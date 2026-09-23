@@ -50,7 +50,7 @@ const basher: AgentDefinition = {
         timeout_seconds: {
           type: 'number',
           description:
-            'Optional wall-clock bound in seconds. Omit or -1 for no timeout (the default).',
+            'Optional wall-clock bound in seconds. Defaults to a finite 300s cap; pass -1 explicitly for no timeout.',
         },
         process_type: {
           type: 'string',
@@ -127,7 +127,27 @@ Do not use any tools! Only report the output of the command.`,
       (params?.failure_pattern as string | undefined) ??
       '\\(fail\\)|error:|Expected|Received|panic|Unhandled|not ok'
     const max_failure_lines = params?.max_failure_lines as number | undefined
-    const failureLineLimit = Math.max(1, Math.floor(max_failure_lines ?? 120))
+    // M3-T1 (finite timeouts / bounded output): clamp max_failure_lines — NaN,
+    // non-finite, and negative values are rejected (they fall back to the
+    // documented 120 default instead of yielding a broken `head -NaN`), and
+    // the extracted set is capped at a sane maximum so `head` stays bounded.
+    const DEFAULT_MAX_FAILURE_LINES = 120
+    const MAX_FAILURE_LINES = 1_000
+    const numericMaxFailureLines =
+      typeof max_failure_lines === 'number' &&
+      Number.isFinite(max_failure_lines)
+        ? Math.floor(max_failure_lines)
+        : undefined
+    const failureLineLimit =
+      numericMaxFailureLines === undefined
+        ? DEFAULT_MAX_FAILURE_LINES
+        : Math.min(MAX_FAILURE_LINES, Math.max(1, numericMaxFailureLines))
+    // M3-T1: finite default wall-clock cap so a hung command cannot wedge the
+    // agent step indefinitely. An explicitly passed timeout_seconds —
+    // including -1 (no timeout) — always wins over this default.
+    const DEFAULT_TIMEOUT_SECONDS = 300
+    const effectiveTimeoutSeconds =
+      timeout_seconds !== undefined ? timeout_seconds : DEFAULT_TIMEOUT_SECONDS
     const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
     // Use crypto.randomUUID() (Node global, no import needed) for the temp
     // log path. crypto.randomUUID is cryptographically random, unlike
@@ -158,7 +178,7 @@ Do not use any tools! Only report the output of the command.`,
       input: {
         command: commandToRun,
         ...(process_type !== undefined && { process_type }),
-        ...(timeout_seconds !== undefined && { timeout_seconds }),
+        timeout_seconds: effectiveTimeoutSeconds,
         ...(cwd !== undefined && { cwd }),
         ...(detach !== undefined && { detach }),
       },

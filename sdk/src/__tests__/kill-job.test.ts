@@ -9,6 +9,7 @@ import {
   type BackgroundJob,
 } from '../tools/background-jobs'
 import { killJob } from '../tools/kill-job'
+import { jobRegistry } from '@codebuff/common/util/job-registry'
 
 let counter = 0
 const tempFiles: string[] = []
@@ -79,16 +80,59 @@ describe('killJob', () => {
     expect(value(out).jobId).toBe('job-does-not-exist')
   })
 
-  test('kills a running job with SIGTERM by default and reports killed=true', async () => {
+  test('kills a running job with SIGTERM by default and reports stopping until exit (M2-T4)', async () => {
     const job = makeJob()
     const out = await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER })
+    // M2-T4 (Fix 3): signal DELIVERY is no longer terminal. The job folds into
+    // the non-terminal 'stopping' state; only the child's 'exit' event settles
+    // 'stopped'.
     expect(value(out)).toEqual({
       jobId: job.jobId,
-      status: 'stopped',
+      status: 'stopping',
       killed: true,
       signal: 'SIGTERM',
       exitCode: null,
     })
+    expect(job.status).toBe('stopping')
+  })
+
+  test('graceful exit after SIGTERM folds stopping into a terminal state with the exit code (M2-T4)', async () => {
+    const job = makeJob()
+    const out = await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER })
+    expect(value(out).status).toBe('stopping')
+    expect(jobRegistry.get(job.jobId)?.state).toBe('stopping')
+
+    // Simulate the child's own 'exit' settling (the ONLY 'stopped' settle
+    // path post-M2-T4): a terminal lifecycle from 'stopping' is legal per the
+    // registry state machine and stamps the exit code.
+    jobRegistry.emit(job.jobId, {
+      type: 'lifecycle',
+      state: 'stopped',
+      exitCode: 143,
+    })
+    job.status = 'stopped'
+    job.exitCode = 143
+    expect(jobRegistry.get(job.jobId)?.state).toBe('stopped')
+    expect(jobRegistry.get(job.jobId)?.exitCode).toBe(143)
+  })
+
+  test('SIGTERM-ignoring child stays stopping with no do_not_repoll (M2-T4)', async () => {
+    const job = makeJob({
+      child: {
+        pid: 53000 + 1337,
+        kill: () => true,
+      } as unknown as BackgroundJob['child'],
+    })
+    await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER })
+
+    // The registry is non-terminal ('stopping') — the job must NOT be
+    // reported as settled/do_not_repoll, since the SIGTERM-ignoring child has
+    // not exited yet; 'stopping' is non-terminal by the registry state
+    // machine, so no terminal lifecycle was emitted.
+    expect(jobRegistry.get(job.jobId)?.state).toBe('stopping')
+    expect(job.status).toBe('stopping')
+    expect(job.settledAt).toBeUndefined()
+    expect(jobRegistry.get(job.jobId)?.completedAt).toBeUndefined()
   })
 
   test('honors an explicit SIGKILL signal', async () => {
@@ -154,5 +198,6 @@ describe('killJob', () => {
     const modelInput = { jobId: job.jobId, owner: FOREIGN_OWNER }
     const out = await killJob({ ...modelInput, owner: TRUSTED_OWNER })
     expect(value(out).killed).toBe(true)
+    expect(value(out).status).toBe('stopping')
   })
 })

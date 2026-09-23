@@ -11,7 +11,10 @@ import {
   getProjectFileTree,
   getAllFilePaths,
 } from '@codebuff/common/project-file-tree'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import {
+  getInitialSessionState,
+  sanitizeAgentStateSecurityMaps,
+} from '@codebuff/common/types/session-state'
 import { getErrorObject } from '@codebuff/common/util/error'
 import z from 'zod/v4'
 
@@ -247,15 +250,32 @@ function getFileSize(stats: Awaited<ReturnType<CodebuffFileSystem['stat']>>) {
   return typeof stats.size === 'number' ? stats.size : Number.POSITIVE_INFINITY
 }
 
+// So a hung `git` subprocess (unusual FS state, network FS, etc.) cannot
+// block session startup forever (M3-T1): a finite, conservative default
+// wall-clock bound per git invocation, applied via the child's own timeout,
+// with capture aborting so a hung child is killed rather than leaked.
+const GIT_CHANGES_TIMEOUT_MS = 5_000
+
 /**
- * Helper to convert ChildProcess to Promise with stdout/stderr
+ * Helper to convert ChildProcess to Promise with stdout/stderr.
+ * M3-T1: bounded by `timeoutMs`, which kills the subprocess on expiry and
+ * rejects so the already-present `.catch` fallbacks degrade gracefully.
  */
 function childProcessToPromise(
   proc: ReturnType<CodebuffSpawn>,
+  timeoutMs: number,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     let stdout = ''
     let stderr = ''
+    let settled = false
+
+    const timeout = globalThis.setTimeout(() => {
+      if (settled) return
+      settled = true
+      proc.kill()
+      reject(new Error(`Command timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
 
     proc.stdout?.on('data', (data: Buffer) => {
       stdout += data.toString()
@@ -266,6 +286,9 @@ function childProcessToPromise(
     })
 
     proc.on('close', (code: number | null) => {
+      if (settled) return
+      settled = true
+      globalThis.clearTimeout(timeout)
       if (code === 0) {
         resolve({ stdout, stderr })
       } else {
@@ -273,7 +296,12 @@ function childProcessToPromise(
       }
     })
 
-    proc.on('error', reject)
+    proc.on('error', (error) => {
+      if (settled) return
+      settled = true
+      globalThis.clearTimeout(timeout)
+      reject(error)
+    })
   })
 }
 
@@ -292,14 +320,17 @@ async function getGitChanges(params: {
 }> {
   const { cwd, spawn, logger } = params
 
-  const status = childProcessToPromise(spawn('git', ['status'], { cwd }))
+  const status = childProcessToPromise(
+    spawn('git', ['status'], { cwd }),
+    GIT_CHANGES_TIMEOUT_MS,
+  )
     .then(({ stdout }) => stdout)
     .catch((error) => {
       logger.debug?.({ error }, 'Failed to get git status')
       return ''
     })
 
-  const diff = childProcessToPromise(spawn('git', ['diff'], { cwd }))
+  const diff = childProcessToPromise(spawn('git', ['diff'], { cwd }), GIT_CHANGES_TIMEOUT_MS)
     .then(({ stdout }) => stdout)
     .catch((error) => {
       logger.debug?.({ error }, 'Failed to get git diff')
@@ -308,6 +339,7 @@ async function getGitChanges(params: {
 
   const diffCached = childProcessToPromise(
     spawn('git', ['diff', '--cached'], { cwd }),
+    GIT_CHANGES_TIMEOUT_MS,
   )
     .then(({ stdout }) => stdout)
     .catch((error) => {
@@ -317,6 +349,7 @@ async function getGitChanges(params: {
 
   const lastCommitMessages = childProcessToPromise(
     spawn('git', ['shortlog', 'HEAD~10..HEAD'], { cwd }),
+    GIT_CHANGES_TIMEOUT_MS,
   )
     .then(({ stdout }) =>
       stdout
@@ -769,6 +802,13 @@ export async function applyOverridesToSessionState(
   const sessionState = JSON.parse(
     JSON.stringify(baseSessionState),
   ) as SessionState
+
+  // M2-T3: the clone above re-derives mainAgentState from untrusted persisted
+  // JSON (JSON.parse-and-cast), so shape-validate and strip the security maps
+  // at this restore boundary before any consumer trusts them.
+  sessionState.mainAgentState = sanitizeAgentStateSecurityMaps(
+    sessionState.mainAgentState,
+  )
 
   // Apply maxAgentSteps override
   if (overrides.maxAgentSteps !== undefined) {

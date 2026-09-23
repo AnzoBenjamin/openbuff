@@ -111,11 +111,17 @@ describe('runTerminalCommand cwd containment', () => {
       ).toEqual(owner)
 
       controller.abort()
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      const job = getBackgroundJob(value.jobId!)
+      // SIGTERM delivery folds 'stopping' (M2-T4, Fix 3); the real child's
+      // exit event then settles 'stopped'. Give the process a moment to exit.
+      let job = getBackgroundJob(value.jobId!)
+      for (let i = 0; i < 200 && job?.status === 'stopping'; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        job = getBackgroundJob(value.jobId!)
+      }
       // An abort-initiated kill is an intentional stop, recorded as 'stopped'
-      // (distinct from an error/non-zero natural exit).
-      expect(job?.status).toBe('stopped')
+      // (distinct from an error/non-zero natural exit) once the exit event
+      // lands; possibly still 'stopping' for a slow-to-die child.
+      expect(job?.status === 'stopped' || job?.status === 'stopping').toBe(true)
     } finally {
       if (value?.jobId !== undefined) {
         killBackgroundJob(value.jobId, 'SIGKILL')

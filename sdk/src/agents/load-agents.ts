@@ -13,6 +13,21 @@ import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-
 export type LoadedAgentDefinition = AgentDefinition & {
   /** The file path this agent was loaded from */
   _sourceFilePath: string
+  /**
+   * Serialized source text when the on-disk definition declared function
+   * `handleSteps` (M2-T3): the loader stringifies it for trusted-local
+   * materialization, so the inherited function-typed `handleSteps` field
+   * carries a STRING at runtime. Consumers must read this typed field
+   * instead of invoking `handleSteps`.
+   */
+  _serializedHandleSteps?: string
+  /**
+   * Runtime provenance for executable-template trust boundaries (mirrors
+   * common/src/types/agent-template.ts). Locally loaded definitions are
+   * stamped 'local' by the loader so string handleSteps never relies on a
+   * fail-open undefined default downstream.
+   */
+  executionSource?: 'bundled' | 'local' | 'database'
 }
 
 /**
@@ -221,15 +236,20 @@ export async function loadLocalAgents({
   const agentDirs = agentsPath
     ? [agentsPath]
     : getDefaultAgentDirs(includeProjectAgents)
-  const allAgentFiles = agentDirs.flatMap((dir) => getAllAgentFiles(dir))
+  // Pair each walked file with the trusted agents-directory root it was
+  // found under, so importAgentModule can enforce lexical containment
+  // against the same root the loader walks.
+  const allAgentFiles = agentDirs.flatMap((dir) =>
+    getAllAgentFiles(dir).map((fullPath) => ({ fullPath, agentsDir: dir })),
+  )
 
   if (allAgentFiles.length === 0) {
     return validate ? { agents, validationErrors: [] } : agents
   }
 
-  for (const fullPath of allAgentFiles) {
+  for (const { fullPath, agentsDir } of allAgentFiles) {
     try {
-      const agentModule = await importAgentModule(fullPath)
+      const agentModule = await importAgentModule(fullPath, agentsDir)
       if (!agentModule) {
         continue
       }
@@ -258,6 +278,18 @@ export async function loadLocalAgents({
       if (agentDefinition.handleSteps) {
         processedAgentDefinition.handleSteps =
           agentDefinition.handleSteps.toString()
+        // M2-T3: keep the serialized source on a typed field so consumers can
+        // read it without reaching into the function-typed handleSteps field.
+        processedAgentDefinition._serializedHandleSteps =
+          agentDefinition.handleSteps.toString()
+      }
+
+      // Locally loaded templates are trusted local code: stamp the execution
+      // source explicitly so string handleSteps never relies on a fail-open
+      // undefined default downstream. Never overwrite a value the agent file
+      // itself already set.
+      if (!processedAgentDefinition.executionSource) {
+        processedAgentDefinition.executionSource = 'local'
       }
 
       // Resolve $env references in MCP server configs
@@ -289,14 +321,16 @@ export async function loadLocalAgents({
       const result = await validateAgents(Object.values(agents))
 
       if (!result.success) {
-        // Build a map of agent IDs to their validation errors
-        // The validation error id format is "{agentId}_{index}" from validateAgents
+        // Build a map of agent IDs to their validation errors. M2-T3: prefer
+        // the structured agentId validateAgents recovered from the composite
+        // key it built; the legacy "_index"-suffix fallback stays for errors
+        // whose id is not a composite key (e.g. the network-error path).
         const errorsByAgentId = new Map<string, string>()
         for (const err of result.validationErrors) {
-          // Extract agent ID by removing the "_index" suffix added by validateAgents
           const lastUnderscoreIdx = err.id.lastIndexOf('_')
-          const agentId =
+          const fallbackAgentId =
             lastUnderscoreIdx > 0 ? err.id.slice(0, lastUnderscoreIdx) : err.id
+          const agentId = err.agentId ?? fallbackAgentId
           if (!errorsByAgentId.has(agentId)) {
             errorsByAgentId.set(agentId, err.message)
           }
@@ -329,7 +363,25 @@ export async function loadLocalAgents({
   return agents
 }
 
-async function importAgentModule(fullPath: string): Promise<any | null> {
+async function importAgentModule(
+  fullPath: string,
+  agentsDir: string,
+): Promise<any | null> {
+  // Lexical containment check: fullPath must resolve inside the trusted
+  // agentsDir root the loader walked. Paths here come from the loader's own
+  // directory walk, not arbitrary user strings, so a lexical check is
+  // sufficient — mirroring escapesRoot in
+  // common/src/util/project-path-containment.ts: reject when the relative
+  // path is empty, starts with '..', or is absolute. On violation, refuse to
+  // import rather than executing code from outside the trust root.
+  const resolvedDir = path.resolve(agentsDir)
+  const relative = path.relative(resolvedDir, path.resolve(fullPath))
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    console.warn(
+      `Refusing to import agent file outside the trusted agents directory '${resolvedDir}': ${fullPath}`,
+    )
+    return null
+  }
   // Cache-bust to ensure fresh imports when agent files change
   const urlVersion = `?update=${Date.now()}`
   return import(`${pathToFileURL(fullPath).href}${urlVersion}`)

@@ -24,12 +24,12 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2 # TODO: pin to SHA
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.5'
 
       - name: Cache dependencies
-        uses: actions/cache@v5 # TODO: pin to SHA
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             node_modules
@@ -126,12 +126,12 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2 # TODO: pin to SHA
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.5'
 
       - name: Cache dependencies
-        uses: actions/cache@v5 # TODO: pin to SHA
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             node_modules
@@ -189,7 +189,7 @@ jobs:
         run: cd cli && bun run prebuild:agents
 
       - name: Run ${{ matrix.package }} tests
-        uses: nick-fields/retry@v3 # TODO: pin to SHA
+        uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08 # v3
         with:
           timeout_minutes: 10
           max_attempts: 3
@@ -200,7 +200,9 @@ jobs:
             else
               # Run all non-integration tests in a single bun test invocation
               # This avoids xargs exit code issues with orphaned child processes
-              TEST_FILES=$(find src -name '*.test.ts' ! -name '*.integration.test.ts' 2>/dev/null | sort | tr '\n' ' ')
+              # M1-T6: search the whole package (not just src/) so packages
+              # whose tests live in __tests__/ (e.g. scripts) actually run.
+              TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f -name '*.test.ts' ! -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ')
               if [ -n "$TEST_FILES" ]; then
                 # --isolate: per-file test isolation prevents cross-file
                 # mock.module / module-state leakage (e.g. indexer's
@@ -230,12 +232,12 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2 # TODO: pin to SHA
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.5'
 
       - name: Cache dependencies
-        uses: actions/cache@v5 # TODO: pin to SHA
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
             node_modules
@@ -293,13 +295,13 @@ jobs:
         run: cd cli && bun run prebuild:agents
 
       - name: Run ${{ matrix.package }} integration tests
-        uses: nick-fields/retry@v3 # TODO: pin to SHA
+        uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08 # v3
         with:
           timeout_minutes: 15
           max_attempts: 3
           command: |
             cd ${{ matrix.package }}
-            TEST_FILES=$(find src -name '*.integration.test.ts' 2>/dev/null | sort | tr '\n' ' ')
+            TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ')
             if [ -n "$TEST_FILES" ]; then
               bun test --timeout=60000 $TEST_FILES
             else

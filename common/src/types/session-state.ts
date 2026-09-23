@@ -75,6 +75,110 @@ export type ConfirmedPostEditAnchor = {
   runId?: string
 }
 
+/** Canonical sha256 content-hash shape minted by read_files (M2-T3). */
+const SHA256_CONTENT_HASH_PATTERN = /^sha256:[a-f0-9]{64}$/i
+
+/**
+ * Runtime validation shape for {@link ConfirmedPostEditAnchor} (M2-T3): used
+ * by the restore-boundary sanitizer below so a JSON.parse-and-cast cannot
+ * smuggle a forged anchor into `confirmedPostEditAnchorsByPath`. The hash and
+ * capability patterns mirror what read_files mints (canonical sha256 content
+ * hash, cap.v3-prefixed capability token).
+ */
+export const confirmedPostEditAnchorSchema = z
+  .object({
+    startLine: z.number().int().min(1),
+    endLine: z.number().int().min(1),
+    contentHash: z.string().regex(SHA256_CONTENT_HASH_PATTERN),
+    readCapability: z.string().min(1).max(4096).regex(/^cap\.v3\./),
+    projectId: z.string().optional(),
+    runId: z.string().optional(),
+  })
+  .strict()
+  .refine((anchor) => anchor.endLine >= anchor.startLine, {
+    message: 'endLine must be >= startLine',
+  })
+
+/**
+ * Untrusted field view used only inside the sanitizer: restored sessions
+ * arrive via JSON.parse-and-cast, so the static map types on
+ * {@link AgentState} are unverified claims that must be re-validated.
+ */
+type AgentStateSecurityMapsView = {
+  readAuthorizationsByPath?: unknown
+  readAuthorizationHashesByPath?: unknown
+  confirmedPostEditAnchorsByPath?: unknown
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Keep entries whose key is a non-empty string and whose value passes
+ * `isValidValue`; drop every other entry. Returns undefined when the whole
+ * map is not a plain object (forged/corrupt shape).
+ */
+function sanitizeSecurityMapEntries<V>(
+  map: unknown,
+  isValidValue: (value: unknown) => value is V,
+): Record<string, V> | undefined {
+  if (!isPlainObject(map)) return undefined
+  const sanitized: Record<string, V> = {}
+  for (const [key, value] of Object.entries(map)) {
+    if (key.length === 0 || !isValidValue(value)) continue
+    sanitized[key] = value
+  }
+  return sanitized
+}
+
+/**
+ * Restore-boundary sanitizer for the persisted AgentState security maps
+ * (M2-T3).
+ *
+ * WHY: persisted AgentState is restored via JSON.parse-and-cast (see
+ * `applyOverridesToSessionState` in sdk/src/run-state.ts), so a forged or
+ * corrupt session could plant sticky read-before-edit authority
+ * (`readAuthorizationsByPath`), authoritative whole-file content hashes
+ * (`readAuthorizationHashesByPath`), or remintable cap.v3 anchors
+ * (`confirmedPostEditAnchorsByPath`) for files that were never read in this
+ * run. Shape-validate and strip at the restore boundary; staleness
+ * re-verification and token authentication remain use-time concerns handled
+ * by the existing revocation/auth code.
+ *
+ * Pure: never mutates the input — returns a shallow-cloned state whose three
+ * maps are sanitized independently. A non-object map is dropped (undefined);
+ * entries with empty-string keys or values failing the per-map check are
+ * dropped individually.
+ */
+export function sanitizeAgentStateSecurityMaps<
+  T extends Pick<
+    AgentState,
+    | 'readAuthorizationsByPath'
+    | 'readAuthorizationHashesByPath'
+    | 'confirmedPostEditAnchorsByPath'
+  >,
+>(state: T): T {
+  const maps: AgentStateSecurityMapsView = state
+  return {
+    ...state,
+    readAuthorizationsByPath: sanitizeSecurityMapEntries(
+      maps.readAuthorizationsByPath,
+      (value): value is true => value === true,
+    ),
+    readAuthorizationHashesByPath: sanitizeSecurityMapEntries(
+      maps.readAuthorizationHashesByPath,
+      (value): value is string =>
+        typeof value === 'string' && SHA256_CONTENT_HASH_PATTERN.test(value),
+    ),
+    confirmedPostEditAnchorsByPath: sanitizeSecurityMapEntries(
+      maps.confirmedPostEditAnchorsByPath,
+      (value): value is ConfirmedPostEditAnchor =>
+        confirmedPostEditAnchorSchema.safeParse(value).success,
+    ),
+  }
+}
+
 /**
  * One recorded injected-block measurement in the per-turn context budget.
  * Canonical declaration: `packages/agent-runtime/src/util/context-budget.ts`

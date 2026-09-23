@@ -328,6 +328,19 @@ const definition: SecretAgentDefinition = {
           ? defaultValue.stdout.trim()
           : ''
       const defaultBranch = defaultRef.split('/').at(-1) ?? ''
+      // M1-T6 (fail closed): when `${remote}/HEAD` cannot be resolved the
+      // default-branch comparison is meaningless — an empty defaultBranch used
+      // to silently satisfy the guard for every branch, turning the
+      // default-branch push protection off exactly when the remote state is
+      // unknown. Refuse the push instead; the user can repair the remote HEAD
+      // with `git remote set-head <remote> --auto`.
+      if (!defaultBranch) {
+        yield {
+          type: 'STEP_TEXT',
+          text: `Push refused: could not resolve the default branch from '${remote}/HEAD' (empty output); nothing was pushed. Repair the remote HEAD with \`git remote set-head ${remote} --auto\` and retry.`,
+        } satisfies StepText
+        return
+      }
       if (branch === defaultBranch) {
         yield {
           type: 'STEP_TEXT',

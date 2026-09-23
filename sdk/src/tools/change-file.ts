@@ -579,7 +579,26 @@ export async function changeFiles(params: {
         // move creates the destination before unlinking the source), so the
         // rollback set must include the current action as well as prior ones.
         committed.push(change)
-        await commitPreparedTransactionChange(change, fs, authority)
+        // Per-change try/catch: a failing adapter call is attributed to the
+        // offending change before it propagates to the shared rollback path
+        // below, so the failure log names the change that broke.
+        try {
+          await commitPreparedTransactionChange(change, fs, authority)
+        } catch (changeError) {
+          logger?.error(
+            {
+              operationId,
+              path: change.path,
+              action: change.action,
+              error:
+                changeError instanceof Error
+                  ? changeError.message
+                  : String(changeError),
+            },
+            'Transaction change commit failed',
+          )
+          throw changeError
+        }
       }
       const expectedFinalHashes = Object.fromEntries(
         prepared.flatMap((change) =>
@@ -690,6 +709,11 @@ export async function changeFiles(params: {
         errorCode:
           rollbackFailures.size > 0 ? 'ROLLBACK_INCOMPLETE' : 'WRITE_FAILED',
       })
+      // Cancel-on-exit: release the still-open operation registration on
+      // every failure exit so `pruneTerminalOperations` can reclaim it.
+      // `cancel` only transitions an 'open' operation, so it is a no-op once
+      // the commit lease above finished.
+      authority.cancel(operationId)
       const committedIndexes = new Set(committed.map((change) => change.index))
       const receipt = await authority.issueObservedFailureReceipt({
         operationId,

@@ -214,6 +214,85 @@ describe('runProgrammaticStep', () => {
     })
   })
 
+  describe('executionSource trust boundary', () => {
+    const untrustedStringHandleSteps = `(function* () { const childProcess = require('child_process'); yield { toolName: 'end_turn', input: {} } })()`
+
+    it('throws for a database-loaded template with a string handleSteps and never executes it', async () => {
+      const dbTemplate = {
+        ...mockTemplate,
+        executionSource: 'database',
+        handleSteps: untrustedStringHandleSteps,
+      } as unknown as AgentTemplate
+
+      await expect(
+        runProgrammaticStep({ ...mockParams, template: dbTemplate }),
+      ).rejects.toThrow(
+        "Executable handleSteps are disabled for agent test-agent loaded from executionSource 'database'",
+      )
+      expect(executeToolCallSpy).not.toHaveBeenCalled()
+    })
+
+    it('throws for a template with an unlisted executionSource and a string handleSteps', async () => {
+      const remoteTemplate = {
+        ...mockTemplate,
+        executionSource: 'remote',
+        handleSteps: untrustedStringHandleSteps,
+      } as unknown as AgentTemplate
+
+      await expect(
+        runProgrammaticStep({ ...mockParams, template: remoteTemplate }),
+      ).rejects.toThrow("executionSource 'remote'")
+      expect(executeToolCallSpy).not.toHaveBeenCalled()
+    })
+
+    it('materializes and runs string handleSteps for a trusted local executionSource', async () => {
+      const localTemplate = {
+        ...mockTemplate,
+        executionSource: 'local',
+        handleSteps: `(function* () { yield { toolName: 'end_turn', input: {} } })`,
+      } as unknown as AgentTemplate
+
+      const result = await runProgrammaticStep({
+        ...mockParams,
+        template: localTemplate,
+      })
+
+      expect(result.endTurn).toBe(true)
+      expect(result.agentState.output?.error).toBeUndefined()
+    })
+
+    it('materializes and runs string handleSteps for the bundled executionSource', async () => {
+      const bundledTemplate = {
+        ...mockTemplate,
+        executionSource: 'bundled',
+        handleSteps: `(function* () { yield { toolName: 'end_turn', input: {} } })`,
+      } as unknown as AgentTemplate
+
+      const result = await runProgrammaticStep({
+        ...mockParams,
+        template: bundledTemplate,
+      })
+
+      expect(result.endTurn).toBe(true)
+      expect(result.agentState.output?.error).toBeUndefined()
+    })
+
+    it('materializes and runs string handleSteps when executionSource is undefined (legacy local loader)', async () => {
+      const legacyTemplate = {
+        ...mockTemplate,
+        handleSteps: `(function* () { yield { toolName: 'end_turn', input: {} } })`,
+      } as unknown as AgentTemplate
+
+      const result = await runProgrammaticStep({
+        ...mockParams,
+        template: legacyTemplate,
+      })
+
+      expect(result.endTurn).toBe(true)
+      expect(result.agentState.output?.error).toBeUndefined()
+    })
+  })
+
   describe('tool execution', () => {
     it('rejects undeclared tools yielded by handleSteps', async () => {
       const mockGenerator = (function* () {

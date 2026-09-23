@@ -400,6 +400,38 @@ describe('Spawn Agents Permissions', () => {
     expect(derived.filesystemScope?.write).toBeUndefined()
   })
 
+  // M2-T2 empty-permission semantics: an empty allowedTools list means "no
+  // change" — the same convention as empty paths — never a zero-tool child.
+  it('preserves the static tool set when handoff allowedTools is empty', () => {
+    const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
+    const childAgent = createMockAgent('repair-editor')
+    childAgent.toolNames = ['edit_transaction', 'code_search']
+
+    const derived = deriveSpawnTemplateCapabilities({
+      agentTemplate: childAgent,
+      parentAgentTemplate: parentAgent,
+      handoff: createVersionedHandoff([]),
+      projectRoot: mockFileContext.projectRoot,
+    })
+
+    expect(derived.toolNames).toEqual(['edit_transaction', 'code_search'])
+  })
+
+  it('still narrows static tools when handoff allowedTools lists a subset', () => {
+    const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
+    const childAgent = createMockAgent('repair-editor')
+    childAgent.toolNames = ['edit_transaction', 'code_search']
+
+    const derived = deriveSpawnTemplateCapabilities({
+      agentTemplate: childAgent,
+      parentAgentTemplate: parentAgent,
+      handoff: createVersionedHandoff(['code_search']),
+      projectRoot: mockFileContext.projectRoot,
+    })
+
+    expect(derived.toolNames).toEqual(['code_search'])
+  })
+
   it('still narrows filesystem scope when handoff lists non-empty paths', () => {
     const parentAgent = createMockAgent('orchestrator', ['repair-editor'])
     const childAgent = createMockAgent('repair-editor')

@@ -20,6 +20,7 @@ import type { AgentState } from '@codebuff/common/types/session-state'
 import type {
   JobEvent,
   JobSnapshot,
+  JobState,
   WaitJobResult,
 } from '@codebuff/common/util/job-registry'
 
@@ -105,12 +106,12 @@ function buildAgentPollResult(params: {
   /** Poll mode yields a JobSnapshot; follow mode yields a WaitJobResult. */
   result: WaitJobResult | JobSnapshot | undefined
   predicate: ((event: JobEvent) => boolean) | undefined
-  fallbackState: string
+  fallbackState: JobState
   jobId: string
   consumerId: string
   cursorOmitted: boolean
 }): {
-  state: string
+  state: JobState
   events: JobEvent[]
   nextCursor: number
   truncated: boolean
@@ -184,21 +185,22 @@ export const handleCheckBackgroundAgent = (async ({
   // the legacy owned/foreign/recover gate is gone.
   const owned = assertBackgroundAgentJobOwned(jobId, owner)
   if (!owned.ok) {
+    // M1-T7 (anti-enumeration): not_found and foreign share ONE generic
+    // payload, so a result can never confirm the existence of another
+    // session's background agent job (ids are counter-ordered with modest
+    // entropy, so a distinguishable 'foreign' message would be a
+    // cross-session oracle). The distinction stays server-side via
+    // owned.reason. M1-T7 also fixes the output SHAPE: CodebuffToolOutput is
+    // a 1-tuple of {type:'json',value} blocks — a bare object here made
+    // every result unrenderable downstream (output[0] === undefined).
+    void owned.reason
     return {
-      output: {
-        type: 'json',
-        value:
-          owned.reason === 'not_found'
-            ? {
-                jobId,
-                errorMessage: jobNotFoundMessage(jobId),
-              }
-            : {
-                jobId,
-                errorMessage:
-                  'Background agent job is not owned by this client session/root run.',
-              },
-      } as unknown as CodebuffToolOutput<ToolName>,
+      output: [
+        {
+          type: 'json',
+          value: { jobId, errorMessage: jobNotFoundMessage(jobId) },
+        },
+      ],
     }
   }
 
@@ -214,10 +216,12 @@ export const handleCheckBackgroundAgent = (async ({
     const cancelResult = cancelBackgroundAgentJob(jobId)
     if ('errorMessage' in cancelResult) {
       return {
-        output: {
-          type: 'json',
-          value: { jobId, errorMessage: cancelResult.errorMessage },
-        } as unknown as CodebuffToolOutput<ToolName>,
+        output: [
+          {
+            type: 'json',
+            value: { jobId, errorMessage: cancelResult.errorMessage },
+          },
+        ],
       }
     }
     cancelledNow = cancelResult.cancelled
@@ -311,33 +315,35 @@ export const handleCheckBackgroundAgent = (async ({
   const idleRunning = state === 'running' && events.length === 0
 
   return {
-    output: {
-      type: 'json',
-      value: {
-        jobId,
-        state,
-        events,
-        nextCursor,
-        truncated,
-        dropped,
-        ...(state === 'completed' && resultValue !== undefined
-          ? { result: resultValue }
-          : {}),
-        ...(errorValue !== undefined &&
-        (state === 'error' || state === 'cancelled')
-          ? { error: errorValue }
-          : {}),
-        ...(matched !== undefined ? { matched } : {}),
-        ...(timedOut ? { timedOut: true } : {}),
-        ...(cancelled ? { cancelled: true } : {}),
-        ...(idleRunning
-          ? {
-              stop_polling: true,
-              hint: 'No new events — do other work, do not re-poll for 30s',
-            }
-          : {}),
-        ...(isTerminalState ? { do_not_repoll: true } : {}),
+    output: [
+      {
+        type: 'json',
+        value: {
+          jobId,
+          state,
+          events,
+          nextCursor,
+          truncated,
+          dropped,
+          ...(state === 'completed' && resultValue !== undefined
+            ? { result: resultValue }
+            : {}),
+          ...(errorValue !== undefined &&
+          (state === 'error' || state === 'cancelled')
+            ? { error: errorValue }
+            : {}),
+          ...(matched !== undefined ? { matched } : {}),
+          ...(timedOut ? { timedOut: true } : {}),
+          ...(cancelled ? { cancelled: true } : {}),
+          ...(idleRunning
+            ? {
+                stop_polling: true,
+                hint: 'No new events — do other work, do not re-poll for 30s',
+              }
+            : {}),
+          ...(isTerminalState ? { do_not_repoll: true } : {}),
+        },
       },
-    } as unknown as CodebuffToolOutput<ToolName>,
+    ],
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

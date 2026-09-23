@@ -69,8 +69,11 @@ export const readLogsParams = {
         path: z.string(),
         resolvedPath: z.string(),
         jobId: z.string().optional(),
+        // M2-T4: 'stopping' is the non-terminal "kill signal delivered, exit
+        // not yet observed" state — read_logs surfaces it like list_jobs so a
+        // schema-faithful consumer does not strip the live status.
         status: z
-          .enum(['running', 'completed', 'error', 'lost', 'stopped'])
+          .enum(['running', 'stopping', 'completed', 'error', 'lost', 'stopped'])
           .optional(),
         lines: z.number(),
         content: z.string(),

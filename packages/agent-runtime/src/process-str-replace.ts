@@ -117,7 +117,15 @@ function addFailedEditRecoveryGuidance(
   return `${error}\n\n${FAILED_EDIT_RECOVERY_GUIDANCE}`
 }
 
-type RecordedFailure = { error: string; kind?: StrReplaceFailureKind }
+// M2-T6: the failing replacement index travels as a structured field, never
+// reconstructed from error prose — an oldString copied out of these very files
+// can contain the literal text "replacement 3" and must be able to spoof
+// nothing.
+type RecordedFailure = {
+  error: string
+  replacementIndex: number
+  kind?: StrReplaceFailureKind
+}
 
 /**
  * Classification (and therefore guidance suppression) is decided per failure,
@@ -263,6 +271,13 @@ export async function processStrReplace(params: {
        * the edit_transaction handler) key off this instead of matching prose.
        */
       failureKind?: StrReplaceFailureKind
+      /**
+       * M2-T6: 0-based index of the first failed replacement in the original
+       * `replacements` array, threaded through so failure attribution never
+       * has to regex the model-facing error prose (which quotes untrusted
+       * oldString content that can spoof a "replacement N" pattern).
+       */
+      failedReplacementIndex?: number
     }
 > {
   const {
@@ -467,7 +482,11 @@ export async function processStrReplace(params: {
       skipIfMissing,
     } = replacement
     const recordFailure = (error: string, kind?: StrReplaceFailureKind) => {
+      // M2-T6: structured index (0-based) alongside the prose so consumers can
+      // map the failure to the originating replacement without regexing the
+      // message text.
       failures.push({
+        replacementIndex,
         error: `Replacement ${replacementIndex + 1}/${normalizedReplacements.length} failed:\n${error}`,
         ...(kind && { kind }),
       })
@@ -933,6 +952,11 @@ export async function processStrReplace(params: {
         batchFailureKind,
       ),
       ...(batchFailureKind && { failureKind: batchFailureKind }),
+      // M2-T6: structured failed-replacement attribution from the recorded
+      // index of the FIRST failed replacement, never re-derived from prose.
+      ...(failures[0] && {
+        failedReplacementIndex: failures[0].replacementIndex,
+      }),
     }
   }
 
@@ -981,6 +1005,10 @@ export async function processStrReplace(params: {
       path,
       error: addFailedEditRecoveryGuidance(messages.join('\n\n'), failureKind),
       ...(failureKind && { failureKind }),
+      // M2-T6: structured failed-replacement attribution (see atomic branch).
+      ...(failures[0] && {
+        failedReplacementIndex: failures[0].replacementIndex,
+      }),
     }
   }
 

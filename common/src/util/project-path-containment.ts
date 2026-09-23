@@ -83,6 +83,86 @@ function hasTraversalSegment(input: string): boolean {
 }
 
 /**
+ * Canonicalized spelling of a caller-supplied path, produced BEFORE any
+ * filter or containment check runs on it. See `normalizePathSpelling`.
+ */
+export type NormalizedPathSpelling = {
+  /** slash-unified, `.` and empty segments dropped, duplicate separators collapsed; `..` segments are PRESERVED verbatim (never collapsed) */
+  canonical: string
+  /** true when canonical differs from the normalized input spelling */
+  changed: boolean
+  /** same predicate as the module's raw-input `..` policy (split on both separators) */
+  hasTraversalSegment: boolean
+}
+
+/**
+ * Canonicalize a caller-supplied path spelling BEFORE any filter/containment
+ * check is applied to it.
+ *
+ * WHY normalize-then-check: the audited bypass class is not a containment bug
+ * but a SPELLING bug. A path written as `src/./.env`, `src//.env`,
+ * `src\\.env`, or with a mixed/aliased spelling can resolve to the same file
+ * as its canonical form while failing an exact-match sensitive-path filter or
+ * a file filter that was written against the canonical spelling. Canonicalizing
+ * the spelling first means every downstream filter sees ONE canonical form, so
+ * a non-normalized spelling can never dodge a check that the canonical form
+ * would fail. Callers normalize FIRST, then run their filter/containment check
+ * on `canonical` (and consult `hasTraversalSegment` for the raw-input refusal).
+ *
+ * `..` segments are deliberately PRESERVED verbatim, never collapsed: the
+ * raw-input `..` refusal (`hasTraversalSegment`, enforced above
+ * `path.resolve` by the entry points) must keep seeing them, or a `..` that
+ * would collapse back inside a boundary would be silently admitted. Traversal
+ * is surfaced through the `hasTraversalSegment` field instead of collapsing.
+ *
+ * Pure string work: no fs access, so it is safe to call before any resolver.
+ */
+export function normalizePathSpelling(input: string): NormalizedPathSpelling {
+  if (!input) {
+    return { canonical: '', changed: false, hasTraversalSegment: false }
+  }
+  const segments = input
+    .split(/[\\/]+/)
+    .filter((segment) => segment !== '' && segment !== '.')
+  // Keep a leading separator for absolute inputs so `/repo/x` stays absolute
+  // under the canonical spelling; the leading separator itself is consumed by
+  // the split and must be re-added explicitly.
+  const wasAbsolute = /^[\\/]/.test(input)
+  const canonical = (wasAbsolute ? '/' : '') + segments.join('/')
+  return {
+    canonical,
+    changed: canonical !== input,
+    hasTraversalSegment: hasTraversalSegment(input),
+  }
+}
+
+/**
+ * Detection-only companion to `refusesWin32AliasedSensitivePath`: true when
+ * ANY segment ends with a trailing dot or space (i.e. stripping trailing
+ * `[ .]+` from any segment would change it), which is the win32 aliasing shape
+ * the OS resolves to the stripped name — so `<root>/.env ` opens the real
+ * `.env` while its raw spelling misses an exact sensitive match.
+ *
+ * WHY detection-only: the alias refusal in the resolvers fires only when the
+ * stripped form is mandatory-sensitive; this predicate is the reusable
+ * detection half for callers that need to KNOW an input is aliased (e.g. to
+ * refuse or warn) without duplicating the stripping logic or mutating the
+ * path. The private refusal helper is intentionally left untouched.
+ *
+ * A bare `..` segment also matches (stripping its trailing dots changes it):
+ * this module's win32 segment stripping has always treated any
+ * dot/space-terminated segment as aliased, and `..` inputs are separately
+ * refused by the raw-input traversal policy, so the extra `true` here is
+ * harmless and keeps this predicate literally identical to the refusal
+ * helper's segment test.
+ */
+export function hasWin32AliasedSegment(input: string): boolean {
+  return input
+    .split(/[\\/]+/)
+    .some((segment) => segment.replace(/[ .]+$/, '') !== segment)
+}
+
+/**
  * Walk up from `fsPath` to the nearest existing ancestor, realpath that,
  * then reconstruct the non-existent tail. When nothing on the chain exists
  * (e.g. a synthetic test root like `/repo`), fall back to the lexical path

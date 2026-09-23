@@ -11,6 +11,12 @@ export interface ValidationResult {
   success: boolean
   validationErrors: Array<{
     id: string
+    /**
+     * M2-T3: the true agent id, recovered at the source from the composite
+     * `{agentId}_{index}` key this function builds. Optional because the
+     * network-error path's id is not a composite key.
+     */
+    agentId?: string
     message: string
   }>
   errorCount: number
@@ -141,11 +147,24 @@ export async function validateAgents(
     validationErrors = result.validationErrors
   }
 
-  // Transform validation errors to the SDK format
-  const transformedErrors = validationErrors.map((error) => ({
-    id: error.filePath ?? 'unknown',
-    message: error.message,
-  }))
+  // Transform validation errors to the SDK format. M2-T3: recover the true
+  // agent id at the SOURCE — this function built the `{definition.id}_${index}`
+  // composite keys above, so it maps each error back to its agent id without
+  // consumers performing string surgery (which misattributes when the id is a
+  // path or an id containing underscores reaches a non-lastIndexOf parser).
+  const agentIdByCompositeKey = new Map<string, string>()
+  for (const [index, definition] of definitions.entries()) {
+    if (!definition || !definition.id) continue
+    agentIdByCompositeKey.set(`${definition.id}_${index}`, definition.id)
+  }
+  const transformedErrors = validationErrors.map((error) => {
+    const agentId = agentIdByCompositeKey.get(error.filePath ?? '')
+    return {
+      id: error.filePath ?? 'unknown',
+      ...(agentId !== undefined ? { agentId } : {}),
+      message: error.message,
+    }
+  })
 
   return {
     success: transformedErrors.length === 0,

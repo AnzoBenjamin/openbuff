@@ -105,5 +105,21 @@ describe('handleWriteFile', () => {
       expect(result.firstFileProcessed).toBe(true)
       expect(result.promisesByPath).toEqual({ 'test.ts': [] })
     })
+
+    it('hydrates modelVisibleReadAuthorizationHashesByPath across the copy loop', () => {
+      // M2-T6: the strict-edit checks use the model-visible snapshot INSTEAD of
+      // reads completed later, and getUsableWholeFileAuthorizationHash keys that
+      // behavior off `!== undefined`. Hydration had to round-trip the field or
+      // committed snapshot semantics silently degraded to the sticky fallback
+      // across turn boundaries.
+      const snapshot = {
+        '/repo/src/a.ts': 'hash-a',
+        '/repo/src/b.ts': 'hash-b',
+      }
+      const result = getFileProcessingValues({
+        modelVisibleReadAuthorizationHashesByPath: snapshot,
+      })
+      expect(result.modelVisibleReadAuthorizationHashesByPath).toEqual(snapshot)
+    })
   })
 })

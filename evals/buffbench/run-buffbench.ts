@@ -1,10 +1,11 @@
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
 import { OpenbuffClient, loadLocalAgents } from '@openbuff/sdk'
 import pLimit from 'p-limit'
+import { z } from 'zod/v4'
 
 import { runAgentOnCommit, type ExternalAgentType } from './agent-runner'
 import { formatTaskResults } from './format-output'
@@ -422,11 +423,89 @@ export async function runTask(options: {
   return { commit, agentResults, commitTraces }
 }
 
+export const BinInstallSchema = z.object({
+  name: z.string().min(1).max(200),
+  installScript: z.string().min(1).max(2000),
+  binPath: z.string().min(1).max(500),
+})
+
+// Minimal allowlist env for the untrusted install process: PATH + HOME keep
+// npm/bun functional and INSTALL_DIR is the existing install contract. The
+// full parent environment (tokens, credentials) is never spread in.
+type ExecInstallEnv = {
+  PATH: string
+  HOME: string
+  INSTALL_DIR: string
+}
+
+type ExecInstallFn = (
+  file: string,
+  args: string[],
+  options: { cwd: string; stdio: 'ignore'; env: ExecInstallEnv },
+) => unknown
+
+/**
+ * Parse an installScript from eval data into a safe argv array. Only simple
+ * `npm install <pkgs>` / `bun add <pkgs>` one-liners are allowed; anything
+ * else (pipes, chains, quotes, other binaries) is rejected — never executed.
+ */
+export function parseInstallScriptArgv(
+  installScript: string,
+  source: string,
+): string[] {
+  const argv = installScript.trim().split(/\s+/)
+  const [bin, subcommand, ...args] = argv
+  if (bin !== 'npm' && bin !== 'bun') {
+    throw new Error(
+      `Invalid ${source}: first token must be exactly 'npm' or 'bun', got ${JSON.stringify(bin)}`,
+    )
+  }
+  if (subcommand !== 'install' && subcommand !== 'add') {
+    throw new Error(
+      `Invalid ${source}: second token must be exactly 'install' or 'add', got ${JSON.stringify(subcommand)}`,
+    )
+  }
+  if (args.length === 0) {
+    throw new Error(
+      `Invalid ${source}: expected at least one package to install`,
+    )
+  }
+  // Set-based metachar scan instead of a character-class regex: a leading `]`
+  // in a JS character class forms an EMPTY class (matches nothing), which made
+  // the previous regex a dead check that admitted `&&`/`|` chains. An explicit
+  // Set cannot silently fail to match.
+  const shellMetachars = new Set([
+    ';',
+    '&',
+    '|',
+    '<',
+    '>',
+    '$',
+    '`',
+    '"',
+    "'",
+    '\\',
+  ])
+  for (const arg of args) {
+    for (const char of arg) {
+      if (shellMetachars.has(char)) {
+        throw new Error(
+          `Invalid ${source}: shell metacharacters are not allowed in install scripts`,
+        )
+      }
+    }
+  }
+  return argv
+}
+
 /**
  * Install binaries specified in binInstalls config to a temporary directory
  * Returns the temporary directory path and updated env with PATH
  */
-function installBinaries(binInstalls: EvalDataV2['binInstalls']): {
+export function installBinaries(
+  binInstalls: EvalDataV2['binInstalls'],
+  execInstall: ExecInstallFn = execFileSync,
+): {
   tempDir: string | null
   env: Record<string, string>
 } {
@@ -434,19 +513,59 @@ function installBinaries(binInstalls: EvalDataV2['binInstalls']): {
     return { tempDir: null, env: {} }
   }
 
+  // Validate every entry (schema + safe argv form) BEFORE creating any
+  // directories or executing anything.
+  const parsedBins: Array<{ name: string; binPath: string; argv: string[] }> =
+    binInstalls.map((rawBin) => {
+      const parsed = BinInstallSchema.safeParse(rawBin)
+      if (!parsed.success) {
+        const issues = parsed.error.issues
+          .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+          .join('; ')
+        throw new Error(
+          `Invalid binInstalls entry for ${JSON.stringify((rawBin as { name?: unknown }).name)}: ${issues}`,
+        )
+      }
+      return {
+        name: parsed.data.name,
+        binPath: parsed.data.binPath,
+        argv: parseInstallScriptArgv(
+          parsed.data.installScript,
+          'binInstalls[].installScript',
+        ),
+      }
+    })
+
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codebuff-bins-'))
 
   const binPaths: string[] = []
 
-  for (const bin of binInstalls) {
+  const installEnv: ExecInstallEnv = {
+    PATH: process.env.PATH ?? '/usr/bin:/bin',
+    HOME: process.env.HOME ?? os.homedir(),
+    INSTALL_DIR: tempDir,
+  }
+
+  for (const bin of parsedBins) {
+    // Containment check BEFORE executing anything: binPath comes from
+    // untrusted eval data, so a '../../evil' binPath must never place a
+    // directory outside tempDir on PATH.
+    const fullBinPath = path.join(tempDir, bin.binPath)
+    const relative = path.relative(tempDir, path.resolve(fullBinPath))
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(
+        `Invalid binInstalls entry for ${JSON.stringify(bin.name)}: binPath escapes the installation directory: ${bin.binPath}`,
+      )
+    }
     try {
-      execSync(bin.installScript, {
+      // Execute via an argv array (no shell): the install script comes from
+      // untrusted eval data and must never be interpolated into a shell line.
+      execInstall(bin.argv[0]!, bin.argv.slice(1), {
         cwd: tempDir,
         stdio: 'ignore',
-        env: { ...process.env, INSTALL_DIR: tempDir },
+        env: installEnv,
       })
 
-      const fullBinPath = path.join(tempDir, bin.binPath)
       if (fs.existsSync(fullBinPath)) {
         binPaths.push(path.dirname(fullBinPath))
         console.log(`✓ ${bin.name} installed at ${fullBinPath}`)

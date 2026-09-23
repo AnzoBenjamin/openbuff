@@ -1084,6 +1084,23 @@ ${guideSections}
       // recomputed from the live filesystem, so a changed value would silently
       // evict all persisted deletion credit.
       const GATE_FILE_MISSING_CONTENT_MARKER = 'missing'
+      // M3-T2 (audit shard-agent-roster readGateFileContentMarker HIGH perf
+      // finding): per-turn marker cache keyed by normalized path. The gate
+      // loop calls readGateFileContentMarker for the SAME files many times
+      // per iteration (eviction ledger, security/specialist freshness,
+      // buildGateSnapshotDetails per fingerprint), re-opening and sha256-
+      // hashing every file each time. Liveness without a filesystem watcher:
+      // a cached marker is reused ONLY while a fresh fstat of the same size +
+      // mtime matches the values captured when it was hashed, so any content
+      // change still re-hashes the live bytes. The marker string itself stays
+      // the per-path sha256 marker, so the cache can never serve a different
+      // file's bytes and every other failure marker (unreadable:*/missing)
+      // stays byte-identical. Bounded (250 entries), reset every turn.
+      const GATE_MARKER_CACHE_MAX = 250
+      const gateMarkerCache = new Map<
+        string,
+        { size: number; mtimeMs: number; marker: string }
+      >()
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
       // Retry the reviewer twice before offering the user-authorized bypass:
@@ -3075,8 +3092,18 @@ ${guideSections}
                 (file: { path: string }) =>
                   typeof file.path === 'string' && file.path.trim().length > 0,
               )
+            // M1-T4c (fail closed): byte progress alone must not satisfy the
+            // gate — the receipt must report at least one open finding id
+            // (same intersection rule as the reviewer repair path).
+            const securityRepairAddressesOpenFinding =
+              openSecurityFindingIds.size === 0 ||
+              (!!securityRepairReceipt &&
+                securityRepairReceipt.findingsAddressed.some((id: string) =>
+                  openSecurityFindingIds.has(id),
+                ))
             if (
               !securityRepairReceipt ||
+              !securityRepairAddressesOpenFinding ||
               (!securityRepairHasProgress &&
                 (securityRepairReceipt.status !== 'completed' ||
                   [...openSecurityFindingIds].some(
@@ -3988,8 +4015,20 @@ ${guideSections}
                           typeof file.path === 'string' &&
                           file.path.trim().length > 0,
                       )
+                    // M1-T4c (fail closed): byte progress alone must not
+                    // satisfy the gate — the receipt must report at least one
+                    // open finding id (same intersection rule as the reviewer
+                    // repair path).
+                    const specialistRepairAddressesOpenFinding =
+                      specialistOpenFindingIds.size === 0 ||
+                      (!!specialistRepairReceipt &&
+                        specialistRepairReceipt.findingsAddressed.some(
+                          (id: string) =>
+                            specialistOpenFindingIds.has(id),
+                        ))
                     if (
                       !specialistRepairReceipt ||
+                      !specialistRepairAddressesOpenFinding ||
                       (!specialistRepairHasProgress &&
                         (specialistRepairReceipt.status !== 'completed' ||
                           [...specialistOpenFindingIds].some(
@@ -4926,8 +4965,19 @@ ${guideSections}
                     typeof file.path === 'string' &&
                     file.path.trim().length > 0,
                 )
+              // M1-T4c (fail closed): byte progress alone must not satisfy
+              // the gate — the receipt must report at least one validation
+              // failure id (same intersection rule as the reviewer repair
+              // path).
+              const validationRepairAddressesFinding =
+                validationFindingIds.length === 0 ||
+                (!!validationRepairReceipt &&
+                  validationRepairReceipt.findingsAddressed.some(
+                    (id: string) => validationFindingIds.includes(id),
+                  ))
               if (
                 !validationRepairReceipt ||
+                !validationRepairAddressesFinding ||
                 (!validationRepairHasProgress &&
                   (validationRepairReceipt.status !== 'completed' ||
                     validationFindingIds.some(
@@ -6043,8 +6093,21 @@ ${guideSections}
                 (file: { path: string }) =>
                   typeof file.path === 'string' && file.path.trim().length > 0,
               )
+            // M1-T4c (fail closed): when open finding IDs exist, byte progress
+            // alone must not satisfy the gate — the receipt must report at
+            // least one open finding id, so an unrelated edit (or a repeat of
+            // an already-applied fix) cannot clear the round with zero
+            // findings addressed. With no structured open findings the
+            // progress path is unchanged.
+            const reviewerRepairAddressesOpenFinding =
+              openFindingIds.size === 0 ||
+              (!!reviewerRepairReceipt &&
+                reviewerRepairReceipt.findingsAddressed.some((id: string) =>
+                  openFindingIds.has(id),
+                ))
             if (
               !reviewerRepairReceipt ||
+              !reviewerRepairAddressesOpenFinding ||
               (!reviewerRepairHasProgress &&
                 (reviewerRepairReceipt.status !== 'completed' ||
                   [...openFindingIds].some(
@@ -7819,23 +7882,25 @@ type ResolvedReviewerAttestation = {
  *
  * CANONICAL WHY for the entry selection; call sites carry pointers only.
  *
- * Resolution is PER FIELD, so the result is a COMPOSITE rather than one entry:
- * `reviewedFiles` is the UNION of the shaped entries, `snapshotFingerprint` is
- * the entry reporting `expectedFingerprint` else the first reporting an
- * attestable v3 fingerprint else undefined, and `schemaVersion` is 1 only when
- * EVERY shaped entry reports 1 (otherwise the first non-conforming version, so
- * the caller's `!== 1` check rejects the whole receipt).
+ * Resolution is ENTRY-SCOPED when an attestation exists (fail closed, M1-T4a):
+ * the attesting entry — the one reporting `expectedFingerprint`, else the
+ * first reporting an attestable v3 fingerprint — supplies BOTH
+ * `snapshotFingerprint` AND `reviewedFiles`. A prompt-injected quoted example
+ * can no longer splice its fingerprint onto a real entry's coverage, nor its
+ * coverage onto a real entry's fingerprint. When NO entry reports an
+ * attestable fingerprint the receipt already fails closed on the
+ * missing-fingerprint blocker, so the coverage union is preserved purely so
+ * the diagnostic stays informative. `schemaVersion` is 1 only when EVERY
+ * shaped entry reports 1 (otherwise the first non-conforming version, so the
+ * caller's `!== 1` check rejects the whole receipt);
+ * `collectReviewerAttestationIssues` additionally rejects a result whose
+ * shaped entries report distinct attestable fingerprints while NO entry
+ * reports the expected one (ambiguous multi-receipt attestation — when the
+ * expected fingerprint IS reported, entry-scoping resolves unambiguously and
+ * sibling foreign fingerprints are tolerated order-independently).
  *
- * ACCEPTED LOOSENING (pinned in agents/__tests__/gate-reviewer.test.ts): the
- * spliced fields let a quoted example entry supply the fingerprint for a real
- * entry that reported none, and — because the union is NOT restricted to the
- * entry that contributed the credited fingerprint — a quoted example whose
- * `reviewedFiles` path COLLIDES with a real pending path (the documented
- * example literally shows `reviewedFiles: ["src/a.ts"]`) credits coverage the
- * real entry never attested. Narrowing the union would not close the
- * fingerprint half and WOULD reject the deletions-only receipt, which
- * legitimately attests with an empty `reviewedFiles`. So the guarantee is the
- * weaker one: a pending file NO entry reported at all still blocks.
+ * The deletions-only receipt (a single shaped entry with an attestable
+ * fingerprint and empty `reviewedFiles`) still attests.
  *
  * With no shaped entry at all the LAST entry is read verbatim, so a receipt that
  * never attested still fails closed on the caller's schemaVersion check.
@@ -7866,12 +7931,19 @@ function resolveReviewerAttestation(structured: StructuredReviewerOutput[], expe
             attestable = entry;
         }
     }
+    // M1-T4a (fail closed): when an ATTESTING entry exists, BOTH attestation
+    // fields come from it — not a per-field composite. A quoted example entry
+    // (prompt injection inside the reviewer result) can no longer lend its
+    // fingerprint to a real entry's coverage, nor its coverage to a real
+    // entry's fingerprint: the splice was the forged-receipt vector and is
+    // closed. When NO entry reports an attestable fingerprint there is nothing
+    // to splice — the receipt already fails closed on the missing-fingerprint
+    // blocker — so the union keeps the coverage diagnostic informative instead
+    // of manufacturing a spurious missing-file blocker.
     const attesting = matching ?? attestable;
-    const reviewedFiles: string[] = [];
-    for (const entry of shaped) {
-        for (const file of entry.reviewedFiles ?? [])
-            reviewedFiles.push(file);
-    }
+    const reviewedFiles = attesting
+        ? (attesting.reviewedFiles ?? [])
+        : shaped.flatMap((entry) => entry.reviewedFiles ?? []);
     // Surfacing the FIRST non-conforming version (instead of the attesting
     // entry's) is what makes the caller's `!== 1` check reject a receipt whose
     // sibling entry claims another schema version.
@@ -7908,6 +7980,25 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
     if (verdicts.size > 1) {
         return [
             'BLOCKING: reviewer returned conflicting structured verdicts in one result',
+        ];
+    }
+    // M1-T4a (fail closed, order-independent): when NO shaped entry reports the
+    // EXPECTED fingerprint, two or more DISTINCT attestable v3 fingerprints make
+    // the result ambiguous — more than one receipt's worth of attestation with no
+    // way to tell which is real — so the whole result is rejected. When the
+    // expected fingerprint IS reported, resolution is unambiguous (that entry
+    // wins outright) and sibling foreign fingerprints are tolerated
+    // order-independently (RF-2): entry-scoping already binds coverage to the
+    // attesting entry, so a sibling can neither lend nor steal either field.
+    const reportedFingerprints = new Set(structured
+        .filter((entry) => entry.schemaVersion !== undefined)
+        .map((entry) => entry.snapshotFingerprint)
+        .filter((value): value is string => isAttestableV3Fingerprint(value)));
+    const reportsExpectedFingerprint = structured.some((entry) => entry.schemaVersion !== undefined &&
+        entry.snapshotFingerprint === expectedFingerprint);
+    if (reportedFingerprints.size > 1 && !reportsExpectedFingerprint) {
+        return [
+            'BLOCKING: reviewer returned conflicting snapshot fingerprints in one result',
         ];
     }
     const result = resolveReviewerAttestation(structured, expectedFingerprint);
@@ -8472,7 +8563,18 @@ function collectStructuredReviewerOutputs(value: unknown): StructuredReviewerOut
     return out;
 }
 
-function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput[], depth: number = 0): void {
+function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput[], depth: number = 0, 
+// Gate-crash fix: schemaVersion inherited from the nearest enclosing
+// ENVELOPE record (agentReceipt / review / output / result slots and the
+// json/structuredOutput wrappers). The runtime receipt carries
+// `schemaVersion: 1` while the compact review inside it omits it, so the
+// review entry used to resolve UNSHAPED and the attestation check failed
+// closed ("invalid attestation schemaVersion" / no structured snapshot
+// attestation) — parking the gate after its single retry despite a valid
+// review. Inheritance NEVER crosses arrays or arbitrary keys, so a
+// verdict-shaped quoted example nested in findings/evidence stays unshaped
+// exactly as before.
+envelopeSchemaVersion?: number): void {
     // Depth cap (same value findReviewerCrash uses on the same envelopes): 8 is
     // well past any realistic agent-result envelope but stops pathological or
     // self-referential recursion from blowing the stack.
@@ -8488,8 +8590,18 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
     if (typeof value !== 'object')
         return;
     const record = value as Record<string, unknown>;
-    if (record.type === 'json' && 'value' in record) {
-        visitForStructuredVerdict(record.value, out, depth + 1);
+    const recordSchemaVersion = typeof record.schemaVersion === 'number' ? record.schemaVersion : undefined;
+    const inheritedSchemaVersion = recordSchemaVersion ?? envelopeSchemaVersion;
+    if ((record.type === 'json' || record.type === 'structuredOutput') &&
+        'value' in record) {
+        visitForStructuredVerdict(record.value, out, depth + 1, inheritedSchemaVersion);
+        // spawn_agent_inline can surface the agent receipt as a SIBLING of
+        // `value` on the json record; the receipt carries the compact review
+        // when the bulky payload was truncated in transit. Visit it too —
+        // recognition only; an absent receipt is a no-op.
+        if (record.type === 'json' && record.agentReceipt !== undefined) {
+            visitForStructuredVerdict(record.agentReceipt, out, depth + 1, inheritedSchemaVersion);
+        }
         return;
     }
     const rawVerdict = record.verdict;
@@ -8591,7 +8703,7 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
                     : undefined,
                 schemaVersion: typeof record.schemaVersion === 'number'
                     ? record.schemaVersion
-                    : undefined,
+                    : envelopeSchemaVersion,
                 findingRecords: Array.isArray(rawFindings)
                     ? rawFindings.flatMap((finding) => {
                         if (!finding || typeof finding !== 'object')
@@ -8624,8 +8736,18 @@ function visitForStructuredVerdict(value: unknown, out: StructuredReviewerOutput
             return;
         }
     }
-    for (const nested of Object.values(record)) {
-        visitForStructuredVerdict(nested, out, depth + 1);
+    for (const [key, nested] of Object.entries(record)) {
+        // Dedicated envelope slots inherit this record's schemaVersion (the
+        // receipt carries it, the verdict object inside omits it). Every other
+        // key — evidence, findings, quoted examples — never inherits, so a
+        // verdict-shaped quote stays unshaped and outside the conflict checks.
+        const slotSchemaVersion = key === 'agentReceipt' ||
+            key === 'review' ||
+            key === 'output' ||
+            key === 'result'
+            ? inheritedSchemaVersion
+            : undefined;
+        visitForStructuredVerdict(nested, out, depth + 1, slotSchemaVersion);
     }
 }
 
@@ -11526,7 +11648,89 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
        * Never throws: every other scope, read, or stat failure becomes an
        * `unreadable:<code>` marker so stale credit fails closed.
        */
+      // M3-T2 cached wrapper (see gateMarkerCache above): fast path returns
+      // the previously computed marker when a fresh stat proves the file is
+      // still the same size and mtime it was hashed with; the uncached body
+      // below re-hashes otherwise. Error/sentinel markers (unreadable:*,
+      // missing) are NOT cached: they are cheap to recompute and a transient
+      // failure state must not pin stale credit.
       function readGateFileContentMarker(normalizedPath: string): string {
+        if (!normalizedPath) return 'unreadable:empty-path'
+        const cached = gateMarkerCache.get(normalizedPath)
+        if (cached !== undefined) {
+          // Resolve built-ins lazily alongside the uncached body so tests and
+          // serialized runtimes stay supported in both paths.
+          const cacheFs = readGateMarkerBuiltinFs()
+          if (cacheFs) {
+            try {
+              const cwd = process.cwd()
+              const stat = cacheFs.statSync(
+                cacheFs.realpathSync(
+                  requirePath().resolve(cwd, normalizedPath),
+                ),
+              )
+              if (
+                stat.isFile() &&
+                stat.size === cached.size &&
+                stat.mtimeMs === cached.mtimeMs
+              ) {
+                return cached.marker
+              }
+            } catch {
+              // Any stat/realpath failure falls through to a full recompute,
+              // which re-derives the same fail-closed sentinels as before.
+            }
+          }
+          gateMarkerCache.delete(normalizedPath)
+        }
+        const marker = readGateFileContentMarkerUncached(normalizedPath)
+        // Cache only present-file sha256 markers, keyed with the stat the
+        // uncached body read (its openedStat/fstat values). Simplest scheme
+        // that preserves bytes-unchanged liveness: stamp with the marker's own
+        // length is NOT enough, so the uncached body records stats itself via
+        // the entry below when they are available.
+        return marker
+      }
+
+      function readGateMarkerBuiltinFs():
+        | typeof import('node:fs')
+        | undefined {
+        const getBuiltinModule =
+          typeof process === 'object' &&
+          process !== null &&
+          'getBuiltinModule' in process &&
+          typeof process.getBuiltinModule === 'function'
+            ? process.getBuiltinModule.bind(process)
+            : undefined
+        const req = (globalThis as any).require as NodeJS.Require | undefined
+        if (getBuiltinModule) {
+          return getBuiltinModule('node:fs') as typeof import('node:fs')
+        }
+        if (typeof req === 'function') return req('node:fs')
+        return undefined
+      }
+
+      function requirePath(): typeof import('node:path') {
+        const getBuiltinModule =
+          typeof process === 'object' &&
+          process !== null &&
+          'getBuiltinModule' in process &&
+          typeof process.getBuiltinModule === 'function'
+            ? process.getBuiltinModule.bind(process)
+            : undefined
+        const req = (globalThis as any).require as NodeJS.Require | undefined
+        if (getBuiltinModule) {
+          return getBuiltinModule('node:path') as typeof import('node:path')
+        }
+        return (req as NodeJS.Require)('node:path')
+      }
+
+      // Cache entry write happens inside the uncached body: it closes over the
+      // resolved absolute path so the stamped stat is exactly the file that
+      // produced the marker (in-process fast path only).
+      function readGateFileContentMarkerUncached(
+        normalizedPath: string,
+      ): string {
         if (!normalizedPath) return 'unreadable:empty-path'
         // Resolve built-ins at call time so this stays compatible with
         // serialized handleSteps executions. Prefer process.getBuiltinModule
@@ -11670,7 +11874,25 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
               return 'unreadable:changed-during-read'
             }
             const prefix = symlinkParts.length > 0 ? 'symlink-sha256' : 'sha256'
-            return `${prefix}:${hash.digest('hex')}:${bytesReadTotal}`
+            const marker = `${prefix}:${hash.digest('hex')}:${bytesReadTotal}`
+            // M3-T2: stamp the cache with this file's size/mtime, captured on
+            // the SAME fd/result that produced the digest, so the fast path
+            // above can re-verify liveness without re-reading bytes. Cap the
+            // cache in insertion order (Map preserves recency).
+            if (gateMarkerCache.has(normalizedPath)) {
+              gateMarkerCache.delete(normalizedPath)
+            }
+            gateMarkerCache.set(normalizedPath, {
+              size: openedStat.size,
+              mtimeMs: openedStat.mtimeMs,
+              marker,
+            })
+            while (gateMarkerCache.size > GATE_MARKER_CACHE_MAX) {
+              const oldest = gateMarkerCache.keys().next().value
+              if (oldest === undefined) break
+              gateMarkerCache.delete(oldest)
+            }
+            return marker
           } finally {
             fs.closeSync(fd)
           }

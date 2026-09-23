@@ -23,6 +23,7 @@ import {
   skipIfMissingDescription,
   updateFileResultSchema,
 } from './str-replace'
+import { structuredEditErrorCodes } from '../../../util/error'
 
 import type { $ToolParams } from '../../constants'
 
@@ -518,13 +519,12 @@ export const editTransactionResultSchema = z.union([
       .describe(
         'True when retrying this aborted transaction requires a fresh read of every recovery.paths target from one coherent snapshot.',
       ),
+    // M2-T3: derived from the shared closed vocabulary in util/error.ts — one
+    // schema definition per contract, so codes sibling emitters actually send
+    // on this channel (fresh_read_required, occurrence_not_found,
+    // str_replace_circuit_breaker) stay valid without hand-mirroring the tuple.
     errorCode: z
-      .enum([
-        'no_match',
-        'stale_capability',
-        'preflight_failed',
-        'payload_truncated',
-      ])
+      .enum(structuredEditErrorCodes)
       .optional()
       .describe(
         'Compact machine-readable abort code models can key off without parsing errorMessage. payload_truncated means the tool-call argument payload was cut in transport (distinct from a genuine syntax preflight failure).',

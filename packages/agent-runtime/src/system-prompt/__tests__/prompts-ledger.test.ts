@@ -175,3 +175,95 @@ describe('system-prompt builders ledger recording', () => {
     expect(ledger.byCategory.systemInfo).toBeGreaterThan(0)
   })
 })
+
+/**
+ * Coverage for `redactedShellConfigBlock` (M1-T5 secret redaction), exercised
+ * through its only public entry point, `getSystemInfoPrompt`.
+ */
+describe('getSystemInfoPrompt shell config redaction', () => {
+  const baseSystemInfo = {
+    platform: 'linux',
+    shell: '/bin/bash',
+    nodeVersion: 'v22',
+    arch: 'x64',
+    homedir: '/home/test',
+    cpus: 4,
+    chromeAvailable: false,
+  }
+
+  it('drops secret-bearing lines and keeps innocuous lines', () => {
+    const fileContext = {
+      ...getStubProjectFileContext(),
+      shellConfigFiles: {
+        '~/.bashrc': [
+          'export EDITOR=vim',
+          'export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx',
+          'alias ll="ls -la"',
+        ].join('\n'),
+      },
+      systemInfo: baseSystemInfo,
+    }
+
+    const prompt = getSystemInfoPrompt(fileContext)
+
+    expect(prompt).toContain('<user_shell_config_files>')
+    // Innocuous lines survive untouched.
+    expect(prompt).toContain('export EDITOR=vim')
+    expect(prompt).toContain('alias ll="ls -la"')
+    // The secret-bearing line is dropped entirely (line-granularity policy).
+    expect(prompt).not.toContain('sk-proj-abcdefghijklmnopqrstuvwx')
+    expect(prompt).not.toContain('OPENAI_API_KEY=')
+  })
+
+  it('drops token-shaped secret lines even without a sensitive keyword', () => {
+    const skToken = 'sk-' + 'a'.repeat(24)
+    const fileContext = {
+      ...getStubProjectFileContext(),
+      shellConfigFiles: {
+        '~/.zshrc': `curl -H "Authorization: ${skToken}" api.example.com`,
+      },
+      systemInfo: baseSystemInfo,
+    }
+
+    const prompt = getSystemInfoPrompt(fileContext)
+
+    expect(prompt).not.toContain(skToken)
+  })
+
+  it('marks a fully redacted file with the explicit redaction marker', () => {
+    const fileContext = {
+      ...getStubProjectFileContext(),
+      shellConfigFiles: {
+        '~/.bashrc': 'export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG',
+      },
+      systemInfo: baseSystemInfo,
+    }
+
+    const prompt = getSystemInfoPrompt(fileContext)
+
+    expect(prompt).toContain('[REDACTED for safety')
+    expect(prompt).toContain('1 lines omitted')
+    expect(prompt).not.toContain('wJalrXUtnFEMI')
+    expect(prompt).not.toContain('AWS_SECRET_ACCESS_KEY=')
+  })
+
+  it('drops comment and blank lines from shell config files', () => {
+    const fileContext = {
+      ...getStubProjectFileContext(),
+      shellConfigFiles: {
+        '~/.profile': [
+          '# my api key config',
+          '',
+          'export PATH=$PATH:/usr/local/bin',
+        ].join('\n'),
+      },
+      systemInfo: baseSystemInfo,
+    }
+
+    const prompt = getSystemInfoPrompt(fileContext)
+
+    // Comments and blanks are dropped; only real config survives.
+    expect(prompt).not.toContain('# my api key config')
+    expect(prompt).toContain('export PATH=$PATH:/usr/local/bin')
+  })
+})

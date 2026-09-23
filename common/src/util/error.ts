@@ -112,11 +112,93 @@ export function failure(error: unknown): Failure<ErrorObject> {
  * only as part of building a full `ErrorObject`; callers that just need to key
  * on the failure mode of an arbitrary caught value use this.
  */
+// Local import (bottom-of-file helpers are exported from this module; keeping
+// the import here avoids touching the top import block order).
+import { redactSecretValues } from './redact-secrets'
+
 export function errorCode(err: unknown): string | undefined {
   if (typeof err !== 'object' || err === null || !('code' in err)) {
     return undefined
   }
   return typeof err.code === 'string' ? err.code : undefined
+}
+
+/**
+ * CLOSED vocabulary of the machine-readable error codes the edit/failure
+ * system actually emits today, collected from the emitting sites (nothing
+ * invented):
+ *
+ * - `packages/agent-runtime/src/process-edit-transaction.ts`: the public
+ *   `errorCode` union `'no_match' | 'stale_capability' | 'preflight_failed'`
+ *   on the aborted-transaction result.
+ * - `packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts`: the
+ *   same three codes re-derived from structured `failureKind`s, plus
+ *   `PAYLOAD_TRUNCATED_ERROR_CODE` (`'payload_truncated'`, defined in
+ *   `common/src/tools/params/utils.ts`) for preflight syntax failures that
+ *   are transport-truncation artifacts.
+ * - `packages/agent-runtime/src/tools/handlers/tool/str-replace.ts`:
+ *   `'fresh_read_required'` (strict read-before-edit and auto-reread failures)
+ *   and `'str_replace_circuit_breaker'` (per-path failure budget exhausted).
+ * - `packages/agent-runtime/src/tools/handlers/tool/replace-range.ts`:
+ *   `'occurrence_not_found'` (occurrence targeting resolved 0 matches or an
+ *   out-of-range index).
+ *
+ * `common/src/tools/params/tool/str-replace.ts` documents `errorCode` on the
+ * result schema as an OPEN `z.string()` (no closed enum to copy), so this
+ * tuple is the closed source of truth for downstream consumers. Growth is
+ * additive only: a new emitting site must append its literal here.
+ */
+export const structuredEditErrorCodes = [
+  'fresh_read_required',
+  'no_match',
+  'occurrence_not_found',
+  'payload_truncated',
+  'preflight_failed',
+  'stale_capability',
+  'str_replace_circuit_breaker',
+] as const
+
+export type StructuredEditErrorCode = (typeof structuredEditErrorCodes)[number]
+
+/**
+ * Runtime type guard for `structuredEditErrorCodes`. Deliberately a runtime
+ * check rather than a cast: a code arriving over the wire from an older
+ * runtime that predates a vocabulary entry is rejected instead of trusted.
+ */
+export function isStructuredEditErrorCode(
+  value: unknown,
+): value is StructuredEditErrorCode {
+  return (
+    typeof value === 'string' &&
+    (structuredEditErrorCodes as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * M0-T2 primitive that M2-T6 will adopt to replace prose-regex failure
+ * classification: extract the typed structured edit error code and the
+ * message from an arbitrary caught value.
+ *
+ * Returns `undefined` when the error carries NO recognizable code — either no
+ * string `code` at all, or a `code` outside the closed
+ * `structuredEditErrorCodes` vocabulary (e.g. a Node fs `'EACCES'`). Callers
+ * MUST treat an undefined code as unknown-classified and FAIL CLOSED (apply
+ * the generic recovery path); they must never guess a classification from the
+ * message text — prose matching is exactly the drift this primitive replaces.
+ *
+ * Pure: reads only the `code` field (via the existing exported `errorCode`
+ * helper) and the `message` field; no regex over prose.
+ */
+export function classifyStructuredEditError(
+  err: unknown,
+): { code: StructuredEditErrorCode | undefined; message: string } | undefined {
+  const code = errorCode(err)
+  if (!isStructuredEditErrorCode(code)) return undefined
+  const message =
+    typeof err === 'object' && err !== null && 'message' in err
+      ? String((err as { message: unknown }).message)
+      : String(err)
+  return { code, message }
 }
 
 /**
@@ -483,19 +565,23 @@ export function getErrorObject(
   if (error instanceof Error) {
     const extError = error as Error & Partial<ExtendedErrorProperties>
 
-    // Extract responseBody - could be string or object
+    // Extract responseBody - could be string or object. M1-T5: the payload can
+    // echo request secrets (API keys in headers/body), so it is redacted.
     let responseBody: string | undefined
     if (extError.responseBody !== undefined) {
-      responseBody = safeStringify(extError.responseBody)
+      responseBody = redactSecretValues(safeStringify(extError.responseBody) ?? '')
     }
 
-    // Extract requestBodyValues - typically an object, stringify for logging
+    // Extract requestBodyValues - typically an object, stringify for logging.
+    // M1-T5: request bodies carry prompt/messages, so secrets are redacted.
     let requestBodyValues: string | undefined
     if (
       extError.requestBodyValues !== undefined &&
       typeof extError.requestBodyValues === 'object'
     ) {
-      requestBodyValues = safeStringify(extError.requestBodyValues)
+      requestBodyValues = redactSecretValues(
+        safeStringify(extError.requestBodyValues) ?? '',
+      )
     }
 
     // Extract cause - recursively convert to ErrorObject if present
@@ -514,7 +600,10 @@ export function getErrorObject(
           ? extError.statusCode
           : undefined,
       code: typeof extError.code === 'string' ? extError.code : undefined,
-      rawError: options.includeRawError ? safeStringify(error) : undefined,
+      // M1-T5: the raw error can carry provider request dumps; redacted.
+      rawError: options.includeRawError
+        ? redactSecretValues(safeStringify(error) ?? '')
+        : undefined,
       // API error fields
       responseBody,
       url: typeof extError.url === 'string' ? extError.url : undefined,

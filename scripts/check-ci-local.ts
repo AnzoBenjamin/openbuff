@@ -187,17 +187,30 @@ export function releaseCiLocalLock(root: string): void {
 }
 
 /**
- * Optional per-step timeout in milliseconds for check:ci-local steps, so a hung
- * suite cannot block the pre-push hook forever. 0 (the default, and the value
- * for unset or invalid overrides) disables the timeout.
+ * M3-T1 (finite timeouts): default per-step cap for check:ci-local steps so a
+ * hung suite cannot block the pre-push hook forever. Conservative: each gate
+ * step (generate, diff, guards, full agents/common suites) completes well
+ * under five minutes on CI-sized workstations.
+ */
+export const DEFAULT_CI_LOCAL_STEP_TIMEOUT_MS = 300_000
+
+/**
+ * Per-step timeout in milliseconds for check:ci-local steps. M3-T1: the cap
+ * is ON by default (DEFAULT_CI_LOCAL_STEP_TIMEOUT_MS). A valid positive
+ * OPENBUFF_CI_LOCAL_STEP_TIMEOUT_MS override wins, an explicit `0` disables
+ * the cap, and unset or invalid overrides keep the documented default.
  */
 export function ciLocalStepTimeoutMs(): number {
   const raw = process.env.OPENBUFF_CI_LOCAL_STEP_TIMEOUT_MS
-  if (!raw) {
-    return 0
+  if (raw === undefined || raw.trim() === '') {
+    return DEFAULT_CI_LOCAL_STEP_TIMEOUT_MS
   }
   const parsed = Number(raw)
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_CI_LOCAL_STEP_TIMEOUT_MS
+  }
+  // 0 (explicitly) disables the timeout; a positive override is floored.
+  return Math.floor(parsed)
 }
 
 export type CiLocalStepRunner = (
@@ -237,9 +250,13 @@ function stepWasKilledByTimeout(result: CiLocalSpawnResult): boolean {
     result.error && typeof result.error === 'object' && 'code' in result.error
       ? String((result.error as { code: unknown }).code)
       : undefined
-  return (
-    code === 'ETIMEDOUT' || (result.status === null && result.signal != null)
-  )
+  // M3-T1: with the cap ARMED any kill-shaped result (signal death or an
+  // ETIMEDOUT spawn error) gets the hint; with the cap DISABLED the hint is
+  // suppressed at the caller (timeoutMs > 0 guard), so an externally killed
+  // child running without the cap is never blamed on it. The cap is enabled
+  // by default, so a signal-death under the default run is almost always the
+  // cap itself.
+  return code === 'ETIMEDOUT' || (result.status === null && result.signal != null)
 }
 
 /**

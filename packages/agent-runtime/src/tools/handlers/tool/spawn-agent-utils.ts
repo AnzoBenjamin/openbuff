@@ -369,11 +369,16 @@ export function validateVersionedAgentHandoff(params: {
     }
     return
   }
-  if (
-    record.schemaVersion === undefined &&
-    params.agentType !== 'repair-editor'
-  ) {
-    return
+  // M2-T2 (fail closed): ANY provided handoff must be a complete v1 envelope.
+  // Unversioned/legacy objects used to be accepted silently here and then
+  // flowed into consumers that dereference `handoff.permissions` (a bare
+  // TypeError) and stamp raw taskId/role into agent receipts. The tool-input
+  // schemas still accept the legacy SHAPE so model calls fail HERE with an
+  // actionable message instead of opaque zod output or a TypeError.
+  if (record.schemaVersion === undefined) {
+    throw new Error(
+      `Invalid handoff for agent ${params.agentType}: handoffs must be complete schemaVersion 1 envelopes (taskId, role, objective, requirements, acceptanceCriteria, context, nonGoals, findings, permissions). Legacy unversioned handoff objects are not accepted; pass prompt/params instead.`,
+    )
   }
   if (
     record.schemaVersion !== 1 ||
@@ -458,8 +463,17 @@ export function deriveSpawnTemplateCapabilities(params: {
     : agentTemplate
   if (!handoff) return inheritedTemplate
 
-  const requestedTools = new Set(handoff.permissions.allowedTools)
   const staticTools = getEffectiveAgentToolNames(inheritedTemplate)
+  // M2-T2 empty-permission semantics: an empty `allowedTools` list means "no
+  // change" to the child's static tool set — the same convention as empty
+  // readablePaths/writablePaths (preserve static scope) — never a zero-tool
+  // child that burns a full spawn cycle and fails downstream. Only a
+  // non-empty list narrows (to requested ∩ static) or grants read-only tools.
+  const requestedTools = new Set(
+    handoff.permissions.allowedTools.length > 0
+      ? handoff.permissions.allowedTools
+      : staticTools,
+  )
   const grantableReadOnlyTools = new Set(HANDOFF_GRANTABLE_READ_ONLY_TOOLS)
   // A handoff may grant the closed allowlist of read-only discovery tools even
   // when they are absent from the child's static tool set. Any other requested
@@ -707,6 +721,67 @@ function compactAgentOutputValue(
   return compacted
 }
 
+/**
+ * Locate the reviewer attestation core — schemaVersion, verdict,
+ * snapshotFingerprint, reviewedFiles, coverage — inside an arbitrarily nested
+ * child output, depth-first. Only a FULLY attestation-shaped review qualifies
+ * (a verdict string plus a snapshotFingerprint string or a reviewedFiles
+ * array), so a verdict-shaped quoted example without attestation payload never
+ * qualifies.
+ *
+ * WHY: the lossy fallback in boundAgentOutputForParent used to destroy these
+ * fields; the gate's walker then found zero structured entries and parked the
+ * run with "reviewer did not return the required structured snapshot
+ * attestation" despite a complete review. Preservation only — the gate's
+ * fingerprint/coverage checks are unchanged and still run on the entry the
+ * walker resolves.
+ */
+function extractReviewerAttestationCore(
+  value: unknown,
+  depth = 0,
+): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || depth > 8) return undefined
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = extractReviewerAttestationCore(entry, depth + 1)
+      if (found) return found
+    }
+    return undefined
+  }
+  const record = value as Record<string, unknown>
+  if (
+    typeof record.verdict === 'string' &&
+    (typeof record.snapshotFingerprint === 'string' ||
+      Array.isArray(record.reviewedFiles))
+  ) {
+    return {
+      ...(typeof record.schemaVersion === 'number'
+        ? { schemaVersion: record.schemaVersion }
+        : {}),
+      verdict: record.verdict,
+      ...(typeof record.snapshotFingerprint === 'string'
+        ? { snapshotFingerprint: record.snapshotFingerprint }
+        : {}),
+      ...(Array.isArray(record.reviewedFiles)
+        ? { reviewedFiles: record.reviewedFiles }
+        : {}),
+      ...(typeof record.coverage === 'string'
+        ? { coverage: record.coverage }
+        : {}),
+      ...(Array.isArray(record.findings) ? { findings: record.findings } : {}),
+    }
+  }
+  if (record.type === 'json' || record.type === 'structuredOutput') {
+    const found = extractReviewerAttestationCore(record.value, depth + 1)
+    if (found) return found
+  }
+  for (const nested of Object.values(record)) {
+    const found = extractReviewerAttestationCore(nested, depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
+
 function summarizeNestedAgentOutput(value: unknown): unknown {
   const strings = new Map<string, string>()
   const artifacts = new Set<string>()
@@ -755,6 +830,10 @@ function summarizeNestedAgentOutput(value: unknown): unknown {
   return {
     type: 'truncatedNestedAgentOutput',
     truncated: true,
+    // Gate-crash fix: the depth-7 collapse must not swallow a complete
+    // reviewer attestation nested inside; re-locate it and hoist the core to
+    // the surface so the walker still resolves a shaped entry.
+    ...(extractReviewerAttestationCore(value) ?? {}),
     ...Object.fromEntries(strings),
     ...(artifacts.size > 0 ? { artifacts: [...artifacts].slice(0, 16) } : {}),
   }
@@ -779,6 +858,10 @@ function boundAgentOutputForParent(
           },
         }
       : rawCompacted
+  // Gate-crash fix: locate the reviewer attestation core ONCE so the lossy
+  // fallbacks below preserve it instead of destroying the only surviving
+  // structured verdict.
+  const attestationCore = extractReviewerAttestationCore(value)
   let serialized = ''
   try {
     serialized = JSON.stringify(compacted)
@@ -787,6 +870,7 @@ function boundAgentOutputForParent(
       type: 'agentReceipt',
       agentType,
       truncated: true,
+      ...(attestationCore ?? {}),
       summary: 'Agent output was not serializable.',
     }
   }
@@ -830,6 +914,12 @@ function boundAgentOutputForParent(
     type: 'agentReceipt',
     agentType,
     truncated: true,
+    // Preserve the reviewer attestation core (verdict, snapshotFingerprint,
+    // reviewedFiles, coverage) when the oversize fallback replaces the real
+    // payload: without it the gate's walker finds zero structured entries and
+    // parks the run on "did not return the required structured snapshot
+    // attestation" despite a complete review.
+    ...(attestationCore ?? {}),
     summary: `${serialized.slice(0, 48_000)}...[truncated child output]...${serialized.slice(-8_000)}`,
   }
 }
@@ -838,6 +928,22 @@ export function normalizeSpawnedAgentOutput(
   output: any,
   agentType?: string,
 ): any {
+  // M0-T3 output durability: a child that never called set_output must never
+  // surface as an undefined/null/empty value that the parent cannot
+  // distinguish from real (possibly compact) output. Emit an explicit partial
+  // marker with a diagnostic instead. Additive fields only — every existing
+  // return shape keeps its fields.
+  if (
+    output === undefined ||
+    output === null ||
+    (typeof output === 'string' && !output.trim())
+  ) {
+    return {
+      summary: '',
+      partial: true,
+      errorMessage: `${agentType ?? 'subagent'} ended without calling set_output`,
+    }
+  }
   if (
     output &&
     typeof output === 'object' &&
@@ -850,6 +956,10 @@ export function normalizeSpawnedAgentOutput(
         typeof message === 'string' && message.trim()
           ? message
           : 'Subagent failed before producing output',
+      // A run-level error means the run ended before the child produced its
+      // real result: mark it explicitly partial so the parent sees the
+      // failure mode without inferring it from a bare errorMessage.
+      partial: true,
     }
   }
   if (output && typeof output === 'object' && !Array.isArray(output)) {

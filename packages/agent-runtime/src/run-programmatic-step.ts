@@ -5,7 +5,6 @@ import { createGateTelemetryRecorder } from './orchestration/gate-telemetry-sink
 import { transitionBase2Gate } from './orchestration/workflow-engine'
 import { getErrorObject } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
-import { cloneDeep } from 'lodash'
 
 import { executeToolCall } from './tools/tool-executor'
 import { parseTextWithToolCalls } from './util/parse-tool-calls-from-text'
@@ -167,6 +166,17 @@ export function clearAgentGeneratorForRun(runId: string): void {
 // calls forever from becoming an unbounded infinite loop (the per-LLM-turn
 // budget in runAgentStep does not cover the programmatic tool-call loop).
 const MAX_PROGRAMMATIC_TOOL_CALLS = 10_000
+
+// executionSource values for which a STRING handleSteps may be materialized
+// with `new Function`. Only locally-installed, explicitly-trusted templates
+// qualify: 'bundled' (the shipped agents package) and 'local' (a trusted
+// local agents directory). Templates from the local loader that predate the
+// field carry no executionSource at all and are treated as local (see the
+// guard below). 'database' and any other/unrecognized provenance are denied.
+const TRUSTED_STRING_HANDLE_STEPS_EXECUTION_SOURCES = new Set([
+  'bundled',
+  'local',
+])
 
 // Function to handle programmatic agents
 export async function runProgrammaticStep(
@@ -331,15 +341,28 @@ export async function runProgrammaticStep(
     // This mirrors the serialization convention used by the agent test suite
     // (agents/__tests__/context-pruner.test.ts, base2.test.ts), so the same
     // stringification contract exercised by tests is what runs in prod.
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    // String materialization is an ALLOWLIST, not a denylist: a string
+    // handleSteps may only be handed to `new Function` when the template's
+    // executionSource marks it as locally-installed and explicitly trusted —
+    // 'bundled' (the shipped agents package), 'local' (a trusted local
+    // agents directory), or undefined (legacy local templates from the local
+    // loader, which predate the field). Any other value — including
+    // 'database' — is rejected before `new Function` ever sees the string.
+    // Function-typed handleSteps are unchanged: they were compiled
+    // in-process from code the caller already trusted, not deserialized from
+    // a stored string.
     if (
-      template.executionSource === 'database' &&
-      typeof template.handleSteps === 'string'
+      typeof template.handleSteps === 'string' &&
+      template.executionSource !== undefined &&
+      !TRUSTED_STRING_HANDLE_STEPS_EXECUTION_SOURCES.has(
+        template.executionSource,
+      )
     ) {
       throw new Error(
-        `Executable handleSteps are disabled for database-loaded agent ${template.id}. Install and explicitly trust the agent locally, or publish it as a prompt-only agent.`,
+        `Executable handleSteps are disabled for agent ${template.id} loaded from executionSource '${template.executionSource}'. Install and explicitly trust the agent locally, or publish it as a prompt-only agent.`,
       )
     }
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const generatorFn =
       typeof template.handleSteps === 'string'
         ? new Function(`return (${template.handleSteps})`)()
@@ -497,6 +520,10 @@ export async function runProgrammaticStep(
       anchors: agentState.confirmedPostEditAnchorsByPath,
       projectId: projectRoot,
       runId: agentState.runId ?? '',
+      // Opt-in (M1-T4b): the stamps live in durable per-run agentState on the
+      // user's own machine; tampering with them implies local write access,
+      // so the issuer-stamp restart path stays available across turns.
+      allowUnauthenticatedIssuerRestamp: true,
     }),
     editRereadRequirementsByPath: {
       ...(agentState.editRereadRequirementsByPath ?? {}),

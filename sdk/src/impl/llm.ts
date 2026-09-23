@@ -81,6 +81,143 @@ const providerOrder = {
   [models.openrouter_claude_opus_4]: ['Google', 'Anthropic'],
 }
 
+/**
+ * Attempt to repair a model tool-call `input` string whose JSON was cut off
+ * mid-stream (a common invalid-tool-input failure for truncated
+ * generations). The repair is strictly bounded: at most 64 trailing
+ * characters of garbage are dropped (whitespace, a dangling value, a
+ * dangling key/colon or a trailing comma), an unterminated string at the
+ * cut point is closed, and missing closing brackets are appended. Returns
+ * the repaired text only when it parses to a plain JSON object or array;
+ * `undefined` means 'unrepairable' and the caller keeps the original input
+ * so per-tool validation produces the model-visible error (M2-T5).
+ */
+export function repairTruncatedToolInputJson(
+  input: string,
+): string | undefined {
+  const text = input.trim()
+  if (text.length === 0) return undefined
+  if (text[0] !== '{' && text[0] !== '[') return undefined
+
+  const tryParse = (
+    candidate: string,
+  ): Record<string, unknown> | unknown[] | undefined => {
+    try {
+      const parsed: unknown = JSON.parse(candidate)
+      if (Array.isArray(parsed)) return parsed
+      if (typeof parsed === 'object' && parsed !== null) {
+        return parsed as Record<string, unknown>
+      }
+      return undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  if (tryParse(text) !== undefined) return text
+
+  // M2-T5 repair (bounded-faithfulness guard): a WRONG closing bracket in the
+  // produced text (e.g. `{"a": 1]`) is a structural mismatch, not a clean
+  // truncation — silently dropping it would misrepresent content the model
+  // already produced. Return undefined so the call fails explicitly through
+  // validation instead of being silently rewritten.
+  // An unterminated string is NOT a mismatch (the repair below legitimately
+  // closes it), so quotes are skipped in this scan.
+  const hasMismatchedCloseBracket = (candidate: string): boolean => {
+    const stack: string[] = []
+    let inString = false
+    let escaped = false
+    for (let i = 0; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') inString = true
+      else if (ch === '{') stack.push('}')
+      else if (ch === '[') stack.push(']')
+      else if (ch === '}' || ch === ']') {
+        if (stack.pop() !== ch) return true
+      }
+    }
+    return false
+  }
+  if (hasMismatchedCloseBracket(text)) return undefined
+
+  // A cut inside a string literal cannot parse without closing the quote.
+  const openQuoteAt = (candidate: string): number => {
+    let quote: string | null = null
+    let escaped = false
+    for (let i = 0; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (quote === null) {
+        if (ch === '"' || ch === "'") quote = ch
+      } else if (quote === ch && !escaped) {
+        quote = null
+      } else if (ch === '\\') {
+        escaped = !escaped
+        continue
+      }
+      escaped = false
+    }
+    return quote === null ? -1 : candidate.lastIndexOf(quote)
+  }
+
+  const closeBrackets = (candidate: string): string | undefined => {
+    const stack: string[] = []
+    let inString = false
+    let escaped = false
+    for (let i = 0; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') inString = true
+      else if (ch === '{') stack.push('}')
+      else if (ch === '[') stack.push(']')
+      else if (ch === '}' || ch === ']') {
+        if (stack.pop() !== ch) return undefined
+      }
+    }
+    if (inString) return undefined
+    return candidate + stack.reverse().join('')
+  }
+
+  const MAX_TRUNCATION_CHARS = 64
+  const cutFrom = Math.max(0, text.length - MAX_TRUNCATION_CHARS)
+  for (let cut = text.length; cut >= cutFrom; cut--) {
+    let candidate = text.slice(0, cut)
+    // Drop a trailing comma / dangling key / dangling colon left by the cut.
+    candidate = candidate.replace(/[,:\s]+$/, '')
+    const quoteAt = openQuoteAt(candidate)
+    if (quoteAt >= 0) {
+      // Close the unterminated string at the cut point, keeping the value
+      // text the model already produced before the cut (M2-T5).
+      candidate = candidate + '"'
+    }
+    candidate = candidate.replace(/,\s*$/, '')
+    const closed = closeBrackets(candidate)
+    if (closed === undefined) continue
+    const parsedClosed = tryParse(closed)
+    if (parsedClosed === undefined) continue
+    // M2-T5 repair: a reconstruction that discards EVERY key the model
+    // produced (parses to an empty `{}`/`[]`) loses all content and must
+    // fail explicitly instead.
+    const isEmptyContainer =
+      Array.isArray(parsedClosed)
+        ? parsedClosed.length === 0
+        : Object.keys(parsedClosed).length === 0
+    if (!isEmptyContainer) return closed
+  }
+
+  return undefined
+}
+
 function isImageMediaType(mediaType: unknown): boolean {
   return (
     typeof mediaType === 'string' &&
@@ -376,6 +513,30 @@ function emitCacheDebugUsage(params: {
 }
 
 const POST_STREAM_METADATA_TIMEOUT_MS = 500
+
+/**
+ * M3-T1 (finite timeouts): conservative default wall-clock bound on a single
+ * LLM request (headers + full stream body), so a provider that accepts the
+ * connection but never streams cannot hang the harness forever. Long
+ * generations for large contexts still fit comfortably inside 10 minutes;
+ * callers keep full control via their own abort signal, which is merged —
+ * an explicit caller cancellation always wins over this default.
+ */
+const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 600_000
+
+/**
+ * M3-T1: merge the caller's signal with a finite default request timeout.
+ * The returned signal aborts when either the caller cancels or the default
+ * deadline elapses, so a hung provider request is always bounded while an
+ * explicitly provided caller timeout (params.signal) remains authoritative.
+ */
+function withDefaultRequestTimeout(
+  params: ModelRequestParams | { signal?: unknown },
+  signal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_LLM_REQUEST_TIMEOUT_MS)
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+}
 
 /**
  * Depth cap for the JSON-safety probe below. Real JSON Schemas nest far
@@ -1152,6 +1313,10 @@ export async function* promptAiSdkStream(
 
           response = streamText({
             ...streamParams,
+            // M3-T1: finite default request timeout so a hung provider
+            // stream cannot hang the harness; the caller's own signal
+            // (streamParams.signal) is merged and keeps taking precedence.
+            abortSignal: withDefaultRequestTimeout(streamParams, streamParams.signal),
             ...(compatibility.supportsTools === false
               ? { tools: undefined, toolChoice: undefined }
               : {}),
@@ -1246,7 +1411,43 @@ export async function* promptAiSdkStream(
                 }
               }
 
-              // For all other cases (invalid args, unknown tools, etc.), pass through
+              // InvalidToolInputError: attempt a bounded truncation repair
+              // of the tool input JSON. The AI SDK only hands the repair hook
+              // NoSuchToolError / InvalidToolInputError errors and, when the
+              // hook returns a call, re-validates it against the tool's
+              // schema (a failed re-validation falls through to the SDK's
+              // invalid tool-call error path, which is the model-visible
+              // graceful failure). Unrepairable input keeps the original
+              // call so that validation error surfaces unchanged (M2-T5).
+              if (InvalidToolInputError.isInstance(error)) {
+                if (typeof toolCall.input === 'string') {
+                  const repairedInput = repairTruncatedToolInputJson(
+                    toolCall.input,
+                  )
+                  if (repairedInput !== undefined) {
+                    logger.info(
+                      {
+                        toolName,
+                        originalLength: toolCall.input.length,
+                        repairedLength: repairedInput.length,
+                      },
+                      'Repaired truncated tool-call input JSON',
+                    )
+                    return { ...toolCall, input: repairedInput }
+                  }
+                  logger.info(
+                    {
+                      toolName,
+                      errorType: error.name,
+                      error: error.message,
+                    },
+                    'Tool input repair attempt failed - returning the call un-repaired after a failed repair attempt so per-tool validation produces the model-visible tool error',
+                  )
+                  return toolCall
+                }
+              }
+
+              // For all other cases (unknown tools etc.), pass through
               // the original tool call.
               logger.info(
                 {
@@ -1800,6 +2001,9 @@ export async function promptAiSdk(
   try {
     response = await generateText({
       ...params,
+      // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
+      // the caller's params.signal is merged and keeps precedence.
+      abortSignal: withDefaultRequestTimeout(params, params.signal),
       ...(compatibility.supportsTools === false
         ? { tools: undefined, toolChoice: undefined }
         : {}),
@@ -1930,6 +2134,9 @@ export async function promptAiSdkStructured<T>(
   try {
     response = await generateObject<z.ZodType<T>, 'object'>({
       ...params,
+      // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
+      // the caller's params.signal is merged and keeps precedence.
+      abortSignal: withDefaultRequestTimeout(params, params.signal),
       ...(compatibility.supportsTools === false
         ? { tools: undefined, toolChoice: undefined }
         : {}),

@@ -4934,17 +4934,34 @@ describe('base2 verification and reviewer gates', () => {
         ).value,
       ).toMatchObject({ toolName: 'add_message' })
 
-      expect(gen.next().value).toMatchObject({
+      const repairSpawn = gen.next().value as any
+      expect(repairSpawn).toMatchObject({
         toolName: 'spawn_agents',
         input: { agents: [{ agent_type: 'repair-editor' }] },
       })
-      // Receipt status blocked + empty findingsAddressed, but changedFiles present:
-      // parent must re-enter validation instead of hard-blocking the gate.
-      // The scratch file's bytes really change so the no-progress guard stays
-      // quiet and the mutation-progress path is what's under test here.
+      // M1-T4c: byte progress alone no longer satisfies the repair gate. The
+      // receipt may stay 'blocked', but it must still address at least one
+      // open finding id — extracted from the repair prompt the way a real
+      // repair-editor reads it — while the scratch file's bytes really change
+      // so the no-progress guard stays quiet and the mutation-progress path
+      // continues into re-validation.
+      // Plain-string blockers are minted `RF-<n>-<fnv-hash>` ids and listed in
+      // the repair prompt as `<id>: <text>` (text keeps its BLOCKING prefix).
+      const findingId =
+        String(repairSpawn.input.agents[0]?.prompt ?? '').match(
+          /^(RF-\d+-[0-9a-f]+):/m,
+        )?.[1] ?? ''
+      expect(findingId).not.toBe('')
       writeFileSync(tmpFile, 'export const value = 2 // partial repair\n')
       expect(
-        gen.next(progressOnlyRepairReceipt([gateFile]) as any).value,
+        gen.next(
+          repairSpawnReport({
+            receiptId: 'repair-progress-addressing-finding',
+            status: 'blocked',
+            changedFiles: [{ path: gateFile }],
+            findingsAddressed: [findingId],
+          }) as any,
+        ).value,
       ).toMatchObject({
         toolName: 'git_status',
       })
@@ -4966,6 +4983,55 @@ describe('base2 verification and reviewer gates', () => {
           ],
         } as any).value,
       ).toMatchObject({ toolName: 'spawn_agent_inline' })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // M1-T4c (fail closed): byte progress with ZERO addressed findings no longer
+  // satisfies the reviewer repair gate — an unrelated edit must hard-block the
+  // phase instead of re-entering validation and re-review with nothing cleared.
+  test('repair receipt with progress but zero addressed findings is rejected', () => {
+    const tmpDir = makeProjectTempDir('base2-repair-zero-addressed-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Make the requested change now please',
+        params: {},
+      } as any)
+
+      gen.next() // git_status
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: '' } }],
+      } as any) // spawn_agent_inline
+      gen.next() // STEP
+      gen.next({
+        stepsComplete: true,
+        toolResult: [{ type: 'json', value: editReceipt(gateFile) }],
+      } as any) // git_status
+      gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any) // run_file_change_hooks
+      gen.next({
+        toolResult: [{ type: 'json', value: [] }],
+      } as any) // git_status
+      const reviewCall = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any).value as any
+      gen.next(
+        attestedReviewerResult(reviewCall, 'BLOCKING', [
+          'Fix the edge case.',
+        ]) as any,
+      ) // add_message
+      gen.next() // repair-editor spawn
+      writeFileSync(tmpFile, 'export const value = 2 // unrelated edit\n')
+      gen.next(progressOnlyRepairReceipt([gateFile]) as any)
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe('blocked')
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -10251,16 +10317,31 @@ describe('base2 reviewer round-findings telemetry', () => {
         (agentState as any).base2ActiveWork.openReviewerBlockers,
       ).toContain(`NON_BLOCKING: ${findingText}`)
 
-      expect(gen.next().value).toMatchObject({
+      const repairSpawn = gen.next().value as any
+      expect(repairSpawn).toMatchObject({
         toolName: 'spawn_agents',
         input: { agents: [{ agent_type: 'repair-editor' }] },
       })
-      // Progress-only receipt: real bytes change (so the no-progress guard
-      // passes) but no finding id is claimed, so nothing is condoned and the
-      // same text legitimately returns as CARRIED next round.
+      // M1-T4c: byte progress alone no longer satisfies the repair gate when
+      // open finding ids exist — the receipt must address at least one. The
+      // receipt stays 'blocked' (so nothing is condoned and the same text
+      // legitimately returns as CARRIED next round) while still naming the
+      // open finding id minted into the repair prompt.
+      const carriedFindingId =
+        String(repairSpawn.input.agents[0]?.prompt ?? '').match(
+          /^(RF-\d+-[0-9a-f]+):/m,
+        )?.[1] ?? ''
+      expect(carriedFindingId).not.toBe('')
       writeFileSync(tmpFile, 'export const value = 2 // touched\n')
       expect(
-        gen.next(progressOnlyRepairReceipt([gateFile]) as any).value,
+        gen.next(
+          repairSpawnReport({
+            receiptId: 'repair-progress-carried-finding',
+            status: 'blocked',
+            changedFiles: [{ path: gateFile }],
+            findingsAddressed: [carriedFindingId],
+          }) as any,
+        ).value,
       ).toMatchObject({ toolName: 'git_status' })
       expect(
         gen.next(feedJson({ status: ` M ${gateFile}` })).value,

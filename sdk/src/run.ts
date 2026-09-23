@@ -2267,18 +2267,19 @@ export async function handleToolCall({
         fileFilter,
       })
     } else if (toolName === 'browser_logs') {
+      // M1-T7: any model-supplied `_browserOwner` in the tool input is
+      // IGNORED — owner identity is stamped from trusted runtime state
+      // (trustedJobOwner) exactly like the check_job/kill_job/read_logs
+      // branches, so a prompt-injected tool call can never claim another
+      // session's browser sessions.
       const browserInput = input as Parameters<typeof browserLogs>[0] & {
         _browserOwner?: BrowserSessionOwner
       }
       const { _browserOwner, ...browserAction } = browserInput
-      if (!_browserOwner) {
-        throw new Error(
-          'browser_logs requires runtime-owned client/run/agent session identity.',
-        )
-      }
+      void _browserOwner
       result = await browserLogs(
         browserAction as Parameters<typeof browserLogs>[0],
-        { ..._browserOwner, projectRoot: cwd },
+        { ...trustedJobOwner, projectRoot: cwd },
       )
     } else if (toolName === 'code_search') {
       if (fs.hostProcessView === false) {
@@ -2342,8 +2343,12 @@ export async function handleToolCall({
       })
     } else if (toolName === 'check_job') {
       // The trusted owner overrides any model-supplied owner in the input.
+      // M2-T4 (Fix 4): the runtime abort signal is likewise pinned OVER any
+      // model-supplied input value, so a spoofed `signal` in tool input cannot
+      // substitute its own for cancellation.
       result = await checkJob({
         ...(input as Omit<Parameters<typeof checkJob>[0], 'owner'>),
+        signal,
         owner: trustedJobOwner,
       })
     } else if (toolName === 'kill_job') {

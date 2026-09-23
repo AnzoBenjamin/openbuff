@@ -141,22 +141,26 @@ describe('check-ci-local helpers', () => {
     expect(existsSync(join(root, 'scripts'))).toBe(true)
   })
 
-  test('ciLocalStepTimeoutMs parses positive overrides, else disables', () => {
+  test('ciLocalStepTimeoutMs defaults ON and honors explicit overrides', () => {
     const name = 'OPENBUFF_CI_LOCAL_STEP_TIMEOUT_MS'
     const original = process.env[name]
     delete process.env[name]
     try {
-      expect(ciLocalStepTimeoutMs()).toBe(0)
+      // M3-T1: the cap is enabled by default so a hung step cannot block the
+      // pre-push hook forever.
+      expect(ciLocalStepTimeoutMs()).toBe(300_000)
       process.env[name] = '45000'
       expect(ciLocalStepTimeoutMs()).toBe(45000)
       process.env[name] = '1500.9'
       expect(ciLocalStepTimeoutMs()).toBe(1500)
-      process.env[name] = 'not-a-number'
-      expect(ciLocalStepTimeoutMs()).toBe(0)
-      process.env[name] = '-1'
-      expect(ciLocalStepTimeoutMs()).toBe(0)
       process.env[name] = '0'
+      // Explicit 0 disables the cap.
       expect(ciLocalStepTimeoutMs()).toBe(0)
+      // Unset or invalid overrides keep the documented default.
+      process.env[name] = 'not-a-number'
+      expect(ciLocalStepTimeoutMs()).toBe(300_000)
+      process.env[name] = '-1'
+      expect(ciLocalStepTimeoutMs()).toBe(300_000)
     } finally {
       if (original === undefined) {
         delete process.env[name]
@@ -417,7 +421,7 @@ describe('runInherited step runner', () => {
     })
   })
 
-  test('omits the timeout when the override is unset or invalid', () => {
+  test('applies the finite default cap when the override is unset or invalid', () => {
     const timeouts: Array<number | undefined> = []
     const record = (
       _command: string,
@@ -439,7 +443,8 @@ describe('runInherited step runner', () => {
       })
     })
 
-    expect(timeouts).toEqual([undefined, undefined])
+    // M3-T1: both runs carry the documented default cap instead of none.
+    expect(timeouts).toEqual([300_000, 300_000])
   })
 
   test('appends a timeout hint when the child dies by signal', () => {
@@ -462,7 +467,10 @@ describe('runInherited step runner', () => {
   })
 
   test('logs no cap hint when an externally killed child runs without a timeout', () => {
-    withTimeoutEnv(undefined, () => {
+    // M3-T1 repair: the cap is ON by default now, so "without a timeout"
+    // must explicitly disable the cap ('0' is the documented opt-out) rather
+    // than rely on the old unset-implies-disabled behavior.
+    withTimeoutEnv('0', () => {
       const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
       try {
         // External kills (e.g. OOM SIGKILL) look like timeout kills to

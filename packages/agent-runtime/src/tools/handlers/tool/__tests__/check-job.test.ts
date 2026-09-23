@@ -124,4 +124,41 @@ describe('handleCheckJob', () => {
     )
     expect(output[0].type).toBe('json')
   })
+
+  test('forwards the runtime abort signal alongside the trusted owner (M2-T4 Fix 4)', async () => {
+    // handleCheckJob must NOT drop the handler AbortSignal: forwarding it
+    // into the SDK follow loop is what lets an aborted turn settle the
+    // follow immediately instead of lingering to the deadline.
+    const toolCall: CodebuffToolCall<'check_job'> = {
+      toolName: 'check_job',
+      toolCallId: 'tool-call-3',
+      input: { jobId: 'job-abort' },
+    }
+    const controller = new AbortController()
+    let forwardedInput: Record<string, unknown> | undefined
+
+    await handleCheckJob({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      requestClientToolCall: async (
+        clientToolCall: ClientToolCall<'check_job'>,
+      ) => {
+        forwardedInput = (
+          clientToolCall as unknown as ProcessJobClientToolCall<'check_job'>
+        ).input
+        return [] as unknown as CodebuffToolOutput<'check_job'>
+      },
+      clientSessionId: 'client-1',
+      agentState: {
+        ancestorRunIds: ['root-run'],
+        runId: 'parent-run',
+        agentId: 'parent-agent',
+      },
+      signal: controller.signal,
+    } as unknown as Parameters<typeof handleCheckJob>[0])
+
+    // The signal is forwarded verbatim (trusted runtime signal, never model
+    // input), so the SDK can pin the runtime abort over any input value.
+    expect(forwardedInput?.signal).toBe(controller.signal)
+  })
 })

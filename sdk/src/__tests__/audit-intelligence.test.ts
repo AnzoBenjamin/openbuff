@@ -8,6 +8,8 @@ import {
   evaluateAuditCoverage,
   inspectCodebaseStructure,
   inspectFeatureCompleteness,
+  isIgnoredPath,
+  promoteFeatureEvidence,
 } from '../services/audit-intelligence'
 import { inspectFeatureCompletenessTool } from '../tools/audit-intelligence'
 import {
@@ -272,5 +274,165 @@ describe('native audit intelligence', () => {
         featureRecords: [verified],
       }).complete,
     ).toBe(false)
+  })
+
+  test('excludes live-state paths from the snapshot', () => {
+    const root = fixture()
+    // cli/commands/extra.ts is an inventoried (non-ignored) path, so it must be
+    // written before the first snapshot; only live-state churn may happen
+    // between the two snapshots for the id-stability assertion below.
+    fs.writeFileSync(
+      path.join(root, 'cli', 'commands', 'extra.ts'),
+      'export const extra = 1',
+    )
+    const before = inspectCodebaseStructure(root)
+    expect(isIgnoredPath('.openbuff/memory/x.sqlite-wal')).toBe(true)
+    expect(isIgnoredPath('.agents/sessions/slug/findings/f.md')).toBe(true)
+    expect(isIgnoredPath('.agents/config.json')).toBe(false)
+    expect(isIgnoredPath('tmp.log')).toBe(true)
+    expect(isIgnoredPath('state.sqlite-shm')).toBe(true)
+    expect(isIgnoredPath('cli/commands/extra.ts')).toBe(false)
+    fs.mkdirSync(path.join(root, '.openbuff', 'memory'), { recursive: true })
+    fs.writeFileSync(path.join(root, '.openbuff', 'memory', 'x.sqlite-wal'), '')
+    fs.mkdirSync(path.join(root, '.codebuff-index'), { recursive: true })
+    fs.writeFileSync(path.join(root, '.codebuff-index', 'metadata.json.tmp'), '')
+    fs.mkdirSync(path.join(root, 'debug'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'debug', 'log.jsonl'), '')
+    fs.mkdirSync(path.join(root, '.agents', 'sessions', 'slug', 'findings'), {
+      recursive: true,
+    })
+    fs.writeFileSync(
+      path.join(root, '.agents', 'sessions', 'slug', 'findings', 'f.md'),
+      '',
+    )
+    fs.writeFileSync(path.join(root, 'tmp.log'), '')
+    const after = inspectCodebaseStructure(root)
+    expect(after.snapshotId).toBe(before.snapshotId)
+    expect(after.files).not.toContain('.openbuff/memory/x.sqlite-wal')
+    expect(after.files).not.toContain('.codebuff-index/metadata.json.tmp')
+    expect(after.files).not.toContain('debug/log.jsonl')
+    expect(after.files).not.toContain('.agents/sessions/slug/findings/f.md')
+    expect(after.files).not.toContain('tmp.log')
+    expect(after.files).toContain('cli/commands/extra.ts')
+  })
+
+  test('probes survive live-state churn between calls with a cached inventory', () => {
+    const root = fixture()
+    const inventory = inspectCodebaseStructure(root)
+    const first = inspectFeatureCompletenessTool(root, {
+      feature: 'resume plan',
+      snapshot_id: inventory.snapshotId,
+    })
+    const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
+    expect(firstValue).toMatchObject({
+      coverageReceipt: { snapshot_id: inventory.snapshotId },
+    })
+    fs.mkdirSync(path.join(root, '.agents', 'sessions', 'x', 'findings'), {
+      recursive: true,
+    })
+    fs.writeFileSync(
+      path.join(root, '.agents', 'sessions', 'x', 'findings', 'y.md'),
+      'resume plan scratchpad',
+    )
+    const second = inspectFeatureCompletenessTool(root, {
+      feature: 'resume plan',
+      snapshot_id: inventory.snapshotId,
+    })
+    const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
+    expect(secondValue).not.toHaveProperty('errorMessage')
+    expect(secondValue).toMatchObject({
+      coverageReceipt: { snapshot_id: inventory.snapshotId },
+    })
+  })
+
+  test('evaluate_audit_coverage validates receipts against the stored inventory after findings writes', () => {
+    const root = fixture()
+    const inventory = inspectCodebaseStructure(root)
+    fs.mkdirSync(path.join(root, '.agents', 'sessions', 'after', 'findings'), {
+      recursive: true,
+    })
+    fs.writeFileSync(
+      path.join(root, '.agents', 'sessions', 'after', 'findings', 'notes.md'),
+      'resume plan notes',
+    )
+    const feature = inspectFeatureCompleteness(root, 'resume plan', inventory)
+    const attested = [
+      ...new Set(Object.values(feature.evidence).flat()),
+    ]
+    const promotion = promoteFeatureEvidence(feature, inventory, attested)
+    expect(promotion.verified).toBe(true)
+    const receipts = inventory.subsystems.map((subsystem) => ({
+      schemaVersion: 1 as const,
+      snapshotId: inventory.snapshotId,
+      shardId: `${subsystem.id}-shard`,
+      subsystemIds: [subsystem.id],
+      files: [
+        inventory.files.find(
+          (file) =>
+            (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
+        )!,
+      ],
+      domains: [...auditDomains],
+    }))
+    expect(
+      evaluateAuditCoverage({
+        inventory,
+        structuralReceipts: receipts,
+        featureRecords: [promotion.record],
+      }).complete,
+    ).toBe(true)
+  })
+
+  test('hashes inventoried files through a capped read beyond 256KB', () => {
+    const root = fixture()
+    fs.writeFileSync(path.join(root, 'sdk', 'src', 'big.ts'), 'x'.repeat(300_000))
+    const before = inspectCodebaseStructure(root)
+    expect(before.files).toContain('sdk/src/big.ts')
+    expect(before.snapshotId).toHaveLength(64)
+    // Mutate only bytes past the 256KB cap boundary: capped hashing must not
+    // observe the change, so the snapshot hash stays stable.
+    fs.writeFileSync(
+      path.join(root, 'sdk', 'src', 'big.ts'),
+      `${'x'.repeat(256_000)}y${'x'.repeat(43_999)}`,
+    )
+    const after = inspectCodebaseStructure(root)
+    expect(after.snapshotId).toBe(before.snapshotId)
+  })
+
+  test('promoteFeatureEvidence flips to verified only with full attestation', () => {
+    const inventory = inspectCodebaseStructure(fixture())
+    const record = {
+      feature: 'resume plan',
+      evidenceKind: 'heuristic' as const,
+      status: 'partial' as const,
+      missing: ['failureStates'],
+      evidence: {
+        entrypoints: ['cli/commands/resume-plan.ts'],
+        implementation: ['sdk/src/resume-plan.ts'],
+        consumers: ['cli/commands/resume-plan.ts'],
+        tests: ['sdk/src/__tests__/resume-plan.test.ts'],
+        docs: ['README.md'],
+        failureStates: ['cli/commands/resume-plan.ts'],
+      },
+    }
+    const attested = [
+      ...new Set(Object.values(record.evidence).flat()),
+    ]
+    const promoted = promoteFeatureEvidence(record, inventory, attested)
+    expect(promoted.verified).toBe(true)
+    expect(promoted.unattested).toEqual([])
+    expect(promoted.record).toMatchObject({
+      evidenceKind: 'verified',
+      status: 'complete',
+      missing: [],
+    })
+    const rejected = promoteFeatureEvidence(
+      record,
+      inventory,
+      attested.filter((file) => file !== 'README.md'),
+    )
+    expect(rejected.verified).toBe(false)
+    expect(rejected.record).toEqual(record)
+    expect(rejected.unattested).toEqual(['README.md'])
   })
 })

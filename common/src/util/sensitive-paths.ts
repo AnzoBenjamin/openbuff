@@ -26,6 +26,17 @@ const SENSITIVE_BASENAMES = new Set([
   '.pypirc',
   'terraform.tfvars',
   '.terraformrc',
+  // M1-T5 hardening: common plaintext credential carriers the audit's
+  // shard-common-contracts MEDIUM flagged as missing (all lowercase —
+  // isMandatorySensitiveReadPath is case-normalized).
+  '.git-credentials',
+  '.pgpass',
+  '.s3cfg',
+  '.s3credentials',
+  '.envrc',
+  '.wgetrc',
+  '.my.cnf',
+  '.netrc.bak',
 ])
 const ENV_TEMPLATE_SUFFIXES = ['.env.example', '.env.sample', '.env.template']
 const AGENT_SESSION_ARTIFACT_BASENAMES = new Set([
@@ -38,7 +49,15 @@ const AGENT_SESSION_ARTIFACT_BASENAMES = new Set([
 ])
 
 function toPortablePath(value: string): string {
-  return value.split(path.sep).join('/').replace(/^\.\//, '')
+  // M1-T5 hardening: normalize backslashes to forward slashes UNCONDITIONALLY
+  // (both separators), not only path.sep — a POSIX path spelled with a literal
+  // backslash must resolve to the same portable form its sibling policies see.
+  return value
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((segment) => segment !== '')
+    .join('/')
+    .replace(/^\.\//, '')
 }
 
 export function isEnvTemplatePath(filePath: string): boolean {

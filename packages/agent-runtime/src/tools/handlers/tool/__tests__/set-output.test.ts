@@ -5,7 +5,10 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 
 import { mockFileContext } from '../../../../__tests__/test-utils'
-import { handleSetOutput } from '../set-output'
+import {
+  handleSetOutput,
+  MAX_SET_OUTPUT_JSON_CHARS,
+} from '../set-output'
 
 import type { AgentTemplate } from '../../../../templates/types'
 import type { CodebuffToolCall } from '@codebuff/common/tools/list'
@@ -700,5 +703,112 @@ describe('handleSetOutput', () => {
       'malformed or incomplete JSON text',
     )
     expect(agentState.output).toBeUndefined()
+  })
+
+  // Shared minimal template for rejection-path tests: these payloads are
+  // rejected before decoding, so the output schema shape is irrelevant.
+  const rejectionTemplate = (id: string): AgentTemplate => ({
+    id,
+    displayName: 'Rejection Test',
+    spawnerPrompt: 'Produce output',
+    model: 'claude-3-5-sonnet-20241022',
+    inputSchema: {},
+    outputMode: 'structured_output',
+    outputSchema: z.object({ verdict: z.string() }),
+    includeMessageHistory: false,
+    inheritParentSystemPrompt: false,
+    mcpServers: {},
+    toolNames: ['set_output'],
+    spawnableAgents: [],
+    systemPrompt: 'Test system prompt',
+    instructionsPrompt: 'Test instructions',
+    stepPrompt: 'Test step prompt',
+  })
+
+  test('rejects an oversized string data payload before decoding with explicit split guidance', async () => {
+    const template = rejectionTemplate('reviewer-oversized-test')
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const oversized = 'x'.repeat(MAX_SET_OUTPUT_JSON_CHARS + 1)
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'oversized-set-output',
+      input: { data: oversized },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.output).toBeUndefined()
+    const message = output[0]?.type === 'json' ? output[0].value.message : ''
+    // The limit and the actual length must both be explicit.
+    expect(message).toContain(String(MAX_SET_OUTPUT_JSON_CHARS))
+    expect(message).toContain(String(oversized.length))
+    // Recovery guidance: chunk into smaller calls or persist to a file.
+    expect(message).toContain('split')
+    expect(message).toContain('file')
+    expect(typeof agentState.lastSetOutputError).toBe('string')
+    expect(agentState.lastSetOutputError).toBe(message)
+  })
+
+  test('reports likely transport truncation when malformed JSON ends mid-structure', async () => {
+    const template = rejectionTemplate('reviewer-truncation-test')
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'transport-truncated-set-output',
+      input: { data: '{"a": {"b": [1,2' },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.output).toBeUndefined()
+    const message = output[0]?.type === 'json' ? output[0].value.message : ''
+    expect(message).toContain('truncated in transport')
+    expect(message).toContain('split')
+    expect(typeof agentState.lastSetOutputError).toBe('string')
+    expect(agentState.lastSetOutputError).toBe(message)
+  })
+
+  test('keeps the plain malformed-JSON wording for a non-truncated garbage string', async () => {
+    const template = rejectionTemplate('reviewer-garbage-test')
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'garbage-string-set-output',
+      input: { data: 'not json' },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.output).toBeUndefined()
+    const message = output[0]?.type === 'json' ? output[0].value.message : ''
+    expect(message).toContain('malformed or incomplete JSON text')
+    // 'not json' ends outside any structure: no truncation claim.
+    expect(message).not.toContain('truncated')
+    expect(typeof agentState.lastSetOutputError).toBe('string')
+    expect(agentState.lastSetOutputError).toBe(message)
   })
 })

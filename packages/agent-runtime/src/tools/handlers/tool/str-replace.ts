@@ -405,7 +405,16 @@ export const handleStrReplace = (async (
   fileProcessingState.promisesByPath[path].push(newPromise)
   fileProcessingState.allPromises.push(newPromise)
 
-  const strReplaceResult = await newPromise
+  // M2-T6: the object resolved by newPromise is shared through
+  // fileProcessingState.promisesByPath / allPromises; another handler's
+  // postStreamProcessing runs Promise.all(fileProcessingState.allPromises)
+  // and reads that object concurrently, so mutating the resolved value in
+  // place here races other consumers' reads (nondeterministic tool output).
+  // Every mutation below therefore targets a fresh derived copy instead of
+  // the settled object referenced by the shared promises.
+  const strReplaceResult = {
+    ...(await newPromise),
+  } as StrReplaceResultWithMetadata
   const everyReplacementWasNoOpSkip =
     'content' in strReplaceResult &&
     'hadNoOpSkip' in strReplaceResult &&
@@ -591,13 +600,20 @@ export const handleStrReplace = (async (
   })
 
   if (application.status === 'threw') {
+    // M2-T6: never echo the raw client-apply error (it can carry internal
+    // filesystem/provider detail); log it instead and emit a static message.
+    logger.warn(
+      { path, error: application.error },
+      'str_replace apply threw; sanitized static error returned to the model',
+    )
     return {
       output: [
         {
           type: 'json',
           value: {
             file: path,
-            errorMessage: `str_replace failed while applying the prepared patch: ${application.error instanceof Error ? application.error.message : String(application.error)}. Re-read the file before retrying.`,
+            errorMessage:
+              'str_replace failed while applying the prepared patch. Re-read the file before retrying.',
           },
         },
       ],

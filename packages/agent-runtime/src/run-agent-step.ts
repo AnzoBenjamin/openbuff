@@ -10,6 +10,7 @@ import {
   isAbortError,
 } from '@codebuff/common/util/error'
 import { serializeCacheDebugCorrelation } from '@codebuff/common/util/cache-debug'
+import { redactSecretValues } from '@codebuff/common/util/redact-secrets'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { type ToolSet } from 'ai'
 import { cloneDeep, mapValues } from 'lodash'
@@ -62,7 +63,10 @@ import {
   getConfirmedAppliedActionsV1,
   isFileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
-import { countTokensJson } from './util/token-counter'
+import {
+  countTokensJson,
+  IncrementalTokenCounter,
+} from './util/token-counter'
 import {
   COMPACTION_NO_PROGRESS_FRACTION,
   DEFAULT_MAX_CONTEXT_TOKENS,
@@ -140,6 +144,33 @@ import type {
   CustomToolDefinitions,
   ProjectFileContext,
 } from '@codebuff/common/util/file'
+
+/**
+ * M1-T5: redact secrets from a message before it reaches a log sink. Handles
+ * BOTH string-shaped content and array-shaped content: text parts carry
+ * tool/file output read during the run (exactly the "secret file contents"
+ * the M1-T5 audit targets), so every text part's text is redacted too. Other
+ * part types carry no raw prompt text and pass through untouched.
+ */
+function redactMessageForLog(message: Message): Message {
+  const { content } = message
+  if (typeof content === 'string') {
+    // Shape-preserving copy: only the string content is rewritten. The union
+    // spread needs the two-step cast TS requires for mixed-content unions.
+    return { ...message, content: redactSecretValues(content) } as unknown as Message
+  }
+  if (!Array.isArray(content)) {
+    return message
+  }
+  const redactedParts = content.map((part) =>
+    part.type === 'text'
+      ? { ...part, text: redactSecretValues(part.text) }
+      : part,
+  )
+  // Shape-preserving copy: only text-part `text` fields are rewritten, so the
+  // runtime message union is unchanged.
+  return { ...message, content: redactedParts } as Message
+}
 
 /**
  * Publish process-owned mutation paths onto agentState so concurrent gate
@@ -686,10 +717,17 @@ export const runAgentStep = async (
       contextTokenCount: agentState.contextTokenCount,
       // Limit debug-log message history to the most recent 50 messages to
       // avoid MB-sized log lines on long sessions. Reverse so the most recent
-      // message appears first.
-      agentMessages: agentState.messageHistory.slice(-50).reverse(),
-      system,
-      prompt,
+      // message appears first. M1-T5: secrets are redacted from logged prompt
+      // bytes (system prompt embeds shell config contents; transcripts can
+      // carry secret file contents read during the run).
+      agentMessages: agentState.messageHistory
+        .slice(-50)
+        .reverse()
+        .map(redactMessageForLog),
+      system: redactSecretValues(system),
+      // M1-T5: prompt is a string or undefined here (the params type pins it);
+      // array-shaped message content above is redacted per text part.
+      prompt: typeof prompt === 'string' ? redactSecretValues(prompt) : undefined,
       params: spawnParams,
       agentContext,
       systemTokens,
@@ -1862,6 +1900,22 @@ export async function loopAgentSteps(
       }
     }
 
+    // M3-T2: per-turn incremental token accounting (audit shard-runtime-loop
+    // run-agent-step.ts:1947). Each message's serialized token count is
+    // memoized by object reference, so repeated estimateContextTokensLocally
+    // calls (post-programmatic, post-eviction, post-prune) price only NEW or
+    // rewritten messages instead of re-encoding the whole transcript every
+    // time. Memoization keys are weak, so evicted/trimmed references do not
+    // pin anything. One full recount (reset + fresh sum) runs only after a
+    // history-rewriting compaction/trim, whose sites below call
+    // invalidateHistoryAggregate.
+    const incrementalTokenCounter = new IncrementalTokenCounter()
+    const invalidateHistoryAggregate = () => {
+      // History was rewritten (compaction/trim): the next estimate must
+      // recount fully rather than trusting stale per-message memoized counts.
+      incrementalTokenCounter.reset()
+    }
+
     try {
       while (true) {
         totalSteps++
@@ -1941,11 +1995,20 @@ export async function loopAgentSteps(
         // Under progressive tool disclosure, a mid-turn tier unlock rebuilds
         // `tools` below and recomputes this total and the serialized
         // toolDefinitions, so pruning estimates track the live tool surface.
+        //
+        // M3-T2: history tokens are counted incrementally (per-message memo);
+        // only system/tools, which are cache-stable strings/objects, are
+        // recounted here. Behavior and every consumed number are unchanged.
         let systemAndToolsTokens =
           countTokensJson(system) + countTokensJson(toolsForTokenCount)
+        incrementalTokenCounter.setSystemAndToolsTokens(
+          systemAndToolsTokens,
+        )
 
         const estimateContextTokensLocally = () =>
-          countTokensJson(messagesWithStepPrompt) + systemAndToolsTokens
+          incrementalTokenCounter.messagesTokens(
+            messagesWithStepPrompt,
+          ) + systemAndToolsTokens
 
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
         const contextTokensBeforeProgrammatic =
@@ -2143,9 +2206,10 @@ export async function loopAgentSteps(
             EVICTION_KEEP_RECENT_STEPS,
           )
         }
-        const historyTokensBeforeProgrammatic = countTokensJson(
-          historyBeforeProgrammatic,
-        )
+        // M3-T2: incremental accounting — heap allocation for every message in
+        // the transcript was priced fully; only its delta differs now.
+        const historyTokensBeforeProgrammatic =
+          incrementalTokenCounter.messagesTokens(historyBeforeProgrammatic)
         const categoriesBeforeProgrammatic = getContextCategoryTelemetry(
           historyBeforeProgrammatic,
         )
@@ -2337,9 +2401,13 @@ export async function loopAgentSteps(
         )
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
 
-        const historyTokensAfterProgrammatic = countTokensJson(
-          currentAgentState.messageHistory,
-        )
+        // M3-T2: incremental accounting prices any NEW or rewritten
+        // (eviction) messages once and reuses memoized counts for the rest;
+        // semantic/lifecycle telemetry below still keys off the same number.
+        const historyTokensAfterProgrammatic =
+          incrementalTokenCounter.messagesTokens(
+            currentAgentState.messageHistory,
+          )
         let compactedThisIteration = false
         const retainedSemanticMemory = currentAgentState.messageHistory.some(
           (message) =>
@@ -2461,6 +2529,10 @@ export async function loopAgentSteps(
           )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages
+          // History was rewritten by the mechanical trim: the full recount
+          // below starts from a fresh per-message memo (M3-T2 full-recall
+          // point).
+          invalidateHistoryAggregate()
           messagesWithStepPrompt = buildArray(
             ...pruningResult.messages,
             buildCompiledTaskMemoryMessage(currentAgentState),
@@ -2758,7 +2830,10 @@ export async function loopAgentSteps(
             agentId: currentAgentState.agentId,
             runId,
             totalSteps,
-            messageHistory: currentAgentState.messageHistory,
+            // M1-T5: redact secrets — the history can carry secret file reads
+            // and shell-config contents, same as the failure path below.
+            messageHistory:
+              currentAgentState.messageHistory.map(redactMessageForLog),
           },
           'Agent run cancelled by user (abort error)',
         )
@@ -2799,8 +2874,11 @@ export async function loopAgentSteps(
           totalSteps,
           directCreditsUsed: currentAgentState.directCreditsUsed,
           creditsUsed: currentAgentState.creditsUsed,
-          messageHistory: currentAgentState.messageHistory,
-          systemPrompt: system,
+          // M1-T5: redact secrets from the failure-path log (the system prompt
+          // embeds shell config contents; history can carry secret file reads).
+          messageHistory:
+            currentAgentState.messageHistory.map(redactMessageForLog),
+          systemPrompt: redactSecretValues(system),
         },
         'Agent execution failed',
       )

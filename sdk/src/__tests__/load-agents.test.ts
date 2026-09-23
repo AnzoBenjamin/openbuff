@@ -320,6 +320,62 @@ describe('loadLocalAgents', () => {
       const handleStepsStr = agent!.handleSteps as unknown as string
       expect(typeof handleStepsStr).toBe('string')
       expect(handleStepsStr).toContain('STEP')
+      // M2-T3: the loader also exposes the serialized source on the typed
+      // _serializedHandleSteps field so consumers never invoke handleSteps.
+      expect(typeof agent!._serializedHandleSteps).toBe('string')
+      expect(agent!._serializedHandleSteps).toContain('STEP')
+    })
+
+    test('stamps executionSource local on locally loaded agent templates', async () => {
+      mkdirSync(agentsDir, { recursive: true })
+      writeAgentFile(
+        agentsDir,
+        'local-source-agent.ts',
+        `
+          export default {
+            id: 'local-source-agent',
+            displayName: 'Local Source Agent',
+            model: '${MODEL_NAME}',
+            handleSteps: function* () {
+              yield 'STEP'
+            }
+          }
+        `,
+      )
+
+      const result: LoadedAgents = await loadLocalAgents({
+        agentsPath: agentsDir,
+      })
+
+      const agent: LoadedAgentDefinition | undefined =
+        result['local-source-agent']
+      expect(agent).toBeDefined()
+      expect(agent!.executionSource).toBe('local')
+    })
+
+    test('preserves an executionSource already set by the agent file', async () => {
+      mkdirSync(agentsDir, { recursive: true })
+      writeAgentFile(
+        agentsDir,
+        'bundled-source-agent.ts',
+        `
+          export default {
+            id: 'bundled-source-agent',
+            displayName: 'Bundled Source Agent',
+            model: '${MODEL_NAME}',
+            executionSource: 'bundled'
+          }
+        `,
+      )
+
+      const result: LoadedAgents = await loadLocalAgents({
+        agentsPath: agentsDir,
+      })
+
+      const agent: LoadedAgentDefinition | undefined =
+        result['bundled-source-agent']
+      expect(agent).toBeDefined()
+      expect(agent!.executionSource).toBe('bundled')
     })
 
     test('handles agent files that throw on import', async () => {
@@ -799,6 +855,36 @@ describe('loadLocalAgents', () => {
       expect(result.validationErrors.length).toBeGreaterThan(0)
       expect(result.agents['conflicting-agent']).toBeUndefined()
     })
+
+    // M2-T3: validation errors must attribute to the true agent id even when
+    // the id itself contains underscores (the composite `{agentId}_{index}`
+    // key must be recovered structurally, not by error-prone string parsing).
+    test('attributes validation errors for agent ids containing underscores', async () => {
+      mkdirSync(agentsDir, { recursive: true })
+      writeAgentFile(
+        agentsDir,
+        'underscore-id.ts',
+        `
+          export default {
+            id: 'my_agent',
+            displayName: 'Underscore Agent',
+            model: '${MODEL_NAME}',
+            inheritParentSystemPrompt: true,
+            systemPrompt: 'This conflicts'
+          }
+        `,
+      )
+
+      const result: LoadLocalAgentsResult = await loadLocalAgents({
+        agentsPath: agentsDir,
+        validate: true,
+      })
+
+      expect(
+        result.validationErrors.some((e) => e.agentId === 'my_agent'),
+      ).toBe(true)
+      expect(result.agents['my_agent']).toBeUndefined()
+    })
   })
 
   describe('type safety', () => {
@@ -869,6 +955,55 @@ describe('loadLocalAgents', () => {
       })
 
       expect(result['test-agent']).toBeDefined()
+    })
+  })
+
+  describe('import containment', () => {
+    test('does not import an agent file outside the agents dir but still imports in-dir agents', async () => {
+      mkdirSync(agentsDir, { recursive: true })
+      const outsideDir = path.join(tempDir, 'outside-agents')
+      mkdirSync(outsideDir, { recursive: true })
+      writeAgentFile(
+        outsideDir,
+        'outside-agent.ts',
+        `
+          export default {
+            id: 'outside-agent',
+            displayName: 'Outside Agent',
+            model: '${MODEL_NAME}'
+          }
+        `,
+      )
+      writeAgentFile(
+        agentsDir,
+        'inside-agent.ts',
+        `
+          export default {
+            id: 'inside-agent',
+            displayName: 'Inside Agent',
+            model: '${MODEL_NAME}'
+          }
+        `,
+      )
+
+      const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(
+        () => {},
+      )
+
+      const result: LoadedAgents = await loadLocalAgents({
+        agentsPath: agentsDir,
+      })
+
+      // The in-dir agent still imports normally, without any containment
+      // refusal naming its path.
+      expect(result['inside-agent']).toBeDefined()
+      expect(consoleWarnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('inside-agent.ts'),
+      )
+
+      // The sibling-dir agent outside the trust root is never imported and
+      // loading does not crash.
+      expect(result['outside-agent']).toBeUndefined()
     })
   })
 })

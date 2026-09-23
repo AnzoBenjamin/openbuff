@@ -257,13 +257,16 @@ export const handleReplaceRange = (async (params) => {
     apply: () => requestClientToolCall(clientToolCall),
   })
   if (application.status === 'threw') {
+    // M2-T6: the raw application error can leak internal details into
+    // agent-visible tool output; emit only the static recovery message.
     return {
       output: [
         {
           type: 'json' as const,
           value: {
             file: path,
-            errorMessage: `replace_range failed while applying the prepared range: ${application.error instanceof Error ? application.error.message : String(application.error)}. Re-read the range before retrying.`,
+            errorMessage:
+              'replace_range failed while applying the prepared range. Re-read the range before retrying.',
           },
         },
       ],
