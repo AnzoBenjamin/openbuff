@@ -15,18 +15,16 @@ import {
   readNewJobOutput,
   MAX_BACKGROUND_READ_BYTES,
   MAX_LINE_BYTES,
+  recheckRecoveredJobLiveness,
   type BackgroundJob,
 } from '../tools/background-jobs'
 import {
   CHECK_JOB_POLL_ACCUMULATION_CAP,
-  DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS,
   MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS,
   appendBoundedCollected,
   checkJob,
   resolveCheckJobWaitBounds,
 } from '../tools/check-job'
-import { recheckRecoveredJobLiveness } from '../tools/background-jobs'
-import { listJobs } from '../tools/list-jobs'
 import {
   SETTLED_JOB_TTL_MS,
   jobRegistry,
@@ -77,6 +75,16 @@ function makeJob(overrides: Partial<BackgroundJob> = {}): BackgroundJob {
   }
   __registerJobForTest(job)
   return job
+}
+
+/**
+ * A deterministically dead pid: spawn a real child that exits immediately and
+ * return its pid, so process.kill(pid, 0) rejects with ESRCH. Synchronous (via
+ * spawnSync) so sync tests can use it directly.
+ */
+function makeDeadPid(): number {
+  const child = spawnSync(process.execPath, ['-e', 'process.exit(0)'])
+  return child.pid!
 }
 
 function value(output: Awaited<ReturnType<typeof checkJob>>): any {
@@ -1074,7 +1082,6 @@ describe('checkJob', () => {
     // store M4 removes). A recovered job is re-emitted into the registry
     // under the disk-derived jobId (passed as explicit registry id), carrying
     // the preserved owner.
-    const recovered = getBackgroundJob(jobId)
     const registryJob = jobRegistry.get(jobId)
     expect(registryJob?.owner).toEqual(owner)
   })
@@ -1213,13 +1220,14 @@ describe('checkJob', () => {
 
   test('retains a settled job within TTL, prunes it past the TTL, never prunes running jobs, and keeps the first settledAt', () => {
     // Settle a RUNNING job through the REAL settle path (M2-T4, Fix 3 + Fix 2:
-    // a kill only folds the non-terminal 'stopping' state on delivery, and a
-    // dead fake-child pid settles terminal via recheckRecoveredJobLiveness,
-    // giving a genuine settledAt rather than a hand-injected one).
+    // a kill only folds the non-terminal 'stopping' state on delivery, and an
+    // already-exited real-child pid settles terminal via
+    // recheckRecoveredJobLiveness, giving a genuine settledAt rather than a
+    // hand-injected one).
     const job = makeJob({
       recovered: true,
       child: {
-        pid: 1234,
+        pid: makeDeadPid(),
         kill: () => true,
       } as unknown as BackgroundJob['child'],
     })
@@ -1229,7 +1237,7 @@ describe('checkJob', () => {
     expect(job.status).toBe('stopping')
     expect(job.settledAt).toBeUndefined()
     // The exit event is what settles terminal: simulate it through the real
-    // settle funnel (the liveness re-check) — pid 1234 is not alive.
+    // settle funnel (the liveness re-check) — the child pid is already dead.
     expect(recheckRecoveredJobLiveness(job)).toBe(false)
     expect(job.status).toBe('lost')
     expect(job.settledAt).toBeDefined()
@@ -1255,7 +1263,7 @@ describe('checkJob', () => {
     const twice = makeJob({
       recovered: true,
       child: {
-        pid: 1234,
+        pid: makeDeadPid(),
         kill: () => true,
       } as unknown as BackgroundJob['child'],
     })
@@ -1381,11 +1389,14 @@ describe('resolveCheckJobWaitBounds (M2-T4 Fix 1)', () => {
 
 describe('recheckRecoveredJobLiveness (M2-T4 Fix 2)', () => {
   test('a recovered running job whose pid died settles lost after a final drain', () => {
-    // Fake pid 1234 does not exist → process.kill(1234, 0) rejects. The
-    // `recovered` marker arms the re-check: live spawns own their exit
-    // listeners, and non-recovered fixtures carry fake pids the OS cannot
-    // reason about.
-    const job = makeJob({ recovered: true })
+    // The fixture child pid belongs to a real child process that has already
+    // exited, so process.kill(pid, 0) rejects with ESRCH. The `recovered`
+    // marker arms the re-check: live spawns own their exit listeners, and
+    // non-recovered fixtures carry pids the OS cannot reason about.
+    const job = makeJob({
+      recovered: true,
+      child: { pid: makeDeadPid() } as unknown as BackgroundJob['child'],
+    })
     fs.appendFileSync(job.logFile, 'late output\n')
     expect(job.status).toBe('running')
 
@@ -1430,7 +1441,10 @@ describe('recheckRecoveredJobLiveness (M2-T4 Fix 2)', () => {
   })
 
   test('a recovered running job observed via check_job reports terminal after the re-check settles it', async () => {
-    const job = makeJob({ recovered: true })
+    const job = makeJob({
+      recovered: true,
+      child: { pid: makeDeadPid() } as unknown as BackgroundJob['child'],
+    })
     fs.appendFileSync(job.logFile, 'gone\n')
 
     const result = value(

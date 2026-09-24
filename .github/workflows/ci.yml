@@ -198,7 +198,12 @@ jobs:
         name: Run ${{ matrix.package }} tests
         uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08 # v3
         with:
-          timeout_minutes: 10
+          # packages/agent-runtime under --isolate (per-file process) needs
+          # >10min on 2-core runners: all 3 retry attempts of run 36056290709
+          # died at exactly the 600s cap mid-suite, still progressing through
+          # alphabetically-late files. 25min leaves headroom without hiding a
+          # true hang (a hung file would still blow the per-attempt budget).
+          timeout_minutes: 25
           max_attempts: 3
           command: |
             cd ${{ matrix.package }}
@@ -233,6 +238,11 @@ jobs:
         if: always()
         run: |
           SUITE=${{ matrix.package }}
+          # GitHub artifact names reject '/'; packages/* matrix entries would
+          # produce 'flake-ledger-packages/agent-runtime' and fail the upload
+          # step on every packages/* job. Sanitize once and reuse it in the
+          # upload step's with.name below.
+          echo "FLAKE_SUITE=${SUITE//\//-}" >> "$GITHUB_ENV"
           if [ -f scripts/flake-ledger.json ]; then
             LEDGER=$(cat scripts/flake-ledger.json)
           else
@@ -250,7 +260,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: flake-ledger-${{ matrix.package }}
+          name: flake-ledger-${{ env.FLAKE_SUITE }}
           path: scripts/flake-ledger.json
           if-no-files-found: error
 
