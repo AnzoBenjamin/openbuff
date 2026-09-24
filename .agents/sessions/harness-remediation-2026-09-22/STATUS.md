@@ -451,3 +451,15 @@ M3-T3 (Race fixes) certification path executed per plan:
 
 M3-T3 checkbox flip deferred until the automated gate passes over the changed test files (per plan rule); commit follows the gate.
 
+
+<!-- update_plan_status:appended -->
+## agents/e2e teardown wiring (followup 3 of 3) — validated; awaiting gate — 2026-09-24T21:08:51.908Z
+
+Wired teardownE2eMocks into the 3 remaining agents/e2e files that call setupE2eMocks directly (context-pruner.e2e.test.ts, file-explorer.e2e.test.ts, context-pruning-threshold.e2e.test.ts — receipt 3c5affe2), completing the cross-file-bleed fix across all three workspaces (sdk 13 files last wave, agents 3 files this wave). Each file adds afterAll(() => teardownE2eMocks()) with the documenting comment from the sdk pattern.
+
+Validation: agents typecheck exit 0; suites serialized green — context-pruner 2 pass/0 fail, file-explorer 4/0, context-pruning-threshold 3/0 (9 tests total). No active bleed existed in agents, so this is preventive parity, verified no-regression.
+
+Plan mechanics noted for the flip chain (M1-T7→M2-T4→M3-T3): the plan tool requires gate-issued plan-gate receipts (minted while a task is current-task over its changed files) for checkpoint.citation — historically recorded reviewer receipts (ycUIATjXr-c for M1-T7, y0luvvfjA88 for M2-T4) do not qualify. Both M1-T7 and M2-T4 have full certification evidence in STATUS.md (gates passed LOOKS_GOOD with reviewer receipts ycUIATjXr-c and y0luvvfjA88) and their Validate suites were re-run green this session (kill-job/list-jobs/check-job/end-turn-pending-jobs/run-session-job-ownership all 0 fail). The flips remain pending a committed-surface review cycle that binds fresh plan-gate receipts per task; M3-T3's flip additionally requires M2-T4 marked done.
+
+Push of 86aff520c + this wave deferred until after this gate passes over the 3 wired files (pre-push CI-local gate re-runs).
+

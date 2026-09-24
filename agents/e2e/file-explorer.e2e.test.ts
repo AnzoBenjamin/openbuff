@@ -3,14 +3,19 @@ import {
   type AgentDefinition,
   type Message,
 } from '@openbuff/sdk'
-import { beforeAll, describe, expect, it } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 
-import { setupE2eMocks } from '../../sdk/e2e/utils/e2e-mocks'
+import { setupE2eMocks, teardownE2eMocks } from '../../sdk/e2e/utils/e2e-mocks'
 
 import fileListerDefinition from '../file-explorer/file-lister'
 import filePickerDefinition from '../file-explorer/file-picker'
 
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+
+// Bun's shared module registry keeps these mocks alive after the file's suite
+// ends; restore the spies so later files re-apply them cleanly (cross-file
+// bleed fix matching the sdk/e2e teardown wiring).
+afterAll(() => teardownE2eMocks())
 
 function normalizeFileEntries(entries: unknown[]): string[] {
   return entries
