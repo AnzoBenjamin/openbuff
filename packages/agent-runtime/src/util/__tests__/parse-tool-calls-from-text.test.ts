@@ -235,19 +235,28 @@ Some commentary after`
     const result = parseTextWithToolCalls(text)
 
     expect(result).toHaveLength(5)
-    expect(result[0]).toEqual({ type: 'text', text: 'Some commentary before' })
+    // Raw slices are preserved (shard-runtime-loop finding on
+    // parse-tool-calls-from-text.ts:62) so leading/trailing whitespace survives
+    // into the transcript; wholly-whitespace segments are still dropped.
+    expect(result[0]).toEqual({
+      type: 'text',
+      text: 'Some commentary before\n\n',
+    })
     expect(result[1]).toEqual({
       type: 'tool_call',
       toolName: 'read_files',
       input: { paths: ['file1.ts'] },
     })
-    expect(result[2]).toEqual({ type: 'text', text: 'Some text between' })
+    expect(result[2]).toEqual({ type: 'text', text: '\n\nSome text between\n\n' })
     expect(result[3]).toEqual({
       type: 'tool_call',
       toolName: 'write_file',
       input: { path: 'file2.ts', content: 'test' },
     })
-    expect(result[4]).toEqual({ type: 'text', text: 'Some commentary after' })
+    expect(result[4]).toEqual({
+      type: 'text',
+      text: '\n\nSome commentary after',
+    })
   })
 
   it('should return only tool call when no surrounding text', () => {
@@ -299,7 +308,9 @@ Some commentary after`
     const result = parseTextWithToolCalls(text)
 
     expect(result).toHaveLength(2)
-    expect(result[0]).toEqual({ type: 'text', text: 'Introduction text' })
+    // Text segments are untrimmed raw slices (module docstring contract) —
+    // the trailing blank line before the tool call survives the parse.
+    expect(result[0]).toEqual({ type: 'text', text: 'Introduction text\n\n' })
     expect(result[1].type).toBe('tool_call')
   })
 
@@ -317,7 +328,9 @@ Conclusion text`
 
     expect(result).toHaveLength(2)
     expect(result[0].type).toBe('tool_call')
-    expect(result[1]).toEqual({ type: 'text', text: 'Conclusion text' })
+    // Text segments are untrimmed raw slices (module docstring contract) —
+    // the leading blank line after the end tag survives the parse.
+    expect(result[1]).toEqual({ type: 'text', text: '\n\nConclusion text' })
   })
 
   it('should report malformed tool calls while keeping surrounding text', () => {
@@ -335,12 +348,13 @@ After text`
     const result = parseTextWithToolCalls(text)
 
     expect(result).toHaveLength(3)
-    expect(result[0]).toEqual({ type: 'text', text: 'Before text' })
+    // Text segments are untrimmed raw slices (module docstring contract).
+    expect(result[0]).toEqual({ type: 'text', text: 'Before text\n\n' })
     expect(result[1]).toMatchObject({
       type: 'parse_error',
       message: expect.stringContaining('JSON parsing failed'),
     })
-    expect(result[2]).toEqual({ type: 'text', text: 'After text' })
+    expect(result[2]).toEqual({ type: 'text', text: '\n\nAfter text' })
   })
 
   it('should report tool calls without cb_tool_name', () => {
@@ -378,8 +392,49 @@ After text`
     const result = parseTextWithToolCalls(text)
 
     expect(result).toHaveLength(3)
-    expect(result[0]).toEqual({ type: 'text', text: 'Text with whitespace' })
+    expect(result[0]).toEqual({
+      type: 'text',
+      text: '   \n  Text with whitespace  \n   \n',
+    })
     expect(result[1].type).toBe('tool_call')
-    expect(result[2]).toEqual({ type: 'text', text: 'More text' })
+    expect(result[2]).toEqual({
+      type: 'text',
+      text: '\n   \n  More text  \n   ',
+    })
+  })
+
+  it('should drop whitespace-only segments but preserve whitespace around content', () => {
+    const text = `\n\n<codebuff_tool_call>\n{\n  "cb_tool_name": "read_files",\n  "paths": ["test.ts"]\n}\n</codebuff_tool_call>\n\n`
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result).toEqual([
+      {
+        type: 'tool_call',
+        toolName: 'read_files',
+        input: { paths: ['test.ts'] },
+      },
+    ])
+  })
+
+  it('should preserve leading indentation before a code fence that a model emitted', () => {
+    const text = [
+      'Here is the change:',
+      '',
+      '<codebuff_tool_call>',
+      '{"cb_tool_name": "write_file", "path": "x.ts", "content": "a"}',
+      '</codebuff_tool_call>',
+      'end of text',
+    ].join('\n')
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result[0]).toEqual({
+      type: 'text',
+      text: 'Here is the change:\n\n',
+    })
+    // Text segments are untrimmed raw slices (module docstring contract) —
+    // the single newline after </codebuff_tool_call> opens the raw slice.
+    expect(result[2]).toEqual({ type: 'text', text: '\nend of text' })
   })
 })

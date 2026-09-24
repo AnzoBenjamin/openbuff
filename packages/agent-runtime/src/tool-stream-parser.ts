@@ -105,8 +105,6 @@ export async function* processStreamWithTools(params: {
     trackEvent,
     executeXmlToolCall,
   } = params
-  let streamCompleted = false
-  let buffer = ''
   let autocompleted = false
 
   // State for parsing XML tool calls from text stream
@@ -129,10 +127,21 @@ export async function* processStreamWithTools(params: {
       try {
         input = JSON.parse(input)
       } catch (err) {
-        console.debug(
-          `[tool-stream-parser] non-JSON tool input for ${toolName}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+        // Audit shard-runtime-loop tool-stream-parser.ts:132: surface the
+        // failure through the injected logger (with run context) instead of a
+        // bare console.debug, so malformed model tool input is observable in
+        // production. NO onResponseChunk error event here: the raw string is
+        // still forwarded to the executor, whose parseJsonStringWithRepair
+        // pass may repair it — emitting an error now double-reports the same
+        // failure once the executor decides the real outcome.
+        logger.warn(
+          {
+            toolName,
+            ...(loggerOptions ?? {}),
+            error: err instanceof Error ? err.message : String(err),
+            inputLength: input.length,
+          },
+          'Non-JSON tool input from the model; forwarding raw string to the executor',
         )
       }
     }
@@ -161,16 +170,6 @@ export async function* processStreamWithTools(params: {
     })
   }
 
-  function flush() {
-    if (buffer) {
-      onResponseChunk({
-        type: 'text',
-        text: buffer,
-      })
-    }
-    buffer = ''
-  }
-
   function emitParserErrors(errors: StreamParserError[]) {
     for (const error of errors) {
       onResponseChunk({
@@ -181,14 +180,8 @@ export async function* processStreamWithTools(params: {
   }
 
   async function* processChunk(
-    chunk: StreamChunk | undefined,
+    chunk: StreamChunk,
   ): AsyncGenerator<StreamChunk> {
-    if (chunk === undefined) {
-      flush()
-      streamCompleted = true
-      return
-    }
-
     if (chunk.type === 'text') {
       // Parse XML tool calls from the text stream
       const { filteredText, toolCalls, errors } = parseStreamChunk(
@@ -199,21 +192,28 @@ export async function* processStreamWithTools(params: {
       emitParserErrors(errors)
 
       if (filteredText) {
-        buffer += filteredText
+        // Memory bounding (stream-buffer-unbounded-retained-text): emit text
+        // straight through instead of retaining every chunk until a flush
+        // point. The previous buffering duplicated the entire response in
+        // memory on long pure-text outputs and re-emitted the full prefix at
+        // each flush point.
+        onResponseChunk({
+          type: 'text',
+          text: filteredText,
+        })
         yield {
           type: 'text',
           text: filteredText,
         }
       }
 
-      // Flush buffer before yielding tool calls so text event is sent first
-      if (toolCalls.length > 0) {
-        flush()
-      }
-
       // Then process and yield any XML tool calls found
       for (const toolCall of toolCalls) {
-        const toolCallId = `xml-${crypto.randomUUID().slice(0, 8)}`
+        // Full UUID (audit shard-runtime-loop tool-stream-parser.ts:216): the
+        // 8-hex-char truncation left a 32-bit id space, so long sessions or
+        // eval sweeps could collide tool_call ids and pair a tool_result with
+        // the wrong call. There is no size constraint on synthetic ids.
+        const toolCallId = `xml-${crypto.randomUUID()}`
 
         // Execute the tool immediately if callback provided, pausing the stream
         // The callback handles emitting tool_call and tool_result events
@@ -224,8 +224,6 @@ export async function* processStreamWithTools(params: {
         })
       }
       return
-    } else {
-      flush()
     }
 
     if (chunk.type === 'tool-call') {
@@ -236,27 +234,13 @@ export async function* processStreamWithTools(params: {
   }
 
   let result: PromptResult<string | null> = { aborted: false, value: null }
-  try {
-    while (true) {
-      const { value, done } = await stream.next()
-      if (done) {
-        result = value
-        break
-      }
-      if (streamCompleted) {
-        break
-      }
-      yield* processChunk(value)
+  while (true) {
+    const { value, done } = await stream.next()
+    if (done) {
+      result = value
+      break
     }
-    if (!streamCompleted) {
-      // After the stream ends, try parsing one last time in case there's leftover text
-      yield* processChunk(undefined)
-    }
-  } finally {
-    // Flush any remaining buffered text so it reaches onResponseChunk even on
-    // abort. Without this, text streamed after the last tool call would be lost
-    // from the message history.
-    flush()
+    yield* processChunk(value)
   }
   return result
 }

@@ -25,6 +25,10 @@ import { Button } from '../button'
 
 import type { AskUserQuestion } from '../../types/store'
 import type { KeyEvent } from '@opentui/core'
+import {
+  countInProgressDraftAnswers,
+  nextEscapeAction,
+} from './skip-guard'
 
 export interface MultipleChoiceFormProps {
   questions: AskUserQuestion[]
@@ -71,6 +75,12 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
     optionIndex: number
   } | null>(null)
 
+  // Esc/Skip confirmation (shard-cli-tui finding: ask-user Esc data-loss).
+  // When any question already holds user input, the first Esc (or Ctrl+C)
+  // only warns; a second press confirms the skip so a stray keypress can no
+  // longer silently discard the whole form.
+  const [confirmingSkip, setConfirmingSkip] = useState<boolean>(false)
+
   // Track if user is typing in "Custom" text input
   const [isTypingCustom, setIsTypingCustom] = useState<boolean>(false)
 
@@ -101,6 +111,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       setFocusedOptionIndex(optionIndex)
       setSubmitFocused(false)
       setIsTypingCustom(false)
+      setConfirmingSkip(false)
     },
     [],
   )
@@ -232,6 +243,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   const handleToggleOption = useCallback(
     (questionIndex: number, optionIndex: number) => {
       setSubmitFocused(false)
+      setConfirmingSkip(false)
       let toggledCustomOn = false
 
       setAnswers((prev) => {
@@ -305,6 +317,8 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
     [],
   )
 
+  const draftAnswerCount = countInProgressDraftAnswers(answers)
+
   // Handle submit
   const handleSubmit = useCallback(() => {
     const formattedAnswers = questions.map((question, index) =>
@@ -328,9 +342,20 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
           }
         }
 
-        // Escape or Ctrl+C to skip/close the form
+        // Escape or Ctrl+C to skip/close the form. An in-progress draft
+        // makes the first press show a confirmation instead of an immediate
+        // discard (shard-cli-tui finding: ask-user Esc data-loss).
         if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
           preventDefault()
+          if (
+            nextEscapeAction(
+              countInProgressDraftAnswers(answers),
+              confirmingSkip,
+            ) === 'warn'
+          ) {
+            setConfirmingSkip(true)
+            return
+          }
           onSkip()
           return
         }
@@ -489,6 +514,8 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
         lastFocusBeforeSubmit,
         isTypingCustom,
         showFocusHighlight,
+        answers,
+        confirmingSkip,
         handleSelectOption,
         handleToggleOption,
         handleSubmit,
@@ -583,6 +610,13 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
           }}
         />
       ))}
+
+      {/* Skip confirmation (shard-cli-tui finding: ask-user Esc data-loss): */}
+      {confirmingSkip ? (
+        <text style={{ wrapMode: 'none', fg: theme.primary, marginRight: 1 }}>
+          {`${draftAnswerCount} answer${draftAnswerCount === 1 ? '' : 's'} will be discarded — press Esc again to confirm`}
+        </text>
+      ) : null}
 
       {/* Footer: submit + keyboard hints */}
       <box

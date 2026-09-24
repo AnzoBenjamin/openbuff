@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 
 import { shouldAbsorbGitStatusFile } from '../base2/gate-concurrency'
-import { publishSelfMutatedPaths } from '../../packages/agent-runtime/src/run-agent-step'
+import {
+  creditSelfMutatedPathValue,
+  publishSelfMutatedPaths,
+} from '../../packages/agent-runtime/src/run-agent-step'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
 
@@ -417,6 +420,157 @@ describe('runtime publishes selfMutatedPaths for concurrent isolation', () => {
         selfMutatedPaths: new Set(published),
       }),
     ).toBe(false)
+  })
+
+  test('publishSelfMutatedPaths re-visits a shared payload object once per payload', () => {
+    // Regression pin for performance-specialist finding
+    // single-visited-set-shared-across-results: the visited set must reset
+    // between tool results. The SAME object appears in both results below; the
+    // first wraps it too deep for the depth>8 budget to reach its inner
+    // touchedPaths, and only the second (shallow) appearance can credit them.
+    // A step-global visited set would skip the shallow re-visit and silently
+    // lose the deep path.
+    const agentState = {} as AgentState
+    const shared = {
+      touchedPaths: ['shallow/shared.ts'],
+      level1: {
+        level2: {
+          level3: {
+            level4: {
+              level5: {
+                touchedPaths: ['deep/only-via-shallow.ts'],
+              },
+            },
+          },
+        },
+      },
+    }
+    const toolResults = [
+      {
+        role: 'tool',
+        toolName: 'check_job',
+        toolCallId: 'tc-deep-wrap',
+        content: [{ type: 'json', value: { w1: { w2: { w3: shared } } } }],
+      } as unknown as ToolMessage,
+      {
+        role: 'tool',
+        toolName: 'check_job',
+        toolCallId: 'tc-shallow',
+        content: [{ type: 'json', value: shared }],
+      } as unknown as ToolMessage,
+    ]
+
+    const published = publishSelfMutatedPaths({ agentState, toolResults })
+    expect(published).toContain('shallow/shared.ts')
+    expect(published).toContain('deep/only-via-shallow.ts')
+  })
+
+  test('publishSelfMutatedPaths terminates on an object-array cycle and credits its paths', () => {
+    // Bound + parity pin for performance-specialist finding
+    // single-visited-set-shared-across-results (breadth clause). The payload
+    // below is an object→array→object cycle: the depth-aware memo must cover
+    // ARRAY identity as well as object identity (arrays are objects), so the
+    // walk terminates with each cycle path credited exactly once instead of
+    // re-walking the shared array once per path.
+    const agentState = {} as AgentState
+    const loop: unknown[] = []
+    const nodeA = { touchedPaths: ['cycle/a.ts'], next: loop }
+    const nodeB = { touchedPaths: ['cycle/b.ts'], next: loop }
+    loop.push(nodeA, nodeB, loop)
+    const toolResults = [
+      {
+        role: 'tool',
+        toolName: 'check_job',
+        toolCallId: 'tc-cycle',
+        content: [{ type: 'json', value: nodeA }],
+      } as unknown as ToolMessage,
+    ]
+
+    const published = publishSelfMutatedPaths({ agentState, toolResults })
+    expect(published).toContain('cycle/a.ts')
+    expect(published).toContain('cycle/b.ts')
+  })
+
+  test('publishSelfMutatedPaths re-walks a shared subgraph reached shallower within one payload', () => {
+    // Regression pin for performance-specialist finding
+    // single-visited-set-shared-across-results (within-payload class). A plain
+    // visited Set walks `shared` first through the DEEP branch (depth 8, where
+    // its `inner` child sits at depth 9 and is pruned by the budget), then
+    // silently skips the SHALLOW branch's reach at depth 3 — losing
+    // shared/inner.ts. The depth-aware memo re-walks on the shallower reach and
+    // credits it, matching the unguarded walk's collected set exactly. This is
+    // also the bound test the finding asks for: the diamond terminates with
+    // both reaches collected instead of one being silently dropped.
+    const agentState = {} as AgentState
+    const shared = {
+      touchedPaths: ['shared/root.ts'],
+      inner: {
+        touchedPaths: ['shared/inner.ts'],
+      },
+    }
+    const toolResults = [
+      {
+        role: 'tool',
+        toolName: 'check_job',
+        toolCallId: 'tc-diamond',
+        content: [
+          {
+            type: 'json',
+            value: {
+              // Insertion order puts the deep branch first, so `shared`'s
+              // initial reach is the pruned one — the exact interleaving that
+              // under-collects with a plain visited Set.
+              deep: { d1: { d2: { d3: { d4: { d5: shared } } } } },
+              shallow: shared,
+            },
+          },
+        ],
+      } as unknown as ToolMessage,
+    ]
+
+    const published = publishSelfMutatedPaths({ agentState, toolResults })
+    expect(published).toContain('shared/root.ts')
+    expect(published).toContain('shared/inner.ts')
+  })
+
+  test('creditSelfMutatedPathValue shares the crediting layer with publishSelfMutatedPaths (CASE 5 like-for-like seam)', () => {
+    // Regression pin for case5-asymmetric-speedup-ratio / RF-8: the CASE 5
+    // before mirror in scripts/measure-perf-guards-baseline.ts runs this
+    // shipped crediting layer (path validation, mutation-signal collection,
+    // Set/sort publish), so both rows credit identical work and only the
+    // traversal guard differs. Pinned here as parity with the publisher on the
+    // same node.
+    const node = {
+      touchedPaths: [
+        'gen/out.ts',
+        ['pkg', 'nested.ts'].join('\\'),
+        '/abs/bad.ts',
+        ['..', 'escape.ts'].join('/'),
+      ],
+      changedFiles: [{ path: 'editor/batch.ts' }, 'editor/other.ts'],
+    }
+    const credited = new Set<string>()
+    creditSelfMutatedPathValue(credited, node)
+
+    const published = publishSelfMutatedPaths({
+      agentState: {} as AgentState,
+      toolResults: [
+        {
+          role: 'tool',
+          toolName: 'check_job',
+          toolCallId: 'tc-seam',
+          content: [{ type: 'json', value: node }],
+        } as unknown as ToolMessage,
+      ],
+    })
+
+    expect([...credited].sort()).toEqual(published)
+    expect(published).toEqual([
+      'editor/batch.ts',
+      'editor/other.ts',
+      'gen/out.ts',
+      'pkg/nested.ts',
+    ])
   })
 
   test('run-agent-step wires publishSelfMutatedPaths after processStream', () => {

@@ -110,7 +110,7 @@ import {
   setExitStreamSignal,
   setQueuedPromptDrain,
 } from './hooks/use-exit-handler'
-import { formatQueuedMessageForHistory } from './hooks/helpers/send-message'
+import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
 
 export const Chat = ({
   headerContent,
@@ -398,33 +398,18 @@ export const Chat = ({
   // the Ctrl-C/SIGINT path exits through use-exit-handler, which has no
   // access to the queue; register the same drain the /exit command runs so
   // prompts queued during an active stream persist to session history
-  // instead of being dropped on that path too.
+  // instead of being dropped on that path too. The drain body lives in
+  // hooks/helpers/exit-queue-drain.ts so its partial-failure semantics stay
+  // unit-testable.
   useEffect(() => {
     setExitStreamSignal(() => abortControllerRef.current?.signal)
-    setQueuedPromptDrain(() => {
-      useChatStore.getState().pushMessageSnapshot()
-      // Drain one entry at a time (reliability finding
-      // exit-drain-partial-failure-drops-queue): a single all-at-once
-      // clearQueue() before the persistence loop would drop every prompt if
-      // persistence never ran. A persist failure skips only its own entry and
-      // the drain continues (reliability finding
-      // exit-drain-stops-on-first-persist-failure): re-queuing at exit is
-      // unobservable because the in-memory queue cannot survive
-      // process.exit(0), so stopping would lose the failed prompt AND every
-      // remaining queued prompt.
-      for (;;) {
-        const [queued] = clearQueue(1)
-        if (!queued) break
-        try {
-          // Persist the attachments folded into the prompt text: dropping
-          // them here loses queued context across the restart (reliability
-          // finding exit-drain-drops-queued-attachments).
-          saveToHistory(formatQueuedMessageForHistory(queued))
-        } catch {
-          // Skip the failed entry; keep draining the remaining prompts.
-        }
-      }
-    })
+    setQueuedPromptDrain(
+      createQueuedPromptDrainer({
+        pushMessageSnapshot: () => useChatStore.getState().pushMessageSnapshot(),
+        clearQueue,
+        saveToHistory,
+      }),
+    )
     return () => {
       setExitStreamSignal(undefined)
       setQueuedPromptDrain(undefined)

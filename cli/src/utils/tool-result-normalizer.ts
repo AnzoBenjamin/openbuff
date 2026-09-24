@@ -41,11 +41,17 @@ function asMessage(value: unknown): string | null {
 
 export function getStructuredErrorMessages(outputRaw: unknown): string[] {
   const messages: string[] = []
-  const visit = (value: unknown, depth = 0): void => {
-    if (depth > 6 || value === null || value === undefined) return
+  // Only the tool-result ENVELOPE (top-level output records) is scanned for
+  // error fields. Recursing into arbitrary payload DATA produced
+  // shard-cli-tui's false-positive failure mode: nested result data carrying
+  // its own `error` / `errorMessage` field flipped a successful tool to
+  // lifecycle 'failed' (MEDIUM correctness finding, tool-result-normalizer
+  // false positives on nested payload data).
+  const visit = (value: unknown): void => {
+    if (value === null || value === undefined) return
     if (typeof value === 'string') return
     if (Array.isArray(value)) {
-      value.forEach((entry) => visit(entry, depth + 1))
+      value.forEach((entry) => visit(entry))
       return
     }
     if (typeof value !== 'object') return
@@ -53,21 +59,15 @@ export function getStructuredErrorMessages(outputRaw: unknown): string[] {
     const record = value as ToolResultRecord
     const error = record.error
     if (typeof error === 'string') messages.push(error.trim())
-    else if (error && typeof error === 'object') {
-      const message = asMessage((error as ToolResultRecord).message)
-      if (message) messages.push(message)
+    else if (
+      error &&
+      typeof error === 'object' &&
+      typeof (error as ToolResultRecord).message === 'string'
+    ) {
+      messages.push((error as ToolResultRecord).message as string)
     }
     const direct = asMessage(record.errorMessage)
     if (direct) messages.push(direct)
-    if (record.kind === 'native_tool_result_error') {
-      const message = asMessage(
-        (record.error as ToolResultRecord | undefined)?.message,
-      )
-      if (message) messages.push(message)
-    }
-    for (const [key, child] of Object.entries(record)) {
-      if (key !== 'error' && key !== 'errorMessage') visit(child, depth + 1)
-    }
   }
   getToolOutputValues(outputRaw).forEach((value) => visit(value))
   return [...new Set(messages.filter(Boolean))]

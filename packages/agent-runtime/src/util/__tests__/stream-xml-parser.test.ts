@@ -274,7 +274,7 @@ Thinking about the task...
       expect(result.errors[0].message).toContain('JSON parsing failed')
     })
 
-    it('should report and clear unterminated tool call buffers past the limit', () => {
+    it('should report and discard unterminated tool call buffers past the limit', () => {
       const state = createStreamParserState({ maxToolCallBufferLength: 8 })
 
       const result = parseStreamChunk('<codebuff_tool_call>123456789', state)
@@ -285,13 +285,71 @@ Thinking about the task...
         {
           code: 'tool_call_buffer_exceeded',
           message:
-            'Discarded unterminated codebuff_tool_call content after 9 buffered characters (limit 8).',
+            'Discarded unterminated codebuff_tool_call content after 9 buffered characters (limit 8). Discarding content until the end tag.',
           bufferedLength: 9,
           maxBufferLength: 8,
         },
       ])
       expect(state.buffer).toBe('')
+      // Overflow stays in a discard-until-end-tag scanning state; the parser
+      // only returns to normal mode after the closing tag is consumed.
+      expect(state.insideToolCall).toBe(true)
+      expect(state.discardingUntilEndTag).toBe(true)
+    })
+
+    it('should swallow the end tag after a buffer overflow instead of leaking it into text', () => {
+      const state = createStreamParserState({ maxToolCallBufferLength: 8 })
+
+      const result1 = parseStreamChunk('<codebuff_tool_call>123456789', state)
+      expect(result1.errors).toHaveLength(1)
+
+      const result2 = parseStreamChunk('\n</codebuff_tool_call>done', state)
+
+      expect(result2.filteredText).toBe('done')
+      expect(result2.toolCalls).toEqual([])
+      expect(result2.errors).toEqual([])
+      expect(state.discardingUntilEndTag).toBe(false)
       expect(state.insideToolCall).toBe(false)
+    })
+
+    it('should handle an end tag split across chunks after a buffer overflow', () => {
+      const state = createStreamParserState({ maxToolCallBufferLength: 4 })
+
+      parseStreamChunk('<codebuff_tool_call>abcdef', state)
+      const result = parseStreamChunk('</codebuff_', state)
+      const final = parseStreamChunk('tool_call>after', state)
+
+      expect(final.filteredText).toBe('after')
+      expect(final.toolCalls).toEqual([])
+      expect(final.errors).toEqual([])
+    })
+
+    it('should extract the balanced JSON object when prose contains braces', () => {
+      const state = createStreamParserState()
+      const chunk = `<codebuff_tool_call>
+use {x} like this: {"cb_tool_name": "test_tool", "path": "foo.ts"} hope that helps
+</codebuff_tool_call>`
+
+      const result = parseStreamChunk(chunk, state)
+
+      expect(result.filteredText).toBe('')
+      expect(result.toolCalls).toHaveLength(1)
+      expect(result.toolCalls[0].toolName).toBe('test_tool')
+      expect(result.toolCalls[0].input).toEqual({ path: 'foo.ts' })
+    })
+
+    it('should not truncate the JSON object at a brace inside a string literal', () => {
+      const state = createStreamParserState()
+      const chunk = `<codebuff_tool_call>
+{"cb_tool_name": "test_tool", "content": "literal { brace"} tail "{
+</codebuff_tool_call>`
+
+      const result = parseStreamChunk(chunk, state)
+
+      expect(result.toolCalls).toHaveLength(1)
+      expect(result.toolCalls[0].input).toEqual({
+        content: 'literal { brace',
+      })
     })
   })
 })

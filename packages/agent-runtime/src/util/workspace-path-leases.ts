@@ -109,6 +109,53 @@ export function releaseWorkspacePathLease(
   }
 }
 
+/**
+ * Extend one of OUR OWN durable leases in place (heartbeat). Fail paths are
+ * structured: an unknown leaseId, a lease owned by another agent, or a lease
+ * already released/interrupted all throw, so callers cannot silently extend
+ * someone else's or an expired handle.
+ */
+export function extendWorkspacePathLease(params: {
+  state: AgentState
+  leaseId: string
+  ownerAgentId: string
+  leaseMs?: number
+}): { leaseId: string; expiresAt: number } {
+  const lease = params.state.workspacePathLeases?.find(
+    (candidate) => candidate.leaseId === params.leaseId,
+  )
+  if (lease === undefined) {
+    throw new Error(
+      `Workspace path lease extension failed: unknown leaseId ${params.leaseId}.`,
+    )
+  }
+  if (lease.ownerAgentId !== params.ownerAgentId) {
+    throw new Error(
+      `Workspace path lease extension denied: ${params.ownerAgentId} does not own ${params.leaseId} (owner ${lease.ownerAgentId}).`,
+    )
+  }
+  if (lease.status !== 'active') {
+    throw new Error(
+      `Workspace path lease extension failed: lease ${params.leaseId} is ${lease.status}, not active.`,
+    )
+  }
+  const runtime = activeLeases.get(params.leaseId)
+  if (runtime === undefined && lease.expiresAt > Date.now()) {
+    // Durable-but-not-runtime is the interrupted/crashed-recovery shape: the
+    // runtime map was lost, so the extension cannot refresh its clock.
+    throw new Error(
+      `Workspace path lease extension failed: lease ${params.leaseId} is no longer held in runtime memory.`,
+    )
+  }
+  const now = Date.now()
+  const expiresAt = now + Math.max(1, params.leaseMs ?? DEFAULT_LEASE_MS)
+  lease.expiresAt = expiresAt
+  if (runtime !== undefined) {
+    runtime.expiresAt = expiresAt
+  }
+  return { leaseId: params.leaseId, expiresAt }
+}
+
 export function reconcileInterruptedPathLeases(state: AgentState): void {
   for (const lease of state.workspacePathLeases ?? []) {
     if (lease.status !== 'active') continue

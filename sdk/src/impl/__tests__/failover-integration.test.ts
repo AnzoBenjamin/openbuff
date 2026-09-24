@@ -2,8 +2,13 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
+import { describe, expect, spyOn, test, beforeEach, afterEach } from 'bun:test'
+import { APICallError } from 'ai'
+import type { LanguageModel } from 'ai'
+import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 
+import * as modelProvider from '../model-provider'
+import { promptAiSdkStream } from '../llm'
 import { resolveModelsToTry } from '../failover'
 import {
   PROVIDER_CONFIG_ENV_VAR,
@@ -240,85 +245,113 @@ describe('failover loop contract (composed)', () => {
 /**
  * Block 2 — `promptAiSdkStream` loop-level integration.
  *
- * The intended test: drive the real `promptAiSdkStream` export, spyOn the
- * `getModelForRequest` export of `./model-provider`, and assert the loop
- * (a) calls getModelForRequest with preferModelParam=false for the primary
- * (failoverIndex 0) and preferModelParam=true for the backup (failoverIndex 1),
- * (b) advances to the backup when the primary rejects with a 401
- * (failover-eligible, NOT retryable — see isRetryableStatusCode), and
- * (c) yields the backup's text content and returns a successful PromptResult.
+ * Implemented loop-level test: drive the real `promptAiSdkStream` export with
+ * `getModelForRequest` spied via the namespace object (Bun intercepts the
+ * named-import call site in llm.ts), asserting (a) preferModelParam=false
+ * (primary) then true (backup) at the M8.1 seam, (b) failover on a primary
+ * 401 (failover-eligible, NOT retryable — see isRetryableStatusCode), and
+ * (c) the backup's text content yielded plus a successful PromptResult.
  *
- * SKIPPED because the loop-level seam is too fragile to assert without running:
+ * The previously-concerned seam fragility was resolved without changing any
+ * behavior: the fake LanguageModel builds its parts from the ai package's own
+ * streamText semantics, and the spy is verified by the assertion that the
+ * FIRST call carries preferModelParam=false — the loop cannot reach the
+ * backup path without the spy intercepting.
  *
- * 1. Spy interception: `promptAiSdkStream` imports `getModelForRequest` via a
- *    named import (`import { getModelForRequest } from './model-provider'`).
- *    Bun's ESM named imports are live bindings, but `spyOn(namespace, 'export')`
- *    on a namespace object does not reliably intercept a call site that bound
- *    the named export at module load. If the primary's 401 never fires (the
- *    loop "succeeds" on the primary), the spy is not intercepting the call
- *    site in llm.ts. Without a verified interception the loop assertions are
- *    meaningless.
+ * Historical blockers addressed:
  *
- * 2. Fake LanguageModel.doStream shape: the real `streamText` from `ai`
- *    validates the `LanguageModelV1` interface and calls `doStream` with a
- *    large, version-specific options object, then expects a strictly-typed
- *    `LanguageModelV1StreamPart` async iterable (including a correctly-shaped
- *    `finish` part). A partial fake is likely rejected by `streamText` before
- *    the failover catch block ever sees the 401 — masking the failover path
- *    under an unrelated stream-shape error.
+ * 1. Spy interception is verified observationally: the FIRST spied call must
+ *    carry preferModelParam=false — the loop cannot reach the backup path
+ *    without the spy intercepting the llm.ts call site.
  *
- * 3. `APICallError` constructor shape + promptAiSdkStream param surface: the
- *    loop destructures many param fields (sendAction, trackEvent, logger,
- *    providerOptions passthrough, etc.) and threads them through
- *    convertCbToModelMessages / getMessagesForModelContext /
- *    withConfiguredReasoningEffort / getProviderOptions — a large surface to
- *    stub correctly blind.
+ * 2. The fake LanguageModel models run through the ai package's own
+ *    streamText semantics: the error model rejects with a real APICallError
+ *    carrying statusCode 401 (failover-eligible, not retryable), and the
+ *    backup model yields a text-delta/finish stream pair.
  *
- * Block 1 above already locks the composed contract (`resolveModelsToTry` dedup
- * + `resolveConfiguredAgentModelConfig` preferModelParam bypass) that the loop
- * relies on, which is the reliable baseline coverage. This skip records the
- * blocker for a follow-up once a verified module-mock strategy (e.g. a
- * injectable model-provider seam or an in-repo http mock) is available.
+ * 3. The promptAiSdkStream param surface is filled out minimally but
+ *    completely (apiKey, runId, messages, session ids, sendAction, logger,
+ *    trackEvent, signal), matching the published PromptAiSdkStreamFn input.
  */
+
+const testLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+}
+
+/**
+ * Backup-side stub: doStream returns a LanguageModelV2 stream (AI SDK 5
+ * rejects specificationVersion 'v1' models outright via
+ * AI_UnsupportedModelVersionError, so the fake must implement v2).
+ */
+function makeStreamModel(text: string): LanguageModel {
+  return {
+    specificationVersion: 'v2',
+    provider: 'test-provider',
+    modelId: 'test-model',
+    doStream: async () => {
+      const parts = [
+        { type: 'stream-start' },
+        { type: 'text-start', id: 'txt-1' },
+        { type: 'text-delta', id: 'txt-1', delta: text },
+        { type: 'text-end', id: 'txt-1' },
+        {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        },
+      ] as LanguageModelV2StreamPart[]
+      const stream = new ReadableStream<LanguageModelV2StreamPart>({
+        start(controller) {
+          for (const part of parts) controller.enqueue(part)
+          controller.close()
+        },
+      })
+      return { stream, rawCall: { rawPrompt: null, rawSettings: {} } }
+    },
+  } as unknown as LanguageModel
+}
+
+/** Primary-side stub: doStream rejects with a failover-eligible
+ *  (non-retryable) 401 APICallError. */
+function makeAuthErrorModel(): LanguageModel {
+  return {
+    specificationVersion: 'v2',
+    provider: 'test-provider',
+    modelId: 'test-model',
+    doStream: async () => {
+      throw new APICallError({
+        message: 'Invalid API key provided',
+        url: 'http://127.0.0.1:11434/v1/chat/completions',
+        requestBodyValues: {},
+        statusCode: 401,
+        isRetryable: false,
+      })
+    },
+  } as unknown as LanguageModel
+}
 describe('promptAiSdkStream failover loop (integration)', () => {
+  let tempDir: string | undefined
+  let spiedGetModelForRequest: ReturnType<typeof spyOn> | undefined
+
   beforeEach(() => {
     resetEnv()
     delete process.env[PROVIDER_CONFIG_ENV_VAR]
   })
 
   afterEach(() => {
+    spiedGetModelForRequest?.mockRestore()
+    spiedGetModelForRequest = undefined
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+      tempDir = undefined
+    }
     resetEnv()
   })
 
-  test.skip('TODO: loop-level test — advances to backup on primary 401, records preferModelParam [false, true], yields backup content', async () => {
-    // Intended setup (kept for the follow-up):
-    // 1. Write a temp openbuff.json with defaultModel 'local/primary' and
-    //    failoverModels: ['local/backup-a'], point
-    //    process.env[PROVIDER_CONFIG_ENV_VAR] at it.
-    // 2. import * as modelProvider from '../model-provider'; spyOn the
-    //    `getModelForRequest` export, recording preferModelParam per call.
-    //    - call 1 (primary, preferModelParam=false): return a fake
-    //      LanguageModel whose doStream rejects with a 401 (createAuthError
-    //      produces an Error with statusCode 401, which isFailoverEligible
-    //      and NOT isRetryable, so the inner retry loop bubbles it to the
-    //      outer failover catch).
-    //    - call 2 (backup, preferModelParam=true): return a fake
-    //      LanguageModel whose doStream yields { type: 'text-delta',
-    //      text: 'backup-content' } then a { type: 'finish' } part, plus
-    //      compatibility / reasoningEffort / effectiveModel /
-    //      contextWindowTokens / pricing / isChatGptOAuth fields.
-    // 3. Build a minimal promptAiSdkStream params object (apiKey, runId,
-    //    messages: [], clientSessionId, fingerprintId, userId: undefined,
-    //    userInputId, model: 'local/primary', agentId: undefined,
-    //    sendAction: async no-op, logger stub with info/warn/error no-ops,
-    //    trackEvent: async no-op, signal: new AbortController().signal).
-    // 4. Iterate the async generator, collect text chunks + the return value.
-    //
-    // Expected assertions:
-    //   - recorded preferModelParam calls === [false, true]
-    //   - collected text chunks include 'backup-content'
-    //   - generator return value is a success: { aborted: false, value: ... }
-    //     (promptSuccess shape from @codebuff/common/util/error).
+  test('advances to backup on primary 401, records preferModelParam [false, true], yields backup content', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-failover-'))
     const configPath = path.join(tempDir, 'openbuff.json')
     fs.writeFileSync(
@@ -338,6 +371,82 @@ describe('promptAiSdkStream failover loop (integration)', () => {
     )
     process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
 
-    expect(true).toBe(true)
+    // Spy the getModelForRequest export whose named import llm.ts binds at
+    // module load. Call 1 (primary attempt): a failover-eligible 401 error
+    // model. Call 2 (backup attempt): the success stream model.
+    const preferModelParamCalls: boolean[] = []
+    spiedGetModelForRequest = spyOn(
+      modelProvider,
+      'getModelForRequest',
+    ).mockImplementation(async (params) => {
+      preferModelParamCalls.push(params.preferModelParam === true)
+      const base = {
+        isChatGptOAuth: false,
+        compatibility: {
+          supportsTools: true,
+          stripProviderMetadata: false,
+          stripCacheControl: false,
+          stringifyTextContent: false,
+          supportsRequiredToolChoice: true,
+          supportsStopSequences: true,
+        },
+      }
+      if (params.preferModelParam) {
+        return {
+          ...base,
+          model: makeStreamModel('backup-content'),
+          effectiveModel: 'local/backup-a',
+        }
+      }
+      return {
+        ...base,
+        model: makeAuthErrorModel(),
+        effectiveModel: 'local/primary',
+      }
+    })
+
+    const promptParams = {
+      apiKey: 'test-key',
+      runId: 'run-1',
+      // AI SDK 5 rejects an empty prompt (AI_InvalidPromptError), so the
+      // failover loop test needs at least one user message. CodebuffMessage
+      // content is an array of typed blocks (string content would crash
+      // getMessagesForModelContext's content.some at llm.ts:808).
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'failover probe' }] },
+      ] as never[],
+      clientSessionId: 'client-1',
+      fingerprintId: 'finger-1',
+      userInputId: 'input-1',
+      userId: undefined,
+      model: 'local/primary' as const,
+      agentId: undefined,
+      sendAction: async () => {},
+      logger: testLogger,
+      trackEvent: async () => {},
+      signal: new AbortController().signal,
+    }
+
+    // Drive the async generator manually so BOTH the yielded text chunks and
+    // the generator's return value (a PromptResult) are observable.
+    const textChunks: string[] = []
+    const iterator = promptAiSdkStream(promptParams as never)[Symbol.asyncIterator]()
+    let next = await iterator.next()
+    while (!next.done) {
+      const chunk = next.value as { type: string; text?: string }
+      if (chunk.type === 'text' && typeof chunk.text === 'string') {
+        textChunks.push(chunk.text)
+      }
+      next = await iterator.next()
+    }
+    const result = next.value as { aborted: boolean; value?: string | null }
+
+    // M8.1 failover seam: exactly two model resolutions, the primary without
+    // preferModelParam bypass and the backup with it set.
+    expect(preferModelParamCalls).toEqual([false, true])
+    // The backup's text was streamed through to the caller.
+    expect(textChunks.join('')).toContain('backup-content')
+    // The generator returns a successful PromptResult (promptSuccess shape).
+    expect(result.aborted).toBe(false)
   })
 })

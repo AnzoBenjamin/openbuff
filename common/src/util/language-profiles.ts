@@ -147,22 +147,55 @@ export function detectLanguageProfilesFromPaths(
   return profilesForIds(detected)
 }
 
-function escapeRegex(value: string): string {
+export function escapeRegexForLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function containsTaskAlias(taskText: string, alias: string): boolean {
-  const escaped = escapeRegex(alias)
+function taskAliasRegexp(alias: string): RegExp {
   const startsWithWord = /^\w/.test(alias)
   const endsWithWord = /\w$/.test(alias)
-  const pattern = `${startsWithWord ? '\\b' : ''}${escaped}${endsWithWord ? '\\b' : ''}`
-  return new RegExp(pattern, 'i').test(taskText)
+  const pattern = `${startsWithWord ? '\\b' : ''}${escapeRegexForLiteral(alias)}${endsWithWord ? '\\b' : ''}`
+  return new RegExp(pattern, 'i')
 }
 
-function containsPathSignal(taskText: string, signal: string): boolean {
-  const escaped = escapeRegex(signal)
-  return new RegExp(`${escaped}(?=$|[\\s\`'"),:;])`, 'i').test(taskText)
+function pathSignalRegexp(signal: string): RegExp {
+  return new RegExp(`${escapeRegexForLiteral(signal)}(?=$|[\\s\`'"),:;])`, 'i')
 }
+
+type LanguageSignalRegexps = {
+  aliases: RegExp[]
+  manifests: RegExp[]
+  manifestExtensions: RegExp[]
+  sourceExtensions: RegExp[]
+}
+
+/**
+ * Per-language signal regexes compiled once at module load instead of
+ * rebuilding (languages × aliases × signal kinds) RegExp objects inside
+ * detectLanguageProfilesFromTask on every language-step call.
+ */
+const LANGUAGE_SIGNAL_REGEXPS = new Map<
+  SupportedLanguageId,
+  LanguageSignalRegexps
+>(
+  SUPPORTED_LANGUAGE_IDS.map((languageId) => {
+    const capability = LANGUAGE_CAPABILITY_REGISTRY[languageId]
+    return [
+      languageId,
+      {
+        aliases: capability.taskAliases.map(taskAliasRegexp),
+        manifests: capability.manifestNames.map(pathSignalRegexp),
+        manifestExtensions: capability.manifestExtensions.map(
+          pathSignalRegexp,
+        ),
+        sourceExtensions: capability.extensions.map(pathSignalRegexp),
+      },
+    ]
+  }),
+)
+
+/** Non-global, so repeated .test calls hold no lastIndex state. */
+const EXPLICIT_GO_PATTERN = /\bGo\b/
 
 /**
  * Detect explicit language signals in task text. Ambiguous lowercase "go" is
@@ -175,28 +208,16 @@ export function detectLanguageProfilesFromTask(
   const detected = new Set<SupportedLanguageId>()
 
   for (const languageId of SUPPORTED_LANGUAGE_IDS) {
-    const capability = LANGUAGE_CAPABILITY_REGISTRY[languageId]
-    const hasAlias = capability.taskAliases.some((alias) =>
-      containsTaskAlias(taskText, alias),
-    )
-    const hasManifest = capability.manifestNames.some((manifest) =>
-      containsPathSignal(taskText, manifest),
-    )
-    const hasManifestExtension = capability.manifestExtensions.some(
-      (extension) => containsPathSignal(taskText, extension),
-    )
-    const hasSourceExtension = capability.extensions.some((extension) =>
-      containsPathSignal(taskText, extension),
-    )
-    const explicitlyNamesGo = languageId === 'go' && /\bGo\b/.test(taskText)
+    const signals = LANGUAGE_SIGNAL_REGEXPS.get(languageId)
+    if (!signals) continue
+    const hit =
+      signals.aliases.some((pattern) => pattern.test(taskText)) ||
+      signals.manifests.some((pattern) => pattern.test(taskText)) ||
+      signals.manifestExtensions.some((pattern) => pattern.test(taskText)) ||
+      signals.sourceExtensions.some((pattern) => pattern.test(taskText)) ||
+      (languageId === 'go' && EXPLICIT_GO_PATTERN.test(taskText))
 
-    if (
-      hasAlias ||
-      hasManifest ||
-      hasManifestExtension ||
-      hasSourceExtension ||
-      explicitlyNamesGo
-    ) {
+    if (hit) {
       detected.add(languageId)
     }
   }
