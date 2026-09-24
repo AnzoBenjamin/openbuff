@@ -22,3 +22,8 @@ Initial entries carried over from the audit phase (they directly shape execution
 - At fix time: verify exact line numbers for the two approximate CLI citations (`chat.tsx`, `sdk-event-handlers.ts`) from the verbatim snippets in shard-cli-tui.md.
 - Verify installed AI SDK v5 `experimental_repairToolCall` semantics (re-dispatch vs re-validate) before M2-T5 design; test both outcomes if the docs are ambiguous.
 - Keep appending here whenever a fix reveals something the next executor will trip over.
+
+<!-- update_plan_status:appended -->
+## Parallel validation runs cause OOM kills and phantom timeouts — serialize heavy validation — 2026-09-24T20:24:25.815Z
+
+Running multiple `bun test`/benchmark processes concurrently (foreground + background bashers) drove load average to ~8.5 on this 4-core-class machine: suites were OOM-SIGKILLed (exit 137, e.g. the cli workspace and part-2 split), and foreground runs that were actually healthy appeared to 'time out' for 5-15 minutes (eviction suite, benchmark, typechecks). Two misdiagnoses followed before the pattern was recognized: a healthy suite looked hung, and a passing-isolated cli test file looked broken. Rule: serialize heavy validation (one bun test / benchmark / tsc at a time); when a run 'times out', check `uptime` + `ps aux` for sibling bun processes before concluding the test itself is slow or broken; a suite that passes isolated after an in-suite failure should first be re-run under settled load before assuming cross-file bleed.

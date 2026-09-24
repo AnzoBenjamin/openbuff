@@ -433,7 +433,7 @@ function runCase5(): void {
       before: measure(legacy, 30),
       after: measure(shipped, 30),
       ratioBasis: 'like-for-like',
-      note: '24 x ~5KB fixtures; the measured op IS file stat/read (I/O-bound row)',
+      note: '24 x ~5KB fixtures; the measured op IS file stat/read (I/O-bound row); the untimed warm fills 24 of the 250-entry cache, so the timed row is the pure stat-fast-path steady state (no mid-run eviction)',
     })
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
@@ -459,21 +459,27 @@ function runCase6(): void {
       checkers.map((check) => check(tempDir)),
       checkers.map((check) => check(tempDir, snapshot)),
     )
-    // Legacy shape: each checker re-walks and re-reads every markdown file.
+    // Legacy shape: each checker re-walks and re-reads every markdown file
+    // (4 full walks per op — the pre-fix per-checker shape).
     const legacy = () =>
       checkers.reduce((total, check) => total + check(tempDir).length, 0)
-    const shipped = () =>
-      checkers.reduce(
-        (total, check) => total + check(tempDir, snapshot).length,
+    // Shipped shape: the FULL per-run work runMemoryDriftGuard pays — the
+    // single buildMarkdownSnapshot walk PLUS the snapshot-mode checker calls
+    // (measuring only the checker bodies would understate the after cost).
+    const shipped = () => {
+      const snap = buildMarkdownSnapshot(tempDir)
+      return checkers.reduce(
+        (total, check) => total + check(tempDir, snap).length,
         0,
       )
+    }
     report({
       case: 'CASE 6',
       finding: 'per-checker walk+read vs single shared snapshot walk',
       before: measure(legacy, 20),
       after: measure(shipped, 20),
       ratioBasis: 'like-for-like',
-      note: '12-file markdown fixture; checkPath/Edges/TodoFixme/BrokenLink subset',
+      note: '12-file markdown fixture; checkPath/Edges/TodoFixme/BrokenLink subset; after row = full run shape (snapshot walk + snapshot checkers)',
     })
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
@@ -528,7 +534,7 @@ function runCase7(): void {
     before: measure(legacy, 10),
     after: measure(shipped, 10),
     ratioBasis: 'contract',
-    note: '22 x 40KB results; the evidenced property is the bound (MAX_PROTECTED_CONTENT_SCAN_CHARS scan cap) engaging, not a timing win',
+    note: '22 x 40KB results; the evidenced property is the eviction/tombstone contract (eviction engages, evictedCount>0, tombstoned results); the MAX_PROTECTED_CONTENT_SCAN_CHARS scan cap is separately pinned by the tool-result-eviction suite scan-cap tests',
   })
 }
 
@@ -543,10 +549,10 @@ runCase7()
 
 console.log('All parity/contract assertions passed across 7 measured rows.')
 console.log(
-  'Parity rows compute identical before/after outputs; contract rows (7) assert',
+  'Parity rows compute identical before/after outputs; contract row 7 asserts',
 )
 console.log(
-  '  the bound\'s contract on the shipped side. Speedup ratios print only for',
+  '  the eviction/tombstone contract on the shipped side. Speedup ratios print only for',
 )
 console.log(
   '  like-for-like rows and are qualified by the min/max quotient envelope.',

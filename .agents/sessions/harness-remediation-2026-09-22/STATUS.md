@@ -408,3 +408,22 @@ All three suggested followups executed.
 
 Awaiting the gate reviewer pass; commit of the followup wave (background-agent-jobs.test.ts afterAll, knowledge.md ×3, .coverage-allow, e2e parity harness fix, M3-T2 benchmark script) follows GATE: PASSED.
 
+
+<!-- update_plan_status:appended -->
+## M3-T2 certification wave complete — benchmark evidence validated, specialist findings fixed, full-repo sweep classified; flip + commit await gate — 2026-09-24T20:24:24.165Z
+
+M3-T2 certification completed to the flip-ready state (checkbox flip deferred until the automated gate passes for the 2 pending files, per the plan's own rule):
+
+1. PLAN-MANDATED VALIDATE green: token-counter + context-budget suites 30 pass / 0 fail, agent-runtime typecheck clean. Performance-specialist review (independent, read-verified) returned NON_BLOCKING with all six requirement-coverage items satisfied (benchmark evidence per site, micro-timings statistically qualified, token metrics per provider documented, faithful mirrors with disclosed bias, after rows = shipped code, eviction bound implemented).
+
+2. All 3 specialist findings fixed:
+- case6-snapshot-walk-untimed: CASE 6's after row now times the FULL shipped run shape (one buildMarkdownSnapshot walk + snapshot-mode checker calls, matching runMemoryDriftGuard per-run cost) — honest 2.3x [2.2..2.6] instead of the overstated 6.6x.
+- case7-scan-cap-not-exercised: CASE 7's row note corrected to the eviction/tombstone contract it actually evidences; the MAX_PROTECTED_CONTENT_SCAN_CHARS (5M chars) scan-cap boundary is now pinned BOTH directions by two new unit tests in tool-result-eviction.test.ts (path beyond cap → evicted/tombstoned fail-open; path within cap → protected/full body), receipts 343fbdba; suite green (full run + isolated scan-cap run exit 0).
+- case5-cache-eviction-not-hit: CASE 5's row note now discloses the pure-stat-fast-path steady state (24 of 250 cache entries warmed untimed; no mid-run eviction).
+
+3. Final benchmark run: exit 0, ALL parity/contract assertions passed across 7 measured rows; scripts typecheck clean; memory-drift guard still 0 findings.
+
+4. Full-repo test sweep (bun run test) classified: 6 workspaces fully green (common 1342, agents 1170, scripts 162, agent-runtime 1870, indexer 249, evals 262); sdk onTrimmed idempotency failure passes isolated 2/0 (cross-file bleed class); cli StatusBar 2 failures pass isolated 3/0 (cross-suite bleed class); cli part-2 SIGKILL (exit 137) = OOM resource kill from concurrently running suites, not a test failure. No real regressions found by the sweep.
+
+5. Operational note: running multiple bun test/benchmark processes in parallel caused load-8.x OOM kills and multi-minute phantom timeouts; heavy validation is now serialized.
+

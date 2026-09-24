@@ -88,7 +88,7 @@ Ordering: M0 → M1 → M2 → M3 → M4 → M5 → M6. M4-T2 may run parallel t
   - Depends on: M2-T1
   - Acceptance: a hung subprocess/stream cannot hang the harness; every default timeout documented.
   - Validate: `cd agents && bun test __tests__/basher.test.ts`; `cd packages/agent-runtime && bun test src/llm-api/__tests__/context7-api.test.ts`; `cd scripts && bun test __tests__/check-ci-local.test.ts`.
-- [ ] **M3-T2** Hot-path cost (R7). `params/utils.ts:195` O(n²) → linear; `run-agent-step.ts:1947` incremental token accounting + `token-counter.ts:4/6` per-provider counters, bounded LRU (no whole-transcript caching); `tool-executor.ts:884` cache `z.toJSONSchema`; `base2.ts` `readGateFileContentMarker` content-hash cache; `memory-drift-guard.ts:1010` single batched walk; `tool-result-eviction.ts:78` bound.
+- [x] **M3-T2** Hot-path cost (R7). `params/utils.ts:195` O(n²) → linear; `run-agent-step.ts:1947` incremental token accounting + `token-counter.ts:4/6` per-provider counters, bounded LRU (no whole-transcript caching); `tool-executor.ts:884` cache `z.toJSONSchema`; `base2.ts` `readGateFileContentMarker` content-hash cache; `memory-drift-guard.ts:1010` single batched walk; `tool-result-eviction.ts:78` bound. (implementation + benchmark evidence + specialist review complete; checkbox flips after the automated gate passes for tool-result-eviction.test.ts + measure-m3-t2-hot-paths.ts) (complete: all 7 sites implemented + benchmark evidence (exit 0, 7/7 parity/contract assertions) + specialist review NON_BLOCKING (3 low findings fixed) + gate LOOKS_GOOD; commit follows)
   - Acceptance: benchmark evidence (before/after) per hot path from `scripts/measure-context-baseline.ts` + micro-timings; token metrics per provider documented.
   - Validate: `cd packages/agent-runtime && bun test src/util/__tests__/token-counter.test.ts src/util/__tests__/context-budget.test.ts`; performance-specialist review.
 - [ ] **M3-T3** Race fixes (R6). `coordinator.ts:721`; `index-store.ts:685` liveness-checked lock reclaim + generation CAS for vector writes; `harness-enforcement.ts:72`; `file-walker.ts` stat→lstat TOCTOU; `command-registry.ts:169` guarded submit + `:474` flush; `chunk-freshness.ts` FRESH-vs-ORPHAN label fix.
@@ -230,4 +230,4 @@ Ordering: M0 → M1 → M2 → M3 → M4 → M5 → M6. M4-T2 may run parallel t
 - Artifacts: `.agents/sessions/harness-remediation-2026-09-22/{SPEC,PLAN,STATUS,LESSONS}.md`.
 
 ## Current-task pointer
-<!-- current-task: M1-T1 Kill code-execution sinks (R1) -->
+<!-- current-task: none -->
