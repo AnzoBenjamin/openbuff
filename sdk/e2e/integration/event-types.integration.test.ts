@@ -6,7 +6,7 @@
  * subagent_start, subagent_finish, reasoning_delta, download
  */
 
-import { describe, test, expect, beforeAll } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { OpenbuffClient } from '../../src/client'
 import {
@@ -17,6 +17,9 @@ import {
   DEFAULT_AGENT_DEFINITION,
   DEFAULT_TIMEOUT,
 } from '../utils'
+import { teardownE2eMocks } from '../utils/e2e-mocks'
+
+afterAll(() => teardownE2eMocks())
 
 describe('Integration: Event Types', () => {
   let client: OpenbuffClient

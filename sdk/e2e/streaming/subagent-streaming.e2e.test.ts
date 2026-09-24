@@ -5,7 +5,7 @@
  * Validates subagent_start, subagent_finish events and chunk forwarding.
  */
 
-import { describe, test, expect, beforeAll } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { OpenbuffClient } from '../../src/client'
 import {
@@ -14,6 +14,9 @@ import {
   skipIfNoApiKey,
   DEFAULT_TIMEOUT,
 } from '../utils'
+import { teardownE2eMocks } from '../utils/e2e-mocks'
+
+afterAll(() => teardownE2eMocks())
 
 describe('Streaming: Subagent Streaming', () => {
   let client: OpenbuffClient

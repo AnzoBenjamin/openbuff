@@ -629,37 +629,71 @@ async function promptAiSdkStructuredMock<T>(
 
 let mocksApplied = false
 
+const appliedSpies: Array<{ mockRestore: () => void }> = []
+
+/**
+ * Restore every spy installed by setupE2eMocks and reset the latch so a later
+ * setupE2eMocks() call re-applies the mocks cleanly. Idempotent: calling this
+ * again (or before any setup) is a no-op. Call from afterAll in each e2e test
+ * file so Bun's shared module registry does not leak mocks into later files.
+ */
+export function teardownE2eMocks(): void {
+  for (const spy of appliedSpies) {
+    spy.mockRestore()
+  }
+  appliedSpies.length = 0
+  mocksApplied = false
+}
+
 export function setupE2eMocks(): void {
   if (mocksApplied) {
     return
   }
   mocksApplied = true
 
-  spyOn(databaseModule, 'getUserInfoFromApiKey').mockImplementation(
-    async ({ fields }) =>
-      Object.fromEntries(
-        fields.map((field) => [field, MOCK_USER[field]]),
-      ) as unknown as Awaited<
-        ReturnType<typeof databaseModule.getUserInfoFromApiKey>
-      >,
+  appliedSpies.push(
+    spyOn(databaseModule, 'getUserInfoFromApiKey').mockImplementation(
+      async ({ fields }) =>
+        Object.fromEntries(
+          fields.map((field) => [field, MOCK_USER[field]]),
+        ) as unknown as Awaited<
+          ReturnType<typeof databaseModule.getUserInfoFromApiKey>
+        >,
+    ),
   )
-  spyOn(databaseModule, 'fetchAgentFromDatabase').mockImplementation(
-    async ({ parsedAgentId }) => buildMockAgentTemplate(parsedAgentId),
+  appliedSpies.push(
+    spyOn(databaseModule, 'fetchAgentFromDatabase').mockImplementation(
+      async ({ parsedAgentId }) => buildMockAgentTemplate(parsedAgentId),
+    ),
   )
-  spyOn(databaseModule, 'startAgentRun').mockImplementation(async () =>
-    nextE2eMockId('mock-run'),
+  appliedSpies.push(
+    spyOn(databaseModule, 'startAgentRun').mockImplementation(async () =>
+      nextE2eMockId('mock-run'),
+    ),
   )
-  spyOn(databaseModule, 'finishAgentRun').mockImplementation(async () => {})
-  spyOn(databaseModule, 'addAgentStep').mockImplementation(async () =>
-    nextE2eMockId('mock-step'),
+  appliedSpies.push(
+    spyOn(databaseModule, 'finishAgentRun').mockImplementation(
+      async () => {},
+    ),
+  )
+  appliedSpies.push(
+    spyOn(databaseModule, 'addAgentStep').mockImplementation(async () =>
+      nextE2eMockId('mock-step'),
+    ),
   )
 
-  spyOn(llmModule, 'promptAiSdkStream').mockImplementation(
-    promptAiSdkStreamMock,
+  appliedSpies.push(
+    spyOn(llmModule, 'promptAiSdkStream').mockImplementation(
+      promptAiSdkStreamMock,
+    ),
   )
-  spyOn(llmModule, 'promptAiSdk').mockImplementation(promptAiSdkMock)
-  spyOn(llmModule, 'promptAiSdkStructured').mockImplementation(
-    promptAiSdkStructuredMock as typeof llmModule.promptAiSdkStructured,
+  appliedSpies.push(
+    spyOn(llmModule, 'promptAiSdk').mockImplementation(promptAiSdkMock),
+  )
+  appliedSpies.push(
+    spyOn(llmModule, 'promptAiSdkStructured').mockImplementation(
+      promptAiSdkStructuredMock as typeof llmModule.promptAiSdkStructured,
+    ),
   )
 
   // BYOK model routing: provide a default provider config for agents that
@@ -716,17 +750,24 @@ export function setupE2eMocks(): void {
     sourceFiles: {},
     diagnostics: [],
   } as unknown as ReturnType<typeof providerConfigModule.loadProviderConfigSync>
-  spyOn(providerConfigModule, 'loadProviderConfigSync').mockImplementation(
-    () => mockLoadedConfig,
+  appliedSpies.push(
+    spyOn(providerConfigModule, 'loadProviderConfigSync').mockImplementation(
+      () => mockLoadedConfig,
+    ),
   )
-  spyOn(modelProviderModule, 'resolveModelContextWindow').mockImplementation(
-    () => 200_000,
+  appliedSpies.push(
+    spyOn(modelProviderModule, 'resolveModelContextWindow').mockImplementation(
+      () => 200_000,
+    ),
   )
-  spyOn(modelProviderModule, 'resolveModelContextWindows').mockImplementation(
-    () => ({
+  appliedSpies.push(
+    spyOn(
+      modelProviderModule,
+      'resolveModelContextWindows',
+    ).mockImplementation(() => ({
       primary: 200_000,
       failoverFloor: 200_000,
-    }),
+    })),
   )
 
   // OpenbuffClient.checkConnection() was removed when the hosted-backend

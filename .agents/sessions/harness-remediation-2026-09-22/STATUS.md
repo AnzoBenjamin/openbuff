@@ -427,3 +427,27 @@ M3-T2 certification completed to the flip-ready state (checkbox flip deferred un
 
 5. Operational note: running multiple bun test/benchmark processes in parallel caused load-8.x OOM kills and multi-minute phantom timeouts; heavy validation is now serialized.
 
+
+<!-- update_plan_status:appended -->
+## M3-T3 certification wave + cross-file bleed fixes — validated; awaiting gate — 2026-09-24T20:53:46.969Z
+
+M3-T3 (Race fixes) certification path executed per plan:
+
+1. Disk verification (read-only): 6/6 plan sites implemented (index-store liveness-checked lock reclaim + strictly-monotonic generation CAS, index-manager epoch mirroring, harness-enforcement consume critical section, file-walker lstat TOCTOU, command-registry guarded submit + one-at-a-time exit drain, chunk-freshness FRESH-vs-ORPHAN) with concurrent-fixture tests for the core races.
+
+2. Plan Validate commands green (serialized): packages/indexer index-store+chunk-freshness+file-walker 63 pass/0 fail; sdk harness-enforcement 7/0; sdk memory-v2 coordinator 53/0; cli command-args exit 0.
+
+3. Reliability-reviewer (plan requirement) returned BLOCKING with 3 findings — all root-caused and fixed:
+- HIGH exit-drain-test-mock-incompatible-with-one-at-a-time-drain: the /exit drain test's clearQueue mock returned the full queue every call, spinning the one-at-a-time drain loop forever (proven: two isolated runs hung). Fixed with a contract-true splicing mock (N entries → N drain calls + 1 terminal empty check), plus a new partial-failure test (saveToHistory throws for one entry; drain continues).
+- walk-dir-swap-to-symlink-test-gap: new file-walker test pins the dir-lstat re-verify (directory entry resolved to symlink before recursion → skipped, external target's files excluded). Suite 26/0.
+- guarded-submit-busy-path-untested: three new tests via /resume-plan (the routing entry to sendPromptCommand): busy+isStreaming queues, busy+chainInProgress queues, idle sends with EXECUTE_PLAN mode. Suite 57/0 (no hang).
+
+4. Cross-file bleed class fixed (root-caused by debugger; the same class as the earlier background-agent-jobs registry leak):
+- sdk: sdk/e2e/utils/e2e-mocks.ts setupE2eMocks spies were never restored (module-latch, no teardown) — the leaked promptAiSdk mock broke llm-ontrim-retry in full-suite runs (minimal bleed pair proven). Added teardownE2eMocks (restores all 11 spies, resets the latch, idempotent) and wired afterAll(() => teardownE2eMocks()) into all 13 sdk/e2e test files that trigger it. Bleed pair now 4 pass/0 fail.
+- cli: build-mode-buttons.test.tsx leaked a module-level mockLayout (last test 30x10 → xs) through bun's process-global mock.module into status-bar.test.tsx (byte-identical full-suite failure reproduced). Added afterAll restoring a wide layout; build-mode-buttons 3/0.
+- Known remainder: agents/e2e files (context-pruner, context-pruning-threshold, file-explorer) call setupE2eMocks directly in the agents workspace — flagged for a follow-up wiring pass; agents full suite currently passes 1170/0 so there is no active bleed there.
+
+5. Full-repo sweep reclassified with root causes: 6 workspaces green; sdk onTrimmed + cli StatusBar full-suite-only failures were the two bleed leaks above (both fixed); cli SIGKILL was OOM under parallel runs (LESSONS entry recorded).
+
+M3-T3 checkbox flip deferred until the automated gate passes over the changed test files (per plan rule); commit follows the gate.
+

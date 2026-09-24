@@ -5,7 +5,7 @@
  * without interference or data mixing.
  */
 
-import { describe, test, expect, beforeAll } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 
 import { OpenbuffClient } from '../../src/client'
 import {
@@ -16,6 +16,9 @@ import {
   DEFAULT_AGENT_DEFINITION,
   DEFAULT_TIMEOUT,
 } from '../utils'
+import { teardownE2eMocks } from '../utils/e2e-mocks'
+
+afterAll(() => teardownE2eMocks())
 
 describe('Streaming: Concurrent Streams', () => {
   let client: OpenbuffClient
@@ -127,10 +130,20 @@ describe('Streaming: Concurrent Streams', () => {
         }),
       ])
 
-      // Each collector should have independent chunks
-      // The chunks shouldn't be identical (different prompts)
-      // Note: We can't guarantee exact output, but they should be independent
-      expect(collector1.streamChunks).not.toBe(collector2.streamChunks)
+      // Each run's stream chunks must reflect only its own prompt output.
+      // The mock providers return the exact quoted marker from each prompt,
+      // so cross-run mixing would be visible here as the other run's marker.
+      expect(collector1.streamChunks.length).toBeGreaterThan(0)
+      expect(collector2.streamChunks.length).toBeGreaterThan(0)
+
+      const streamText1 = collector1.getFullStreamText()
+      const streamText2 = collector2.getFullStreamText()
+
+      expect(streamText1).toContain('FIRST RUN OUTPUT')
+      expect(streamText1).not.toContain('SECOND RUN OUTPUT')
+
+      expect(streamText2).toContain('SECOND RUN OUTPUT')
+      expect(streamText2).not.toContain('FIRST RUN OUTPUT')
     },
     DEFAULT_TIMEOUT * 2,
   )

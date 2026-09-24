@@ -4,7 +4,7 @@
  * Custom agent with a get_weather custom tool demonstrating custom tool integration.
  */
 
-import { describe, test, expect, beforeAll } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { z } from 'zod/v4'
 
 import { OpenbuffClient, getCustomToolDefinition } from '../../src'
@@ -15,8 +15,11 @@ import {
   MOCK_WEATHER_DATA,
   DEFAULT_TIMEOUT,
 } from '../utils'
+import { teardownE2eMocks } from '../utils/e2e-mocks'
 
 import type { AgentDefinition } from '../../src'
+
+afterAll(() => teardownE2eMocks())
 
 describe('Custom Agents: Weather Agent', () => {
   let client: OpenbuffClient
