@@ -51,7 +51,7 @@ Ordering: M0 → M1 → M2 → M3 → M4 → M5 → M6. M4-T2 may run parallel t
 - [ ] **M1-T6** Close fail-open guards (R4/R6). `git-committer.ts:330` — default-branch push guard fails CLOSED when `${remote}/HEAD` unresolvable; `tool-tiers.ts:49` + `packages/agent-runtime/src/util/base2-tool-tiers.ts` — `modeAllowsTool` default-deny for mutation-capable tools with an exhaustive mode-policy map + test asserting every ToolName has an explicit policy; `nightly-e2e.yml:21` — remove `toJSON(secrets)`; `ci.yml:27` — SHA-pin setup-bun/cache/retry, per-step secret scoping; `ci.yml:203` — fix `find src` glob so `scripts/__tests__` actually runs.
   - Acceptance: negative tests (unresolvable HEAD → refuse; unknown tool name in plan-only → deny); workflow lint passes `check-ci-local`.
   - Validate: `cd agents && bun test __tests__/git-committer.test.ts __tests__/base2.test.ts`; `cd scripts && bun test`; `bun run check:ci-local` (read-only steps).
-- [ ] **M1-T7** CRITICAL background-agent output + ownership (R3/R5). `check-background-agent.ts:314` — fix the output shape (tuple-JSON) so all background-agent results render; `check-background-agent.ts:199` + `run.ts:2274` — runtime-stamp job owner; ignore model-supplied owner fields (`browser_logs` `_browserOwner` included).
+- [~] **M1-T7** CRITICAL background-agent output + ownership (R3/R5). `check-background-agent.ts:314` — fix the output shape (tuple-JSON) so all background-agent results render; `check-background-agent.ts:199` + `run.ts:2274` — runtime-stamp job owner; ignore model-supplied owner fields (`browser_logs` `_browserOwner` included). (certification-complete (STATUS.md: gate LOOKS_GOOD receipt ycUIATjXr-c; Validate suites re-confirmed green this session); in-progress solely to claim the committed-surface review that mints the plan-gate receipt for the flip)
   - Acceptance: a real background-agent result renders in CLI (tmux smoke); spoofed owner fields ignored with tests.
   - Validate: `cd packages/agent-runtime && bun test src/tools/handlers/tool/__tests__/check-job.test.ts`; `cd sdk && bun test src/__tests__/check-job.test.ts src/__tests__/run-session-job-ownership.test.ts`.
 
@@ -230,4 +230,4 @@ Ordering: M0 → M1 → M2 → M3 → M4 → M5 → M6. M4-T2 may run parallel t
 - Artifacts: `.agents/sessions/harness-remediation-2026-09-22/{SPEC,PLAN,STATUS,LESSONS}.md`.
 
 ## Current-task pointer
-<!-- current-task: none -->
+<!-- current-task: M1-T7 CRITICAL background-agent output + ownership (R3/R5) -->
