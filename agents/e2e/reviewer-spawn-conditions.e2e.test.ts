@@ -211,11 +211,21 @@ function reviewableFingerprint(path: string): string {
 }
 
 /**
- * Load the REAL production `readGateFileContentMarker` from base2.ts by
- * extracting its inline declaration, transpiling, and evaluating it as a
- * standalone function (no module closure needed: it resolves fs/path/crypto
- * lazily via process.getBuiltinModule / global require at call time). This is
- * the parity oracle the test-local `gateFileMarker` must agree with.
+ * Load the REAL production gate marker logic from base2.ts by extracting its
+ * inline declaration, transpiling, and evaluating it as a standalone function
+ * (no module closure needed: it resolves fs/path/crypto lazily via
+ * process.getBuiltinModule / global require at call time). This is the parity
+ * oracle the test-local `gateFileMarker` must agree with.
+ *
+ * The extracted symbol is `readGateFileContentMarkerUncached`, the shipped
+ * body the M3-T2 cached wrapper delegates to. The wrapper only adds a
+ * liveness cache (size+mtime fstat fast path) around the SAME marker strings
+ * — it can never produce a different marker for the same bytes — so the
+ * uncached body is the semantically complete oracle. The uncached body still
+ * touches the closure-level `gateMarkerCache`/`GATE_MARKER_CACHE_MAX`
+ * bindings on its cache-STAMPING path (which never affects the returned
+ * marker string), so the harness supplies `GATE_MARKER_CACHE_MAX` extracted
+ * verbatim from production source plus a fresh transient Map.
  *
  * Inline extraction is preferred over importing the member from base2 because
  * importing would pull in the whole module and run its top-level module-closure
@@ -232,7 +242,7 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
   const base2JavaScript = transpiler.transformSync(base2Source)
   const helperSource = extractInlineFunctionSource(
     base2JavaScript,
-    'readGateFileContentMarker',
+    'readGateFileContentMarkerUncached',
   )
   // readGateFileContentMarker references the hoisted in-handleSteps const
   // GATE_FILE_MISSING_CONTENT_MARKER (the 'missing' deletion sentinel). That
@@ -247,11 +257,11 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
     'const GATE_FILE_MISSING_CONTENT_MARKER',
   )
   const inlineFnStart = base2JavaScript.indexOf(
-    'function readGateFileContentMarker(',
+    'function readGateFileContentMarkerUncached(',
   )
   if (hoistStart < 0 || inlineFnStart < 0 || hoistStart > inlineFnStart) {
     throw new Error(
-      'Unable to find hoisted GATE_FILE_MISSING_CONTENT_MARKER before readGateFileContentMarker',
+      'Unable to find hoisted GATE_FILE_MISSING_CONTENT_MARKER before readGateFileContentMarkerUncached',
     )
   }
   // End-of-declaration robust to a `;` inside the string-literal initializer:
@@ -299,8 +309,27 @@ function loadProductionGateFileContentMarker(): (path: string) => string {
       `loadProductionGateFileContentMarker: hoisted GATE_FILE_MISSING_CONTENT_MARKER slice is malformed (layout changed?): ${JSON.stringify(hoistedConstSource.slice(0, 120))}`,
     )
   }
+  // The uncached body stamps the M3-T2 liveness cache on every successful
+  // sha256 marker, so the eval scope needs the closure bindings it expects:
+  // GATE_MARKER_CACHE_MAX pulled verbatim from production source (parity
+  // property kept) and a fresh transient Map (cache state never affects the
+  // returned marker). Fail fast with clear errors instead of letting the
+  // stamping path throw a confusing ReferenceError mid-assertion.
+  const cacheMaxStart = base2JavaScript.indexOf('const GATE_MARKER_CACHE_MAX')
+  if (cacheMaxStart < 0) {
+    throw new Error(
+      'Unable to find GATE_MARKER_CACHE_MAX declaration for the marker-cache stamping path',
+    )
+  }
+  const cacheMaxEnd = base2JavaScript.indexOf(';', cacheMaxStart)
+  if (cacheMaxEnd < 0) {
+    throw new Error(
+      'Unable to find the end of the GATE_MARKER_CACHE_MAX declaration',
+    )
+  }
+  const cacheMaxSource = base2JavaScript.slice(cacheMaxStart, cacheMaxEnd + 1)
   const fn = new Function(
-    `"use strict";\n${hoistedConstSource}\n${helperSource}\nreturn readGateFileContentMarker`,
+    `"use strict";\n${hoistedConstSource}\n${cacheMaxSource}\nconst gateMarkerCache = new Map()\n${helperSource}\nreturn readGateFileContentMarkerUncached`,
   ) as () => (path: string) => string
   return fn()
 }

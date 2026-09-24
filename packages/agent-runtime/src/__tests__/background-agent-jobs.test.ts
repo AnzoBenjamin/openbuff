@@ -5,6 +5,7 @@ import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
 import { assistantMessage } from '@codebuff/common/util/messages'
 import {
+  afterAll,
   afterEach,
   beforeEach,
   describe,
@@ -117,6 +118,10 @@ function readJsonToolValue(output: unknown): Record<string, unknown> {
 
 describe('background-agent-jobs registry', () => {
   beforeEach(() => {
+    __clearBackgroundAgentJobsForTest()
+  })
+
+  afterAll(() => {
     __clearBackgroundAgentJobsForTest()
   })
 
@@ -874,6 +879,10 @@ describe('check_background_agent join semantics', () => {
     __clearBackgroundAgentJobsForTest()
   })
 
+  afterAll(() => {
+    __clearBackgroundAgentJobsForTest()
+  })
+
   afterEach(() => {
     mock.restore()
   })
@@ -1268,6 +1277,10 @@ describe('spawn_agents background intent reconciliation', () => {
         },
       }),
     )
+  })
+
+  afterAll(() => {
+    __clearBackgroundAgentJobsForTest()
   })
 
   afterEach(() => {

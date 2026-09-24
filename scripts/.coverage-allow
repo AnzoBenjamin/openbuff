@@ -8,6 +8,7 @@ benchmark-providers.ts
 calculate-dau.ts
 calculate-weekly-usage.ts
 chatgpt-oauth-validate.ts
+check-doc-citations.ts
 check-tool-registration.ts
 compare-buffbench-runs.ts
 compare-cache-debug.ts
@@ -19,6 +20,7 @@ fat-sdk-openrouter-example.ts
 fireworks-deployment-stats.ts
 get-changelog.ts
 investigate-user.ts
+measure-m3-t2-hot-paths.ts
 query-minimax-cache-stats.ts
 query-usage-stats.ts
 test-canopywave-e2e.ts

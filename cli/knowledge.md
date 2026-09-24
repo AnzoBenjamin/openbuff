@@ -21,6 +21,8 @@
 
 - _Knowledge refresh 2026-09-17: record_decision tool, memory-first skip/narrow in glob/list-directory/code-search/find-files-matching-content, indexer chunk-freshness sidecar, coordinator deterministic kinds, two-session cold-start test._
 
+- _Knowledge refresh 2026-09-24: ask-user Esc data-loss guard (`components/ask-user/skip-guard.ts` — first Esc with in-progress drafts warns, second confirms), exit drain extracted to `hooks/helpers/exit-queue-drain.ts` (`createQueuedPromptDrainer`, partial-failure semantics unit-testable), and `utils/tool-result-normalizer.ts` error-scan restricted to the tool-result envelope so nested payload errors no longer flip successful tools to failed._
+
 ## Slash Commands and Plan Mode
 
 - Durable planning is entered through `mode:plan`; the standalone `/plan` command is intentionally absent from `COMMAND_REGISTRY` and `SLASH_COMMANDS` so there is one plan-entry path.
