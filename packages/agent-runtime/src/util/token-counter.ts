@@ -14,6 +14,19 @@ const TOKEN_COUNT_CACHE = new LRUCache<string, number>(1000)
 const MAX_CACHEABLE_INPUT_CHARS = 8 * 1024
 
 /**
+ * M3-T2/CI: gpt-tokenizer's BPE is pathologically slow on very long
+ * separator-free runs — a single ~5MB tool-result body measured >2 minutes
+ * per encode locally and stalled the CI agent-runtime suite at its whole
+ * 25-minute budget on all three attempts (run 36063479106, zero test
+ * failures; the process simply never finished encoding). Serialized inputs
+ * above this bound skip BPE entirely and use the same chars/3 fallback the
+ * error path already uses. Eviction accounting compares two counts computed
+ * the SAME way, so the delta stays meaningful, while the hot path is bounded
+ * to string arithmetic instead of a minutes-long encode.
+ */
+const MAX_BPE_ENCODE_CHARS = 100_000
+
+/**
  * M3-T2: per-model-family fudge factors. countTokens encodes with the gpt-4o
  * tokenizer (single dependency, no per-provider tokenizer call is in scope for
  * this wave), so the multiplier corrects for how much that BPE diverges from
@@ -92,6 +105,11 @@ export function tokenCountCacheSizeForTest(): number {
  */
 function estimateTokensForSerialized(serialized: string, model?: string): number {
   try {
+    if (serialized.length > MAX_BPE_ENCODE_CHARS) {
+      // Oversized input: bounded estimate instead of a minutes-long BPE
+      // encode (see MAX_BPE_ENCODE_CHARS). Never cached.
+      return Math.ceil(serialized.length / 3)
+    }
     const cached = TOKEN_COUNT_CACHE.get(serialized)
     if (cached !== undefined) {
       return cached
