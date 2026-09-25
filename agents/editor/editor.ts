@@ -45,8 +45,10 @@ export const createCodeEditor = (options: {
     model: EDITOR_MODELS[model],
     // Explicit output ceiling: without it, provider defaults (the Anthropic
     // path defaults to ~4k) cut large multi-edit edit_transaction payloads
-    // mid-JSON, which surfaces as "no edit_transaction was submitted".
-    maxOutputTokens: 32000,
+    // mid-JSON, which surfaces as "no edit_transaction was submitted". 32k
+    // still truncated the largest multi-file transactions plus the think-tag
+    // preamble, so this is raised to the opus-4.7 output maximum.
+    maxOutputTokens: 64000,
     displayName: 'Code Editor',
     spawnerPrompt:
       'Expert code editor that implements code changes. Spawn this agent with a compact, self-contained implementation brief containing requirements, target files, constraints/non-goals, relevant patterns, and code-level risks. Do not include validation commands, terminal cleanup, visual checks, review, git operations, or other parent-only work. The editor can read exact target files to recover missing or stale context and performs every mutation through edit_transaction, including capability-anchored range and symbol edits.',
@@ -291,29 +293,104 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       // parent reviewer gate until an explicit trustworthy evidence channel exists.
       const findingsAddressed: string[] = []
 
-      yield {
+      const receiptResult = yield {
         toolName: 'set_output',
         input: {
-          output: {
-            status,
-            messages: newMessages,
-            changedFiles,
-            ...(blockedReason !== undefined ? { blockedReason } : {}),
-            ...(targetFileProgress ? { targetFileProgress } : {}),
-            requirementsAddressed: extractBriefListItems(
-              messageHistory,
-              /requirements?/i,
-            ),
-            acceptanceCriteriaAddressed: extractBriefListItems(
-              messageHistory,
-              /acceptance criteria/i,
-            ),
-            findingsAddressed,
-            unresolved,
-            requestedValidation: inferValidationCommands(changedFiles),
-          },
+          output: buildReceiptOutput(
+            boundMessagesForReceipt(newMessages, 60, 2000),
+          ),
         },
         includeToolCall: false,
+      }
+
+      // Receipt-delivery fallback: prompt-only agents get a runtime retry when
+      // they end without required output, but that loop skips handleSteps
+      // agents (the generator is torn down once it returns), so the generator
+      // owns the equivalent retry. A rejected receipt (oversized or
+      // schema-invalid payload) leaves agentState.output unset, so retry with
+      // progressively tighter bounds instead of letting the parent receive no
+      // structured result at all.
+      let receiptState = receiptResult.agentState
+      let receiptAttempt = 0
+      while (receiptState.output === undefined && receiptAttempt < 2) {
+        receiptAttempt += 1
+        const [maxMessages, maxTextChars] =
+          receiptAttempt === 1
+            ? ([20, 800] as const)
+            : ([6, 300] as const)
+        const retryResult = yield {
+          toolName: 'set_output',
+          input: {
+            output: buildReceiptOutput(
+              boundMessagesForReceipt(newMessages, maxMessages, maxTextChars),
+            ),
+          },
+          includeToolCall: false,
+        }
+        receiptState = retryResult.agentState
+      }
+
+      // The final receipt historically inlined the entire post-spawn
+      // transcript, including full read_files contents, which made the receipt
+      // itself the largest payload of the run: oversized receipts were cut off
+      // in transport and the parent received no structured result at all.
+      // Bound the transcript instead — keep the newest messages and cap
+      // oversized strings so committed-edit receipts (short hash/actionId
+      // fields) stay fully correlated while bulky file contents are elided.
+      // Self-contained inline helper (handleSteps is serialized via
+      // toString/new Function, which drops module closure).
+      function boundMessagesForReceipt(
+        messages: unknown[],
+        maxMessages: number,
+        maxTextChars: number,
+      ): unknown[] {
+        return messages
+          .slice(-maxMessages)
+          .map((message) => boundValueDepth(message, 0, maxTextChars))
+      }
+
+      function boundValueDepth(
+        value: unknown,
+        depth: number,
+        maxTextChars: number,
+      ): unknown {
+        if (typeof value === 'string') {
+          if (value.length <= maxTextChars) return value
+          return `${value.slice(0, maxTextChars)}…[truncated ${value.length} chars]`
+        }
+        if (!value || typeof value !== 'object' || depth >= 8) return value
+        if (Array.isArray(value)) {
+          return value
+            .slice(0, 40)
+            .map((item) => boundValueDepth(item, depth + 1, maxTextChars))
+        }
+        const record = value as Record<string, unknown>
+        const bounded: Record<string, unknown> = {}
+        for (const [key, item] of Object.entries(record)) {
+          bounded[key] = boundValueDepth(item, depth + 1, maxTextChars)
+        }
+        return bounded
+      }
+
+      function buildReceiptOutput(messages: unknown[]) {
+        return {
+          status,
+          messages,
+          changedFiles,
+          ...(blockedReason !== undefined ? { blockedReason } : {}),
+          ...(targetFileProgress ? { targetFileProgress } : {}),
+          requirementsAddressed: extractBriefListItems(
+            messageHistory,
+            /requirements?/i,
+          ),
+          acceptanceCriteriaAddressed: extractBriefListItems(
+            messageHistory,
+            /acceptance criteria/i,
+          ),
+          findingsAddressed,
+          unresolved,
+          requestedValidation: inferValidationCommands(changedFiles),
+        }
       }
 
       function extractChangedFiles(messages: unknown[]): string[] {

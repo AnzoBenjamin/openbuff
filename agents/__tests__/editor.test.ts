@@ -11,10 +11,12 @@ describe('editor agent', () => {
   test('editor and repair-editor declare an explicit output token ceiling', () => {
     // Without an explicit ceiling, provider defaults (the Anthropic path
     // defaults to ~4k output tokens) truncate large multi-edit
-    // edit_transaction payloads mid-JSON before the editor can finish.
-    expect(createCodeEditor({ model: 'opus' }).maxOutputTokens).toBe(32000)
-    expect(editor.maxOutputTokens).toBe(32000)
-    expect(repairEditor.maxOutputTokens).toBe(32000)
+    // edit_transaction payloads mid-JSON before the editor can finish. 32k
+    // still truncated the largest multi-file transactions plus the think-tag
+    // preamble, so the ceiling is the opus-4.7 output maximum.
+    expect(createCodeEditor({ model: 'opus' }).maxOutputTokens).toBe(64000)
+    expect(editor.maxOutputTokens).toBe(64000)
+    expect(repairEditor.maxOutputTokens).toBe(64000)
   })
 
   const withCommittedReceipt = (value: any) => {
@@ -1511,6 +1513,87 @@ describe('editor agent', () => {
       expect(output.requestedValidation).toEqual([
         'cd packages/foo && bun run typecheck && bun test',
       ])
+    })
+
+    test('bounds oversized tool-result strings in the receipt messages', () => {
+      // The receipt historically inlined full read_files contents, making it
+      // the largest payload of the run and prone to transport truncation.
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: noopLogger as any,
+        params: {},
+      })
+      generator.next()
+
+      const huge = 'x'.repeat(3000)
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'read_files',
+            content: [
+              { type: 'json', value: { stdout: huge } },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      const serialized = JSON.stringify(
+        (result.value as any).input.output.messages,
+      )
+      expect(serialized).toContain('[truncated 3000 chars]')
+      expect(serialized.length).toBeLessThan(5000)
+    })
+
+    test('retries the receipt with tighter bounds while output is unset', () => {
+      // A rejected receipt leaves agentState.output unset; the generator must
+      // retry with progressively tighter bounds instead of delivering nothing.
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: noopLogger as any,
+        params: {},
+      })
+      generator.next()
+
+      const huge = 'x'.repeat(3000)
+      const history = [
+        {
+          role: 'tool' as const,
+          toolName: 'read_files',
+          content: [{ type: 'json' as const, value: { stdout: huge } }],
+        },
+      ]
+
+      const first = generator.next({
+        agentState: createMockAgentState(history),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((first.value as any).toolName).toBe('set_output')
+      const firstText = JSON.stringify((first.value as any).input.output)
+
+      // Output still unset → first retry with tighter bounds.
+      const retry = generator.next({
+        agentState: createMockAgentState(history),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((retry.value as any).toolName).toBe('set_output')
+      const retryText = JSON.stringify((retry.value as any).input.output)
+      expect(retryText.length).toBeLessThan(firstText.length)
+
+      // Output set → the generator completes without further retries.
+      const final = generator.next({
+        agentState: {
+          ...createMockAgentState([]),
+          output: { status: 'completed' },
+        },
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect(final.done).toBe(true)
     })
   })
 
