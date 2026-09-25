@@ -140,6 +140,15 @@ export type AgentTemplate<
   maxTokensPerTurn?: number
 
   /**
+   * Optional per-response output token ceiling forwarded to the provider as
+   * maxOutputTokens. When unset, providers apply their own defaults (the
+   * Anthropic path defaults to a small ~4k cap), which can truncate large
+   * tool-call payloads such as multi-edit transactions mid-JSON. Mirrors
+   * DynamicAgentDefinitionSchema.maxOutputTokens.
+   */
+  maxOutputTokens?: number
+
+  /**
    * Optional maximum nesting depth for this agent when spawned as a subagent.
    * The root orchestrator runs at depth 0; each spawn increments depth by 1.
    * When a spawn would exceed this depth, executeSubagent rejects it with an

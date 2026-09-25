@@ -25,6 +25,8 @@
 
 - _Knowledge refresh 2026-09-24b (staleness guard touch): M3-T3 reliability wave landed test-only changes under `src/` — the /exit drain test now mirrors the one-at-a-time `clearQueue(1)` splicing contract (plus a partial-failure persistence test), three guarded-submit busy-path tests exercise `/resume-plan` queueing via `commands/__tests__/command-args.test.ts`, and `components/__tests__/build-mode-buttons.test.tsx` restores its mockLayout in `afterAll` so the xs layout no longer bleeds into status-bar tests; this entry keeps `cli/knowledge.md` newer than `src/` for the pre-push memory-drift guard._
 
+- _Knowledge refresh 2026-09-25 (staleness guard touch): release-wrapper auto-update hardening landed under `src/` — the release/release-staging npm wrappers gained poisoned-pendingVersion recovery with a 24h `failedPendingVersion` backoff, an async binary-version probe (2s timeout) that self-heals lost metadata, an offline in-memory-only packaged-version fallback that persists no unverified platform claim, crash-signature quarantine with a crashHeal budget preserved across reinstalls, `--update` exit(1) on failed apply, a wrapper-skew stderr notice at child exit, a bounded background update check with backoff, `OPENBUFF_UPDATE_DEBUG` logging, and the atomic `writeMetadataPatch` helper; this entry keeps `cli/knowledge.md` newer than `src/` for the pre-push memory-drift guard._
+
 ## Slash Commands and Plan Mode
 
 - Durable planning is entered through `mode:plan`; the standalone `/plan` command is intentionally absent from `COMMAND_REGISTRY` and `SLASH_COMMANDS` so there is one plan-entry path.

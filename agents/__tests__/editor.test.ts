@@ -2,11 +2,21 @@ import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
 import editor, { createCodeEditor } from '../editor/editor'
+import repairEditor from '../editor/repair-editor'
 import { extractInlineFunctionSource } from './helpers/extract-inline-function-source'
 
 import type { AgentState } from '../types/agent-definition'
 
 describe('editor agent', () => {
+  test('editor and repair-editor declare an explicit output token ceiling', () => {
+    // Without an explicit ceiling, provider defaults (the Anthropic path
+    // defaults to ~4k output tokens) truncate large multi-edit
+    // edit_transaction payloads mid-JSON before the editor can finish.
+    expect(createCodeEditor({ model: 'opus' }).maxOutputTokens).toBe(32000)
+    expect(editor.maxOutputTokens).toBe(32000)
+    expect(repairEditor.maxOutputTokens).toBe(32000)
+  })
+
   const withCommittedReceipt = (value: any) => {
     const receiptId = `${value.operationId}:receipt`
     return {

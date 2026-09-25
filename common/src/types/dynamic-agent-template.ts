@@ -180,6 +180,9 @@ export const DynamicAgentDefinitionSchema = z.object({
   // Optional per-step input token cap. When set, the agent runtime ends the
   // turn if a single step's total input tokens exceed this threshold.
   maxTokensPerTurn: z.number().int().positive().optional(),
+  // Optional per-response output token ceiling forwarded to the provider as
+  // maxOutputTokens. Undefined = provider default.
+  maxOutputTokens: z.number().int().positive().optional(),
 
   maxSpawnDepth: z.number().int().min(0).optional(),
 

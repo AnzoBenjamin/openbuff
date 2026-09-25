@@ -475,6 +475,67 @@ const term = {
   },
 }
 
+function logUpdateDebug(...args) {
+  if (!process.env.OPENBUFF_UPDATE_DEBUG) return
+  console.error('[openbuff-update]', ...args)
+}
+
+function extractSemverLine(output) {
+  if (!output) return null
+  for (const line of String(output).split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (/^\d+(\.\d+)*(?:-[0-9A-Za-z.-]+)?$/.test(trimmed)) return trimmed
+  }
+  return null
+}
+
+/**
+ * Probe the installed binary's version without blocking the event loop. The
+ * child is spawned asynchronously with a hard timeout so a hung or slow
+ * binary (or a slow AV scan) can never stall a launch.
+ */
+function probeBinaryVersion(config = CONFIG, timeoutMs = 2000) {
+  if (!fs.existsSync(config.binaryPath)) {
+    return Promise.resolve(null)
+  }
+  return new Promise((resolve) => {
+    let settled = false
+    let output = ''
+    const finish = (version) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(version)
+    }
+    const child = spawn(config.binaryPath, ['--version'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const timer = setTimeout(() => {
+      logUpdateDebug('binary version probe timed out')
+      child.kill()
+      finish(null)
+    }, timeoutMs)
+    const collect = (chunk) => {
+      output += chunk
+    }
+    child.stdout.on('data', collect)
+    child.stderr.on('data', collect)
+    child.on('error', (error) => {
+      logUpdateDebug('binary version probe failed:', error?.message)
+      finish(null)
+    })
+    child.on('close', () => {
+      const version = extractSemverLine(output)
+      if (!version) {
+        logUpdateDebug('binary version probe returned no semver version line')
+        finish(null)
+        return
+      }
+      finish(version)
+    })
+  })
+}
+
 async function getLatestVersion() {
   try {
     const res = await httpGet(
@@ -488,6 +549,7 @@ async function getLatestVersion() {
 
     return packageData.version || null
   } catch (error) {
+    logUpdateDebug('latest version lookup failed:', error?.message)
     return null
   }
 }
@@ -533,28 +595,38 @@ function getPendingUpdateVersion() {
   }
 }
 
-function writePendingUpdateVersion(version) {
-  fs.mkdirSync(CONFIG.configDir, { recursive: true })
+/**
+ * Metadata writes use a per-pid temp file plus atomic rename under a
+ * single-writer assumption: concurrent launches may race, but the last rename
+ * wins with a coherent snapshot. Keys mapped to undefined are dropped.
+ */
+function writeMetadataPatch(metadataPath, patch) {
+  fs.mkdirSync(path.dirname(metadataPath), { recursive: true })
   let metadata = {}
   try {
-    if (fs.existsSync(CONFIG.metadataPath)) {
-      metadata = JSON.parse(fs.readFileSync(CONFIG.metadataPath, 'utf8'))
+    if (fs.existsSync(metadataPath)) {
+      metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'))
     }
   } catch {
     metadata = {}
   }
-  const tempPath = `${CONFIG.metadataPath}.tmp-${process.pid}`
-  fs.writeFileSync(
-    tempPath,
-    JSON.stringify({ ...metadata, pendingVersion: version }, null, 2),
-  )
+  const next = { ...metadata, ...patch }
+  for (const key of Object.keys(next)) {
+    if (next[key] === undefined) delete next[key]
+  }
+  const tempPath = `${metadataPath}.tmp-${process.pid}`
+  fs.writeFileSync(tempPath, JSON.stringify(next, null, 2))
   try {
-    fs.renameSync(tempPath, CONFIG.metadataPath)
+    fs.renameSync(tempPath, metadataPath)
   } catch (error) {
     if (!['EEXIST', 'EPERM'].includes(error.code)) throw error
-    fs.unlinkSync(CONFIG.metadataPath)
-    fs.renameSync(tempPath, CONFIG.metadataPath)
+    fs.unlinkSync(metadataPath)
+    fs.renameSync(tempPath, metadataPath)
   }
+}
+
+function writePendingUpdateVersion(version) {
+  writeMetadataPatch(CONFIG.metadataPath, { pendingVersion: version })
 }
 
 function getWrapperVersion() {
@@ -893,9 +965,20 @@ async function downloadBinary(version, options = {}) {
       { source: tempBinaryPath, target: config.binaryPath },
       ...managedSiblings,
     ]
+    // Preserve the crash-heal budget: a fresh install must never reset the
+    // bounded quarantine/re-download loop for a persistently crashing release.
+    const previousCrashHeal = readMetadata(config.metadataPath).crashHeal
     fs.writeFileSync(
       tempMetadataPath,
-      JSON.stringify({ version, platformKey }, null, 2),
+      JSON.stringify(
+        {
+          version,
+          platformKey,
+          ...(previousCrashHeal ? { crashHeal: previousCrashHeal } : {}),
+        },
+        null,
+        2,
+      ),
     )
     installFiles.push({ source: tempMetadataPath, target: config.metadataPath })
 
@@ -961,10 +1044,52 @@ async function ensureBinaryExists(options = {}) {
   const logError = options.consoleError || console.error
   const resolveProxyUrl = options.getProxyUrl || getProxyUrl
   const exit = options.exit || process.exit
-  const currentVersion =
-    options.currentVersion === undefined
-      ? getCurrentVersion()
-      : options.currentVersion
+  const currentVersionInjected = options.currentVersion !== undefined
+  let currentVersion = currentVersionInjected
+    ? options.currentVersion
+    : getCurrentVersion()
+  const binaryExists = fs.existsSync(config.binaryPath)
+  const packagedVersion =
+    options.packagedVersion === undefined
+      ? getLocalPackageVersion()
+      : options.packagedVersion
+
+  // Self-heal: when metadata is lost or stale but the binary still runs, ask
+  // the binary itself for its build version instead of trusting the wrapper's
+  // own (stale) package version, which would silently downgrade the install.
+  // Explicitly injected current versions (tests, --update) skip the probe
+  // unless they provide a probe hook themselves.
+  if (
+    currentVersion === null &&
+    binaryExists &&
+    (options.probeBinaryVersion || !currentVersionInjected)
+  ) {
+    const probe =
+      options.probeBinaryVersion || (async () => probeBinaryVersion(config))
+    const probedVersion = await probe()
+    if (probedVersion) {
+      logUpdateDebug('healing metadata from binary probe:', probedVersion)
+      writeMetadataPatch(config.metadataPath, {
+        version: probedVersion,
+        platformKey: getPlatformKey(),
+      })
+      currentVersion = probedVersion
+    } else if (packagedVersion) {
+      // Offline fallback: a probe-resistant binary plus no network must not
+      // become a hard launch failure. Adopt the bundled packaged version in
+      // memory only so the existing binary keeps launching without any
+      // network dependency. Nothing is persisted: the binary could not be
+      // verified (it may not even run on this platform), so recording a
+      // version/platformKey pair would make later launches trust an
+      // unverified binary instead of repairing it.
+      logUpdateDebug(
+        'binary probe failed; adopting packaged version in memory only:',
+        packagedVersion,
+      )
+      currentVersion = packagedVersion
+    }
+  }
+
   const assetProblems = currentVersion
     ? getTreeSitterAssetProblems(config.configDir)
     : []
@@ -979,18 +1104,38 @@ async function ensureBinaryExists(options = {}) {
       pendingVersion = null
     }
   }
-  const packagedVersion =
-    options.packagedVersion === undefined
-      ? getLocalPackageVersion()
-      : options.packagedVersion
+  // The wrapper package version is only a fresh-install target; it must never
+  // act as a downgrade floor for an existing (possibly newer) binary.
   const packagedUpdate =
     packagedVersion &&
-    (currentVersion === null ||
-      compareVersions(currentVersion, packagedVersion) < 0)
+    (currentVersion === null
+      ? !binaryExists
+      : compareVersions(currentVersion, packagedVersion) < 0)
       ? packagedVersion
       : null
+
+  // A previously failed staged download is not retried for 24h so a poisoned
+  // release cannot stall every launch; a successful apply clears the marker.
+  let failedPending = null
+  try {
+    failedPending = fs.existsSync(config.metadataPath)
+      ? JSON.parse(fs.readFileSync(config.metadataPath, 'utf8'))
+          .failedPendingVersion || null
+      : null
+  } catch {
+    failedPending = null
+  }
+  const pendingRetryable =
+    !failedPending ||
+    failedPending.version !== pendingVersion ||
+    Date.now() - failedPending.at >= 24 * 60 * 60 * 1000
+  const stagedVersion = pendingRetryable ? pendingVersion : null
+  if (pendingVersion && !pendingRetryable) {
+    logUpdateDebug('skipping recently failed staged update:', pendingVersion)
+  }
+
   const requestedVersion =
-    pendingVersion ||
+    stagedVersion ||
     packagedUpdate ||
     (assetProblems.length ? currentVersion : null)
 
@@ -1013,10 +1158,36 @@ async function ensureBinaryExists(options = {}) {
   const download =
     options.downloadBinary ||
     ((requestedVersion) => downloadBinary(requestedVersion, { config }))
+  const isStagedOrUpgradeTarget =
+    version === stagedVersion || version === packagedUpdate
+  const canKeepCurrentBinary =
+    isStagedOrUpgradeTarget &&
+    currentVersion !== null &&
+    fs.existsSync(config.binaryPath)
   try {
     await download(version)
   } catch (error) {
     term.clearLine()
+    if (canKeepCurrentBinary) {
+      // A failed staged update must never brick the CLI: keep launching the
+      // working binary and record the failure so we back off for 24h.
+      logError(
+        `Failed to apply update to ${version} — keeping current version ${currentVersion}. Run 'openbuff --update' to retry.`,
+      )
+      logUpdateDebug('staged update failed:', error.message)
+      try {
+        writeMetadataPatch(config.metadataPath, {
+          pendingVersion: undefined,
+          failedPendingVersion: { version, at: Date.now() },
+        })
+      } catch (writeError) {
+        logUpdateDebug(
+          'failed to record staged-update failure:',
+          writeError?.message,
+        )
+      }
+      return
+    }
     logError('❌ Failed to download openbuff:', error.message)
     printInstallFailureGuidance(resolveProxyUrl, logError)
     exit(1)
@@ -1024,13 +1195,14 @@ async function ensureBinaryExists(options = {}) {
 }
 
 async function checkForUpdates(options = {}) {
+  let latestVersion = null
   try {
     const currentVersion =
       options.currentVersion === undefined
         ? getCurrentVersion()
         : options.currentVersion
-    const latestVersion = await (options.getLatestVersion || getLatestVersion)()
-    if (!latestVersion) return
+    latestVersion = await (options.getLatestVersion || getLatestVersion)()
+    if (!latestVersion) return null
 
     if (
       currentVersion === null ||
@@ -1040,8 +1212,11 @@ async function checkForUpdates(options = {}) {
         options.writePendingUpdateVersion || writePendingUpdateVersion
       persistPending(latestVersion)
     }
+    return latestVersion
   } catch (error) {
+    logUpdateDebug('background update check failed:', error?.message)
     trackUpdateFailed(error.message, null, { stage: 'background_check' })
+    return latestVersion
   }
 }
 
@@ -1163,8 +1338,20 @@ async function handleUpdateCommand(options = {}) {
     } else {
       await downloadBinary(targetVersion, { config })
     }
-    log(`Updated to ${targetVersion}.`)
-    exit(0)
+    const appliedVersion = getCurrent()
+    if (
+      appliedVersion !== null &&
+      compare(appliedVersion, targetVersion) >= 0
+    ) {
+      log(`Updated to ${targetVersion}.`)
+      exit(0)
+    } else {
+      log(
+        `Could not update to ${targetVersion}; kept ${appliedVersion ?? 'current version'}. Run 'openbuff --update' to retry.`,
+      )
+      exit(1)
+      return
+    }
   } catch (error) {
     term.clearLine()
     logError('❌ Failed to download openbuff:', error.message)
@@ -1173,22 +1360,80 @@ async function handleUpdateCommand(options = {}) {
   }
 }
 
-function printCrashDiagnostics(code, signal) {
+function readMetadata(metadataPath = CONFIG.metadataPath) {
+  try {
+    if (!fs.existsSync(metadataPath)) return {}
+    return JSON.parse(fs.readFileSync(metadataPath, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function getCrashKind(code, signal) {
   // Windows NTSTATUS codes (unsigned DWORD)
   const unsignedCode = code != null && code < 0 ? code >>> 0 : code
-  const isIllegalInstruction =
-    signal === 'SIGILL' ||
-    (process.platform === 'win32' && unsignedCode === 0xc000001d)
-  const isAccessViolation =
-    signal === 'SIGSEGV' ||
-    (process.platform === 'win32' && unsignedCode === 0xc0000005)
-  const isBusError = signal === 'SIGBUS'
-  const isAbort =
-    signal === 'SIGABRT' ||
-    (process.platform === 'win32' && unsignedCode === 0xc0000409)
+  if (signal === 'SIGILL') return 'illegal-instruction'
+  if (process.platform === 'win32' && unsignedCode === 0xc000001d) {
+    return 'illegal-instruction'
+  }
+  if (signal === 'SIGSEGV') return 'access-violation'
+  if (process.platform === 'win32' && unsignedCode === 0xc0000005) {
+    return 'access-violation'
+  }
+  if (signal === 'SIGBUS') return 'bus-error'
+  if (signal === 'SIGABRT') return 'abort'
+  if (process.platform === 'win32' && unsignedCode === 0xc0000409) {
+    return 'abort'
+  }
+  return null
+}
 
-  if (!isIllegalInstruction && !isAccessViolation && !isBusError && !isAbort)
+function isCrashExit(code, signal) {
+  return getCrashKind(code, signal) !== null
+}
+
+/**
+ * Self-heal for a crashing binary: quarantine it and clear the recorded
+ * version so the next launch re-downloads a checksum-verified copy. The
+ * crashHeal counter bounds the loop at 3 attempts per 24h so a persistently
+ * incompatible release cannot download forever.
+ */
+function quarantineCrashedBinary(config = CONFIG) {
+  const crashHeal = readMetadata(config.metadataPath).crashHeal || {
+    count: 0,
+    lastAt: 0,
+  }
+  if (
+    crashHeal.count >= 3 &&
+    Date.now() - crashHeal.lastAt < 24 * 60 * 60 * 1000
+  ) {
+    logUpdateDebug('crash-heal budget exhausted; skipping quarantine')
     return
+  }
+  try {
+    fs.renameSync(
+      config.binaryPath,
+      `${config.binaryPath}.crash-quarantine-${Date.now()}`,
+    )
+  } catch (error) {
+    logUpdateDebug('failed to quarantine crashing binary:', error?.message)
+  }
+  try {
+    writeMetadataPatch(config.metadataPath, {
+      version: undefined,
+      crashHeal: { count: crashHeal.count + 1, lastAt: Date.now() },
+    })
+  } catch (error) {
+    logUpdateDebug('failed to record crash heal:', error?.message)
+  }
+  console.error(
+    'Openbuff crashed; quarantined the binary. The next launch will download a fresh copy.',
+  )
+}
+
+function printCrashDiagnostics(code, signal) {
+  const crashKind = getCrashKind(code, signal)
+  if (!crashKind) return
 
   const exitInfo = signal ? `signal ${signal}` : `code ${code}`
   const platformKey = getPlatformKey()
@@ -1198,19 +1443,19 @@ function printCrashDiagnostics(code, signal) {
   console.error(`❌ ${binaryName} exited immediately (${exitInfo})`)
   console.error('')
 
-  if (isIllegalInstruction) {
+  if (crashKind === 'illegal-instruction') {
     for (const line of getIllegalInstructionGuidance(cpuInfo)) {
       console.error(line)
     }
     console.error('')
-  } else if (isAccessViolation) {
+  } else if (crashKind === 'access-violation') {
     console.error('The binary crashed with an access violation.')
     console.error('')
-  } else if (isBusError) {
+  } else if (crashKind === 'bus-error') {
     console.error('The binary crashed with a bus error.')
     console.error('This may indicate a platform compatibility issue.')
     console.error('')
-  } else if (isAbort) {
+  } else {
     console.error('The binary crashed with an abort signal.')
     console.error('')
   }
@@ -1240,6 +1485,8 @@ async function main() {
   const args = process.argv.slice(2)
 
   if (isVersionFlag(args)) {
+    // Keep the historical one-line stdout contract for '--version'/'-v';
+    // wrapper/binary skew notices belong on stderr at child exit.
     console.log(getWrapperVersion())
     return
   }
@@ -1270,6 +1517,20 @@ async function main() {
     resetTerminal()
     printCrashDiagnostics(code, signal)
     try {
+      const installedVersion = getMetadataVersion()
+      const wrapperVersion = getLocalPackageVersion()
+      if (
+        installedVersion &&
+        wrapperVersion &&
+        compareVersions(installedVersion, wrapperVersion) > 0
+      ) {
+        console.error(
+          `Note: the installed binary is version ${installedVersion} but this npm wrapper is ${wrapperVersion}. Update the wrapper with: npm i -g ${npmPackageName}`,
+        )
+      }
+      if (isCrashExit(code, signal)) {
+        quarantineCrashedBinary()
+      }
       const pending = getPendingUpdateVersion()
       if (pending) {
         const current = getCurrentVersion()
@@ -1292,9 +1553,25 @@ async function main() {
     process.exit(1)
   })
 
-  setTimeout(() => {
-    checkForUpdates()
-  }, 100)
+  // Bounded background update check: retry twice with backoff when the npm
+  // lookup fails, but never keep the wrapper process alive just for retries.
+  const scheduleUpdateCheck = (delay, retriesLeft) => {
+    const timer = setTimeout(() => {
+      void checkForUpdates().then((latestVersion) => {
+        if (
+          latestVersion ||
+          retriesLeft <= 0 ||
+          child.exitCode !== null ||
+          child.signalCode !== null
+        ) {
+          return
+        }
+        scheduleUpdateCheck(retriesLeft === 2 ? 30000 : 90000, retriesLeft - 1)
+      })
+    }, delay)
+    timer.unref()
+  }
+  scheduleUpdateCheck(100, 2)
 }
 
 if (require.main === module) {
@@ -1318,8 +1595,10 @@ module.exports = {
   handleCheckUpdateCommand,
   handleUpdateCommand,
   isCheckUpdateFlag,
+  isCrashExit,
   isUpdateFlag,
   parseExpectedChecksum,
   parseLinuxCpuInfo,
+  probeBinaryVersion,
   resolveConfigDir,
 }

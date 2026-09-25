@@ -126,6 +126,9 @@ export interface AgentDefinition {
   /** Optional maximum input tokens accepted by one agent step. */
   maxTokensPerTurn?: number
 
+  /** Optional per-response output token ceiling forwarded to the provider. */
+  maxOutputTokens?: number
+
   // ============================================================================
   // Tools and Subagents
   // ============================================================================

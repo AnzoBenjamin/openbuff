@@ -134,6 +134,13 @@ export interface AgentDefinition {
    */
   maxTokensPerTurn?: number
 
+  /**
+   * Optional per-response output token ceiling. When set, the runtime
+   * forwards it to the provider as maxOutputTokens; unset uses the provider
+   * default (which can be small — e.g. ~4k on the Anthropic path).
+   */
+  maxOutputTokens?: number
+
   // ============================================================================
   // Tools and Subagents
   // ============================================================================

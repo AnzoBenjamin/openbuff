@@ -119,3 +119,47 @@ describe('describeTruncationRecovery (F2)', () => {
     expect(summary!.recoveredPreview).not.toContain('secret-content-')
   })
 })
+
+describe('oversized payload classification (post-256KB coverage)', () => {
+  const OVER_CAP = 256_000 + 1
+
+  it('classifies an oversized payload cut mid-string as transport truncation', () => {
+    const oversized = `{"edits":[{"type":"str_replace","path":"a.ts","newString":"${'y'.repeat(OVER_CAP)}`
+    expect(oversized.length).toBeGreaterThan(256_000)
+    expect(detectTransportTruncation(oversized)).toBe(true)
+  })
+
+  it('does NOT classify an oversized but complete payload as truncated', () => {
+    const oversizedComplete = `{"edits":[{"type":"write_file","path":"a.ts","content":"${'y'.repeat(OVER_CAP)}"}]}`
+    expect(oversizedComplete.length).toBeGreaterThan(256_000)
+    expect(detectTransportTruncation(oversizedComplete)).toBe(false)
+    expect(tryRecoverTruncatedToolArguments(oversizedComplete)).toBeUndefined()
+  })
+
+  it('recovers an oversized payload cut at a clean edit boundary', () => {
+    const edit = `{"type":"write_file","path":"a.ts","content":"${'y'.repeat(OVER_CAP)}"}`
+    const truncated = `{"edits":[${edit}`
+    const recovered = tryRecoverTruncatedToolArguments(truncated)
+    expect(recovered).toBeDefined()
+    const edits = (recovered as Record<string, unknown>).edits
+    expect(Array.isArray(edits)).toBe(true)
+    expect((edits as unknown[]).length).toBe(1)
+  })
+
+  it('stays bounded and correct on an oversized payload with many closers', () => {
+    // 100 closed edit objects push the payload past the legacy bound with
+    // 100 candidate closers; recovery must still succeed via the latest
+    // boundary without scanning unboundedly.
+    const edits = Array.from(
+      { length: 100 },
+      (_, index) =>
+        `{"type":"write_file","path":"f${index}.ts","content":"${'y'.repeat(3000)}"}`,
+    ).join(',')
+    const truncated = `{"edits":[${edits}`
+    expect(truncated.length).toBeGreaterThan(256_000)
+    const recovered = tryRecoverTruncatedToolArguments(truncated)
+    expect(recovered).toBeDefined()
+    const recoveredEdits = (recovered as Record<string, unknown>).edits
+    expect((recoveredEdits as unknown[]).length).toBe(100)
+  })
+})
