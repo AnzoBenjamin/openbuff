@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'bun:test'
 
 import {
+  commitReceiptV1Schema,
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  getContentHash,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
+
+import {
   EVICTION_KEEP_RECENT_STEPS,
   EVICTION_MIN_SAVINGS_TOKENS,
   deriveProtectedEvictionPaths,
@@ -275,6 +285,222 @@ describe('MAX_PROTECTED_CONTENT_SCAN_CHARS scan cap', () => {
     expect(part.type).toBe('json')
     if (part.type === 'json') {
       expect(typeof part.value).toBe('object')
+    }
+  })
+})
+
+/**
+ * R4 receipt-preserving eviction: an authority-backed edit_transaction
+ * `file_mutation_result` is the only evidence `buildRuntimeAgentReceipt` can
+ * use to credit a child's changed-file claims at settle time, so it must be
+ * slimmed to a parseable receipt-bearing copy instead of tombstoned, and
+ * small `commit_receipt` results must survive untouched.
+ */
+describe('receipt-preserving eviction (mutation receipts survive)', () => {
+  const afterContent = 'export const fixed = true'
+
+  /** A schema-valid applied mutation result WITH post-edit payloads, exactly
+   *  the heavy shape a real edit_transaction success carries. */
+  const appliedMutationResult = (path: string, callId: string) => {
+    const afterHash = getExactContentHash(afterContent)
+    const receiptId = `receipt-${callId}`
+    const operationId = `operation-${callId}`
+    const action = {
+      actionId: `action-${callId}`,
+      index: 0,
+      action: 'update' as const,
+      path,
+      outcome: 'applied' as const,
+      beforeHash: `before-${callId}`,
+      afterHash,
+      afterContent,
+      editAnchor: {
+        startLine: 1,
+        endLine: 1,
+        contentHash: getContentHash(afterContent),
+        readCapability: 'cap-test-token',
+      },
+    }
+    return {
+      kind: 'file_mutation_result' as const,
+      version: 1 as const,
+      operationId,
+      outcome: 'applied' as const,
+      actions: [action],
+      authorityTier: 'conditional_commit' as const,
+      receiptId,
+      authorityReceipt: {
+        kind: 'commit_receipt' as const,
+        version: 1 as const,
+        receiptId,
+        operationId,
+        callId,
+        authorityTier: 'conditional_commit' as const,
+        status: 'committed' as const,
+        actions: [
+          {
+            actionId: action.actionId,
+            index: 0,
+            action: 'update' as const,
+            path,
+            status: 'committed' as const,
+            beforeHash: action.beforeHash,
+            afterHash: action.afterHash,
+          },
+        ],
+        finalHashes: { [path]: action.afterHash },
+      },
+      errors: [],
+      freshCapabilities: [
+        {
+          kind: 'whole_file' as const,
+          version: 1 as const,
+          token: 'cap-test-token',
+          snapshot: {
+            kind: 'file_snapshot' as const,
+            version: 1 as const,
+            canonicalPath: path,
+            contentHash: afterHash,
+            sizeBytes: afterContent.length,
+            encoding: 'utf8' as const,
+            readGeneration: 1,
+          },
+        },
+      ],
+    }
+  }
+
+  const mutationToolResult = (callId: string, path: string): ToolMessage => ({
+    role: 'tool',
+    toolCallId: callId,
+    toolName: 'edit_transaction',
+    content: [
+      { type: 'json', value: appliedMutationResult(path, callId) },
+    ],
+  })
+
+  it('slims a stale file_mutation_result instead of tombstoning it', () => {
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      assistantStep('call-mut'),
+      mutationToolResult('call-mut', 'src/fixed.ts'),
+    ]
+
+    const result = evictStaleToolResults(messages, {
+      keepRecentSteps: 0,
+      minSavingsTokens: 1,
+    })
+
+    expect(result.messages).not.toBe(messages)
+    const toolResult = result.messages[2] as ToolMessage
+    const part = toolResult.content[0]
+    expect(part.type).toBe('json')
+    expect(JSON.stringify(toolResult)).not.toContain(
+      '[tool result evicted to free context',
+    )
+    if (part.type === 'json' && typeof part.value !== 'string') {
+      const parsed = fileMutationResultV1Schema.safeParse(part.value)
+      expect(parsed.success).toBe(true)
+      const slimmed = parsed.data!
+      // The slimmed receipt still attests the applied path for the
+      // receipt builder's mutation-attestation extractor.
+      expect(
+        getConfirmedAppliedActionsV1(slimmed).map((action) => action.path),
+      ).toEqual(['src/fixed.ts'])
+      expect(slimmed.authorityReceipt?.status).toBe('committed')
+      for (const action of slimmed.actions) {
+        expect(action.afterContent).toBeUndefined()
+        expect(action.editAnchor).toBeUndefined()
+        expect(action.patch).toBeUndefined()
+      }
+      expect(slimmed.freshCapabilities).toEqual([])
+    }
+  })
+
+  it('skips already-slimmed mutation results on a second pass (idempotent)', () => {
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      assistantStep('call-mut'),
+      mutationToolResult('call-mut', 'src/fixed.ts'),
+    ]
+
+    const first = evictStaleToolResults(messages, {
+      keepRecentSteps: 0,
+      minSavingsTokens: 1,
+    })
+    expect(first.messages).not.toBe(messages)
+
+    const second = evictStaleToolResults(first.messages, {
+      keepRecentSteps: 0,
+      minSavingsTokens: 1,
+    })
+    expect(second.messages).toBe(first.messages)
+    expect(second.evictedCount).toBe(0)
+  })
+
+  it('leaves commit_receipt tool results untouched', () => {
+    const commitReceipt = {
+      kind: 'commit_receipt' as const,
+      version: 1 as const,
+      receiptId: 'receipt-commit',
+      operationId: 'operation-commit',
+      callId: 'call-commit',
+      authorityTier: 'conditional_commit' as const,
+      status: 'committed' as const,
+      actions: [
+        {
+          actionId: 'action-commit',
+          index: 0,
+          action: 'update' as const,
+          path: 'src/fixed.ts',
+          status: 'committed' as const,
+          beforeHash: 'before-commit',
+          afterHash: 'after-commit',
+        },
+      ],
+      finalHashes: { 'src/fixed.ts': 'after-commit' },
+    }
+    expect(commitReceiptV1Schema.safeParse(commitReceipt).success).toBe(true)
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      assistantStep('call-commit'),
+      {
+        role: 'tool',
+        toolCallId: 'call-commit',
+        toolName: 'edit_transaction',
+        content: [{ type: 'json', value: commitReceipt }],
+      },
+    ]
+
+    const result = evictStaleToolResults(messages, {
+      keepRecentSteps: 0,
+      minSavingsTokens: 1,
+    })
+
+    // Small control-plane evidence: never evicted, never rewritten.
+    expect(result.messages).toBe(messages)
+    expect(result.evictedCount).toBe(0)
+    expect(JSON.stringify(result.messages)).toContain('commit_receipt')
+  })
+
+  it('still tombstones ordinary tool results', () => {
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+      assistantStep('call-plain'),
+      bigToolResult('read_files', 'call-plain'),
+    ]
+
+    const result = evictStaleToolResults(messages, {
+      keepRecentSteps: 0,
+      minSavingsTokens: 1,
+    })
+
+    expect(result.evictedCount).toBe(1)
+    const part = (result.messages[2] as ToolMessage).content[0]
+    expect(part.type).toBe('json')
+    if (part.type === 'json') {
+      expect(typeof part.value).toBe('string')
+      expect(part.value).toContain('[tool result evicted to free context')
     }
   })
 })

@@ -181,6 +181,11 @@ export interface ModelResult {
    *  openbuff.json `modelCapabilities.pricing`. Used by the cost-accounting
    *  fallback when the provider does not return OpenRouter-style cost metadata. */
   pricing?: ModelPricing
+  /** Configured per-response output token ceiling for the resolved model, from
+   *  provider config `defaultCapabilities`/`modelCapabilities`
+   *  `context.outputTokens`. Forwarded to the provider as `maxOutputTokens`
+   *  when the agent template does not declare its own. */
+  maxOutputTokens?: number
 }
 
 export function selectAdaptiveReasoningEffort(params: {
@@ -272,6 +277,7 @@ export async function getModelForRequest(
   }
   const contextWindowTokens = resolvedCapabilities?.context?.windowTokens
   const pricing = resolvedCapabilities?.pricing
+  const maxOutputTokens = resolvedCapabilities?.context?.outputTokens
 
   if (configuredProviderModel) {
     if (
@@ -290,6 +296,7 @@ export async function getModelForRequest(
         effectiveModel,
         contextWindowTokens,
         pricing,
+        maxOutputTokens,
       }
     }
     if (configuredProviderModel.provider.type === 'chatgpt-oauth') {
@@ -311,6 +318,7 @@ export async function getModelForRequest(
         effectiveModel,
         contextWindowTokens,
         pricing,
+        maxOutputTokens,
       }
     }
 
@@ -326,6 +334,7 @@ export async function getModelForRequest(
         effectiveModel,
         contextWindowTokens,
         pricing,
+        maxOutputTokens,
       }
     }
 
@@ -340,6 +349,7 @@ export async function getModelForRequest(
       effectiveModel,
       contextWindowTokens,
       pricing,
+      maxOutputTokens,
     }
   }
 
@@ -359,6 +369,7 @@ export async function getModelForRequest(
       effectiveModel,
       contextWindowTokens,
       pricing,
+      maxOutputTokens,
     }
   }
 
@@ -392,6 +403,7 @@ export async function getModelForRequest(
           reasoningEffort,
           effectiveModel,
           contextWindowTokens,
+          maxOutputTokens,
         }
       }
 

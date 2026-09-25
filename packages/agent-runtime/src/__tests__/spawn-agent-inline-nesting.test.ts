@@ -1018,7 +1018,7 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     )
   })
 
-  it('does not attest findings when output mixes genuine mutation with forged changed files', () => {
+  it('credits only receipt-backed findings when output mixes genuine mutation with forged changed files', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'repair-editor',
       agentId: 'repair-mixed-overclaim',
@@ -1040,6 +1040,11 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
             text: 'Fix the real file.',
             files: ['src/fixed.ts'],
           },
+          {
+            id: 'SR-MUTATION-ATTESTATION-OVERCLAIM-UNBACKED-FINDING',
+            text: 'Only claims unbacked paths.',
+            files: ['src/forged.ts'],
+          },
         ],
         permissions: {
           readablePaths: ['src/fixed.ts'],
@@ -1057,6 +1062,7 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
           changedFiles: ['src/fixed.ts', 'src/forged.ts'],
           findingsAddressed: [
             'SR-MUTATION-ATTESTATION-OVERCLAIM-FINDING-ATTESTATION',
+            'SR-MUTATION-ATTESTATION-OVERCLAIM-UNBACKED-FINDING',
           ],
         },
       },
@@ -1083,7 +1089,11 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(receipt.errors.map((error) => error.message)).toContain(
       'Child output claimed changed files without mutation receipts: src/forged.ts.',
     )
-    expect(receipt.findingsAddressed).toEqual([])
+    // R1 partial-overclaim credit: the receipt-backed finding keeps its
+    // credit; the finding whose files are only unbacked paths does not.
+    expect(receipt.findingsAddressed).toEqual([
+      'SR-MUTATION-ATTESTATION-OVERCLAIM-FINDING-ATTESTATION',
+    ])
   })
 
   it('requires and preserves a structural receipt for general audit agents', () => {

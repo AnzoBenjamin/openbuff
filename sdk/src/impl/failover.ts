@@ -8,6 +8,8 @@
  * pure-helper precedent).
  */
 
+import { NoOutputGeneratedError } from 'ai'
+
 import {
   getErrorStatusCode,
   isProviderContentPolicyError,
@@ -87,6 +89,12 @@ export function isFailoverEligibleError(error: unknown): boolean {
   // closes (reliability finding
   // content-policy-status-preserved-through-normalization).
   if (isProviderContentPolicyError(error)) return false
+  // An empty stream (NoOutputGeneratedError from the AI SDK) means the
+  // provider accepted the connection but produced zero chunks before a clean
+  // close, so the primary model failed without emitting anything. A backup
+  // model attempt is worthwhile; the failover loop's `anyContentYielded`
+  // guard already protects against duplicating output.
+  if (NoOutputGeneratedError.isInstance(error)) return true
   const statusCode = getErrorStatusCode(error)
   if (statusCode === undefined) return false
   return FAILOVER_ELIGIBLE_STATUS_CODES.has(statusCode)

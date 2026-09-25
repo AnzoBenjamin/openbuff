@@ -1,3 +1,8 @@
+import {
+  commitReceiptV1Schema,
+  fileMutationResultV1Schema,
+} from '@codebuff/common/tools/results/filesystem'
+
 import { looksLikeProjectPath } from './project-path-policy'
 import { isProtectedToolResult } from './tool-result-lifecycle'
 import { countTokensJson } from './token-counter'
@@ -25,6 +30,12 @@ import type { Message, ToolMessage } from '@codebuff/common/types/messages/codeb
  *    touched, via `isProtectedToolResult`.
  *  - Already-evicted results are skipped (the tombstone marker is detected),
  *    so calling this every iteration is idempotent.
+ *  - Mutation receipts survive eviction: a stale `edit_transaction`
+ *    `file_mutation_result` carrying an `authorityReceipt` is replaced with a
+ *    SLIMMED parseable copy (dropping per-action afterContent / patch /
+ *    editAnchor and emptying freshCapabilities) instead of a tombstone, and
+ *    `commit_receipt` results are left untouched — their JSON bodies are the
+ *    evidence `buildRuntimeAgentReceipt` needs at settle time.
  *  - If the whole-array token delta is below `EVICTION_MIN_SAVINGS_TOKENS`,
  *    the ORIGINAL array reference is returned unchanged: the caller relies on
  *    reference inequality to decide whether history was rewritten, and
@@ -60,6 +71,94 @@ const isEvicted = (message: ToolMessage): boolean =>
       typeof part.value === 'string' &&
       part.value.startsWith(TOMBSTONE_MARKER),
   )
+
+/**
+ * R4: a tool result whose json content is a commit_receipt is small
+ * control-plane evidence; leave it untouched rather than evicting it.
+ */
+const isCommitReceiptOnlyResult = (message: ToolMessage): boolean =>
+  message.content.length > 0 &&
+  message.content.every(
+    (part) =>
+      part.type === 'json' &&
+      typeof part.value !== 'string' &&
+      commitReceiptV1Schema.safeParse(part.value).success,
+  )
+
+/**
+ * R4 receipt-preserving eviction: slim an authority-backed
+ * `file_mutation_result` to its receipt-bearing core instead of tombstoning
+ * it. Drops the bulky per-action `afterContent` / `patch` / `editAnchor`
+ * payloads and empties `freshCapabilities` while preserving everything the
+ * mutation-attestation extractor needs (kind/version/operationId/outcome/
+ * actions, authorityTier/receiptId/workspaceRevision/workspaceSnapshotId/
+ * authorityReceipt/errors). Returns undefined when the value is not an
+ * authority-backed file_mutation_result or the slimmed copy would fail the
+ * schema — callers then fall back to the tombstone behavior.
+ */
+export function slimMutationReceiptForEviction(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  const record = value as Record<string, unknown>
+  if (record.kind !== 'file_mutation_result') return undefined
+  const parsed = fileMutationResultV1Schema.safeParse(value)
+  if (!parsed.success || !parsed.data.authorityReceipt) return undefined
+  const slimmed = {
+    ...parsed.data,
+    actions: parsed.data.actions.map((action) => {
+      const {
+        afterContent: _afterContent,
+        patch: _patch,
+        editAnchor: _editAnchor,
+        ...rest
+      } = action
+      return rest
+    }),
+    freshCapabilities: [],
+  }
+  const reparsed = fileMutationResultV1Schema.safeParse(slimmed)
+  return reparsed.success ? reparsed.data : undefined
+}
+
+/**
+ * R4 idempotency: a mutation receipt that has already been slimmed carries no
+ * heavy payload to reclaim, and re-slimming it every iteration would rewrite
+ * history (churning prompt caches) without saving anything. Such results are
+ * skipped exactly like already-tombstoned ones.
+ */
+const isSlimmedMutationResult = (message: ToolMessage): boolean =>
+  message.content.some((part) => {
+    if (part.type !== 'json' || typeof part.value === 'string') return false
+    const parsed = fileMutationResultV1Schema.safeParse(part.value)
+    if (!parsed.success || !parsed.data.authorityReceipt) return false
+    const hasHeavyPayload = parsed.data.actions.some(
+      (action) =>
+        action.afterContent !== undefined ||
+        action.editAnchor !== undefined ||
+        action.patch !== undefined,
+    )
+    return !hasHeavyPayload && parsed.data.freshCapabilities.length === 0
+  })
+
+/**
+ * Per-part slimmed replacement content for a tool message, or undefined when
+ * no json part carried a slimable authority-backed mutation receipt (the
+ * caller then applies the whole-message tombstone as before).
+ */
+const slimmedContentForMessage = (
+  message: ToolMessage,
+): ToolMessage['content'] | undefined => {
+  let changed = false
+  const parts = message.content.map((part) => {
+    if (part.type !== 'json' || typeof part.value === 'string') return part
+    const slimmed = slimMutationReceiptForEviction(part.value)
+    if (slimmed === undefined) return part
+    changed = true
+    return { type: 'json' as const, value: slimmed } as typeof part
+  })
+  return changed ? parts : undefined
+}
 
 export type ToolResultEvictionResult = {
   messages: Message[]
@@ -105,9 +204,11 @@ const contentReferencesProtectedPath = (
 }
 
 /**
- * Replace the bodies of stale tool results with short tombstones. Pure with
- * respect to the input array (never mutates it); returns the same reference
- * when nothing was worth evicting.
+ * Replace the bodies of stale tool results with short tombstones — except
+ * mutation receipts, which are slimmed to a parseable receipt-bearing copy
+ * instead (see `slimMutationReceiptForEviction`). Pure with respect to the
+ * input array (never mutates it); returns the same reference when nothing was
+ * worth evicting.
  */
 export function evictStaleToolResults(
   messages: Message[],
@@ -149,6 +250,7 @@ export function evictStaleToolResults(
   const candidates = messages.filter((message): message is ToolMessage => {
     if (message.role !== 'tool') return false
     if (isEvicted(message)) return false
+    if (isSlimmedMutationResult(message)) return false
     if ((newestStep - (stepIndexOf.get(message) ?? 0)) < keepRecentSteps) {
       return false
     }
@@ -158,6 +260,9 @@ export function evictStaleToolResults(
         tags: message.tags,
       })
     ) {
+      return false
+    }
+    if (isCommitReceiptOnlyResult(message)) {
       return false
     }
     if (
@@ -175,7 +280,13 @@ export function evictStaleToolResults(
   }
 
   const tombstonesByMessage = new Map<ToolMessage, string>()
+  const slimmedContentByMessage = new Map<ToolMessage, ToolMessage['content']>()
   for (const candidate of candidates) {
+    const slimmedContent = slimmedContentForMessage(candidate)
+    if (slimmedContent !== undefined) {
+      slimmedContentByMessage.set(candidate, slimmedContent)
+      continue
+    }
     tombstonesByMessage.set(
       candidate,
       buildTombstone(approximateTokens(candidate)),
@@ -183,6 +294,10 @@ export function evictStaleToolResults(
   }
 
   const nextMessages = messages.map((message) => {
+    const slimmedContent = slimmedContentByMessage.get(message as ToolMessage)
+    if (slimmedContent !== undefined) {
+      return { ...(message as ToolMessage), content: slimmedContent }
+    }
     const tombstone = tombstonesByMessage.get(message as ToolMessage)
     if (tombstone === undefined) return message
     const evicted: ToolMessage = {

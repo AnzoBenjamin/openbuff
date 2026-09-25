@@ -17,6 +17,7 @@ import {
   generateObject,
   NoSuchToolError,
   APICallError,
+  NoOutputGeneratedError,
   ToolCallRepairError,
   InvalidToolInputError,
   TypeValidationError,
@@ -533,7 +534,6 @@ const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 600_000
  * explicitly provided caller timeout (params.signal) remains authoritative.
  */
 function withDefaultRequestTimeout(
-  params: ModelRequestParams | { signal?: unknown },
   signal: AbortSignal | undefined,
 ): AbortSignal | undefined {
   const timeoutSignal = AbortSignal.timeout(DEFAULT_LLM_REQUEST_TIMEOUT_MS)
@@ -1187,10 +1187,17 @@ export async function* promptAiSdkStream(
 
           response = streamText({
             ...streamParams,
+            // Provider-config default output ceiling (defaultCapabilities/modelCapabilities
+            // context.outputTokens). The caller's explicit maxOutputTokens (agent template)
+            // always wins; this only fills the gap when the template leaves it unset.
+            ...(streamParams.maxOutputTokens === undefined &&
+            modelResult.maxOutputTokens !== undefined
+              ? { maxOutputTokens: modelResult.maxOutputTokens }
+              : {}),
             // M3-T1: finite default request timeout so a hung provider
             // stream cannot hang the harness; the caller's own signal
             // (streamParams.signal) is merged and keeps taking precedence.
-            abortSignal: withDefaultRequestTimeout(streamParams, streamParams.signal),
+            abortSignal: withDefaultRequestTimeout(streamParams.signal),
             ...(compatibility.supportsTools === false
               ? { tools: undefined, toolChoice: undefined }
               : {}),
@@ -1403,10 +1410,6 @@ export async function* promptAiSdkStream(
               })
 
               if (chatGptErrorPolicy === 'fallback-rate-limit') {
-                const rateLimitErrorDetails =
-                  chunkValue.error instanceof Error
-                    ? chunkValue.error.message
-                    : String(chunkValue.error)
                 logger.warn(
                   { error: getErrorObject(chunkValue.error) },
                   'ChatGPT OAuth rate limited during stream',
@@ -1725,7 +1728,21 @@ export async function* promptAiSdkStream(
           // check, a provider 500 would be thrown immediately rather than retried.
           const statusCode = getErrorStatusCode(error)
           const isRetryableStatus = isRetryableStatusCode(statusCode)
-          if (!isTransientNetworkError(error) && !isRetryableStatus) {
+          // The AI SDK rejects `response.finishReason` with NoOutputGeneratedError
+          // ("No output generated. Check the stream for errors.") when the provider
+          // opened a stream, sent zero chunks (no text, no tool call, no error
+          // chunk), and closed cleanly. That error carries no HTTP status and is
+          // not a network error, so without this case it would be thrown
+          // immediately. Treat it as retryable — the `anyContentYielded` check
+          // above already throws once output was streamed, so a retry here can
+          // never duplicate content.
+          const isEmptyStreamNoOutput =
+            NoOutputGeneratedError.isInstance(error) && !anyContentYielded
+          if (
+            !isTransientNetworkError(error) &&
+            !isRetryableStatus &&
+            !isEmptyStreamNoOutput
+          ) {
             throw error
           }
 
@@ -1903,7 +1920,7 @@ export async function promptAiSdk(
             ...params,
             // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
             // the caller's params.signal is merged and keeps precedence.
-            abortSignal: withDefaultRequestTimeout(params, params.signal),
+            abortSignal: withDefaultRequestTimeout(params.signal),
             ...(compatibility.supportsTools === false
               ? { tools: undefined, toolChoice: undefined }
               : {}),
@@ -2063,7 +2080,7 @@ export async function promptAiSdkStructured<T>(
             ...params,
             // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
             // the caller's params.signal is merged and keeps precedence.
-            abortSignal: withDefaultRequestTimeout(params, params.signal),
+            abortSignal: withDefaultRequestTimeout(params.signal),
             ...(compatibility.supportsTools === false
               ? { tools: undefined, toolChoice: undefined }
               : {}),

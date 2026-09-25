@@ -12,6 +12,7 @@ import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-rece
 import {
   agentHandoffSchema,
   agentReceiptSchema,
+  agentRoleSchema,
 } from '@codebuff/common/types/agent-handoff'
 import { rm } from 'node:fs/promises'
 
@@ -1137,7 +1138,16 @@ export async function finalizeOwnedLibrarianClone(params: {
 }
 
 function inferAgentRole(agentType: string, handoff?: AgentHandoff): AgentRole {
-  if (handoff) return handoff.role
+  // Free-form handoffs may arrive loosely typed (cast through `any` at spawn
+  // boundaries); only trust handoff.role when it is a valid agentRoleSchema
+  // value, otherwise fall through to the agentType inference below instead of
+  // emitting a role that fails the strict receipt parse.
+  if (
+    handoff &&
+    agentRoleSchema.safeParse((handoff as { role?: unknown }).role).success
+  ) {
+    return handoff.role
+  }
   if (agentType === 'repair-editor') return 'repair-editor'
   if (agentType.includes('editor')) return 'editor'
   if (agentType === 'test-writer') return 'test-writer'
@@ -1475,7 +1485,7 @@ function stripUndefinedValuedKeys(value: unknown, depth = 0): unknown {
   return out
 }
 
-export function buildRuntimeAgentReceipt(params: {
+function buildRuntimeAgentReceiptOrThrow(params: {
   agentType: string
   agentId: string
   handoff?: AgentHandoff
@@ -1519,8 +1529,11 @@ export function buildRuntimeAgentReceipt(params: {
     !containsStructuralAuditReceipt(receiptSources, trimmedSnapshotId)
   const completionContractFailed =
     missingExplicitCompletion || missingAuditReceipt
+  const runtimeMutationToolMessages = extractRuntimeMutationToolMessages(
+    params.agentState?.messageHistory,
+  )
   const mutationAttestations = extractMutationAttestations(
-    extractRuntimeMutationToolMessages(params.agentState?.messageHistory),
+    runtimeMutationToolMessages,
   )
   const claimedChangedFiles = extractReceiptStringArray(
     params.output,
@@ -1548,6 +1561,16 @@ export function buildRuntimeAgentReceipt(params: {
       ? [
           {
             message: `Child output claimed changed files without mutation receipts: ${overclaimedPaths.join(', ')}.`,
+            retryable: false,
+          },
+        ]
+      : []),
+    ...(overclaimedPaths.length > 0 &&
+    mutationAttestations.length === 0 &&
+    runtimeMutationToolMessages.length > 0
+      ? [
+          {
+            message: `${runtimeMutationToolMessages.length} edit_transaction tool result${runtimeMutationToolMessages.length === 1 ? '' : 's'} ${runtimeMutationToolMessages.length === 1 ? 'was' : 'were'} present but none yielded a parseable mutation receipt (evicted/truncated or callId-correlation mismatch); unbacked claimed paths: ${overclaimedPaths.join(', ')}.`,
             retryable: false,
           },
         ]
@@ -1597,17 +1620,17 @@ export function buildRuntimeAgentReceipt(params: {
     params.output,
     'findingsAddressed',
   )
-  const attestedFindingIds =
-    overclaimedPaths.length > 0
-      ? []
-      : params.handoff
-        ? claimedFindingIds.filter((id) => {
-            const finding = params.handoff?.findings.find(
-              (item) => item.id === id,
-            )
-            return !!finding?.files.some((path) => actualChangedPaths.has(path))
-          })
-        : claimedFindingIds
+  // Partial-overclaim credit: one unbacked changed-file claim must not wipe
+  // the credit of OTHER findings whose files ARE receipt-backed. A claimed
+  // finding id is credited iff the handoff finding exists AND its files
+  // intersect the receipt-backed path set (fail closed per finding).
+  // Handoff-less spawns keep passing claimedFindingIds through unchanged.
+  const attestedFindingIds = params.handoff
+    ? claimedFindingIds.filter((id) => {
+        const finding = params.handoff?.findings?.find((item) => item.id === id)
+        return !!finding?.files.some((path) => actualChangedPaths.has(path))
+      })
+    : claimedFindingIds
   // RF-2/RF-7/RF-11/RF-16: runtime-attested mutations are the completion
   // authority for editor-family agents. A stale blocked/null child output must
   // not hide applied work from the parent gate, while receipt errors still
@@ -1734,6 +1757,62 @@ export function buildRuntimeAgentReceipt(params: {
     ...(contextUsage ? { contextUsage } : {}),
   })
   return receipt
+}
+
+/**
+ * R2 total receipt build: the receipt build must NEVER throw. Previously a
+ * strict `agentReceiptSchema.parse` failure or a deref into a malformed
+ * handoff escaped the spawn handler and killed the entire agent run. Any
+ * failure in the core build now falls back to a minimal, field-complete,
+ * schema-valid failed receipt that preserves the original error message.
+ */
+export function buildRuntimeAgentReceipt(params: {
+  agentType: string
+  agentId: string
+  handoff?: AgentHandoff
+  spawnParams?: Record<string, unknown>
+  output: unknown
+  agentState?: AgentState
+  status?: AgentReceipt['status']
+  error?: unknown
+}): AgentReceipt {
+  try {
+    return buildRuntimeAgentReceiptOrThrow(params)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const rawTaskId = params.handoff?.taskId ?? `spawn-${params.agentId}`
+    const taskId =
+      typeof rawTaskId === 'string' && rawTaskId.trim().length > 0
+        ? rawTaskId
+        : 'unknown-task'
+    const agentId =
+      typeof params.agentId === 'string' && params.agentId.trim().length > 0
+        ? params.agentId
+        : 'unknown-agent'
+    return agentReceiptSchema.parse({
+      schemaVersion: 1,
+      receiptId: generateCompactId(),
+      taskId,
+      role: 'specialist',
+      agentId,
+      status: 'failed',
+      changedFiles: [],
+      requirementsAddressed: [],
+      acceptanceCriteriaAddressed: [],
+      findingsAddressed: [],
+      evidence: [],
+      assumptions: [],
+      unresolved: [],
+      requestedValidation: [],
+      artifacts: [],
+      errors: [
+        {
+          message: `Receipt build failed: ${detail}`,
+          retryable: false,
+        },
+      ],
+    })
+  }
 }
 
 export function reconcileAgentReceiptIntoParent(params: {

@@ -812,6 +812,92 @@ describe('model-provider', () => {
       expect((result.model as any).modelId).toBe('llama3.1')
     })
 
+    test('getModelForRequest forwards defaultCapabilities.context.outputTokens as maxOutputTokens', async () => {
+      const tempDir = makeTempDir('codebuff-provider-')
+      const configPath = path.join(tempDir, 'openbuff.json')
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          providers: {
+            local: {
+              type: 'openai-compatible',
+              baseURL: 'http://127.0.0.1:11434/v1',
+              models: ['test-model'],
+              defaultCapabilities: {
+                context: { windowTokens: 128_000, outputTokens: 16_384 },
+              },
+            },
+          },
+        }),
+      )
+      process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
+
+      const result = await getModelForRequest({
+        apiKey: 'codebuff-key',
+        model: 'local/test-model',
+      })
+
+      expect(result.maxOutputTokens).toBe(16_384)
+    })
+
+    test('getModelForRequest lets per-model context.outputTokens override the provider default', async () => {
+      const tempDir = makeTempDir('codebuff-provider-')
+      const configPath = path.join(tempDir, 'openbuff.json')
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          providers: {
+            local: {
+              type: 'openai-compatible',
+              baseURL: 'http://127.0.0.1:11434/v1',
+              models: ['test-model'],
+              defaultCapabilities: {
+                context: { outputTokens: 8_192 },
+              },
+              modelCapabilities: {
+                'test-model': {
+                  context: { outputTokens: 32_768 },
+                },
+              },
+            },
+          },
+        }),
+      )
+      process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
+
+      const result = await getModelForRequest({
+        apiKey: 'codebuff-key',
+        model: 'local/test-model',
+      })
+
+      expect(result.maxOutputTokens).toBe(32_768)
+    })
+
+    test('getModelForRequest leaves maxOutputTokens undefined without context.outputTokens', async () => {
+      const tempDir = makeTempDir('codebuff-provider-')
+      const configPath = path.join(tempDir, 'openbuff.json')
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          providers: {
+            local: {
+              type: 'openai-compatible',
+              baseURL: 'http://127.0.0.1:11434/v1',
+              models: ['test-model'],
+            },
+          },
+        }),
+      )
+      process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
+
+      const result = await getModelForRequest({
+        apiKey: 'codebuff-key',
+        model: 'local/test-model',
+      })
+
+      expect(result.maxOutputTokens).toBeUndefined()
+    })
+
     test('getModelForRequest routes opencode-go responses models to /responses', async () => {
       const tempDir = makeTempDir('codebuff-provider-')
       const configPath = path.join(tempDir, 'openbuff.json')
