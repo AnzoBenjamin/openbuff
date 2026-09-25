@@ -108,14 +108,38 @@ describe('searchLibraries', () => {
     expect(out).toEqual([])
   })
 
-  test('returns undefined when results key is missing from response', async () => {
+  test('returns null when results key is missing from response', async () => {
     const fetchMock = mock(async () => makeResponse({ other: 'stuff' }))
     const out = await searchLibraries({
       query: 'x',
       logger: noopLogger,
       fetch: fetchMock as unknown as typeof globalThis.fetch,
     })
-    expect(out).toBeUndefined()
+    // M3-T1: an invalid response shape fails closed to null instead of
+    // returning an unvalidated value.
+    expect(out).toBeNull()
+  })
+
+  test('returns null when results is a truthy non-array of the wrong shape', async () => {
+    const fetchMock = mock(async () => makeResponse({ results: 'oops' }))
+    const out = await searchLibraries({
+      query: 'x',
+      logger: noopLogger,
+      fetch: fetchMock as unknown as typeof globalThis.fetch,
+    })
+    expect(out).toBeNull()
+  })
+
+  test('returns null when a result entry is missing required fields', async () => {
+    const fetchMock = mock(async () =>
+      makeResponse({ results: [{ id: '/x' }] }),
+    )
+    const out = await searchLibraries({
+      query: 'x',
+      logger: noopLogger,
+      fetch: fetchMock as unknown as typeof globalThis.fetch,
+    })
+    expect(out).toBeNull()
   })
 })
 

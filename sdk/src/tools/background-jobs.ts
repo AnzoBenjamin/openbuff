@@ -26,6 +26,10 @@ import {
  */
 export type BackgroundJobStatus =
   | 'running'
+  // M2-T4 (Fix 3): 'stopping' is the non-terminal "signal delivered, exit not
+  // yet observed" state folded from the registry state machine
+  // (running -> stopping) before a terminal settle.
+  | 'stopping'
   | 'completed'
   | 'error'
   | 'lost'
@@ -96,6 +100,12 @@ export interface BackgroundJob {
    */
   hasLiveDrainer?: boolean
   /**
+   * Pending SIGKILL escalation timer for a delivered-but-unobserved kill
+   * (M2-T4, Fix 3). Unref'd; cleared by settleBackgroundJob when the job
+   * settles first so a kill never leaks a timer.
+   */
+  killEscalationTimer?: ReturnType<typeof setTimeout>
+  /**
    * Per-adapter registry consumer cursor for check_job. Tracks how far the
    * adapter has already returned events to a check_job caller — independent
    * of the live drainer's readOffset/decoder/lineCarry progress. Defaults to
@@ -122,6 +132,13 @@ export interface BackgroundJob {
    * before a group-kill (pid reuse guard); undefined on non-Linux hosts.
    */
   childProcessStartTime?: string
+  /**
+   * True when the adapter record came from cross-session disk recovery
+   * (M2-T4, Fix 2). Only recovered jobs need the observation-time liveness
+   * re-check — a live spawn owns its own exit listeners, and test-registered
+   * fixtures carry fakes liveness cannot reason about.
+   */
+  recovered?: boolean
   /**
    * Project root used for the pre-start dirty snapshot (BACKGROUND start).
    * In-memory only — not written to recovery metadata. Recovered jobs omit it.
@@ -477,6 +494,13 @@ function settleBackgroundJob(
   exitCode: number | null,
   error?: string,
 ): void {
+  // M2-T4 (Fix 3): a pending SIGKILL escalation no longer matters once the job
+  // settled (child exit, error, or direct settle) — clear the unref'd timer so
+  // a kill never leaks one per attempt.
+  if (job.killEscalationTimer) {
+    clearTimeout(job.killEscalationTimer)
+    job.killEscalationTimer = undefined
+  }
   job.status = status
   job.exitCode = exitCode
   // Stamp the FIRST terminal time once. settleBackgroundJob can be reached
@@ -494,6 +518,62 @@ function settleBackgroundJob(
     ...(error !== undefined ? { error } : {}),
   })
   writeBackgroundJobMetadata(job)
+}
+
+/**
+ * M2-T4 (Fix 2): observation-time liveness re-check for jobs whose lifecycle
+ * cannot arrive through a child 'exit' event.
+ *
+ * A recovered job's fake ChildProcess carries no listeners, so a job that was
+ * rescued ALIVE but exited afterwards otherwise reads 'running' forever. This
+ * helper:
+ * - skips jobs with a real live drainer (their own exit handler owns settling)
+ *   or a job already in a non-observability state (terminal); and
+ * - verifies `isProcessAlive(pid)` plus, when both the spawn-time starttime
+ *   record and a readable /proc starttime exist, that the pid still belongs
+ *   to the ORIGINAL process (pid-reuse guard, same evidence kill uses).
+ *
+ * When the pid is gone it performs the final readNewJobOutput +
+ * flushJobLineCarry drain and settles 'lost': we cannot distinguish a clean
+ * exit for a process we never parented, so 'lost' matches the recovery-time
+ * promotion behavior. Returns true when the job still looks alive.
+ */
+export function recheckRecoveredJobLiveness(job: BackgroundJob): boolean {
+  // Only recovered jobs lack exit listeners AND carry a real pid worth
+  // probing: a same-process spawn folds terminal via its own 'exit' event,
+  // and a test fixture's fake pid says nothing about the OS.
+  if (!job.recovered) return true
+  if (job.hasLiveDrainer === true) return true
+  if (job.status !== 'running' && job.status !== 'stopping') return true
+  const pid = job.child.pid
+  if (!pid) return true
+  if (!isProcessAlive(pid)) {
+    readNewJobOutput(job)
+    flushJobLineCarry(job)
+    settleBackgroundJob(job, 'lost', job.exitCode)
+    return false
+  }
+  if (job.childProcessStartTime !== undefined) {
+    const currentStartTime = readProcessStartTime(pid)
+    if (currentStartTime !== undefined && currentStartTime !== job.childProcessStartTime) {
+      // The pid was recycled by an unrelated process: the recovery metadata
+      // can no longer be attributed to a live drainable stream.
+      readNewJobOutput(job)
+      flushJobLineCarry(job)
+      settleBackgroundJob(job, 'lost', job.exitCode)
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * True when a status is far enough along that log-end cleanup debounce
+ * (decoder end / metadata persist) applies. 'stopping' (M2-T4 Fix 3) is NOT
+ * settled: the child is still running and could keep producing output.
+ */
+function isSettledStatus(status: BackgroundJobStatus): boolean {
+  return status !== 'running' && status !== 'stopping'
 }
 
 /**
@@ -748,12 +828,14 @@ export function startBackgroundJob(params: {
   }
   writeBackgroundJobMetadata(job)
   child.on('exit', (code) => {
-    // A prior killBackgroundJob call settles the job as 'stopped'
-    // synchronously before this exit fires. SIGTERM produces a non-zero exit
-    // code, so treat an already-'stopped' job as an intentional stop rather
-    // than an error and preserve the documented 'stopped' contract. Quota
-    // termination still wins (the job already settled as 'error').
-    const intentionallyStopped = job.status === 'stopped'
+    // A prior killBackgroundJob call folds the registry into the NON-terminal
+    // 'stopping' state when the signal is delivered (M2-T4, Fix 3) and only
+    // THIS exit handler settles 'stopped'. SIGTERM produces a non-zero exit
+    // code, so treat an already-stopped/stopping job as an intentional stop
+    // rather than an error and preserve the documented 'stopped' contract.
+    // Quota termination still wins (the job already settled as 'error').
+    const intentionallyStopped =
+      job.status === 'stopped' || job.status === 'stopping'
     const status = quotaExceeded
       ? 'error'
       : intentionallyStopped
@@ -1010,6 +1092,9 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
         typeof metadata.childProcessStartTime === 'string'
           ? metadata.childProcessStartTime
           : undefined,
+      // Observation-time liveness re-check marker (M2-T4, Fix 2): only
+      // recovered jobs have no exit listeners on their fake child.
+      recovered: true,
     }
   } catch {
     return undefined
@@ -1083,6 +1168,70 @@ function killProcess(pid: number, signal: 'SIGTERM' | 'SIGKILL'): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Bounded SIGKILL escalation for a delivered-but-unobserved kill (M2-T4,
+ * Fix 3). Five unref'd seconds after SIGTERM, re-check the pid; when it is
+ * still alive, escalate to SIGKILL through the same terminate path.
+ *
+ * A LIVE child (real ChildProcess handle) relies on its own 'exit' event to
+ * settle 'stopped' once the process dies. A RECOVERED job's fake child has no
+ * exit event, so the escalation callback is its ONLY settle path: after
+ * SIGKILL escalation confirms the pid is gone (or was already gone at the
+ * check), settle 'stopped' directly. If the pid cannot be confirmed dead the
+ * job stays 'stopping' and the observation-time liveness re-check (Fix 2,
+ * recheckRecoveredJobLiveness) settles it 'lost' on next observation.
+ */
+const KILL_ESCALATION_DELAY_MS = 5_000
+
+function scheduleKillEscalation(job: BackgroundJob, recovered: boolean): void {
+  if (job.killEscalationTimer) return
+  const timer = setTimeout(() => {
+    job.killEscalationTimer = undefined
+    if (job.status !== 'stopping' && job.status !== 'running') return
+    const pid = job.child.pid
+    if (!pid) return
+    const alreadyDead =
+      typeof job.child.kill === 'function'
+        ? !isProcessTreeAlive(job.child)
+        : !isProcessAlive(pid)
+    if (alreadyDead) {
+      // No exit event will fire for a recovered fake child: settle directly.
+      if (recovered) {
+        settleBackgroundJob(job, 'stopped', job.exitCode)
+      }
+      return
+    }
+    const escalated =
+      typeof job.child.kill === 'function'
+        ? terminateProcessTree(job.child, 'SIGKILL')
+        : killProcess(os.platform() === 'win32' ? pid : -pid, 'SIGKILL')
+    if (!escalated) {
+      // Could not escalate: leave 'stopping' and let the observation-time
+      // liveness re-check settle the job on a later read.
+      return
+    }
+    if (recovered) {
+      // The recovered pid is unverifiable as "will emit an exit" — SIGKILL
+      // is asynchronous but fatal (not ignorable): confirm death shortly
+      // after the signal, settling 'stopped' when the pid is gone. When it
+      // cannot be confirmed, leave 'stopping' for the liveness re-check.
+      const confirmTimer = setTimeout(() => {
+        if (job.status !== 'stopping' && job.status !== 'running') return
+        if (isProcessAlive(pid) && readProcessStartTime(pid) === job.childProcessStartTime) {
+          // Still (or again) alive after SIGKILL: leave 'stopping'; the
+          // next liveness observation settles it.
+          return
+        }
+        settleBackgroundJob(job, 'stopped', job.exitCode)
+      }, 1_000)
+      confirmTimer.unref?.()
+    }
+    // A live child settles through its own 'exit' event after the kill.
+  }, KILL_ESCALATION_DELAY_MS)
+  timer.unref?.()
+  job.killEscalationTimer = timer
 }
 
 export function killBackgroundJob(
@@ -1161,10 +1310,23 @@ export function killBackgroundJob(
     killed = killProcess(os.platform() === 'win32' ? pid : -pid, signal)
   }
   if (killed) {
-    // An intentional kill is not a failure, so record it as 'stopped'. The
-    // registry folds this terminal lifecycle in (and ignores the later exit
-    // event), keeping the settled state servable for post-kill status reads.
-    settleBackgroundJob(job, 'stopped', job.exitCode)
+    // M2-T4 (Fix 3): signal DELIVERY is not an exit. Fold the registry's
+    // documented NON-terminal 'stopping' state (running -> stopping) so a
+    // SIGTERM-ignoring child can no longer be reported as 'stopped' while it
+    // keeps running, and schedule a bounded SIGKILL escalation. Only the
+    // child's own 'exit' event settles 'stopped' now (see startBackgroundJob);
+    // for a recovered job — which has no exit event — the escalation callback
+    // below is its sole settle path.
+    const recovered = typeof job.child.kill !== 'function'
+    jobRegistry.emit(job.jobId, {
+      type: 'lifecycle',
+      state: 'stopping',
+      exitCode: job.exitCode,
+    })
+    job.status = 'stopping'
+    if (signal === 'SIGTERM' || recovered) {
+      scheduleKillEscalation(job, recovered)
+    }
   }
 
   return {
@@ -1187,7 +1349,7 @@ export function readNewJobOutput(job: BackgroundJob): string {
   const { fd, size } = opened
   try {
     if (size <= job.readOffset) {
-      if (job.status !== 'running' && job.decoder) {
+      if (isSettledStatus(job.status) && job.decoder) {
         const final = job.decoder.end()
         job.decoder = new StringDecoder('utf8')
         emitJobOutputLines(job, final)
@@ -1205,7 +1367,7 @@ export function readNewJobOutput(job: BackgroundJob): string {
       // settled so the final offset/status is durable.
       const now = Date.now()
       if (
-        job.status !== 'running' ||
+        isSettledStatus(job.status) ||
         now - (job.lastMetadataWriteAt ?? 0) >= METADATA_WRITE_THROTTLE_MS
       ) {
         writeBackgroundJobMetadata(job)

@@ -6,6 +6,11 @@ on:
     - cron: '0 12 * * *'
   workflow_dispatch: # Allow manual triggering
 
+# M1-T6: scope the workflow token to read-only contents — a scheduled workflow
+# must not run with the default write-scoped GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   e2e-tests:
     runs-on: ubuntu-latest
@@ -18,16 +23,42 @@ jobs:
 
       - name: Set environment variables
         env:
-          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CANOPYWAVE_API_KEY: ${{ secrets.CANOPYWAVE_API_KEY }}
+          CODEBUFF_GITHUB_TOKEN: ${{ secrets.OPENBUFF_GITHUB_TOKEN }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GRAVITY_API_KEY: ${{ secrets.GRAVITY_API_KEY }}
+          IPINFO_TOKEN: ${{ secrets.IPINFO_TOKEN }}
+          LINKUP_API_KEY: ${{ secrets.LINKUP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          NEXT_PUBLIC_CODEBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_CODEBUFF_APP_URL }}
+          NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION_ID }}
+          NEXT_PUBLIC_OPENBUFF_APP_URL: ${{ secrets.NEXT_PUBLIC_OPENBUFF_APP_URL }}
+          NEXT_PUBLIC_POSTHOG_API_KEY: ${{ secrets.NEXT_PUBLIC_POSTHOG_API_KEY }}
+          NEXT_PUBLIC_POSTHOG_HOST_URL: ${{ secrets.NEXT_PUBLIC_POSTHOG_HOST_URL }}
+          NEXT_PUBLIC_SUPPORT_EMAIL: ${{ secrets.NEXT_PUBLIC_SUPPORT_EMAIL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPEN_ROUTER_API_KEY: ${{ secrets.OPEN_ROUTER_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
         run: |
           VAR_NAMES=$(bun scripts/generate-ci-env.ts)
-          echo "$SECRETS_CONTEXT" | jq -r --argjson vars "$VAR_NAMES" '
-            to_entries | .[] | select(.key as $k | $vars | index($k)) | .key + "=" + .value
-          ' >> $GITHUB_ENV
+          # Export each required var from its named step env entry above.
+          # M1-T6: no toJSON(secrets) dump — the whole secrets object used to
+          # be piped through jq; now only the named secrets above are exposed
+          # and only the required-and-present subset is persisted.
+          for name in $(printf '%s' "$VAR_NAMES" | jq -r '.[]'); do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "$name=$value" >> $GITHUB_ENV
+            fi
+          done
           echo "CODEBUFF_GITHUB_ACTIONS=true" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_CB_ENVIRONMENT=test" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
-          echo "CODEBUFF_GITHUB_TOKEN=${{ secrets.OPENBUFF_GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
       - name: Build SDK
         run: cd sdk && bun run build

@@ -13,6 +13,7 @@ import {
   collectReviewerHardBlockers,
   detectReviewerCrash,
   getReviewerFinalizationVerdict,
+  getSecurityReviewerFinalizationVerdict,
   isParentOwnedOrOutOfScopeRequirement,
   isTestCoverageReviewerFinding,
   isTransientReviewerCrash,
@@ -98,6 +99,10 @@ const INLINE_DEPENDENCY_NAMES = [
   'visitForStructuredVerdict',
   'hasReviewerLineVerdict',
   'collectStrings',
+  // getReviewerFinalizationVerdict delegates to the shared resolver split out
+  // for getSecurityReviewerFinalizationVerdict; the generated base2 copy calls
+  // it directly, so the reconstructed mirror needs it in scope.
+  'resolveReviewerFinalizationVerdict',
   // Crash taxonomy helpers are generated into base2; parity for
   // detectReviewerCrash only needs findReviewerCrash. Unit tests cover
   // isTransientReviewerCrash / classifyReviewerCrash against the export.
@@ -563,12 +568,12 @@ describe('gate-reviewer helpers', () => {
     )
   })
 
-  // RF-1-17fea4a5: the documented loosening. The reviewedFiles UNION is not
-  // restricted to the entry that contributed the credited fingerprint, so a
-  // quoted example whose example path COLLIDES with a real pending path credits
-  // coverage the real entry never attested. Pinned so resolveReviewerAttestation's
-  // docblock caveat stays honest; a pending path NO entry reported still blocks.
-  test('the reviewedFiles union credits a colliding quoted example path', () => {
+  // RF-1-17fea4a5 (M1-T4a, tightened): the reviewedFiles union used to credit a
+  // quoted example whose example path COLLIDES with a real pending path.
+  // Coverage is now ENTRY-SCOPED — only the attesting entry's reviewedFiles
+  // count — so the colliding quote can no longer manufacture coverage and the
+  // unattested pending path blocks.
+  test('a colliding quoted example path no longer credits coverage', () => {
     const expected = 'v3:' + 'd'.repeat(64)
     const attesting = {
       schemaVersion: 1,
@@ -588,13 +593,15 @@ describe('gate-reviewer helpers', () => {
       reviewedFiles: ['src/a.ts'],
     }
     const collidingQuote = { type: 'json', value: [attesting, quotedExample] }
+    // src/a.ts is claimed only by the quoted example: not credited.
     expect(
       collectReviewerAttestationIssues(collidingQuote, expected, [
         'src/a.ts',
         'src/b.ts',
       ]),
-    ).toEqual([])
-    // A pending path neither entry reported still fails closed.
+    ).toEqual([
+      'BLOCKING: reviewer did not attest to every pending file: src/a.ts',
+    ])
     expect(
       collectReviewerAttestationIssues(collidingQuote, expected, [
         'src/a.ts',
@@ -602,7 +609,7 @@ describe('gate-reviewer helpers', () => {
         'src/c.ts',
       ]),
     ).toEqual([
-      'BLOCKING: reviewer did not attest to every pending file: src/c.ts',
+      'BLOCKING: reviewer did not attest to every pending file: src/a.ts, src/c.ts',
     ])
     // base2's inline mirror is the gate's runtime authority.
     const inlineHelpers = loadInlineGateReviewerHelpers()
@@ -1859,7 +1866,11 @@ describe('gate-reviewer helpers', () => {
       type: 'json',
       value: [attesting, quotedExample],
     }
-    // The same quote, also copying a v3 fingerprint of its own.
+    // M1-T4a: the same quote ALSO carrying a v3 fingerprint of its own now
+    // produces two distinct attestable fingerprints in one result — more than
+    // one receipt's worth of attestation — so the whole result is rejected
+    // instead of resolved (the old behavior spliced the quote's fingerprint
+    // selection against the real entry's coverage).
     const trailingQuoteWithFingerprint = {
       type: 'json',
       value: [attesting, { ...quotedExample, snapshotFingerprint: quoted }],
@@ -1873,22 +1884,28 @@ describe('gate-reviewer helpers', () => {
         { ...attesting, snapshotFingerprint: expected },
       ],
     }
-    const toolResults = [
-      trailingQuoteWithFiles,
-      trailingQuoteWithFingerprint,
-      leadingQuoteWithFingerprint,
-    ]
-    for (const toolResult of toolResults) {
-      expect(
-        collectReviewerAttestationIssues(toolResult, expected, files),
-      ).toEqual([])
-    }
+    expect(
+      collectReviewerAttestationIssues(trailingQuoteWithFiles, expected, files),
+    ).toEqual([])
+    expect(
+      collectReviewerAttestationIssues(
+        trailingQuoteWithFingerprint,
+        expected,
+        files,
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer returned conflicting snapshot fingerprints in one result',
+    ])
+    expect(
+      collectReviewerAttestationIssues(
+        leadingQuoteWithFingerprint,
+        expected,
+        files,
+      ),
+    ).toEqual([])
     // Drift telemetry follows the real receipt, not the quote.
     expect(
       collectReviewerFingerprintDrift(trailingQuoteWithFiles, expected),
-    ).toBe(drifted)
-    expect(
-      collectReviewerFingerprintDrift(trailingQuoteWithFingerprint, expected),
     ).toBe(drifted)
     // Nothing to record when the preferred entry matched exactly, even though
     // the quote beside it reported a drifted fingerprint.
@@ -1897,7 +1914,11 @@ describe('gate-reviewer helpers', () => {
     ).toBe('')
     // base2's inline mirrors are the gate's runtime authority.
     const inlineHelpers = loadInlineGateReviewerHelpers()
-    for (const toolResult of toolResults) {
+    for (const toolResult of [
+      trailingQuoteWithFiles,
+      trailingQuoteWithFingerprint,
+      leadingQuoteWithFingerprint,
+    ]) {
       expect(
         inlineHelpers.collectReviewerAttestationIssues(
           toolResult,
@@ -2013,19 +2034,15 @@ describe('gate-reviewer helpers', () => {
     }
   })
 
-  // RF-1-add6f07e (PINNED INTENT): `resolveReviewerAttestation` resolves PER
-  // FIELD, so the credited attestation is a COMPOSITE — the fingerprint may come
-  // from one shaped entry while the coverage union comes from all of them. A
-  // receipt whose real entry reported no fingerprint is therefore creditable
-  // from a quoted example entry's attestable v3 value. That looseness is
-  // accepted deliberately: requiring the fingerprint-contributing entry to also
-  // contribute a reviewed file would not close it (the documented example
-  // carries `reviewedFiles`) and would reject the deletions-only receipt, which
-  // legitimately attests with an empty `reviewedFiles`. What the gate relies on
-  // is pinned below: the union still cannot manufacture coverage for a pending
-  // file no entry reported, and a receipt where NO entry reported an attestable
-  // fingerprint still fails closed.
-  test('credits a spliced attestation: coverage from one entry, fingerprint from another', () => {
+  // RF-1-add6f07e (M1-T4a, tightened): `resolveReviewerAttestation` used to
+  // resolve PER FIELD, splicing a quoted example's fingerprint onto a real
+  // entry's coverage. The attestation is now ENTRY-SCOPED: the attesting entry
+  // (the one carrying the credited fingerprint) must supply BOTH fields, so
+  // the splice below is rejected — the quoted fingerprint's entry never
+  // attested the pending file, and the coverage-bearing entry has no
+  // fingerprint. The deletions-only receipt (single entry, empty
+  // reviewedFiles) still attests, pinned in its own test below.
+  test('rejects a spliced attestation: coverage from one entry, fingerprint from another', () => {
     const quotedFingerprint = 'v3:' + 'e'.repeat(64)
     const expected = 'v3:' + 'd'.repeat(64)
     const pendingFiles = ['src/a.ts']
@@ -2052,16 +2069,20 @@ describe('gate-reviewer helpers', () => {
         },
       ],
     }
+    // The attesting entry is the quoted one, so its reviewedFiles
+    // (['src/example.ts']) never covered src/a.ts: the splice is rejected.
     expect(
       collectReviewerAttestationIssues(splicedReceipt, expected, pendingFiles),
-    ).toEqual([])
-    // The credited fingerprint is the quoted one, so the drift is recorded
-    // rather than accepted silently.
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+      'BLOCKING: reviewer did not attest to every pending file: src/a.ts',
+    ])
+    // The credited fingerprint is still the quoted one, so the drift is
+    // recorded rather than accepted silently.
     expect(collectReviewerFingerprintDrift(splicedReceipt, expected)).toBe(
       quotedFingerprint,
     )
-    // The union cannot manufacture coverage: a pending file no entry reported
-    // still blocks (and the non-matching fingerprint is then a mismatch too).
+    // Adding another unreported pending file extends the missing list.
     expect(
       collectReviewerAttestationIssues(splicedReceipt, expected, [
         ...pendingFiles,
@@ -2069,7 +2090,7 @@ describe('gate-reviewer helpers', () => {
       ]),
     ).toEqual([
       'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
-      'BLOCKING: reviewer did not attest to every pending file: src/b.ts',
+      'BLOCKING: reviewer did not attest to every pending file: src/a.ts, src/b.ts',
     ])
     // Strip the quoted entry's fingerprint and the same receipt fails closed:
     // the splice never invents an attestable value.
@@ -2108,6 +2129,125 @@ describe('gate-reviewer helpers', () => {
         inlineHelpers.collectReviewerFingerprintDrift(toolResult, expected),
       ).toBe(collectReviewerFingerprintDrift(toolResult, expected))
     }
+  })
+
+  // M1-T4a (order-independent rule): when the EXPECTED fingerprint is
+  // reported, resolution is unambiguous — that entry wins outright — so a
+  // sibling foreign fingerprint is tolerated and its coverage is never
+  // unioned in. When NO entry reports the expected fingerprint, multiple
+  // distinct attestable fingerprints make the receipt ambiguous (more than
+  // one receipt's worth of attestation) and the whole result is rejected.
+  test('entry-scopes past a foreign sibling fingerprint and rejects the ambiguous case', () => {
+    const expected = 'v3:' + 'd'.repeat(64)
+    const foreign = 'v3:' + 'e'.repeat(64)
+    const pendingFiles = ['src/a.ts']
+    const conflicting = {
+      type: 'json',
+      value: [
+        {
+          schemaVersion: 1,
+          verdict: 'NON_BLOCKING' as const,
+          findings: ['real'],
+          coverage: 'covered' as const,
+          snapshotFingerprint: expected,
+          reviewedFiles: pendingFiles,
+        },
+        {
+          schemaVersion: 1,
+          verdict: 'NON_BLOCKING' as const,
+          findings: ['example: a nit'],
+          coverage: 'covered' as const,
+          snapshotFingerprint: foreign,
+          reviewedFiles: ['src/example.ts'],
+        },
+      ],
+    }
+    // Expected is reported: the matching entry supplies BOTH attestation
+    // fields, so the receipt attests and the sibling's example coverage is
+    // NOT unioned in — a file only the sibling listed still blocks.
+    expect(
+      collectReviewerAttestationIssues(conflicting, expected, pendingFiles),
+    ).toEqual([])
+    expect(
+      collectReviewerAttestationIssues(conflicting, expected, [
+        ...pendingFiles,
+        'src/example-only.ts',
+      ]),
+    ).toEqual([
+      'BLOCKING: reviewer did not attest to every pending file: src/example-only.ts',
+    ])
+    expect(collectReviewerFingerprintDrift(conflicting, expected)).toBe('')
+    // Expected ABSENT (the real fingerprint drifted to a third value): two
+    // distinct attestable fingerprints are ambiguous, so the result is
+    // rejected instead of resolved.
+    const ambiguous = {
+      type: 'json',
+      value: [
+        {
+          schemaVersion: 1,
+          verdict: 'NON_BLOCKING' as const,
+          findings: ['real'],
+          coverage: 'covered' as const,
+          snapshotFingerprint: 'v3:' + 'f'.repeat(64),
+          reviewedFiles: pendingFiles,
+        },
+        conflicting.value[1]!,
+      ],
+    }
+    expect(
+      collectReviewerAttestationIssues(ambiguous, expected, pendingFiles),
+    ).toEqual([
+      'BLOCKING: reviewer returned conflicting snapshot fingerprints in one result',
+    ])
+    const inlineHelpers = loadInlineGateReviewerHelpers()
+    for (const toolResult of [conflicting, ambiguous]) {
+      expect(
+        inlineHelpers.collectReviewerAttestationIssues(
+          toolResult,
+          expected,
+          pendingFiles,
+        ),
+      ).toEqual(
+        collectReviewerAttestationIssues(toolResult, expected, pendingFiles),
+      )
+    }
+  })
+
+  // M1-T4a: the deletions-only receipt (a single shaped entry with an
+  // attestable fingerprint and EMPTY reviewedFiles) still attests — deleted
+  // files are attested-by-absence via the deletedFiles parameter.
+  test('a deletions-only receipt with an empty reviewedFiles still attests', () => {
+    const expected = 'v3:' + 'd'.repeat(64)
+    const deletionsOnly = {
+      type: 'json',
+      value: [
+        {
+          schemaVersion: 1,
+          verdict: 'NON_BLOCKING' as const,
+          findings: [],
+          coverage: 'covered' as const,
+          snapshotFingerprint: expected,
+          reviewedFiles: [],
+        },
+      ],
+    }
+    expect(
+      collectReviewerAttestationIssues(
+        deletionsOnly,
+        expected,
+        ['src/deleted.ts'],
+        ['src/deleted.ts'],
+      ),
+    ).toEqual([])
+    const inlineHelpers = loadInlineGateReviewerHelpers()
+    expect(
+      inlineHelpers.collectReviewerAttestationIssues(
+        deletionsOnly,
+        expected,
+        ['src/deleted.ts'],
+        ['src/deleted.ts'],
+      ),
+    ).toEqual([])
   })
 
   // RF-2-1ce51577: schemaVersion conformance is checked on EVERY shaped entry,
@@ -3539,5 +3679,186 @@ describe('collectReviewerHardBlockers', () => {
         collectReviewerFindingRecords(input),
       )
     }
+  })
+
+  // Gate-crash fix (recognition-only): a valid review can arrive ONLY inside
+  // the runtime receipt envelope — `agentReceipt` carries `schemaVersion: 1`
+  // while the compact review inside omits it, and the bulky output payload is
+  // often truncated in transit. The walker must resolve the envelope's review
+  // as a SHAPED entry (schemaVersion inherited from the receipt) instead of
+  // failing closed with the protocol blocker that parked the gate.
+  test('recognizes a schemaVersion-inheriting receipt envelope review and attests', () => {
+    const expected = 'v3:' + 'd'.repeat(64)
+    const files = ['src/a.ts', 'src/b.ts']
+    const review = {
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint: expected,
+      coverage: 'covered',
+      reviewedFiles: files,
+    }
+    // spawn_agent_inline sibling shape: agentReceipt beside `value`.
+    const siblingEnvelope = {
+      type: 'json',
+      value: { result: { message: 'done' } },
+      agentReceipt: { schemaVersion: 1, review },
+    }
+    // Nested shape: the receipt inside the json value.
+    const nestedEnvelope = {
+      type: 'json',
+      value: {
+        result: { type: 'truncatedNestedAgentOutput', truncated: true },
+        agentReceipt: { schemaVersion: 1, review },
+      },
+    }
+    for (const envelope of [siblingEnvelope, nestedEnvelope]) {
+      expect(
+        collectReviewerAttestationIssues(envelope, expected, files),
+      ).toEqual([])
+      expect(getReviewerFinalizationVerdict(envelope)).toBe('LOOKS_GOOD')
+    }
+    // Fail-closed preserved: a pending file the inherited entry never listed
+    // still blocks, and the schemaVersion-2 rejection is unchanged.
+    expect(
+      collectReviewerAttestationIssues(siblingEnvelope, expected, [
+        ...files,
+        'src/c.ts',
+      ]),
+    ).toEqual([
+      'BLOCKING: reviewer did not attest to every pending file: src/c.ts',
+    ])
+    expect(
+      collectReviewerAttestationIssues(
+        {
+          type: 'json',
+          value: {},
+          agentReceipt: {
+            schemaVersion: 2,
+            review: {
+              ...review,
+              snapshotFingerprint: 'v3:' + 'e'.repeat(64),
+            },
+          },
+        },
+        expected,
+        files,
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer returned an invalid attestation schemaVersion',
+    ])
+    // A verdict-shaped QUOTED example inside a NON-slot key (evidence) never
+    // inherits schemaVersion: it stays unshaped and outside the conflict
+    // checks while the real envelope review attests.
+    const quotedInEvidence = {
+      agentReceipt: {
+        schemaVersion: 1,
+        evidence: [
+          {
+            id: 'e1',
+            kind: 'review',
+            summary: 'quoted example',
+            extra: { verdict: 'BLOCKING', findings: ['example: fix it'] },
+          },
+        ],
+        review,
+      },
+    }
+    expect(
+      collectReviewerAttestationIssues(quotedInEvidence, expected, files),
+    ).toEqual([])
+    // base2's inline mirrors are the gate's runtime authority.
+    const inlineHelpers = loadInlineGateReviewerHelpers()
+    for (const envelope of [siblingEnvelope, nestedEnvelope, quotedInEvidence]) {
+      expect(
+        inlineHelpers.collectReviewerAttestationIssues(envelope, expected, files),
+      ).toEqual(collectReviewerAttestationIssues(envelope, expected, files))
+      expect(inlineHelpers.getReviewerFinalizationVerdict(envelope)).toBe(
+        getReviewerFinalizationVerdict(envelope),
+      )
+    }
+  })
+})
+
+// Security-reviewer family: NON_BLOCKING is its clean verdict, so a clean
+// security review must credit finalization instead of being misclassified as
+// a protocol failure by the gate's security branch. The default verdict keeps
+// crediting LOOKS_GOOD only, and every pre-credit gate still applies.
+describe('getSecurityReviewerFinalizationVerdict', () => {
+  const fingerprint = 'v3:' + 'a'.repeat(64)
+  const cleanSecurityReview = {
+    type: 'json',
+    value: [
+      {
+        schemaVersion: 1,
+        verdict: 'NON_BLOCKING',
+        findings: [],
+        coverage: 'covered',
+        snapshotFingerprint: fingerprint,
+        reviewedFiles: ['src/a.ts'],
+      },
+    ],
+  }
+
+  test('credits NON_BLOCKING for a clean security review with matching fingerprint', () => {
+    expect(getSecurityReviewerFinalizationVerdict(cleanSecurityReview)).toBe(
+      'NON_BLOCKING',
+    )
+  })
+
+  test('still credits LOOKS_GOOD for the security-reviewer family', () => {
+    expect(
+      getSecurityReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            schemaVersion: 1,
+            verdict: 'LOOKS_GOOD',
+            findings: [],
+            coverage: 'covered',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: ['src/a.ts'],
+          },
+        ],
+      }),
+    ).toBe('LOOKS_GOOD')
+  })
+
+  test('never credits a BLOCKING verdict', () => {
+    expect(
+      getSecurityReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            schemaVersion: 1,
+            verdict: 'BLOCKING',
+            findings: ['real blocker'],
+            coverage: 'covered',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: ['src/a.ts'],
+          },
+        ],
+      }),
+    ).toBe('')
+  })
+
+  test('missing coverage still blocks finalization even with NON_BLOCKING', () => {
+    expect(
+      getSecurityReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            schemaVersion: 1,
+            verdict: 'NON_BLOCKING',
+            findings: [],
+            coverage: 'missing',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: ['src/a.ts'],
+          },
+        ],
+      }),
+    ).toBe('')
+  })
+
+  test('the default finalization verdict still rejects a NON_BLOCKING entry', () => {
+    expect(getReviewerFinalizationVerdict(cleanSecurityReview)).toBe('')
   })
 })

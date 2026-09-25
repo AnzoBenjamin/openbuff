@@ -1357,6 +1357,10 @@ export type MemoryExportOutcome = z.infer<typeof MemoryExportOutcomeSchema>
  * event-envelope variant: it is carried on the live turn stream only and is
  * never persisted to the memory-v2 event store, so the store schemaVersion
  * stays 2 while this receipt is versioned independently at 1.
+ *
+ * M2-T3: `conceptExpanded` defaults to 0 so producers emitting the original
+ * v1 shape (before this field existed) still parse — closing the unversioned
+ * v1 drift backward-compatibly instead of bumping the version.
  */
 export const MemoryReuseReceiptV1Schema = z
   .object({
@@ -1368,7 +1372,7 @@ export const MemoryReuseReceiptV1Schema = z
     recordsServed: z.number().int().nonnegative(),
     gapsRemaining: z.number().int().nonnegative(),
     recordedDecisions: z.number().int().nonnegative(),
-    conceptExpanded: z.number().int().nonnegative(),
+    conceptExpanded: z.number().int().nonnegative().default(0),
     byTool: z
       .array(
         z.object({

@@ -55,6 +55,12 @@ export const agentFindingSchema = z
     text: z.string().min(1),
     files: z.array(z.string().min(1)),
     snapshotFingerprint: z.string().min(1),
+    // Q4-3 (gate-robustness fix): the reviewer family that reported the
+    // finding (code-reviewer / security-reviewer / a specialist agent type).
+    // Optional for legacy envelopes; when present it lets repair-progress
+    // reconciliation scope `findingsAddressed` to the OWNING family instead
+    // of accepting any family's id.
+    reviewer: z.string().min(1).optional(),
   })
   .strict()
 
@@ -185,6 +191,21 @@ export const agentReceiptSchema = z
         percentOfWindow: z.number().int().min(0).max(100).optional(),
         compactionCount: z.number().int().min(0).optional(),
       })
+      .optional(),
+    /**
+     * Compact reviewer attestation core attached by the runtime so the gate's
+     * walker can attest even when the full structured result payload was
+     * truncated in transit; additive + optional so every existing receipt
+     * stays valid.
+     */
+    review: z
+      .object({
+        verdict: z.enum(['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING']),
+        snapshotFingerprint: z.string().optional(),
+        reviewedFiles: z.array(z.string()).optional(),
+        coverage: z.enum(['covered', 'missing', 'n/a']).optional(),
+      })
+      .strict()
       .optional(),
   })
   .strict()

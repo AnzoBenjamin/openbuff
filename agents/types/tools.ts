@@ -959,6 +959,7 @@ export interface SpawnAgentsParams {
             text: string
             files: string[]
             snapshotFingerprint: string
+            reviewer?: string
           }[]
           permissions: {
             readablePaths: string[]

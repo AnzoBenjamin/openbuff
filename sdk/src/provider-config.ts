@@ -12,6 +12,8 @@ import { getSystemProcessEnv } from './env'
 import type { FileChangeHook } from './tools/file-change-hooks'
 
 export const PROVIDER_CONFIG_ENV_VAR = 'OPENBUFF_PROVIDER_CONFIG'
+export const OPENBUFF_TRUST_ANCESTOR_CONFIG_ENV_VAR =
+  'OPENBUFF_TRUST_ANCESTOR_CONFIG'
 const PROVIDER_CONFIG_FILE_NAME = 'openbuff.json'
 const GLOBAL_PROVIDER_CONFIG_FILE_NAME = 'provider-config.json'
 
@@ -1020,8 +1022,7 @@ export function getAncestorProviderConfigPaths(startDir: string): string[] {
   // root, which is always below home, so this bound preserves real use cases
   // while closing the unbounded-to-filesystem-root walk.
   const home = os.homedir()
-  const trustAncestorConfig =
-    (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
+  const trustAncestorConfig = isAncestorTrustEnabled()
   const depthCeiling = trustAncestorConfig
     ? Number.MAX_SAFE_INTEGER
     : MAX_ANCESTOR_SCAN_DEPTH
@@ -1045,6 +1046,75 @@ export function getAncestorProviderConfigPaths(startDir: string): string[] {
   return paths
 }
 
+function isAncestorTrustEnabled(): boolean {
+  return (
+    (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
+  )
+}
+
+/**
+ * Classify a provider config file path for the ancestor-config trust gate
+ * (M1-T3 credential-exfiltration vector). Trusted sources are the project
+ * (at/under `projectRoot`), the global openbuff config directory (user-owned,
+ * not repository-controlled), and the explicit OPENBUFF_PROVIDER_CONFIG
+ * override. Everything else — notably any ancestor directory ABOVE the
+ * project — is untrusted: an `openbuff.json` there can route API requests to
+ * attacker-controlled endpoints and exfiltrate env-var secrets via apiKeyEnv.
+ * Exported for tests; containment uses resolved-prefix + path.sep so a sibling
+ * directory sharing the prefix (`<root>-evil`) is never trusted.
+ */
+export function isTrustedProviderConfigPath(
+  configPath: string,
+  options: { projectRoot: string; explicitConfigPath?: string },
+): boolean {
+  const resolved = path.resolve(configPath)
+  const trustedRoots: string[] = [path.resolve(options.projectRoot)]
+  trustedRoots.push(
+    ...getOpenbuffConfigDirs().map((configDir) => path.resolve(configDir)),
+  )
+  if (options.explicitConfigPath) {
+    trustedRoots.push(path.resolve(options.explicitConfigPath))
+  }
+  return trustedRoots.some(
+    (trustedRoot) =>
+      resolved === trustedRoot || resolved.startsWith(trustedRoot + path.sep),
+  )
+}
+
+/**
+ * Fail-closed strip for untrusted ancestor fragments (M1-T3): remove every
+ * provider that declares a truthy `apiKeyEnv` from the FRAGMENT's providers
+ * before it reaches mergeProviderConfigs. Only apiKeyEnv providers are
+ * removed — routes/models for trusted providers in the same fragment still
+ * merge — because a provider sourced from a config outside the project can
+ * route requests to attacker-controlled endpoints and exfiltrate the
+ * env-var secret. Returns the stripped provider ids and their env-var names
+ * for the diagnostic. Safe to mutate the fragment: readProviderConfigFile
+ * returns a freshly parsed result (its per-call cache is not shared across
+ * load invocations).
+ */
+function stripApiKeyEnvProvidersFromFragment(
+  fragment: ProviderConfigLoadResult,
+): { ids: string[]; envVarNames: string[] } {
+  const providers = fragment.config.providers
+  if (!providers) return { ids: [], envVarNames: [] }
+  const ids: string[] = []
+  const envVarNames: string[] = []
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (
+      provider &&
+      typeof provider === 'object' &&
+      'apiKeyEnv' in provider &&
+      provider.apiKeyEnv
+    ) {
+      delete providers[providerId]
+      ids.push(providerId)
+      envVarNames.push(String(provider.apiKeyEnv))
+    }
+  }
+  return { ids, envVarNames }
+}
+
 /**
  * Warn when a provider that sources its API key from an env var was loaded
  * from a config file outside the project root. An ancestor `openbuff.json`
@@ -1059,6 +1129,13 @@ function warnIfAncestorConfigHasApiKeyEnv(
   sourceFilePaths: string[],
   cwd: string,
 ): void {
+  // Honor this function's own advertised opt-out: with the trust flag set the
+  // user has explicitly acknowledged ancestor apiKeyEnv providers, so the
+  // warning must not fire. (It previously warned unconditionally even though
+  // its message pointed at this exact flag.)
+  if (isAncestorTrustEnabled()) {
+    return
+  }
   const projectRoot = path.resolve(cwd)
   const ancestorPaths = sourceFilePaths.filter((p) => {
     const resolved = path.resolve(p)
@@ -1223,17 +1300,27 @@ function resolveProviderConfigDependencyPaths(
 
 /**
  * Build a cache key that changes whenever the set of resolved config paths,
- * expanded fragment paths/directories, any of their mtimes, or the explicit
- * env-var override changes. Missing files/directories contribute a sentinel so
+ * expanded fragment paths/directories, any of their mtimes, the explicit
+ * env-var override, or the OPENBUFF_TRUST_ANCESTOR_CONFIG opt-in changes. Missing
+ * files/directories contribute a sentinel so
  * that newly-created configs or openbuff.d fragments invalidate the cache.
  */
 function buildProviderConfigCacheKey(
   configPaths: string[],
   explicitConfigPath: string | undefined,
 ): string {
-  const parts: string[] = explicitConfigPath
-    ? [`env=${explicitConfigPath}`]
-    : []
+  // The ancestor-trust opt-in changes whether apiKeyEnv providers are
+  // stripped from untrusted ancestor fragments, so it must be part of the
+  // key: otherwise toggling it mid-process serves a stale cached result and
+  // can bypass the fail-closed gate.
+  const parts: string[] = [
+    `trustAncestorConfig=${
+      getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? ''
+    }`,
+  ]
+  if (explicitConfigPath) {
+    parts.push(`env=${explicitConfigPath}`)
+  }
   const dependencyPaths = resolveProviderConfigDependencyPaths(
     configPaths,
     explicitConfigPath,
@@ -1295,6 +1382,34 @@ export function loadProviderConfigSync(
 
     try {
       const parsedConfig = readProviderConfigFile(configPath)
+      // Fail-closed trust gate (M1-T3): an apiKeyEnv provider declared by a
+      // config outside the project (an ancestor directory above cwd) can
+      // route requests to attacker-controlled endpoints and exfiltrate
+      // env-var secrets. Strip such providers from the FRAGMENT before the
+      // merge (stripping after the merge could not attribute providers to
+      // files) unless the user opted in via OPENBUFF_TRUST_ANCESTOR_CONFIG=1.
+      // Project configs, global config-dir configs, and the explicit
+      // OPENBUFF_PROVIDER_CONFIG override are always trusted.
+      if (
+        !isTrustedProviderConfigPath(configPath, {
+          projectRoot: process.cwd(),
+          explicitConfigPath,
+        }) &&
+        !isAncestorTrustEnabled()
+      ) {
+        const stripped = stripApiKeyEnvProvidersFromFragment(parsedConfig)
+        if (stripped.ids.length > 0) {
+          diagnostics.push({
+            filePath: configPath,
+            message:
+              `apiKeyEnv provider(s) ${stripped.ids.join(', ')} ` +
+              `(apiKeyEnv: ${stripped.envVarNames.join(', ')}) ignored: ` +
+              `providers from configs outside the project can route requests ` +
+              `to untrusted endpoints and exfiltrate env-var secrets. ` +
+              `Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to trust this config.`,
+          })
+        }
+      }
       config = mergeProviderConfigs(config, parsedConfig.config)
       sourceFilePaths.push(...parsedConfig.sourceFilePaths)
       sourceFiles = mergeSourceFiles(
@@ -1970,9 +2085,6 @@ export const OPENCODE_GO_RESPONSES_MODELS = [
   'muse-spark-1.3-contributor',
   'muse-spark-1.2-contributor',
 ] as const
-
-// Backwards-compat alias: previously a single flat list mixing protocols.
-const OPENCODE_GO_MODELS = [...OPENCODE_GO_CHAT_MODELS] as const
 
 const OPENAI_API_MODELS = [
   'gpt-5.5',

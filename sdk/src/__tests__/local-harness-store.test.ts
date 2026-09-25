@@ -167,4 +167,176 @@ describe('LocalHarnessStore', () => {
     ).toHaveLength(1)
     expect(store.read('repo-1', 'tasks', 'task-1')?.revision).toBe(1)
   })
+
+  test('lock reclaim verifies the recorded owner is dead, not just stale mtime', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-harness-lock-'))
+    roots.push(root)
+    const store = new LocalHarnessStore(root)
+    const internal = store as unknown as {
+      isFilesystemLockOwnerDead: (ownerFilePath: string) => boolean
+    }
+    const ownerPath = path.join(root, 'kind.lock', 'owner.json')
+    fs.mkdirSync(path.dirname(ownerPath), { recursive: true })
+    const writeOwner = (owner: Record<string, unknown>) => {
+      fs.writeFileSync(ownerPath, JSON.stringify(owner))
+    }
+
+    // A lock whose recorded owner is this live process must not be
+    // reclaimable on mtime alone: this is the slow-holder steal race.
+    writeOwner({ pid: process.pid, acquiredAt: Date.now() })
+    expect(internal.isFilesystemLockOwnerDead(ownerPath)).toBe(false)
+
+    // A genuinely dead owner (an exited child process) is safe to reclaim.
+    const dead = spawn(process.execPath, ['-e', ''])
+    const deadPid = dead.pid!
+    await new Promise<void>((resolve) => dead.on('close', () => resolve()))
+    writeOwner({ pid: deadPid, acquiredAt: Date.now() })
+    expect(internal.isFilesystemLockOwnerDead(ownerPath)).toBe(true)
+
+    // A malformed owner record falls back to reclaimable so a corrupt lock
+    // can still be recovered.
+    fs.writeFileSync(ownerPath, 'not json')
+    expect(internal.isFilesystemLockOwnerDead(ownerPath)).toBe(true)
+  })
+
+  test('release is ownership-verified: a stale holder does not delete a stolen lock', () => {
+    const root = fs.mkdtempSync(path.join(
+      os.tmpdir(),
+      'openbuff-harness-lock2-',
+    ))
+    roots.push(root)
+    const store = new LocalHarnessStore(root)
+    const lockPath = path.join(root, 'repo-1', 'approvals.lock')
+
+    store.withKindLock('repo-1', 'approvals', () => {
+      // Simulate a lock steal inside the critical section: the owner record
+      // now belongs to the new owner, not to this holder.
+      fs.writeFileSync(
+        path.join(lockPath, 'owner.json'),
+        JSON.stringify({
+          pid: process.pid,
+          acquiredAt: Date.now(),
+          token: 'foreign-owner-token',
+        }),
+      )
+    })
+
+    // The stale holder's release must leave the new owner's lock intact
+    // instead of deleting it out from under them.
+    expect(fs.existsSync(lockPath)).toBe(true)
+    expect(
+      JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')),
+    ).toMatchObject({ token: 'foreign-owner-token' })
+  })
+
+  test('reclaim deletes the lock dir only when the displaced owner is still dead', async () => {
+    const root = fs.mkdtempSync(path.join(
+      os.tmpdir(),
+      'openbuff-harness-lock3-',
+    ))
+    roots.push(root)
+    const store = new LocalHarnessStore(root)
+    const internal = store as unknown as {
+      reclaimStaleFilesystemLock: (lockPath: string) => boolean
+    }
+    const lockPath = path.join(root, 'repo-1', 'approvals.lock')
+
+    // A lock dir whose recorded owner is this live process must survive the
+    // reclaim even when the caller already judged the lock stale: this is the
+    // competing-waiter re-acquire race.
+    fs.mkdirSync(lockPath, { recursive: true })
+    fs.writeFileSync(
+      path.join(lockPath, 'owner.json'),
+      JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: 'live' }),
+    )
+    expect(internal.reclaimStaleFilesystemLock(lockPath)).toBe(false)
+    expect(fs.existsSync(lockPath)).toBe(true)
+    expect(
+      JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')),
+    ).toMatchObject({ token: 'live' })
+    // No displaced scratch copies of the live lock remain.
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.reclaim.')),
+    ).toEqual([])
+
+    // A genuinely dead owner is reclaimable at delete time.
+    const dead = spawn(process.execPath, ['-e', ''])
+    const deadPid = dead.pid!
+    await new Promise<void>((resolve) => dead.on('close', () => resolve()))
+    fs.writeFileSync(
+      path.join(lockPath, 'owner.json'),
+      JSON.stringify({ pid: deadPid, acquiredAt: Date.now(), token: 'dead' }),
+    )
+    expect(internal.reclaimStaleFilesystemLock(lockPath)).toBe(true)
+    expect(fs.existsSync(lockPath)).toBe(false)
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.reclaim.')),
+    ).toEqual([])
+  })
+
+  test('reclaim removes the displaced scratch lock dir when the restore races a newer waiter', () => {
+    const root = fs.mkdtempSync(path.join(
+      os.tmpdir(),
+      'openbuff-harness-lock4-',
+    ))
+    roots.push(root)
+    const store = new LocalHarnessStore(root)
+    const internal = store as unknown as {
+      reclaimStaleFilesystemLock: (lockPath: string) => boolean
+    }
+    const lockPath = path.join(root, 'repo-1', 'approvals.lock')
+    // A live owner holds the lock when this waiter's reclaim displaces it, so
+    // the reclaim takes the restore path instead of deleting.
+    fs.mkdirSync(lockPath, { recursive: true })
+    fs.writeFileSync(
+      path.join(lockPath, 'owner.json'),
+      JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: 'live' }),
+    )
+
+    // Simulate a newer waiter re-acquiring the lock path between the
+    // displacement and the restore: the restore rename fails atomically and
+    // the newer waiter's own lock dir is in place.
+    const originalRename = fs.renameSync
+    fs.renameSync = ((from: string, to: string) => {
+      if (to === lockPath) {
+        fs.mkdirSync(lockPath, { recursive: true })
+        fs.writeFileSync(
+          path.join(lockPath, 'owner.json'),
+          JSON.stringify({
+            pid: process.pid,
+            acquiredAt: Date.now(),
+            token: 'newer-waiter',
+          }),
+        )
+        const error = new Error(
+          'EEXIST: simulated newer waiter holds the lock path',
+        ) as NodeJS.ErrnoException
+        error.code = 'EEXIST'
+        throw error
+      }
+      return originalRename(from, to)
+    }) as typeof fs.renameSync
+    let reclaimed: boolean
+    try {
+      reclaimed = internal.reclaimStaleFilesystemLock(lockPath)
+    } finally {
+      fs.renameSync = originalRename
+    }
+    expect(reclaimed).toBe(false)
+
+    // The newer waiter's lock survived...
+    expect(
+      JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')),
+    ).toMatchObject({ token: 'newer-waiter' })
+    // ...and the losing waiter left no `.reclaim.*` scratch dirs behind.
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.reclaim.')),
+    ).toEqual([])
+  })
 })

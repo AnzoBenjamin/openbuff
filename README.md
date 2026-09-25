@@ -197,7 +197,13 @@ We ❤️ contributions from the community - whether you're fixing bugs, tweakin
 
 ### Running Tests
 
-To run the test suite:
+To run the test suite from the repository root:
+
+```bash
+bun run test
+```
+
+For a fast per-package loop (for example, CLI tests only):
 
 ```bash
 cd cli
@@ -218,7 +224,7 @@ wsl --install
 sudo apt-get install tmux
 ```
 
-See [cli/src/**tests**/README.md](cli/src/__tests__/README.md) for comprehensive testing documentation.
+See [`cli/src/__tests__/README.md`](cli/src/__tests__/README.md) for comprehensive testing documentation.
 
 Some ways you can help:
 

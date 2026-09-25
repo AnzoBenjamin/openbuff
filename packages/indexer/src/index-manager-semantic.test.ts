@@ -7,6 +7,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { IndexManager } from './index-manager'
 
 import type { EmbedFn } from './semantic'
+import type { MetadataIndex } from './types'
 
 const VOCAB = ['auth', 'login', 'token', 'payment', 'invoice', 'charge']
 const fakeEmbed: EmbedFn = async (texts) =>
@@ -241,5 +242,52 @@ describe('IndexManager semantic integration', () => {
 
     expect(defaultAuthScore).toBeGreaterThan(0)
     expect(zeroAuthScore).toBeLessThan(defaultAuthScore)
+  })
+
+  test('queryBlended pins semantic-only metadata to the pre-await snapshot', async () => {
+    const root = makeProject()
+    // Armed just before the query so the embed call inside queryBlended's
+    // semantic search simulates a concurrent refresh swapping this.index
+    // mid-await (reliability finding queryblended-mixed-snapshot-metadata).
+    let swapArmed = false
+    let internal!: { index: MetadataIndex }
+    const embed: EmbedFn = async (texts) => {
+      if (swapArmed) {
+        swapArmed = false
+        const previous = internal.index
+        internal.index = {
+          ...previous,
+          builtAt: previous.builtAt + 1,
+          files: {
+            ...previous.files,
+            'src/payment.ts': {
+              ...previous.files['src/payment.ts']!,
+              hash: 'refreshed-payment-hash',
+            },
+          },
+        }
+      }
+      return fakeEmbed(texts)
+    }
+    const mgr = IndexManager.getInstance(
+      root,
+      { semantic: { enabled: true } },
+      embed,
+    )
+    await mgr.waitUntilReady(10_000)
+    internal = mgr as unknown as { index: MetadataIndex }
+    const originalPaymentHash = internal.index.files['src/payment.ts']!.hash
+    const builtAtBefore = internal.index.builtAt
+
+    swapArmed = true
+    const blended = await mgr.queryBlended('auth repayment', { limit: 5 })
+
+    // The semantic-only hit's metadata must come from the snapshot the
+    // lexical half ran against, not from the concurrently swapped index.
+    const payment = blended.results.find((r) => r.path === 'src/payment.ts')
+    expect(payment).toBeDefined()
+    expect(payment?.indexedHash).toBe(originalPaymentHash)
+    // Snapshot identity must also stay consistent with the lexical results.
+    expect(blended.snapshot?.builtAt).toBe(builtAtBefore)
   })
 })

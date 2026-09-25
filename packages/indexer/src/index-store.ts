@@ -15,12 +15,28 @@ const SEMANTIC_VECTOR_FILE = 'semantic-vectors.json'
 const SEMANTIC_VECTOR_VERSION = '3'
 const LEGACY_SEMANTIC_VECTOR_VERSIONS = new Set(['1', '2'])
 const MAX_SEMANTIC_FINGERPRINTS = 4
+/**
+ * Union-merge retention bound (reliability finding
+ * semantic-vector-union-merge-unbounded-growth): beyond the vectors for the
+ * current index snapshot, at most this many carried-over embedding hashes
+ * survive a save. Without a bound the per-fingerprint union-merge retained
+ * every embeddingHash ever written, so the on-disk vector cache grew
+ * monotonically with the project's cumulative edit history (vectors for
+ * deleted files and superseded file revisions were never pruned).
+ */
+export const MAX_CARRIED_SEMANTIC_VECTORS = 1_024
 export const MAX_INDEX_AGE_MS = 5 * 60 * 1000 // 5 minutes
 const DEFAULT_CACHE_DIR = '.codebuff-index'
 const OWNER_FILE = '.openbuff-index-owner'
 const LOCK_FILE = '.openbuff-index.lock'
 const LOCK_TIMEOUT_MS = 10_000
 const STALE_LOCK_MS = 5 * 60_000
+/**
+ * The lock holder touches the lock file's mtime at this interval so a
+ * slow-but-live writer (large serialize + fsync) is never age-reclaimed
+ * mid-operation. Must be well under STALE_LOCK_MS.
+ */
+const LOCK_HEARTBEAT_MS = 30_000
 
 /**
  * P8.6b: whether saveIndex may side-effect-write `.git/info/exclude`. Left
@@ -207,6 +223,7 @@ export async function saveSemanticVectors(
   fingerprint: string,
   vectors: FileVector[],
   cacheDir = DEFAULT_CACHE_DIR,
+  options: { expectedUpdatedAt?: number } = {},
 ): Promise<void> {
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
@@ -219,14 +236,58 @@ export async function saveSemanticVectors(
     const existing =
       (await readSemanticVectorCache(projectRoot, cacheDir)) ??
       emptySemanticVectorCache(projectRoot)
+    const currentEntry = existing.fingerprints[fingerprint]
+    // Generation CAS (mirrors saveIndex's expectedBuiltAt): when the caller
+    // pins the fingerprint generation it observed, a parallel writer that
+    // already advanced the generation wins and this stale write is dropped
+    // instead of clobbering it.
+    if (
+      currentEntry &&
+      options.expectedUpdatedAt !== undefined &&
+      currentEntry.updatedAt !== options.expectedUpdatedAt
+    ) {
+      return
+    }
+    // Union-merge over the entry currently on disk so a writer that raced
+    // the lock cannot erase vectors for embedding hashes it never observed.
+    // Bounded merge: vectors for the current index always win, and only the
+    // most recent MAX_CARRIED_SEMANTIC_VECTORS carried-over hashes survive,
+    // so vectors for deleted files and superseded file revisions are pruned
+    // as the index advances instead of accumulating forever (reliability
+    // finding semantic-vector-union-merge-unbounded-growth).
+    const savedHashes = new Set<string>()
+    for (const entry of vectors) {
+      if (entry.embeddingHash && isValidVector(entry.vector)) {
+        savedHashes.add(entry.embeddingHash)
+      }
+    }
+    // Carried-over vectors first, in their on-disk (insertion) order, so the
+    // merged entry's key order stays stable across saves and callers that
+    // inspect loadSemanticVectors see existing hashes before newly added
+    // ones.
+    const carried: Array<[string, number[]]> = []
+    for (const [hash, vector] of Object.entries(currentEntry?.vectors ?? {})) {
+      if (!savedHashes.has(hash)) carried.push([hash, vector])
+    }
+    const dropped = Math.max(0, carried.length - MAX_CARRIED_SEMANTIC_VECTORS)
     const byHash: Record<string, number[]> = {}
+    for (let i = dropped; i < carried.length; i++) {
+      byHash[carried[i]![0]] = carried[i]![1]
+    }
+    // The current write's vectors land last but still win: the loop above
+    // only fills hashes the current write never observed.
     for (const entry of vectors) {
       if (entry.embeddingHash && isValidVector(entry.vector)) {
         byHash[entry.embeddingHash] = entry.vector
       }
     }
     existing.fingerprints[fingerprint] = {
-      updatedAt: Date.now(),
+      // Strictly advance the generation: when two writes land in the same
+      // millisecond, a raw Date.now() would leave the generation unchanged
+      // and the expectedUpdatedAt CAS could never detect the second writer
+      // as stale. Bumping past the previous value keeps every successful
+      // write observationally distinct for the CAS.
+      updatedAt: Math.max(Date.now(), (currentEntry?.updatedAt ?? 0) + 1),
       vectors: byHash,
     }
 
@@ -245,10 +306,36 @@ async function assertCacheOwnership(dir: string): Promise<void> {
       (entry) =>
         entry === INDEX_FILE ||
         entry === SEMANTIC_VECTOR_FILE ||
-        entry === CHUNKS_FILE,
+        entry === CHUNKS_FILE ||
+        // The lock file a crashed holder left behind and the
+        // `.release.*`/`.reclaim.*` scratch files a defensive release/reclaim
+        // restore race can leak are OUR artifacts, not foreign content: a
+        // legacy cache dir (no owner.json) must not be permanently bricked
+        // with 'Refusing to use non-owned index cache directory' by one of
+        // them (reliability finding
+        // reclaim-scratch-leak-bricks-legacy-cache-dir).
+        entry === LOCK_FILE ||
+        entry.startsWith('.release.') ||
+        entry.startsWith('.reclaim.'),
     )
     if (entries.length > 0 && !entries.includes(OWNER_FILE) && !legacyOwned) {
       throw new Error(`Refusing to use non-owned index cache directory: ${dir}`)
+    }
+    // Best-effort sweep of our old scratch artifacts (same finding): entries
+    // older than the stale-lock bound cannot belong to a live operation.
+    for (const entry of entries) {
+      if (!entry.startsWith('.release.') && !entry.startsWith('.reclaim.')) {
+        continue
+      }
+      const scratchPath = path.join(dir, entry)
+      try {
+        const stat = await fs.promises.stat(scratchPath)
+        if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
+          await fs.promises.rm(scratchPath, { force: true })
+        }
+      } catch {
+        // Vanished or unreadable: nothing to sweep.
+      }
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -660,38 +747,115 @@ async function withCacheLock<T>(
   const lockPath = path.join(dir, LOCK_FILE)
   const deadline = Date.now() + LOCK_TIMEOUT_MS
 
+  // Release a lock we verifiably own: clear the heartbeat, close the open
+  // handle, and remove the lock file only when the atomically displaced
+  // bytes still hold our token (see releaseOwnedLock below). Shared by
+  // every exit path below — the critical section, a failed owner-token
+  // verification, and an error during lock initialization — so no path can
+  // leak the 30s heartbeat timer or the open file handle, and the
+  // just-created lock file is always released by the path that created it
+  // (reliability finding withcachelock-verify-continue-skips-release).
+  const release = async (
+    heartbeat: ReturnType<typeof setInterval>,
+    handle: fs.promises.FileHandle,
+    ownerToken: string,
+  ): Promise<void> => {
+    clearInterval(heartbeat)
+    await handle.close().catch(() => {})
+    try {
+      await releaseOwnedLock(lockPath, ownerToken)
+    } catch {
+      // A stale-lock recovery may already have removed it.
+    }
+  }
+
   while (true) {
     try {
       const handle = await fs.promises.open(lockPath, 'wx')
       const ownerToken = `${process.pid}:${randomUUID()}`
+      // Heartbeat: keep the lock mtime fresh while the operation runs so a
+      // slow-but-live holder is not reclaimed by the STALE_LOCK_MS age
+      // heuristic (see the EEXIST branch below).
+      const heartbeat = setInterval(() => {
+        // Token-verified touch (reliability finding
+        // heartbeat-utimes-touches-displaced-lock): clearInterval in release()
+        // cannot cancel a utimes already in flight, and a tick that races our
+        // release and a competitor's re-acquire would refresh the NEW owner's
+        // lock mtime, extending its apparent freshness and delaying
+        // legitimate age-based reclaim. Verify the lock still holds OUR token
+        // immediately before (and after) touching so an in-flight tick that
+        // lost the lock is a no-op. Non-throwing on ENOENT.
+        void fs.promises
+          .readFile(lockPath, 'utf8')
+          .then((content) => {
+            if (!content.startsWith(`${ownerToken}\n`)) return
+            const now = new Date()
+            return fs.promises.utimes(lockPath, now, now).catch(() => {})
+          })
+          .catch(() => {})
+      }, LOCK_HEARTBEAT_MS)
+      // unref the heartbeat: a wedged operation must not keep the event loop
+      // alive indefinitely via this timer alone (reliability finding
+      // heartbeat-timer-pinned-to-operation).
+      heartbeat.unref?.()
+      // Phase 1: write our token and verify it is verifiably on disk. The
+      // finally releases the heartbeat, the handle, and the just-created
+      // lock file whenever the phase does NOT end acquired — including the
+      // failed-verification path, whose `continue` below can no longer skip
+      // cleanup (reliability finding withcachelock-verify-continue-skips-release).
+      let acquired = false
       try {
         await handle.writeFile(`${ownerToken}\n${Date.now()}\n`, 'utf8')
+        // Close the create-vs-owner-write window (reliability finding
+        // withcachelock-lockfile-open-race): a waiter that snapshotted the
+        // previous dead owner's content could reclaim between our 'wx'
+        // create and this token write. Only run the critical section when
+        // OUR token is verifiably on disk.
+        try {
+          acquired = (
+            await fs.promises.readFile(lockPath, 'utf8')
+          ).startsWith(`${ownerToken}\n`)
+        } catch {
+          acquired = false
+        }
+      } finally {
+        if (!acquired) {
+          await release(heartbeat, handle, ownerToken)
+        }
+      }
+      if (!acquired) continue
+      // Phase 2: the verified critical section. The heartbeat timer and the
+      // handle stay live for the operation and are released exactly once,
+      // whether the operation returns or throws.
+      try {
         return await operation()
       } finally {
-        await handle.close().catch(() => {})
-        try {
-          const currentOwner = await fs.promises.readFile(lockPath, 'utf8')
-          if (currentOwner.startsWith(`${ownerToken}\n`)) {
-            await fs.promises.rm(lockPath, { force: true })
-          }
-        } catch {
-          // A stale-lock recovery may already have removed it.
-        }
+        await release(heartbeat, handle, ownerToken)
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
       try {
+        // Snapshot the lock file once and make every reclaim decision from
+        // that snapshot, so the liveness probe and the age check reason about
+        // the same bytes the reclaim below verifies.
+        const content = await fs.promises.readFile(lockPath, 'utf8')
         const stat = await fs.promises.stat(lockPath)
-        if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
-          await fs.promises.rm(lockPath, { force: true })
-          continue
-        }
-        // Reclaim immediately when the process that created the lock is no
-        // longer alive, so a crashed indexer does not block every build for
-        // the full STALE_LOCK_MS window.
-        if (await isLockOwnerDead(lockPath)) {
-          await fs.promises.rm(lockPath, { force: true })
-          continue
+        // Liveness first: reclaim immediately when the process that created
+        // the lock is no longer alive, so a crashed indexer does not block
+        // every build for the full STALE_LOCK_MS window. The age heuristic
+        // below must never preempt this check — stealing a slow-but-live
+        // writer's lock breaks mutual exclusion mid-operation.
+        const deadOwner = isLockOwnerDead(content)
+        // Age fallback for a live or ambiguous owner: a genuine holder keeps
+        // the mtime fresh via the heartbeat, so this only fires for a
+        // genuinely abandoned lock (e.g. one whose pid cannot be probed).
+        const ageStale = Date.now() - stat.mtimeMs > STALE_LOCK_MS
+        if (deadOwner || ageStale) {
+          // Rename-verified reclaim: the lock is moved aside atomically and
+          // only deleted when the displaced bytes still hold the stale
+          // content judged above, so a competing waiter that already
+          // reclaimed and re-acquired never loses its live lock here.
+          if (await reclaimStaleLock(lockPath, content)) continue
         }
       } catch (statError) {
         if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue
@@ -706,20 +870,16 @@ async function withCacheLock<T>(
 }
 
 /**
- * Determines whether the process that wrote the lock file is no longer alive.
- * The lock's first line is `${pid}:${uuid}` (see withCacheLock). A dead owner
- * lets a crashed indexer's lock be reclaimed immediately instead of waiting
- * out STALE_LOCK_MS. Conservative: any ambiguity (unreadable/empty lock,
- * unparseable pid, our own pid, or a live/foreign process) returns false so a
- * genuinely held lock is never stolen.
+ * Determines whether the process that wrote a lock file is no longer alive.
+ * The lock's first line is `${pid}:${uuid}` (see withCacheLock); `content` is
+ * the caller's snapshot of the file, so the liveness verdict and the
+ * subsequent content-verified reclaim (see {@link reclaimStaleLock}) reason
+ * about the same bytes. A dead owner lets a crashed indexer's lock be
+ * reclaimed immediately instead of waiting out STALE_LOCK_MS. Conservative:
+ * any ambiguity (empty lock, unparseable pid, our own pid, or a live/foreign
+ * process) returns false so a genuinely held lock is never stolen.
  */
-async function isLockOwnerDead(lockPath: string): Promise<boolean> {
-  let content: string
-  try {
-    content = await fs.promises.readFile(lockPath, 'utf8')
-  } catch {
-    return false
-  }
+function isLockOwnerDead(content: string): boolean {
   const firstLine = content.split('\n', 1)[0] ?? ''
   const pidText = firstLine.split(':', 1)[0] ?? ''
   const pid = Number.parseInt(pidText, 10)
@@ -734,6 +894,157 @@ async function isLockOwnerDead(lockPath: string): Promise<boolean> {
     return false
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
+
+/**
+ * Reclaim a stale lock by removing the lock file from its namespace — but
+ * only when it still holds the exact `staleContent` that was judged
+ * reclaimable. Ownership is verified BEFORE the rename (reliability finding
+ * release-owned-lock-displaces-foreign-lock): renaming first would displace
+ * a competing waiter's live lock when the stale snapshot was already
+ * reclaimed and re-acquired, and a third waiter acquiring during the
+ * rename→restore window would leave the displaced live lock destroyed —
+ * two processes in the critical section. Lock content is only ever replaced
+ * via remove+create (never in place), so a read verified as stale cannot be
+ * legitimately replaced between this read and the atomic rename; the rename
+ * therefore displaces exactly the stale bytes. A vanished path (ENOENT)
+ * means another waiter reclaimed it first. The defensive displaced-bytes
+ * check restores unexpected content via link (EEXIST-safe) and never
+ * deletes possibly-live lock bytes. Returns true when the caller may
+ * proceed to (re)acquire.
+ */
+export async function reclaimStaleLock(
+  lockPath: string,
+  staleContent: string,
+): Promise<boolean> {
+  let observed: string
+  try {
+    observed = await fs.promises.readFile(lockPath, 'utf8')
+  } catch {
+    // The lock is gone: another waiter already reclaimed it.
+    return true
+  }
+  if (observed !== staleContent) {
+    // A fresh owner token: the lock was re-acquired after the staleness
+    // snapshot was taken. Never displace a live lock — do not proceed.
+    return false
+  }
+  const displacedPath = `${lockPath}.reclaim.${process.pid}.${randomUUID()}`
+  try {
+    await fs.promises.rename(lockPath, displacedPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Another waiter reclaimed the stale lock between our verified read
+      // and this rename.
+      return true
+    }
+    throw error
+  }
+  let displaced: string
+  try {
+    displaced = await fs.promises.readFile(displacedPath, 'utf8')
+  } catch {
+    // The displaced lock vanished before it could be judged; nothing was
+    // deleted and the lock namespace is free either way.
+    return true
+  }
+  if (displaced !== staleContent) {
+    // Defensive: content changed between the verified read and the rename
+    // without a remove+create (no known code path does this). Restore via
+    // link (EEXIST-safe) and never delete possibly-live lock bytes; a
+    // leaked scratch file is the safe failure mode.
+    try {
+      await fs.promises.link(displacedPath, lockPath)
+      try {
+        await fs.promises.rm(displacedPath, { force: true })
+      } catch {
+        // Our scratch name is gone; the lock survives at lockPath.
+      }
+    } catch {
+      // Lock path occupied by a newer waiter; leave the scratch copy.
+    }
+    return false
+  }
+  try {
+    await fs.promises.rm(displacedPath, { force: true })
+  } catch {
+    // Already gone.
+  }
+  return true
+}
+
+/**
+ * Release a lock we believe we own by deleting the lock file — but only
+ * when the bytes at the lock path still hold `ownerToken`. Ownership is
+ * verified BEFORE the rename (reliability finding
+ * release-owned-lock-displaces-foreign-lock): renaming first would displace
+ * a competing waiter's live lock when our lock was already reclaimed and
+ * re-acquired, and a third waiter acquiring during the rename→restore
+ * window would leave the displaced live lock destroyed. A reclaim that
+ * takes our live lock must first prove our owner pid dead
+ * (isLockOwnerDead), so a read verified as ours cannot be legitimately
+ * replaced between this read and the atomic rename; the rename therefore
+ * displaces exactly our own bytes. Lock content is only ever replaced via
+ * remove+create (never in place). The defensive displaced-bytes check
+ * restores unexpected content via link (EEXIST-safe) and never deletes
+ * possibly-live lock bytes.
+ */
+export async function releaseOwnedLock(
+  lockPath: string,
+  ownerToken: string,
+): Promise<void> {
+  let observed: string
+  try {
+    observed = await fs.promises.readFile(lockPath, 'utf8')
+  } catch {
+    // A stale-lock recovery already removed our lock from the namespace.
+    return
+  }
+  if (!observed.startsWith(`${ownerToken}\n`)) {
+    // Not ours: someone else's live (or stale) lock occupies the path.
+    // Never displace or delete bytes we do not own.
+    return
+  }
+  const displacedPath = `${lockPath}.release.${process.pid}.${randomUUID()}`
+  try {
+    await fs.promises.rename(lockPath, displacedPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Reclaimed between our verified read and the rename.
+      return
+    }
+    throw error
+  }
+  let displaced: string
+  try {
+    displaced = await fs.promises.readFile(displacedPath, 'utf8')
+  } catch {
+    // The displaced lock vanished before it could be judged; nothing was
+    // deleted and the lock namespace is free either way.
+    return
+  }
+  if (!displaced.startsWith(`${ownerToken}\n`)) {
+    // Defensive: content changed between the verified read and the rename
+    // without a remove+create (no known code path does this). Restore via
+    // link (EEXIST-safe) and never delete possibly-live lock bytes; a
+    // leaked scratch file is the safe failure mode.
+    try {
+      await fs.promises.link(displacedPath, lockPath)
+      try {
+        await fs.promises.rm(displacedPath, { force: true })
+      } catch {
+        // Our scratch name is gone; the lock survives at lockPath.
+      }
+    } catch {
+      // Lock path occupied by a newer waiter; leave the scratch copy.
+    }
+    return
+  }
+  try {
+    await fs.promises.rm(displacedPath, { force: true })
+  } catch {
+    // Already gone.
   }
 }
 

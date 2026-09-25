@@ -10,6 +10,7 @@ import {
   isAbortError,
 } from '@codebuff/common/util/error'
 import { serializeCacheDebugCorrelation } from '@codebuff/common/util/cache-debug'
+import { redactSecretValues } from '@codebuff/common/util/redact-secrets'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { type ToolSet } from 'ai'
 import { cloneDeep, mapValues } from 'lodash'
@@ -62,7 +63,10 @@ import {
   getConfirmedAppliedActionsV1,
   isFileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
-import { countTokensJson } from './util/token-counter'
+import {
+  countTokensJson,
+  IncrementalTokenCounter,
+} from './util/token-counter'
 import {
   COMPACTION_NO_PROGRESS_FRACTION,
   DEFAULT_MAX_CONTEXT_TOKENS,
@@ -142,6 +146,126 @@ import type {
 } from '@codebuff/common/util/file'
 
 /**
+ * M1-T5: redact secrets from a message before it reaches a log sink. Handles
+ * BOTH string-shaped content and array-shaped content: text parts carry
+ * tool/file output read during the run (exactly the "secret file contents"
+ * the M1-T5 audit targets), so every text part's text is redacted too. Other
+ * part types carry no raw prompt text and pass through untouched.
+ */
+function redactMessageForLog(message: Message): Message {
+  const { content } = message
+  if (typeof content === 'string') {
+    // Shape-preserving copy: only the string content is rewritten. The union
+    // spread needs the two-step cast TS requires for mixed-content unions.
+    return { ...message, content: redactSecretValues(content) } as unknown as Message
+  }
+  if (!Array.isArray(content)) {
+    return message
+  }
+  const redactedParts = content.map((part) =>
+    part.type === 'text'
+      ? { ...part, text: redactSecretValues(part.text) }
+      : part,
+  )
+  // Shape-preserving copy: only text-part `text` fields are rewritten, so the
+  // runtime message union is unchanged.
+  return { ...message, content: redactedParts } as Message
+}
+
+/**
+ * Validates and normalizes one candidate mutation path into `paths`
+ * (contained-rel-path-only: empty, absolute, drive-rooted, and '..'-escaping
+ * values are rejected — audit shard-runtime-loop: a tool-result payload
+ * echoing such a string must not pollute the mutation ledger).
+ */
+function addSelfMutatedPath(paths: Set<string>, value: unknown): void {
+  if (typeof value !== 'string') return
+  const trimmed = value.trim().replace(/\\/g, '/')
+  if (trimmed.length === 0) return
+  if (trimmed.startsWith('/') || /^[A-Za-z]:/.test(trimmed)) return
+  const isInsideProject = trimmed
+    .split('/')
+    .reduce<number>((depth, segment) => {
+      if (segment === '' || segment === '.') return depth
+      if (segment === '..') return depth - 1
+      return depth + 1
+    }, 0)
+  if (isInsideProject <= 0) return
+  paths.add(trimmed)
+}
+
+/**
+ * Crediting layer for one traversed node: confirmed file-mutation actions,
+ * touchedPaths, changedFiles, and schemaVersion=1 agent receipts feed
+ * addSelfMutatedPath. Shared with the CASE 5 before mirror in
+ * scripts/measure-perf-guards-baseline.ts so before/after rows run identical
+ * crediting work (RF-8 / case5-asymmetric-speedup-ratio) and only the
+ * traversal guard differs.
+ */
+export function creditSelfMutatedPathValue(
+  paths: Set<string>,
+  value: unknown,
+): void {
+  // Keep a non-narrowed plain object view. Type-guard file mutations on
+  // `value` (unknown) so TS does not collapse `plain` to FileMutationResultV1
+  // and drop agent-receipt property access below.
+  const plain: Record<string, unknown> = value as Record<string, unknown>
+
+  if (isFileMutationResultV1(value)) {
+    for (const action of getConfirmedAppliedActionsV1(value)) {
+      addSelfMutatedPath(paths, action.path)
+      if (action.action === 'move') {
+        addSelfMutatedPath(paths, action.destinationPath)
+      }
+    }
+  }
+
+  const collectChangedFiles = (changedFiles: unknown) => {
+    if (!Array.isArray(changedFiles)) return
+    for (const item of changedFiles) {
+      if (typeof item === 'string') {
+        addSelfMutatedPath(paths, item)
+      } else if (item && typeof item === 'object') {
+        addSelfMutatedPath(paths, (item as { path?: unknown }).path)
+      }
+    }
+  }
+
+  // Optional touchedPaths → selfMutatedPaths: SYNC terminal/basher dirty
+  // delta and first-settled check_job BACKGROUND settlement dirty delta.
+  if (Array.isArray(plain.touchedPaths)) {
+    for (const p of plain.touchedPaths) addSelfMutatedPath(paths, p)
+  }
+  // Credit top-level changedFiles when already present on tool results.
+  if (Array.isArray(plain.changedFiles)) {
+    collectChangedFiles(plain.changedFiles)
+  }
+
+  // agent-receipt checks use plain.* only (never narrowed FileMutationResultV1)
+  const isAgentReceipt =
+    plain.schemaVersion === 1 &&
+    typeof plain.receiptId === 'string' &&
+    Array.isArray(plain.changedFiles)
+  if (isAgentReceipt) {
+    collectChangedFiles(plain.changedFiles)
+  }
+  if (
+    plain.agentReceipt &&
+    typeof plain.agentReceipt === 'object' &&
+    !Array.isArray(plain.agentReceipt)
+  ) {
+    const receipt = plain.agentReceipt as Record<string, unknown>
+    if (
+      receipt.schemaVersion === 1 &&
+      typeof receipt.receiptId === 'string' &&
+      Array.isArray(receipt.changedFiles)
+    ) {
+      collectChangedFiles(receipt.changedFiles)
+    }
+  }
+}
+
+/**
  * Publish process-owned mutation paths onto agentState so concurrent gate
  * isolation (base2 mid-turn git-status absorption) can credit broker/owned
  * writes without absorbing foreign dirty files.
@@ -164,82 +288,70 @@ export function publishSelfMutatedPaths(params: {
   const existing = agentState.selfMutatedPaths
   const paths = new Set<string>()
 
-  const addPath = (value: unknown) => {
-    if (typeof value !== 'string') return
-    const trimmed = value.trim().replace(/\\/g, '/')
-    if (trimmed.length > 0) paths.add(trimmed)
+  if (Array.isArray(existing)) {
+    for (const path of existing) addSelfMutatedPath(paths, path)
   }
 
-  if (Array.isArray(existing)) {
-    for (const path of existing) addPath(path)
+  // Traversal guard (performance-specialist finding
+  // single-visited-set-shared-across-results): depth > 8 alone cannot bound a
+  // CYCLIC tool-result graph at O(cycle_length × branches) — a self-referencing
+  // object loops forever hit-or-miss with the depth threshold. A plain visited
+  // set bounds the walk but is NOT semantics-preserving: when a shared object
+  // is first reached at a deep depth its subtree is pruned by the depth cap,
+  // and the later shallower reach — which still has budget for that subtree —
+  // is silently skipped, under-collecting paths the unguarded walk finds (the
+  // benchmark shared-graph parity case collected 9 of 19 paths that way).
+  //
+  // A depth-aware memo keeps the bound AND the semantics: each object records
+  // the shallowest depth it has been walked at and is re-walked only when
+  // reached with strictly more remaining budget (a smaller depth). Collection
+  // at a shallower depth is a superset of collection at any deeper one (same
+  // edges, more budget), so the shallowest walk yields exactly the union the
+  // unguarded walk collects, while cyclic re-entry always arrives at a LARGER
+  // depth and is refused. Bounded: at most one walk per object per depth level
+  // instead of one per path.
+  //
+  // The memo is PER-PAYLOAD (cleared between each tool result / tool message):
+  // gate results and messages are conceptually independent subgraphs today, but
+  // if two payloads ever shared object identity (e.g. a receipt object embedded
+  // in two tool results), a step-global memo would silently skip the second
+  // appearance and could change what gets measured. Cycle detection is scoped
+  // to the object graph WITHIN one payload; sharing across payloads is
+  // intentionally re-visited so each payload's mutation evidence is collected
+  // on its own terms.
+  const walkedAtDepth = new Map<unknown, number>()
+
+  const visitPayload = (payload: unknown): void => {
+    walkedAtDepth.clear()
+    visitValue(payload)
   }
 
   const visitValue = (value: unknown, depth = 0): void => {
     if (value == null || depth > 8) return
+    if (typeof value !== 'object') return
+    // Re-walk only on a strictly shallower reach. An equal-depth repeat is a
+    // diamond, not a larger budget: both reaches traverse the identical
+    // subtree at the identical budget, so skipping keeps the union unchanged.
+    // Arrays are memoized here too (they are objects): exempting them left a
+    // shared/self-referential array chain re-walking once per path (depth-capped
+    // but breadth-unbounded, k refs ^ remaining budget) — the residual half of
+    // the single-visited-set-shared-across-results breadth clause.
+    const priorWalkDepth = walkedAtDepth.get(value)
+    if (priorWalkDepth !== undefined && priorWalkDepth <= depth) return
+    walkedAtDepth.set(value, depth)
     if (Array.isArray(value)) {
       for (const item of value) visitValue(item, depth + 1)
       return
     }
-    if (typeof value !== 'object') return
 
-    // Keep a non-narrowed plain object view. Type-guard file mutations on
-    // `value` (unknown) so TS does not collapse `plain` to FileMutationResultV1
-    // and drop agent-receipt property access below.
+    // Non-narrowed plain-object view for traversal (the file-mutation type
+    // guards live in creditSelfMutatedPathValue below).
     const plain: Record<string, unknown> = value as Record<string, unknown>
     if (plain.type === 'json' && 'value' in plain) {
       visitValue(plain.value, depth + 1)
     }
 
-    if (isFileMutationResultV1(value)) {
-      for (const action of getConfirmedAppliedActionsV1(value)) {
-        addPath(action.path)
-        if (action.action === 'move') addPath(action.destinationPath)
-      }
-    }
-
-    const collectChangedFiles = (changedFiles: unknown) => {
-      if (!Array.isArray(changedFiles)) return
-      for (const item of changedFiles) {
-        if (typeof item === 'string') {
-          addPath(item)
-        } else if (item && typeof item === 'object') {
-          addPath((item as { path?: unknown }).path)
-        }
-      }
-    }
-
-    // Optional touchedPaths → selfMutatedPaths: SYNC terminal/basher dirty
-    // delta and first-settled check_job BACKGROUND settlement dirty delta.
-    if (Array.isArray(plain.touchedPaths)) {
-      for (const p of plain.touchedPaths) addPath(p)
-    }
-    // Credit top-level changedFiles when already present on tool results.
-    if (Array.isArray(plain.changedFiles)) {
-      collectChangedFiles(plain.changedFiles)
-    }
-
-    // agent-receipt checks use plain.* only (never narrowed FileMutationResultV1)
-    const isAgentReceipt =
-      plain.schemaVersion === 1 &&
-      typeof plain.receiptId === 'string' &&
-      Array.isArray(plain.changedFiles)
-    if (isAgentReceipt) {
-      collectChangedFiles(plain.changedFiles)
-    }
-    if (
-      plain.agentReceipt &&
-      typeof plain.agentReceipt === 'object' &&
-      !Array.isArray(plain.agentReceipt)
-    ) {
-      const receipt = plain.agentReceipt as Record<string, unknown>
-      if (
-        receipt.schemaVersion === 1 &&
-        typeof receipt.receiptId === 'string' &&
-        Array.isArray(receipt.changedFiles)
-      ) {
-        collectChangedFiles(receipt.changedFiles)
-      }
-    }
+    creditSelfMutatedPathValue(paths, value)
 
     // Shallow nested walk for tool-result envelopes without deep graph cycles.
     for (const nested of Object.values(plain)) {
@@ -250,11 +362,11 @@ export function publishSelfMutatedPaths(params: {
   }
 
   for (const result of toolResults) {
-    visitValue(result.content)
+    visitPayload(result.content)
   }
   for (const message of messages) {
     if (message.role !== 'tool') continue
-    visitValue(message.content)
+    visitPayload(message.content)
   }
 
   const published = [...paths].sort()
@@ -686,10 +798,17 @@ export const runAgentStep = async (
       contextTokenCount: agentState.contextTokenCount,
       // Limit debug-log message history to the most recent 50 messages to
       // avoid MB-sized log lines on long sessions. Reverse so the most recent
-      // message appears first.
-      agentMessages: agentState.messageHistory.slice(-50).reverse(),
-      system,
-      prompt,
+      // message appears first. M1-T5: secrets are redacted from logged prompt
+      // bytes (system prompt embeds shell config contents; transcripts can
+      // carry secret file contents read during the run).
+      agentMessages: agentState.messageHistory
+        .slice(-50)
+        .reverse()
+        .map(redactMessageForLog),
+      system: redactSecretValues(system),
+      // M1-T5: prompt is a string or undefined here (the params type pins it);
+      // array-shaped message content above is redacted per text part.
+      prompt: typeof prompt === 'string' ? redactSecretValues(prompt) : undefined,
       params: spawnParams,
       agentContext,
       systemTokens,
@@ -745,9 +864,15 @@ export const runAgentStep = async (
     let nResponses: string[]
     try {
       nResponses = JSON.parse(responsesString) as string[]
-      if (!Array.isArray(nResponses)) {
-        // Parsed but not an array: degrade to a single response rather than
-        // throwing, so one malformed best-of-N completion can't kill the run.
+      // Audit shard-runtime-loop: Array.isArray alone typed objects/numbers/nulls
+      // as string[] and flowed them into GENERATE_N consumers. Every element
+      // must be a string, else degrade to the single-response fallback.
+      if (
+        !Array.isArray(nResponses) ||
+        !nResponses.every((candidate) => typeof candidate === 'string')
+      ) {
+        // Parsed but not a string array: degrade to a single response rather
+        // than throwing, so one malformed best-of-N completion can't kill the run.
         logger.warn(
           { n: params.n, response: responsesString.slice(0, 50) },
           'Expected JSON array response from LLM for n; got non-array, falling back to single response',
@@ -1862,6 +1987,22 @@ export async function loopAgentSteps(
       }
     }
 
+    // M3-T2: per-turn incremental token accounting (audit shard-runtime-loop
+    // run-agent-step.ts:1947). Each message's serialized token count is
+    // memoized by object reference, so repeated estimateContextTokensLocally
+    // calls (post-programmatic, post-eviction, post-prune) price only NEW or
+    // rewritten messages instead of re-encoding the whole transcript every
+    // time. Memoization keys are weak, so evicted/trimmed references do not
+    // pin anything. One full recount (reset + fresh sum) runs only after a
+    // history-rewriting compaction/trim, whose sites below call
+    // invalidateHistoryAggregate.
+    const incrementalTokenCounter = new IncrementalTokenCounter()
+    const invalidateHistoryAggregate = () => {
+      // History was rewritten (compaction/trim): the next estimate must
+      // recount fully rather than trusting stale per-message memoized counts.
+      incrementalTokenCounter.reset()
+    }
+
     try {
       while (true) {
         totalSteps++
@@ -1941,11 +2082,20 @@ export async function loopAgentSteps(
         // Under progressive tool disclosure, a mid-turn tier unlock rebuilds
         // `tools` below and recomputes this total and the serialized
         // toolDefinitions, so pruning estimates track the live tool surface.
+        //
+        // M3-T2: history tokens are counted incrementally (per-message memo);
+        // only system/tools, which are cache-stable strings/objects, are
+        // recounted here. Behavior and every consumed number are unchanged.
         let systemAndToolsTokens =
           countTokensJson(system) + countTokensJson(toolsForTokenCount)
+        incrementalTokenCounter.setSystemAndToolsTokens(
+          systemAndToolsTokens,
+        )
 
         const estimateContextTokensLocally = () =>
-          countTokensJson(messagesWithStepPrompt) + systemAndToolsTokens
+          incrementalTokenCounter.messagesTokens(
+            messagesWithStepPrompt,
+          ) + systemAndToolsTokens
 
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
         const contextTokensBeforeProgrammatic =
@@ -2143,9 +2293,10 @@ export async function loopAgentSteps(
             EVICTION_KEEP_RECENT_STEPS,
           )
         }
-        const historyTokensBeforeProgrammatic = countTokensJson(
-          historyBeforeProgrammatic,
-        )
+        // M3-T2: incremental accounting — heap allocation for every message in
+        // the transcript was priced fully; only its delta differs now.
+        const historyTokensBeforeProgrammatic =
+          incrementalTokenCounter.messagesTokens(historyBeforeProgrammatic)
         const categoriesBeforeProgrammatic = getContextCategoryTelemetry(
           historyBeforeProgrammatic,
         )
@@ -2337,9 +2488,13 @@ export async function loopAgentSteps(
         )
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
 
-        const historyTokensAfterProgrammatic = countTokensJson(
-          currentAgentState.messageHistory,
-        )
+        // M3-T2: incremental accounting prices any NEW or rewritten
+        // (eviction) messages once and reuses memoized counts for the rest;
+        // semantic/lifecycle telemetry below still keys off the same number.
+        const historyTokensAfterProgrammatic =
+          incrementalTokenCounter.messagesTokens(
+            currentAgentState.messageHistory,
+          )
         let compactedThisIteration = false
         const retainedSemanticMemory = currentAgentState.messageHistory.some(
           (message) =>
@@ -2461,6 +2616,10 @@ export async function loopAgentSteps(
           )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages
+          // History was rewritten by the mechanical trim: the full recount
+          // below starts from a fresh per-message memo (M3-T2 full-recall
+          // point).
+          invalidateHistoryAggregate()
           messagesWithStepPrompt = buildArray(
             ...pruningResult.messages,
             buildCompiledTaskMemoryMessage(currentAgentState),
@@ -2758,7 +2917,10 @@ export async function loopAgentSteps(
             agentId: currentAgentState.agentId,
             runId,
             totalSteps,
-            messageHistory: currentAgentState.messageHistory,
+            // M1-T5: redact secrets — the history can carry secret file reads
+            // and shell-config contents, same as the failure path below.
+            messageHistory:
+              currentAgentState.messageHistory.map(redactMessageForLog),
           },
           'Agent run cancelled by user (abort error)',
         )
@@ -2799,8 +2961,11 @@ export async function loopAgentSteps(
           totalSteps,
           directCreditsUsed: currentAgentState.directCreditsUsed,
           creditsUsed: currentAgentState.creditsUsed,
-          messageHistory: currentAgentState.messageHistory,
-          systemPrompt: system,
+          // M1-T5: redact secrets from the failure-path log (the system prompt
+          // embeds shell config contents; history can carry secret file reads).
+          messageHistory:
+            currentAgentState.messageHistory.map(redactMessageForLog),
+          systemPrompt: redactSecretValues(system),
         },
         'Agent execution failed',
       )

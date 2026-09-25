@@ -107,6 +107,34 @@ describe('orchestration ledger', () => {
     ).toHaveLength(1)
   })
 
+  test('draft events carry a sequence and timestamp in the persisted ledger', () => {
+    const state = getInitialAgentState()
+    const before = Date.now()
+    const ledger = appendOrchestrationEvent({
+      state,
+      event: { type: 'task_claimed', runId: 'run-1', taskId: 'T-1' },
+    })
+    expect(ledger.events).toHaveLength(1)
+    expect(ledger.events[0].sequence).toBe(0)
+    // Default timestamp is minted from the wall clock when the draft omits it.
+    expect(ledger.events[0].timestamp).toBeGreaterThanOrEqual(before)
+  })
+
+  test('sequence grows monotonically across appends on the same ledger', () => {
+    const state = getInitialAgentState()
+    const first = appendOrchestrationEvent({
+      state,
+      event: { type: 'task_claimed', runId: 'run-1', taskId: 'T-1' },
+    })
+    const second = appendOrchestrationEvent({
+      state,
+      event: { type: 'task_claimed', runId: 'run-1', taskId: 'T-2' },
+    })
+    expect(second.events.at(-1)!.sequence).toBeGreaterThan(
+      first.events.at(-1)!.sequence,
+    )
+  })
+
   test('preserves unresolved spawn evidence while bounding the event ledger', () => {
     const state = getInitialAgentState()
     appendOrchestrationEvent({

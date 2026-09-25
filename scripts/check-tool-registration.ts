@@ -27,12 +27,16 @@ interface Check {
   detail?: string
 }
 
-function fileMentions(relativePath: string, needle: string): boolean {
+function fileContent(relativePath: string): string | null {
   try {
-    return readFileSync(join(repoRoot, relativePath), 'utf8').includes(needle)
+    return readFileSync(join(repoRoot, relativePath), 'utf8')
   } catch {
-    return false
+    return null
   }
+}
+
+function fileMentions(relativePath: string, needle: string): boolean {
+  return fileContent(relativePath)?.includes(needle) ?? false
 }
 
 function directoryMentions(relativePath: string, needle: string): boolean {
@@ -51,6 +55,29 @@ function directoryMentions(relativePath: string, needle: string): boolean {
     )
   }
   return visit(root)
+}
+
+/**
+ * Match a real property-key registration for `tool` (e.g. `  write: handler,`
+ * or `{ write:`) rather than any substring ending in `:`. A plain
+ * `fileMentions(path, 'write:')` also matches longer sibling keys like
+ * `overwrite:` and would false-positive the readiness checklist — the exact
+ * failure mode this script exists to catch. Line-level `//` comments are
+ * stripped first so a commented-out registration does not count either.
+ */
+export function sourceRegistersHandlerKey(
+  source: string,
+  tool: string,
+): boolean {
+  const escaped = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const keyRegex = new RegExp(`(^|[\\s{,(])${escaped}\\s*:`)
+  return source
+    .split('\n')
+    .some((line) => {
+      const commentStart = line.indexOf('//')
+      const code = commentStart === -1 ? line : line.slice(0, commentStart)
+      return keyRegex.test(code)
+    })
 }
 
 export function checkTool(tool: string): Check[] {
@@ -73,9 +100,9 @@ export function checkTool(tool: string): Check[] {
     },
     {
       label: 'runtime handler registered in agent-runtime handlers/list.ts',
-      ok: fileMentions(
-        'packages/agent-runtime/src/tools/handlers/list.ts',
-        `${tool}:`,
+      ok: sourceRegistersHandlerKey(
+        fileContent('packages/agent-runtime/src/tools/handlers/list.ts') ?? '',
+        tool,
       ),
       detail: handlerImport,
     },

@@ -106,6 +106,11 @@ import type {
   StatusBarContextUsage,
 } from './utils/sdk-event-handlers'
 import type { ScrollBoxRenderable } from '@opentui/core'
+import {
+  setExitStreamSignal,
+  setQueuedPromptDrain,
+} from './hooks/use-exit-handler'
+import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
 
 export const Chat = ({
   headerContent,
@@ -388,6 +393,28 @@ export const Chat = ({
     activeAgentStreamsRef,
     sendMessageRef,
   })
+
+  // Exit-path queue drain (reliability finding exit-handler-drops-queued-prompts):
+  // the Ctrl-C/SIGINT path exits through use-exit-handler, which has no
+  // access to the queue; register the same drain the /exit command runs so
+  // prompts queued during an active stream persist to session history
+  // instead of being dropped on that path too. The drain body lives in
+  // hooks/helpers/exit-queue-drain.ts so its partial-failure semantics stay
+  // unit-testable.
+  useEffect(() => {
+    setExitStreamSignal(() => abortControllerRef.current?.signal)
+    setQueuedPromptDrain(
+      createQueuedPromptDrainer({
+        pushMessageSnapshot: () => useChatStore.getState().pushMessageSnapshot(),
+        clearQueue,
+        saveToHistory,
+      }),
+    )
+    return () => {
+      setExitStreamSignal(undefined)
+      setQueuedPromptDrain(undefined)
+    }
+  }, [clearQueue, saveToHistory, addToQueue, abortControllerRef])
 
   // M4.3: Context-window usage for the status bar (updated via context_window
   // PrintModeEvent from the agent runtime).

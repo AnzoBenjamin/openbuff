@@ -161,10 +161,13 @@ describe('commander agent', () => {
 
       const result = generator.next()
 
+      // M3-T1: an explicitly omitted timeout falls back to the documented
+      // finite default cap.
       expect(result.value).toEqual({
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
+          timeout_seconds: 300,
         },
       })
     })
@@ -193,6 +196,73 @@ describe('commander agent', () => {
           timeout_seconds: 60,
         },
       })
+    })
+
+    test('defaults to a finite timeout and keeps explicit callers winning', () => {
+      const mockAgentState = createMockAgentState()
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const defaulted = commander.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: { command: 'sleep 10' },
+      })
+      expect(defaulted.next().value).toEqual({
+        toolName: 'run_terminal_command',
+        input: { command: 'sleep 10', timeout_seconds: 300 },
+      })
+
+      // An explicitly passed timeout — including -1 (no timeout) — always
+      // wins over the documented default.
+      const explicit = commander.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: { command: 'sleep 10', timeout_seconds: -1 },
+      })
+      expect(explicit.next().value).toEqual({
+        toolName: 'run_terminal_command',
+        input: { command: 'sleep 10', timeout_seconds: -1 },
+      })
+    })
+
+    test('clamps max_failure_lines when save_full_log is requested', () => {
+      const mockAgentState = createMockAgentState()
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const firstCommandFor = (max_failure_lines?: number): string => {
+        const generator = commander.handleSteps!({
+          agentState: createMockAgentState(),
+          logger: mockLogger as any,
+          params: {
+            command: 'bun test',
+            what_to_summarize: 'test failures',
+            save_full_log: true,
+            ...(max_failure_lines !== undefined ? { max_failure_lines } : {}),
+          },
+        })
+        const first = generator.next().value as {
+          toolName: string
+          input: { command: string }
+        }
+        return first.input.command
+      }
+
+      // M3-T1: NaN/non-finite and negative values are rejected in favor of
+      // the documented default, and a runaway value is capped.
+      expect(firstCommandFor(Number.NaN)).toContain('head -120')
+      expect(firstCommandFor(-5)).toContain('head -1')
+      expect(firstCommandFor(5)).toContain('head -5')
+      expect(firstCommandFor(1_000_000)).toContain('head -1000')
     })
 
     test('yields set_output with raw result when what_to_summarize is not provided', () => {
@@ -257,6 +327,7 @@ describe('commander agent', () => {
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
+          timeout_seconds: 300,
         },
         includeToolCall: false,
       })
@@ -379,6 +450,7 @@ describe('commander agent', () => {
         input: {
           command: 'bun dev',
           process_type: 'BACKGROUND',
+          timeout_seconds: 300,
         },
         includeToolCall: false,
       })

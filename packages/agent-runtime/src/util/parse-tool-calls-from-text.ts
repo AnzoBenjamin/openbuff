@@ -4,6 +4,21 @@ import {
   toolNameParam,
 } from '@codebuff/common/tools/constants'
 import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
+import { escapeRegexForLiteral as escapeRegex } from '@codebuff/common/util/language-profiles'
+
+// Module-level constant: building the extraction RegExp inside
+// parseTextWithToolCalls allocated a fresh RegExp per assistant-text parse in
+// the hot tool-call path. The tag literals are fixed at module load, so the
+// pattern never varies between calls. matchAll requires lastIndex=0 before
+// each run because a 'g'-flagged regex retains lastIndex across uses.
+// Exported as the measurement seam for the CASE 2 after row in
+// scripts/measure-perf-guards-baseline.ts: that row times THIS shipped pattern
+// (after-rows-measure-mirrors / case2-after-row-local-pattern-mirror), never a
+// local rebuild of it.
+export const TOOL_EXTRACTION_PATTERN = new RegExp(
+  `${escapeRegex(startToolTag)}([\\s\\S]*?)${escapeRegex(endToolTag)}`,
+  'gs',
+)
 
 export type ParsedToolCallFromText = {
   type: 'tool_call'
@@ -49,18 +64,19 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
   const segments: ParsedSegment[] = []
 
   // Match <codebuff_tool_call>...</codebuff_tool_call> blocks
-  const toolExtractionPattern = new RegExp(
-    `${escapeRegex(startToolTag)}([\\s\\S]*?)${escapeRegex(endToolTag)}`,
-    'gs',
-  )
+  TOOL_EXTRACTION_PATTERN.lastIndex = 0
 
   let lastIndex = 0
 
-  for (const match of text.matchAll(toolExtractionPattern)) {
-    // Add any text before this tool call
+  for (const match of text.matchAll(TOOL_EXTRACTION_PATTERN)) {
+    // Add any text before this tool call. The raw slice is preserved so leading
+    // indentation / blank lines / fenced-code boundaries the model emitted are
+    // not silently dropped from the transcript (audit shard-runtime-loop
+    // parse-tool-calls-from-text.ts:62). Only the presence check keeps its
+    // trim; the emitted segment is the untrimmed slice.
     if (match.index !== undefined && match.index > lastIndex) {
-      const textBefore = text.slice(lastIndex, match.index).trim()
-      if (textBefore) {
+      const textBefore = text.slice(lastIndex, match.index)
+      if (textBefore.trim() !== '') {
         segments.push({ type: 'text', text: textBefore })
       }
     }
@@ -117,8 +133,8 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
 
   // Add any remaining text after the last tool call
   if (lastIndex < text.length) {
-    const textAfter = text.slice(lastIndex).trim()
-    if (textAfter) {
+    const textAfter = text.slice(lastIndex)
+    if (textAfter.trim() !== '') {
       segments.push({ type: 'text', text: textAfter })
     }
   }
@@ -146,8 +162,4 @@ export function parseToolCallsFromText(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function escapeRegex(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

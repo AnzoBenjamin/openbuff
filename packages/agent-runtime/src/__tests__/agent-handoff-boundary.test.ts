@@ -12,7 +12,9 @@ describe('versioned shipped-agent handoff boundary', () => {
         agentType: 'repair-editor',
         handoff: {},
       }),
-    ).toThrow(/requires taskId, role, and objective/)
+      // M2-T2: {} is an UNVERSIONED handoff (schemaVersion absent), so it
+      // fails closed with the envelope error before any field-level check.
+    ).toThrow(/handoffs must be complete schemaVersion 1 envelopes/)
   })
 
   test('accepts repair-editor with task, findings, and permissions', () => {
@@ -70,6 +72,34 @@ describe('versioned shipped-agent handoff boundary', () => {
         handoff: { schemaVersion: 1, taskId: 'T1' },
       }),
     ).toThrow(/requires taskId, role, and objective/)
+  })
+
+  // M2-T2: unversioned/legacy handoffs are a clean validation error, never a
+  // TypeError. These shapes used to slip past the validator's early return and
+  // die inside deriveSpawnTemplateCapabilities with "Cannot read properties
+  // of undefined (reading 'allowedTools')".
+  test('rejects an unversioned legacy handoff with a clean validation error', () => {
+    expect(() =>
+      validateVersionedAgentHandoff({
+        agentType: 'thinker',
+        handoff: { context: 'legacy free-form text' },
+      }),
+    ).toThrow(/handoffs must be complete schemaVersion 1 envelopes/)
+    expect(() =>
+      validateVersionedAgentHandoff({
+        agentType: 'thinker',
+        handoff: { summary: 'legacy' },
+      }),
+    ).toThrow(/handoffs must be complete schemaVersion 1 envelopes/)
+  })
+
+  test('rejects a future schemaVersion with the v1 envelope error', () => {
+    expect(() =>
+      validateVersionedAgentHandoff({
+        agentType: 'thinker',
+        handoff: { schemaVersion: 2, taskId: 'T1' },
+      }),
+    ).toThrow(/schemaVersion 1 requires taskId, role, and objective/)
   })
 
   test('bounds oversized handoff strings before child context transfer', () => {

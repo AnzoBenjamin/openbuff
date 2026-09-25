@@ -8,10 +8,13 @@
 export const MAX_MAX_GATE_REPAIR_ROUNDS = 20
 
 /**
- * No-verdict retry budgets differ from the repair-round budgets above: they
- * default to a small positive integer (not unlimited) and use a tighter cap.
- * They count reviewer/specialist retries after a schema-invalid (no) verdict
- * before the user-authorized BYPASS REVIEWER escape is offered.
+ * No-verdict retry budgets differ from the repair-round budgets above only in
+ * their cap: missing/invalid → unlimited (Infinity) and positive ints cap at
+ * 10. They count reviewer/specialist retries after a schema-invalid (no)
+ * verdict before the user-authorized BYPASS REVIEWER escape is offered.
+ *
+ * @deprecated Legacy finite default (2). The resolvers now default to
+ * Number.POSITIVE_INFINITY; kept exported only for back-compat readers.
  */
 export const DEFAULT_MAX_NO_VERDICT_RETRIES = 2
 /** Tighter hard-cap ceiling for the no-verdict retry budgets. */
@@ -82,34 +85,37 @@ export function resolveMaxSpecialistRepairRounds(
 }
 
 /**
- * Parse option/env for the reviewer no-verdict retry budget. Unlike the
- * repair-round resolvers, missing/invalid → `2` (never null) and positive ints
- * are capped at `MAX_MAX_NO_VERDICT_RETRIES` (10).
+ * Parse option/env for the reviewer no-verdict retry budget. Missing/invalid
+ * → `Number.POSITIVE_INFINITY` (unlimited); a finite positive int is capped at
+ * `MAX_MAX_NO_VERDICT_RETRIES` (10).
  */
 export function resolveMaxReviewerNoVerdictRetries(
   raw: unknown,
-  fallback: number = DEFAULT_MAX_NO_VERDICT_RETRIES,
+  fallback: number = Number.POSITIVE_INFINITY,
 ): number {
-  return resolvePositiveIntBudget(
-    raw,
-    fallback,
-    MAX_MAX_NO_VERDICT_RETRIES,
-  ) as number
+  // resolvePositiveIntBudget can only return null when the fallback is null;
+  // this resolver's fallback (or caller's) is a number, so null here means
+  // the caller passed null explicitly → unlimited.
+  return (
+    resolvePositiveIntBudget(raw, fallback, MAX_MAX_NO_VERDICT_RETRIES) ??
+    Number.POSITIVE_INFINITY
+  )
 }
 
 /**
  * Parse option/env for the specialist no-verdict retry budget. Missing/invalid
- * → `2` (never null); positive ints capped at `MAX_MAX_NO_VERDICT_RETRIES` (10).
+ * → `Number.POSITIVE_INFINITY` (unlimited); a finite positive int is capped at
+ * `MAX_MAX_NO_VERDICT_RETRIES` (10).
  */
 export function resolveMaxSpecialistNoVerdictRetries(
   raw: unknown,
-  fallback: number = DEFAULT_MAX_NO_VERDICT_RETRIES,
+  fallback: number = Number.POSITIVE_INFINITY,
 ): number {
-  return resolvePositiveIntBudget(
-    raw,
-    fallback,
-    MAX_MAX_NO_VERDICT_RETRIES,
-  ) as number
+  // See resolveMaxReviewerNoVerdictRetries: null fallback → unlimited.
+  return (
+    resolvePositiveIntBudget(raw, fallback, MAX_MAX_NO_VERDICT_RETRIES) ??
+    Number.POSITIVE_INFINITY
+  )
 }
 
 export type EffectiveGateRepairBudgets = {

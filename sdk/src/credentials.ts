@@ -292,27 +292,39 @@ export const isChatGptOAuthValid = (clientEnv?: ClientEnv): boolean => {
   return credentials.expiresAt > Date.now() + bufferMs
 }
 
-let chatGptRefreshPromise: Promise<ChatGptOAuthCredentials | null> | null = null
+// Module-level single-flight refresh promises, keyed by the config-dir
+// identity the negative cache and credentials files are keyed by. One global
+// slot would make caller B joining caller A's in-flight refresh receive A's
+// tokens (saved to A's file) even across different credential stores (M2-T5).
+const chatGptRefreshPromises = new Map<
+  string,
+  Promise<ChatGptOAuthCredentials | null>
+>()
 
 // Module-level negative cache for failed refresh attempts, keyed by config-Dir
 // identity. Contains the last-failure wall-clock time only — no token material.
 const REFRESH_FAILURE_TTL_MS = 45_000
 const chatGptRefreshFailureAt = new Map<string, number>()
 
-export const refreshChatGptOAuthToken = async (
+export const refreshChatGptOAuthToken = (
   clientEnv?: ClientEnv,
 ): Promise<ChatGptOAuthCredentials | null> => {
-  if (chatGptRefreshPromise) {
-    return chatGptRefreshPromise
+  // Compute the config-dir key FIRST so every map slot and the negative
+  // cache are keyed consistently, before any credentials read/write (M2-T5).
+  const refreshKey = getConfigDir(clientEnv)
+
+  const inFlight = chatGptRefreshPromises.get(refreshKey)
+  if (inFlight) {
+    return inFlight
   }
 
   const credentials = getChatGptOAuthCredentials(clientEnv)
   if (!credentials?.refreshToken) {
-    return null
+    return Promise.resolve(null)
   }
 
-  const failureKey = getConfigDir(clientEnv)
-  chatGptRefreshPromise = (async () => {
+  const refreshPromise = (async () => {
+    let failed = false
     try {
       const response = await fetch(CHATGPT_OAUTH_TOKEN_URL, {
         method: 'POST',
@@ -331,6 +343,7 @@ export const refreshChatGptOAuthToken = async (
         console.debug(
           `ChatGPT OAuth token refresh failed (status ${response.status})`,
         )
+        failed = true
         return null
       }
 
@@ -341,6 +354,7 @@ export const refreshChatGptOAuthToken = async (
         data.access_token.trim().length === 0
       ) {
         console.debug('ChatGPT OAuth token refresh returned empty access token')
+        failed = true
         return null
       }
 
@@ -364,26 +378,24 @@ export const refreshChatGptOAuthToken = async (
         'ChatGPT OAuth token refresh failed:',
         error instanceof Error ? error.message : String(error),
       )
+      failed = true
       return null
     } finally {
-      chatGptRefreshPromise = null
+      // Stamp the negative cache BEFORE the shared promise resolves and the
+      // map slot clears, so a caller that observes a null outcome cannot
+      // start a fresh refresh before the failure is recorded (M2-T5).
+      if (failed) {
+        chatGptRefreshFailureAt.set(refreshKey, Date.now())
+      } else {
+        chatGptRefreshFailureAt.delete(refreshKey)
+      }
+      chatGptRefreshPromises.delete(refreshKey)
     }
   })()
 
-  // Record the refresh outcome in the negative cache: a successful refresh
-  // clears the memo, a failed one stamps the failure time so getValid...
-  // can skip the network retry window below.
-  const refreshOutcome = chatGptRefreshPromise.then((result) => {
-    if (result) {
-      chatGptRefreshFailureAt.delete(failureKey)
-    } else {
-      chatGptRefreshFailureAt.set(failureKey, Date.now())
-    }
-    return result
-  })
-  chatGptRefreshPromise = refreshOutcome
+  chatGptRefreshPromises.set(refreshKey, refreshPromise)
 
-  return refreshOutcome
+  return refreshPromise
 }
 
 export const getValidChatGptOAuthCredentials = async (

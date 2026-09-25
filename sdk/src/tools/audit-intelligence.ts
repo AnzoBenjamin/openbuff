@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 import {
   evaluateAuditCoverage,
   inspectCodebaseStructure,
@@ -5,6 +7,7 @@ import {
 } from '../services/audit-intelligence'
 import type {
   AuditCoverageReceipt,
+  CodebaseInventory,
   FeatureCompletenessRecord,
 } from '../services/audit-intelligence'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
@@ -14,24 +17,51 @@ const json = (value: JSONObject): [{ type: 'json'; value: JSONObject }] => [
   { type: 'json', value },
 ]
 
+const inventoryCache = new Map<string, CodebaseInventory>()
+const inventoryCacheLimit = 16
+
+function cacheInventory(inventory: CodebaseInventory): void {
+  if (inventoryCache.has(inventory.snapshotId)) return
+  if (inventoryCache.size >= inventoryCacheLimit) {
+    const oldest = inventoryCache.keys().next().value
+    if (oldest !== undefined) inventoryCache.delete(oldest)
+  }
+  inventoryCache.set(inventory.snapshotId, inventory)
+}
+
 export function inspectCodebaseStructureTool(
   cwd: string,
   scope?: string[],
 ): CodebuffToolOutput<'inspect_codebase_structure'> {
-  return json(inspectCodebaseStructure(cwd, scope) as unknown as JSONObject)
+  const inventory = inspectCodebaseStructure(cwd, scope)
+  cacheInventory(inventory)
+  return json(inventory as unknown as JSONObject)
 }
 
 export function inspectFeatureCompletenessTool(
   cwd: string,
   input: { feature: string; snapshot_id: string; scope?: string[] },
 ): CodebuffToolOutput<'inspect_feature_completeness'> {
-  const inventory = inspectCodebaseStructure(cwd, input.scope)
-  if (inventory.snapshotId !== input.snapshot_id)
+  // snapshotId hashes only file contents, never the root path, so the same
+  // snapshot_id can exist across different (possibly deleted) directories.
+  // Treat a cache entry as valid only if it was built for this exact cwd.
+  const cachedCandidate = inventoryCache.get(input.snapshot_id)
+  const cached =
+    cachedCandidate && cachedCandidate.root === path.resolve(cwd)
+      ? cachedCandidate
+      : undefined
+  const inventory = cached ?? inspectCodebaseStructure(cwd, input.scope)
+  if (!cached && inventory.snapshotId !== input.snapshot_id)
     return json({
       errorMessage:
         'The codebase snapshot is stale. Re-run inspect_codebase_structure.',
     })
-  const record = inspectFeatureCompleteness(cwd, input.feature, inventory)
+  if (!cached) cacheInventory(inventory)
+  const record = inspectFeatureCompleteness(
+    inventory.root,
+    input.feature,
+    inventory,
+  )
   const { failureStates, ...evidence } = record.evidence
   return json({
     ...record,
@@ -80,12 +110,21 @@ export function evaluateAuditCoverageTool(
     scope?: string[]
   },
 ): CodebuffToolOutput<'evaluate_audit_coverage'> {
-  const inventory = inspectCodebaseStructure(cwd, input.scope)
-  if (inventory.snapshotId !== input.snapshot_id)
+  // snapshotId hashes only file contents, never the root path, so the same
+  // snapshot_id can exist across different (possibly deleted) directories.
+  // Treat a cache entry as valid only if it was built for this exact cwd.
+  const cachedCandidate = inventoryCache.get(input.snapshot_id)
+  const cached =
+    cachedCandidate && cachedCandidate.root === path.resolve(cwd)
+      ? cachedCandidate
+      : undefined
+  const inventory = cached ?? inspectCodebaseStructure(cwd, input.scope)
+  if (!cached && inventory.snapshotId !== input.snapshot_id)
     return json({
       errorMessage:
         'The codebase snapshot is stale. Re-run inspect_codebase_structure.',
     })
+  if (!cached) cacheInventory(inventory)
   const structuralReceipts: AuditCoverageReceipt[] =
     input.structural_receipts.map((receipt) => ({
       schemaVersion: receipt.schema_version,

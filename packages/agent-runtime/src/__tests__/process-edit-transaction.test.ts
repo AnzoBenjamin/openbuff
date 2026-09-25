@@ -1138,6 +1138,90 @@ describe('processEditTransaction', () => {
     }
   })
 
+  it('does not let oldString prose shift the failed replacement attribution (M2-T6)', async () => {
+    // Pre-fix, resolveFailedEdit regexed /replacement (\d+)/ out of the error
+    // prose, and the prose is built from untrusted oldString content. Here the
+    // FAILING third replacement's oldString contains "replacement 3", which
+    // previously re-matched and pointed attribution at replacement index 2 of
+    // the COALESCED batch — corrupting editIndex/failedReplacementIndex.
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([
+        ['src/helper.ts', 'const a = 1\nconst b = 1\nconst c = 1\n'],
+      ]),
+      logger,
+      edits: [
+        {
+          type: 'str_replace',
+          path: 'src/helper.ts',
+          replacements: [
+            {
+              oldString: 'const a = 1',
+              newString: 'const a = 2',
+              allowMultiple: false,
+            },
+            {
+              oldString: 'const b = 1',
+              newString: 'const b = 2',
+              allowMultiple: false,
+            },
+            {
+              // Literal spoof token inside the oldString plus a real miss.
+              oldString: 'const missing replacement 3 = 1',
+              newString: 'const missing = 2',
+              allowMultiple: false,
+            },
+          ],
+        },
+      ],
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.failures).toHaveLength(1)
+      expect(result.failures[0]).toEqual(
+        expect.objectContaining({
+          editIndex: 0,
+          failedReplacementIndex: 2,
+        }),
+      )
+      expect(result.recovery?.failedReplacementIndex).toBe(2)
+    }
+  })
+
+  it('returns a structured failure (not a throw) for a malformed patch diff (M2-T6)', async () => {
+    // applyPatch on a malformed diff header throws in the 'diff' package; the
+    // transaction must convert that into a { error } failure entry so the
+    // atomic failures[]/recovery envelope survives instead of escaping to the
+    // generic handler-failure wrapper.
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([['src/file.ts', 'const value = 1\n']]),
+      logger,
+      readCapabilityIssuer: defaultReadCapabilityIssuer,
+      edits: [
+        {
+          type: 'patch',
+          path: 'src/file.ts',
+          diff: 'not a unified diff at all',
+        },
+      ],
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('edit_transaction aborted')
+      expect(result.failures).toEqual([
+        expect.objectContaining({
+          editIndex: 0,
+          path: 'src/file.ts',
+          errorMessage: expect.stringContaining(
+            'Patch did not apply cleanly to src/file.ts',
+          ),
+        }),
+      ])
+    }
+    expect('files' in result).toBe(false)
+  })
+
   it('maps a replace_range through a prior disjoint same-file edit', async () => {
     const initialContent = 'const a = 1\nconst b = 1\nconst c = 1\n'
     const result = await processEditTransaction({

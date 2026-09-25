@@ -4,7 +4,7 @@
  * Agent that fetches from external APIs demonstrating API integration patterns.
  */
 
-import { describe, test, expect, beforeAll } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { z } from 'zod/v4'
 
 import { OpenbuffClient, getCustomToolDefinition } from '../../src'
@@ -14,8 +14,11 @@ import {
   skipIfNoApiKey,
   DEFAULT_TIMEOUT,
 } from '../utils'
+import { teardownE2eMocks } from '../utils/e2e-mocks'
 
 import type { AgentDefinition } from '../../src'
+
+afterAll(() => teardownE2eMocks())
 
 describe('Custom Agents: API Integration Agent', () => {
   let client: OpenbuffClient

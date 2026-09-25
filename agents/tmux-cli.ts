@@ -530,6 +530,10 @@ esac
       toolName: 'run_terminal_command',
       input: {
         command: setupScript,
+        // M3-T1 (finite timeouts): conservative finite cap on the combined
+        // sweep/write/start/send setup, so a stuck tmux/CLI start cannot
+        // hang the agent step forever (setup normally completes in <2s).
+        timeout_seconds: 60,
       },
       includeToolCall: false,
     }
@@ -741,20 +745,28 @@ esac
       includeToolCall: false,
     }
 
-    yield 'STEP_ALL'
-    yield {
-      toolName: 'run_terminal_command',
-      input: {
-        command:
-          helperPath +
-          " stop '" +
-          sessionName +
-          "' >/dev/null 2>&1; rm -f '" +
-          helperPath +
-          "'",
-        timeout_seconds: 15,
-      },
-      includeToolCall: false,
+    // M3-T1 (finite timeouts / unconditional teardown): the tmux session and
+    // helper script are torn down in a finally so a failed, thrown, or
+    // cancelled model step still kills the session and removes the helper —
+    // a prior step failing must never skip teardown (best-effort inside the
+    // helper: `stop` already ignores tmux errors).
+    try {
+      yield 'STEP_ALL'
+    } finally {
+      yield {
+        toolName: 'run_terminal_command',
+        input: {
+          command:
+            helperPath +
+            " stop '" +
+            sessionName +
+            "' >/dev/null 2>&1; rm -f '" +
+            helperPath +
+            "'>",
+          timeout_seconds: 15,
+        },
+        includeToolCall: false,
+      }
     }
   },
 }

@@ -155,7 +155,11 @@ describe('git-committer (M5.2 resurrected)', () => {
     } as any).value
     expect(branchStep).toMatchObject({
       toolName: 'git_branch',
-      input: { branch_name: 'feat/test-branch', switch: true },
+      input: {
+        branch_name: 'feat/test-branch',
+        switch: true,
+        allow_dirty: false,
+      },
     })
   })
 
@@ -296,6 +300,83 @@ describe('git-committer (M5.2 resurrected)', () => {
     expect(gen.next().done).toBe(true)
   })
 
+  // Dirty-worktree branch-switch guard: `git status --short --branch` lines
+  // other than the `##` header indicate uncommitted work. Switching branches
+  // with a dirty worktree must be refused unless allow_dirty_branch is true.
+  const dirtyStatusStdout = '## main\n M src/a.ts\n?? src/b.ts\n'
+
+  test('handleSteps refuses a branch switch on a dirty worktree without allow_dirty_branch', () => {
+    if (!gitCommitter.handleSteps) return
+    const gen = gitCommitter.handleSteps({
+      params: { branch_name: 'feat/test-branch', owned_paths: [] },
+    } as unknown as Parameters<NonNullable<typeof gitCommitter.handleSteps>>[0])
+    expect(gen.next().value).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git status --short --branch' },
+    })
+    const refusal = gen.next(feedJson({ stdout: dirtyStatusStdout, exitCode: 0 }))
+      .value
+    expect(refusal).toMatchObject({ type: 'STEP_TEXT' })
+    const report = JSON.stringify(refusal)
+    expect(report).toContain('dirty worktree')
+    expect(report).toContain('allow_dirty_branch')
+    // Refusal is final: no git_branch step, generator terminates.
+    expect(gen.next().done).toBe(true)
+  })
+
+  test('handleSteps honors allow_dirty_branch: true on a dirty worktree (git_branch allow_dirty)', () => {
+    if (!gitCommitter.handleSteps) return
+    const gen = gitCommitter.handleSteps({
+      params: {
+        branch_name: 'feat/test-branch',
+        owned_paths: [],
+        allow_dirty_branch: true,
+      },
+    } as unknown as Parameters<NonNullable<typeof gitCommitter.handleSteps>>[0])
+    expect(gen.next().value).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git status --short --branch' },
+    })
+    const branchStep = gen.next(
+      feedJson({ stdout: dirtyStatusStdout, exitCode: 0 }),
+    ).value
+    expect(branchStep).toMatchObject({
+      toolName: 'git_branch',
+      input: {
+        branch_name: 'feat/test-branch',
+        switch: true,
+        allow_dirty: true,
+      },
+    })
+    // The override must not abort the run: the next step is the inspection
+    // prelude, not a STEP_TEXT refusal.
+    const nextStep = gen.next(feedJson({ stdout: '', exitCode: 0 })).value
+    expect(nextStep).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git rev-parse --show-toplevel' },
+    })
+  })
+
+  test('handleSteps does not trigger the dirty-worktree refusal without branch_name', () => {
+    if (!gitCommitter.handleSteps) return
+    const gen = gitCommitter.handleSteps({
+      params: { owned_paths: [] },
+    } as unknown as Parameters<NonNullable<typeof gitCommitter.handleSteps>>[0])
+    expect(gen.next().value).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git status --short --branch' },
+    })
+    const nextStep = gen.next(
+      feedJson({ stdout: dirtyStatusStdout, exitCode: 0 }),
+    ).value
+    expect(nextStep).not.toMatchObject({ type: 'STEP_TEXT' })
+    expect(nextStep).not.toMatchObject({ toolName: 'git_branch' })
+    expect(nextStep).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git rev-parse --show-toplevel' },
+    })
+  })
+
   const firstStagingCommand = (ownedPaths: string[]): string => {
     if (!gitCommitter.handleSteps) throw new Error('handleSteps missing')
     const gen = gitCommitter.handleSteps({
@@ -367,7 +448,12 @@ describe('git-committer (M5.2 resurrected)', () => {
   // Push-branch validation: the branch reported by `git branch
   // --show-current` is interpolated into rev-list/push commands and must be
   // a git-ref-safe token.
-  const driveToBranchCheck = (branchStdout: string): unknown => {
+  const driveToBranchCheck = (
+    branchStdout: string,
+  ): {
+    gen: CommitterSteps
+    step: unknown
+  } => {
     if (!gitCommitter.handleSteps) throw new Error('handleSteps missing')
     const gen = gitCommitter.handleSteps({
       params: { owned_paths: [], push: true },
@@ -397,11 +483,14 @@ describe('git-committer (M5.2 resurrected)', () => {
       toolName: 'run_terminal_command',
       input: { command: 'git branch --show-current' },
     })
-    return gen.next(feedJson({ stdout: branchStdout, exitCode: 0 })).value
+    const stepAfterBranch = gen.next(
+      feedJson({ stdout: branchStdout, exitCode: 0 }),
+    ).value
+    return { gen, step: stepAfterBranch }
   }
 
   test('push proceeds when the checked-out branch is git-ref-safe', () => {
-    const step = driveToBranchCheck('feat/feature-1')
+    const { step } = driveToBranchCheck('feat/feature-1')
     expect(step).toMatchObject({
       toolName: 'run_terminal_command',
       input: { command: 'git fetch --prune origin' },
@@ -409,7 +498,7 @@ describe('git-committer (M5.2 resurrected)', () => {
   })
 
   test('push refuses a hostile branch name with metacharacters', () => {
-    const step = driveToBranchCheck('feat/$(rm -rf ~)')
+    const { step } = driveToBranchCheck('feat/$(rm -rf ~)')
     expect(step).toMatchObject({ type: 'STEP_TEXT' })
     const report = JSON.stringify(step)
     expect(report).toContain('Push refused')
@@ -417,14 +506,59 @@ describe('git-committer (M5.2 resurrected)', () => {
   })
 
   test('push refuses a branch name with a leading dash', () => {
-    const step = driveToBranchCheck('-dashy')
+    const { step } = driveToBranchCheck('-dashy')
     expect(step).toMatchObject({ type: 'STEP_TEXT' })
     expect(JSON.stringify(step)).toContain('Push refused')
   })
 
   test('push refuses an empty/whitespace current branch (detached HEAD)', () => {
-    const step = driveToBranchCheck('   ')
+    const { step } = driveToBranchCheck('   ')
     expect(step).toMatchObject({ type: 'STEP_TEXT' })
     expect(JSON.stringify(step)).toContain('detached')
+  })
+
+  // M1-T6 (fail closed): when `${remote}/HEAD` cannot be resolved, the
+  // default-branch comparison is meaningless — an empty defaultBranch used to
+  // silently satisfy the guard for every branch, disabling the default-branch
+  // push protection exactly when remote state is unknown.
+  test('push refuses when the remote default branch cannot be resolved', () => {
+    const { gen, step: fetchStep } = driveToBranchCheck('feat/feature-1')
+    expect(fetchStep).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git fetch --prune origin' },
+    })
+    const revParseStep = gen.next(feedJson({ stdout: '', exitCode: 0 })).value
+    expect(revParseStep).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git rev-parse --abbrev-ref origin/HEAD' },
+    })
+    const refusal = gen.next(feedJson({ stdout: '', exitCode: 1 })).value
+    expect(refusal).toMatchObject({ type: 'STEP_TEXT' })
+    const report = JSON.stringify(refusal)
+    expect(report).toContain('Push refused')
+    expect(report).toContain('set-head')
+  })
+
+  test('push proceeds when the remote default branch resolves to a different branch', () => {
+    const { gen, step: fetchStep } = driveToBranchCheck('feat/feature-1')
+    expect(fetchStep).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git fetch --prune origin' },
+    })
+    const revParseStep = gen.next(feedJson({ stdout: '', exitCode: 0 })).value
+    expect(revParseStep).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: { command: 'git rev-parse --abbrev-ref origin/HEAD' },
+    })
+    const countsStep = gen.next(
+      feedJson({ stdout: 'origin/main', exitCode: 0 }),
+    ).value
+    expect(countsStep).toMatchObject({
+      toolName: 'run_terminal_command',
+      input: {
+        command:
+          'git rev-list --left-right --count origin/feat/feature-1...HEAD',
+      },
+    })
   })
 })

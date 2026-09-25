@@ -241,6 +241,45 @@ describe('withTimeout', () => {
     // Promise.resolve is always faster than setTimeout(0)
     expect(result).toBe(42)
   })
+
+  test('a pre-aborted signal does not collapse the timeout window', async () => {
+    // The /exit and SIGINT paths abort the stream controller BEFORE wrapping
+    // flushAnalytics() with its signal: the wrapped work must still get the
+    // full timeout bound instead of resolving immediately.
+    const controller = new AbortController()
+    controller.abort()
+    const neverResolves = new Promise<string>(() => {})
+
+    const started = Date.now()
+    const result = await withTimeout(
+      neverResolves,
+      50,
+      'timeout',
+      controller.signal,
+    )
+    const elapsed = Date.now() - started
+
+    expect(result).toBe('timeout')
+    expect(elapsed).toBeGreaterThanOrEqual(40)
+  })
+
+  test('an abort firing while the window is open still resolves early', async () => {
+    const controller = new AbortController()
+    const neverResolves = new Promise<string>(() => {})
+    setTimeout(() => controller.abort(), 10)
+
+    const started = Date.now()
+    const result = await withTimeout(
+      neverResolves,
+      5_000,
+      'timeout',
+      controller.signal,
+    )
+    const elapsed = Date.now() - started
+
+    expect(result).toBe('timeout')
+    expect(elapsed).toBeLessThan(1_000)
+  })
 })
 
 // ============================================================================

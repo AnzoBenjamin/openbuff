@@ -1,4 +1,121 @@
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import { escapeRegexForLiteral as escapeRegex } from '@codebuff/common/util/language-profiles'
+
+/**
+ * Fixed import-line regex for the JS/TS family, compiled once at module
+ * load instead of per import-processing call.
+ */
+const JS_IMPORT_REGEX =
+  /^import(?:\s+type)?(?:\s+[\s\S]*?\s+from\s+['"][^'"]+['"]|\s+['"][^'"]+['"]);?\r?\n?/gm
+
+/** Non-matching regex shared by extensions with no import-line syntax. */
+const NO_MATCH_IMPORT_REGEX = /$a/g
+
+/**
+ * Hoisted literal patterns (per-call-regex-literals-in-import-paths / RF-12):
+ * each of these used to be evaluated as a regex literal inside the
+ * import-processing helpers — a fresh RegExp per call or per import range
+ * (up to ~3 per statement across removeImport's filter over a large file).
+ * All are non-global (or used only via matchAll/replace, which never retain
+ * shared lastIndex state), so the shared instances are safe for repeated
+ * exec/test/match.
+ */
+const TRAILING_SEMICOLON_REGEX = /;$/
+const FILE_EXTENSION_REGEX = /\.[^.\/]+$/
+const GO_IMPORT_CLAUSE_REGEX = /^import\s+(.+)$/s
+const GO_QUOTED_SPECIFIER_REGEX = /["`]([^"`]+)["`]/
+const GO_IMPORT_BLOCK_REGEX =
+  /(^[ \t]*import[ \t]*\([ \t]*\r?\n)([\s\S]*?)(^[ \t]*\)[ \t]*\r?\n?)/m
+const QUOTED_FROM_CLAUSE_REGEX = /\sfrom\s+['"]([^'"]+)['"]\s*;?$/
+const QUOTED_SIDE_EFFECT_IMPORT_REGEX = /^import\s+['"]([^'"]+)['"]\s*;?$/
+const QUOTED_STRING_REGEX = /['"]([^'"]+)['"]/
+const JS_NAMED_IMPORT_STATEMENT_REGEX =
+  /^import(?:\s+type)?\s+[\s\S]+\s+from\s+['"][^'"]+['"]$/
+const JS_SIDE_EFFECT_IMPORT_STATEMENT_REGEX = /^import\s+['"][^'"]+['"]$/
+const JS_USE_STRICT_REGEX = /^(?:['"]use strict['"];?\r?\n)/
+const PY_IMPORT_STATEMENT_REGEX =
+  /^(?:from\s+[.\w]+\s+import\s+.+|import\s+[\w.]+(?:\s+as\s+\w+)?)$/
+const PY_CODING_COOKIE_REGEX = /^#.*coding[:=][ \t]*[-\w.]+[ \t]*\r?\n/
+const PY_DOCSTRING_REGEX =
+  /^(?:[ \t]*\r?\n)*[rubfRUBF]*("""|''')[\s\S]*?\1[ \t]*\r?\n?/
+const PY_FROM_MODULE_REGEX = /^from\s+([.\w]+)\s+import/
+const PY_IMPORT_MODULE_REGEX = /^import\s+([\w.]+)/
+const RS_IMPORT_STATEMENT_REGEX = /^(?:pub\s+)?(?:use\s+[^;]+|mod\s+\w+);?$/
+const RS_PROLOGUE_REGEX = /^(?:(?:#!\[[^\n]+\]|\/\/![^\n]*)[ \t]*\r?\n)*/
+const RS_USE_PATH_REGEX = /^(?:pub\s+)?(?:use|mod)\s+([^;]+)/
+const GO_LINE_IMPORT_STATEMENT_REGEX =
+  /^import\s+(?:[\w.]+\s+)?["`][^"`]+["`]$/
+const GO_BLOCK_IMPORT_STATEMENT_REGEX =
+  /^import\s*\([\s\S]*["`][^"`]+["`][\s\S]*\)$/
+const GO_PACKAGE_LINE_REGEX = /^[ \t]*package\s+\w+[ \t]*\r?\n/m
+const JVM_IMPORT_STATEMENT_REGEX = /^import\s+(?:static\s+)?[\w.*]+;?$/
+const JVM_PACKAGE_LINE_REGEX = /^[ \t]*package\s+[\w.]+[ \t]*;?[ \t]*\r?\n/m
+const JVM_IMPORT_MODULE_REGEX = /^import\s+(?:static\s+)?([\w.*]+)/
+const CS_IMPORT_STATEMENT_REGEX =
+  /^(?:global\s+)?using\s+(?:\w+\s*=\s*)?[\w.]+;?$/
+const CS_USING_MODULE_REGEX = /using\s+(?:\w+\s*=\s*)?([\w.]+)/
+const C_INCLUDE_STATEMENT_REGEX = /^#\s*include\s*[<"][^>"]+[>"]$/
+const C_INCLUDE_PATH_REGEX = /[<"]([^>"]+)[>"]/
+const RB_REQUIRE_STATEMENT_REGEX =
+  /^require(?:_relative)?\s*[('" ]+[^'"\s)]+['"]?\)?$/
+const RB_REQUIRE_TARGET_REGEX = /require(?:_relative)?\s*[('" ]+([^'"\s)]+)/
+const PHP_IMPORT_STATEMENT_REGEX =
+  /^(?:use\s+[\w\\]+|(?:require|require_once|include|include_once)\s*\(\s*['"][^'"]+['"]\)?);?$/
+const PHP_OPEN_TAG_REGEX = /^\uFEFF?<\?php\b/
+const PHP_DECLARE_REGEX = /^declare\s*\([^)]*\)\s*;/
+const PHP_NAMESPACE_REGEX = /^namespace\s+[\w\\]+\s*(?:;|\{)/
+const PHP_USE_MODULE_REGEX = /^use\s+([\w\\]+)/
+const PHP_TRIVIA_REGEX =
+  /^(?:\s+|\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$)|#(?!\[)[^\n]*(?:\n|$))/
+const SWIFT_IMPORT_STATEMENT_REGEX = /^import\s+(?:\w+\s+)?[\w.]+$/
+const SWIFT_IMPORT_MODULE_REGEX = /^import\s+(?:\w+\s+)?([\w.]+)/
+const GD_PRELOAD_STATEMENT_REGEX =
+  /^(?:const|var)\s+\w+(?::[^=]+)?\s*=\s*(?:preload|load)\(\s*["']res:\/\/[^"']+["']\s*\)$/
+const GD_PRELOAD_PATH_REGEX = /["']res:\/\/([^"']+)["']/
+const GD_HEADER_LINE_REGEX =
+  /^[ \t]*(?:@tool|class_name\s+\w+|extends\s+.+)[ \t]*\r?\n/gm
+const LEADING_NEWLINE_REGEX = /^[ \t]*\r?\n/
+const BACKSLASH_GLOBAL_REGEX = /\\/g
+
+/**
+ * Memoized RegExp cache keyed by a caller-namespaced string (import-line,
+ * go-block, go-line, ...). Bounded with per-entry LRU eviction so
+ * model-supplied keys — module-specifier text, file extensions on edit
+ * paths — can't grow the cache unboundedly
+ * (import-line-regex-cache-unbounded), while a hot key hit on every call
+ * survives adversarial cold-key churn instead of being dropped with the
+ * whole cache on each overflow (regex-cache-clear-on-overflow-thrash).
+ * Also the seam the CASE 4 rows in scripts/measure-perf-guards-baseline.ts
+ * measure, so that benchmark's after row times this shipped cache.
+ */
+const REGEX_CACHE = new Map<string, RegExp>()
+const REGEX_CACHE_LIMIT = 512
+
+export function cachedRegExp(key: string, build: () => RegExp): RegExp {
+  const cached = REGEX_CACHE.get(key)
+  if (cached) {
+    // Refresh recency: Map iterates in insertion order, so re-inserting the
+    // hit key at the end marks it most-recently-used for the eviction below
+    // (O(1) bookkeeping, far cheaper than the RegExp construction it avoids).
+    REGEX_CACHE.delete(key)
+    REGEX_CACHE.set(key, cached)
+    return cached
+  }
+  if (REGEX_CACHE.size >= REGEX_CACHE_LIMIT) {
+    // Evict ONLY the least-recently-used entry (the first insertion-order
+    // key after the hit-refresh above). The previous clear-on-overflow policy
+    // dropped every hot key each time adversarial key churn filled the cache,
+    // making the memo strictly more per-call work than uncached RegExp
+    // construction.
+    const oldest = REGEX_CACHE.keys().next()
+    if (!oldest.done) {
+      REGEX_CACHE.delete(oldest.value)
+    }
+  }
+  const regex = build()
+  REGEX_CACHE.set(key, regex)
+  return regex
+}
 
 export type InsertTextStructuredOperation = {
   kind: 'insert_text'
@@ -274,7 +391,7 @@ function normalizeImportStatement(statement: string, filePath: string): string {
     '.mjs',
     '.cjs',
   ].includes(extensionForPath(filePath))
-    ? trimmed.replace(/;$/, '')
+    ? trimmed.replace(TRAILING_SEMICOLON_REGEX, '')
     : trimmed
 }
 
@@ -284,17 +401,16 @@ function insertIntoGoImportBlock(
   importStatement: string,
 ): { content: string } | { error: string } | null {
   if (extensionForPath(filePath) !== '.go') return null
-  const specifier = importStatement.match(/^import\s+(.+)$/s)?.[1]
+  const specifier = importStatement.match(GO_IMPORT_CLAUSE_REGEX)?.[1]
   if (!specifier || specifier.startsWith('(')) return null
-  const moduleSpecifier = specifier.match(/["`]([^"`]+)["`]/)?.[1]
-  const block =
-    /(^[ \t]*import[ \t]*\([ \t]*\r?\n)([\s\S]*?)(^[ \t]*\)[ \t]*\r?\n?)/m.exec(
-      content,
-    )
+  const moduleSpecifier = specifier.match(GO_QUOTED_SPECIFIER_REGEX)?.[1]
+  const block = GO_IMPORT_BLOCK_REGEX.exec(content)
   if (!block) return null
   if (
     moduleSpecifier &&
-    new RegExp(`["\`]${escapeRegex(moduleSpecifier)}["\`]`).test(block[2])
+    cachedRegExp(`go-block:${moduleSpecifier}`, () =>
+      new RegExp(`["\`]${escapeRegex(moduleSpecifier)}["\`]`),
+    ).test(block[2])
   ) {
     return {
       error: `Cannot insert import into ${filePath}: import already exists.`,
@@ -310,14 +426,13 @@ function removeFromGoImportBlock(
   content: string,
   moduleSpecifier: string,
 ): string | null {
-  const block =
-    /(^[ \t]*import[ \t]*\([ \t]*\r?\n)([\s\S]*?)(^[ \t]*\)[ \t]*\r?\n?)/m.exec(
-      content,
-    )
+  const block = GO_IMPORT_BLOCK_REGEX.exec(content)
   if (!block) return null
-  const lineRegex = new RegExp(
-    `^[ \\t]*(?:[\\w.]+\\s+)?["\`]${escapeRegex(moduleSpecifier)}["\`][ \\t]*(?:\\/\\/.*)?\\r?\\n?`,
-    'm',
+  const lineRegex = cachedRegExp(`go-line:${moduleSpecifier}`, () =>
+    new RegExp(
+      `^[ \\t]*(?:[\\w.]+\\s+)?["\`]${escapeRegex(moduleSpecifier)}["\`][ \\t]*(?:\\/\\/.*)?\\r?\\n?`,
+      'm',
+    ),
   )
   const line = lineRegex.exec(block[2])
   if (!line) return null
@@ -325,12 +440,8 @@ function removeFromGoImportBlock(
   return `${content.slice(0, start)}${content.slice(start + line[0].length)}`
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function extensionForPath(filePath: string): string {
-  const match = filePath.toLowerCase().match(/\.[^.\/]+$/)
+  const match = filePath.toLowerCase().match(FILE_EXTENSION_REGEX)
   return match?.[0] ?? ''
 }
 
@@ -342,46 +453,39 @@ function isValidImportStatement(filePath: string, statement: string): boolean {
     )
   ) {
     return (
-      /^import(?:\s+type)?\s+[\s\S]+\s+from\s+['"][^'"]+['"]$/.test(
-        statement,
-      ) || /^import\s+['"][^'"]+['"]$/.test(statement)
+      JS_NAMED_IMPORT_STATEMENT_REGEX.test(statement) ||
+      JS_SIDE_EFFECT_IMPORT_STATEMENT_REGEX.test(statement)
     )
   }
   if (['.py', '.pyi'].includes(extension)) {
-    return /^(?:from\s+[.\w]+\s+import\s+.+|import\s+[\w.]+(?:\s+as\s+\w+)?)$/.test(
-      statement,
-    )
+    return PY_IMPORT_STATEMENT_REGEX.test(statement)
   }
   if (extension === '.rs')
-    return /^(?:pub\s+)?(?:use\s+[^;]+|mod\s+\w+);?$/.test(statement)
+    return RS_IMPORT_STATEMENT_REGEX.test(statement)
   if (extension === '.go')
     return (
-      /^import\s+(?:[\w.]+\s+)?["`][^"`]+["`]$/.test(statement) ||
-      /^import\s*\([\s\S]*["`][^"`]+["`][\s\S]*\)$/.test(statement)
+      GO_LINE_IMPORT_STATEMENT_REGEX.test(statement) ||
+      GO_BLOCK_IMPORT_STATEMENT_REGEX.test(statement)
     )
   if (['.java', '.kt', '.kts'].includes(extension))
-    return /^import\s+(?:static\s+)?[\w.*]+;?$/.test(statement)
+    return JVM_IMPORT_STATEMENT_REGEX.test(statement)
   if (extension === '.cs')
-    return /^(?:global\s+)?using\s+(?:\w+\s*=\s*)?[\w.]+;?$/.test(statement)
+    return CS_IMPORT_STATEMENT_REGEX.test(statement)
   if (
     ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(
       extension,
     )
   ) {
-    return /^#\s*include\s*[<"][^>"]+[>"]$/.test(statement)
+    return C_INCLUDE_STATEMENT_REGEX.test(statement)
   }
   if (extension === '.rb')
-    return /^require(?:_relative)?\s*[('" ]+[^'"\s)]+['"]?\)?$/.test(statement)
+    return RB_REQUIRE_STATEMENT_REGEX.test(statement)
   if (extension === '.php')
-    return /^(?:use\s+[\w\\]+|(?:require|require_once|include|include_once)\s*\(?\s*['"][^'"]+['"]\)?);?$/.test(
-      statement,
-    )
+    return PHP_IMPORT_STATEMENT_REGEX.test(statement)
   if (extension === '.swift')
-    return /^import\s+(?:\w+\s+)?[\w.]+$/.test(statement)
+    return SWIFT_IMPORT_STATEMENT_REGEX.test(statement)
   if (extension === '.gd')
-    return /^(?:const|var)\s+\w+(?::[^=]+)?\s*=\s*(?:preload|load)\(\s*["']res:\/\/[^"']+["']\s*\)$/.test(
-      statement,
-    )
+    return GD_PRELOAD_STATEMENT_REGEX.test(statement)
   return false
 }
 
@@ -410,30 +514,22 @@ function getImportInsertionOffset(filePath: string, content: string): number {
   if (['.py', '.pyi'].includes(extension)) {
     let offset = shebangEnd
     const afterShebang = content.slice(offset)
-    const encoding = afterShebang.match(
-      /^#.*coding[:=][ \t]*[-\w.]+[ \t]*\r?\n/,
-    )
+    const encoding = afterShebang.match(PY_CODING_COOKIE_REGEX)
     if (encoding) offset += encoding[0].length
-    const docstring = content
-      .slice(offset)
-      .match(/^(?:[ \t]*\r?\n)*[rubfRUBF]*("""|''')[\s\S]*?\1[ \t]*\r?\n?/)
+    const docstring = content.slice(offset).match(PY_DOCSTRING_REGEX)
     if (docstring) offset += docstring[0].length
     return offset
   }
   if (extension === '.rs') {
-    const prologue = content.match(
-      /^(?:(?:#!\[[^\n]+\]|\/\/![^\n]*)[ \t]*\r?\n)*/,
-    )
+    const prologue = content.match(RS_PROLOGUE_REGEX)
     return prologue?.[0].length ?? 0
   }
   if (extension === '.go') {
-    const packageMatch = content.match(/^[ \t]*package\s+\w+[ \t]*\r?\n/m)
+    const packageMatch = content.match(GO_PACKAGE_LINE_REGEX)
     return packageMatch ? packageMatch.index! + packageMatch[0].length : 0
   }
   if (['.java', '.kt', '.kts'].includes(extension)) {
-    const packageMatch = content.match(
-      /^[ \t]*package\s+[\w.]+[ \t]*;?[ \t]*\r?\n/m,
-    )
+    const packageMatch = content.match(JVM_PACKAGE_LINE_REGEX)
     return packageMatch ? packageMatch.index! + packageMatch[0].length : 0
   }
   if (extension === '.php') {
@@ -441,26 +537,22 @@ function getImportInsertionOffset(filePath: string, content: string): number {
   }
   if (extension === '.gd') {
     const headerMatches = [
-      ...content.matchAll(
-        /^[ \t]*(?:@tool|class_name\s+\w+|extends\s+.+)[ \t]*\r?\n/gm,
-      ),
+      ...content.matchAll(GD_HEADER_LINE_REGEX),
     ]
     const lastHeader = headerMatches.at(-1)
     return lastHeader?.index !== undefined
       ? lastHeader.index + lastHeader[0].length
       : 0
   }
-  const useStrictMatch = content
-    .slice(shebangEnd)
-    .match(/^(?:['"]use strict['"];?\r?\n)/)
+  const useStrictMatch = content.slice(shebangEnd).match(JS_USE_STRICT_REGEX)
   return shebangEnd + (useStrictMatch?.[0].length ?? 0)
 }
 
 function getPhpImportInsertionOffset(content: string): number {
-  let offset = content.match(/^\uFEFF?<\?php\b/)?.[0].length ?? 0
+  let offset = content.match(PHP_OPEN_TAG_REGEX)?.[0].length ?? 0
   offset = skipPhpTrivia(content, offset)
 
-  const declareMatch = content.slice(offset).match(/^declare\s*\([^)]*\)\s*;/)
+  const declareMatch = content.slice(offset).match(PHP_DECLARE_REGEX)
   if (declareMatch) {
     offset += declareMatch[0].length
     offset = skipPhpTrivia(content, offset)
@@ -468,21 +560,17 @@ function getPhpImportInsertionOffset(content: string): number {
 
   const namespaceMatch = content
     .slice(offset)
-    .match(/^namespace\s+[\w\\]+\s*(?:;|\{)/)
+    .match(PHP_NAMESPACE_REGEX)
   if (namespaceMatch) offset += namespaceMatch[0].length
 
-  const newline = content.slice(offset).match(/^[ \t]*\r?\n/)
+  const newline = content.slice(offset).match(LEADING_NEWLINE_REGEX)
   return offset + (newline?.[0].length ?? 0)
 }
 
 function skipPhpTrivia(content: string, start: number): number {
   let offset = start
   while (offset < content.length) {
-    const trivia = content
-      .slice(offset)
-      .match(
-        /^(?:\s+|\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$)|#(?!\[)[^\n]*(?:\n|$))/,
-      )
+    const trivia = content.slice(offset).match(PHP_TRIVIA_REGEX)
     if (!trivia) break
     offset += trivia[0].length
   }
@@ -505,7 +593,7 @@ function getImportRanges(
     '.mjs',
     '.cjs',
   ].includes(extension)
-    ? /^import(?:\s+type)?(?:\s+[\s\S]*?\s+from\s+['"][^'"]+['"]|\s+['"][^'"]+['"]);?\r?\n?/gm
+    ? JS_IMPORT_REGEX
     : importLineRegex(extension)
   let match: RegExpExecArray | null
   while ((match = importRegex.exec(content)) !== null) {
@@ -515,6 +603,12 @@ function getImportRanges(
 }
 
 function importLineRegex(extension: string): RegExp {
+  return cachedRegExp(`import-line:${extension}`, () =>
+    buildImportLineRegex(extension),
+  )
+}
+
+function buildImportLineRegex(extension: string): RegExp {
   if (['.py', '.pyi'].includes(extension))
     return /^[ \t]*(?:from\s+[.\w]+\s+import\s+.+|import\s+.+)\r?\n?/gm
   if (extension === '.rs')
@@ -539,7 +633,7 @@ function importLineRegex(extension: string): RegExp {
     return /^[ \t]*import\s+(?:\w+\s+)?[\w.]+[ \t]*\r?\n?/gm
   if (extension === '.gd')
     return /^[ \t]*(?:const|var)\s+\w+(?::[^=]+)?\s*=\s*(?:preload|load)\(\s*["']res:\/\/[^"']+["']\s*\)[ \t]*\r?\n?/gm
-  return /$a/g
+  return NO_MATCH_IMPORT_REGEX
 }
 
 function getImportModuleSpecifier(
@@ -547,45 +641,45 @@ function getImportModuleSpecifier(
   statement: string,
 ): string | null {
   const extension = extensionForPath(filePath)
-  const fromMatch = statement.match(/\sfrom\s+['"]([^'"]+)['"]\s*;?$/)
+  const fromMatch = statement.match(QUOTED_FROM_CLAUSE_REGEX)
   if (fromMatch) return fromMatch[1]
-  const sideEffectMatch = statement.match(/^import\s+['"]([^'"]+)['"]\s*;?$/)
+  const sideEffectMatch = statement.match(QUOTED_SIDE_EFFECT_IMPORT_REGEX)
   if (sideEffectMatch) return sideEffectMatch[1]
   if (['.py', '.pyi'].includes(extension)) {
     return (
-      statement.match(/^from\s+([.\w]+)\s+import/)?.[1] ??
-      statement.match(/^import\s+([\w.]+)/)?.[1] ??
+      statement.match(PY_FROM_MODULE_REGEX)?.[1] ??
+      statement.match(PY_IMPORT_MODULE_REGEX)?.[1] ??
       null
     )
   }
   if (extension === '.rs')
-    return statement.match(/^(?:pub\s+)?(?:use|mod)\s+([^;]+)/)?.[1] ?? null
+    return statement.match(RS_USE_PATH_REGEX)?.[1] ?? null
   if (extension === '.go')
-    return statement.match(/["`]([^"`]+)["`]/)?.[1] ?? null
+    return statement.match(GO_QUOTED_SPECIFIER_REGEX)?.[1] ?? null
   if (['.java', '.kt', '.kts'].includes(extension))
-    return statement.match(/^import\s+(?:static\s+)?([\w.*]+)/)?.[1] ?? null
+    return statement.match(JVM_IMPORT_MODULE_REGEX)?.[1] ?? null
   if (extension === '.cs')
-    return statement.match(/using\s+(?:\w+\s*=\s*)?([\w.]+)/)?.[1] ?? null
+    return statement.match(CS_USING_MODULE_REGEX)?.[1] ?? null
   if (
     ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(
       extension,
     )
   )
-    return statement.match(/[<"]([^>"]+)[>"]/)?.[1] ?? null
+    return statement.match(C_INCLUDE_PATH_REGEX)?.[1] ?? null
   if (extension === '.rb')
     return (
-      statement.match(/require(?:_relative)?\s*[('" ]+([^'"\s)]+)/)?.[1] ?? null
+      statement.match(RB_REQUIRE_TARGET_REGEX)?.[1] ?? null
     )
   if (extension === '.php')
     return (
-      statement.match(/^use\s+([\w\\]+)/)?.[1]?.replace(/\\/g, '/') ??
-      statement.match(/['"]([^'"]+)['"]/)?.[1] ??
+      statement.match(PHP_USE_MODULE_REGEX)?.[1]?.replace(BACKSLASH_GLOBAL_REGEX, '/') ??
+      statement.match(QUOTED_STRING_REGEX)?.[1] ??
       null
     )
   if (extension === '.swift')
-    return statement.match(/^import\s+(?:\w+\s+)?([\w.]+)/)?.[1] ?? null
+    return statement.match(SWIFT_IMPORT_MODULE_REGEX)?.[1] ?? null
   if (extension === '.gd')
-    return statement.match(/["']res:\/\/([^"']+)["']/)?.[1] ?? null
+    return statement.match(GD_PRELOAD_PATH_REGEX)?.[1] ?? null
   return null
 }
 

@@ -53,6 +53,12 @@ export async function listJobs(params: {
   // runtime end_turn warnings. Ownership is (clientSessionId, rootRunId).
   // Do NOT advance lastCheckCursor — list_jobs is a read-only digest.
   //
+  // M2-T4 (Fix 2, noted-not-wired): list_jobs intentionally reads REGISTRY
+  // state only (no adapter iteration, no liveness probing) — it is a cheap
+  // digest. A recovered job whose process died after recovery is settled
+  // 'lost' by the observation-time re-check in check_job
+  // (recheckRecoveredJobLiveness); a later list_jobs then reports the
+  // terminal state from the registry.
   // Cap on lightweight registry data first: candidates carry only the fields
   // selectListJobsRows orders by (state → status, startedAt ?? createdAt —
   // the same fallback the row build below uses, keeping order/tie-break

@@ -68,6 +68,17 @@ export type ToolResultEvictionResult = {
 }
 
 /**
+ * M3-T2 bound on the protection scan: a pathological multi-megabyte tool
+ * result no longer gets an unbounded substring scan over every protected
+ * path. Above the cap only the first bounded region is searched; a path
+ * cited beyond that point may be evicted (fail-OPEN for eviction so the
+ * history-rewrite savings are preserved), but the result is recoverable via
+ * re-read and the pinned-test semantics for normal-size results are byte-
+ * identical.
+ */
+const MAX_PROTECTED_CONTENT_SCAN_CHARS = 5_000_000
+
+/**
  * Whether a tool result's content references any importance-derived path.
  * Serializes the candidate's content once; the whole-array token accounting
  * below already pays a serialization pass, so this adds no asymptotic cost.
@@ -80,8 +91,15 @@ const contentReferencesProtectedPath = (
   protectedPaths: ReadonlySet<string>,
 ): boolean => {
   const serialized = JSON.stringify(message.content)
+  // M3-T2: bounded scan region — compact results (the norm) scan fully and
+  // keep byte-identical protection semantics; only pathological oversized
+  // results get their scan cost capped.
+  const scanRegion =
+    serialized.length > MAX_PROTECTED_CONTENT_SCAN_CHARS
+      ? serialized.slice(0, MAX_PROTECTED_CONTENT_SCAN_CHARS)
+      : serialized
   for (const path of protectedPaths) {
-    if (serialized.includes(path)) return true
+    if (scanRegion.includes(path)) return true
   }
   return false
 }

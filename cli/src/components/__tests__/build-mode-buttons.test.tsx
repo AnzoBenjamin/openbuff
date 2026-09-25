@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterAll, describe, expect, mock, test } from 'bun:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
@@ -51,5 +51,15 @@ describe('BuildModeButtons', () => {
     )
 
     expect(markup).toContain('Execute Plan')
+  })
+
+  // bun's process-global module registry keeps this file's mock.module
+  // registration alive after the suite ends, so the last mockLayout value
+  // (computeTerminalLayout(30, 10) → 'xs') bleeds into status-bar.test.tsx
+  // and breaks its assertions (reliability finding build-mode-buttons
+  // mockLayout leak → status-bar xs). Restore the default layout when the
+  // suite finishes.
+  afterAll(() => {
+    mockLayout = computeTerminalLayout(80, 24)
   })
 })

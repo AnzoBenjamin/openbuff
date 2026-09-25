@@ -869,6 +869,39 @@ function coerceIntString(value: unknown, min?: number): number | undefined {
 // strings (e.g. "-1") are not coerced here — those are handled by the
 // tool-specific repairs above (e.g. repairTerminalCommandScalars for a negative
 // run_terminal_command timeout).
+/**
+ * M3-T2: per-tool-name JSON Schema cache. The scalar-coercion walker used to
+ * call `z.toJSONSchema` on EVERY tool call; that zod-to-JSON-Schema
+ * conversion is by far the dominant per-call cost on this path and the
+ * result is byte-stable for the process lifetime because a native tool's
+ * `inputSchema` is a static zod schema (schemas are registered once per
+ * process). Memoize per tool name; a failed conversion is cached too so a
+ * schema that cannot be converted does not pay the conversion again per
+ * call.
+ */
+const TOOL_JSON_SCHEMA_CACHE = new Map<
+  string,
+  Record<string, unknown> | undefined
+>()
+
+function toolInputJsonSchema(toolName: string): Record<string, unknown> | undefined {
+  if (TOOL_JSON_SCHEMA_CACHE.has(toolName)) {
+    return TOOL_JSON_SCHEMA_CACHE.get(toolName)
+  }
+  let jsonSchema: Record<string, unknown> | undefined
+  try {
+    jsonSchema = z.toJSONSchema(toolParams[toolName as ToolName].inputSchema, {
+      io: 'input',
+    }) as Record<string, unknown>
+  } catch {
+    // Fail closed for this tool: cache `undefined` so the failed conversion
+    // is not re-attempted on every call.
+    jsonSchema = undefined
+  }
+  TOOL_JSON_SCHEMA_CACHE.set(toolName, jsonSchema)
+  return jsonSchema
+}
+
 function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
   if (
     !(toolName in toolParams) ||
@@ -879,12 +912,8 @@ function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
     return input
   }
 
-  let jsonSchema: Record<string, unknown>
-  try {
-    jsonSchema = z.toJSONSchema(toolParams[toolName as ToolName].inputSchema, {
-      io: 'input',
-    }) as Record<string, unknown>
-  } catch {
+  const jsonSchema = toolInputJsonSchema(toolName)
+  if (!jsonSchema) {
     return input
   }
 

@@ -12,11 +12,6 @@ export type QueuedMessage = {
   attachments: PendingAttachment[]
 }
 
-type QueueWatchdogTimer = ReturnType<typeof setTimeout>
-
-// Watchdog timeout duration: 60 seconds
-const QUEUE_WATCHDOG_TIMEOUT_MS = 60 * 1000
-
 export const createQueueProcessingOwnership = (
   activeQueueProcessingOwnerRef: MutableRefObject<symbol | null>,
 ): {
@@ -41,17 +36,13 @@ export const createQueueProcessingOwnership = (
 export type QueueProcessingRun = {
   isCurrentQueueProcessingOwner: () => boolean
   releaseQueueProcessingOwner: () => void
-  clearTimeoutFn: (timeout: QueueWatchdogTimer) => void
 }
 
 export type BeginQueuedMessageProcessingParams = {
   isProcessingQueueRef: MutableRefObject<boolean>
   isQueuePausedRef: MutableRefObject<boolean>
-  watchdogTimeoutRef: MutableRefObject<QueueWatchdogTimer | null>
   queueProcessingOwnerRef: MutableRefObject<symbol | null>
   setCanProcessQueue: (can: boolean) => void
-  setTimeoutFn?: (callback: () => void, timeoutMs: number) => QueueWatchdogTimer
-  clearTimeoutFn?: (timeout: QueueWatchdogTimer) => void
 }
 
 export const beginQueuedMessageProcessing = (
@@ -60,42 +51,17 @@ export const beginQueuedMessageProcessing = (
   const {
     isProcessingQueueRef,
     isQueuePausedRef,
-    watchdogTimeoutRef,
     queueProcessingOwnerRef,
     setCanProcessQueue,
-    setTimeoutFn = setTimeout,
-    clearTimeoutFn = clearTimeout,
   } = params
 
   isProcessingQueueRef.current = true
   const { isCurrentQueueProcessingOwner, releaseQueueProcessingOwner } =
     createQueueProcessingOwnership(queueProcessingOwnerRef)
 
-  // Start watchdog timer to recover from stuck processing lock
-  if (watchdogTimeoutRef.current) {
-    clearTimeoutFn(watchdogTimeoutRef.current)
-  }
-  watchdogTimeoutRef.current = setTimeoutFn(() => {
-    if (!isCurrentQueueProcessingOwner()) {
-      return
-    }
-    if (isProcessingQueueRef.current) {
-      logger.warn(
-        { stuckDurationMs: QUEUE_WATCHDOG_TIMEOUT_MS },
-        '[message-queue] Watchdog: isProcessingQueueRef stuck for too long, forcing reset',
-      )
-      isProcessingQueueRef.current = false
-      // Also reset canProcessQueue to allow queue to resume (unless user-paused)
-      setCanProcessQueue(!isQueuePausedRef.current)
-    }
-    watchdogTimeoutRef.current = null
-    releaseQueueProcessingOwner()
-  }, QUEUE_WATCHDOG_TIMEOUT_MS)
-
   return {
     isCurrentQueueProcessingOwner,
     releaseQueueProcessingOwner,
-    clearTimeoutFn,
   }
 }
 
@@ -104,7 +70,6 @@ export type CompleteQueuedMessageProcessingParams = {
   sendMessage: (message: QueuedMessage) => Promise<void>
   onRejected?: (message: QueuedMessage, error: unknown) => void
   isProcessingQueueRef: MutableRefObject<boolean>
-  watchdogTimeoutRef: MutableRefObject<QueueWatchdogTimer | null>
   queueProcessingRun: QueueProcessingRun
 }
 
@@ -116,11 +81,30 @@ export const completeQueuedMessageProcessing = (
     sendMessage,
     onRejected,
     isProcessingQueueRef,
-    watchdogTimeoutRef,
     queueProcessingRun,
   } = params
 
-  sendMessage(messageToProcess)
+  // A sendMessage implementation that throws synchronously returns nothing
+  // to chain .catch on (reviewer advisory): without this guard the throw
+  // would escape before the `.finally` cleanup, leaking the processing lock
+  // and orphaning the queue. Route it through the same rejection path.
+  let sendPromise: Promise<void>
+  try {
+    sendPromise = sendMessage(messageToProcess)
+  } catch (err: unknown) {
+    logger.warn(
+      { error: err },
+      '[message-queue] sendMessage threw synchronously',
+    )
+    onRejected?.(messageToProcess, err)
+    if (queueProcessingRun.isCurrentQueueProcessingOwner()) {
+      isProcessingQueueRef.current = false
+      queueProcessingRun.releaseQueueProcessingOwner()
+      logger.debug('[message-queue] Processing lock released')
+    }
+    return
+  }
+  sendPromise
     .catch((err: unknown) => {
       logger.warn(
         { error: err },
@@ -134,11 +118,6 @@ export const completeQueuedMessageProcessing = (
         return
       }
       isProcessingQueueRef.current = false
-      // Clear watchdog timer when processing completes normally
-      if (watchdogTimeoutRef.current) {
-        queueProcessingRun.clearTimeoutFn(watchdogTimeoutRef.current)
-        watchdogTimeoutRef.current = null
-      }
       queueProcessingRun.releaseQueueProcessingOwner()
       logger.debug('[message-queue] Processing lock released')
     })
@@ -158,7 +137,6 @@ export const runQueuedMessage = (params: RunQueuedMessageParams): void => {
     sendMessage: params.sendMessage,
     onRejected: params.onRejected,
     isProcessingQueueRef: params.isProcessingQueueRef,
-    watchdogTimeoutRef: params.watchdogTimeoutRef,
     queueProcessingRun,
   })
 }
@@ -182,8 +160,6 @@ export const useMessageQueue = (
   const isProcessingQueueRef = useRef<boolean>(false)
   // User-initiated pause state (separate from system-busy state)
   const isQueuePausedRef = useRef<boolean>(false)
-  // Watchdog timer to recover from stuck queue processing lock
-  const watchdogTimeoutRef = useRef<QueueWatchdogTimer | null>(null)
   const queueProcessingOwnerRef = useRef<symbol | null>(null)
 
   // queuePaused reflects whether the user has explicitly paused the queue
@@ -208,11 +184,6 @@ export const useMessageQueue = (
   useEffect(() => {
     return () => {
       clearStreaming()
-      // Clean up watchdog timer on unmount
-      if (watchdogTimeoutRef.current) {
-        clearTimeout(watchdogTimeoutRef.current)
-        watchdogTimeoutRef.current = null
-      }
     }
   }, [clearStreaming])
 
@@ -291,7 +262,6 @@ export const useMessageQueue = (
     const queueProcessingRun = beginQueuedMessageProcessing({
       isProcessingQueueRef,
       isQueuePausedRef,
-      watchdogTimeoutRef,
       queueProcessingOwnerRef,
       setCanProcessQueue,
     })
@@ -323,7 +293,6 @@ export const useMessageQueue = (
         setCanProcessQueue(false)
       },
       isProcessingQueueRef,
-      watchdogTimeoutRef,
       queueProcessingRun,
     })
   }, [
@@ -369,11 +338,19 @@ export const useMessageQueue = (
     setCanProcessQueue(true)
   }, [])
 
-  const clearQueue = useCallback(() => {
+  // Partial-failure-aware drain (reliability finding
+  // exit-drain-partial-failure-drops-queue): the exit path drains one entry
+  // at a time so a persist failure leaves the remaining prompts queued
+  // instead of having been removed from the queue up front.
+  const clearQueue = useCallback((count?: number) => {
     const current = queuedMessagesRef.current
-    queuedMessagesRef.current = []
-    setQueuedMessages([])
-    return current
+    const drained =
+      count === undefined ? current : current.slice(0, Math.max(0, count))
+    const remaining =
+      count === undefined ? [] : current.slice(Math.max(0, count))
+    queuedMessagesRef.current = remaining
+    setQueuedMessages(remaining)
+    return drained
   }, [])
 
   const startStreaming = useCallback(() => {

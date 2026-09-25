@@ -1790,9 +1790,17 @@ describe('read_files edit-state recovery', () => {
     expect(output.type).toBe('json')
     if (output.type === 'json') {
       expect(output.value).toHaveProperty('errorMessage')
+      // The client apply error is sanitized before reaching the model: the
+      // raw throwable goes to the server log only, and the model sees the
+      // static recovery message (no internal error text leakage).
       expect(
         String((output.value as { errorMessage?: string }).errorMessage),
-      ).toContain('client apply threw')
+      ).toContain(
+        'edit_transaction failed while applying its preflighted coordinated changes.',
+      )
+      expect(
+        String((output.value as { errorMessage?: string }).errorMessage),
+      ).not.toContain('client apply threw')
     }
     expect(fileProcessingState.promisesByPath[path]).toBeUndefined()
     expect(fileProcessingState.promisesByPath[otherPath]).toBeUndefined()

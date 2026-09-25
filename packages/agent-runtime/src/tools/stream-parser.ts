@@ -260,6 +260,10 @@ export async function processStream(
       anchors: agentState.confirmedPostEditAnchorsByPath,
       projectId: fileContext.projectRoot ?? '',
       runId,
+      // Opt-in (M1-T4b): the stamps live in durable per-run agentState on the
+      // user's own machine; tampering with them implies local write access,
+      // so the issuer-stamp restart path stays available across turns.
+      allowUnauthenticatedIssuerRestamp: true,
     }),
     // Only authorizations already present before this provider generation are
     // epistemically usable by edit arguments authored in this response. A

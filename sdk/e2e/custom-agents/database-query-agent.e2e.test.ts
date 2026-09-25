@@ -4,7 +4,7 @@
  * Agent with mock SQL execution tool demonstrating database integration patterns.
  */
 
-import { describe, test, expect, beforeAll } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { z } from 'zod/v4'
 
 import { OpenbuffClient, getCustomToolDefinition } from '../../src'
@@ -15,8 +15,11 @@ import {
   MOCK_DATABASE,
   DEFAULT_TIMEOUT,
 } from '../utils'
+import { teardownE2eMocks } from '../utils/e2e-mocks'
 
 import type { AgentDefinition } from '../../src'
+
+afterAll(() => teardownE2eMocks())
 
 describe('Custom Agents: Database Query Agent', () => {
   let client: OpenbuffClient

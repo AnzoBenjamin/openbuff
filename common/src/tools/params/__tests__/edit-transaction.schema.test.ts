@@ -11,19 +11,21 @@ import {
 // target bounds may narrow its covered range; removed legacy hash fields are
 // rejected at model-facing transaction boundaries.
 
+// Shared fixture minting (also reused by the provider/runtime delta contract
+// describe below): a whole-file cap.v3 exactly as read_files.renderWholeFileItem
+// would mint it — startLine=1, endLine=split('\n').length of the normalized
+// content, hash over the full normalized content.
+const issuer = { projectId: '/project', runId: 'run-schema-transform' }
+const path = 'src/file.ts'
+const wholeFileContent = 'line 1\nline 2\nline 3\nline 4\n'
+const wholeFileCap = encodeReadCapabilityToken({
+  startLine: 1,
+  endLine: 4,
+  hash: getContentHash(wholeFileContent),
+  scope: { ...issuer, path },
+})
+
 describe('editTransactionParams inputSchema transform — whole-file readCapability', () => {
-  const issuer = { projectId: '/project', runId: 'run-schema-transform' }
-  const path = 'src/file.ts'
-  // Mint a whole-file cap.v3 exactly as read_files.renderWholeFileItem would:
-  // startLine=1, endLine=split('\n').length of the normalized content, hash
-  // over the full normalized content.
-  const wholeFileContent = 'line 1\nline 2\nline 3\nline 4\n'
-  const wholeFileCap = encodeReadCapabilityToken({
-    startLine: 1,
-    endLine: 4,
-    hash: getContentHash(wholeFileContent),
-    scope: { ...issuer, path },
-  })
   const decodedWholeFile = decodeReadCapabilityToken(wholeFileCap)
   expect(typeof decodedWholeFile).toBe('object')
   const wholeFileHash =
@@ -331,5 +333,111 @@ describe('editTransactionParams inputSchema transform — whole-file readCapabil
       },
     ])
     expect(parsed.success).toBe(true)
+  })
+})
+
+describe('provider ↔ runtime edit-schema delta contract (M2-T3)', () => {
+  // Audit MEDIUM api-contract finding: the runtime inputSchema enforces four
+  // refinements the provider-declared providerInputSchema (the surface SDK
+  // providers see) intentionally omits — capability-token decode and
+  // authentication, occurrence vs explicit line-bounds mutual exclusion,
+  // target-line containment within the capability range, and placeholder
+  // rejection. Every case below must pass providerInputSchema while failing
+  // inputSchema, and the runtime failure issues must name the delta
+  // constraint — never a missing sibling field.
+  const expectProviderAcceptsRuntimeRejects = (
+    fixture: unknown,
+    expectedIssueFragment: string,
+  ) => {
+    expect(
+      editTransactionParams.providerInputSchema.safeParse(fixture).success,
+    ).toBe(true)
+
+    const runtimeParsed = editTransactionParams.inputSchema.safeParse(fixture)
+    expect(runtimeParsed.success).toBe(false)
+    if (runtimeParsed.success) return
+    const issueText = runtimeParsed.error.issues
+      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+      .join('\n')
+    // Only the named delta may fail: no issue may report a missing/required
+    // sibling field or a shape-level type error instead.
+    expect(issueText).toContain(expectedIssueFragment)
+    expect(issueText.toLowerCase()).not.toMatch(
+      /required|missing|invalid input/i,
+    )
+  }
+
+  it('capability decode: the runtime decodes and authenticates cap.v3 tokens', () => {
+    expectProviderAcceptsRuntimeRejects(
+      {
+        edits: [
+          {
+            type: 'replace_range',
+            path,
+            readCapability: 'not-a-real-token',
+            newContent: 'replacement',
+          },
+        ],
+      },
+      'Invalid basedOnRead',
+    )
+  })
+
+  it('mutual exclusion: the runtime rejects occurrence targeting alongside explicit line bounds', () => {
+    expectProviderAcceptsRuntimeRejects(
+      {
+        edits: [
+          {
+            type: 'replace_range',
+            path,
+            readCapability: wholeFileCap,
+            occurrence: { match: 'x' },
+            startLine: 2,
+            endLine: 3,
+            newContent: 'replacement',
+          },
+        ],
+      },
+      'occurrence is mutually exclusive with startLine/endLine',
+    )
+  })
+
+  it('containment: the runtime rejects line bounds outside the capability range', () => {
+    expectProviderAcceptsRuntimeRejects(
+      {
+        edits: [
+          {
+            type: 'replace_range',
+            path,
+            readCapability: wholeFileCap,
+            startLine: 1,
+            endLine: 999,
+            newContent: 'replacement',
+          },
+        ],
+      },
+      'contained within the readCapability range 1-4',
+    )
+  })
+
+  it('placeholder rejection: the runtime refuses explicit placeholders the provider surface passes through', () => {
+    // The audit's fixture named the create-edit content refine, but that
+    // refine lives on a schema object shared by BOTH unions, so a create
+    // fixture would fail both schemas and pin no delta. The runtime-only
+    // placeholder refinement for replace_range lives on newContent, so this
+    // fixture pins the same placeholder-rejection delta class through it.
+    expectProviderAcceptsRuntimeRejects(
+      {
+        edits: [
+          {
+            type: 'replace_range',
+            path,
+            readCapability: wholeFileCap,
+            newContent: '[see patch above]',
+          },
+        ],
+      },
+      'explicit placeholder',
+    )
   })
 })

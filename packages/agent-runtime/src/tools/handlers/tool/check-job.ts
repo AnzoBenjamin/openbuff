@@ -25,6 +25,7 @@ export const handleCheckJob = (async ({
   requestClientToolCall,
   agentState,
   clientSessionId,
+  signal,
 }: {
   previousToolCallFinished: Promise<void>
   toolCall: CodebuffToolCall<ToolName>
@@ -33,6 +34,7 @@ export const handleCheckJob = (async ({
   ) => Promise<CodebuffToolOutput<ToolName>>
   agentState: AgentState
   clientSessionId: string
+  signal: AbortSignal
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
   const clientToolCall: ProcessJobClientToolCall<ToolName> = {
     toolName: 'check_job',
@@ -42,6 +44,11 @@ export const handleCheckJob = (async ({
       wait_for: toolCall.input.wait_for,
       timeout_seconds: toolCall.input.timeout_seconds,
       kill_on_timeout: toolCall.input.kill_on_timeout,
+      // Trusted runtime abort signal (M2-T4, Fix 4): forwards turn
+      // cancellation into the SDK follow loop so an aborted turn cannot
+      // linger to the follow deadline. Non-serializable, injected alongside
+      // the trusted owner — never model input.
+      signal,
       // Trusted owner injected from agent/session state (never model input).
       owner: resolveRuntimeJobOwner({ clientSessionId, agentState }),
     },

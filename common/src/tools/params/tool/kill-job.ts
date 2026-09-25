@@ -49,7 +49,11 @@ export const killJobParams = {
     z.union([
       z.object({
         jobId: z.string(),
-        status: z.enum(['running', 'completed', 'error', 'lost', 'stopped']),
+        // M2-T4: 'stopping' is the non-terminal "signal delivered, exit not
+        // yet observed" state the kill path folds in before the exit event.
+        status: z.enum(
+          ['running', 'stopping', 'completed', 'error', 'lost', 'stopped'],
+        ),
         killed: z.boolean(),
         signal: z.enum(['SIGTERM', 'SIGKILL']),
         exitCode: z.number().nullable().optional(),

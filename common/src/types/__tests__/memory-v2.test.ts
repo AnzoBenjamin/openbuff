@@ -23,6 +23,7 @@ import {
   MemorySelectorSchema,
   MemoryEvidenceSchema,
   MemoryProvenanceSchema,
+  MemoryReuseReceiptV1Schema,
   MemoryTurnContextV2Schema,
   ProjectIdSchema,
   QueryDegradationSummarySchema,
@@ -1116,5 +1117,29 @@ describe('CoverageRecordedPayload and CurrentCoverageItem schemas', () => {
       state: 'covered',
       taskId: 'task:1',
     })
+  })
+})
+
+describe('MemoryReuseReceiptV1Schema conceptExpanded backward-compat (M2-T3)', () => {
+  test('defaults conceptExpanded to 0 for v1 receipts without the field', () => {
+    // Producers emitting the original v1 shape (before conceptExpanded
+    // existed) must keep parsing: the additive default closes the unversioned
+    // v1 drift backward-compatibly instead of bumping the version.
+    const v1Receipt = {
+      schemaVersion: 1,
+      turnId: 'turn:1',
+      skip: 1,
+      narrow: 2,
+      full: 3,
+      recordsServed: 4,
+      gapsRemaining: 5,
+      recordedDecisions: 6,
+    }
+
+    expect(MemoryReuseReceiptV1Schema.parse(v1Receipt).conceptExpanded).toBe(0)
+    expect(
+      MemoryReuseReceiptV1Schema.parse({ ...v1Receipt, conceptExpanded: 3 })
+        .conceptExpanded,
+    ).toBe(3)
   })
 })

@@ -190,37 +190,45 @@ export function tryRecoverTruncatedToolArguments(
     // balanced payloads are never truncation-recovery candidates.
     return undefined
   }
-  // Scan `}`/`]` candidate cut positions from LATEST to EARLIEST. For each,
-  // build the prefix ending at that closer, append balanced closers for the
-  // residual open containers, and let JSON.parse be the final gate.
-  for (let pos = rawInput.length - 1; pos >= 0; pos--) {
-    const closingChar = rawInput[pos]
-    if (closingChar !== '}' && closingChar !== ']') {
-      continue
+  // M3-T2: ONE forward pass over the raw input records every out-of-string
+  // `}`/`]` position together with the residual open-container stack at that
+  // point. The original implementation re-ran the string/escape/brace state
+  // machine over the whole prefix for EVERY candidate closer (O(n²) on the
+  // truncation-recovery hot path); recording the stack incrementally keeps
+  // the scan linear while producing byte-identical candidate strings.
+  type CandidateSnapshot = { pos: number; openStack: string[] }
+  const candidates: CandidateSnapshot[] = []
+  let openStack: string[] = []
+  let inString = false
+  let escapedData = false
+  for (let i = 0; i < rawInput.length; i++) {
+    const c = rawInput[i]
+    if (inString) {
+      if (escapedData) escapedData = false
+      else if (c === '\\') escapedData = true
+      else if (c === '"') inString = false
+    } else if (c === '"') {
+      inString = true
+    } else if (c === '{') {
+      openStack.push('{')
+    } else if (c === '[') {
+      openStack.push('[')
+    } else if (c === '}' || c === ']') {
+      // The candidate prefix ends AT this closer (inclusive), so the residual
+      // stack is the one AFTER this closer is consumed.
+      openStack.pop()
+      candidates.push({ pos: i, openStack: [...openStack] })
     }
-    const prefix = rawInput.slice(0, pos + 1)
-    // Rescan the prefix with the string/escape state machine to compute the
-    // residual open-container stack. When the candidate character was consumed
-    // inside a string literal (inString at end of prefix) it is data, not a
-    // structural boundary — skip it.
-    const openStack: string[] = []
-    let inString = false
-    let escapedData = false
-    for (let i = 0; i < prefix.length; i++) {
-      const c = prefix[i]
-      if (inString) {
-        if (escapedData) escapedData = false
-        else if (c === '\\') escapedData = true
-        else if (c === '"') inString = false
-      } else if (c === '"') inString = true
-      else if (c === '{') openStack.push('{')
-      else if (c === '[') openStack.push('[')
-      else if (c === '}' || c === ']') openStack.pop()
-    }
-    if (inString) continue
-    let candidate = prefix
-    for (let i = openStack.length - 1; i >= 0; i--) {
-      candidate += openStack[i] === '{' ? '}' : ']'
+  }
+  // Try candidates from LATEST to EARLIEST: append balanced closers for the
+  // residual opens and let JSON.parse be the final gate. Same acceptance
+  // semantics as before: the recovered object must be a plain non-empty
+  // object.
+  for (let k = candidates.length - 1; k >= 0; k--) {
+    const snapshot = candidates[k]
+    let candidate = rawInput.slice(0, snapshot.pos + 1)
+    for (let i = snapshot.openStack.length - 1; i >= 0; i--) {
+      candidate += snapshot.openStack[i] === '{' ? '}' : ']'
     }
     try {
       const recovered = JSON.parse(candidate)

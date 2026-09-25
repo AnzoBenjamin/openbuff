@@ -201,12 +201,23 @@ function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
  *    the file changed since the confirmed apply.
  * 6. The anchor's own capability re-decodes and is scope-bound to this same
  *    run + normalized path (cross-run / cross-path anti-replay).
+ * 7. The PROVIDED capability is itself whole-file covering — substituting a
+ *    scoped capability with the whole-file anchor would widen what the edit
+ *    can target (with omitted startLine/endLine the transaction defaults the
+ *    target from the substituted capability's span, turning a scoped edit
+ *    into a whole-file clobber). A scoped caller keeps its own token and
+ *    follows the normal strict/stale/re-read recovery path.
+ * 8. The PROVIDED capability is itself scope-bound to this same project +
+ *    normalized path + run — the cross-run / cross-path anti-replay of
+ *    condition 6 applies to the provided token too, not only the anchor. A
+ *    decodable whole-file token minted for a different path, project, or run
+ *    proves nothing about this file in this scope and is never substituted.
  *
  * delete/move are never touched here (they are authorized separately via the
  * confirmed-anchor branch), and context_compacted markers are never cleared
  * by this substitution.
  */
-function substituteConfirmedPostEditCapabilities(
+export function substituteConfirmedPostEditCapabilities(
   edits: TransactionEdit[],
   initialContentByPath: ReadonlyMap<string, string | null>,
   fileProcessingState: FileProcessingState,
@@ -218,7 +229,8 @@ function substituteConfirmedPostEditCapabilities(
     path: string,
     providedToken: string,
   ): string | null => {
-    if (typeof decodeReadCapabilityToken(providedToken) === 'string') {
+    const decodedProvided = decodeReadCapabilityToken(providedToken)
+    if (typeof decodedProvided === 'string') {
       return null
     }
     const anchor = fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
@@ -231,6 +243,33 @@ function substituteConfirmedPostEditCapabilities(
     if (typeof decodedAnchor === 'string') return null
     if (
       !readCapabilityMatchesScope(decodedAnchor, { projectId, path, runId })
+    ) {
+      return null
+    }
+    // 7. Span non-widening guard (fail closed): substituting a SCOPED provided
+    // capability with the whole-file anchor widens what the edit can target —
+    // with omitted startLine/endLine the transaction defaults the target from
+    // the substituted capability's span, turning a scoped edit into a
+    // whole-file clobber. Only a provided capability that already covers the
+    // whole file may take the anchor; a scoped caller keeps its own token and
+    // follows the normal strict/stale/re-read recovery path.
+    if (
+      !isWholeFileCoveringRange(
+        getLineCoordinates(snapshotContent),
+        decodedProvided.startLine,
+        decodedProvided.endLine,
+      )
+    ) {
+      return null
+    }
+    // 8. Provided-capability scope anti-replay (fail closed): the PROVIDED
+    // token must itself be scope-bound to this same project + path + run. A
+    // decodable whole-file token minted for a DIFFERENT path, project, or run
+    // proves nothing about this file in this scope; swapping it for the
+    // anchor would grant edit authority for a file the caller never read in
+    // this scope.
+    if (
+      !readCapabilityMatchesScope(decodedProvided, { projectId, path, runId })
     ) {
       return null
     }
@@ -1375,6 +1414,14 @@ export const handleEditTransaction = (async (
   })
 
   if (application.status === 'threw') {
+    // M2-T6: client-apply errors can carry internal filesystem/client detail
+    // that must not be echoed into agent-visible tool output (matches the
+    // tool-executor MIGRATION NOTE). The raw error is logged here; both the
+    // top-level and the per-failure messages stay static.
+    logger.warn(
+      { paths: transactionResult.files.map((file) => file.path), error: application.error },
+      'edit_transaction apply threw; sanitized static error returned to the model',
+    )
     return {
       output: [
         {
@@ -1382,7 +1429,6 @@ export const handleEditTransaction = (async (
           value: {
             errorMessage: [
               'edit_transaction failed while applying its preflighted coordinated changes.',
-              `Client threw: ${application.error instanceof Error ? application.error.message : String(application.error)}`,
               'No in-memory transaction state was recorded. Re-read all affected files before retrying.',
             ].join('\n'),
             failures: [
@@ -1392,9 +1438,7 @@ export const handleEditTransaction = (async (
                   .map((file) => file.path)
                   .join(', '),
                 errorMessage:
-                  application.error instanceof Error
-                    ? application.error.message
-                    : String(application.error),
+                  'edit_transaction failed while applying its preflighted coordinated changes.',
               },
             ],
           },

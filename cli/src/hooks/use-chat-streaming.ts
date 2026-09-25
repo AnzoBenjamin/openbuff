@@ -65,7 +65,13 @@ export interface UseChatStreamingReturn {
   setCanProcessQueue: (value: boolean | ((prev: boolean) => boolean)) => void
   pauseQueue: () => void
   resumeQueue: () => void
-  clearQueue: () => QueuedMessage[]
+  /**
+   * Drains up to `count` prompts (all of them when `count` is omitted) and
+   * returns them. The exit path drains one at a time so a partial persist
+   * failure leaves the remaining prompts queued (reliability finding
+   * exit-drain-partial-failure-drops-queue).
+   */
+  clearQueue: (count?: number) => QueuedMessage[]
   isQueuePausedRef: MutableRefObject<boolean>
   isProcessingQueueRef: MutableRefObject<boolean>
 

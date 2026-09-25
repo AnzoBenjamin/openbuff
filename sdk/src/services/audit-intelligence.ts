@@ -10,6 +10,43 @@ const ignored = new Set([
   'coverage',
   '.next',
 ])
+export const ignoredLiveStateDirectories = [
+  '.openbuff',
+  '.codebuff-index',
+  '.omx',
+  '.tmp',
+  'debug',
+  'scratch-logs',
+  'release',
+  'release-staging',
+  'bin',
+] as const
+export const ignoredLiveStateFileSuffixes = [
+  '.log',
+  '.sqlite',
+  '.sqlite-wal',
+  '.sqlite-shm',
+  '.sqlite-journal',
+] as const
+const ignoredLiveStateDirectorySet = new Set<string>(
+  ignoredLiveStateDirectories,
+)
+const ignoredLiveStateFileSuffixList: readonly string[] =
+  ignoredLiveStateFileSuffixes
+
+export function isIgnoredPath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/')
+  if (normalized.startsWith('.agents/sessions/')) return true
+  if (
+    normalized
+      .split('/')
+      .some((segment) => ignoredLiveStateDirectorySet.has(segment))
+  )
+    return true
+  return ignoredLiveStateFileSuffixList.some((suffix) =>
+    normalized.endsWith(suffix),
+  )
+}
 const sourceExtensions = new Set([
   '.ts',
   '.tsx',
@@ -69,13 +106,30 @@ export type CodebaseInventory = {
 
 function walk(root: string, current = root, out: string[] = []): string[] {
   for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-    if (entry.isDirectory() && ignored.has(entry.name)) continue
     const absolute = path.join(current, entry.name)
-    if (entry.isDirectory()) walk(root, absolute, out)
-    else if (entry.isFile())
-      out.push(path.relative(root, absolute).replace(/\\/g, '/'))
+    const relative = path.relative(root, absolute).replace(/\\/g, '/')
+    if (entry.isDirectory()) {
+      if (ignored.has(entry.name) || isIgnoredPath(relative)) continue
+      walk(root, absolute, out)
+    } else if (entry.isFile()) {
+      if (isIgnoredPath(relative)) continue
+      out.push(relative)
+    }
   }
   return out
+}
+
+const maxFileBytes = 256_000
+
+function readCapped(file: string): Buffer {
+  const fd = fs.openSync(file, 'r')
+  try {
+    const buffer = Buffer.alloc(Math.min(fs.fstatSync(fd).size, maxFileBytes))
+    fs.readSync(fd, buffer, 0, buffer.length, 0)
+    return buffer
+  } finally {
+    fs.closeSync(fd)
+  }
 }
 
 function hashInventory(files: string[], root: string): string {
@@ -87,7 +141,7 @@ function hashInventory(files: string[], root: string): string {
       `${file}\0${stat.mode}\0${stat.isSymbolicLink() ? 'link' : 'file'}\0`,
     )
     if (stat.isSymbolicLink()) hash.update(fs.readlinkSync(absolute))
-    else hash.update(fs.readFileSync(absolute))
+    else hash.update(readCapped(absolute))
     hash.update('\n')
   }
   return hash.digest('hex')
@@ -289,12 +343,44 @@ export function inspectFeatureCompleteness(
 
 function safeRead(file: string): string {
   try {
-    return fs.statSync(file).size <= 256_000
+    return fs.statSync(file).size <= maxFileBytes
       ? fs.readFileSync(file, 'utf8')
       : ''
   } catch {
     return ''
   }
+}
+
+export function promoteFeatureEvidence(
+  record: FeatureCompletenessRecord,
+  inventory: CodebaseInventory,
+  attestedFiles: readonly string[],
+): {
+  record: FeatureCompletenessRecord
+  verified: boolean
+  unattested: string[]
+} {
+  const attested = new Set(attestedFiles)
+  const inventoryFiles = new Set(inventory.files)
+  const unattested = new Set<string>()
+  let categoriesPopulated = true
+  for (const category of Object.values(record.evidence)) {
+    if (category.length === 0) categoriesPopulated = false
+    for (const file of category)
+      if (!attested.has(file) || !inventoryFiles.has(file)) unattested.add(file)
+  }
+  if (categoriesPopulated && unattested.size === 0)
+    return {
+      record: {
+        ...record,
+        evidenceKind: 'verified',
+        status: 'complete',
+        missing: [],
+      },
+      verified: true,
+      unattested: [],
+    }
+  return { record, verified: false, unattested: [...unattested] }
 }
 
 export type AuditCoverageReceipt = {

@@ -1,9 +1,11 @@
+import { checkBackgroundAgentParams } from '@codebuff/common/tools/params/tool/check-background-agent'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/fixtures/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
 import { assistantMessage } from '@codebuff/common/util/messages'
 import {
+  afterAll,
   afterEach,
   beforeEach,
   describe,
@@ -116,6 +118,10 @@ function readJsonToolValue(output: unknown): Record<string, unknown> {
 
 describe('background-agent-jobs registry', () => {
   beforeEach(() => {
+    __clearBackgroundAgentJobsForTest()
+  })
+
+  afterAll(() => {
     __clearBackgroundAgentJobsForTest()
   })
 
@@ -845,6 +851,10 @@ describe('check_background_agent join semantics', () => {
     userInputId: 'input-poll',
   }
 
+  /** The generic not-found message the handler emits (shared by M1-T7). */
+  const jobNotFoundTemplate = (jobId: string): string =>
+    `No background agent job found with id "${jobId}".`
+
   function startCheckBackgroundAgent(
     input: Record<string, unknown>,
     options: { signal?: AbortSignal } = {},
@@ -866,6 +876,10 @@ describe('check_background_agent join semantics', () => {
   }
 
   beforeEach(() => {
+    __clearBackgroundAgentJobsForTest()
+  })
+
+  afterAll(() => {
     __clearBackgroundAgentJobsForTest()
   })
 
@@ -1127,6 +1141,80 @@ describe('check_background_agent join semantics', () => {
     expect(settled.do_not_repoll).toBe(true)
     expect(settled.stop_polling).toBeUndefined()
   })
+
+  // M1-T7 boundary contract: the handler's CodebuffToolOutput is a 1-TUPLE of
+  // json blocks. The pre-fix handler returned a bare {type:'json',value}
+  // object through `as unknown as` casts, so output[0] was undefined
+  // downstream and every check_background_agent result was unrenderable.
+  test('handler output is a 1-tuple json block that validates against the tool output schema', async () => {
+    const job = allocateBackgroundAgentJob({
+      agentType: 'basher',
+      agentName: 'Basher',
+      owner: POLL_OWNER,
+    })
+    await settleBackgroundAgentJob(job, { output: 'done' })
+    const { mainAgentState } = getInitialSessionState(mockFileContext)
+    const handlerResult = await handleCheckBackgroundAgent({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'check_background_agent',
+        toolCallId: 'boundary-contract',
+        input: { jobId: job.jobId },
+      },
+      agentState: mainAgentState,
+      clientSessionId: POLL_OWNER.clientSessionId,
+      signal: new AbortController().signal,
+    } as unknown as Parameters<typeof handleCheckBackgroundAgent>[0])
+
+    // Shape: tuple of exactly one json block (the CRITICAL shape break).
+    expect(Array.isArray(handlerResult.output)).toBe(true)
+    expect(handlerResult.output).toHaveLength(1)
+    expect(handlerResult.output[0]!.type).toBe('json')
+
+    // Contract: the tuple validates against the declared outputSchema.
+    const parsed = checkBackgroundAgentParams.outputSchema.safeParse(
+      handlerResult.output,
+    )
+    expect(parsed.success).toBe(true)
+  })
+
+  // M1-T7 anti-enumeration: a FOREIGN job id must return the SAME generic
+  // not-found payload as an unknown id, so a caller can never probe for other
+  // sessions' background agent activity (ids are counter-ordered with modest
+  // entropy — a distinguishable 'foreign' message would be an oracle).
+  test('foreign job ids are indistinguishable from unknown ids', async () => {
+    const foreignOwner: BackgroundAgentJobOwner = {
+      clientSessionId: 'other-session',
+      rootRunId: 'other-root',
+      parentRunId: 'other-root',
+      parentAgentId: 'other-agent',
+      userInputId: 'other-input',
+    }
+    const foreignJob = allocateBackgroundAgentJob({
+      agentType: 'basher',
+      agentName: 'Basher',
+      owner: foreignOwner,
+    })
+    attachBackgroundAgentPromise(foreignJob, new Promise(() => {}))
+
+    const bogusValue = await startCheckBackgroundAgent({
+      jobId: 'bg-agent-does-not-exist',
+    })
+    const foreignValue = await startCheckBackgroundAgent({
+      jobId: foreignJob.jobId,
+    })
+
+    // Both return the SAME generic not-found template (only the caller-supplied
+    // id is echoed, exactly as for a bogus id) — no 'foreign' distinction that
+    // would leak the existence of another session's job.
+    expect(bogusValue.errorMessage).toBe(
+      jobNotFoundTemplate('bg-agent-does-not-exist'),
+    )
+    expect(foreignValue.errorMessage).toBe(
+      jobNotFoundTemplate(foreignJob.jobId),
+    )
+    expect(String(foreignValue.errorMessage)).not.toContain('not owned')
+  })
 })
 
 describe('spawn_agents background intent reconciliation', () => {
@@ -1189,6 +1277,10 @@ describe('spawn_agents background intent reconciliation', () => {
         },
       }),
     )
+  })
+
+  afterAll(() => {
+    __clearBackgroundAgentJobsForTest()
   })
 
   afterEach(() => {

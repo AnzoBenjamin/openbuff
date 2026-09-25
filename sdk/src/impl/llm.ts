@@ -44,6 +44,8 @@ import {
   MAX_RETRIES_PER_MESSAGE,
   RETRY_BACKOFF_BASE_DELAY_MS,
   computeBackoffDelayMs,
+  isTransientNetworkError,
+  runWithRetryPolicy,
   waitForBackoffDelay,
 } from '../retry-config'
 
@@ -79,6 +81,143 @@ const providerOrder = {
     'Amazon Bedrock',
   ],
   [models.openrouter_claude_opus_4]: ['Google', 'Anthropic'],
+}
+
+/**
+ * Attempt to repair a model tool-call `input` string whose JSON was cut off
+ * mid-stream (a common invalid-tool-input failure for truncated
+ * generations). The repair is strictly bounded: at most 64 trailing
+ * characters of garbage are dropped (whitespace, a dangling value, a
+ * dangling key/colon or a trailing comma), an unterminated string at the
+ * cut point is closed, and missing closing brackets are appended. Returns
+ * the repaired text only when it parses to a plain JSON object or array;
+ * `undefined` means 'unrepairable' and the caller keeps the original input
+ * so per-tool validation produces the model-visible error (M2-T5).
+ */
+export function repairTruncatedToolInputJson(
+  input: string,
+): string | undefined {
+  const text = input.trim()
+  if (text.length === 0) return undefined
+  if (text[0] !== '{' && text[0] !== '[') return undefined
+
+  const tryParse = (
+    candidate: string,
+  ): Record<string, unknown> | unknown[] | undefined => {
+    try {
+      const parsed: unknown = JSON.parse(candidate)
+      if (Array.isArray(parsed)) return parsed
+      if (typeof parsed === 'object' && parsed !== null) {
+        return parsed as Record<string, unknown>
+      }
+      return undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  if (tryParse(text) !== undefined) return text
+
+  // M2-T5 repair (bounded-faithfulness guard): a WRONG closing bracket in the
+  // produced text (e.g. `{"a": 1]`) is a structural mismatch, not a clean
+  // truncation — silently dropping it would misrepresent content the model
+  // already produced. Return undefined so the call fails explicitly through
+  // validation instead of being silently rewritten.
+  // An unterminated string is NOT a mismatch (the repair below legitimately
+  // closes it), so quotes are skipped in this scan.
+  const hasMismatchedCloseBracket = (candidate: string): boolean => {
+    const stack: string[] = []
+    let inString = false
+    let escaped = false
+    for (let i = 0; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') inString = true
+      else if (ch === '{') stack.push('}')
+      else if (ch === '[') stack.push(']')
+      else if (ch === '}' || ch === ']') {
+        if (stack.pop() !== ch) return true
+      }
+    }
+    return false
+  }
+  if (hasMismatchedCloseBracket(text)) return undefined
+
+  // A cut inside a string literal cannot parse without closing the quote.
+  const openQuoteAt = (candidate: string): number => {
+    let quote: string | null = null
+    let escaped = false
+    for (let i = 0; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (quote === null) {
+        if (ch === '"' || ch === "'") quote = ch
+      } else if (quote === ch && !escaped) {
+        quote = null
+      } else if (ch === '\\') {
+        escaped = !escaped
+        continue
+      }
+      escaped = false
+    }
+    return quote === null ? -1 : candidate.lastIndexOf(quote)
+  }
+
+  const closeBrackets = (candidate: string): string | undefined => {
+    const stack: string[] = []
+    let inString = false
+    let escaped = false
+    for (let i = 0; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') inString = true
+      else if (ch === '{') stack.push('}')
+      else if (ch === '[') stack.push(']')
+      else if (ch === '}' || ch === ']') {
+        if (stack.pop() !== ch) return undefined
+      }
+    }
+    if (inString) return undefined
+    return candidate + stack.reverse().join('')
+  }
+
+  const MAX_TRUNCATION_CHARS = 64
+  const cutFrom = Math.max(0, text.length - MAX_TRUNCATION_CHARS)
+  for (let cut = text.length; cut >= cutFrom; cut--) {
+    let candidate = text.slice(0, cut)
+    // Drop a trailing comma / dangling key / dangling colon left by the cut.
+    candidate = candidate.replace(/[,:\s]+$/, '')
+    const quoteAt = openQuoteAt(candidate)
+    if (quoteAt >= 0) {
+      // Close the unterminated string at the cut point, keeping the value
+      // text the model already produced before the cut (M2-T5).
+      candidate = candidate + '"'
+    }
+    candidate = candidate.replace(/,\s*$/, '')
+    const closed = closeBrackets(candidate)
+    if (closed === undefined) continue
+    const parsedClosed = tryParse(closed)
+    if (parsedClosed === undefined) continue
+    // M2-T5 repair: a reconstruction that discards EVERY key the model
+    // produced (parses to an empty `{}`/`[]`) loses all content and must
+    // fail explicitly instead.
+    const isEmptyContainer =
+      Array.isArray(parsedClosed)
+        ? parsedClosed.length === 0
+        : Object.keys(parsedClosed).length === 0
+    if (!isEmptyContainer) return closed
+  }
+
+  return undefined
 }
 
 function isImageMediaType(mediaType: unknown): boolean {
@@ -376,6 +515,30 @@ function emitCacheDebugUsage(params: {
 }
 
 const POST_STREAM_METADATA_TIMEOUT_MS = 500
+
+/**
+ * M3-T1 (finite timeouts): conservative default wall-clock bound on a single
+ * LLM request (headers + full stream body), so a provider that accepts the
+ * connection but never streams cannot hang the harness forever. Long
+ * generations for large contexts still fit comfortably inside 10 minutes;
+ * callers keep full control via their own abort signal, which is merged —
+ * an explicit caller cancellation always wins over this default.
+ */
+const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 600_000
+
+/**
+ * M3-T1: merge the caller's signal with a finite default request timeout.
+ * The returned signal aborts when either the caller cancels or the default
+ * deadline elapses, so a hung provider request is always bounded while an
+ * explicitly provided caller timeout (params.signal) remains authoritative.
+ */
+function withDefaultRequestTimeout(
+  params: ModelRequestParams | { signal?: unknown },
+  signal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_LLM_REQUEST_TIMEOUT_MS)
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+}
 
 /**
  * Depth cap for the JSON-safety probe below. Real JSON Schemas nest far
@@ -854,134 +1017,6 @@ export function classifyChatGptOAuthStreamError(params: {
   return 'fail-fast'
 }
 
-/**
- * Check if an error is a transient network error that should be retried.
- * Handles socket disconnections, connection resets, timeouts, and other
- * temporary network failures that can occur during LLM streaming.
- */
-function isTransientNetworkError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-
-  const err = error as {
-    name?: string
-    message?: string
-    cause?: unknown
-  }
-  const message = (err.message ?? '').toLowerCase()
-
-  // Check error names that indicate transient network issues.
-  // TypeError is only treated as transient when the message also
-  // indicates a network/fetch failure, to avoid retrying programming errors.
-  const transientErrorNames = ['TimeoutError', 'FetchError']
-  if (err.name && transientErrorNames.some((n) => err.name === n)) {
-    return true
-  }
-
-  // AbortError from the underlying fetch (not our user cancellation)
-  if (err.name === 'AbortError' && !message.includes('user cancelled')) {
-    return true
-  }
-
-  // TypeError from Node fetch for network failures
-  if (err.name === 'TypeError' && message.includes('fetch')) {
-    return true
-  }
-
-  // Check common transient network error patterns in message
-  const transientPatterns = [
-    'socket',
-    'connection was closed',
-    'connection reset',
-    'econnreset',
-    'etimedout',
-    'fetch failed',
-    'network error',
-    'unexpectedly closed',
-    'broken pipe',
-    'timeout',
-    'econnrefused',
-    'econnaborted',
-    'enetunreach',
-    'eai_again',
-  ]
-
-  for (const pattern of transientPatterns) {
-    if (message.includes(pattern)) return true
-  }
-
-  // Check if AbortError by message (but not from our own signal.aborted)
-  if (message.includes('abort') && !message.includes('user cancelled')) {
-    return true
-  }
-
-  // Check cause chain for error codes and messages (walk recursively through causes)
-  const seen = new Set<unknown>()
-  let currentCause: unknown = err.cause
-  while (currentCause && typeof currentCause === 'object') {
-    if (seen.has(currentCause)) break // Guard against cyclic cause chains
-    seen.add(currentCause)
-
-    const causeObj = currentCause as {
-      code?: string
-      message?: string
-      name?: string
-      cause?: unknown
-    }
-
-    // Check nested cause codes (normalized to uppercase)
-    if (causeObj.code) {
-      const codeUpper = causeObj.code.toUpperCase()
-      const transientCodes = [
-        'ECONNRESET',
-        'ETIMEDOUT',
-        'ECONNREFUSED',
-        'ECONNABORTED',
-        'ENETUNREACH',
-        'EAI_AGAIN',
-        'UND_ERR_SOCKET',
-        'UND_ERR_CONNECT_TIMEOUT',
-        'UND_ERR_HEADERS_TIMEOUT',
-        'UND_ERR_BODY_TIMEOUT',
-        'UND_ERR_ABORTED',
-        'EPIPE',
-        'ENOTFOUND',
-        'ENETDOWN',
-      ]
-      if (transientCodes.some((c) => codeUpper === c)) return true
-    }
-
-    // Check nested cause messages for transient patterns
-    if (causeObj.message) {
-      const causeMessage = causeObj.message.toLowerCase()
-      for (const pattern of transientPatterns) {
-        if (causeMessage.includes(pattern)) return true
-      }
-      if (
-        causeMessage.includes('abort') &&
-        !causeMessage.includes('user cancelled')
-      ) {
-        return true
-      }
-    }
-
-    // Check nested cause names
-    if (causeObj.name) {
-      if (
-        causeObj.name === 'TimeoutError' ||
-        causeObj.name === 'FetchError' ||
-        (causeObj.name === 'AbortError' &&
-          !(causeObj.message ?? '').toLowerCase().includes('user cancelled'))
-      ) {
-        return true
-      }
-    }
-
-    currentCause = causeObj.cause
-  }
-
-  return false
-}
-
 export async function* promptAiSdkStream(
   params: ParamsOf<PromptAiSdkStreamFn> & {
     skipChatGptOAuth?: boolean
@@ -1152,6 +1187,10 @@ export async function* promptAiSdkStream(
 
           response = streamText({
             ...streamParams,
+            // M3-T1: finite default request timeout so a hung provider
+            // stream cannot hang the harness; the caller's own signal
+            // (streamParams.signal) is merged and keeps taking precedence.
+            abortSignal: withDefaultRequestTimeout(streamParams, streamParams.signal),
             ...(compatibility.supportsTools === false
               ? { tools: undefined, toolChoice: undefined }
               : {}),
@@ -1246,7 +1285,43 @@ export async function* promptAiSdkStream(
                 }
               }
 
-              // For all other cases (invalid args, unknown tools, etc.), pass through
+              // InvalidToolInputError: attempt a bounded truncation repair
+              // of the tool input JSON. The AI SDK only hands the repair hook
+              // NoSuchToolError / InvalidToolInputError errors and, when the
+              // hook returns a call, re-validates it against the tool's
+              // schema (a failed re-validation falls through to the SDK's
+              // invalid tool-call error path, which is the model-visible
+              // graceful failure). Unrepairable input keeps the original
+              // call so that validation error surfaces unchanged (M2-T5).
+              if (InvalidToolInputError.isInstance(error)) {
+                if (typeof toolCall.input === 'string') {
+                  const repairedInput = repairTruncatedToolInputJson(
+                    toolCall.input,
+                  )
+                  if (repairedInput !== undefined) {
+                    logger.info(
+                      {
+                        toolName,
+                        originalLength: toolCall.input.length,
+                        repairedLength: repairedInput.length,
+                      },
+                      'Repaired truncated tool-call input JSON',
+                    )
+                    return { ...toolCall, input: repairedInput }
+                  }
+                  logger.info(
+                    {
+                      toolName,
+                      errorType: error.name,
+                      error: error.message,
+                    },
+                    'Tool input repair attempt failed - returning the call un-repaired after a failed repair attempt so per-tool validation produces the model-visible tool error',
+                  )
+                  return toolCall
+                }
+              }
+
+              // For all other cases (unknown tools etc.), pass through
               // the original tool call.
               logger.info(
                 {
@@ -1796,33 +1871,61 @@ export async function promptAiSdk(
     includeTools: compatibility.supportsTools !== false,
   })
 
+  // Hoisted out of the retry closure below: the message context is identical
+  // on every attempt, so the emergency-brake trim — and its side-effecting
+  // onRequestContextTrimmed consumer — must run once per request, not once
+  // per retry attempt.
+  const requestMessages = convertCbToModelMessages({
+    ...params,
+    messages: getMessagesForModelContext({
+      messages: params.messages,
+      contextWindowTokens,
+      systemTokens: requestOverheadTokens,
+      logger,
+      trackEvent: params.trackEvent,
+      userId: params.userId,
+      userInputId: params.userInputId,
+      model: effectiveModelSdk,
+      onTrimmed: params.onRequestContextTrimmed,
+    }),
+    includeCacheControl: compatibility.stripCacheControl === false,
+  })
+
   let response: Awaited<ReturnType<typeof generateText>>
   try {
-    response = await generateText({
-      ...params,
-      ...(compatibility.supportsTools === false
-        ? { tools: undefined, toolChoice: undefined }
-        : {}),
-      prompt: undefined,
-      model: aiSDKModel,
-      messages: convertCbToModelMessages({
-        ...params,
-        messages: getMessagesForModelContext({
-          messages: params.messages,
-          contextWindowTokens,
-          systemTokens: requestOverheadTokens,
-          logger,
-          trackEvent: params.trackEvent,
-          userId: params.userId,
-          userInputId: params.userInputId,
-          model: effectiveModelSdk,
-          onTrimmed: params.onRequestContextTrimmed,
-        }),
-        includeCacheControl: compatibility.stripCacheControl === false,
-      }),
-      ...(hasProviderOptions(requestProviderOptions)
-        ? { providerOptions: requestProviderOptions }
-        : {}),
+    // M3-T4: non-streaming paths retry transient failures exactly like the
+    // streaming path — same shared policy object, same backoff helpers.
+    response = await runWithRetryPolicy({
+      signal: params.signal,
+      operation: async () => {
+        try {
+          return await generateText({
+            ...params,
+            // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
+            // the caller's params.signal is merged and keeps precedence.
+            abortSignal: withDefaultRequestTimeout(params, params.signal),
+            ...(compatibility.supportsTools === false
+              ? { tools: undefined, toolChoice: undefined }
+              : {}),
+            prompt: undefined,
+            model: aiSDKModel,
+            messages: requestMessages,
+            ...(hasProviderOptions(requestProviderOptions)
+              ? { providerOptions: requestProviderOptions }
+              : {}),
+          })
+        } catch (error) {
+          // Normalize before the retry classifier sees the error so a
+          // content-policy refusal is never retried.
+          throw normalizeProviderContentPolicyError(error) ?? error
+        }
+      },
+      onRetry: ({ error, attempt, delayMs }) => {
+        logger.warn(
+          { error: getErrorObject(error), attempt, delayMs },
+          'Transient error in non-streaming prompt, retrying with delay',
+        )
+      },
     })
   } catch (error) {
     throw normalizeProviderContentPolicyError(error) ?? error
@@ -1926,37 +2029,64 @@ export async function promptAiSdkStructured<T>(
         cacheDebugCorrelation: params.cacheDebugCorrelation,
       })
 
+  // Hoisted out of the retry closure below (same rationale as promptAiSdk):
+  // the emergency-brake trim and its side-effecting onRequestContextTrimmed
+  // consumer run once per request, not once per retry attempt.
+  const requestMessages = convertCbToModelMessages({
+    ...params,
+    // `PromptAiSdkStructuredInput` has no `system`/`tools` request surface
+    // (unlike the streamText/generateText param types), so there is
+    // nothing comparable to subtract and systemTokens stays at its 0
+    // default here.
+    messages: getMessagesForModelContext({
+      messages: params.messages,
+      contextWindowTokens,
+      logger,
+      trackEvent: params.trackEvent,
+      userId: params.userId,
+      userInputId: params.userInputId,
+      model: effectiveModelStructured,
+      onTrimmed: params.onRequestContextTrimmed,
+    }),
+    includeCacheControl: compatibility.stripCacheControl === false,
+  })
+
   let response: GenerateObjectResult<T>
   try {
-    response = await generateObject<z.ZodType<T>, 'object'>({
-      ...params,
-      ...(compatibility.supportsTools === false
-        ? { tools: undefined, toolChoice: undefined }
-        : {}),
-      prompt: undefined,
-      model: aiSDKModel,
-      output: 'object',
-      messages: convertCbToModelMessages({
-        ...params,
-        // `PromptAiSdkStructuredInput` has no `system`/`tools` request surface
-        // (unlike the streamText/generateText param types), so there is
-        // nothing comparable to subtract and systemTokens stays at its 0
-        // default here.
-        messages: getMessagesForModelContext({
-          messages: params.messages,
-          contextWindowTokens,
-          logger,
-          trackEvent: params.trackEvent,
-          userId: params.userId,
-          userInputId: params.userInputId,
-          model: effectiveModelStructured,
-          onTrimmed: params.onRequestContextTrimmed,
-        }),
-        includeCacheControl: compatibility.stripCacheControl === false,
-      }),
-      ...(hasProviderOptions(requestProviderOptions)
-        ? { providerOptions: requestProviderOptions }
-        : {}),
+    // M3-T4: non-streaming paths retry transient failures exactly like the
+    // streaming path — same shared policy object, same backoff helpers.
+    response = await runWithRetryPolicy({
+      signal: params.signal,
+      operation: async () => {
+        try {
+          return await generateObject<z.ZodType<T>, 'object'>({
+            ...params,
+            // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
+            // the caller's params.signal is merged and keeps precedence.
+            abortSignal: withDefaultRequestTimeout(params, params.signal),
+            ...(compatibility.supportsTools === false
+              ? { tools: undefined, toolChoice: undefined }
+              : {}),
+            prompt: undefined,
+            model: aiSDKModel,
+            output: 'object',
+            messages: requestMessages,
+            ...(hasProviderOptions(requestProviderOptions)
+              ? { providerOptions: requestProviderOptions }
+              : {}),
+          })
+        } catch (error) {
+          // Normalize before the retry classifier sees the error so a
+          // content-policy refusal is never retried.
+          throw normalizeProviderContentPolicyError(error) ?? error
+        }
+      },
+      onRetry: ({ error, attempt, delayMs }) => {
+        logger.warn(
+          { error: getErrorObject(error), attempt, delayMs },
+          'Transient error in non-streaming structured prompt, retrying with delay',
+        )
+      },
     })
   } catch (error) {
     throw normalizeProviderContentPolicyError(error) ?? error

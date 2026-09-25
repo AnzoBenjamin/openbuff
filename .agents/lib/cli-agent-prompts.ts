@@ -241,8 +241,18 @@ Use ${config.cliName} to complete implementation tasks like building features, f
    \`\`\`
 
 2. **Send your task** (from the prompt you received) to the CLI:
+
+   **Do NOT interpolate the task text directly into the send command.**
+   Arbitrary task text inside a shell double-quoted argument can break the
+   command or inject unwanted shell syntax. Use this safe two-step recipe:
+
+   First, write the exact task text to a file using your file tools (e.g.
+   write the task verbatim to \`.openbuff-task.txt\` in the repo root, or to a
+   clearly-named temp path).
+
+   Then send the CLI only a short pointer to that file:
    \`\`\`bash
-   ./scripts/tmux/tmux-cli.sh send "$SESSION" "<the task from your prompt parameter>"
+   ./scripts/tmux/tmux-cli.sh send "$SESSION" "Read the task file at .openbuff-task.txt and execute it exactly."
    \`\`\`
 
    Use the exact task description from the prompt the parent agent gave you.
@@ -260,8 +270,13 @@ Use ${config.cliName} to complete implementation tasks like building features, f
    Prefer at most 1-2 progress captures before deciding whether you already have enough evidence.
 
 4. **Send follow-up prompts** if needed to refine or continue the work:
+
+   As in step 2, never interpolate follow-up instructions directly into the
+   send command. Write the follow-up instructions to a file (e.g. append to
+   or overwrite \`.openbuff-task.txt\`, or use a clearly-named temp path),
+   then send only a short pointer:
    \`\`\`bash
-   ./scripts/tmux/tmux-cli.sh send "$SESSION" "<follow-up instructions>"
+   ./scripts/tmux/tmux-cli.sh send "$SESSION" "Read the updated task file at .openbuff-task.txt and continue, applying the follow-up instructions it contains."
    ./scripts/tmux/tmux-cli.sh capture "$SESSION" --label "follow-up" --wait 30
    \`\`\`
 

@@ -15,14 +15,16 @@ import {
   readNewJobOutput,
   MAX_BACKGROUND_READ_BYTES,
   MAX_LINE_BYTES,
+  recheckRecoveredJobLiveness,
   type BackgroundJob,
 } from '../tools/background-jobs'
 import {
   CHECK_JOB_POLL_ACCUMULATION_CAP,
+  MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS,
   appendBoundedCollected,
   checkJob,
+  resolveCheckJobWaitBounds,
 } from '../tools/check-job'
-import { listJobs } from '../tools/list-jobs'
 import {
   SETTLED_JOB_TTL_MS,
   jobRegistry,
@@ -73,6 +75,16 @@ function makeJob(overrides: Partial<BackgroundJob> = {}): BackgroundJob {
   }
   __registerJobForTest(job)
   return job
+}
+
+/**
+ * A deterministically dead pid: spawn a real child that exits immediately and
+ * return its pid, so process.kill(pid, 0) rejects with ESRCH. Synchronous (via
+ * spawnSync) so sync tests can use it directly.
+ */
+function makeDeadPid(): number {
+  const child = spawnSync(process.execPath, ['-e', 'process.exit(0)'])
+  return child.pid!
 }
 
 function value(output: Awaited<ReturnType<typeof checkJob>>): any {
@@ -608,13 +620,16 @@ describe('checkJob', () => {
 
       expect(killCalled).toBe(true)
       expect(childKillCalled).toBe(false)
+      // M2-T4 (Fix 3): signal DELIVERY is not an exit. The job folds into the
+      // NON-terminal 'stopping' state and only the child's 'exit' event
+      // settles 'stopped'; the timed-out kill surface keeps killed/timedOut.
       expect(result).toMatchObject({
         jobId: job.jobId,
-        state: 'stopped',
+        state: 'stopping',
         matched: false,
         killed: true,
       })
-      expect(job.status).toBe('stopped')
+      expect(job.status).toBe('stopping')
     } finally {
       process.kill = originalKill
     }
@@ -1067,7 +1082,6 @@ describe('checkJob', () => {
     // store M4 removes). A recovered job is re-emitted into the registry
     // under the disk-derived jobId (passed as explicit registry id), carrying
     // the preserved owner.
-    const recovered = getBackgroundJob(jobId)
     const registryJob = jobRegistry.get(jobId)
     expect(registryJob?.owner).toEqual(owner)
   })
@@ -1205,18 +1219,27 @@ describe('checkJob', () => {
   })
 
   test('retains a settled job within TTL, prunes it past the TTL, never prunes running jobs, and keeps the first settledAt', () => {
-    // Settle a RUNNING job through the REAL settle path (killBackgroundJob)
-    // so settledAt is stamped for real rather than hand-injected.
+    // Settle a RUNNING job through the REAL settle path (M2-T4, Fix 3 + Fix 2:
+    // a kill only folds the non-terminal 'stopping' state on delivery, and an
+    // already-exited real-child pid settles terminal via
+    // recheckRecoveredJobLiveness, giving a genuine settledAt rather than a
+    // hand-injected one).
     const job = makeJob({
+      recovered: true,
       child: {
-        pid: 1234,
+        pid: makeDeadPid(),
         kill: () => true,
       } as unknown as BackgroundJob['child'],
     })
     const killResult = killBackgroundJob(job.jobId)
     expect('killed' in killResult).toBe(true)
     expect('killed' in killResult ? killResult.killed : false).toBe(true)
-    expect(job.status).toBe('stopped')
+    expect(job.status).toBe('stopping')
+    expect(job.settledAt).toBeUndefined()
+    // The exit event is what settles terminal: simulate it through the real
+    // settle funnel (the liveness re-check) — the child pid is already dead.
+    expect(recheckRecoveredJobLiveness(job)).toBe(false)
+    expect(job.status).toBe('lost')
     expect(job.settledAt).toBeDefined()
     const settledAt = job.settledAt!
 
@@ -1238,19 +1261,19 @@ describe('checkJob', () => {
     // Settling the same job twice does NOT change its settledAt (idempotency):
     // a late duplicate settle must never extend an entry's retention window.
     const twice = makeJob({
+      recovered: true,
       child: {
-        pid: 1234,
+        pid: makeDeadPid(),
         kill: () => true,
       } as unknown as BackgroundJob['child'],
     })
     killBackgroundJob(twice.jobId)
+    expect(recheckRecoveredJobLiveness(twice)).toBe(false)
     const firstStamp = twice.settledAt!
-    // Re-open the running state and settle again through the real kill path;
-    // the guard must keep the FIRST stamp.
+    // Re-open the running state and settle again through the real settle
+    // path; the guard must keep the FIRST stamp.
     twice.status = 'running'
-    const killResult2 = killBackgroundJob(twice.jobId)
-    expect('killed' in killResult2).toBe(true)
-    expect('killed' in killResult2 ? killResult2.killed : false).toBe(true)
+    expect(recheckRecoveredJobLiveness(twice)).toBe(false)
     expect(twice.settledAt).toBe(firstStamp)
   })
 
@@ -1311,6 +1334,157 @@ describe('checkJob', () => {
     expect(recovered).toBeDefined()
     expect(recovered?.status).toBe('completed')
     expect(recovered?.settledAt).toBe(freshSettledAt)
+  })
+})
+
+describe('resolveCheckJobWaitBounds (M2-T4 Fix 1)', () => {
+  test('junk timeout_seconds (NaN) behaves as omitted: no follow, zero timeoutMs', () => {
+    const bounds = resolveCheckJobWaitBounds({
+      timeoutSeconds: Number.NaN,
+    })
+    expect(bounds.follow).toBe(false)
+    expect(bounds.timeoutMs).toBe(0)
+    expect(Number.isFinite(bounds.deadline)).toBe(true)
+  })
+
+  test('negative timeout_seconds behaves as omitted (poll mode stays single-immediate-poll)', () => {
+    expect(
+      resolveCheckJobWaitBounds({ timeoutSeconds: -5 }),
+    ).toMatchObject({ follow: false, timeoutMs: 0 })
+    // M2-T4 repair: follow mode requires an EXPLICIT positive timeout — the
+    // documented poll contract is "without timeout_seconds, a wait_for is
+    // evaluated against the single current poll" — so a wait_for (even with a
+    // junk/negative timeout) stays poll mode with timeoutMs 0.
+    expect(
+      resolveCheckJobWaitBounds({ waitFor: 'ready', timeoutSeconds: -5 }),
+    ).toMatchObject({ follow: false, timeoutMs: 0 })
+  })
+
+  test('wait_for without a positive timeout is still a single non-blocking poll', () => {
+    // M2-T4 repair: the documented poll contract says wait_for WITHOUT
+    // timeout_seconds must NOT pull in a 30s default follow — that regression
+    // blocked poll-mode callers for the whole default window.
+    const bounds = resolveCheckJobWaitBounds({ waitFor: 'ready' })
+    expect(bounds.follow).toBe(false)
+    expect(bounds.timeoutMs).toBe(0)
+  })
+
+  test('an oversized timeout_seconds clamps to the 600s maximum', () => {
+    const bounds = resolveCheckJobWaitBounds({
+      waitFor: 'ready',
+      timeoutSeconds: 10_000,
+    })
+    expect(bounds.follow).toBe(true)
+    expect(bounds.timeoutMs).toBe(MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS)
+    expect(bounds.timeoutMs).toBe(600_000)
+  })
+
+  test('poll mode contract: no wait_for + no positive timeout stays timeoutMs 0', () => {
+    expect(resolveCheckJobWaitBounds({})).toMatchObject({
+      follow: false,
+      timeoutMs: 0,
+    })
+  })
+})
+
+describe('recheckRecoveredJobLiveness (M2-T4 Fix 2)', () => {
+  test('a recovered running job whose pid died settles lost after a final drain', () => {
+    // The fixture child pid belongs to a real child process that has already
+    // exited, so process.kill(pid, 0) rejects with ESRCH. The `recovered`
+    // marker arms the re-check: live spawns own their exit listeners, and
+    // non-recovered fixtures carry pids the OS cannot reason about.
+    const job = makeJob({
+      recovered: true,
+      child: { pid: makeDeadPid() } as unknown as BackgroundJob['child'],
+    })
+    fs.appendFileSync(job.logFile, 'late output\n')
+    expect(job.status).toBe('running')
+
+    expect(recheckRecoveredJobLiveness(job)).toBe(false)
+    expect(job.status).toBe('lost')
+    expect(job.settledAt).toBeDefined()
+    // The final drain ran BEFORE the settle, so the late bytes are in the
+    // registry and a subsequent poll serves the terminal state + output.
+    expect(
+      (jobRegistry.snapshot(job.jobId, 0)?.events ?? []).some(
+        (event) =>
+          event.payload.type === 'output' &&
+          event.payload.data.includes('late output'),
+      ),
+    ).toBe(true)
+  })
+
+  test('a recovered running job that is still alive stays running', () => {
+    const job = makeJob({
+      recovered: true,
+      child: { pid: process.pid } as unknown as BackgroundJob['child'],
+    })
+    expect(recheckRecoveredJobLiveness(job)).toBe(true)
+    expect(job.status).toBe('running')
+    expect(job.settledAt).toBeUndefined()
+  })
+
+  test('non-recovered fixtures, live drainers, and terminal jobs are skipped', () => {
+    // A plain test fixture (no `recovered` marker) is never probed: its fake
+    // pid says nothing about the OS.
+    const fixture = makeJob()
+    expect(recheckRecoveredJobLiveness(fixture)).toBe(true)
+    expect(fixture.status).toBe('running')
+
+    const drained = makeJob({ recovered: true, hasLiveDrainer: true })
+    expect(recheckRecoveredJobLiveness(drained)).toBe(true)
+    expect(drained.status).toBe('running')
+
+    const settled = makeJob({ status: 'completed', exitCode: 0 })
+    expect(recheckRecoveredJobLiveness(settled)).toBe(true)
+    expect(settled.status).toBe('completed')
+  })
+
+  test('a recovered running job observed via check_job reports terminal after the re-check settles it', async () => {
+    const job = makeJob({
+      recovered: true,
+      child: { pid: makeDeadPid() } as unknown as BackgroundJob['child'],
+    })
+    fs.appendFileSync(job.logFile, 'gone\n')
+
+    const result = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(result.state).toBe('lost')
+    expect(result.do_not_repoll).toBe(true)
+    expect(outputText(result)).toContain('gone')
+    expect(job.status).toBe('lost')
+  })
+})
+
+describe('check_job aborts (M2-T4 Fix 4)', () => {
+  test('aborting the signal mid-follow resolves the call promptly', async () => {
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'still running\n')
+    const controller = new AbortController()
+    // Abort well before the (junk-proof) follow deadline elapses.
+    const abortTimer = setTimeout(() => controller.abort(), 100)
+    const start = Date.now()
+    try {
+      const result = value(
+        await checkJob({
+          jobId: job.jobId,
+          wait_for: 'NEVER-APPEARS',
+          timeout_seconds: 30,
+          owner: TRUSTED_OWNER,
+          signal: controller.signal,
+        }),
+      )
+      // The call resolved with the state so-far (timeout-shaped, timedOut
+      // false — the wire schema is unchanged); it did NOT wait out the
+      // deadline.
+      expect(result.state).toBe('running')
+      expect(result.matched).toBe(false)
+      expect(result.timedOut).toBeUndefined()
+      expect(Date.now() - start).toBeLessThan(5_000)
+    } finally {
+      clearTimeout(abortTimer)
+    }
   })
 })
 

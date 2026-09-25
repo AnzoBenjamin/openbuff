@@ -127,23 +127,25 @@ type ResolvedReviewerAttestation = {
  *
  * CANONICAL WHY for the entry selection; call sites carry pointers only.
  *
- * Resolution is PER FIELD, so the result is a COMPOSITE rather than one entry:
- * `reviewedFiles` is the UNION of the shaped entries, `snapshotFingerprint` is
- * the entry reporting `expectedFingerprint` else the first reporting an
- * attestable v3 fingerprint else undefined, and `schemaVersion` is 1 only when
- * EVERY shaped entry reports 1 (otherwise the first non-conforming version, so
- * the caller's `!== 1` check rejects the whole receipt).
+ * Resolution is ENTRY-SCOPED when an attestation exists (fail closed, M1-T4a):
+ * the attesting entry — the one reporting `expectedFingerprint`, else the
+ * first reporting an attestable v3 fingerprint — supplies BOTH
+ * `snapshotFingerprint` AND `reviewedFiles`. A prompt-injected quoted example
+ * can no longer splice its fingerprint onto a real entry's coverage, nor its
+ * coverage onto a real entry's fingerprint. When NO entry reports an
+ * attestable fingerprint the receipt already fails closed on the
+ * missing-fingerprint blocker, so the coverage union is preserved purely so
+ * the diagnostic stays informative. `schemaVersion` is 1 only when EVERY
+ * shaped entry reports 1 (otherwise the first non-conforming version, so the
+ * caller's `!== 1` check rejects the whole receipt);
+ * `collectReviewerAttestationIssues` additionally rejects a result whose
+ * shaped entries report distinct attestable fingerprints while NO entry
+ * reports the expected one (ambiguous multi-receipt attestation — when the
+ * expected fingerprint IS reported, entry-scoping resolves unambiguously and
+ * sibling foreign fingerprints are tolerated order-independently).
  *
- * ACCEPTED LOOSENING (pinned in agents/__tests__/gate-reviewer.test.ts): the
- * spliced fields let a quoted example entry supply the fingerprint for a real
- * entry that reported none, and — because the union is NOT restricted to the
- * entry that contributed the credited fingerprint — a quoted example whose
- * `reviewedFiles` path COLLIDES with a real pending path (the documented
- * example literally shows `reviewedFiles: ["src/a.ts"]`) credits coverage the
- * real entry never attested. Narrowing the union would not close the
- * fingerprint half and WOULD reject the deletions-only receipt, which
- * legitimately attests with an empty `reviewedFiles`. So the guarantee is the
- * weaker one: a pending file NO entry reported at all still blocks.
+ * The deletions-only receipt (a single shaped entry with an attestable
+ * fingerprint and empty `reviewedFiles`) still attests.
  *
  * With no shaped entry at all the LAST entry is read verbatim, so a receipt that
  * never attested still fails closed on the caller's schemaVersion check.
@@ -176,11 +178,19 @@ function resolveReviewerAttestation(
       attestable = entry
     }
   }
+  // M1-T4a (fail closed): when an ATTESTING entry exists, BOTH attestation
+  // fields come from it — not a per-field composite. A quoted example entry
+  // (prompt injection inside the reviewer result) can no longer lend its
+  // fingerprint to a real entry's coverage, nor its coverage to a real
+  // entry's fingerprint: the splice was the forged-receipt vector and is
+  // closed. When NO entry reports an attestable fingerprint there is nothing
+  // to splice — the receipt already fails closed on the missing-fingerprint
+  // blocker — so the union keeps the coverage diagnostic informative instead
+  // of manufacturing a spurious missing-file blocker.
   const attesting = matching ?? attestable
-  const reviewedFiles: string[] = []
-  for (const entry of shaped) {
-    for (const file of entry.reviewedFiles ?? []) reviewedFiles.push(file)
-  }
+  const reviewedFiles = attesting
+    ? (attesting.reviewedFiles ?? [])
+    : shaped.flatMap((entry) => entry.reviewedFiles ?? [])
   // Surfacing the FIRST non-conforming version (instead of the attesting
   // entry's) is what makes the caller's `!== 1` check reject a receipt whose
   // sibling entry claims another schema version.
@@ -224,6 +234,30 @@ export function collectReviewerAttestationIssues(
   if (verdicts.size > 1) {
     return [
       'BLOCKING: reviewer returned conflicting structured verdicts in one result',
+    ]
+  }
+  // M1-T4a (fail closed, order-independent): when NO shaped entry reports the
+  // EXPECTED fingerprint, two or more DISTINCT attestable v3 fingerprints make
+  // the result ambiguous — more than one receipt's worth of attestation with no
+  // way to tell which is real — so the whole result is rejected. When the
+  // expected fingerprint IS reported, resolution is unambiguous (that entry
+  // wins outright) and sibling foreign fingerprints are tolerated
+  // order-independently (RF-2): entry-scoping already binds coverage to the
+  // attesting entry, so a sibling can neither lend nor steal either field.
+  const reportedFingerprints = new Set(
+    structured
+      .filter((entry) => entry.schemaVersion !== undefined)
+      .map((entry) => entry.snapshotFingerprint)
+      .filter((value): value is string => isAttestableV3Fingerprint(value)),
+  )
+  const reportsExpectedFingerprint = structured.some(
+    (entry) =>
+      entry.schemaVersion !== undefined &&
+      entry.snapshotFingerprint === expectedFingerprint,
+  )
+  if (reportedFingerprints.size > 1 && !reportsExpectedFingerprint) {
+    return [
+      'BLOCKING: reviewer returned conflicting snapshot fingerprints in one result',
     ]
   }
   const result = resolveReviewerAttestation(structured, expectedFingerprint)
@@ -801,6 +835,31 @@ export function classifyReviewerCrash(
 export function getReviewerFinalizationVerdict(
   toolResult: unknown,
 ): ReviewerFinalizationVerdict {
+  // allowNonBlocking=false makes the resolver's NON_BLOCKING branch statically
+  // unreachable, so narrowing it back to '' here is sound (and keeps the
+  // exported contract unchanged for every existing caller).
+  const verdict = resolveReviewerFinalizationVerdict(toolResult, false)
+  return verdict === 'NON_BLOCKING' ? '' : verdict
+}
+
+/**
+ * NON_BLOCKING is the security-reviewer family's clean verdict; its findings
+ * are elevated by the caller's blocker branch before the protocol check, so a
+ * clean security review may credit finalization instead of being misclassified
+ * as a protocol failure. All pre-credit gates (coverage missing, incomplete
+ * in-scope requirements, blocking dimensions) still apply; the default
+ * `getReviewerFinalizationVerdict` keeps crediting LOOKS_GOOD only.
+ */
+export function getSecurityReviewerFinalizationVerdict(
+  toolResult: unknown,
+): 'LOOKS_GOOD' | 'NON_BLOCKING' | '' {
+  return resolveReviewerFinalizationVerdict(toolResult, true)
+}
+
+function resolveReviewerFinalizationVerdict(
+  toolResult: unknown,
+  allowNonBlocking: boolean,
+): 'LOOKS_GOOD' | 'NON_BLOCKING' | '' {
   // Automated gates accept only schema-backed structured reviewer output.
   const structured = collectStructuredReviewerOutputs(toolResult)
   // Coverage-adequacy contract (M6.3): missing coverage blocks finalization
@@ -839,8 +898,10 @@ export function getReviewerFinalizationVerdict(
   ) {
     return ''
   }
-  // Finalization credit is LOOKS_GOOD only. NON_BLOCKING findings are
-  // elevated by collectReviewerBlockers into the repair loop.
+  // Finalization credit is LOOKS_GOOD only for the default variant;
+  // NON_BLOCKING findings are elevated by collectReviewerBlockers into the
+  // repair loop (the security-reviewer variant may credit NON_BLOCKING — see
+  // getSecurityReviewerFinalizationVerdict).
   // The scan is restricted to the `schemaVersion`-carrying entries whenever the
   // receipt carries any, so credit and collectReviewerAttestationIssues read
   // the SAME entry set and an unshaped quoted LOOKS_GOOD example cannot credit
@@ -853,6 +914,11 @@ export function getReviewerFinalizationVerdict(
     : structured
   for (const entry of creditable) {
     if (entry.verdict === 'LOOKS_GOOD') return 'LOOKS_GOOD'
+    // Security-reviewer family: NON_BLOCKING is its clean verdict (see the
+    // docblock on getSecurityReviewerFinalizationVerdict).
+    if (allowNonBlocking && entry.verdict === 'NON_BLOCKING') {
+      return 'NON_BLOCKING'
+    }
   }
 
   return ''
@@ -877,6 +943,17 @@ function visitForStructuredVerdict(
   value: unknown,
   out: StructuredReviewerOutput[],
   depth: number = 0,
+  // Gate-crash fix: schemaVersion inherited from the nearest enclosing
+  // ENVELOPE record (agentReceipt / review / output / result slots and the
+  // json/structuredOutput wrappers). The runtime receipt carries
+  // `schemaVersion: 1` while the compact review inside it omits it, so the
+  // review entry used to resolve UNSHAPED and the attestation check failed
+  // closed ("invalid attestation schemaVersion" / no structured snapshot
+  // attestation) — parking the gate after its single retry despite a valid
+  // review. Inheritance NEVER crosses arrays or arbitrary keys, so a
+  // verdict-shaped quoted example nested in findings/evidence stays unshaped
+  // exactly as before.
+  envelopeSchemaVersion?: number,
 ): void {
   // Depth cap (same value findReviewerCrash uses on the same envelopes): 8 is
   // well past any realistic agent-result envelope but stops pathological or
@@ -889,8 +966,26 @@ function visitForStructuredVerdict(
   }
   if (typeof value !== 'object') return
   const record = value as Record<string, unknown>
-  if (record.type === 'json' && 'value' in record) {
-    visitForStructuredVerdict(record.value, out, depth + 1)
+  const recordSchemaVersion =
+    typeof record.schemaVersion === 'number' ? record.schemaVersion : undefined
+  const inheritedSchemaVersion = recordSchemaVersion ?? envelopeSchemaVersion
+  if (
+    (record.type === 'json' || record.type === 'structuredOutput') &&
+    'value' in record
+  ) {
+    visitForStructuredVerdict(record.value, out, depth + 1, inheritedSchemaVersion)
+    // spawn_agent_inline can surface the agent receipt as a SIBLING of
+    // `value` on the json record; the receipt carries the compact review
+    // when the bulky payload was truncated in transit. Visit it too —
+    // recognition only; an absent receipt is a no-op.
+    if (record.type === 'json' && record.agentReceipt !== undefined) {
+      visitForStructuredVerdict(
+        record.agentReceipt,
+        out,
+        depth + 1,
+        inheritedSchemaVersion,
+      )
+    }
     return
   }
   const rawVerdict = record.verdict
@@ -1000,7 +1095,7 @@ function visitForStructuredVerdict(
         schemaVersion:
           typeof record.schemaVersion === 'number'
             ? record.schemaVersion
-            : undefined,
+            : envelopeSchemaVersion,
         findingRecords: Array.isArray(rawFindings)
           ? rawFindings.flatMap((finding) => {
               if (!finding || typeof finding !== 'object') return []
@@ -1033,8 +1128,19 @@ function visitForStructuredVerdict(
       return
     }
   }
-  for (const nested of Object.values(record)) {
-    visitForStructuredVerdict(nested, out, depth + 1)
+  for (const [key, nested] of Object.entries(record)) {
+    // Dedicated envelope slots inherit this record's schemaVersion (the
+    // receipt carries it, the verdict object inside omits it). Every other
+    // key — evidence, findings, quoted examples — never inherits, so a
+    // verdict-shaped quote stays unshaped and outside the conflict checks.
+    const slotSchemaVersion =
+      key === 'agentReceipt' ||
+      key === 'review' ||
+      key === 'output' ||
+      key === 'result'
+        ? inheritedSchemaVersion
+        : undefined
+    visitForStructuredVerdict(nested, out, depth + 1, slotSchemaVersion)
   }
 }
 

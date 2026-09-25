@@ -44,15 +44,26 @@ function isSafeAnchorPath(path: string): boolean {
 /**
  * Remint durable confirmed post-edit anchors only when issuer-bound to the
  * current project/run. cap.v3 is reminted when the stored token authenticates
- * for that scope, or when stamped projectId+runId match (process-restart path).
+ * for that scope (Path 3), or — ONLY when the caller explicitly opts in via
+ * `allowUnauthenticatedIssuerRestamp` — when stamped projectId+runId match
+ * (Path 4, the process-restart path). Default is FAIL CLOSED: an anchor whose
+ * stored token no longer authenticates is dropped unless the caller accepts
+ * the issuer-stamp trust model, because the stamps are unauthenticated
+ * persisted state (the audit's shard-tools-edit MEDIUM at :74).
  * Unauthenticated / cross-scope / malformed / hostile entries are dropped.
  */
 export function remintConfirmedPostEditAnchors(params: {
   anchors: Record<string, ConfirmedPostEditAnchor> | undefined
   projectId: string
   runId: string
+  /**
+   * Opt in to Path 4 (issuer-stamp restamp). Callers must state why the
+   * stamped projectId/runId are trusted: they are durable per-run agentState
+   * on the user's own machine, so tampering implies local write access.
+   */
+  allowUnauthenticatedIssuerRestamp?: boolean
 }): Record<string, ConfirmedPostEditAnchor> {
-  const { anchors, projectId, runId } = params
+  const { anchors, projectId, runId, allowUnauthenticatedIssuerRestamp } = params
   const result: Record<string, ConfirmedPostEditAnchor> = {}
   if (!anchors) return result
 
@@ -79,9 +90,17 @@ export function remintConfirmedPostEditAnchors(params: {
       stored.projectId === projectId &&
       stored.runId === runId
 
-    // Path 3: live HMAC authenticates for current scope.
-    // Path 4: process restart — in-process HMAC dies, but stamped issuer matches.
-    if (!tokenAuthenticatesForScope && !issuerMatchesCurrent) continue
+    // Path 3: live HMAC authenticates for current scope (always allowed).
+    // Path 4: process restart — in-process HMAC dies, but stamped issuer
+    // matches. Opt-in only: the stamps are unauthenticated persisted state,
+    // so the default drops the anchor (fail closed).
+    if (tokenAuthenticatesForScope) {
+      // fall through to remint
+    } else if (issuerMatchesCurrent && allowUnauthenticatedIssuerRestamp) {
+      // fall through to remint
+    } else {
+      continue
+    }
 
     result[path] = {
       startLine: stored.startLine,

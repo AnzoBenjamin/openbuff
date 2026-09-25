@@ -2,10 +2,39 @@ import { withTimeout } from '@codebuff/common/util/promise'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsOf } from '@codebuff/common/types/function-params'
+import { z } from 'zod/v4'
 
 const CONTEXT7_API_BASE_URL = 'https://context7.com/api/v1'
 const DEFAULT_TYPE = 'txt'
 const FETCH_TIMEOUT_MS = 10_000
+// M3-T1 (finite timeouts): the timeout above bounds only the fetch() promise
+// (response headers). Remote body reads (json()/text()) are additionally
+// bounded by BODY_READ_TIMEOUT_MS so a stalled/trickling server body cannot
+// hang the read-docs tool call and the whole agent step indefinitely.
+const BODY_READ_TIMEOUT_MS = 10_000
+
+// M3-T1 (fail closed on invalid shape): the search response is remote JSON
+// cast blindly before, so a truthy non-array `results` (API change, hijacked
+// or mistyped response) crashed `libraries.map` outside any try. The module
+// schema validates the shape before use; an invalid response logs and returns
+// null like every other failure mode.
+const SearchResponseSchema = z.object({
+  results: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      description: z.string(),
+      branch: z.string(),
+      lastUpdateDate: z.string(),
+      state: z.enum(['initial', 'finalized', 'error', 'delete']),
+      totalTokens: z.number(),
+      totalSnippets: z.number(),
+      totalPages: z.number(),
+      stars: z.number().optional(),
+      trustScore: z.number().optional(),
+    }),
+  ),
+})
 
 export interface SearchResponse {
   results: Array<{
@@ -105,8 +134,26 @@ export async function searchLibraries(params: {
     }
 
     const parseStartTime = Date.now()
-    const responseBody = await response.json()
-    const projects = responseBody as SearchResponse
+    // M3-T1: bounded body read + zod validation (fail closed to null).
+    const responseBody = await withTimeout(
+      response.json(),
+      BODY_READ_TIMEOUT_MS,
+    )
+    const parsedResponse = SearchResponseSchema.safeParse(responseBody)
+    if (!parsedResponse.success) {
+      logger.error(
+        {
+          ...searchContext,
+          issues: parsedResponse.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.')}: ${issue.message}`),
+          totalDuration: Date.now() - searchStartTime,
+        },
+        'Library search returned an invalid response shape',
+      )
+      return null
+    }
+    const projects = parsedResponse.data
     const parseDuration = Date.now() - parseStartTime
     const totalDuration = Date.now() - searchStartTime
 
@@ -249,7 +296,8 @@ export async function fetchContext7LibraryDocumentation(
     }
 
     const parseStartTime = Date.now()
-    const text = await response.text()
+    // M3-T1: bounded body read (the fetch timeout only covered the headers).
+    const text = await withTimeout(response.text(), BODY_READ_TIMEOUT_MS)
     const parseDuration = Date.now() - parseStartTime
     const totalDuration = Date.now() - apiStartTime
 

@@ -3,6 +3,7 @@ import {
   getLastReadFilePaths,
 } from '@codebuff/common/project-file-tree'
 import { createMarkdownFileBlock } from '@codebuff/common/util/file'
+import { redactSecretValues } from '@codebuff/common/util/redact-secrets'
 import { truncateString } from '@codebuff/common/util/string'
 import { closeXml } from '@codebuff/common/util/xml'
 
@@ -139,6 +140,36 @@ ${truncationNote}
   return prompt
 }
 
+/**
+ * M1-T5 (secret redaction): shell config files (bashrc/zshrc/profile)
+ * routinely contain API keys, tokens, and cloud credentials. Only lines that
+ * carry NO sensitive-keyword assignment and NO well-known token shape are
+ * embedded in the system prompt; everything else is dropped, and a fully
+ * redacted file still surfaces as an explicit one-line marker so the model
+ * knows the file exists without receiving its secret contents.
+ */
+function redactedShellConfigBlock(path: string, content: string): string {
+  const lines = content.split('\n')
+  const SENSITIVE_ASSIGNMENT =
+    /(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_?KEY|ACCESS_?KEY|SESSION|BEARER)/i
+  const TOKEN_SHAPE =
+    /sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|gh[o rus]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|Bearer\s+\S{20,}/
+  const safeLines = lines.filter(
+    (line) =>
+      !SENSITIVE_ASSIGNMENT.test(line) &&
+      !TOKEN_SHAPE.test(line) &&
+      line.trim() !== '' &&
+      !line.trim().startsWith('#'),
+  )
+  if (safeLines.length === 0) {
+    return createMarkdownFileBlock(
+      path,
+      `[REDACTED for safety — ${lines.length} lines omitted]`,
+    )
+  }
+  return createMarkdownFileBlock(path, safeLines.join('\n'))
+}
+
 const windowsNote = `
 Note: many commands in the terminal are different on Windows.
 For example, the mkdir command is \`mkdir\` instead of \`mkdir -p\`. Instead of grep, use \`findstr\`. Instead of \`ls\` use \`dir\` to list files. Instead of \`mv\` use \`move\`. Instead of \`rm\` use \`del\`. Instead of \`cp\` use \`copy\`. Unless the user is in Powershell, in which case you should use the Powershell commands instead.
@@ -161,9 +192,11 @@ Shell: ${systemInfo.shell}
 Chrome: ${systemInfo.chromeAvailable ? 'installed' : 'not found'}
 
 <user_shell_config_files>
-${Object.entries(shellConfigFiles)
-  .map(([path, content]) => createMarkdownFileBlock(path, content))
-  .join('\n')}
+${redactSecretValues(
+  Object.entries(shellConfigFiles)
+    .map(([path, content]) => redactedShellConfigBlock(path, content))
+    .join('\n'),
+)}
 ${closeXml('user_shell_config_files')}
 
 The following are the most recently read files according to the OS atime. This is cached from the start of this conversation:

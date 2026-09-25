@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'bun:test'
 
-import { handleEditTransaction } from '../edit-transaction'
+import {
+  handleEditTransaction,
+  substituteConfirmedPostEditCapabilities,
+} from '../edit-transaction'
 import { getFileProcessingValues } from '../write-file'
 import {
   encodeReadCapabilityToken,
   getContentHash,
 } from '@codebuff/common/util/content-hash'
+import {
+  getLineCoordinates,
+  getRangeSlice,
+} from '@codebuff/common/util/line-coordinates'
 
 import type { FileProcessingState } from '../write-file'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -391,5 +398,258 @@ describe('edit_transaction capability-bearing edit guard', () => {
     expect(String(value?.errorMessage)).toContain('lifecycle preflight failed')
     expect(value?.failures?.[0]?.editIndex).toBe(1)
     expect(clientCalls).toBe(0)
+  })
+})
+
+describe('edit_transaction confirmed-post-edit substitution span guard', () => {
+  const content = 'line1\nline2\nline3\n'
+  const coordinates = getLineCoordinates(content)
+  const anchorToken = (path: string): string =>
+    encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: coordinates.maxCapabilityLine,
+      hash: getContentHash(
+        getRangeSlice(coordinates, 1, coordinates.maxCapabilityLine),
+      ),
+      scope: { projectId: '/project', path, runId: 'run' },
+    })
+  const scopedStaleToken = (path: string): string =>
+    encodeReadCapabilityToken({
+      startLine: 2,
+      endLine: 2,
+      hash: getContentHash('STALE-SLICE'),
+      scope: { projectId: '/project', path, runId: 'run' },
+    })
+  const wholeFileStaleToken = (path: string): string =>
+    encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: coordinates.maxCapabilityLine,
+      hash: getContentHash('STALE-WHOLE'),
+      scope: { projectId: '/project', path, runId: 'run' },
+    })
+  const scopedWholeFileToken = (scope: {
+    projectId: string
+    path: string
+    runId: string
+  }): string =>
+    encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: coordinates.maxCapabilityLine,
+      hash: getContentHash('STALE-WHOLE'),
+      scope,
+    })
+
+  const substitutionParams = (params: {
+    edits: unknown[]
+    onClientCall: () => void
+  }) => ({
+    previousToolCallFinished: Promise.resolve(),
+    toolCall: {
+      toolCallId: 'substitution-span-guard',
+      toolName: 'edit_transaction',
+      input: { edits: params.edits },
+    },
+    fileProcessingState: getFileProcessingValues({
+      strictReadBeforeEdit: true,
+    }),
+    logger,
+    requestOptionalFile: async () => content,
+    requestClientToolCall: async () => {
+      params.onClientCall()
+      return []
+    },
+    writeToClient: () => undefined,
+    fileContext: { projectRoot: '/project' },
+    runId: 'run',
+  })
+
+  const freshAnchorState = (path: string): FileProcessingState => {
+    const state = getFileProcessingValues({ strictReadBeforeEdit: true })
+    ;(state as any).confirmedPostEditAnchorsByPath = {
+      [path]: {
+        startLine: 1,
+        endLine: coordinates.visibleLineCount,
+        contentHash: getContentHash(content),
+        readCapability: anchorToken(path),
+      },
+    }
+    return state
+  }
+
+  it('does not substitute a scoped replace_range capability with the whole-file anchor when target lines are omitted', async () => {
+    // Regression for the span-widening clobber: pre-fix, the scoped token was
+    // silently replaced by the fresh whole-file anchor, and with omitted
+    // startLine/endLine the transaction defaulted the target span from the
+    // SUBSTITUTED capability (1..N) — a whole-file clobber authorized by a
+    // scoped read. Fail closed: the edit keeps its own token and fails on the
+    // strict path without being forwarded for application.
+    let forwarded = 0
+    const state = freshAnchorState('src/a.ts')
+    const result = await handleEditTransaction({
+      ...substitutionParams({
+        edits: [
+          {
+            type: 'replace_range',
+            path: 'src/a.ts',
+            readCapability: scopedStaleToken('src/a.ts'),
+            newContent: 'line1\nreplaced\nline3\n',
+          },
+        ],
+        onClientCall: () => {
+          forwarded += 1
+        },
+      }),
+      fileProcessingState: state,
+    } as any)
+    const value = result.output[0]?.value as {
+      errorMessage?: string
+      failures?: unknown[]
+    }
+    expect(forwarded).toBe(0)
+    expect(String(value?.errorMessage ?? '')).not.toBe('')
+  })
+
+  // The substitution feeds ONLY processEditTransaction — the strict gate above
+  // still evaluates the ORIGINAL edits — so substitution outcomes are observed
+  // with direct unit tests of the exported function rather than through the
+  // handler (whose strict gate blocks stale originals before substitution runs).
+
+  it('still substitutes a whole-file-covering capability with a fresh whole-file anchor (unit)', () => {
+    // The legitimate feature preserved: a whole-file capability that went
+    // stale only because an earlier edit in this run changed the file takes
+    // the fresh anchor — it grants nothing the caller did not already hold.
+    const path = 'src/a.ts'
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'replace_range',
+          path,
+          readCapability: wholeFileStaleToken(path),
+          newContent: 'fully replaced file\n',
+        },
+      ] as any,
+      new Map([[path, content as string | null]]),
+      freshAnchorState(path),
+      '/project',
+      'run',
+      logger,
+    )
+    expect((out as { readCapability?: string }).readCapability).toBe(
+      anchorToken(path),
+    )
+    expect((out as { readCapability?: string }).readCapability).not.toBe(
+      wholeFileStaleToken(path),
+    )
+  })
+
+  it('does not substitute a scoped replace_range capability with the whole-file anchor (unit)', () => {
+    // Span guard: a scoped capability keeps its own token; substituting it
+    // with the whole-file anchor would let an omitted startLine/endLine
+    // default to the anchor's 1..N span — a whole-file clobber.
+    const path = 'src/a.ts'
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'replace_range',
+          path,
+          readCapability: scopedStaleToken(path),
+          newContent: 'line1\nreplaced\nline3\n',
+        },
+      ] as any,
+      new Map([[path, content as string | null]]),
+      freshAnchorState(path),
+      '/project',
+      'run',
+      logger,
+    )
+    expect((out as { readCapability?: string }).readCapability).toBe(
+      scopedStaleToken(path),
+    )
+  })
+
+  it('does not substitute a scoped write_file basedOnRead with the whole-file anchor (unit)', () => {
+    // write_file authorization semantics are whole-file; a scoped basedOnRead
+    // must never be smuggled past the whole-file check via anchor substitution.
+    const path = 'src/a.ts'
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'write_file',
+          path,
+          content,
+          basedOnRead: scopedStaleToken(path),
+        },
+      ] as any,
+      new Map([[path, content as string | null]]),
+      freshAnchorState(path),
+      '/project',
+      'run',
+      logger,
+    )
+    expect((out as { basedOnRead?: string }).basedOnRead).toBe(
+      scopedStaleToken(path),
+    )
+  })
+
+  it('does not substitute a foreign-scope whole-file capability with the anchor (unit)', () => {
+    // Cross-scope anti-replay on the PROVIDED token: a decodable
+    // whole-file-covering cap.v3 minted for a different path, run, or project
+    // proves nothing about this file in this scope. Substituting it for the
+    // fresh anchor would grant edit authority for a file the caller never
+    // read in this run/path scope, so the token must be kept unchanged.
+    const path = 'src/a.ts'
+    const foreignScopes = [
+      { projectId: '/project', path: 'src/other.ts', runId: 'run' },
+      { projectId: '/project', path, runId: 'other-run' },
+      { projectId: '/other-project', path, runId: 'run' },
+    ]
+    for (const scope of foreignScopes) {
+      const foreignToken = scopedWholeFileToken(scope)
+      const [out] = substituteConfirmedPostEditCapabilities(
+        [
+          {
+            type: 'replace_range',
+            path,
+            readCapability: foreignToken,
+            newContent: 'fully replaced file\n',
+          },
+        ] as any,
+        new Map([[path, content as string | null]]),
+        freshAnchorState(path),
+        '/project',
+        'run',
+        logger,
+      )
+      expect((out as { readCapability?: string }).readCapability).toBe(
+        foreignToken,
+      )
+    }
+  })
+
+  it('does not substitute a foreign-run whole-file write_file basedOnRead with the anchor (unit)', () => {
+    // write_file authorization is whole-file: a foreign-run token that
+    // happens to be whole-file covering must never take this run's anchor.
+    const path = 'src/a.ts'
+    const foreignToken = scopedWholeFileToken({
+      projectId: '/project',
+      path,
+      runId: 'other-run',
+    })
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'write_file',
+          path,
+          content,
+          basedOnRead: foreignToken,
+        },
+      ] as any,
+      new Map([[path, content as string | null]]),
+      freshAnchorState(path),
+      '/project',
+      'run',
+      logger,
+    )
+    expect((out as { basedOnRead?: string }).basedOnRead).toBe(foreignToken)
   })
 })

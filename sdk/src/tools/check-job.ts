@@ -4,6 +4,7 @@ import {
   killBackgroundJob,
   peekJobLineCarry,
   readNewJobOutput,
+  recheckRecoveredJobLiveness,
 } from './background-jobs'
 import {
   dirtyDelta,
@@ -20,6 +21,22 @@ const CHECK_JOB_OUTPUT_LIMIT = 50_000
 const POLL_INTERVAL_MS = 200
 
 /**
+ * M2-T4 (Fix 1): default follow deadline when a caller joined follow mode via
+ * `wait_for` WITHOUT a positive timeout_seconds. Follow mode must ALWAYS have
+ * a finite deadline: awaiting the registry with none could block the turn
+ * indefinitely. Exported so the covering test pins the bound.
+ */
+export const DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS = 30_000
+
+/**
+ * M2-T4 (Fix 1): hard ceiling on any follow-mode wait, mirroring the input
+ * schema's 600-second maximum (and resolveCheckBackgroundAgentWaitBounds) so a
+ * caller that reaches this function through a non-validating path cannot hold
+ * the turn open longer than the documented maximum.
+ */
+export const MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS = 600_000
+
+/**
  * Upper bound on the in-memory `wait_for` match window a single check_job
  * follow accumulates. Prevents a chatty long-running job from growing
  * `collected` without limit (OOM) across many poll iterations.
@@ -27,9 +44,13 @@ const POLL_INTERVAL_MS = 200
 export const CHECK_JOB_POLL_ACCUMULATION_CAP = CHECK_JOB_OUTPUT_LIMIT * 2
 const COLLECTED_TAIL_KEEP = Math.floor(CHECK_JOB_OUTPUT_LIMIT / 4)
 
-/** True when a job can no longer produce output. */
+/**
+ * True when a job can no longer produce output (M2-T4, Fix 3: 'stopping' is
+ * the non-terminal signal-delivered state — the child is still running and
+ * may keep producing output, so it is NOT settled).
+ */
 function jobSettled(job: { status: string }): boolean {
-  return job.status !== 'running'
+  return job.status !== 'running' && job.status !== 'stopping'
 }
 
 /** Terminal check_job states that will never produce more output. */
@@ -195,11 +216,37 @@ async function resolveSettlementTouchedPaths(job: {
  * window out indefinitely (a mocked or fast-advancing clock would then never
  * satisfy `Date.now() >= deadline`).
  */
-function resolveCheckJobWaitBounds(params: {
+export function resolveCheckJobWaitBounds(params: {
+  waitFor?: string
   timeoutSeconds?: number
-}): { timeoutMs: number; deadline: number } {
-  const timeoutMs = Math.max(0, (params.timeoutSeconds ?? 0) * 1000)
-  return { timeoutMs, deadline: Date.now() + timeoutMs }
+}): { follow: boolean; timeoutMs: number; deadline: number } {
+  const requestedSeconds = params.timeoutSeconds
+  // M2-T4 (Fix 1): a non-finite or negative timeout_seconds is treated as
+  // OMITTED rather than trusted — the previous math (Math.max(0, junk*1000))
+  // produced a NaN deadline, so `Date.now() >= deadline` was always false,
+  // the follow never ended via deadline, and jobRegistry.wait received NaN
+  // (fires immediately → CPU hot loop). Mirror
+  // resolveCheckBackgroundAgentWaitBounds: guard with Number.isFinite.
+  const requestedTimeoutMs =
+    typeof requestedSeconds === 'number' && Number.isFinite(requestedSeconds)
+      ? Math.max(0, requestedSeconds * 1000)
+      : 0
+  // Follow mode requires an EXPLICIT positive timeout_seconds (M2-T4 repair):
+  // the documented poll contract is "without timeout_seconds the call performs
+  // a single non-blocking poll with wait_for evaluated against current
+  // output", so a wait_for alone must NOT pull in a 30s default follow — that
+  // regression blocked poll-mode callers for the whole default window. The
+  // DEFAULT constant only covers a hypothetical follow request with no
+  // duration, which cannot occur under this contract; poll mode keeps
+  // timeoutMs 0 (immediate single poll).
+  const follow = requestedTimeoutMs > 0
+  const timeoutMs = Math.min(
+    follow
+      ? requestedTimeoutMs
+      : 0,
+    MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS,
+  )
+  return { follow, timeoutMs, deadline: Date.now() + timeoutMs }
 }
 
 /**
@@ -315,6 +362,13 @@ export async function checkJob(params: {
   timeout_seconds?: number
   kill_on_timeout?: boolean
   /**
+   * Trusted runtime abort signal (M2-T4, Fix 4). Injected by the run/dispatch
+   * layer (pinning the runtime abort over any model/model-supplied value);
+   * NEVER training/model input. An aborted turn settles the follow loop
+   * immediately — the follow must not linger past the turn.
+   */
+  signal?: AbortSignal
+  /**
    * REQUIRED trusted owner, injected from run/session state by the caller
    * (never from model/tool input). Ownership is verified against the
    * registry before any output is served.
@@ -331,8 +385,13 @@ export async function checkJob(params: {
   // could push the follow window out indefinitely (a mocked or fast-advancing
   // clock would then never satisfy `Date.now() >= deadline`).
   const { timeoutMs, deadline } = resolveCheckJobWaitBounds({
+    waitFor: params.wait_for,
     timeoutSeconds: params.timeout_seconds,
   })
+  // M2-T4 (Fix 4): the caller supplies the runtime AbortSignal; an aborted
+  // turn must settle the follow loop immediately rather than lingering to
+  // the deadline. Trusted runtime signal — never model input.
+  const { signal } = params
 
   // Cross-session recovery re-stamps the registry record with THIS trusted
   // owner (never a model-supplied one).
@@ -364,6 +423,13 @@ export async function checkJob(params: {
       },
     ]
   }
+  // M2-T4 (Fix 2): observation-time liveness re-check for jobs whose exit can
+  // only be discovered by watching the OS (a recovered job's fake child gets no
+  // 'exit' event). When the pid is gone this settles the job terminal — the
+  // poll below then reports that terminal state through the normal flow (the
+  // drain inside recheckRecoveredJobLiveness happens BEFORE the poll's own
+  // drain later in the loop, so no events are lost).
+  recheckRecoveredJobLiveness(job)
   // Per-adapter registry consumer cursor (lastCheckCursor). Independent of the
   // live drainer's readOffset: bytes the 250ms interval already mirrored into
   // the registry are still unconsumed by check_job until returned here.
@@ -445,7 +511,11 @@ export async function checkJob(params: {
     // `collected` without limit (OOM) across many poll iterations.
     collected = appendBoundedCollected(collected, chunk)
     const finished = jobSettled(job)
-    if (matched || finished || Date.now() >= deadline) {
+    // M2-T4 (Fix 4): an aborted turn settles immediately (before the deadline
+    // term) so an aborted follow cannot linger — it returns the normal
+    // timeout-shaped result with the state so-far and timedOut: false (no new
+    // wire field; the loop must simply not outlive the turn).
+    if (matched || finished || Date.now() >= deadline || signal?.aborted) {
       // The follow-timeout fired (deadline reached, pattern NOT matched, job
       // NOT finished, and still running) and only in follow mode (timeoutMs > 0).
       // Poll mode (timeoutMs === 0) must never kill even though its deadline
@@ -559,9 +629,12 @@ export async function checkJob(params: {
     // before ever reaching this line, so wait() never blocks a poll. No
     // predicate is passed and the return value is ignored.
     const remaining = deadline - Date.now()
+    // M2-T4 (Fix 4): pass the caller's signal so an aborted turn wakes this
+    // waiter immediately (the registry detaches its abort listener on settle).
     await jobRegistry.wait(jobId, {
       timeoutMs: Math.min(POLL_INTERVAL_MS, remaining),
       cursor,
+      signal,
     })
   }
 }

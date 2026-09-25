@@ -255,6 +255,12 @@ export function getFileProcessingValues(
     strictReadBeforeEdit: true,
     readAuthorizationsByPath: {},
     readAuthorizationHashesByPath: {},
+    // M2-T6: hydrate every key the FileProcessingState type declares. The copy
+    // loop only accepts keys present in these defaults, so an optional field
+    // omitted here would be silently dropped by hydration: specifically
+    // modelVisibleReadAuthorizationHashesByPath was lost across turn
+    // boundaries, degrading strict edit checks to the sticky-hash fallback.
+    modelVisibleReadAuthorizationHashesByPath: {},
     confirmedPostEditAnchorsByPath: {},
     editRereadRequirementsByPath: {},
   }
@@ -596,11 +602,15 @@ export const handleWriteFile = (async (
       if (error instanceof AbortError) {
         throw error
       }
+      // M2-T6: the raw handler error can carry internal detail (stack-derived
+      // messages, filesystem paths, provider payloads) that must not be echoed
+      // into agent-visible tool output. The raw error is already logged above;
+      // the model-visible message stays static.
       logger.error(error, 'Error processing write_file block')
       return {
         tool: 'write_file' as const,
         path,
-        error: `Error: Failed to process the write_file block. ${typeof error === 'string' ? error : error.message}`,
+        error: 'Error: Failed to process the write_file block.',
         preflightSyntaxError: false,
       }
     })
@@ -657,13 +667,21 @@ export const handleWriteFile = (async (
   })
 
   if (application.status === 'threw') {
+    // M2-T6: interpolation of application.error.message would expose client
+    // internals into agent-visible output; the static message carries the
+    // recovery intent instead.
+    logger.warn(
+      { path, error: application.error },
+      'write_file apply threw; sanitized static error returned to the model',
+    )
     return {
       output: [
         {
           type: 'json',
           value: {
             file: path,
-            errorMessage: `write_file failed while applying the prepared content: ${application.error instanceof Error ? application.error.message : String(application.error)}. Re-read the file before retrying.`,
+            errorMessage:
+              'write_file failed while applying the prepared content. Re-read the file before retrying.',
           },
         },
       ],

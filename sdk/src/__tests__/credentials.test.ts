@@ -413,6 +413,125 @@ describe('credentials', () => {
         fs.rmSync(tmpDir, { recursive: true })
       }
     })
+
+    test('shares one fetch for two concurrent refreshes with the SAME config dir', async () => {
+      const tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'chatgpt-refresh-same-dir-'),
+      )
+      // M2-T5 repair: the config dir must live under the MOCKED homedir (an
+      // isolated tmpDir), not a root-level absolute path — writeCredentialsFileAtomic
+      // creates it with mode 0700, so an absolute path like '/shared-refresh-dir-a'
+      // cannot be created by an unprivileged test user, and getChatGptOAuthCredentials
+      // reads via the homedir-derived getConfigDir while the file was written to the
+      // literal path.
+      const env = {
+        OPENBUFF_CONFIG_DIR: path.join(tmpDir, 'shared-refresh-dir'),
+      } as any
+      const originalHomedir = os.homedir
+      ;(os as any).homedir = () => tmpDir
+
+      try {
+        const configDir = getConfigDir(env)
+        fs.mkdirSync(configDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(configDir, 'credentials.json'),
+          JSON.stringify({
+            chatgptOAuth: {
+              accessToken: 'old-access',
+              refreshToken: 'shared-refresh-token',
+              expiresAt: Date.now() - 1_000,
+              connectedAt: Date.now() - 7_200_000,
+            },
+          }),
+        )
+
+        let fetchCalls = 0
+        globalThis.fetch = mock(() => {
+          fetchCalls++
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                access_token: 'shared-refresh-access',
+                refresh_token: 'shared-refresh-token',
+                expires_in: 3600,
+              }),
+          } as Response)
+        }) as unknown as typeof fetch
+
+        const [a, b] = await Promise.all([
+          refreshChatGptOAuthToken(env),
+          refreshChatGptOAuthToken(env),
+        ])
+
+        expect(fetchCalls).toBe(1)
+        expect(a).not.toBeNull()
+        expect(b).toBe(a)
+      } finally {
+        ;(os as any).homedir = originalHomedir
+        fs.rmSync(tmpDir, { recursive: true })
+      }
+    })
+
+    test('issues two fetches for two concurrent refreshes with DIFFERENT config dirs', async () => {
+      const tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'chatgpt-refresh-multi-dir-'),
+      )
+      // M2-T5 repair: same isolation rule as the same-dir test above — the
+      // config dirs must live under the mocked homedir's tmpDir so they can
+      // actually be created and read.
+      const envA = {
+        OPENBUFF_CONFIG_DIR: path.join(tmpDir, 'refresh-dir-a'),
+      } as any
+      const envB = {
+        OPENBUFF_CONFIG_DIR: path.join(tmpDir, 'refresh-dir-b'),
+      } as any
+      const originalHomedir = os.homedir
+      ;(os as any).homedir = () => tmpDir
+
+      try {
+        for (const env of [envA, envB]) {
+          fs.mkdirSync(getConfigDir(env), { recursive: true })
+          fs.writeFileSync(
+            path.join(getConfigDir(env), 'credentials.json'),
+            JSON.stringify({
+              chatgptOAuth: {
+                accessToken: 'old-access',
+                refreshToken: 'dir-refresh-token',
+                expiresAt: Date.now() - 1_000,
+                connectedAt: Date.now() - 7_200_000,
+              },
+            }),
+          )
+        }
+
+        let fetchCalls = 0
+        globalThis.fetch = mock(() => {
+          fetchCalls++
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                access_token: 'per-dir-refresh-access',
+                refresh_token: 'dir-refresh-token',
+                expires_in: 3600,
+              }),
+          } as Response)
+        }) as unknown as typeof fetch
+
+        const [a, b] = await Promise.all([
+          refreshChatGptOAuthToken(envA),
+          refreshChatGptOAuthToken(envB),
+        ])
+
+        expect(fetchCalls).toBe(2)
+        expect(a).not.toBeNull()
+        expect(b).not.toBeNull()
+      } finally {
+        ;(os as any).homedir = originalHomedir
+        fs.rmSync(tmpDir, { recursive: true })
+      }
+    })
   })
 
   describe('getValidChatGptOAuthCredentials', () => {

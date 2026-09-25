@@ -6,6 +6,7 @@ import { getInitialAgentState } from '@codebuff/common/types/session-state'
 
 import {
   acquireWorkspacePathLease,
+  extendWorkspacePathLease,
   reconcileInterruptedPathLeases,
   releaseWorkspacePathLease,
 } from '../workspace-path-leases'
@@ -87,6 +88,108 @@ describe('workspace path leases', () => {
       status: 'interrupted',
     })
     expect(state.workspacePathLeases[0].releasedAt).toBeNumber()
+  })
+
+  test('extends owned leases and reports the new expiry', () => {
+    const state = getInitialAgentState()
+    const leaseId = acquireWorkspacePathLease({
+      state,
+      projectRoot: '/tmp/lease-extend-test',
+      ownerAgentId: 'editor-1',
+      paths: ['src/**'],
+      leaseMs: 60_000,
+    })
+    const extended = extendWorkspacePathLease({
+      state,
+      leaseId: leaseId!,
+      ownerAgentId: 'editor-1',
+      leaseMs: 120_000,
+    })
+    expect(extended.expiresAt).toBeGreaterThan(Date.now() + 100_000)
+    expect(
+      state.workspacePathLeases?.find((lease) => lease.leaseId === leaseId)
+        ?.expiresAt,
+    ).toBe(extended.expiresAt)
+  })
+
+  test('extension failure paths are structured (unknown, foreign owner, non-active)', () => {
+    const state = getInitialAgentState()
+    const leaseId = acquireWorkspacePathLease({
+      state,
+      projectRoot: '/tmp/lease-extend-fail',
+      ownerAgentId: 'editor-1',
+      paths: ['src/**'],
+    }) as string
+
+    expect(() =>
+      extendWorkspacePathLease({
+        state,
+        leaseId: 'no-such-lease',
+        ownerAgentId: 'editor-1',
+      }),
+    ).toThrow('unknown leaseId')
+
+    expect(() =>
+      extendWorkspacePathLease({
+        state,
+        leaseId,
+        ownerAgentId: 'editor-2',
+      }),
+    ).toThrow('does not own')
+
+    releaseWorkspacePathLease(state, leaseId)
+    expect(() =>
+      extendWorkspacePathLease({
+        state,
+        leaseId,
+        ownerAgentId: 'editor-1',
+      }),
+    ).toThrow('not active')
+  })
+
+  test('extension fails closed when runtime memory lost the active lease', () => {
+    const state = getInitialAgentState()
+    state.workspacePathLeases = [
+      {
+        leaseId: 'orphaned-active',
+        ownerAgentId: 'editor-1',
+        paths: ['src/a.ts'],
+        status: 'active',
+        acquiredAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+      },
+    ]
+    // Durable says active and unexpired, but the runtime map never recorded
+    // it (crash-recovery boundary): extension must fail rather than fabricate
+    // a runtime clock the reconciler cannot see.
+    expect(() =>
+      extendWorkspacePathLease({
+        state,
+        leaseId: 'orphaned-active',
+        ownerAgentId: 'editor-1',
+      }),
+    ).toThrow('no longer held in runtime memory')
+  })
+
+  test('double-release and unknown-id release are safe no-ops (release race)', () => {
+    const state = getInitialAgentState()
+    const leaseId = acquireWorkspacePathLease({
+      state,
+      projectRoot: '/tmp/lease-race-test',
+      ownerAgentId: 'editor-1',
+      paths: ['src/**'],
+    })
+    releaseWorkspacePathLease(state, leaseId)
+    const releasedAt = state.workspacePathLeases?.find(
+      (lease) => lease.leaseId === leaseId,
+    )?.releasedAt
+    // A raced/retried release must not throw or resurrect the lease.
+    expect(() => releaseWorkspacePathLease(state, leaseId)).not.toThrow()
+    expect(
+      state.workspacePathLeases?.find((lease) => lease.leaseId === leaseId)
+        ?.releasedAt,
+    ).toBe(releasedAt)
+    expect(() => releaseWorkspacePathLease(state, 'no-such-lease')).not.toThrow()
   })
 
   test('does not allocate a lease for an empty writable scope', () => {

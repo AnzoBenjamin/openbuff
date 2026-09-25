@@ -5,6 +5,7 @@ import { isValidPlanSlug } from '@codebuff/common/util/plan-artifacts'
 
 import { registerPlanTimelineCommand } from './plan-timeline'
 import { handleContextCommand } from './context'
+import { formatQueuedMessageForHistory } from '../hooks/helpers/send-message'
 import { handleIndexCommandBlocks } from './index-command'
 import { handleHelpCommand } from './help'
 import { handleImageCommand } from './image'
@@ -55,6 +56,9 @@ import {
   handleOpenbuffProviderCommand,
   setupOpenbuffProviderFromArgs,
 } from '../utils/openbuff-provider'
+import { flushAnalytics } from '../utils/analytics'
+import { cancelAllBashCommands } from '../utils/bash-command-controller'
+import { withTimeout } from '../utils/terminal-color-detection'
 import { capturePendingAttachments } from '../utils/pending-attachments'
 import { fuzzyMatch } from '../utils/fuzzy-match'
 import {
@@ -65,6 +69,7 @@ import {
 
 import type { MultilineInputHandle } from '../components/multiline-input'
 import type { InputValue, PendingAttachment } from '../types/store'
+import type { QueuedMessage } from '../hooks/use-message-queue'
 import type { ChatMessage, ContentBlock } from '../types/chat'
 import type { SendMessageFn } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
@@ -78,6 +83,15 @@ export type RouterParams = {
   isStreaming: boolean
   streamMessageIdRef: React.MutableRefObject<string | null>
   addToQueue: (message: string, attachments?: PendingAttachment[]) => void
+  /**
+   * Drains up to `count` prompts (all of them when `count` is omitted) from
+   * the guarded-submit queue, returning them with their attachments. The
+   * exit path drains one at a time so a partial persist failure leaves the
+   * remaining prompts queued instead of dropped (reliability finding
+   * exit-drain-partial-failure-drops-queue). Optional — the /exit handler
+   * degrades to a no-op drain when a caller does not wire it.
+   */
+  clearQueue?: (count?: number) => QueuedMessage[]
   clearMessages: () => void
   saveToHistory: (message: string) => void
   scrollToLatest: () => void
@@ -186,11 +200,51 @@ const clearInput = (params: RouterParams) => {
   params.setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
 }
 
+// Bounded analytics flush followed by a deterministic process.exit, mirroring
+// the Ctrl-C exit path in use-exit-handler. The /exit command exits directly
+// instead of raising SIGINT: signalling our own PID depends on whatever SIGINT
+// handler happens to be installed to actually terminate the process, which can
+// leave async resources (in-flight tool subprocesses, open file handles,
+// timers) half torn down when that handler defers or swallows the signal.
+const EXIT_FLUSH_TIMEOUT_MS = 1000
+const exitWithAnalyticsFlush = (signal?: AbortSignal): void => {
+  // The flush window is bounded by withTimeout (reliability finding
+  // exit-flush-not-tied-to-timeout): the /exit handler aborts the stream
+  // controller before calling this, and withTimeout only honors aborts that
+  // fire while the window is open — so this pre-aborted signal never
+  // collapses the documented EXIT_FLUSH_TIMEOUT_MS flush bound (reliability
+  // finding exit-flush-window-collapsed-by-pre-aborted-signal).
+  withTimeout(
+    flushAnalytics(),
+    EXIT_FLUSH_TIMEOUT_MS,
+    undefined,
+    signal,
+  ).finally(() => {
+    process.exit(0)
+  })
+}
+
 const sendPromptCommand = (
   params: RouterParams,
   prompt: string,
   mode: AgentMode = params.agentMode,
 ) => {
+  // Guarded submit: never start a second concurrent turn while a stream or
+  // chain is active — queue the prompt instead (same busy-check + queue
+  // fallback the /init and skill commands use). /interview, /review,
+  // /resume-plan, /update-plan, /lessons, mode:* and /new <msg> all route
+  // through here, so an unguarded send would interleave two turns on one
+  // transcript and clobber streamMessageId.
+  if (
+    params.isStreaming ||
+    params.streamMessageIdRef.current ||
+    params.isChainInProgressRef.current
+  ) {
+    params.addToQueue(prompt)
+    params.setInputFocused(true)
+    params.inputRef.current?.focus()
+    return
+  }
   params.sendMessage({
     content: prompt,
     agentMode: mode,
@@ -468,8 +522,36 @@ const ALL_COMMANDS: CommandDefinition[] = [
   defineCommand({
     name: 'exit',
     aliases: ['quit', 'q'],
-    handler: () => {
-      process.kill(process.pid, 'SIGINT')
+    handler: (params) => {
+      // Flush state before exiting: snapshot the conversation so an in-flight
+      // turn's blocks persist for /undo, drain the guarded-submit queue so
+      // prompts queued while a stream was active are persisted to the session
+      // history instead of being dropped by the restart, cancel in-flight
+      // resources (stream abort controller, bash subprocesses), stop any
+      // active stream, and only then exit.
+      useChatStore.getState().pushMessageSnapshot()
+      // Drain one entry at a time (reliability finding
+      // exit-drain-partial-failure-drops-queue): a single all-at-once
+      // clearQueue() before the persistence loop would drop every prompt if
+      // persistence never ran. A persist failure skips only its own entry and
+      // the drain continues (reliability finding
+      // exit-drain-stops-on-first-persist-failure): re-queuing at exit is
+      // unobservable because the in-memory queue cannot survive
+      // process.exit(0), so stopping would lose the failed prompt AND every
+      // remaining queued prompt.
+      for (;;) {
+        const [queued] = params.clearQueue?.(1) ?? []
+        if (!queued) break
+        try {
+          params.saveToHistory(formatQueuedMessageForHistory(queued))
+        } catch {
+          // Skip the failed entry; keep draining the remaining prompts.
+        }
+      }
+      params.abortControllerRef.current?.abort()
+      cancelAllBashCommands()
+      params.stopStreaming()
+      exitWithAnalyticsFlush(params.abortControllerRef.current?.signal)
     },
   }),
   defineCommandWithArgs({

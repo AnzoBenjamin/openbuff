@@ -202,3 +202,79 @@ describe('evictStaleToolResults', () => {
     expect(after.evictedCount).toBe(before.evictedCount)
   })
 })
+
+describe('MAX_PROTECTED_CONTENT_SCAN_CHARS scan cap', () => {
+  const PROTECTED_PATH = '/protected/deep/asset.ts'
+
+  /** One stale step whose tool output embeds the protected path at a
+   *  configurable offset, padded to a multi-megabyte serialized size so the
+   *  scan-cap slice in contentReferencesProtectedPath actually engages. */
+  const historyWithHugeToolResult = (
+    prefixChars: number,
+    suffixChars: number,
+  ): Message[] => {
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    messages.push(assistantStep('call-0'))
+    messages.push({
+      role: 'tool',
+      toolCallId: 'call-0',
+      toolName: 'read_files',
+      content: [
+        {
+          type: 'json',
+          value: {
+            output: 'x'.repeat(prefixChars) + PROTECTED_PATH + 'x'.repeat(suffixChars),
+          },
+        },
+      ],
+    })
+    return messages
+  }
+
+  it('evicts a stale result whose protected path lies beyond the 5M-char scan region', () => {
+    // The serialized content envelope is ~35 chars, so the path starts at
+    // ~5_100_035 — comfortably past the 5_000_000-char scan cap, so the
+    // bounded scan cannot see it and eviction fail-opens.
+    const messages = historyWithHugeToolResult(5_100_000, 50_000)
+    expect(JSON.stringify(messages[2]).length).toBeGreaterThan(5_000_000)
+
+    const result = evictStaleToolResults(messages, {
+      keepRecentSteps: 0,
+      minSavingsTokens: 1,
+      protectedPaths: new Set([PROTECTED_PATH]),
+    })
+
+    expect(result.evictedCount).toBe(1)
+    const toolResult = result.messages[2] as ToolMessage
+    const part = toolResult.content[0]
+    expect(part.type).toBe('json')
+    if (part.type === 'json') {
+      expect(typeof part.value).toBe('string')
+      expect(part.value).toContain('[tool result evicted to free context')
+    }
+  })
+
+  it('keeps a stale result whose protected path lies within the 5M-char scan region', () => {
+    // Same oversized shape, but the path sits ~1k chars into the serialized
+    // content — inside the 5M scan region — so protection still applies.
+    const messages = historyWithHugeToolResult(1_000, 5_100_000)
+    expect(JSON.stringify(messages[2]).length).toBeGreaterThan(5_000_000)
+
+    const result = evictStaleToolResults(messages, {
+      keepRecentSteps: 0,
+      minSavingsTokens: 1,
+      protectedPaths: new Set([PROTECTED_PATH]),
+    })
+
+    // No candidates: the input array is returned untouched by reference.
+    expect(result.evictedCount).toBe(0)
+    expect(result.messages).toBe(messages)
+    const part = (result.messages[2] as ToolMessage).content[0]
+    expect(part.type).toBe('json')
+    if (part.type === 'json') {
+      expect(typeof part.value).toBe('object')
+    }
+  })
+})

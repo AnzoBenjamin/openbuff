@@ -13,6 +13,9 @@ import {
   loadChunkSidecar,
   loadIndex,
   loadSemanticVectors,
+  MAX_CARRIED_SEMANTIC_VECTORS,
+  reclaimStaleLock,
+  releaseOwnedLock,
   sanitizeIndexCacheDir,
   saveChunkSidecar,
   saveIndex,
@@ -310,6 +313,67 @@ describe('index cache ownership', () => {
     ])
   })
 
+  test('still unions concurrent same-fingerprint writes within the retention bound', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-vector-union-'),
+    )
+    await saveSemanticVectors(root, 'model-a', [
+      { path: 'a.ts', embeddingHash: 'a', vector: [1] },
+    ])
+    await saveSemanticVectors(root, 'model-a', [
+      { path: 'b.ts', embeddingHash: 'b', vector: [2] },
+    ])
+
+    const loaded = await loadSemanticVectors(root, 'model-a')
+    expect(loaded).toHaveLength(2)
+    expect(loaded.map((entry) => entry.embeddingHash).sort()).toEqual([
+      'a',
+      'b',
+    ])
+  })
+
+  test('bounds the per-fingerprint union merge so superseded vectors are pruned', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-vector-bound-'),
+    )
+    // Simulate a long edit history: more distinct embedding hashes than the
+    // carried-over retention bound.
+    const history = []
+    for (let i = 0; i < MAX_CARRIED_SEMANTIC_VECTORS + 50; i++) {
+      history.push({
+        path: `src/gen-${i}.ts`,
+        embeddingHash: `hash-${i}`,
+        vector: [i],
+      })
+    }
+    await saveSemanticVectors(root, 'model-a', history)
+
+    // A later save with a much smaller current index must prune the stale
+    // carried-over hashes instead of retaining the full edit history
+    // (reliability finding semantic-vector-union-merge-unbounded-growth).
+    await saveSemanticVectors(root, 'model-a', [
+      { path: 'src/current.ts', embeddingHash: 'hash-current', vector: [0] },
+    ])
+
+    const loaded = await loadSemanticVectors(root, 'model-a')
+    expect(loaded.length).toBe(MAX_CARRIED_SEMANTIC_VECTORS + 1)
+    // The oldest generation was pruned...
+    expect(loaded.some((entry) => entry.embeddingHash === 'hash-0')).toBe(
+      false,
+    )
+    // ...the current index's vector survives...
+    expect(
+      loaded.some((entry) => entry.embeddingHash === 'hash-current'),
+    ).toBe(true)
+    // ...and the most recent carried-over hashes are retained.
+    expect(
+      loaded.some(
+        (entry) =>
+          entry.embeddingHash === `hash-${MAX_CARRIED_SEMANTIC_VECTORS + 49}`,
+      ),
+    ).toBe(true)
+  })
+
   test('verifies content-addressed snapshot via expectedSnapshotId', async () => {
     const root = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), 'openbuff-index-snapshot-'),
@@ -496,5 +560,232 @@ describe('index cache ownership', () => {
     const leakedEntry = { ...rejected.chunks['stable-helper']!, kind: '' }
     expect(await saveChunkSidecar(root, { ...rejected, chunks: { ...rejected.chunks, 'stable-bad': leakedEntry } })).toBe(false)
     expect((await loadChunkSidecar(root))?.chunks['stable-bad']).toBeUndefined()
+  })
+
+  test('generation CAS drops a stale vector write for the same fingerprint', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-vector-cas-'),
+    )
+    await saveSemanticVectors(root, 'model-a', [
+      { path: 'a.ts', embeddingHash: 'a1', vector: [1] },
+    ])
+    const dir = getIndexDir(root)
+    const readGeneration = async (): Promise<number | undefined> => {
+      const parsed = JSON.parse(
+        await fs.promises.readFile(
+          path.join(dir, 'semantic-vectors.json'),
+          'utf8',
+        ),
+      ) as {
+        fingerprints?: Record<string, { updatedAt?: number }>
+      }
+      return parsed.fingerprints?.['model-a']?.updatedAt
+    }
+    const generation = await readGeneration()
+    expect(typeof generation).toBe('number')
+
+    // A parallel writer advances the generation first...
+    await saveSemanticVectors(root, 'model-a', [
+      { path: 'b.ts', embeddingHash: 'b1', vector: [2] },
+    ])
+    // ...then the stale writer (pinned to the pre-advance generation) must
+    // lose: its vector is dropped and the newer one is preserved.
+    await saveSemanticVectors(
+      root,
+      'model-a',
+      [{ path: 'c.ts', embeddingHash: 'c1', vector: [3] }],
+      '.codebuff-index',
+      { expectedUpdatedAt: generation },
+    )
+    // The stale writer's c1 vector was CAS-dropped; the winning b1 write
+    // union-merged with the pre-existing a1 vector (no-lost-updates), so the
+    // store holds both surviving hashes.
+    expect(
+      (await loadSemanticVectors(root, 'model-a')).map((v) => v.embeddingHash),
+    ).toEqual(['a1', 'b1'])
+  })
+
+  test('concurrent same-fingerprint vector writers merge without lost updates', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-vector-merge-'),
+    )
+    await Promise.all([
+      saveSemanticVectors(root, 'model-a', [
+        { path: 'a.ts', embeddingHash: 'h1', vector: [1] },
+      ]),
+      saveSemanticVectors(root, 'model-a', [
+        { path: 'b.ts', embeddingHash: 'h2', vector: [2] },
+      ]),
+    ])
+    // Union-merge under the lock means neither writer can erase the other's
+    // freshly computed vectors.
+    expect(
+      (await loadSemanticVectors(root, 'model-a'))
+        .map((v) => v.embeddingHash)
+        .sort(),
+    ).toEqual(['h1', 'h2'])
+  })
+})
+
+describe('reclaimStaleLock', () => {
+  const makeLockPath = async (prefix: string): Promise<string> =>
+    path.join(
+      await fs.promises.mkdtemp(path.join(os.tmpdir(), prefix)),
+      '.openbuff-index.lock',
+    )
+
+  test('deletes a lock whose content still matches the stale snapshot', async () => {
+    const lockPath = await makeLockPath('openbuff-reclaim-match-')
+    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
+    await fs.promises.writeFile(lockPath, staleContent, 'utf8')
+    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(true)
+    await expect(fs.promises.readFile(lockPath, 'utf8')).rejects.toThrow(
+      'ENOENT',
+    )
+  })
+
+  test('leaves a re-acquired lock intact when its content no longer matches', async () => {
+    const lockPath = await makeLockPath('openbuff-reclaim-fresh-')
+    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
+    // A competing waiter reclaimed the stale lock and re-acquired it with a
+    // fresh owner token before this waiter's reclaim ran.
+    const freshContent = `${process.pid}:11111111-1111-1111-1111-111111111111\n${Date.now()}\n`
+    await fs.promises.writeFile(lockPath, staleContent, 'utf8')
+    await fs.promises.writeFile(lockPath, freshContent, 'utf8')
+
+    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(false)
+    // The fresh holder's lock file must survive the losing waiter's reclaim.
+    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(freshContent)
+  })
+
+  test('reports success for an already-reclaimed (missing) lock', async () => {
+    const lockPath = await makeLockPath('openbuff-reclaim-gone-')
+    expect(await reclaimStaleLock(lockPath, 'gone\n')).toBe(true)
+  })
+
+  test('leaves no reclaim scratch files behind after a matched reclaim', async () => {
+    const lockPath = await makeLockPath('openbuff-reclaim-clean-')
+    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
+    await fs.promises.writeFile(lockPath, staleContent, 'utf8')
+    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(true)
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.reclaim.')),
+    ).toEqual([])
+  })
+
+  test('restores a displaced fresh lock byte-for-byte when the namespace frees up', async () => {
+    const lockPath = await makeLockPath('openbuff-reclaim-restore-')
+    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
+    const freshContent = `${process.pid}:22222222-2222-2222-2222-222222222222\n${Date.now()}\n`
+    await fs.promises.writeFile(lockPath, freshContent, 'utf8')
+
+    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(false)
+    // The displaced live lock was moved back atomically: no scratch copies of
+    // a live holder's lock remain in the directory.
+    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(freshContent)
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.reclaim.')),
+    ).toEqual([])
+  })
+
+  test('removes the displaced scratch lock when the restore races a newer waiter', async () => {
+    const lockPath = await makeLockPath('openbuff-reclaim-leak-')
+    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
+    const freshContent = `${process.pid}:33333333-3333-3333-3333-333333333333\n${Date.now()}\n`
+    // The competing waiter re-acquired with a fresh owner token before this
+    // waiter's reclaim ran, so the displaced copy can never match.
+    await fs.promises.writeFile(lockPath, freshContent, 'utf8')
+
+    // Simulate the newer waiter still holding the lock path at restore time:
+    // link fails atomically with EEXIST, so the displaced copy cannot go back
+    // and the losing waiter must clean up its own scratch.
+    const originalLink = fs.promises.link
+    fs.promises.link = (async (
+      existingPath: string,
+      newPath: string,
+    ): Promise<void> => {
+      if (newPath === lockPath) {
+        await fs.promises.writeFile(lockPath, freshContent, 'utf8')
+        const error = new Error(
+          'EEXIST: simulated newer waiter holds the lock path',
+        ) as NodeJS.ErrnoException
+        error.code = 'EEXIST'
+        throw error
+      }
+      return originalLink(existingPath, newPath)
+    }) as typeof fs.promises.link
+    try {
+      expect(await reclaimStaleLock(lockPath, staleContent)).toBe(false)
+    } finally {
+      fs.promises.link = originalLink
+    }
+
+    // The newer waiter's lock survived...
+    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(freshContent)
+    // ...and the losing waiter left no `.reclaim.*` scratch behind.
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.reclaim.')),
+    ).toEqual([])
+  })
+})
+
+describe('releaseOwnedLock', () => {
+  const makeLockPath = async (prefix: string): Promise<string> =>
+    path.join(
+      await fs.promises.mkdtemp(path.join(os.tmpdir(), prefix)),
+      '.openbuff-index.lock',
+    )
+
+  test('deletes the lock when the displaced bytes still hold our token', async () => {
+    const lockPath = await makeLockPath('openbuff-release-match-')
+    const ownerToken = '424242:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+    await fs.promises.writeFile(lockPath, `${ownerToken}\n1\n`, 'utf8')
+
+    await releaseOwnedLock(lockPath, ownerToken)
+
+    await expect(fs.promises.readFile(lockPath, 'utf8')).rejects.toThrow(
+      'ENOENT',
+    )
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.release.')),
+    ).toEqual([])
+  })
+
+  test("restores a competing waiter's re-acquired lock instead of deleting it", async () => {
+    // The finding's race: our mtime aged out (silent heartbeat utimes
+    // failure), a waiter reclaimed the lock and re-acquired it with a fresh
+    // token, and only then did our release run. The release must not delete
+    // the waiter's live lock.
+    const lockPath = await makeLockPath('openbuff-release-race-')
+    const staleToken = '424242:00000000-0000-0000-0000-000000000000'
+    const freshContent = `${process.pid}:44444444-4444-4444-4444-444444444444\n${Date.now()}\n`
+    await fs.promises.writeFile(lockPath, freshContent, 'utf8')
+
+    await releaseOwnedLock(lockPath, staleToken)
+
+    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(freshContent)
+    expect(
+      fs
+        .readdirSync(path.dirname(lockPath))
+        .filter((name) => name.includes('.release.')),
+    ).toEqual([])
+  })
+
+  test('treats an already-reclaimed (missing) lock as released', async () => {
+    const lockPath = await makeLockPath('openbuff-release-gone-')
+    await expect(
+      releaseOwnedLock(
+        lockPath,
+        '424242:00000000-0000-0000-0000-000000000000',
+      ),
+    ).resolves.toBeUndefined()
   })
 })

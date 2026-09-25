@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 
 import {
   BINARY_EXTENSIONS,
@@ -431,5 +431,99 @@ describe('file-walker statProjectFiles', () => {
     expect(walkedPaths).not.toContain('scratch.tmp.ts')
     expect(walkedPaths).not.toContain('vendor/lib/hidden.ts')
     expect(walkedPaths).not.toContain('tmp-data/cache.ts')
+  })
+
+  test('walkProjectDetailed does not follow file symlinks (shared no-follow policy)', async () => {
+    const root = await makeTempProject({
+      'src/real.ts': 'export const real = 1\n',
+    })
+    // A symlink (swapped in between readdir and stat in the TOCTOU window, or
+    // simply present on disk) must be skipped, not stat'd/hashed through its
+    // target — matching statProjectFiles' P8.6 lstat contract.
+    try {
+      await fs.promises.symlink(
+        path.join(root, 'src/real.ts'),
+        path.join(root, 'src/link.ts'),
+        'file',
+      )
+    } catch {
+      // Platform cannot create symlinks (e.g. Windows without privileges):
+      // the no-follow assertion is untestable here, so skip.
+      return
+    }
+    const result = await walkProjectDetailed(root)
+    const paths = result.files.map((file) => file.relativePath)
+    expect(paths).toContain('src/real.ts')
+    expect(paths).not.toContain('src/link.ts')
+  })
+
+  test('walkProjectDetailed skips entries that vanish between readdir and stat', async () => {
+    const root = await makeTempProject({
+      'src/keep.ts': 'export const keep = 1\n',
+    })
+    // Simulate a vanished entry by removing the file after building the tree
+    // shape: a missing file must be skipped (ENOENT on lstat) without failing
+    // the walk or inventing an entry.
+    await fs.promises.unlink(path.join(root, 'src/keep.ts'))
+    const result = await walkProjectDetailed(root)
+    expect(result.files).toEqual([])
+    expect(result.truncated).toBe(false)
+  })
+
+  test('skips a directory entry that lstat re-verify resolves to a symlink before recursion (dir-swap TOCTOU)', async () => {
+    // Reliability finding walk-dir-swap-to-symlink-test-gap: the per-entry
+    // lstat re-verify before recursion must refuse a directory that was
+    // swapped to an out-of-project symlink inside the TOCTOU window.
+    //
+    // readdir(withFileTypes) reports the entry's on-disk type, so a STATIC
+    // symlink fixture would be filtered at the entry-type check and never
+    // reach the re-verify. Instead we simulate the race directly: the entry
+    // passes the readdir type check (it really was a directory), but by the
+    // time the walker lstats it again before recursing, it resolves to a
+    // symlink pointing outside the project root.
+    const root = await makeTempProject({
+      'child/marker.ts': 'export const marker = 1\n',
+      'src/keep.ts': 'export const keep = 1\n',
+    })
+    const outside = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'codebuff-walker-outside-'),
+    )
+    try {
+      await fs.promises.writeFile(
+        path.join(outside, 'outside-secret.ts'),
+        'export const secret = 1\n',
+        'utf8',
+      )
+
+      const childAbs = path.join(root, 'child')
+      const realLstat = fs.promises.lstat.bind(fs.promises)
+      const swappedStat = {
+        isSymbolicLink: () => true,
+        isDirectory: () => false,
+        isFile: () => false,
+      } as unknown as fs.Stats
+      // The lstat overloads return Stats or BigIntStats depending on opts;
+      // cast the single-purpose mock to the spied signature so the bigint
+      // overload arm is also satisfied (TS2345 otherwise).
+      const lstatSpy = spyOn(fs.promises, 'lstat').mockImplementation(
+        (async (p: fs.PathLike) =>
+          p === childAbs ? swappedStat : await realLstat(p)) as unknown as typeof fs.promises.lstat,
+      )
+
+      try {
+        const result = await walkProjectDetailed(root)
+        const paths = result.files.map((file) => file.relativePath)
+        // Unaffected files are still walked.
+        expect(paths).toContain('src/keep.ts')
+        // The swapped entry is skipped — neither its in-project contents nor
+        // anything reachable through the out-of-project target leaks in.
+        expect(paths).not.toContain('child/marker.ts')
+        expect(paths).not.toContain('outside-secret.ts')
+      } finally {
+        lstatSpy.mockRestore()
+      }
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true })
+    }
   })
 })

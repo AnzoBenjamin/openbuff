@@ -474,6 +474,88 @@ describe('command factory pattern', () => {
       expect(setMessages).toHaveBeenCalled()
     })
 
+    test('resume-plan queues the prompt when a stream is active (guarded submit)', () => {
+      writeArtifact('auth-refresh', 'PLAN.md', '# Plan\n- [ ] task one')
+      writeArtifact('auth-refresh', 'STATUS.md', 'in progress: task one')
+
+      const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
+      expect(resumeCmd).toBeDefined()
+
+      // /resume-plan routes through sendPromptCommand's guarded submit: while
+      // a stream or chain is active the prompt must be queued instead of
+      // starting a second concurrent turn (reliability finding
+      // guarded-submit-busy-path-untested).
+      const addToQueue = mock(() => {})
+      const setInputFocused = mock(() => {})
+      const sendMessage = mock(async () => {})
+      const params = createMockParams({
+        inputValue: '/resume-plan auth-refresh',
+        isStreaming: true,
+        addToQueue,
+        setInputFocused,
+        sendMessage,
+      })
+
+      resumeCmd!.handler(params, 'auth-refresh')
+
+      expect(addToQueue).toHaveBeenCalledWith(
+        expect.stringContaining('.agents/sessions/auth-refresh'),
+      )
+      expect(sendMessage).not.toHaveBeenCalled()
+      expect(setInputFocused).toHaveBeenCalledWith(true)
+    })
+
+    test('resume-plan queues the prompt while a chain is in progress', () => {
+      writeArtifact('auth-refresh', 'PLAN.md', '# Plan\n- [ ] task one')
+
+      const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
+      const addToQueue = mock(() => {})
+      const setInputFocused = mock(() => {})
+      const sendMessage = mock(async () => {})
+      const params = createMockParams({
+        inputValue: '/resume-plan auth-refresh',
+        isChainInProgressRef: { current: true },
+        addToQueue,
+        setInputFocused,
+        sendMessage,
+      })
+
+      resumeCmd!.handler(params, 'auth-refresh')
+
+      expect(addToQueue).toHaveBeenCalledWith(
+        expect.stringContaining('.agents/sessions/auth-refresh'),
+      )
+      expect(sendMessage).not.toHaveBeenCalled()
+      expect(setInputFocused).toHaveBeenCalledWith(true)
+    })
+
+    test('resume-plan sends immediately when no stream or chain is active', () => {
+      writeArtifact('auth-refresh', 'PLAN.md', '# Plan\n- [ ] task one')
+      writeArtifact('auth-refresh', 'STATUS.md', 'in progress: task one')
+
+      const resumeCmd = COMMAND_REGISTRY.find((c) => c.name === 'resume-plan')
+      const addToQueue = mock(() => {})
+      const sendMessage = mock(async () => {})
+      const params = createMockParams({
+        inputValue: '/resume-plan auth-refresh',
+        addToQueue,
+        sendMessage,
+      })
+
+      resumeCmd!.handler(params, 'auth-refresh')
+
+      // Idle guarded-submit path: the prompt goes straight out with the
+      // EXECUTE_PLAN mode the resume toggle set, never through the queue.
+      expect(sendMessage).toHaveBeenCalledTimes(1)
+      const calls = sendMessage.mock.calls as unknown as Array<
+        [{ content: string; agentMode: string }]
+      >
+      expect(calls[0][0].agentMode).toBe('EXECUTE_PLAN')
+      expect(calls[0][0].content).toContain('.agents/sessions/auth-refresh')
+      expect(calls[0][0].content).toContain('in progress: task one')
+      expect(addToQueue).not.toHaveBeenCalled()
+    })
+
     test('update-plan includes note and artifact content in prompt', () => {
       writeArtifact('foo', 'SPEC.md', 'spec body')
       writeArtifact('foo', 'PLAN.md', 'plan body')
@@ -1061,6 +1143,190 @@ describe('command factory pattern', () => {
           artifacts: ['PLAN.md'],
         }),
       )
+    })
+  })
+
+  describe('exit command shutdown sequence', () => {
+    /**
+     * The /exit handler ends in an async analytics flush whose .finally
+     * callback calls process.exit, so the test must stub both process.exit and
+     * process.kill (the handler must never self-signal) and yield a macrotask
+     * for the flush's .finally to run before asserting.
+     */
+    const stubProcessExitAndKill = () => {
+      const exitSpy = mock(() => undefined)
+      const killSpy = mock(() => true)
+      const originalExit = process.exit
+      const originalKill = process.kill
+      process.exit = exitSpy as unknown as typeof process.exit
+      process.kill = killSpy as unknown as typeof process.kill
+      return {
+        exitSpy,
+        killSpy,
+        restore: () => {
+          process.exit = originalExit
+          process.kill = originalKill
+        },
+      }
+    }
+
+    test('drains the guarded-submit queue into session history before exiting', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        // The /exit drain loop calls clearQueue(1) one entry at a time and
+        // terminates only when the mock returns an empty array, so a mock
+        // that always returns both entries would spin the synchronous loop
+        // forever (reliability finding
+        // exit-drain-test-mock-incompatible-with-one-at-a-time-drain). The
+        // real clearQueue contract returns the first `count` entries and
+        // keeps the rest, which a splicing mock mirrors.
+        const remaining = [
+          { content: 'queued one', attachments: [] },
+          { content: 'queued two', attachments: [] },
+        ]
+        const clearQueue = mock((count?: number) => remaining.splice(0, count))
+        const saveToHistory = mock(() => {})
+        const stopStreaming = mock(() => {})
+        const params = createMockParams({ clearQueue, saveToHistory, stopStreaming })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        // Every queued prompt (with its attachments) is persisted to the
+        // session history instead of being dropped by the restart, and the
+        // queue is drained so a late handler cannot resend it.
+        expect(saveToHistory).toHaveBeenCalledWith('queued one')
+        expect(saveToHistory).toHaveBeenCalledWith('queued two')
+        // One-at-a-time contract: 2 draining calls plus 1 terminal empty
+        // check (reliability finding
+        // exit-drain-test-mock-incompatible-with-one-at-a-time-drain).
+        expect(clearQueue).toHaveBeenCalledTimes(3)
+        // Shutdown sequencing: stream stopped before the exit is scheduled.
+        expect(stopStreaming).toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('continues the exit drain past a failed queue persistence', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        // Same one-at-a-time splicing mock as the happy-path drain test: the
+        // synchronous loop terminates only on an empty return.
+        const remaining = [
+          { content: 'queued one', attachments: [] },
+          { content: 'queued two', attachments: [] },
+        ]
+        const clearQueue = mock((count?: number) => remaining.splice(0, count))
+        // formatQueuedMessageForHistory returns the queued content verbatim
+        // when the entry has no attachments, so saveToHistory receives the
+        // raw prompt strings. The first persist throws; the drain must skip
+        // only that entry and keep going (reliability finding
+        // exit-drain-stops-on-first-persist-failure).
+        const saveToHistory = mock((message: string) => {
+          if (message.includes('queued one')) {
+            throw new Error('persist failed')
+          }
+        })
+        const stopStreaming = mock(() => {})
+        const params = createMockParams({
+          clearQueue,
+          saveToHistory,
+          stopStreaming,
+        })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        // Both entries were drained; only the first persist threw.
+        expect(
+          (saveToHistory.mock.calls as unknown as Array<[string]>).map(
+            (call) => call[0],
+          ),
+        ).toEqual(['queued one', 'queued two'])
+        // 'queued two' is still persisted despite the first entry failing.
+        expect(saveToHistory).toHaveBeenCalledWith('queued two')
+        // 2 draining calls plus 1 terminal empty check: the drain did not
+        // stop on the first persist failure.
+        expect(clearQueue).toHaveBeenCalledTimes(3)
+        // The exit still proceeds normally.
+        expect(stopStreaming).toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('exits without queueing when the queue is empty', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const clearQueue = mock(() => [] as Array<{ content: string; attachments: never[] }>)
+        const saveToHistory = mock(() => {})
+        const params = createMockParams({ clearQueue, saveToHistory })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        expect(saveToHistory).not.toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('degrades to a no-op drain when clearQueue is not wired', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const saveToHistory = mock(() => {})
+        const params = createMockParams({ saveToHistory })
+        expect(params.clearQueue).toBeUndefined()
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        expect(saveToHistory).not.toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('cancels in-flight resources instead of self-signalling SIGINT', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+        expect(abortController.signal.aborted).toBe(false)
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+
+        // The stream's abort controller is cancelled so in-flight SDK streams
+        // unwind before the exit, and the process never signals its own PID.
+        expect(abortController.signal.aborted).toBe(true)
+        expect(stubs.killSpy).not.toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
     })
   })
 

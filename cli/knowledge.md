@@ -21,6 +21,10 @@
 
 - _Knowledge refresh 2026-09-17: record_decision tool, memory-first skip/narrow in glob/list-directory/code-search/find-files-matching-content, indexer chunk-freshness sidecar, coordinator deterministic kinds, two-session cold-start test._
 
+- _Knowledge refresh 2026-09-23: ask-user Esc data-loss guard (`components/ask-user/skip-guard.ts` — first Esc with in-progress drafts warns, second confirms), exit drain extracted to `hooks/helpers/exit-queue-drain.ts` (`createQueuedPromptDrainer`, partial-failure semantics unit-testable), and `utils/tool-result-normalizer.ts` error-scan restricted to the tool-result envelope so nested payload errors no longer flip successful tools to failed._
+
+- _Knowledge refresh 2026-09-24b (staleness guard touch): M3-T3 reliability wave landed test-only changes under `src/` — the /exit drain test now mirrors the one-at-a-time `clearQueue(1)` splicing contract (plus a partial-failure persistence test), three guarded-submit busy-path tests exercise `/resume-plan` queueing via `commands/__tests__/command-args.test.ts`, and `components/__tests__/build-mode-buttons.test.tsx` restores its mockLayout in `afterAll` so the xs layout no longer bleeds into status-bar tests; this entry keeps `cli/knowledge.md` newer than `src/` for the pre-push memory-drift guard._
+
 ## Slash Commands and Plan Mode
 
 - Durable planning is entered through `mode:plan`; the standalone `/plan` command is intentionally absent from `COMMAND_REGISTRY` and `SLASH_COMMANDS` so there is one plan-entry path.
@@ -899,7 +903,7 @@ Streaming markdown renders as plain text until the message or agent finishes. Th
 
 ## Recent Runtime State Notes
 
-- Queue processing uses a single-owner lock plus a watchdog in `cli/src/hooks/use-message-queue.ts` so stale async cleanup cannot release a newer queue-processing run.
+- Queue processing uses a single-owner lock in `cli/src/hooks/use-message-queue.ts` so stale async cleanup cannot release a newer queue-processing run. The lock is cleared only when a settled send's finally-cleanup runs (no timing-based watchdog; the earlier 60s force-release was removed because a normal LLM turn exceeds 60s and the watchdog force-reset could interleave two turns).
 - Plan blocks render known and custom artifact paths as static text, while plan command strings render as `Button` controls that call `onInsertCommand` to prefill the chat input without submitting. Keep this callback threaded through `MessageWithAgents`, `MessageBlock`, `BlocksRenderer`, `SingleBlock`, and nested `AgentBranchWrapper` when changing plan or agent rendering.
 - Status indicators in `cli/src/utils/status-indicator-state.ts` distinguish retrying, reconnecting, paused ask_user prompts, and phase-aware waiting/streaming labels.
 - Re-render performance tests rely on debug rerender logs from `CODEBUFF_PERF_TEST=true`; tmux global env propagation is best-effort because `new-session` can start the server and inherit the current process environment.

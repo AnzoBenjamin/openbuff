@@ -187,8 +187,6 @@ deduction.
 Tool calls always execute on the user's machine:
 
 ```
-
-Control-plane reads and validation use the same local dispatch path. A targeted validation call must include the snapshot ID observed before execution; the SDK rejects the call if the workspace is already stale and rejects its result if files mutate while the command is running. This prevents an old compiler/test result or reviewer verdict from clearing a newer change.
 LLM Response (tool_call)          Agent Runtime processes stream
         │                                    │
         ▼                                    ▼
@@ -203,6 +201,8 @@ LLM Response (tool_call)          Agent Runtime processes stream
         │
   Feeds result back into next provider call
 ```
+
+Control-plane reads and validation use the same local dispatch path. A targeted validation call must include the snapshot ID observed before execution; the SDK rejects the call if the workspace is already stale and rejects its result if files mutate while the command is running. This prevents an old compiler/test result or reviewer verdict from clearing a newer change.
 
 ### Staged read-before-edit enforcement
 
@@ -270,8 +270,15 @@ exposes a stable structured contract to the user:
   surrounding prose.
 - File contents themselves are not logged into gate state or transcripts;
   only the hash/byte-length marker and pass/fail status are recorded.
-- Versioned reviewer results must echo the exact snapshot fingerprint and
-  attest to every pending file. A mismatch or omitted file is blocking.
+- Versioned reviewer results must attest to every pending file. An omitted
+  file is blocking. A snapshot fingerprint MISMATCH is blocking only when
+  file coverage is also incomplete: a coverage-complete review reporting a
+  well-formed v3 fingerprint is trusted even when the snapshot id advanced
+  between its spawn and attestation (the reviewer may have re-read drifted
+  bytes), and the drift is recorded non-silently via
+  `collectReviewerFingerprintDrift`. A missing or non-attestable
+  fingerprint is always blocking. This matches the pinned behavior in
+  `collectReviewerAttestationIssues` (`agents/base2/gate-reviewer.ts`).
 - Missing hooks or hooks that match no changed files are surfaced as
   `REDUCED_ASSURANCE`, not ordinary validation success.
 - Explicit reviewer bypasses retain the reason, authorization timestamp,

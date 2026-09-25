@@ -101,6 +101,57 @@ function readLines(filePath: string): string[] {
   return readFileSync(filePath, 'utf8').split('\n')
 }
 
+/**
+ * M3-T2: one shared snapshot of the markdown tree. Each checker previously
+ * ran its own recursive `markdownFiles` walk plus a per-file read, so a run
+ * re-walked the entire repo and re-read every .md/.mdx once PER CHECKER.
+ * `runMemoryDriftGuard` now walks ONCE, reads each file once, and hands the
+ * snapshot to every checker; direct checker calls without a snapshot keep
+ * their own walk (backward-compatible with the pinned tests).
+ */
+export type MarkdownSnapshot = {
+  files: string[]
+  linesByFile: Map<string, string[]>
+}
+
+export function buildMarkdownSnapshot(root: string): MarkdownSnapshot {
+  const files = [...markdownFiles(root)]
+  const linesByFile = new Map<string, string[]>()
+  for (const filePath of files) {
+    try {
+      linesByFile.set(filePath, readFileSync(filePath, 'utf8').split('\n'))
+    } catch (err) {
+      console.debug(
+        `[memory-drift-guard] buildMarkdownSnapshot read failed for ${filePath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    }
+  }
+  return { files, linesByFile }
+}
+
+/** File list for a checker: the shared snapshot when present, else its own walk. */
+function snapshotFiles(
+  snapshot: MarkdownSnapshot | undefined,
+  root: string,
+): string[] {
+  return snapshot ? snapshot.files : [...markdownFiles(root)]
+}
+
+/**
+ * Lines for one file from the shared snapshot, falling back to a direct read
+ * when the checker was called without one (or the snapshot read failed).
+ */
+function snapshotFileLines(
+  snapshot: MarkdownSnapshot | undefined,
+  filePath: string,
+): string[] {
+  const cached = snapshot?.linesByFile.get(filePath)
+  if (cached) return cached
+  return readLines(filePath)
+}
+
 function loadPackageJson(root: string, subdir: string): any {
   const pkgPath = join(root, subdir, 'package.json')
   if (!existsSync(pkgPath)) {
@@ -188,11 +239,14 @@ function dependencyExists(root: string, pkgName: string): boolean {
   return false
 }
 
-export function checkPath(root: string): Finding[] {
+export function checkPath(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const projectPath = toProjectPath(root, filePath)
-    const lines = readLines(filePath)
+    const lines = snapshotFileLines(snapshot, filePath)
     lines.forEach((line, index) => {
       PATH_QUOTED_REGEX.lastIndex = 0
       let match: RegExpExecArray | null
@@ -211,15 +265,18 @@ export function checkPath(root: string): Finding[] {
   return findings
 }
 
-export function checkEdges(root: string): Finding[] {
+export function checkEdges(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const base = filePath.split(sep).pop() || ''
     if (base !== 'knowledge.md' && !base.endsWith('.knowledge.md')) {
       continue
     }
     const projectPath = toProjectPath(root, filePath)
-    const lines = readLines(filePath)
+    const lines = snapshotFileLines(snapshot, filePath)
     let inSection = false
     lines.forEach((line, index) => {
       if (line.startsWith('## ')) {
@@ -302,7 +359,10 @@ export function checkIndexSync(root: string): Finding[] {
   return findings
 }
 
-export function checkStaleness(root: string): Finding[] {
+export function checkStaleness(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const candidates: Array<{
     filePath: string
     projectPath: string
@@ -310,7 +370,7 @@ export function checkStaleness(root: string): Finding[] {
     topic: string
     base: string
   }> = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const base = filePath.split(sep).pop() || ''
     if (base !== 'knowledge.md' && !base.endsWith('.knowledge.md')) {
       continue
@@ -543,11 +603,14 @@ function pathIsTracked(root: string, pathspec: string): boolean {
   }
 }
 
-export function checkCommand(root: string): Finding[] {
+export function checkCommand(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const projectPath = toProjectPath(root, filePath)
-    const lines = readLines(filePath)
+    const lines = snapshotFileLines(snapshot, filePath)
     lines.forEach((line, index) => {
       COMMAND_REGEX.lastIndex = 0
       let match: RegExpExecArray | null
@@ -667,11 +730,14 @@ export function checkCommand(root: string): Finding[] {
   return findings
 }
 
-export function checkDependency(root: string): Finding[] {
+export function checkDependency(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const projectPath = toProjectPath(root, filePath)
-    const lines = readLines(filePath)
+    const lines = snapshotFileLines(snapshot, filePath)
     lines.forEach((line, index) => {
       DEPENDENCY_REGEX.lastIndex = 0
       let match: RegExpExecArray | null
@@ -690,12 +756,15 @@ export function checkDependency(root: string): Finding[] {
   return findings
 }
 
-export function checkCrossFile(root: string): Finding[] {
+export function checkCrossFile(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const projectPath = toProjectPath(root, filePath)
     const dir = dirname(filePath)
-    const lines = readLines(filePath)
+    const lines = snapshotFileLines(snapshot, filePath)
     lines.forEach((line, index) => {
       CROSS_FILE_LINK_REGEX.lastIndex = 0
       let match: RegExpExecArray | null
@@ -784,7 +853,10 @@ function workspacePackageSubdirs(root: string): string[] {
   return [...subdirs]
 }
 
-export function checkScriptCoverage(root: string): Finding[] {
+export function checkScriptCoverage(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
   const scripts = listTopLevelScripts(root)
   // A script is covered when any workspace package wires it into its scripts —
@@ -822,9 +894,11 @@ export function checkScriptCoverage(root: string): Finding[] {
   }
 
   const allMdContent: string[] = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     try {
-      allMdContent.push(readFileSync(filePath, 'utf8'))
+      allMdContent.push(
+        snapshotFileLines(snapshot, filePath).join('\n'),
+      )
     } catch (err) {
       console.debug(
         `[memory-drift-guard] checkScriptCoverage read failed for ${filePath}: ${
@@ -883,15 +957,18 @@ export function checkToolConfigSync(root: string): Finding[] {
   return findings
 }
 
-export function checkTodoFixme(root: string): Finding[] {
+export function checkTodoFixme(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
   // Match TODO/FIXME/XXX only when followed by `:` or `(` (i.e. an actual
   // unresolved marker), not when used as a feature/section name like
   // "TODO List Positioning" or "FIXME notes".
   const markerRegex = /\b(TODO|FIXME|XXX)\b[:(]/
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const projectPath = toProjectPath(root, filePath)
-    const lines = readLines(filePath)
+    const lines = snapshotFileLines(snapshot, filePath)
     lines.forEach((line, index) => {
       if (line.includes('<!-- allow-todo -->')) {
         return
@@ -908,12 +985,15 @@ export function checkTodoFixme(root: string): Finding[] {
   return findings
 }
 
-export function checkBrokenLink(root: string): Finding[] {
+export function checkBrokenLink(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
-  for (const filePath of markdownFiles(root)) {
+  for (const filePath of snapshotFiles(snapshot, root)) {
     const projectPath = toProjectPath(root, filePath)
     const dir = dirname(filePath)
-    const lines = readLines(filePath)
+    const lines = snapshotFileLines(snapshot, filePath)
     lines.forEach((line, index) => {
       BROKEN_LINK_REGEX.lastIndex = 0
       let match: RegExpExecArray | null
@@ -952,6 +1032,12 @@ export function checkBrokenLink(root: string): Finding[] {
  * repo gate (CI and the pre-push hook), so it must only judge tracked
  * repository content: an untracked record is skipped entirely, because no
  * source change produced its contents and none can clear a finding on it.
+ *
+ * M4-T3: the `.openbuff/.gitignore` written by check:ci-local is scoped to the
+ * transient lock file only (OPENBUFF_DIR_GITIGNORE_CONTENT in
+ * scripts/check-ci-local.ts is the single source for those rules), so a
+ * tracked task-memory.json stays `git add`-able on machines that run
+ * check:ci-local and this tracked-mode path remains reachable.
  */
 export function checkTaskMemory(root: string): Finding[] {
   const memoryProjectPath = '.openbuff/memory/task-memory.json'
@@ -991,7 +1077,7 @@ export function checkTaskMemory(root: string): Finding[] {
 
 export const CHECKERS: Array<{
   name: string
-  run: (root: string) => Finding[]
+  run: (root: string, snapshot?: MarkdownSnapshot) => Finding[]
 }> = [
   { name: 'path', run: checkPath },
   { name: 'edges', run: checkEdges },
@@ -1010,9 +1096,14 @@ export const CHECKERS: Array<{
 export function runMemoryDriftGuard(
   root = projectRoot(),
 ): MemoryDriftGuardResult {
+  // M3-T2: ONE shared markdown-tree snapshot for every checker. Each checker
+  // previously re-ran its own recursive directory walk and re-read every
+  // .md/.mdx file; the snapshot turns that into one walk plus one read per
+  // file for the whole run.
+  const snapshot = buildMarkdownSnapshot(root)
   const checkers: CheckerResult[] = CHECKERS.map(({ name, run }) => ({
     name,
-    findings: run(root),
+    findings: run(root, snapshot),
   }))
   const score = checkers.reduce((sum, c) => sum + c.findings.length, 0)
   return { score, checkers }

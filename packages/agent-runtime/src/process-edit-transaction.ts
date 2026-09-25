@@ -29,6 +29,7 @@ import type {
 } from './process-structured-edit'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+import type { StructuredEditErrorCode } from '@codebuff/common/util/error'
 
 
 type StrReplaceTransactionEdit = {
@@ -154,6 +155,13 @@ type TransactionFailure = {
    * consumers can ignore it (the output schema strips unknown keys).
    */
   failureKind?: TransactionFailureKind
+  /**
+   * M2-T6: structured failed-replacement attribution threaded from
+   * processStrReplace, carrying the 0-based failing replacement index. Never
+   * re-derived from errorMessage: error prose quotes untrusted oldString/file
+   * content that can contain a spoofing "replacement N" pattern.
+   */
+  failedReplacementIndex?: number
 }
 
 type TransactionFileChange = {
@@ -180,7 +188,7 @@ export async function processEditTransaction(params: {
       error: string
       failures: TransactionFailure[]
       requiresFreshRead?: boolean
-      errorCode?: 'no_match' | 'stale_capability' | 'preflight_failed'
+      errorCode?: StructuredEditErrorCode
       recovery?: TransactionRecovery
     }
 > {
@@ -285,7 +293,8 @@ export async function processEditTransaction(params: {
         edits,
         editIndex,
         coalescedEdit,
-        result.error,
+        // M2-T6: structured index from processStrReplace — never the prose.
+        result.failedReplacementIndex,
       )
       const failureKind =
         result.failureKind ?? classifyTransactionFailureKind(result.error)
@@ -295,6 +304,9 @@ export async function processEditTransaction(params: {
         path: effectiveEdit.path,
         errorMessage: result.error,
         ...(failureKind && { failureKind }),
+        ...(failedEdit.failedReplacementIndex !== undefined && {
+          failedReplacementIndex: failedEdit.failedReplacementIndex,
+        }),
       })
       break
     }
@@ -330,7 +342,7 @@ export async function processEditTransaction(params: {
       edits,
       firstFailure.editIndex,
       coalesceAdjacentStrReplaceEdits(edits, firstFailure.editIndex),
-      firstFailure.errorMessage,
+      firstFailure.failedReplacementIndex,
     )
     const recovery = buildTransactionRecovery({
       paths: uniquePaths,
@@ -469,16 +481,24 @@ function resolveFailedEdit(
   edits: TransactionEdit[],
   editIndex: number,
   coalescedEdit: ReturnType<typeof coalesceAdjacentStrReplaceEdits>,
-  errorMessage: string,
+  structuredFailedReplacementIndex?: number,
 ): {
   editIndex: number
   edit: TransactionEdit
   failedReplacementIndex?: number
 } {
-  const replacementMatch = errorMessage.match(/replacement (\d+)/i)
-  const replacementIndex = replacementMatch
-    ? Number.parseInt(replacementMatch[1], 10) - 1
-    : -1
+  // M2-T6: the failing replacement index is threaded as a structured field
+  // from processStrReplace, NOT regexed out of errorMessage. The regex
+  // /replacement (\d+)/ previously matched arbitrary error prose — which
+  // quotes untrusted oldString/file content, so an edit whose content
+  // contains the literal text "replacement 2" could shift the parsed index
+  // and misattribute the failure to a different edit/replacement, corrupting
+  // failure.editIndex, failedReplacementIndex, and recovery guidance.
+  const replacementIndex =
+    typeof structuredFailedReplacementIndex === 'number' &&
+    structuredFailedReplacementIndex >= 0
+      ? structuredFailedReplacementIndex
+      : -1
   const sourceEditIndex =
     replacementIndex >= 0
       ? coalescedEdit?.replacementEditIndexes[replacementIndex]
@@ -550,7 +570,7 @@ function classifyTransactionFailureKind(
 
 function recoveryErrorCode(
   failure: TransactionFailure,
-): 'no_match' | 'stale_capability' | 'preflight_failed' | undefined {
+): StructuredEditErrorCode | undefined {
   if (
     failure.failureKind === 'capability_stale' ||
     failure.failureKind === 'capability_scope' ||
@@ -559,8 +579,9 @@ function recoveryErrorCode(
     return 'stale_capability'
   }
   if (failure.failureKind === 'no_match') return 'no_match'
-  // The public errorCode enum intentionally does not grow: an anchored scope
-  // mismatch is reported as no_match with the precise prose in the failure.
+  // anchor_scope_mismatch intentionally reports as no_match; the full closed
+  // vocabulary lives in common/src/util/error.ts (structuredEditErrorCodes,
+  // additive growth only).
   if (failure.failureKind === 'anchor_scope_mismatch') return 'no_match'
   if (failure.failureKind === 'preflight_failed') return 'preflight_failed'
   if (classifyTransactionFailureKind(failure.errorMessage) === 'no_match') {
@@ -977,6 +998,11 @@ async function processTransactionEdit(params: {
   | {
       error: string
       failureKind?: TransactionFailureKind
+      /**
+       * M2-T6: structured failed-replacement index threaded through from
+       * processStrReplace so failure attribution stays prose-independent.
+       */
+      failedReplacementIndex?: number
     }
 > {
   const {
@@ -1209,10 +1235,34 @@ async function processTransactionEdit(params: {
       if (initialContent === null) {
         return { error: `Cannot apply a patch to missing file ${edit.path}.` }
       }
-      const content = applyPatch(initialContent, edit.diff)
-      return content === false
-        ? { error: `Patch did not apply cleanly to ${edit.path}.` }
-        : { content, messages: [`Applied patch to ${edit.path}.`] }
+      // M2-T6: applyPatch on an untrusted edit.diff can THROW on malformed
+      // patch headers (the 'diff' package does not return false there). A
+      // thrown error would escape this structured { error, failureKind }
+      // return branch and abort the whole transaction through tool-executor's
+      // generic handler-failure wrapper, losing failures[]/recovery and the
+      // atomic 'no files were changed' envelope for the remaining targets.
+      let content: string | false
+      try {
+        content = applyPatch(initialContent, edit.diff)
+      } catch {
+        content = false
+      }
+      // Falsy-safe + no-op-safe (M2-T6 repair): the 'diff' package treats a
+      // patch with NO parsable hunks as an empty patch that silently returns
+      // the ORIGINAL content (verified empirically: 'not a unified diff at
+      // all' neither throws nor returns false). An apply that changed nothing
+      // is a failed apply and must surface the structured failure instead of
+      // being reported as a successful no-op change.
+      const applied =
+        typeof content === 'string' && content !== initialContent
+          ? content
+          : false
+      return applied === false
+        ? {
+            error: `Patch did not apply cleanly to ${edit.path}.`,
+            failureKind: 'generic' as const,
+          }
+        : { content: applied, messages: [`Applied patch to ${edit.path}.`] }
     }
     case 'write_file':
       return {

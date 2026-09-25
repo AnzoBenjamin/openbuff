@@ -237,20 +237,11 @@ export const handleSpawnAgentInline = (async (
         }
       : {}),
   }
-  appendOrchestrationEvent({
-    state: parentAgentState,
-    event: {
-      type: 'spawn_started',
-      runId: parentAgentState.runId ?? parentAgentState.agentId,
-      spawnId: childAgentState.agentId,
-      taskId: handoff?.taskId,
-      agentType,
-      parentRunId: parentAgentState.runId ?? parentAgentState.agentId,
-      capabilityId: selection.capabilityId,
-      workspaceRevision: parentAgentState.workspaceState?.revision,
-      workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
-    },
-  })
+  // Lease BEFORE the `spawn_started` ledger event: a failed acquisition (a
+  // lease conflict on overlapping writablePaths) must escape with no
+  // `spawn_started` at all rather than a dangling one, so the event is
+  // emitted only after the lease is held — inside the try below, whose catch
+  // closes the ledger pair and whose finally releases the lease on every path.
   const leaseId = acquireWorkspacePathLease({
     state: parentAgentState,
     projectRoot: params.fileContext.projectRoot,
@@ -258,16 +249,39 @@ export const handleSpawnAgentInline = (async (
     taskId: handoff?.taskId,
     paths: handoff?.permissions.writablePaths ?? [],
   })
-  // Extract common context params to avoid bugs from spreading all params
-  const contextParams = extractSubagentContextParams(params)
 
   // Observed pruner chunks, counted only so the parent's announced compaction
   // pass can report live movement. The chunks themselves are still dropped: see
   // the `else` branch of `onResponseChunk` below.
   let prunerChunks = 0
 
+  // Exception-safe settle bookkeeping: `receiptReconciled` flips only after
+  // `reconcileAgentReceiptIntoParent` returns, so the catch below can tell an
+  // execute throw from a settle throw, and the lease release in the finally
+  // below runs on every path.
+  let receiptReconciled = false
   let result: Awaited<ReturnType<typeof executeSubagent>>
   try {
+    // Emitted only once the lease is held: any throw after this point —
+    // including context-param extraction below — is closed by the
+    // `interrupted` event in the catch and the lease release in the finally.
+    appendOrchestrationEvent({
+      state: parentAgentState,
+      event: {
+        type: 'spawn_started',
+        runId: parentAgentState.runId ?? parentAgentState.agentId,
+        spawnId: childAgentState.agentId,
+        taskId: handoff?.taskId,
+        agentType,
+        parentRunId: parentAgentState.runId ?? parentAgentState.agentId,
+        capabilityId: selection.capabilityId,
+        workspaceRevision: parentAgentState.workspaceState?.revision,
+        workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+      },
+    })
+    // Extract common context params to avoid bugs from spreading all params
+    const contextParams = extractSubagentContextParams(params)
+
     result = await executeSubagent({
       ...contextParams,
 
@@ -363,43 +377,65 @@ export const handleSpawnAgentInline = (async (
       },
       clearUserPromptMessagesAfterResponse: false,
     })
-  } catch (error) {
-    releaseWorkspacePathLease(parentAgentState, leaseId)
-    throw error
-  }
+    // Ordinary inline agents never write their private transcript back into the
+    // parent. Only explicit history-editor templates may propagate replacements.
+    if (editsParentMessageHistory) {
+      parentAgentState.messageHistory = result.agentState.messageHistory
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType,
+      agentId: result.agentState.agentId,
+      handoff,
+      spawnParams: runtimeSpawnParams,
+      output: result.output,
+      agentState: result.agentState,
+    })
+    reconcileAgentReceiptIntoParent({
+      parentAgentState,
+      receipt,
+      agentType,
+      objective: handoff?.objective,
+    })
+    receiptReconciled = true
 
-  // Ordinary inline agents never write their private transcript back into the
-  // parent. Only explicit history-editor templates may propagate replacements.
-  if (editsParentMessageHistory) {
-    parentAgentState.messageHistory = result.agentState.messageHistory
-  }
-  const receipt = buildRuntimeAgentReceipt({
-    agentType,
-    agentId: result.agentState.agentId,
-    handoff,
-    spawnParams: runtimeSpawnParams,
-    output: result.output,
-    agentState: result.agentState,
-  })
-  reconcileAgentReceiptIntoParent({
-    parentAgentState,
-    receipt,
-    agentType,
-    objective: handoff?.objective,
-  })
-  releaseWorkspacePathLease(parentAgentState, leaseId)
-
-  return {
-    output: [
-      {
-        type: 'json',
-        value: {
-          result: receipt.output ?? {
-            message: 'Agent completed without structured output.',
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            result: receipt.output ?? {
+              message: 'Agent completed without structured output.',
+            },
+            agentReceipt: receipt,
           },
-          agentReceipt: receipt,
         },
-      },
-    ],
+      ],
+    }
+  } catch (error) {
+    // A settle throw (receipt build or receipt reconcile) must not leave the
+    // `spawn_started` ledger event dangling: close the pair with an
+    // `interrupted` event unless the terminal receipt was already reconciled.
+    if (!receiptReconciled) {
+      appendOrchestrationEvent({
+        state: parentAgentState,
+        event: {
+          type: 'interrupted',
+          runId: parentAgentState.runId ?? parentAgentState.agentId,
+          subjectType: 'spawn',
+          subjectId: childAgentState.agentId,
+          reason:
+            error instanceof Error
+              ? `Inline spawn failed before reaching its terminal receipt: ${error.message}`
+              : `Inline spawn failed before reaching its terminal receipt: ${String(error)}`,
+          workspaceRevision: parentAgentState.workspaceState?.revision,
+          workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        },
+      })
+    }
+    throw error
+  } finally {
+    // The lease must be released on EVERY path: execute throw, settle throw,
+    // and success alike.
+    releaseWorkspacePathLease(parentAgentState, leaseId)
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

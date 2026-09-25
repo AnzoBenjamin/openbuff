@@ -17,6 +17,7 @@ import {
   searchConsolidations,
   selectUnconsolidatedSnapshots,
 } from '../context-consolidation'
+import { archivePreCompaction } from '../context-archive'
 import { maybeRunBackgroundConsolidation } from '../context-consolidation-runner'
 import { handleRecallContext } from '../../tools/handlers/tool/recall-context'
 
@@ -78,6 +79,46 @@ describe('selectUnconsolidatedSnapshots', () => {
       { consolidatedAt: 99, sourceArchivedAts: [50, 50], action: 'semantic_compaction', summary: 's', coveredMessages: 4 } as ContextConsolidation,
     ]
     expect(selectUnconsolidatedSnapshots(archive, consolidations)).toEqual([])
+  })
+})
+
+describe('archivePreCompaction archivedAt collision safety (M3-T4)', () => {
+  it('mints distinct archivedAt values when multiple snapshots archive in the same tick', () => {
+    // Two DIFFERENT transcripts archived back-to-back within the same
+    // millisecond (as when a semantic pass and a mechanical trim run in one
+    // iteration). Coverage/provenance are keyed per archivedAt, so duplicate
+    // timestamps would mark both snapshots covered off one consolidation.
+    const state: { compactionArchive?: ContextArchiveSnapshot[] } = {}
+    const first: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'first' }] },
+    ]
+    const second: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'second' }] },
+    ]
+    archivePreCompaction(state, first, 'semantic_compaction', 6)
+    archivePreCompaction(state, second, 'mechanical_trim', 6)
+
+    const archive = state.compactionArchive!
+    expect(archive).toHaveLength(2)
+    const ids = archive.map((s) => s.archivedAt)
+    expect(new Set(ids).size).toBe(2)
+    // Monotonic: the second mint is strictly after the first.
+    expect(ids[1]).toBeGreaterThan(ids[0])
+  })
+
+  it('keeps every stored snapshot unique even across MAX_ARCHIVE_SNAPSHOTS same-tick archives', () => {
+    const state: { compactionArchive?: ContextArchiveSnapshot[] } = {}
+    for (let i = 0; i < 12; i++) {
+      archivePreCompaction(
+        state,
+        [{ role: 'user', content: [{ type: 'text', text: `m-${i}` }] } as Message],
+        'mechanical_trim',
+        6,
+      )
+    }
+    const archive = state.compactionArchive!
+    expect(archive).toHaveLength(8) // capped at MAX_ARCHIVE_SNAPSHOTS
+    expect(new Set(archive.map((s) => s.archivedAt)).size).toBe(8)
   })
 })
 
@@ -322,7 +363,7 @@ const invokeRecall = async (agentState: AgentState, query: string) => {
   }
 }
 
-describe('handleRecallContext consolidation merge', () => {
+describe('handleRecallContext consolidation merge failure paths', () => {
   const consolidation = (summary: string): ContextConsolidation => ({
     consolidatedAt: 99,
     sourceArchivedAts: [11],
@@ -370,5 +411,24 @@ describe('handleRecallContext consolidation merge', () => {
     const consolidationOnly = await invokeRecall(withConsolidation, 'eviction')
     expect(consolidationOnly.consolidations).toHaveLength(1)
     expect(consolidationOnly.message).toBeUndefined()
+  })
+
+  test('stale-evidence provenance: archive hits carry archivedAt so callers can spot pre-compaction staleness', async () => {
+    const agentState = buildRunnerState()
+    const value = await invokeRecall(agentState, 'keystone-11')
+    expect(value.matches.length).toBeGreaterThan(0)
+    // The archivedAt provenance array accompanies matches so consumers can
+    // distinguish pre-compaction (possibly stale) evidence from live state.
+    expect(value.archivedAt).toEqual([12, 11])
+    expect(value.snapshotsSearched).toBe(2)
+  })
+
+  test('stale-evidence merge failure path: no archive yields guidance message without provenance', async () => {
+    const agentState = buildRunnerState({ compactionArchive: [] })
+    const value = await invokeRecall(agentState, 'keystone-11')
+    expect(value.matches).toEqual([])
+    expect(value.archivedAt).toEqual([])
+    expect(value.snapshotsSearched).toBe(0)
+    expect(value.message).toContain('No archived pre-compaction content matched')
   })
 })

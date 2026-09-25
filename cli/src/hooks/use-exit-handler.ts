@@ -23,6 +23,35 @@ let exitHandlerRegistered = false
 // idempotent.
 let exiting = false
 
+// Registered by the chat host (chat.tsx): drains the guarded-submit queue
+// into persisted history before exitCli tears the process down. The /exit
+// command drains inline; the Ctrl-C/SIGINT path exits here, where the queue
+// is otherwise unreachable — without this, prompts queued during an active
+// stream are dropped on that path too (reliability finding
+// exit-handler-drops-queued-prompts).
+let queuedPromptDrain: (() => void) | undefined
+export function setQueuedPromptDrain(
+  drain: (() => void) | undefined,
+): void {
+  queuedPromptDrain = drain
+}
+
+// Registered by the chat host (chat.tsx): returns the active stream's abort
+// signal so an abort racing the analytics flush is bounded by withTimeout
+// (reliability finding exit-flush-not-tied-to-timeout) instead of landing in
+// an unobserved window between stopStreaming() and the flush's
+// .finally(process.exit). withTimeout only honors aborts that fire while the
+// window is open: the stream controller is typically already aborted by the
+// time exitCli runs, and that pre-aborted signal never collapses the
+// documented EXIT_FLUSH_TIMEOUT_MS flush bound (reliability finding
+// exit-flush-window-collapsed-by-pre-aborted-signal).
+let getExitStreamSignal: (() => AbortSignal | undefined) | undefined
+export function setExitStreamSignal(
+  getter: (() => AbortSignal | undefined) | undefined,
+): void {
+  getExitStreamSignal = getter
+}
+
 function setupExitMessageHandler() {
   if (exitHandlerRegistered) return
   exitHandlerRegistered = true
@@ -49,11 +78,21 @@ function exitCli(): void {
     return
   }
   exiting = true
-  withTimeout(flushAnalytics(), EXIT_FLUSH_TIMEOUT_MS, undefined).finally(
-    () => {
-      process.exit(0)
-    },
-  )
+  // Persist queued prompts before teardown (the same drain the /exit command
+  // runs); a drain failure must never block the exit.
+  try {
+    queuedPromptDrain?.()
+  } catch {
+    // Ignore — exit proceeds.
+  }
+  withTimeout(
+    flushAnalytics(),
+    EXIT_FLUSH_TIMEOUT_MS,
+    undefined,
+    getExitStreamSignal?.(),
+  ).finally(() => {
+    process.exit(0)
+  })
 }
 
 export const useExitHandler = ({

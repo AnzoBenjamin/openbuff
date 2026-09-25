@@ -139,7 +139,7 @@ describe('remintConfirmedPostEditAnchors', () => {
     }
   })
 
-  it('remints from stamped issuer when stored token no longer authenticates (restart path)', () => {
+  it('remints from stamped issuer when stored token no longer authenticates (restart path, opted in)', () => {
     const reminted = remintConfirmedPostEditAnchors({
       anchors: {
         'src/a.ts': {
@@ -154,6 +154,9 @@ describe('remintConfirmedPostEditAnchors', () => {
       },
       projectId: '/project',
       runId: 'run',
+      // Path 4 is opt-in (M1-T4b): the caller must accept the issuer-stamp
+      // trust model explicitly.
+      allowUnauthenticatedIssuerRestamp: true,
     })
 
     expect(reminted['src/a.ts']?.contentHash).toBe(contentHash)
@@ -163,6 +166,28 @@ describe('remintConfirmedPostEditAnchors', () => {
       reminted['src/a.ts']!.readCapability,
     )
     expect(typeof decoded).not.toBe('string')
+  })
+
+  it('drops stamped-issuer anchors by default (fail closed, M1-T4b)', () => {
+    // Same shape as the restart-path test above, but WITHOUT the opt-in: the
+    // stamps are unauthenticated persisted state, so the default must drop
+    // the anchor instead of minting a fresh authenticated cap.v3 from them.
+    const reminted = remintConfirmedPostEditAnchors({
+      anchors: {
+        'src/a.ts': {
+          startLine: 1,
+          endLine: 2,
+          contentHash,
+          readCapability: 'cap.v3.1.2.invalid-token-payload-for-restart',
+          projectId: '/project',
+          runId: 'run',
+        },
+      },
+      projectId: '/project',
+      runId: 'run',
+    })
+
+    expect(reminted).toEqual({})
   })
 
   it('drops cross-project/cross-run remint even with well-formed hash/bounds', () => {
