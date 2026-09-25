@@ -13,6 +13,7 @@ export function DiscoveryOutput({
   items,
   availableWidth,
   maxVisibleItems = MAX_VISIBLE_ITEMS,
+  showHeader = true,
 }: {
   status: string
   message?: string
@@ -21,6 +22,7 @@ export function DiscoveryOutput({
   items?: string[]
   availableWidth: number
   maxVisibleItems?: number
+  showHeader?: boolean
 }) {
   const theme = useTheme()
   const width = Math.max(10, availableWidth - 4)
@@ -29,11 +31,13 @@ export function DiscoveryOutput({
 
   return (
     <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      <text style={{ wrapMode: 'word' }}>
-        <span fg={theme.muted}>Status: </span>
-        <span fg={error ? theme.error : theme.foreground}>{status}</span>
-      </text>
-      {provenance ? (
+      {showHeader ? (
+        <text style={{ wrapMode: 'word' }}>
+          <span fg={theme.muted}>Status: </span>
+          <span fg={error ? theme.error : theme.foreground}>{status}</span>
+        </text>
+      ) : null}
+      {showHeader && provenance ? (
         <text style={{ wrapMode: 'word' }}>
           <span fg={theme.muted}>Scope: </span>
           <span fg={theme.foreground}>

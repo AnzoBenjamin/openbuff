@@ -1,6 +1,7 @@
 import React from 'react'
 
-import { DiscoveryOutput, discoveryStatus } from './discovery-output'
+import { discoveryStatus } from './discovery-output'
+import { CollapsibleGroup, statusGlyph } from './discovery-results'
 import { SimpleToolCallItem } from './tool-call-item'
 import { defineToolComponent } from './types'
 import { useTheme } from '../../hooks/use-theme'
@@ -13,13 +14,14 @@ import type { ToolRenderConfig } from './types'
 
 /**
  * UI component for list_directory tool.
- * Displays a single line showing the directories being listed.
- * Does not support expand/collapse - always shows as a single line.
+ * The header line summarizes the queried directories and entry counts with a
+ * status glyph; the expanded body lists entries in one collapsible group per
+ * queried directory.
  */
 export const ListDirectoryComponent = defineToolComponent({
   toolName: 'list_directory',
 
-  render(toolBlock, _theme, options): ToolRenderConfig {
+  render(toolBlock, theme, options): ToolRenderConfig {
     const input = toolBlock.input as any
 
     // Extract directories from input
@@ -27,12 +29,14 @@ export const ListDirectoryComponent = defineToolComponent({
 
     if (Array.isArray(input?.directories)) {
       directories = input.directories
-        .map((dir: any) =>
-          typeof dir === 'object' && dir.path ? dir.path : dir,
-        )
         .filter(
-          (path: any) => typeof path === 'string' && path.trim().length > 0,
+          (dir: any) =>
+            dir !== null &&
+            typeof dir === 'object' &&
+            typeof dir.path === 'string' &&
+            dir.path.trim().length > 0,
         )
+        .map((dir: any) => dir.path)
     } else if (
       typeof input?.path === 'string' &&
       input.path.trim().length > 0
@@ -68,31 +72,62 @@ export const ListDirectoryComponent = defineToolComponent({
       error,
       count: entries.length,
     })
-    const description = `${directories.join(', ')}${hasOutput && !error ? ` (${childDirectories.length} dirs, ${files.length} files)` : ''} · ${status}`
+    const { glyph, color } = statusGlyph(status, theme)
+    const label = directories.join(', ')
+
+    let summaryText = `List ${label}`
+    if (error || !hasOutput) {
+      // Keep the summary short; error detail renders below.
+    } else if (entries.length === 0) {
+      summaryText += ' — empty'
+    } else if (status === 'running' || status === 'queued') {
+      summaryText += ` — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} so far`
+    } else {
+      summaryText += ` — ${childDirectories.length} dir${childDirectories.length === 1 ? '' : 's'}, ${files.length} file${files.length === 1 ? '' : 's'}`
+    }
 
     // Use a wrapper component to access theme
     const ListDirectoryContent = () => {
-      const theme = useTheme()
+      const contentTheme = useTheme()
       return (
         <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
           <SimpleToolCallItem
             name="List"
-            description={description}
-            descriptionColor={theme.directory}
+            description={
+              <>
+                {summaryText}
+                {' '}
+                <span fg={color}>{glyph}</span>
+              </>
+            }
+            descriptionColor={contentTheme.directory}
           />
-          <DiscoveryOutput
-            status={status}
-            error={error}
-            provenance={directories.join(', ')}
-            items={entries}
-            availableWidth={options.availableWidth}
-          />
+          {error ? (
+            <text style={{ wrapMode: 'word' }}>
+              <span fg={contentTheme.error}>{error}</span>
+            </text>
+          ) : entries.length > 0 ? (
+            <CollapsibleGroup
+              label={label}
+              count={entries.length}
+              badge={`${childDirectories.length}d/${files.length}f`}
+              entries={entries.map((entry, index) => (
+                <text
+                  key={`${entry}-${index}`}
+                  style={{ wrapMode: 'none' }}
+                >
+                  <span fg={contentTheme.muted}>{'    '}</span>
+                  <span fg={contentTheme.foreground}>{entry}</span>
+                </text>
+              ))}
+            />
+          ) : null}
         </box>
       )
     }
 
     return {
-      collapsedPreview: description,
+      collapsedPreview: `${summaryText} ${glyph}`,
       content: <ListDirectoryContent />,
     }
   },

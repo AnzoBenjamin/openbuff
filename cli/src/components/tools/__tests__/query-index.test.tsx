@@ -78,14 +78,14 @@ describe('QueryIndexComponent', () => {
 
     const markup = renderToStaticMarkup(<>{result.content}</>)
 
-    expect(markup).toContain('explain: authentication (1 result)')
+    expect(markup).toContain('explain: authentication — 1 result')
     expect(markup).toContain('docs/authentication.md')
     expect(markup).toContain('12.35')
     expect(markup).toContain('heading, concept')
     expect(markup).toContain('hash abcdef012345')
     expect(markup).toContain('related to src/auth.ts')
     expect(markup).toContain('Matched on heading, concept.')
-    expect(markup).toContain('Status:')
+    expect(markup).not.toContain('Status:')
     expect(markup).toContain('ready')
     expect(markup).toContain('321 indexed files')
     expect(markup).toContain('age 2m')
@@ -230,7 +230,6 @@ describe('QueryIndexComponent', () => {
     })
     const markup = renderToStaticMarkup(<>{rendered.content}</>)
 
-    expect(markup).toContain('1 additional result shown below')
     expect(markup).toContain('d.ts')
 
     toolBlock.outputRaw = [
