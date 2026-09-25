@@ -2928,8 +2928,15 @@ ${guideSections}
             securitySpawnFiles,
             securitySpawnDeletedFiles,
           )
+          // Attestation-loop fix: a security review's clean verdict is
+          // NON_BLOCKING (its findings are elevated as repair fuel by the
+          // securityBlockers branch below BEFORE this protocol check), so the
+          // LOOKS_GOOD-only default read every clean review as a protocol
+          // failure and parked the gate in a spawn/reject loop. The
+          // security-specific credit accepts NON_BLOCKING while keeping the
+          // same coverage/requirement/dimension gates.
           const securityVerdict =
-            getReviewerFinalizationVerdict(securityToolResult)
+            getSecurityReviewerFinalizationVerdict(securityToolResult)
           const securityProtocolFailure =
             securityCrash ||
             securityAttestationIssues.length > 0 ||
@@ -8613,6 +8620,26 @@ function classifyReviewerCrash(message: string | null): 'none' | 'transient' | '
 }
 
 function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizationVerdict {
+    // allowNonBlocking=false makes the resolver's NON_BLOCKING branch statically
+    // unreachable, so narrowing it back to '' here is sound (and keeps the
+    // exported contract unchanged for every existing caller).
+    const verdict = resolveReviewerFinalizationVerdict(toolResult, false);
+    return verdict === 'NON_BLOCKING' ? '' : verdict;
+}
+
+/**
+ * NON_BLOCKING is the security-reviewer family's clean verdict; its findings
+ * are elevated by the caller's blocker branch before the protocol check, so a
+ * clean security review may credit finalization instead of being misclassified
+ * as a protocol failure. All pre-credit gates (coverage missing, incomplete
+ * in-scope requirements, blocking dimensions) still apply; the default
+ * `getReviewerFinalizationVerdict` keeps crediting LOOKS_GOOD only.
+ */
+function getSecurityReviewerFinalizationVerdict(toolResult: unknown): 'LOOKS_GOOD' | 'NON_BLOCKING' | '' {
+    return resolveReviewerFinalizationVerdict(toolResult, true);
+}
+
+function resolveReviewerFinalizationVerdict(toolResult: unknown, allowNonBlocking: boolean): 'LOOKS_GOOD' | 'NON_BLOCKING' | '' {
     // Automated gates accept only schema-backed structured reviewer output.
     const structured = collectStructuredReviewerOutputs(toolResult);
     // Coverage-adequacy contract (M6.3): missing coverage blocks finalization
@@ -8635,8 +8662,10 @@ function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizati
     if (structured.some((entry) => Object.values(entry.dimensions ?? {}).some((status) => /^block(?:s|ing|er|ers)?\b/.test(status.trim().toLowerCase())))) {
         return '';
     }
-    // Finalization credit is LOOKS_GOOD only. NON_BLOCKING findings are
-    // elevated by collectReviewerBlockers into the repair loop.
+    // Finalization credit is LOOKS_GOOD only for the default variant;
+    // NON_BLOCKING findings are elevated by collectReviewerBlockers into the
+    // repair loop (the security-reviewer variant may credit NON_BLOCKING — see
+    // getSecurityReviewerFinalizationVerdict).
     // The scan is restricted to the `schemaVersion`-carrying entries whenever the
     // receipt carries any, so credit and collectReviewerAttestationIssues read
     // the SAME entry set and an unshaped quoted LOOKS_GOOD example cannot credit
@@ -8648,6 +8677,11 @@ function getReviewerFinalizationVerdict(toolResult: unknown): ReviewerFinalizati
     for (const entry of creditable) {
         if (entry.verdict === 'LOOKS_GOOD')
             return 'LOOKS_GOOD';
+        // Security-reviewer family: NON_BLOCKING is its clean verdict (see the
+        // docblock on getSecurityReviewerFinalizationVerdict).
+        if (allowNonBlocking && entry.verdict === 'NON_BLOCKING') {
+            return 'NON_BLOCKING';
+        }
     }
     return '';
 }

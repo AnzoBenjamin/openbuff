@@ -192,6 +192,21 @@ export const agentReceiptSchema = z
         compactionCount: z.number().int().min(0).optional(),
       })
       .optional(),
+    /**
+     * Compact reviewer attestation core attached by the runtime so the gate's
+     * walker can attest even when the full structured result payload was
+     * truncated in transit; additive + optional so every existing receipt
+     * stays valid.
+     */
+    review: z
+      .object({
+        verdict: z.enum(['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING']),
+        snapshotFingerprint: z.string().optional(),
+        reviewedFiles: z.array(z.string()).optional(),
+        coverage: z.enum(['covered', 'missing', 'n/a']).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
 

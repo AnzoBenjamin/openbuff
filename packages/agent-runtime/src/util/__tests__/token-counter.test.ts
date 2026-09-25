@@ -8,6 +8,16 @@ import {
 } from '../token-counter'
 
 describe('countTokensJson', () => {
+  test('counts model-controlled special-token text as ordinary text (SEC-TC-SPECIAL-1)', () => {
+    // Under allowedSpecial:'all' the literal '<|endoftext|>' collapses to ONE
+    // special token; the estimator escapes '<|' before encoding so the text
+    // is priced like the ordinary characters it contains (and the default
+    // encode path, which throws on special tokens, is never reachable). The
+    // unescaped-then-escaped difference for this input is several tokens.
+    const withSpecial = 'a <|endoftext|> b'
+    expect(countTokensJson(withSpecial)).toBeGreaterThan(3)
+  })
+
   test('does not count base64 media payloads as text tokens', () => {
     const withMediaPayload = [
       {
@@ -41,6 +51,19 @@ describe('countTokensJson', () => {
 
     expect(countTokensJson(withMediaPayload)).toBeLessThan(1_000)
   })
+
+  test('degrades to an estimate instead of throwing on malformed objects (SEC-TC-CIRC-1)', () => {
+    // Circular reference: plain JSON.stringify throws; the salvage
+    // serializer must yield a count instead of aborting the caller.
+    const circular: Record<string, unknown> = { role: 'user', content: 'x' }
+    circular.self = circular
+    expect(() => countTokensJson(circular)).not.toThrow()
+    expect(countTokensJson(circular)).toBeGreaterThan(0)
+    // BigInt value: the other JSON.stringify throw class the finding names.
+    const withBigInt = { role: 'user', content: 'y', count: 9007199254740993n }
+    expect(() => countTokensJson(withBigInt)).not.toThrow()
+    expect(countTokensJson(withBigInt)).toBeGreaterThan(0)
+  })
 })
 
 describe('token-count LRU bound (M3-T2)', () => {
@@ -65,6 +88,19 @@ describe('token-count LRU bound (M3-T2)', () => {
     countTokensJson(small)
     countTokensJson(small)
     expect(tokenCountCacheSizeForTest()).toBe(before + 1)
+  })
+
+  test('a cached entry is model-independent (SEC-TC-CACHE-KEY-1)', () => {
+    // The cache stores the RAW BPE count and the per-model fudge factor is
+    // applied after the lookup, so counting the same text under two models
+    // yields each model's own factored count, never the first model's.
+    const small = 'z'.repeat(5_000)
+    const anthropicFirst = countTokensJson(small, 'anthropic/claude')
+    const openaiSecond = countTokensJson(small, 'openai/gpt-4o')
+    expect(openaiSecond).toBeLessThan(anthropicFirst)
+    // Repeats stay consistent per model.
+    expect(countTokensJson(small, 'anthropic/claude')).toBe(anthropicFirst)
+    expect(countTokensJson(small, 'openai/gpt-4o')).toBe(openaiSecond)
   })
 })
 

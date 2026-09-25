@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 
-import { normalizeSpawnedAgentOutput } from '../spawn-agent-utils'
+import {
+  buildRuntimeAgentReceipt,
+  normalizeSpawnedAgentOutput,
+} from '../spawn-agent-utils'
 
 /**
  * Direct coverage for the M0-T3 sub-agent output durability contract on
@@ -128,5 +131,80 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     expect(collapsed.verdict).toBe('LOOKS_GOOD')
     expect(collapsed.snapshotFingerprint).toBe('v3:' + 'a'.repeat(64))
     expect(collapsed.reviewedFiles).toEqual(['src/a.ts'])
+  })
+})
+
+/**
+ * Recursive scan for explicitly-undefined-valued keys — the exact shape that
+ * used to kill agentReceiptSchema.parse inside buildRuntimeAgentReceipt.
+ */
+function hasUndefinedValuedKey(value: unknown, depth = 0): boolean {
+  if (depth > 12 || value === null || typeof value !== 'object') return false
+  if (Array.isArray(value)) {
+    return value.some((item) => hasUndefinedValuedKey(item, depth + 1))
+  }
+  return Object.values(value as Record<string, unknown>).some(
+    (nested) =>
+      nested === undefined || hasUndefinedValuedKey(nested, depth + 1),
+  )
+}
+
+/**
+ * Gate attestation-loop fixes on `buildRuntimeAgentReceipt`:
+ * - models/runtimes can emit explicitly-undefined keys inside structured
+ *   output; the receipt build used to THROW at agentReceiptSchema.parse,
+ *   killing the inline spawn before its terminal receipt, so the gate saw
+ *   zero structured entries.
+ * - the compact reviewer attestation core must be attached as the receipt's
+ *   `review` field so the gate's walker can attest even when the bulky
+ *   structured result payload was truncated in transit.
+ */
+describe('buildRuntimeAgentReceipt output durability', () => {
+  test('does not throw on an explicitly-undefined key inside structured output', () => {
+    const reviewLike = {
+      schemaVersion: 1,
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint: 'v3:' + 'c'.repeat(64),
+      coverage: 'covered',
+      reviewedFiles: ['src/a.ts'],
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'security-reviewer',
+      agentId: 'sec-undefined-1',
+      output: {
+        type: 'structuredOutput',
+        value: { ...reviewLike, findings: undefined },
+      },
+    })
+    const output = receipt.output as Record<string, unknown> | undefined
+    // No explicitly-undefined-valued key survived: the JSON round-trip drops
+    // undefined keys, so a round-trip deep-equal to the direct value proves
+    // the receipt output carried none.
+    expect(hasUndefinedValuedKey(output)).toBe(false)
+    expect(JSON.parse(JSON.stringify(output))).toEqual(output)
+  })
+
+  test('attaches the compact review core to the receipt for the gate walker', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'security-reviewer',
+      agentId: 'sec-review-1',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          schemaVersion: 1,
+          verdict: 'NON_BLOCKING',
+          findings: [],
+          coverage: 'covered',
+          snapshotFingerprint: 'v3:' + 'a'.repeat(64),
+          reviewedFiles: ['packages/agent-runtime/src/util/token-counter.ts'],
+        },
+      },
+    })
+    expect(receipt.review).toEqual({
+      verdict: 'NON_BLOCKING',
+      snapshotFingerprint: 'v3:' + 'a'.repeat(64),
+      reviewedFiles: ['packages/agent-runtime/src/util/token-counter.ts'],
+      coverage: 'covered',
+    })
   })
 })

@@ -13,6 +13,7 @@ import {
   collectReviewerHardBlockers,
   detectReviewerCrash,
   getReviewerFinalizationVerdict,
+  getSecurityReviewerFinalizationVerdict,
   isParentOwnedOrOutOfScopeRequirement,
   isTestCoverageReviewerFinding,
   isTransientReviewerCrash,
@@ -98,6 +99,10 @@ const INLINE_DEPENDENCY_NAMES = [
   'visitForStructuredVerdict',
   'hasReviewerLineVerdict',
   'collectStrings',
+  // getReviewerFinalizationVerdict delegates to the shared resolver split out
+  // for getSecurityReviewerFinalizationVerdict; the generated base2 copy calls
+  // it directly, so the reconstructed mirror needs it in scope.
+  'resolveReviewerFinalizationVerdict',
   // Crash taxonomy helpers are generated into base2; parity for
   // detectReviewerCrash only needs findReviewerCrash. Unit tests cover
   // isTransientReviewerCrash / classifyReviewerCrash against the export.
@@ -3770,5 +3775,90 @@ describe('collectReviewerHardBlockers', () => {
         getReviewerFinalizationVerdict(envelope),
       )
     }
+  })
+})
+
+// Security-reviewer family: NON_BLOCKING is its clean verdict, so a clean
+// security review must credit finalization instead of being misclassified as
+// a protocol failure by the gate's security branch. The default verdict keeps
+// crediting LOOKS_GOOD only, and every pre-credit gate still applies.
+describe('getSecurityReviewerFinalizationVerdict', () => {
+  const fingerprint = 'v3:' + 'a'.repeat(64)
+  const cleanSecurityReview = {
+    type: 'json',
+    value: [
+      {
+        schemaVersion: 1,
+        verdict: 'NON_BLOCKING',
+        findings: [],
+        coverage: 'covered',
+        snapshotFingerprint: fingerprint,
+        reviewedFiles: ['src/a.ts'],
+      },
+    ],
+  }
+
+  test('credits NON_BLOCKING for a clean security review with matching fingerprint', () => {
+    expect(getSecurityReviewerFinalizationVerdict(cleanSecurityReview)).toBe(
+      'NON_BLOCKING',
+    )
+  })
+
+  test('still credits LOOKS_GOOD for the security-reviewer family', () => {
+    expect(
+      getSecurityReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            schemaVersion: 1,
+            verdict: 'LOOKS_GOOD',
+            findings: [],
+            coverage: 'covered',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: ['src/a.ts'],
+          },
+        ],
+      }),
+    ).toBe('LOOKS_GOOD')
+  })
+
+  test('never credits a BLOCKING verdict', () => {
+    expect(
+      getSecurityReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            schemaVersion: 1,
+            verdict: 'BLOCKING',
+            findings: ['real blocker'],
+            coverage: 'covered',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: ['src/a.ts'],
+          },
+        ],
+      }),
+    ).toBe('')
+  })
+
+  test('missing coverage still blocks finalization even with NON_BLOCKING', () => {
+    expect(
+      getSecurityReviewerFinalizationVerdict({
+        type: 'json',
+        value: [
+          {
+            schemaVersion: 1,
+            verdict: 'NON_BLOCKING',
+            findings: [],
+            coverage: 'missing',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: ['src/a.ts'],
+          },
+        ],
+      }),
+    ).toBe('')
+  })
+
+  test('the default finalization verdict still rejects a NON_BLOCKING entry', () => {
+    expect(getReviewerFinalizationVerdict(cleanSecurityReview)).toBe('')
   })
 })

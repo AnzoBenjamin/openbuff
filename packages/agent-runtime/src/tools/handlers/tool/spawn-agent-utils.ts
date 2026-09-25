@@ -1454,6 +1454,27 @@ function buildReceiptContextUsage(
   }
 }
 
+/**
+ * Models/runtimes can emit explicitly-undefined keys inside structured output;
+ * agentReceiptSchema.parse rejects them, killing the inline spawn before its
+ * terminal receipt. JSON.stringify drops undefined keys identically, so
+ * stripping them here keeps the receipt build total without changing any
+ * serialized shape.
+ */
+function stripUndefinedValuedKeys(value: unknown, depth = 0): unknown {
+  if (depth > 8 || value === null || typeof value !== 'object') return value
+  if (Array.isArray(value))
+    return value.map((item) => stripUndefinedValuedKeys(item, depth + 1))
+  const out: Record<string, unknown> = Object.create(null)
+  for (const [key, nested] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (nested === undefined) continue
+    out[key] = stripUndefinedValuedKeys(nested, depth + 1)
+  }
+  return out
+}
+
 export function buildRuntimeAgentReceipt(params: {
   agentType: string
   agentId: string
@@ -1636,6 +1657,38 @@ export function buildRuntimeAgentReceipt(params: {
         }
     : normalizedOutput
   const contextUsage = buildReceiptContextUsage(params.agentState)
+  const reviewCore = extractReviewerAttestationCore(reconciledOutput)
+  // Attach the compact reviewer attestation core as the receipt's `review`
+  // field so the gate's walker can attest even when the bulky structured
+  // result payload was truncated in transit. Built explicitly (no spread) so
+  // extractReviewerAttestationCore's extra keys (schemaVersion, findings)
+  // never reach the strict review schema, and the verdict is filtered to the
+  // three schema-allowed values so a junk verdict is omitted instead of
+  // failing the parse. Omitted entirely when the child produced no review.
+  const reviewVerdict = reviewCore?.verdict
+  const reviewCoreRecord =
+    reviewVerdict === 'LOOKS_GOOD' ||
+    reviewVerdict === 'NON_BLOCKING' ||
+    reviewVerdict === 'BLOCKING'
+      ? {
+          verdict: reviewVerdict,
+          ...(typeof reviewCore?.snapshotFingerprint === 'string'
+            ? { snapshotFingerprint: reviewCore.snapshotFingerprint }
+            : {}),
+          ...(Array.isArray(reviewCore?.reviewedFiles)
+            ? {
+                reviewedFiles: reviewCore.reviewedFiles.filter(
+                  (file): file is string => typeof file === 'string',
+                ),
+              }
+            : {}),
+          ...(reviewCore?.coverage === 'covered' ||
+          reviewCore?.coverage === 'missing' ||
+          reviewCore?.coverage === 'n/a'
+            ? { coverage: reviewCore.coverage }
+            : {}),
+        }
+      : undefined
   const receipt = agentReceiptSchema.parse({
     schemaVersion: 1,
     receiptId: generateCompactId(),
@@ -1676,7 +1729,8 @@ export function buildRuntimeAgentReceipt(params: {
     ),
     artifacts: extractReceiptStringArray(receiptSources, 'artifacts'),
     errors,
-    output: reconciledOutput as any,
+    output: stripUndefinedValuedKeys(reconciledOutput) as any,
+    ...(reviewCoreRecord ? { review: reviewCoreRecord } : {}),
     ...(contextUsage ? { contextUsage } : {}),
   })
   return receipt
