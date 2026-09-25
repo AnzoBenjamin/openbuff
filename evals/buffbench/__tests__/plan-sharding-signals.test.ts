@@ -247,6 +247,23 @@ describe('classifyBreadth', () => {
     expect(result.domainCount).toBe(3)
   })
 
+  test('M5-T7: domain boundary regex does not match inside longer words', () => {
+    // Pre-fix the boundary class collapsed to [^w], so 'auth' matched inside
+    // 'authoring' and corrupted domainCount (which feeds requiredPairs).
+    const result = classifyBreadth('Audit the auth authoring flow')
+    expect(result.domains).toEqual(['auth'])
+    expect(result.domainCount).toBe(1)
+  })
+
+  test('M5-T7: domain boundary regex still matches punctuation-adjacent tokens', () => {
+    expect(classifyBreadth('Audit the auth-wizard module').domains).toContain(
+      'auth',
+    )
+    expect(classifyBreadth('Audit the auth wizard module').domains).toContain(
+      'auth',
+    )
+  })
+
   test('broad-audit: conceptual context/indexing/UX request maps to repo domains', () => {
     const result = classifyBreadth(
       'Audit our context, indexing and general ability to gather context effectively for feature gaps, feature improvements and ux flow issues.',
@@ -433,6 +450,38 @@ describe('computePlanShardingSignals', () => {
     const s = computePlanShardingSignals({ events, prompt: AUDIT_PROMPT })
     expect(s.peakConcurrency).toBe(1)
     expect(s.shardedParallely).toBe(false)
+  })
+
+  test('M5-T7: nested subagent events do not count toward peakConcurrency', () => {
+    // A nested agent (parentAgentId set) whose start was excluded must not
+    // have its finish decrement the shared counter, and must not inflate the
+    // peak. Pre-fix this trace reported peakConcurrency 2 with an empty
+    // subagentStarts list (shardedParallely true while subagentStarts.length
+    // was 0 — signals from the same trace disagreed).
+    const events: PrintModeEvent[] = [
+      subagentStart({ agentId: 'nested-1', parentAgentId: 'root' }),
+      subagentStart({ agentId: 'nested-2', parentAgentId: 'root' }),
+      subagentFinish({ agentId: 'nested-1', parentAgentId: 'root' }),
+      subagentFinish({ agentId: 'nested-2', parentAgentId: 'root' }),
+      subagentFinish({ agentId: 'nested-1', parentAgentId: 'root' }),
+    ]
+    const s = computePlanShardingSignals({ events, prompt: AUDIT_PROMPT })
+    expect(s.peakConcurrency).toBe(0)
+    expect(s.shardedParallely).toBe(false)
+    expect(s.subagentStarts).toHaveLength(0)
+  })
+
+  test('M5-T7: top-level and nested events are counted independently', () => {
+    const events: PrintModeEvent[] = [
+      subagentStart({ agentId: 'top-1' }),
+      subagentStart({ agentId: 'nested', parentAgentId: 'top-1' }),
+      subagentFinish({ agentId: 'nested', parentAgentId: 'top-1' }),
+      subagentFinish({ agentId: 'top-1' }),
+    ]
+    const s = computePlanShardingSignals({ events, prompt: AUDIT_PROMPT })
+    // Only the top-level start counts: peak 1, not 2.
+    expect(s.peakConcurrency).toBe(1)
+    expect(s.subagentStarts).toHaveLength(1)
   })
 
   test('classifies the prompt kind from the prompt string', () => {

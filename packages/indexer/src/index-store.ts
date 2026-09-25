@@ -39,14 +39,24 @@ const STALE_LOCK_MS = 5 * 60_000
 const LOCK_HEARTBEAT_MS = 30_000
 
 /**
- * P8.6b: whether saveIndex may side-effect-write `.git/info/exclude`. Left
- * enabled for backward compatibility; embedders that manage gitignore state
- * themselves can opt out via {@link setWriteGitExclude}.
+ * P8.6b / M4-S6: whether saveIndex may side-effect-write `.git/info/exclude`.
+ * Defaults OFF: mutating a user's git metadata as an unadvertised side effect
+ * of indexing is opt-in, not opt-out. Callers that want the historical
+ * behavior enable it via {@link setWriteGitExclude} — globally, or scoped to
+ * one project root.
  */
-let writeGitExclude = true
+let writeGitExcludeDefault = false
+const writeGitExcludeByRoot = new Map<string, boolean>()
 
-export function setWriteGitExclude(enabled: boolean): void {
-  writeGitExclude = enabled
+export function setWriteGitExclude(
+  enabled: boolean,
+  projectRoot?: string,
+): void {
+  if (projectRoot === undefined) {
+    writeGitExcludeDefault = enabled
+    return
+  }
+  writeGitExcludeByRoot.set(projectRoot, enabled)
 }
 
 /** Line already written this session, keyed by projectRoot + line. */
@@ -110,7 +120,12 @@ export async function loadIndex(
     sanitizeIndexedFiles(parsed)
     if (options?.expectedSnapshotId !== undefined) {
       const expected = options.expectedSnapshotId
-      if (typeof expected !== 'string' || expected.length === 0 || expected.length > 256) return null
+      if (
+        typeof expected !== 'string' ||
+        expected.length === 0 ||
+        expected.length > 256
+      )
+        return null
       let snapshotId: string
       try {
         snapshotId = computeIndexSnapshotId(parsed)
@@ -123,7 +138,10 @@ export async function loadIndex(
     // structurally corrupt queryData would otherwise poison postings/adjacency
     // for every query; rebuild it once here (degrade once at load, not per
     // query) instead of trusting corrupt data.
-    if (!parsed.queryData || !isValidQueryData(parsed.queryData, parsed.graph)) {
+    if (
+      !parsed.queryData ||
+      !isValidQueryData(parsed.queryData, parsed.graph)
+    ) {
       parsed.queryData = buildIndexQueryData(parsed.files, parsed.graph)
     }
     return parsed
@@ -497,10 +515,7 @@ function normalizeChunkSidecar(
   ) {
     return null
   }
-  if (
-    typeof value.builtAt !== 'number' ||
-    !Number.isFinite(value.builtAt)
-  ) {
+  if (typeof value.builtAt !== 'number' || !Number.isFinite(value.builtAt)) {
     return null
   }
   if (!isRecord(value.chunks)) return null
@@ -610,8 +625,7 @@ export async function saveChunkSidecar(
   // validator contract. Reject the write (leaving any prior sidecar intact)
   // instead of silently stripping entries under the shared lock.
   if (
-    Object.keys(normalized.chunks).length !==
-    Object.keys(sidecar.chunks).length
+    Object.keys(normalized.chunks).length !== Object.keys(sidecar.chunks).length
   ) {
     return false
   }
@@ -812,9 +826,9 @@ async function withCacheLock<T>(
         // create and this token write. Only run the critical section when
         // OUR token is verifiably on disk.
         try {
-          acquired = (
-            await fs.promises.readFile(lockPath, 'utf8')
-          ).startsWith(`${ownerToken}\n`)
+          acquired = (await fs.promises.readFile(lockPath, 'utf8')).startsWith(
+            `${ownerToken}\n`,
+          )
         } catch {
           acquired = false
         }
@@ -1048,15 +1062,27 @@ export async function releaseOwnedLock(
   }
 }
 
+/**
+ * Serialize compactly for large index artifacts (reliability finding
+ * atomicwritejson-pretty-prints-large-artifacts): pretty-printing roughly
+ * doubles bytes and CPU on every refresh for metadata.json,
+ * semantic-vectors.json, and the chunk sidecar. Small documents keep the
+ * pretty format for debuggability; anything larger serializes compactly.
+ */
+const PRETTY_PRINT_MAX_CHARS = 4_096
+
 async function atomicWriteJson(
   filePath: string,
   value: unknown,
 ): Promise<void> {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+  const pretty = JSON.stringify(value, null, 2)
+  const payload =
+    pretty.length > PRETTY_PRINT_MAX_CHARS ? JSON.stringify(value) : pretty
   let handle: fs.promises.FileHandle | undefined
   try {
     handle = await fs.promises.open(temporaryPath, 'wx')
-    await handle.writeFile(JSON.stringify(value, null, 2), 'utf8')
+    await handle.writeFile(payload, 'utf8')
     await handle.sync()
     await handle.close()
     handle = undefined
@@ -1080,6 +1106,11 @@ async function ensureGitInfoExcludes(
   cacheDir: string,
 ): Promise<void> {
   const normalizedCacheDir = sanitizeIndexCacheDir(cacheDir)
+  // Default-off toggle (M4-S6): decide before touching the exclude file so a
+  // disabled toggle performs no I/O against .git at all.
+  const writeEnabled =
+    writeGitExcludeByRoot.get(projectRoot) ?? writeGitExcludeDefault
+  if (!writeEnabled) return
 
   const gitDir = path.join(projectRoot, '.git')
   const infoDir = path.join(gitDir, 'info')
@@ -1094,17 +1125,16 @@ async function ensureGitInfoExcludes(
       existing = await fs.promises.readFile(excludePath, 'utf8')
     } catch {}
     const excludeLine = `/${normalizedCacheDir}/`
-  // P8.6b: skip everything (including the exclude-file read) when the exact
-  // line was already written for this project this session, keeping the
-  // write rate bounded.
-  const dedupKey = `${projectRoot}\0${excludeLine}`
-  if (writtenGitExcludeLines.has(dedupKey)) return
-  if (existing.split('\n').includes(excludeLine)) {
-    writtenGitExcludeLines.add(dedupKey)
-    return
-  }
-  if (!writeGitExclude) return
-  const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
+    // P8.6b: skip everything (including the exclude-file read) when the exact
+    // line was already written for this project this session, keeping the
+    // write rate bounded.
+    const dedupKey = `${projectRoot}\0${excludeLine}`
+    if (writtenGitExcludeLines.has(dedupKey)) return
+    if (existing.split('\n').includes(excludeLine)) {
+      writtenGitExcludeLines.add(dedupKey)
+      return
+    }
+    const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
     await fs.promises.appendFile(
       excludePath,
       `${prefix}${excludeLine}\n`,

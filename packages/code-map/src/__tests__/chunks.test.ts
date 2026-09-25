@@ -8,6 +8,7 @@ import {
   extractCodeChunks,
   extractCodeChunksDetailed,
   hashContent,
+  MAX_CHUNK_MEMO_ENTRIES,
   registerChunkRenameAlias,
   resolveChunkAlias,
 } from '../chunks'
@@ -206,9 +207,7 @@ describe('extractCodeChunks', () => {
     expect(incoming.line).toBe(6)
     // Self-calls never produce calledBy or reference edges.
     expect(lonely.calledBy).toEqual([])
-    expect(
-      lonely.references.filter((r) => r.target === 'lonely'),
-    ).toEqual([])
+    expect(lonely.references.filter((r) => r.target === 'lonely')).toEqual([])
     // Per-chunk caps hold.
     for (const chunk of chunks) {
       expect(chunk.calls.length).toBeLessThanOrEqual(25)
@@ -335,11 +334,119 @@ describe('extractCodeChunks', () => {
     expect(viaAlias.reusedChunks).toBe(seeded.length)
     expect(viaAlias.chunks[0]!.path).toBe(aliasNew)
     expect(viaAlias.chunks[0]!.stableChunkId).toBe(
-      deriveStableChunkId(
-        aliasNew,
-        seeded[0]!.qualifiedName,
-        seeded[0]!.kind,
-      ),
+      deriveStableChunkId(aliasNew, seeded[0]!.qualifiedName, seeded[0]!.kind),
     )
+  })
+
+  test('outgoing references refuse ambiguous same-name targets like calledBy', async () => {
+    // Regression for the M4-S6 asymmetry finding: two unrelated definitions
+    // sharing one bare name must produce NO outgoing reference edge, exactly
+    // like the incoming calledBy pass — the old code guessed with the first
+    // match, corrupting chunk-level blast radius.
+    const src = [
+      'class Alpha {', // 1 — first unrelated definition of `run`
+      '  run() {', // 2
+      '    return 1', // 3
+      '  }', // 4
+      '}', // 5
+      '', // 6
+      'class Beta {', // 7 — a second, unrelated definition of the same name
+      '  run() {', // 8
+      '    return 2', // 9
+      '  }', // 10
+      '}', // 11
+      '', // 12
+      'function trigger() {', // 13 — calls the ambiguous bare name
+      '  return run()', // 14
+      '}', // 15
+    ].join('\n')
+
+    const chunks = await extractCodeChunks(src, 'ambiguous.ts')
+    const trigger = chunks.find((chunk) => chunk.qualifiedName === 'trigger')!
+
+    // The call itself is still recorded...
+    expect(trigger.calls.some((call) => call.name === 'run')).toBe(true)
+    // ...but no guessed reference edge is emitted for the ambiguous name.
+    expect(trigger.references).toEqual([])
+  })
+
+  test('outgoing references still link unambiguous calls and overloads', async () => {
+    const src = [
+      'function unique() {', // 1
+      '  return 1', // 2
+      '}', // 3
+      '', // 4
+      'function caller() {', // 5
+      '  return unique()', // 6
+      '}', // 7
+    ].join('\n')
+
+    const chunks = await extractCodeChunks(src, 'symmetry.ts')
+    const caller = chunks.find((chunk) => chunk.qualifiedName === 'caller')!
+
+    expect(caller.references.map((reference) => reference.target)).toContain(
+      'unique',
+    )
+  })
+
+  test('memoizes zero-chunk non-empty files with the same content hash', async () => {
+    // Regression for the M4-S6 zero-chunk finding: a non-empty file that
+    // yields zero chunks (e.g. only comments) must be memoized so the next
+    // call with identical content reuses it instead of re-parsing.
+    const src = '// nothing extractable here\n// just a comment\n'
+    const first = await extractCodeChunksDetailed(src, 'comments-only.ts')
+    expect(first.chunks).toEqual([])
+    // A fresh parse of a zero-chunk non-empty file surfaces the synthetic
+    // 'no definitions' diagnostic — that is the baseline result being memoized.
+    expect(first.diagnostics.map((d) => d.stage)).toEqual(['parse'])
+
+    const second = await extractCodeChunksDetailed(src, 'comments-only.ts')
+    // Memo hit: no fresh parse ran, so the synthetic diagnostic is absent —
+    // that absence is the observable signal that the empty result was reused.
+    expect(second.diagnostics).toEqual([])
+    expect(second.chunks).toEqual([])
+  })
+
+  test('does not memoize a parse failure for a non-empty file', async () => {
+    const first = await extractCodeChunksDetailed('hello', 'notes.unknownext')
+    expect(first.chunks).toEqual([])
+    expect(first.diagnostics[0]!.stage).toBe('language')
+
+    // The failure is not cached: the second call re-runs extraction and
+    // surfaces the same diagnostic instead of a silent cached [].
+    const second = await extractCodeChunksDetailed('hello', 'notes.unknownext')
+    expect(second.diagnostics[0]!.stage).toBe('language')
+  })
+
+  test('scopes memo keys by projectRoot and evicts on overflow', async () => {
+    const src = ['export function scoped() {', '  return 1', '}'].join('\n')
+    clearChunkMemo()
+
+    // Same relative path under two different project roots must not alias.
+    const first = await extractCodeChunksDetailed(src, 'src/shared.ts', {
+      projectRoot: '/project-a',
+    })
+    const second = await extractCodeChunksDetailed(src, 'src/shared.ts', {
+      projectRoot: '/project-b',
+    })
+    // The second extraction is a fresh parse for a distinct memo key — both
+    // carry the same (content-derived) chunk ids, so equality of ids proves
+    // scoping by content, and two live memo entries prove scoping by root.
+    expect(second.chunks[0]!.chunkId).toBe(first.chunks[0]!.chunkId)
+
+    // FIFO eviction: filling past the bound evicts the oldest entry without
+    // unbounded growth.
+    for (let i = 0; i < MAX_CHUNK_MEMO_ENTRIES + 10; i++) {
+      await extractCodeChunksDetailed(src, `filler-${i}.ts`)
+    }
+    // A filler entry evicted long ago is re-parsed fresh...
+    const evicted = await extractCodeChunksDetailed(src, 'filler-0.ts')
+    expect(evicted.freshChunks).toBeGreaterThan(0)
+    // ...and the most recently inserted entry is still memoized.
+    const recent = await extractCodeChunksDetailed(
+      src,
+      `filler-${MAX_CHUNK_MEMO_ENTRIES + 9}.ts`,
+    )
+    expect(recent.reusedChunks).toBeGreaterThan(0)
   })
 })

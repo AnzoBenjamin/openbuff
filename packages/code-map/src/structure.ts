@@ -336,7 +336,8 @@ export function findContainers(
     .filter((other) => other !== sym && isStrictContainer(other, sym))
     .sort(
       (a, b) =>
-        a.depth - b.depth || b.endLine - b.startLine - (a.endLine - a.startLine),
+        a.depth - b.depth ||
+        b.endLine - b.startLine - (a.endLine - a.startLine),
     )
 }
 
@@ -405,10 +406,7 @@ function extractHeaderSpan(
       // variable_declarator -> arrow_function -> block).
       for (const grand of child.namedChildren) {
         if (!grand) continue
-        if (
-          looksLikeBody(grand.type) &&
-          grand.startPosition.row > startRow
-        ) {
+        if (looksLikeBody(grand.type) && grand.startPosition.row > startRow) {
           if (bodyRow === undefined || grand.startPosition.row < bodyRow) {
             bodyRow = grand.startPosition.row
           }
@@ -526,11 +524,7 @@ export function extractDocForLine(
 function extractTypeInfo(node: Node): SymbolTypeInfo | undefined {
   try {
     let params: SymbolParam[] | undefined
-    for (const field of [
-      'parameters',
-      'formal_parameters',
-      'parameter_list',
-    ]) {
+    for (const field of ['parameters', 'formal_parameters', 'parameter_list']) {
       const p = safeField(node, field)
       if (p) {
         const list: SymbolParam[] = []
@@ -551,9 +545,13 @@ function extractTypeInfo(node: Node): SymbolTypeInfo | undefined {
             safeField(child, 'type_annotation') ??
             safeField(child, 'annotation')
           const typeText = typeNode
-            ? firstLine(typeNode.text).replace(/^[:=]\s*/, '').slice(0, 256)
+            ? firstLine(typeNode.text)
+                .replace(/^[:=]\s*/, '')
+                .slice(0, 256)
             : undefined
-          list.push(typeText ? { name: rawName, type: typeText } : { name: rawName })
+          list.push(
+            typeText ? { name: rawName, type: typeText } : { name: rawName },
+          )
           if (list.length >= 25) break
         }
         params = list
@@ -561,12 +559,7 @@ function extractTypeInfo(node: Node): SymbolTypeInfo | undefined {
       }
     }
     let returnType: string | undefined
-    for (const field of [
-      'return_type',
-      'type_annotation',
-      'result',
-      'type',
-    ]) {
+    for (const field of ['return_type', 'type_annotation', 'result', 'type']) {
       // `type` is a name fallback for non-functions; only treat it as a
       // return type for function-like nodes.
       if (field === 'type' && node.type !== 'function_item') {
@@ -610,7 +603,10 @@ function extractTypeInfo(node: Node): SymbolTypeInfo | undefined {
   }
 }
 
-function extractModifiers(node: Node, exported: boolean): SymbolModifiers | undefined {
+function extractModifiers(
+  node: Node,
+  exported: boolean,
+): SymbolModifiers | undefined {
   try {
     let visibility: string | undefined
     let isStatic: boolean | undefined
@@ -636,7 +632,11 @@ function extractModifiers(node: Node, exported: boolean): SymbolModifiers | unde
         checkText(anonType)
       }
       const anonText = (child.text ?? '').trim().toLowerCase()
-      if (anonText.length > 0 && anonText.length <= 16 && !seen.has(`t:${anonText}`)) {
+      if (
+        anonText.length > 0 &&
+        anonText.length <= 16 &&
+        !seen.has(`t:${anonText}`)
+      ) {
         seen.add(`t:${anonText}`)
         checkText(anonText)
       }
@@ -649,7 +649,8 @@ function extractModifiers(node: Node, exported: boolean): SymbolModifiers | unde
       }
     }
     const prefix = firstLine(node.text).slice(0, 64).toLowerCase()
-    if (prefix.startsWith('async ') || prefix.includes(' async ')) isAsync = true
+    if (prefix.startsWith('async ') || prefix.includes(' async '))
+      isAsync = true
     if (/(^|\s)static(\s|\()/.test(prefix)) isStatic = true
     if (
       visibility === undefined &&
@@ -677,7 +678,8 @@ function isExportedNode(node: Node): boolean {
       cur = cur.parent
     }
     const prefix = firstLine(node.text).slice(0, 32).toLowerCase()
-    if (prefix.startsWith('export ') || prefix.startsWith('export{')) return true
+    if (prefix.startsWith('export ') || prefix.startsWith('export{'))
+      return true
     if (prefix.startsWith('pub ')) return true
     return false
   } catch {
@@ -699,6 +701,36 @@ export async function parseFileStructure(
   filePath: string,
   diagnostics?: StructureDiagnostic[],
 ): Promise<SymbolRange[] | null> {
+  return (await parseStructureOnce(content, filePath, diagnostics)).symbols
+}
+
+/**
+ * Parse once and derive both structural symbols and call sites from the same
+ * tree (reliability finding chunks-parses-each-file-twice): buildChunks no
+ * longer parses every file a second time just to extract call sites.
+ * `symbols` keeps parseFileStructure's null/[] semantics; `callSites` is []
+ * whenever no grammar or query is available, and is capped at 500 entries
+ * like the previous dedicated call-site pass.
+ */
+export async function parseFileStructureWithCallSites(
+  content: string,
+  filePath: string,
+  diagnostics?: StructureDiagnostic[],
+): Promise<{
+  symbols: SymbolRange[] | null
+  callSites: Array<{ name: string; line: number; col: number }>
+}> {
+  return parseStructureOnce(content, filePath, diagnostics)
+}
+
+async function parseStructureOnce(
+  content: string,
+  filePath: string,
+  diagnostics?: StructureDiagnostic[],
+): Promise<{
+  symbols: SymbolRange[] | null
+  callSites: Array<{ name: string; line: number; col: number }>
+}> {
   let cfg
   try {
     cfg = await getLanguageConfig(filePath)
@@ -708,7 +740,7 @@ export async function parseFileStructure(
       stage: 'language',
       message: `Tree-sitter grammar failed to load for ${filePath}`,
     })
-    return null
+    return { symbols: null, callSites: [] }
   }
   if (!cfg?.parser) {
     diagnostics?.push({
@@ -716,7 +748,7 @@ export async function parseFileStructure(
       stage: 'language',
       message: `No tree-sitter language configuration available for ${filePath}`,
     })
-    return null
+    return { symbols: null, callSites: [] }
   }
 
   let tree
@@ -728,7 +760,7 @@ export async function parseFileStructure(
       stage: 'parse',
       message: `Tree-sitter parse failed for ${filePath}`,
     })
-    return null
+    return { symbols: null, callSites: [] }
   }
   if (!tree) {
     diagnostics?.push({
@@ -736,7 +768,7 @@ export async function parseFileStructure(
       stage: 'parse',
       message: `Tree-sitter returned no tree for ${filePath}`,
     })
-    return null
+    return { symbols: null, callSites: [] }
   }
 
   try {
@@ -856,14 +888,52 @@ export async function parseFileStructure(
         if (child) stack.push(child)
       }
     }
-    return assignDepths(symbols)
+
+    // Same-tree call-site capture: structure and call extraction share this
+    // single parse instead of re-parsing the file. Call sites are
+    // best-effort — a capture failure must not discard the symbols.
+    const callSites: Array<{ name: string; line: number; col: number }> = []
+    if (cfg.query) {
+      try {
+        const captures = cfg.query.captures(tree.rootNode)
+        for (const capture of captures) {
+          const captureName = (capture as { name?: string }).name ?? ''
+          if (!captureName.toLowerCase().includes('call')) continue
+          const node = (
+            capture as {
+              node?: {
+                text?: string
+                startPosition?: { row: number; column: number }
+              }
+            }
+          ).node
+          if (!node || typeof node.text !== 'string') continue
+          const raw = node.text.split(/\r?\n/, 1)[0]?.trim() ?? ''
+          if (!raw) continue
+          const short = raw.split(/::|\./).filter(Boolean).pop() ?? raw
+          if (!short || short.length > 128) continue
+          const pos = node.startPosition
+          if (!pos) continue
+          callSites.push({
+            name: short,
+            line: pos.row + 1,
+            col: pos.column + 1,
+          })
+          if (callSites.length >= 500) break
+        }
+      } catch {
+        // Call sites are best-effort; structure extraction already succeeded.
+      }
+    }
+
+    return { symbols: assignDepths(symbols), callSites }
   } catch {
     diagnostics?.push({
       filePath,
       stage: 'parse',
       message: `Tree-sitter structure walk failed for ${filePath}`,
     })
-    return null
+    return { symbols: null, callSites: [] }
   } finally {
     ;(tree as { delete?: () => void }).delete?.()
   }
@@ -872,7 +942,10 @@ export async function parseFileStructure(
 export async function parseFileStructureDetailed(
   content: string,
   filePath: string,
-): Promise<{ symbols: SymbolRange[] | null; diagnostics: StructureDiagnostic[] }> {
+): Promise<{
+  symbols: SymbolRange[] | null
+  diagnostics: StructureDiagnostic[]
+}> {
   const diagnostics: StructureDiagnostic[] = []
   const symbols = await parseFileStructure(content, filePath, diagnostics)
   return { symbols, diagnostics }

@@ -2361,12 +2361,24 @@ export async function executeSubagent(
       spawnIndex,
       error: errorMessage,
     })
-    // User/parent cancellation must keep propagating so the run aborts.
-    const isCancellation =
-      (withDefaults as { signal?: AbortSignal }).signal?.aborted === true ||
-      (error instanceof Error &&
-        (error.name === 'AbortError' || error.name === 'TimeoutError'))
-    if (isCancellation) {
+    // Only GENUINE parent/user cancellation must keep propagating so the run
+    // aborts. Gate this on the PARENT signal actually being aborted — never on
+    // error.name === 'AbortError'/'TimeoutError' alone. A child-internal abort
+    // (an aborted sub-operation, a timed-out provider fetch, or an abort
+    // raised while the settle tail processes a large set_output payload plus
+    // receipt reconciliation) surfaces as an AbortError while the parent
+    // signal is still live. The previous guard re-threw on the error NAME
+    // regardless of the parent signal, so a mutating child (editor /
+    // repair-editor) that had ALREADY committed its edits crashed the entire
+    // parent turn at receipt-delivery time with 'Error executing handleSteps
+    // for agent base2: The operation was aborted'. Reviewers rarely tripped it
+    // because they settle a tiny attestation object fast; the long mutating
+    // settle tail is what widened the window. When the parent signal is NOT
+    // aborted we degrade to the structured error output below instead of
+    // taking down the session.
+    const parentSignalAborted =
+      (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
+    if (parentSignalAborted) {
       throw error
     }
     // Degrade instead of throwing: a re-raised error previously propagated

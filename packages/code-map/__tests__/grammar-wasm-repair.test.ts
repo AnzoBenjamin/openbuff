@@ -5,8 +5,10 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  computeRetryDelayMs,
   getPinnedGrammarAssetUrl,
   PINNED_GRAMMAR_ASSETS,
+  REPAIR_RETRY_BASE_DELAY_MS,
   repairGrammarWasm,
   resolveGrammarWasmSource,
 } from '../src/grammar-wasm-repair'
@@ -292,9 +294,7 @@ describe('grammar WASM repair', () => {
       fetchImpl: async () => trackedFailureResponse(503),
     })
     expect(retryable).toBeNull()
-    expect(cancelCountGetters.map((getCount) => getCount())).toEqual([
-      1, 1, 1,
-    ])
+    expect(cancelCountGetters.map((getCount) => getCount())).toEqual([1, 1, 1])
 
     cancelCountGetters.length = 0
     const nonRetryable = await repairGrammarWasm({
@@ -414,5 +414,131 @@ describe('grammar WASM repair', () => {
         repairImpl: async () => null,
       }),
     ).rejects.toThrow('checksum-pinned repair failed')
+  })
+
+  test('rejects a body whose Content-Length exceeds the byte cap before streaming', async () => {
+    // Regression for the M4-S6 unbounded-arrayBuffer finding: a hijacked
+    // asset source declaring an oversized body must be rejected from its
+    // headers, without buffering the bytes and before the sha256 check.
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-cap-len-'),
+    )
+    roots.push(targetDir)
+    const failureReasons: string[] = []
+    let cancelCount = 0
+    // The body never closes: if the implementation streamed it, the attempt
+    // would hang instead of failing fast from the declared length.
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024))
+      },
+      cancel() {
+        cancelCount++
+      },
+    })
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      fetchImpl: async () =>
+        new Response(body, {
+          headers: { 'content-length': String(8 * 1024 * 1024) },
+        }) as Response,
+      maxBodyBytes: 1024 * 1024,
+      onFailure: (reason) => failureReasons.push(reason),
+    })
+
+    expect(repaired).toBeNull()
+    expect(failureReasons).toEqual([
+      'downloaded body missing or exceeded the 1048576-byte cap',
+    ])
+    // The rejected body was released rather than left holding its socket.
+    expect(cancelCount).toBe(1)
+    expect(
+      fs.existsSync(path.join(targetDir, 'tree-sitter-javascript.wasm')),
+    ).toBe(false)
+  })
+
+  test('aborts a body that streams past the byte cap mid-stream', async () => {
+    // No Content-Length header: the cap must be enforced while streaming so
+    // an unbounded body cannot force a huge allocation before hashing.
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-cap-stream-'),
+    )
+    roots.push(targetDir)
+    const failureReasons: string[] = []
+    const chunk = new Uint8Array(768 * 1024).fill(1)
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk)
+        controller.enqueue(chunk) // 1.5MB total > the 1MB test cap
+        controller.close()
+      },
+    })
+
+    const repaired = await repairGrammarWasm({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      targetDir,
+      fetchImpl: async () => new Response(body) as Response,
+      maxBodyBytes: 1024 * 1024,
+      onFailure: (reason) => failureReasons.push(reason),
+    })
+
+    expect(repaired).toBeNull()
+    expect(failureReasons).toEqual([
+      'downloaded body missing or exceeded the 1048576-byte cap',
+    ])
+    // Nothing was persisted from the oversized download.
+    expect(fs.readdirSync(targetDir)).toEqual([])
+  })
+
+  test('honors Retry-After and backs off exponentially with jitter', () => {
+    // Regression for the M4-S6 fixed-retry-delay finding: a Retry-After
+    // header wins verbatim (seconds to ms), including an explicit 0.
+    expect(computeRetryDelayMs(REPAIR_RETRY_BASE_DELAY_MS, 1, 7)).toBe(7000)
+    expect(computeRetryDelayMs(REPAIR_RETRY_BASE_DELAY_MS, 2, 0)).toBe(0)
+    // Without Retry-After: exponential backoff with jitter in [0.5x, 1x). The
+    // jitter never makes the delay LONGER than the un-jittered backoff.
+    expect(computeRetryDelayMs(2000, 1, null)).toBeLessThanOrEqual(2000)
+    expect(computeRetryDelayMs(2000, 1, null)).toBeGreaterThanOrEqual(1000)
+    expect(computeRetryDelayMs(2000, 3, null)).toBeLessThanOrEqual(8000)
+    expect(computeRetryDelayMs(2000, 3, null)).toBeGreaterThan(2000)
+  })
+
+  test('re-verifies repaired bytes against the pin before returning them', async () => {
+    // Regression for the M4-S6 load-rehash finding: bytes at the repaired
+    // path must match the pin when the production repair output is loaded,
+    // so a file swapped in between write and load is rejected.
+    const targetDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-grammar-rehash-'),
+    )
+    roots.push(targetDir)
+    const gdscriptPath = path.join(targetDir, 'tree-sitter-gdscript.wasm')
+    fs.writeFileSync(gdscriptPath, 'bytes swapped in after repair')
+
+    await expect(
+      resolveGrammarWasmSource({
+        wasmFile: 'tree-sitter-gdscript.wasm',
+        candidates: [path.join(targetDir, 'missing.wasm')],
+        repairDir: targetDir,
+        repairImpl: async () => gdscriptPath,
+        forceRepairedBytesVerification: true,
+      }),
+    ).rejects.toThrow('repaired file no longer matches the pinned checksum')
+
+    // Genuine pinned bytes resolve through the same verification path.
+    const realBytes = fs.readFileSync(
+      require.resolve('tree-sitter-wasms/out/tree-sitter-javascript.wasm'),
+    )
+    const jsPath = path.join(targetDir, 'tree-sitter-javascript.wasm')
+    fs.writeFileSync(jsPath, realBytes)
+    const resolved = await resolveGrammarWasmSource({
+      wasmFile: 'tree-sitter-javascript.wasm',
+      candidates: [path.join(targetDir, 'missing.wasm')],
+      repairDir: targetDir,
+      repairImpl: async () => jsPath,
+      forceRepairedBytesVerification: true,
+    })
+    expect(resolved).toBe(jsPath)
   })
 })

@@ -242,6 +242,102 @@ describe('file-walker walkProject', () => {
     ])
     expect(result.skippedPrefixes).toEqual(['a'])
   })
+
+  test('caps per-prefix candidates below maxFiles so memory stays O(maxFiles)', async () => {
+    // Regression for the M4-S6 per-prefix cap finding: a wide monorepo with
+    // many top-level prefixes must not accumulate O(prefixes x maxFiles)
+    // candidate entries per refresh. With 20 files per prefix across 10
+    // prefixes (200 files) and maxFiles=20, the total returned set is still
+    // capped at 20 and each prefix contributes an equal fair share.
+    const files: Record<string, string> = {}
+    for (let prefix = 0; prefix < 10; prefix++) {
+      for (let i = 0; i < 20; i++) {
+        files[`p${prefix}/file-${i}.ts`] = '1'
+      }
+    }
+    const root = await makeTempProject(files)
+
+    const result = await walkProjectDetailed(root, [], 20)
+    expect(result.files).toHaveLength(20)
+    const perPrefix = new Map<string, number>()
+    for (const file of result.files) {
+      const prefix = file.relativePath.split('/')[0]!
+      perPrefix.set(prefix, (perPrefix.get(prefix) ?? 0) + 1)
+    }
+    // Round-robin fairness holds across all 10 prefixes.
+    expect(perPrefix.size).toBe(10)
+    for (const count of perPrefix.values()) {
+      expect(count).toBe(2)
+    }
+    expect(result.truncated).toBe(true)
+    expect(result.skippedFiles).toBe(180)
+  })
+
+  test('reads ignore files through async fs (no blocking readFileSync during the walk)', async () => {
+    // Regression for the M4-S6 async-ignore-reads finding: loadIgnorePatterns
+    // must use fs.promises.readFile so the async walk does not issue blocking
+    // syscalls that interleave with awaited stats.
+    const root = await makeTempProject({
+      'src/keep.ts': 'export const keep = true\n',
+      'src/skipped.ts': 'export const skipped = true\n',
+      'src/.gitignore': 'skipped.ts\n',
+    })
+    const realReadFile = fs.promises.readFile
+    let syncReadFileSyncUsed = false
+    const readFileSpy = spyOn(fs.promises, 'readFile').mockImplementation(
+      (async (
+        pathLike: Parameters<typeof realReadFile>[0],
+        options?: Parameters<typeof realReadFile>[1],
+      ) => {
+        return realReadFile(
+          pathLike,
+          options as Parameters<typeof realReadFile>[1],
+        )
+      }) as typeof fs.promises.readFile,
+    )
+    // The ignore loader must NOT call the blocking fs.readFileSync while the
+    // async walk runs; the sync API is spied (same pattern as the lstat TOCTOU
+    // test below) so any sync ignore read is observable.
+    const realReadFileSync = fs.readFileSync
+    const readFileSyncSpy = spyOn(fs, 'readFileSync').mockImplementation(
+      // The single-purpose mock is cast to the spied signature so the
+      // multi-overload arm is also satisfied (TS2345 otherwise), mirroring the
+      // lstat spy's documented cast.
+      ((
+        filePath: Parameters<typeof realReadFileSync>[0],
+        options?: Parameters<typeof realReadFileSync>[1],
+      ) => {
+        const target = String(filePath)
+        if (
+          target.endsWith('.gitignore') ||
+          target.endsWith('.openbuffignore') ||
+          target.endsWith('.codebuffignore')
+        ) {
+          syncReadFileSyncUsed = true
+        }
+        return realReadFileSync(filePath, options)
+      }) as unknown as typeof fs.readFileSync,
+    )
+
+    try {
+      const files = await walkProject(root)
+      const relPaths = files.map((file) => file.relativePath)
+      // Ignore semantics are unchanged through the async path.
+      expect(relPaths).toContain('src/keep.ts')
+      expect(relPaths).not.toContain('src/skipped.ts')
+      // The async reader WAS used for the ignore files...
+      expect(
+        readFileSpy.mock.calls.some((call) =>
+          String(call[0]).endsWith('.gitignore'),
+        ),
+      ).toBe(true)
+      // ...and the blocking sync API never touched an ignore file.
+      expect(syncReadFileSyncUsed).toBe(false)
+    } finally {
+      readFileSpy.mockRestore()
+      readFileSyncSpy.mockRestore()
+    }
+  })
   test('keeps 3D assets as metadata-only candidates and skips other binaries', async () => {
     const root = await makeTempProject({
       'src/main.ts': 'export const x = 1\n',
@@ -505,10 +601,12 @@ describe('file-walker statProjectFiles', () => {
       // The lstat overloads return Stats or BigIntStats depending on opts;
       // cast the single-purpose mock to the spied signature so the bigint
       // overload arm is also satisfied (TS2345 otherwise).
-      const lstatSpy = spyOn(fs.promises, 'lstat').mockImplementation(
-        (async (p: fs.PathLike) =>
-          p === childAbs ? swappedStat : await realLstat(p)) as unknown as typeof fs.promises.lstat,
-      )
+      const lstatSpy = spyOn(fs.promises, 'lstat').mockImplementation((async (
+        p: fs.PathLike,
+      ) =>
+        p === childAbs
+          ? swappedStat
+          : await realLstat(p)) as unknown as typeof fs.promises.lstat)
 
       try {
         const result = await walkProjectDetailed(root)

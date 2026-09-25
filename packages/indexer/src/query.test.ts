@@ -9,6 +9,7 @@ import {
 } from './query'
 
 import type { MetadataIndex } from './types'
+import { buildIndexQueryData } from './query-data'
 
 const index: MetadataIndex = {
   version: '2',
@@ -608,16 +609,12 @@ describe('queryIndex', () => {
       },
     }
     const withChunk = queryIndex(chunkOnly, 'loginUser', { limit: 5 })
-    expect(
-      withChunk.some((r) => r.matchedOn.includes('chunk')),
-    ).toBe(true)
+    expect(withChunk.some((r) => r.matchedOn.includes('chunk'))).toBe(true)
     const withoutChunk = queryIndex(chunkOnly, 'loginUser', {
       lexicalWeights: { chunk: 0 },
       limit: 5,
     })
-    expect(
-      withoutChunk.some((r) => r.matchedOn.includes('chunk')),
-    ).toBe(false)
+    expect(withoutChunk.some((r) => r.matchedOn.includes('chunk'))).toBe(false)
   })
 })
 
@@ -717,5 +714,62 @@ describe('symbolMatchesToken', () => {
 
   test('does not match unrelated symbol and token', () => {
     expect(symbolMatchesToken('login', 'auth')).toBe(false)
+  })
+})
+
+describe('persisted adjacency coverage validation', () => {
+  test('rebuilds adjacency from edges when the persisted map is truncated', () => {
+    // Regression for the M4-S6 adjacency finding: a persisted adjacency that
+    // omits nodes (here: everything except the auth/db edge endpoints) must
+    // be rejected and rebuilt, not trusted wholesale.
+    const truncated: MetadataIndex = {
+      ...index,
+      queryData: {
+        ...buildIndexQueryData(index.files, index.graph),
+        adjacency: {
+          'file:src/auth.ts': [0, 1, 4],
+          'file:src/db.ts': [0],
+        },
+      },
+    }
+
+    const results = queryIndex(truncated, 'AuthProvider', { limit: 5 })
+
+    // The defines edge from .bun-install/noisy.ts survives via the rebuild...
+    // ...and the references edge auth -> db still boosts db.ts.
+    const dbResult = results.find((result) => result.path === 'src/db.ts')
+    expect(dbResult?.matchedOn).toContain('graph')
+    expect(dbResult?.relatedFiles?.[0]?.path).toBe('src/auth.ts')
+  })
+
+  test('a complete persisted adjacency is trusted as-is', () => {
+    const complete: MetadataIndex = {
+      ...index,
+      queryData: buildIndexQueryData(index.files, index.graph),
+    }
+
+    const results = queryIndex(complete, 'AuthProvider', { limit: 5 })
+
+    const dbResult = results.find((result) => result.path === 'src/db.ts')
+    expect(dbResult?.matchedOn).toContain('graph')
+  })
+})
+
+describe('fileTypes cache freshness', () => {
+  test('in-place mutation of options.fileTypes between queries is honored', () => {
+    // Regression for the M4-S6 fileTypeSetCache finding: the cache must be
+    // keyed by the filter VALUE, not the caller's mutable array reference.
+    const fileTypes = ['ts']
+    const tsResults = queryIndex(index, 'getUser', { fileTypes, limit: 5 })
+    expect(tsResults.length).toBeGreaterThan(0)
+    expect(tsResults.every((result) => result.path.endsWith('.ts'))).toBe(true)
+
+    fileTypes[0] = 'md'
+    const mdResults = queryIndex(index, 'authentication flow', {
+      fileTypes,
+      limit: 5,
+    })
+    expect(mdResults.length).toBeGreaterThan(0)
+    expect(mdResults.every((result) => result.path.endsWith('.md'))).toBe(true)
   })
 })

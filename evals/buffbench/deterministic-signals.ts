@@ -13,8 +13,8 @@
  * - Clamping only ever *reduces* scores, never inflates them. The LLM judge
  *   remains the authority on subjective dimensions; deterministic signals only
  *   enforce hard upper bounds when the build/tests/lint are broken.
- * - Classification of a command as compile/test/lint is heuristic (by command
- *   substring) and intentionally conservative: an unrecognized command is treated
+ * - Classification of a command as compile/test/lint is heuristic (boundary-
+ *   aware token matching) and intentionally conservative: an unrecognized command is treated
  *   as a generic check that still contributes to the overall fail count, but
  *   does not trigger a category-specific clamp.
  */
@@ -52,45 +52,72 @@ export interface DeterministicSignals {
 }
 
 /**
+ * Escape a token for literal use inside a RegExp.
+ */
+function escapeRegExp(token: string): string {
+  return token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Boundary-aware token match (M5-T7-R5a): `token` must start after a
+ * non-word, non-dash character (or the string start) and end before a
+ * non-word, non-dash character (or the string end).
+ *
+ * Word-internal and dash-joined compounds therefore never match — 'attest.sh'
+ * and 'latest-check' do not match 'test', 'rebuild-docs' does not match
+ * 'build' — while punctuation-adjacent tokens ('$(gofmt ...)', 'build:test',
+ * and a bare 'tsc' at end-of-string) still do.
+ */
+function matchesToken(normalized: string, token: string): boolean {
+  return new RegExp(`(^|[^\\w-])${escapeRegExp(token)}($|[^\\w-])`).test(
+    normalized,
+  )
+}
+
+/** Ordered category tokens for {@link classifyCommand}. */
+const COMPILE_TOKENS = [
+  'typecheck',
+  'type-check',
+  'tsc',
+  'build',
+  'compile',
+] as const
+const TEST_TOKENS = ['test', 'vitest', 'jest', 'pytest'] as const
+const LINT_TOKENS = [
+  'lint',
+  'eslint',
+  'biome check',
+  'prettier',
+  'cargo clippy',
+  'cargo fmt',
+  'ruff',
+  'go vet',
+  'gofmt',
+  'rubocop',
+  'swift-format',
+  'dotnet format',
+] as const
+
+/**
  * Classify a single command string into a check category.
  *
  * Heuristics are deliberately conservative and match the conventions observed
  * in the eval configs (e.g. `bun run typecheck`, `bun run test`, `bun run lint`,
- * `npm run build`, `tsc --noEmit`). Unknown commands fall through to `generic`.
+ * `npm run build`, `tsc --noEmit`). Matching is boundary-aware (word-internal
+ * and dash-joined compounds like 'rebuild-docs' or 'attest.sh' do not match).
+ * Compile tokens are checked first — the documented precedence: a command like
+ * `npm run build:test` is classified as compile because a build step is more
+ * severe. Unknown commands fall through to `generic`.
  */
 export function classifyCommand(command: string): CheckCategory {
   const normalized = command.toLowerCase().trim()
-  if (
-    normalized.includes('typecheck') ||
-    normalized.includes('type-check') ||
-    normalized.includes('tsc ') ||
-    normalized.includes('build') ||
-    normalized.includes('compile')
-  ) {
+  if (COMPILE_TOKENS.some((token) => matchesToken(normalized, token))) {
     return 'compile'
   }
-  if (
-    normalized.includes('lint') ||
-    normalized.includes('eslint') ||
-    normalized.includes('biome check') ||
-    normalized.includes('prettier') ||
-    normalized.includes('cargo clippy') ||
-    normalized.includes('cargo fmt') ||
-    normalized.includes('ruff') ||
-    normalized.includes('go vet') ||
-    normalized.includes('gofmt') ||
-    normalized.includes('rubocop') ||
-    normalized.includes('swift-format') ||
-    normalized.includes('dotnet format')
-  ) {
+  if (LINT_TOKENS.some((token) => matchesToken(normalized, token))) {
     return 'lint'
   }
-  if (
-    normalized.includes('test') ||
-    normalized.includes('vitest') ||
-    normalized.includes('jest') ||
-    normalized.includes('pytest')
-  ) {
+  if (TEST_TOKENS.some((token) => matchesToken(normalized, token))) {
     return 'test'
   }
   return 'generic'
@@ -181,8 +208,10 @@ const CAP_BY_CATEGORY_FAILED: Record<
  * 4. Else if any generic command ran and failed → cap overall & completion at 6.
  *
  * `codeQualityScore` is capped by the same bound as `overallScore` — broken
- * builds should not get high quality marks. If no deterministic signals are
- * available (`isEmpty`), the result is returned unchanged.
+ * builds should not get high quality marks. `idiomScore` (when present) is
+ * capped by the same bound, so a failed compile can never coexist with a
+ * high idiom score in the report. If no deterministic signals are available
+ * (`isEmpty`), the result is returned unchanged.
  *
  * A `clampedBy` note is appended to `analysis` when clamping occurs, so the
  * eval report records *why* a score was reduced (auditable + explains variance
@@ -214,18 +243,24 @@ export function clampScoresByDeterministicSignals(
     reason = 'generic'
   }
 
-  if (cap === undefined || reason === undefined) {
-    return result
-  }
-
+  // After the if/else-if chain above, cap and reason are always assigned (the
+  // final else covers the generic case), so no defensive guard is needed: a
+  // future category branch that forgets to assign one would be a compile error
+  // here, not a silent skip of the clamp.
+  const capValue = cap
   const clamped = {
     ...result,
-    overallScore: Math.min(result.overallScore, cap),
-    completionScore: Math.min(result.completionScore, cap),
-    codeQualityScore: Math.min(result.codeQualityScore, cap),
+    overallScore: Math.min(result.overallScore, capValue),
+    completionScore: Math.min(result.completionScore, capValue),
+    codeQualityScore: Math.min(result.codeQualityScore, capValue),
+    // M5-T7-R5b: idiomScore must honor the same deterministic ceiling — a
+    // broken build reporting idiom 9/10 reads downstream as a measured pass.
+    ...(typeof result.idiomScore === 'number'
+      ? { idiomScore: Math.min(result.idiomScore, capValue) }
+      : {}),
   }
 
-  const note = `[deterministic clamp: ${reason} check failed → scores capped at ${cap}]`
+  const note = `[deterministic clamp: ${reason} check failed → scores capped at ${capValue}]`
   // Prepend the note so it's visible in reports without burying the analysis.
   clamped.analysis = clamped.analysis ? `${note}\n${clamped.analysis}` : note
 

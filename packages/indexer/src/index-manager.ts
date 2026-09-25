@@ -12,11 +12,17 @@ import {
 import { queryIndex, type QueryOptions } from './query'
 import {
   buildFileVectors,
+  fileEmbeddingHash,
   getSemanticConfigFingerprint,
   semanticSearch,
   blendSemanticScores,
 } from './semantic'
-import type { EmbedFn, FileVector, SemanticHit } from './semantic'
+import type {
+  BuildFileVectorsDiagnostics,
+  EmbedFn,
+  FileVector,
+  SemanticHit,
+} from './semantic'
 import type {
   IndexingConfig,
   IndexBuildError,
@@ -45,6 +51,10 @@ export class IndexManager {
   private staleRefreshPending = false
   private embed?: EmbedFn
   private fileVectors: FileVector[] = []
+  /** Files dropped from the vector set by the last successful semantic build. */
+  private semanticSkippedCount = 0
+  /** Set when the most recent waitUntilReady timed out before the build finished. */
+  private waitTimedOut = false
   private lastBuildError: IndexBuildError | undefined
   private pendingMutationDelta: IndexMutationDelta | undefined
   private mutationEpoch = 0
@@ -98,6 +108,22 @@ export class IndexManager {
         instance.forceRefresh = true
         instance.ensureBuilt()
       }
+    } else if (
+      embed &&
+      instance.embed &&
+      embed.cacheKey !== instance.embed.cacheKey
+    ) {
+      // Rewire on a changed embedder identity (reliability finding
+      // second-embedder-silently-ignored): the persisted vector cache is
+      // fingerprinted by the embedder's cacheKey, so silently keeping the
+      // stale embedder would keep serving vectors from the old provider.
+      // Wipe the in-memory semantic tier (its vectors belong to the old
+      // fingerprint) and rebuild against the new one.
+      instance.embed = embed
+      instance.fileVectors = []
+      instance.semanticSkippedCount = 0
+      instance.forceRefresh = true
+      instance.ensureBuilt()
     }
     return instance
   }
@@ -296,9 +322,10 @@ export class IndexManager {
 
   /**
    * Wait for the index to be ready (up to timeoutMs).
-   * Starts a build if needed.
+   * Starts a build if needed. Returns false when the wait timed out before
+   * the build finished (also surfaced via {@link getStatus}).
    */
-  async waitUntilReady(timeoutMs = 30_000): Promise<void> {
+  async waitUntilReady(timeoutMs = 30_000): Promise<boolean> {
     // Detached-instance gate (reliability finding
     // detached-index-manager-still-runs-own-build-loop): forward readiness to
     // the registered singleton so the holder never builds (or serves) its own
@@ -310,8 +337,7 @@ export class IndexManager {
       // instead of being deferred until something else calls ensureBuilt
       // (reliability finding detached-query-forward-skips-pending-drain).
       this.forwardPendingMutationsTo(registered)
-      await registered.waitUntilReady(timeoutMs)
-      return
+      return registered.waitUntilReady(timeoutMs)
     }
     this.scheduleRefreshIfNeeded()
     if (
@@ -320,14 +346,36 @@ export class IndexManager {
       !this.staleRefreshPending &&
       (!this.config.semantic?.enabled || !this.embed || this.isSemanticReady())
     ) {
-      return
+      this.waitTimedOut = false
+      return true
     }
     this.ensureBuilt()
-    if (!this.buildPromise) return
-    await Promise.race([
-      this.buildPromise,
-      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-    ])
+    if (!this.buildPromise) {
+      this.waitTimedOut = false
+      return true
+    }
+    // Clear the losing timeout in a finally and surface the timeout through
+    // the return value and getStatus() so callers can distinguish a hung
+    // build from readiness (reliability finding
+    // waituntilready-silent-timeout-leaks-timer). The unref'd timer never
+    // pins the event loop past timeoutMs.
+    this.waitTimedOut = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        this.buildPromise,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            this.waitTimedOut = true
+            resolve()
+          }, timeoutMs)
+          timer.unref?.()
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    return !this.waitTimedOut
   }
 
   /**
@@ -561,7 +609,11 @@ export class IndexManager {
           )
         }
       }
-      if (index.parserDegraded && mutationDelta && !this.degradedDeltaRequeued) {
+      if (
+        index.parserDegraded &&
+        mutationDelta &&
+        !this.degradedDeltaRequeued
+      ) {
         // P8.1: the tree-sitter parse degraded and the delta was dropped.
         // Re-queue it once so the next refresh re-applies it; the raw flag
         // bound prevents infinite retries when parsing stays degraded.
@@ -660,6 +712,10 @@ export class IndexManager {
     cacheDir: string,
   ): Promise<void> {
     if (!this.config.semantic?.enabled || !this.embed) return
+    const diagnostics: BuildFileVectorsDiagnostics = {
+      skippedPaths: [],
+      skippedCount: 0,
+    }
     try {
       const fingerprint = getSemanticConfigFingerprint(
         this.config.semantic,
@@ -675,7 +731,9 @@ export class IndexManager {
         this.embed,
         64,
         [...this.fileVectors, ...persisted],
+        diagnostics,
       )
+      this.semanticSkippedCount = diagnostics.skippedCount
       await saveSemanticVectors(
         this.projectRoot,
         fingerprint,
@@ -684,7 +742,34 @@ export class IndexManager {
       )
     } catch (err) {
       console.debug('[indexer] semantic vector build failed:', err)
-      this.fileVectors = []
+      // One transient embedder failure must not wipe the whole semantic tier
+      // (reliability finding semantic-tier-wiped-by-transient-embedder-failure):
+      // keep the vectors this instance already holds, or recover the persisted
+      // cache for the current fingerprint when we hold none. The tier is
+      // cleared only by the fingerprint-change rewire in getInstance.
+      if (this.fileVectors.length === 0) {
+        try {
+          const persisted = await loadSemanticVectors(
+            this.projectRoot,
+            getSemanticConfigFingerprint(this.config.semantic, this.embed),
+            cacheDir,
+          )
+          const vectorByHash = new Map(
+            persisted.map((entry) => [entry.embeddingHash, entry.vector]),
+          )
+          const recovered: FileVector[] = []
+          for (const file of Object.values(index.files)) {
+            const embeddingHash = fileEmbeddingHash(file)
+            const vector = vectorByHash.get(embeddingHash)
+            if (vector) {
+              recovered.push({ path: file.path, embeddingHash, vector })
+            }
+          }
+          if (recovered.length > 0) this.fileVectors = recovered
+        } catch {
+          // Persisted cache unavailable too: stay lexical-only this round.
+        }
+      }
       this.lastBuildError = createBuildError(
         'semantic',
         err,
@@ -746,6 +831,12 @@ export class IndexManager {
     const errorNotice = this.lastBuildError
       ? ` Last ${this.lastBuildError.stage} error: ${this.lastBuildError.message}`
       : ''
+    const semanticSkippedNotice = this.semanticSkippedCount
+      ? ` Semantic recall is partial: ${this.semanticSkippedCount} file(s) have no embedding vector.`
+      : ''
+    const waitTimeoutNotice = this.waitTimedOut
+      ? ' Timed out waiting for index build.'
+      : ''
     return {
       state,
       ready: Boolean(this.index),
@@ -757,7 +848,10 @@ export class IndexManager {
       diagnostics,
       coverage,
       lastBuildError: this.lastBuildError,
-      message: `${state === 'ready' ? 'Index ready.' : state === 'stale' ? 'Serving a stale snapshot while refreshing.' : state === 'degraded' ? 'Index ready with partial coverage or diagnostics.' : state === 'failed' ? 'Index build failed.' : state === 'building' ? 'Index is building.' : state === 'disabled' ? 'Indexing is disabled.' : 'Index is empty or unavailable.'}${coverageNotice}${errorNotice}`,
+      ...(this.semanticSkippedCount > 0
+        ? { semanticSkippedFiles: this.semanticSkippedCount }
+        : {}),
+      message: `${state === 'ready' ? 'Index ready.' : state === 'stale' ? 'Serving a stale snapshot while refreshing.' : state === 'degraded' ? 'Index ready with partial coverage or diagnostics.' : state === 'failed' ? 'Index build failed.' : state === 'building' ? 'Index is building.' : state === 'disabled' ? 'Indexing is disabled.' : 'Index is empty or unavailable.'}${coverageNotice}${errorNotice}${semanticSkippedNotice}${waitTimeoutNotice}`,
     }
   }
 
@@ -844,10 +938,7 @@ function withConfigLexicalWeights(
  * Backs the fail-closed verification in `_build` without depending on two
  * independently implemented content-addressed digests agreeing.
  */
-function isSameIndexSnapshot(
-  a: MetadataIndex,
-  b: MetadataIndex,
-): boolean {
+function isSameIndexSnapshot(a: MetadataIndex, b: MetadataIndex): boolean {
   if (
     a.version !== b.version ||
     a.projectRoot !== b.projectRoot ||
@@ -862,7 +953,10 @@ function isSameIndexSnapshot(
   )
 }
 
-function mergeMutationDeltas(current: IndexMutationDelta | undefined, next: IndexMutationDelta): IndexMutationDelta {
+function mergeMutationDeltas(
+  current: IndexMutationDelta | undefined,
+  next: IndexMutationDelta,
+): IndexMutationDelta {
   // P8.3: select the max revision with numeric-aware comparison; plain string
   // territory ("10" < "9") would let an older-dated delta win the merge.
   const revision =

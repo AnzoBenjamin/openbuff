@@ -9,6 +9,7 @@ import { describe, it, expect } from 'bun:test'
 import {
   parseTokens,
   DEBUG_PARSING,
+  buildTokenCallers,
   getFileTokenScores,
   type TokenCallerMap,
   type FileTokenData,
@@ -700,6 +701,58 @@ console.log('Total:', formatCurrency(total));
           message: 'No tree-sitter language configuration available for .fake',
         },
       ])
+    })
+
+    it('skips caller paths that escape the project root instead of reading them', async () => {
+      // Regression for the M4-S6 path-traversal finding: a corrupted index
+      // cache must not be able to point statSync/readFileSync outside the
+      // project via '../', absolute paths, or NUL bytes.
+      const result = await getFileTokenScores('/tmp/test-project', [
+        '../outside.ts',
+        '/etc/passwd',
+        'src/../../escape.ts',
+        'a\0b.ts',
+      ])
+
+      expect(result.tokenScores).toEqual({})
+      expect(result.parsed).toEqual({})
+      expect(result.diagnostics).toEqual([])
+      expect(result.coverage.truncated).toBe(true)
+      expect(result.coverage.skippedFiles).toBe(4)
+    })
+
+    it('fabricates no cross-language caller edges; same-language only', () => {
+      // Regression for the M4-S6 stale-comment finding: buildTokenCallers
+      // resolves ONLY same-language definitions. A cross-language raw-name
+      // match is ambiguous in polyglot monorepos and must not fabricate a
+      // blast-radius edge (pinned identically by the indexer's
+      // call-navigation contract 'does not create cross-language raw-name
+      // call edges').
+      const tokenScores = {
+        'src/a.ts': { render: 1, helper: 1 },
+        'src/b.ts': { helper: 1 },
+        'src/c.ts': { helper: 1 },
+        'scripts/d.py': { render: 1 },
+      }
+      const fileCallsMap = new Map<string, string[]>([
+        ['src/a.ts', ['render', 'helper']],
+      ])
+
+      const callers = buildTokenCallers(tokenScores, fileCallsMap)
+
+      // 'render' has no same-language (.ts) definition: no cross-language
+      // edge is fabricated for the .py definition.
+      expect(callers['scripts/d.py']).toBeUndefined()
+      // 'helper' has two same-language definitions: ambiguous, no edge.
+      expect(callers['src/b.ts']).toBeUndefined()
+      expect(callers['src/c.ts']).toBeUndefined()
+
+      // A single same-language definition still resolves to its caller.
+      const unambiguous = buildTokenCallers(
+        { 'src/lib.ts': { unique: 1 } },
+        new Map([['src/use.ts', ['unique']]]),
+      )
+      expect(unambiguous['src/lib.ts']?.unique).toEqual(['src/use.ts'])
     })
   })
 })

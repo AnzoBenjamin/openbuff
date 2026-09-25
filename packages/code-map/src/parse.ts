@@ -142,7 +142,17 @@ export async function getFileTokenScores(
   // Round-robin top-level-prefix/language buckets so a tight parse budget does
   // not erase every symbol from directories that happen to sort last.
   for (const filePath of fairParseOrder(filePaths)) {
-    const fullPath = path.join(projectRoot, filePath)
+    // Path-traversal guard (mirrors file-walker statProjectFiles): caller- or
+    // cache-supplied paths must never be joined onto projectRoot unchecked, or
+    // a corrupted index cache could point statSync/readFileSync at arbitrary
+    // files outside the project. Unsafe paths are skipped like any other
+    // unparsable file — they are never read.
+    const fullPath = resolveWithinProjectRoot(projectRoot, filePath)
+    if (fullPath === null) {
+      skippedPaths.push(filePath)
+      skippedLanguages.add(path.extname(filePath) || 'unknown')
+      continue
+    }
 
     // Incremental fast path: reuse a prior parse for an unchanged file. The
     // caller is responsible for only passing reuse entries for files whose
@@ -456,7 +466,12 @@ function scoreFileTokens(fullPath: string, parsed: ParsedTokens): FileCallData {
   return { scores, calls: parsed.calls }
 }
 
-function buildTokenCallers(
+/**
+ * Resolve caller edges from token scores and per-file call lists. Exported so
+ * the same-language caller-resolution rule is directly testable; inputs are the
+ * tokenScores/fileCallsMap shapes produced by {@link getFileTokenScores}.
+ */
+export function buildTokenCallers(
   tokenScores: Record<string, Record<string, number>>,
   fileCallsMap: Map<string, string[]>,
 ): TokenCallerMap {
@@ -483,10 +498,15 @@ function buildTokenCallers(
         (candidate) =>
           getLanguageFamily(candidate.extension) === callerLanguage,
       )
-      // Resolve only when the raw name is unambiguous in the caller's language
-      // (or globally when no same-language definition exists). Import-aware
-      // graph construction can add stronger edges later; guessing here creates
-      // false blast-radius relationships in polyglot/monorepo codebases.
+      // Same-language definitions only (M4-S6): cross-language raw-name
+      // matches are ambiguous in polyglot monorepos — a .py and a .ts file
+      // both defining the same name would fabricate a false blast-radius
+      // edge. Caller edges resolve only when exactly one same-language
+      // definition exists; import-aware graph construction adds stronger
+      // cross-language edges later. This contract is pinned by both
+      // code-map's buildTokenCallers tests and the indexer's
+      // call-navigation suite ('does not create cross-language raw-name call
+      // edges').
       const eligible = sameLanguage
       const definingFile =
         eligible.length === 1 ? eligible[0]?.filePath : undefined
@@ -572,6 +592,27 @@ function getLanguageFamily(filePathOrExtension: string): string {
   }
   if (['.kt', '.kts'].includes(extension)) return 'kotlin'
   return extension
+}
+
+/**
+ * Resolve a caller-supplied relative path onto projectRoot safely: rejects
+ * absolute paths, '..' segments, and NUL before joining, then resolves and
+ * verifies the final absolute path stays under projectRoot. Returns null for
+ * any path that would escape the project root.
+ */
+function resolveWithinProjectRoot(
+  projectRoot: string,
+  filePath: string,
+): string | null {
+  if (filePath.includes('\0')) return null
+  const normalized = filePath.replace(/\\/g, '/').replace(/^\.\//, '')
+  if (!normalized) return null
+  if (path.isAbsolute(filePath) || normalized.startsWith('/')) return null
+  if (normalized.split('/').includes('..')) return null
+  const resolved = path.resolve(projectRoot, normalized)
+  const root = path.resolve(projectRoot)
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null
+  return resolved
 }
 
 function getKnownFileSize(filePath: string): number {

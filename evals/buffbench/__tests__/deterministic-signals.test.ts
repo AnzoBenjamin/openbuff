@@ -38,6 +38,11 @@ function makeJudgeResult(
     completionScore: overrides.completionScore ?? 8,
     codeQualityScore: overrides.codeQualityScore ?? 8,
     overallScore: overrides.overallScore ?? 8,
+    // R5b fixtures pass idiomScore through so the clamp tests exercise a
+    // PRESENT idiomScore; absent stays absent (optional field).
+    ...(overrides.idiomScore !== undefined
+      ? { idiomScore: overrides.idiomScore }
+      : {}),
   }
 }
 
@@ -93,6 +98,24 @@ describe('classifyCommand', () => {
     // "build" is checked before "test" in classification order. This documents
     // the deliberate compile-priority design: a build step is more severe.
     expect(classifyCommand('npm run build:test')).toBe('compile')
+  })
+
+  test('boundary-aware: bare tsc matches, but substrings inside other words do not', () => {
+    // M5-T7-R5a: matching is boundary-aware on token starts, so a bare 'tsc'
+    // matches (the old 'tsc ' substring probe missed it) while word-internal
+    // and dash-joined compounds no longer false-positive.
+    expect(classifyCommand('tsc')).toBe('compile')
+    expect(classifyCommand('bun run typecheck')).toBe('compile')
+
+    // 'test' must not match inside these tokens.
+    expect(classifyCommand('./attest.sh')).toBe('generic')
+    expect(classifyCommand('./latest-check')).toBe('generic')
+
+    // 'build' must not match dash-joined compounds.
+    expect(classifyCommand('npm run rebuild-docs')).toBe('generic')
+
+    // A standalone 'test' word still matches, even mid-pipe.
+    expect(classifyCommand('cat f | grep test')).toBe('test')
   })
 })
 
@@ -399,6 +422,33 @@ describe('clampScoresByDeterministicSignals', () => {
     expect(result.overallScore).toBe(9) // unchanged
     expect(clamped).not.toBe(result)
     expect(clamped.overallScore).toBe(3)
+  })
+
+  test('M5-T7-R5b: compile failure also caps a present idiomScore at the cap', () => {
+    const result = makeJudgeResult({ overallScore: 9, idiomScore: 9 })
+    const signals: DeterministicSignals = {
+      commandCount: 1,
+      failCount: 1,
+      compiles: false,
+      hasAnyFailure: true,
+      isEmpty: false,
+    }
+    const clamped = clampScoresByDeterministicSignals(result, signals)
+    expect(clamped.idiomScore).toBe(3)
+    expect(clamped.overallScore).toBe(3)
+  })
+
+  test('M5-T7-R5b: an absent idiomScore stays absent after clamping', () => {
+    const result = makeJudgeResult({ overallScore: 9 })
+    const signals: DeterministicSignals = {
+      commandCount: 1,
+      failCount: 1,
+      compiles: false,
+      hasAnyFailure: true,
+      isEmpty: false,
+    }
+    const clamped = clampScoresByDeterministicSignals(result, signals)
+    expect(clamped.idiomScore).toBeUndefined()
   })
 })
 
