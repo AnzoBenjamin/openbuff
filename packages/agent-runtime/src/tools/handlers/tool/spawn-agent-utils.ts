@@ -2266,9 +2266,9 @@ export async function executeSubagent(
   } catch (error) {
     // Any subagent failure (cancellation, budget exhaustion, thrown error) must
     // still emit a finish event so the UI never shows a subagent that started
-    // but never finished. Re-throw so the parent sees the error via
-    // Promise.allSettled.
+    // but never finished.
     failed = true
+    const errorMessage = error instanceof Error ? error.message : String(error)
     onResponseChunk({
       type: 'subagent_finish',
       agentId: withDefaults.agentState.agentId,
@@ -2280,9 +2280,31 @@ export async function executeSubagent(
       params: spawnParams,
       spawnToolCallId,
       spawnIndex,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage,
     })
-    throw error
+    // User/parent cancellation must keep propagating so the run aborts.
+    const isCancellation =
+      (withDefaults as { signal?: AbortSignal }).signal?.aborted === true ||
+      (error instanceof Error &&
+        (error.name === 'AbortError' || error.name === 'TimeoutError'))
+    if (isCancellation) {
+      throw error
+    }
+    // Degrade instead of throwing: a re-raised error previously propagated
+    // through Promise.allSettled as a rejected settlement and failed the whole
+    // parent turn — including the common case where the child had already
+    // committed its edits and only the final receipt delivery crashed. A
+    // structured error output keeps the failure visible to the parent (the
+    // spawned-output normalizer maps it to an explicit partial diagnostic;
+    // covered by spawn-agent-utils-output.test.ts) without taking down the
+    // session.
+    result = {
+      agentState: withDefaults.agentState,
+      output: {
+        type: 'error' as const,
+        message: `Subagent ${agentTemplate.id} crashed: ${errorMessage}`,
+      },
+    }
   }
 
   if (!failed) {

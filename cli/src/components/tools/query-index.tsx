@@ -7,6 +7,7 @@ import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig, ToolRenderOptions } from './types'
+import { statusGlyph } from './discovery-results'
 
 type QueryIndexResult = {
   path?: unknown
@@ -65,7 +66,7 @@ const NUMBER_PREFIX_WIDTH = 3
 export const QueryIndexComponent = defineToolComponent({
   toolName: 'query_index',
 
-  render(toolBlock, _theme, options: ToolRenderOptions): ToolRenderConfig {
+  render(toolBlock, theme, options: ToolRenderOptions): ToolRenderConfig {
     const input = toolBlock.input as Record<string, unknown> | undefined
     const query = typeof input?.query === 'string' ? input.query : ''
     const mode = typeof input?.mode === 'string' ? input.mode : 'search'
@@ -82,6 +83,7 @@ export const QueryIndexComponent = defineToolComponent({
       error,
       resultCount: results.length,
     })
+    const { glyph, color } = statusGlyph(status, theme)
     const availableWidth = Math.max(20, options?.availableWidth ?? 80)
     const headerDescriptionWidth = Math.max(
       10,
@@ -98,8 +100,12 @@ export const QueryIndexComponent = defineToolComponent({
 
     const QueryIndexContent = () => {
       const theme = useTheme()
+      const { glyph: contentGlyph, color: contentColor } = statusGlyph(
+        status,
+        theme,
+      )
       const description = wrapTextPreservingNewlines(
-        buildDescription({ query, mode, from, to, results, status }),
+        buildDescription({ query, mode, from, to, results }),
         headerDescriptionWidth,
       )
       const message =
@@ -117,7 +123,13 @@ export const QueryIndexComponent = defineToolComponent({
         <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
           <SimpleToolCallItem
             name="Index"
-            description={description}
+            description={
+              <>
+                {description}
+                {' '}
+                <span fg={contentColor}>{contentGlyph}</span>
+              </>
+            }
             descriptionColor={theme.primary}
           />
           <box
@@ -128,10 +140,13 @@ export const QueryIndexComponent = defineToolComponent({
               width: '100%',
             }}
           >
-            <text style={{ wrapMode: 'word' }}>
-              <span fg={theme.muted}>Status: </span>
-              <span fg={error ? theme.error : theme.foreground}>{status}</span>
-            </text>
+            {status !== 'ready' ? (
+              <text style={{ wrapMode: 'word' }}>
+                <span fg={error ? theme.error : theme.muted}>
+                  {`State: ${status}`}
+                </span>
+              </text>
+            ) : null}
             {totalIndexed !== null ? (
               <text style={{ wrapMode: 'word' }}>
                 <span fg={theme.muted}>
@@ -200,13 +215,7 @@ export const QueryIndexComponent = defineToolComponent({
                 </span>
               </text>
             ))}
-            {results.length > 3 ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.muted}>
-                  {`${results.length - 3} additional result${results.length - 3 === 1 ? '' : 's'} shown below.`}
-                </span>
-              </text>
-            ) : null}
+
           </box>
           {results.length > 0 ? (
             <box
@@ -265,7 +274,7 @@ export const QueryIndexComponent = defineToolComponent({
                   >
                     <text style={{ wrapMode: 'word' }}>
                       <span fg={theme.muted}>{`${index + 1}. `}</span>
-                      <span fg={theme.foreground}>{pathDisplay}</span>
+                      <span fg={theme.directory}>{pathDisplay}</span>
                     </text>
                     {detailsDisplay ? (
                       <text
@@ -305,14 +314,13 @@ export const QueryIndexComponent = defineToolComponent({
     }
 
     return {
-      collapsedPreview: buildDescription({
+      collapsedPreview: `${buildDescription({
         query,
         mode,
         from,
         to,
         results,
-        status,
-      }),
+      })} ${glyph}`,
       content: <QueryIndexContent />,
     }
   },
@@ -346,7 +354,6 @@ function buildDescription(input: {
   from: string
   to: string
   results: QueryIndexResult[]
-  status: string
 }): string {
   const target =
     input.mode === 'path'
@@ -355,7 +362,7 @@ function buildDescription(input: {
         ? input.from || input.query || 'auto'
         : input.query || input.from || 'index'
   const count = input.results.length
-  return `${input.mode}: ${target} (${count} result${count === 1 ? '' : 's'}) · ${input.status}`
+  return `${input.mode}: ${target} — ${count} result${count === 1 ? '' : 's'}`
 }
 
 function getIndexStatus(input: {
