@@ -45,7 +45,8 @@ type IndexStatusView = {
 type IndexManagerLike = {
   markStale(): void
   ensureBuilt(): void
-  waitUntilReady(timeoutMs?: number): Promise<void>
+  // Real IndexManager surfaces readiness via a boolean; mocks return void.
+  waitUntilReady(timeoutMs?: number): Promise<void | boolean>
   query(query: string, options?: { limit?: number }): IndexQueryResult
   queryBlended(
     query: string,

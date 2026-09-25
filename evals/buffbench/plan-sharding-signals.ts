@@ -316,7 +316,11 @@ export function classifyBreadth(prompt: string): BreadthClassification {
   // 1. Detect domains via whole-word, case-insensitive token matching.
   const domains = new Set<string>()
   for (const domain of KNOWN_DOMAINS) {
-    const re = new RegExp(`(?:^|[^\w])${domain}(?:[^\w]|$)`, 'i')
+    // M5-T7: escape at the string level exactly like buildPlannerOutputCoverage
+    // below — a single backslash-w in a template literal collapses to the
+    // literal character 'w', making the boundary class [^w] and matching inside
+    // longer words ('auth' matching in 'authoring').
+    const re = new RegExp(`(?:^|[^\\\\w])${domain}(?:[^\\\\w]|$)`, 'i')
     const aliasMatched = (DOMAIN_ALIASES[domain] ?? []).some((alias) =>
       normalized.includes(alias),
     )
@@ -431,15 +435,23 @@ export function extractSubagentStarts(
  * Compute peak concurrency by scanning subagent_start/subagent_finish events
  * in trace order. Assumes events are emitted in chronological order (the
  * runtime streams them as they happen).
+ *
+ * M5-T7: only top-level subagents (parentAgentId undefined) count, matching
+ * extractSubagentStarts. Nested subagent events must not move the counter: a
+ * finish of a nested agent whose start was excluded previously drove inFlight
+ * down without a matching increment, so a trace could report
+ * peakConcurrency >= 2 (shardedParallely true) while subagentStarts was empty.
  */
 function computePeakConcurrency(events: readonly PrintModeEvent[]): number {
   let inFlight = 0
   let peak = 0
   for (const event of events) {
     if (event.type === 'subagent_start') {
+      if (event.parentAgentId !== undefined) continue
       inFlight++
       if (inFlight > peak) peak = inFlight
     } else if (event.type === 'subagent_finish') {
+      if (event.parentAgentId !== undefined) continue
       if (inFlight > 0) inFlight--
     }
   }

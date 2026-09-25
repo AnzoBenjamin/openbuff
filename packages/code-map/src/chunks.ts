@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 
-import { getLanguageConfig, hasLanguageConfiguration } from './languages'
+import { hasLanguageConfiguration } from './languages'
 import {
   buildQualifiedName,
   getLanguageTag,
-  parseFileStructure,
+  parseFileStructureWithCallSites,
 } from './structure'
 
 import type {
@@ -116,6 +116,11 @@ export interface ExtractCodeChunksOptions {
   previousTree?: unknown
   /** Rename/move alias: previous path for stable-slot lineage lookup. */
   previousPath?: string
+  /**
+   * Scope the memo key by project root so same-relative-path files from
+   * different projects cannot alias each other's cached chunks.
+   */
+  projectRoot?: string
 }
 
 export interface ExtractCodeChunksResult {
@@ -168,7 +173,41 @@ export function deriveStableChunkId(
   return sha256Hex(`${path}${qualifiedName}${kind}`)
 }
 
-const chunkMemo = new Map<string, { contentHash: string; chunks: CodeChunk[] }>()
+const chunkMemo = new Map<
+  string,
+  { contentHash: string; chunks: CodeChunk[] }
+>()
+
+/**
+ * Bounded per-path memo (reliability finding chunk-memo-unbounded-and-not-
+ * project-scoped): the module-level Map was unbounded and keyed by the bare
+ * file path, so a long-lived process grew it with every chunked file and
+ * same-relative-path entries leaked across projects. Keys are now
+ * `${projectRoot}\0${filePath}` when a projectRoot is supplied via
+ * {@link ExtractCodeChunksOptions} (bare path otherwise, for backward
+ * compatibility), and the map is FIFO-bounded like IndexManager's instance
+ * cache.
+ */
+const CHUNK_MEMO_LIMIT = 4_096
+/** Exported for the memo-eviction regression test. */
+export const MAX_CHUNK_MEMO_ENTRIES = CHUNK_MEMO_LIMIT
+
+function memoKey(projectRoot: string | undefined, filePath: string): string {
+  return projectRoot ? `${projectRoot}\0${filePath}` : filePath
+}
+
+function memoSet(
+  projectRoot: string | undefined,
+  filePath: string,
+  entry: { contentHash: string; chunks: CodeChunk[] },
+): void {
+  const key = memoKey(projectRoot, filePath)
+  if (!chunkMemo.has(key) && chunkMemo.size >= CHUNK_MEMO_LIMIT) {
+    const oldest = chunkMemo.keys().next()
+    if (!oldest.done) chunkMemo.delete(oldest.value)
+  }
+  chunkMemo.set(key, entry)
+}
 
 export function clearChunkMemo(): void {
   chunkMemo.clear()
@@ -185,10 +224,17 @@ const MAX_ALIAS_RESOLVE_DEPTH = 10
  * lineage can be resolved via `resolveChunkAlias`. Additive; body-edit
  * stable ID behavior is unchanged.
  */
-export function registerChunkRenameAlias(oldPath: string, newPath: string): void {
+export function registerChunkRenameAlias(
+  oldPath: string,
+  newPath: string,
+): void {
   if (typeof oldPath !== 'string' || typeof newPath !== 'string') return
   if (oldPath.length === 0 || newPath.length === 0) return
-  if (oldPath.length > MAX_ALIAS_PATH_LENGTH || newPath.length > MAX_ALIAS_PATH_LENGTH) return
+  if (
+    oldPath.length > MAX_ALIAS_PATH_LENGTH ||
+    newPath.length > MAX_ALIAS_PATH_LENGTH
+  )
+    return
   if (oldPath === newPath) return
   if (!chunkAlias.has(oldPath) && chunkAlias.size >= MAX_CHUNK_ALIASES) {
     const oldest = chunkAlias.keys().next()
@@ -221,8 +267,17 @@ function remapChunksForPath(chunks: CodeChunk[], newPath: string): CodeChunk[] {
     return {
       ...chunk,
       path: newPath,
-      stableChunkId: deriveStableChunkId(newPath, chunk.qualifiedName, chunk.kind),
-      chunkId: deriveChunkId(newPath, chunk.qualifiedName, chunk.kind, chunk.hash),
+      stableChunkId: deriveStableChunkId(
+        newPath,
+        chunk.qualifiedName,
+        chunk.kind,
+      ),
+      chunkId: deriveChunkId(
+        newPath,
+        chunk.qualifiedName,
+        chunk.kind,
+        chunk.hash,
+      ),
       calls: [...chunk.calls],
       calledBy: [...chunk.calledBy],
       imports: [...chunk.imports],
@@ -235,6 +290,7 @@ function findAliasMemoChunks(
   filePath: string,
   previousPath: string | undefined,
   currentHash: string,
+  projectRoot: string | undefined,
 ): CodeChunk[] | null {
   const candidates: string[] = []
   const pushCandidate = (candidate: string) => {
@@ -256,7 +312,7 @@ function findAliasMemoChunks(
     }
   }
   for (const candidate of candidates) {
-    const memo = chunkMemo.get(candidate)
+    const memo = chunkMemo.get(memoKey(projectRoot, candidate))
     if (memo && memo.contentHash === currentHash) {
       if (memo.chunks.length === 0) return []
       return remapChunksForPath(memo.chunks, filePath)
@@ -279,49 +335,6 @@ function sliceLines(
 function lastNameSegment(qualifiedName: string): string {
   const parts = qualifiedName.split('/')
   return parts[parts.length - 1] ?? qualifiedName
-}
-
-async function extractCallSites(
-  content: string,
-  filePath: string,
-): Promise<ChunkCallSite[]> {
-  let cfg
-  try {
-    cfg = await getLanguageConfig(filePath)
-  } catch {
-    return []
-  }
-  if (!cfg?.parser || !cfg?.query) return []
-  let tree
-  try {
-    tree = cfg.parser.parse(content)
-  } catch {
-    return []
-  }
-  if (!tree) return []
-  try {
-    const captures = cfg.query.captures(tree.rootNode)
-    const sites: ChunkCallSite[] = []
-    for (const capture of captures) {
-      const name = (capture as { name?: string }).name ?? ''
-      if (!name.toLowerCase().includes('call')) continue
-      const node = (capture as { node?: { text?: string; startPosition?: { row: number; column: number } } }).node
-      if (!node || typeof node.text !== 'string') continue
-      const raw = node.text.split(/\r?\n/, 1)[0]?.trim() ?? ''
-      if (!raw) continue
-      const short = raw.split(/::|\./).filter(Boolean).pop() ?? raw
-      if (!short || short.length > 128) continue
-      const pos = node.startPosition
-      if (!pos) continue
-      sites.push({ name: short, line: pos.row + 1, col: pos.column + 1 })
-      if (sites.length >= 500) break
-    }
-    return sites
-  } catch {
-    return []
-  } finally {
-    ;(tree as { delete?: () => void }).delete?.()
-  }
 }
 
 function extractImportSites(
@@ -349,24 +362,35 @@ function extractImportSites(
   lines.forEach((rawLine, idx) => {
     const lineNo = idx + 1
     const line = rawLine
-    if (['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
-      const fromMatch = line.match(/\b(?:import|export)\b[^'\"]*\bfrom\s+['\"]([^'\"]+)['\"]/)
+    if (
+      ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'].includes(
+        ext,
+      )
+    ) {
+      const fromMatch = line.match(
+        /\b(?:import|export)\b[^'\"]*\bfrom\s+['\"]([^'\"]+)['\"]/,
+      )
       if (fromMatch?.[1]) {
         const brace = line.match(/\{([^}]*)\}/)
         const names = brace?.[1]
-          ? brace[1].split(',').map((s) => s.trim().split(/\s+/).pop()!).filter(Boolean)
+          ? brace[1]
+              .split(',')
+              .map((s) => s.trim().split(/\s+/).pop()!)
+              .filter(Boolean)
           : undefined
-        push(fromMatch[1], lineNo, (line.indexOf(fromMatch[1]) + 1) || 1, names)
+        push(fromMatch[1], lineNo, line.indexOf(fromMatch[1]) + 1 || 1, names)
         return
       }
       const sideMatch = line.match(/^\s*import\s+['\"]([^'\"]+)['\"]/)
       if (sideMatch?.[1]) {
-        push(sideMatch[1], lineNo, (line.indexOf(sideMatch[1]) + 1) || 1)
+        push(sideMatch[1], lineNo, line.indexOf(sideMatch[1]) + 1 || 1)
         return
       }
-      const reqMatch = line.match(/\b(?:require|import)\s*\(\s*['\"]([^'\"]+)['\"]\s*\)/)
+      const reqMatch = line.match(
+        /\b(?:require|import)\s*\(\s*['\"]([^'\"]+)['\"]\s*\)/,
+      )
       if (reqMatch?.[1]) {
-        push(reqMatch[1], lineNo, (line.indexOf(reqMatch[1]) + 1) || 1)
+        push(reqMatch[1], lineNo, line.indexOf(reqMatch[1]) + 1 || 1)
         return
       }
       return
@@ -374,13 +398,16 @@ function extractImportSites(
     if (['.py', '.pyi'].includes(ext)) {
       const fromMatch = line.match(/^\s*from\s+([.\w]+)\s+import\s+(.+)$/)
       if (fromMatch) {
-        const names = (fromMatch[2] ?? '').split(',').map((s) => s.trim().split(/\s+/)[0]!).filter(Boolean)
-        push(fromMatch[1], lineNo, (line.indexOf(fromMatch[1]) + 1) || 1, names)
+        const names = (fromMatch[2] ?? '')
+          .split(',')
+          .map((s) => s.trim().split(/\s+/)[0]!)
+          .filter(Boolean)
+        push(fromMatch[1], lineNo, line.indexOf(fromMatch[1]) + 1 || 1, names)
         return
       }
       const impMatch = line.match(/^\s*import\s+([\w.]+)/)
       if (impMatch?.[1]) {
-        push(impMatch[1], lineNo, (line.indexOf(impMatch[1]) + 1) || 1, [
+        push(impMatch[1], lineNo, line.indexOf(impMatch[1]) + 1 || 1, [
           impMatch[1].split('.').pop()!,
         ])
         return
@@ -389,47 +416,57 @@ function extractImportSites(
     }
     if (ext === '.rs') {
       const m = line.match(/^\s*(?:pub\s+)?(?:use|mod)\s+([\w:]+)/)
-      if (m?.[1]) push(m[1].replace(/::/g, '/'), lineNo, (line.indexOf(m[1]) + 1) || 1)
+      if (m?.[1])
+        push(m[1].replace(/::/g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
     if (ext === '.go') {
       const m = line.match(/^\s*import\s+(?:[\w.]+\s+)?["`]([^"`]+)["`]/)
-      if (m?.[1]) push(m[1], lineNo, (line.indexOf(m[1]) + 1) || 1)
+      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
     if (['.java', '.kt', '.kts'].includes(ext)) {
       const m = line.match(/^\s*import\s+(?:static\s+)?([\w.]+)/)
-      if (m?.[1]) push(m[1].replace(/\./g, '/'), lineNo, (line.indexOf(m[1]) + 1) || 1)
+      if (m?.[1])
+        push(m[1].replace(/\./g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
-    if (['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(ext)) {
+    if (
+      ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(ext)
+    ) {
       const m = line.match(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/)
-      if (m?.[1]) push(m[1], lineNo, (line.indexOf(m[1]) + 1) || 1)
+      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
     if (ext === '.cs') {
-      const m = line.match(/^\s*(?:global\s+)?using\s+(?:[\w]+\s*=\s*)?([\w.]+)\s*;/)
-      if (m?.[1]) push(m[1].replace(/\./g, '/'), lineNo, (line.indexOf(m[1]) + 1) || 1)
+      const m = line.match(
+        /^\s*(?:global\s+)?using\s+(?:[\w]+\s*=\s*)?([\w.]+)\s*;/,
+      )
+      if (m?.[1])
+        push(m[1].replace(/\./g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
     if (ext === '.rb') {
       const m = line.match(/^\s*require(?:_relative)?\s*[('" ]+([^'"\s)]+)/)
-      if (m?.[1]) push(m[1], lineNo, (line.indexOf(m[1]) + 1) || 1)
+      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
     if (ext === '.php') {
       const m = line.match(/^\s*use\s+([\w\\]+)/)
-      if (m?.[1]) push(m[1].replace(/\\/g, '/'), lineNo, (line.indexOf(m[1]) + 1) || 1)
+      if (m?.[1])
+        push(m[1].replace(/\\/g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
     if (ext === '.swift') {
       const m = line.match(/^\s*import\s+(?:\w+\s+)?([\w.]+)/)
-      if (m?.[1]) push(m[1], lineNo, (line.indexOf(m[1]) + 1) || 1)
+      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
     if (ext === '.gd') {
-      const m = line.match(/\b(?:preload|load)\s*\(\s*["'](?:res:\/\/)?([^"']+)/)
-      if (m?.[1]) push(m[1], lineNo, (line.indexOf(m[1]) + 1) || 1)
+      const m = line.match(
+        /\b(?:preload|load)\s*\(\s*["'](?:res:\/\/)?([^"']+)/,
+      )
+      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
       return
     }
   })
@@ -440,13 +477,26 @@ async function buildChunks(
   content: string,
   filePath: string,
   structureDiagnostics: StructureDiagnostic[],
-): Promise<{ chunks: CodeChunk[]; callSites: ChunkCallSite[]; importSites: ChunkImportRef[] }> {
-  const symbols = await parseFileStructure(content, filePath, structureDiagnostics)
-  if (!symbols || symbols.length === 0) return { chunks: [], callSites: [], importSites: [] }
+): Promise<{
+  chunks: CodeChunk[]
+  callSites: ChunkCallSite[]
+  importSites: ChunkImportRef[]
+}> {
+  // One parse serves both structure and call sites (reliability finding
+  // chunks-parses-each-file-twice): the previous code parsed every file a
+  // second time inside extractCallSites just to capture call identifiers.
+  const { symbols, callSites: rawCallSites } =
+    await parseFileStructureWithCallSites(
+      content,
+      filePath,
+      structureDiagnostics,
+    )
+  if (!symbols || symbols.length === 0)
+    return { chunks: [], callSites: [], importSites: [] }
 
   const lines = content.split(/\r?\n/)
   const language = getLanguageTag(filePath)
-  const callSites = await extractCallSites(content, filePath)
+  const callSites: ChunkCallSite[] = rawCallSites
   const importSites = extractImportSites(lines, filePath)
 
   const chunks: CodeChunk[] = symbols.map((sym) => {
@@ -454,7 +504,11 @@ async function buildChunks(
     const chunkLines = sliceLines(lines, sym.startLine, sym.endLine)
     const chunkText = chunkLines.join('\n')
     const hash = sha256Hex(chunkText)
-    const fullHeader = (sym.signatureText ?? lines[Math.max(0, sym.startLine - 1)] ?? '').trim()
+    const fullHeader = (
+      sym.signatureText ??
+      lines[Math.max(0, sym.startLine - 1)] ??
+      ''
+    ).trim()
     const signature = fullHeader.slice(0, MAX_SIGNATURE_LENGTH)
     const sigStart = sym.signatureStartLine ?? sym.startLine
     const sigEnd = sym.signatureEndLine ?? sym.startLine
@@ -535,30 +589,43 @@ async function buildChunks(
     const chunk = chunks[owner]!
     if (chunk.calls.length < MAX_CHUNK_CALLS) {
       const last = chunk.calls[chunk.calls.length - 1]
-      if (!(last && last.name === site.name && last.line === site.line && last.col === site.col)) {
+      if (
+        !(
+          last &&
+          last.name === site.name &&
+          last.line === site.line &&
+          last.col === site.col
+        )
+      ) {
         chunk.calls.push({ name: site.name, line: site.line, col: site.col })
       }
     }
-    const candidates = (bySimpleName.get(site.name) ?? []).filter((idx) => idx !== owner)
+    const candidates = (bySimpleName.get(site.name) ?? []).filter(
+      (idx) => idx !== owner,
+    )
     if (candidates.length === 0) return
-    // Same-file === same language: keep the unambiguous rule by skipping
-    // only when the name matches no local definition is handled above.
-    // Overloads share one qualifiedName; link each distinct chunk once.
-    const seenTargets = new Set<string>()
-    for (const targetIdx of candidates) {
-      const target = chunks[targetIdx]!
+    // Symmetric ambiguity rule (reliability finding
+    // outgoing-chunk-references-lack-calledby-ambiguity-rule): when several
+    // unrelated definitions share one bare name, do not guess — emit a
+    // reference edge only when exactly one distinct logical target exists,
+    // mirroring the calledBy pass below. Overloads (same qualifiedName and
+    // kind) collapse to one distinct target and still link.
+    const distinct = new Map<string, number>()
+    for (const idx of candidates) {
+      const target = chunks[idx]!
       const key = `${target.qualifiedName}\0${target.kind}`
-      if (seenTargets.has(key)) continue
-      seenTargets.add(key)
-      if (chunk.references.length < MAX_CHUNK_REFERENCES) {
-        chunk.references.push({
-          name: site.name,
-          line: site.line,
-          col: site.col,
-          target: target.qualifiedName,
-        })
-      }
-      break
+      if (!distinct.has(key)) distinct.set(key, idx)
+    }
+    if (distinct.size !== 1) return
+    const targetIdx = [...distinct.values()][0]!
+    const target = chunks[targetIdx]!
+    if (chunk.references.length < MAX_CHUNK_REFERENCES) {
+      chunk.references.push({
+        name: site.name,
+        line: site.line,
+        col: site.col,
+        target: target.qualifiedName,
+      })
     }
   })
 
@@ -567,7 +634,9 @@ async function buildChunks(
     const owner = callOwner.get(siteIdx)
     if (owner === undefined) return
     const caller = chunks[owner]!
-    const candidates = (bySimpleName.get(site.name) ?? []).filter((idx) => idx !== owner)
+    const candidates = (bySimpleName.get(site.name) ?? []).filter(
+      (idx) => idx !== owner,
+    )
     if (candidates.length === 0) return
     const distinct = new Map<string, number>()
     for (const idx of candidates) {
@@ -581,20 +650,49 @@ async function buildChunks(
     const targetIdx = [...distinct.values()][0]!
     const target = chunks[targetIdx]!
     if (target.calledBy.length >= MAX_CHUNK_CALLERS) return
-    if (target.calledBy.some((c) => c.caller === caller.qualifiedName && c.line === site.line && c.col === site.col)) return
-    target.calledBy.push({ caller: caller.qualifiedName, line: site.line, col: site.col })
+    if (
+      target.calledBy.some(
+        (c) =>
+          c.caller === caller.qualifiedName &&
+          c.line === site.line &&
+          c.col === site.col,
+      )
+    )
+      return
+    target.calledBy.push({
+      caller: caller.qualifiedName,
+      line: site.line,
+      col: site.col,
+    })
   })
 
   // Per-chunk imports: inside-span imports plus name-relevant file imports.
+  // The per-file import name set is computed once (reliability finding
+  // per-chunk-substring-import-scans): the previous per-chunk inner loop ran
+  // a substring scan for every import name x every chunk.
+  const importNames = new Set<string>()
+  for (const imp of importSites) {
+    for (const name of imp.names ?? []) importNames.add(name)
+  }
   chunks.forEach((chunk) => {
     const callNames = new Set(chunk.calls.map((c) => c.name))
-    const chunkText = sliceLines(lines, chunk.startLine, chunk.endLine).join('\n')
+    const chunkText = sliceLines(lines, chunk.startLine, chunk.endLine).join(
+      '\n',
+    )
     for (const imp of importSites) {
       if (chunk.imports.length >= MAX_CHUNK_IMPORTS) break
-      const insideSpan = imp.line >= chunk.startLine && imp.line <= chunk.endLine
-      const nameHit = (imp.names ?? []).some((n) => callNames.has(n) || chunkText.includes(n))
+      const insideSpan =
+        imp.line >= chunk.startLine && imp.line <= chunk.endLine
+      const nameHit = (imp.names ?? []).some(
+        (n) =>
+          callNames.has(n) || (importNames.has(n) && chunkText.includes(n)),
+      )
       if (insideSpan || nameHit) {
-        if (!chunk.imports.some((e) => e.specifier === imp.specifier && e.line === imp.line)) {
+        if (
+          !chunk.imports.some(
+            (e) => e.specifier === imp.specifier && e.line === imp.line,
+          )
+        ) {
           chunk.imports.push({ ...imp })
         }
       }
@@ -638,18 +736,30 @@ export async function extractCodeChunksDetailed(
 ): Promise<ExtractCodeChunksResult> {
   const currentHash = hashContent(content)
   const contentHash = opts?.contentHash ?? currentHash
+  const projectRoot = opts?.projectRoot
   // Compat: tree-sitter edit path stays out of scope; hash memo is canonical.
   void opts?.previousTree
   // Incremental fast path: no fresh parse() when the hash is unchanged and
   // the caller hands back the previous chunks for this path.
-  if (opts?.previousChunks && opts.contentHash !== undefined && opts.contentHash === currentHash) {
+  if (
+    opts?.previousChunks &&
+    opts.contentHash !== undefined &&
+    opts.contentHash === currentHash
+  ) {
     const cached = opts.previousChunks
     // Rename/move lineage: remap stable-slot ids when the caller hands back
     // chunks extracted under a previous path. Same-path reuse keeps identity.
     const needsRemap =
-      cached.length > 0 && cached[0]?.path !== undefined && cached[0]?.path !== filePath
-    const chunksForPath = needsRemap ? remapChunksForPath(cached, filePath) : cached
-    chunkMemo.set(filePath, { contentHash: currentHash, chunks: chunksForPath })
+      cached.length > 0 &&
+      cached[0]?.path !== undefined &&
+      cached[0]?.path !== filePath
+    const chunksForPath = needsRemap
+      ? remapChunksForPath(cached, filePath)
+      : cached
+    memoSet(projectRoot, filePath, {
+      contentHash: currentHash,
+      chunks: chunksForPath,
+    })
     return {
       chunks: chunksForPath,
       diagnostics: [],
@@ -657,7 +767,7 @@ export async function extractCodeChunksDetailed(
       freshChunks: 0,
     }
   }
-  const memo = chunkMemo.get(filePath)
+  const memo = chunkMemo.get(memoKey(projectRoot, filePath))
   if (memo && memo.contentHash === currentHash) {
     return {
       chunks: memo.chunks,
@@ -669,9 +779,17 @@ export async function extractCodeChunksDetailed(
   // Rename/move alias lineage: reuse the memo entry stored under the previous
   // path (explicit `previousPath` or a registered alias) when the content
   // hash is unchanged. Body-edit stable ID behavior is unchanged.
-  const aliasHit = findAliasMemoChunks(filePath, opts?.previousPath, currentHash)
+  const aliasHit = findAliasMemoChunks(
+    filePath,
+    opts?.previousPath,
+    currentHash,
+    projectRoot,
+  )
   if (aliasHit) {
-    chunkMemo.set(filePath, { contentHash: currentHash, chunks: aliasHit })
+    memoSet(projectRoot, filePath, {
+      contentHash: currentHash,
+      chunks: aliasHit,
+    })
     return {
       chunks: aliasHit,
       diagnostics: [],
@@ -681,6 +799,10 @@ export async function extractCodeChunksDetailed(
   }
   const structureDiagnostics: StructureDiagnostic[] = []
   const { chunks } = await buildChunks(content, filePath, structureDiagnostics)
+  // Parse/language failure marker: the synthetic 'no definitions' diagnostic
+  // below describes a valid zero-chunk result, not an extraction failure, so
+  // it must not block memoization.
+  const extractionFailed = structureDiagnostics.length > 0
   const diagnostics: ChunkDiagnostic[] = structureDiagnostics.map((d) => ({
     filePath: d.filePath,
     stage: d.stage === 'language' ? ('language' as const) : ('parse' as const),
@@ -688,17 +810,27 @@ export async function extractCodeChunksDetailed(
   }))
   // Surface a diagnostic instead of a silent [] when nothing was produced
   // because the language is unsupported or the parse failed.
-  if (chunks.length === 0 && diagnostics.length === 0 && content.trim().length > 0) {
+  if (
+    chunks.length === 0 &&
+    diagnostics.length === 0 &&
+    content.trim().length > 0
+  ) {
     diagnostics.push({
       filePath,
-      stage: hasLanguageConfiguration(filePath) ? ('parse' as const) : ('language' as const),
+      stage: hasLanguageConfiguration(filePath)
+        ? ('parse' as const)
+        : ('language' as const),
       message: hasLanguageConfiguration(filePath)
         ? `No definitions extracted for ${filePath}`
         : `No tree-sitter language configuration available for ${filePath}`,
     })
   }
-  if (chunks.length > 0 || content.length === 0) {
-    chunkMemo.set(filePath, { contentHash: currentHash, chunks })
+  // Memoize zero-chunk non-empty files too (reliability finding
+  // zero-chunk-files-reparse-every-call) — but only when the extraction did
+  // not fail: a parse/language failure must keep retrying on the next call,
+  // since the reuse path treats a cached [] as a valid final result.
+  if (chunks.length > 0 || content.length === 0 || !extractionFailed) {
+    memoSet(projectRoot, filePath, { contentHash: currentHash, chunks })
   }
   void contentHash
   return {

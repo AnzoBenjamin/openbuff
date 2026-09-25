@@ -81,13 +81,29 @@ function failedJudgingResult(error: string): JudgingResult {
 export function summarizeAgentRuns(agentData: AgentEvalResults): {
   validRuns: EvalRun[]
   runsExcludingFailures: EvalRun[]
+  measuredRuns: EvalRun[]
 } {
   const validRuns = agentData.runs.filter((run) => !run.error)
+  const isSyntheticZero = (run: EvalRun): boolean =>
+    run.judging.scoringStatus === 'all_judges_failed' ||
+    // Legacy runs (pre-scoringStatus judging bodies) carry only the top-level
+    // mirror field; recognize both shapes so they are never counted as a
+    // measured zero. The optional top-level field may be absent on fresh run
+    // objects, which is why this is a property check rather than a truthy
+    // read — `run.scoringStatus` on a missing key is undefined, not false.
+    (run.scoringStatus ??
+      (Object.prototype.hasOwnProperty.call(run, 'scoringStatus')
+        ? run.scoringStatus
+        : undefined)) === 'all_judges_failed'
   return {
     validRuns,
-    runsExcludingFailures: validRuns.filter(
-      (run) => run.judging.overallScore > 1.0,
-    ),
+    // Kept as an alias of validRuns to preserve the declared shape. The old
+    // overallScore > 1.0 magic threshold here silently discarded genuine low
+    // measured scores (e.g. 0.5-1.0) while still counting synthetic zeros.
+    runsExcludingFailures: validRuns,
+    // M5-T7-R2: synthetic all-zero runs (scoringStatus 'all_judges_failed' —
+    // documented as NOT a measured 0/10) must never enter measured averages.
+    measuredRuns: validRuns.filter((run) => !isSyntheticZero(run)),
   }
 }
 
@@ -283,8 +299,12 @@ export async function runTask(options: {
       const traceFilename = `${index + 1}-${safeTaskId}-${safeAgentId}-${safeCommitShort}.json`
       const tracePath = path.join(logsDir, traceFilename)
 
-      // Store judging result and trace for combined output later
-      commitTraces.push({
+      // Store judging result and trace for combined output later. Bind the
+      // entry to a local const: writing commitTraces[commitTraces.length - 1]
+      // read from a shared array mutated by concurrent agent callbacks, so any
+      // await inserted between push and write could serialize ANOTHER agent's
+      // trace under this agent's filename.
+      const traceEntry: AgentTraceData = {
         agentId,
         commitSha: commit.sha,
         prompt: commit.prompt,
@@ -301,7 +321,8 @@ export async function runTask(options: {
         idiomTraceability,
         thinkerHarvest,
         proposalDryRun,
-      })
+      }
+      commitTraces.push(traceEntry)
 
       // Save judge traces to separate files if saveTraces is enabled
       if (saveTraces) {
@@ -321,10 +342,7 @@ export async function runTask(options: {
         )
       }
 
-      fs.writeFileSync(
-        tracePath,
-        JSON.stringify(commitTraces[commitTraces.length - 1], null, 2),
-      )
+      fs.writeFileSync(tracePath, JSON.stringify(traceEntry, null, 2))
 
       return { agentId, evalRun }
     } catch (error) {
@@ -343,7 +361,17 @@ export async function runTask(options: {
         durationMs: 0,
         error: message,
       }
-      commitTraces.push({
+      // M5-T7: crash runs get a trace artifact too — formatTaskResults prints
+      // a traceFilePath for them, so the file must exist. Bind the entry to a
+      // local const for the same concurrency reason as the success path.
+      const safeTaskId = commit.id.replace(/[^a-zA-Z0-9-]/g, '_')
+      const safeAgentId = agentId.replace(/[^a-zA-Z0-9-]/g, '_')
+      const safeCommitShort = commit.sha.slice(0, 7)
+      const tracePath = path.join(
+        logsDir,
+        `${index + 1}-${safeTaskId}-${safeAgentId}-${safeCommitShort}.json`,
+      )
+      const traceEntry: AgentTraceData = {
         agentId,
         commitSha: commit.sha,
         prompt: commit.prompt,
@@ -354,7 +382,9 @@ export async function runTask(options: {
         durationMs: 0,
         error: message,
         timestamp: new Date().toISOString(),
-      })
+      }
+      commitTraces.push(traceEntry)
+      fs.writeFileSync(tracePath, JSON.stringify(traceEntry, null, 2))
       return { agentId, evalRun }
     }
   })
@@ -427,6 +457,38 @@ export const BinInstallSchema = z.object({
   name: z.string().min(1).max(200),
   installScript: z.string().min(1).max(2000),
   binPath: z.string().min(1).max(500),
+})
+
+// M5-T7: eval data files are untrusted input (they drive repo clones, install
+// scripts, and shell-adjacent flows), so they must be schema-validated at load
+// time instead of relying on TypeScript's compile-time-only guarantee over a
+// bare JSON.parse cast. The schema pins the fields the runner actually reads;
+// it is intentionally loose so optional config keys (env, cacheRecallEval,
+// binInstalls, ...) survive validation unchanged.
+const FileDiffSchema = z.object({
+  path: z.string().min(1),
+  status: z.enum(['modified', 'added', 'deleted', 'renamed']),
+  oldPath: z.string().optional(),
+  diff: z.string(),
+})
+
+export const EvalCommitV2Schema = z.looseObject({
+  id: z.string().min(1),
+  sha: z.string().min(1),
+  parentSha: z.string(),
+  spec: z.string(),
+  prompt: z.string(),
+  supplementalFiles: z.array(z.string()),
+  fileDiffs: z.array(FileDiffSchema),
+})
+
+export const EvalDataV2Schema = z.looseObject({
+  repoUrl: z.string().min(1),
+  // generationDate is runner-irrelevant metadata: validated as a string when
+  // present but never required, so eval files that predate the field still
+  // load (the runner never reads it).
+  generationDate: z.string().optional(),
+  evalCommits: z.array(EvalCommitV2Schema),
 })
 
 // Minimal allowlist env for the untrusted install process: PATH + HOME keep
@@ -624,9 +686,28 @@ export async function runBuffBench(options: {
   const loadedEvalFiles: { path: string; data: EvalDataV2 }[] = []
 
   for (const evalDataPath of evalDataPaths) {
-    const evalData: EvalDataV2 = JSON.parse(
-      fs.readFileSync(evalDataPath, 'utf-8'),
-    )
+    const raw = JSON.parse(fs.readFileSync(evalDataPath, 'utf-8')) as unknown
+    const parsed = EvalDataV2Schema.safeParse(raw)
+    if (!parsed.success) {
+      // Fail before installBinaries runs: aggregate every issue into one
+      // error so a version-drifted or malformed file names all of its
+      // problems instead of throwing a raw 'Unexpected token' or failing
+      // deep inside runTask.
+      const issues = parsed.error.issues
+        .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+        .join('; ')
+      throw new Error(`Invalid eval data file ${evalDataPath}: ${issues}`)
+    }
+    // Build the typed value instead of casting: the loose schema validates
+    // the fields the runner reads but deliberately does not require
+    // EvalDataV2's generationDate metadata, so a direct `as EvalDataV2` cast
+    // is unsound (TS2352). Spreading the validated object keeps every
+    // optional config key (env, binInstalls, finalCheckCommands, ...) that
+    // survived validation; generationDate passes through when present.
+    const evalData: EvalDataV2 = {
+      ...parsed.data,
+      generationDate: parsed.data.generationDate ?? '',
+    }
     loadedEvalFiles.push({ path: evalDataPath, data: evalData })
 
     for (const commit of evalData.evalCommits) {
@@ -778,21 +859,23 @@ export async function runBuffBench(options: {
   }
 
   for (const agentData of Object.values(results)) {
-    const { validRuns, runsExcludingFailures } = summarizeAgentRuns(agentData)
+    const { validRuns, measuredRuns } = summarizeAgentRuns(agentData)
 
+    // M5-T7-R2: averageScore is a measured-quality metric. Synthetic all-zero
+    // runs (all_judges_failed) are excluded so a judge outage never reads as
+    // a true zero.
     agentData.averageScore =
+      measuredRuns.length > 0
+        ? measuredRuns.reduce((sum, r) => sum + r.judging.overallScore, 0) /
+          measuredRuns.length
+        : 0
+
+    // Average over valid (non-agent-error) runs. The old ">1.0 score" trim is
+    // gone: genuine low measured scores are real data, not failures.
+    agentData.averageScoreExcludingFailures =
       validRuns.length > 0
         ? validRuns.reduce((sum, r) => sum + r.judging.overallScore, 0) /
           validRuns.length
-        : 0
-
-    // Calculate average excluding huge failures (scores ≤1.0)
-    agentData.averageScoreExcludingFailures =
-      runsExcludingFailures.length > 0
-        ? runsExcludingFailures.reduce(
-            (sum, r) => sum + r.judging.overallScore,
-            0,
-          ) / runsExcludingFailures.length
         : 0
 
     const idiomScoredRuns = validRuns.filter(
@@ -817,8 +900,6 @@ export async function runBuffBench(options: {
         ? validRuns.reduce((sum, r) => sum + r.durationMs, 0) / validRuns.length
         : 0
   }
-
-  const logFiles = fs.readdirSync(logsDir)
 
   const metaAnalysis = disableAnalysis
     ? undefined
@@ -856,6 +937,12 @@ export async function runBuffBench(options: {
     }
   }
 
+  // M5-T7: snapshot the artifact listing immediately before writing
+  // FINAL_RESULTS.json. The previous snapshot ran before meta-analysis and
+  // before FINAL_RESULTS.json itself existed, so metadata.files silently
+  // omitted artifacts the run actually produced.
+  const logFiles = [...fs.readdirSync(logsDir), 'FINAL_RESULTS.json']
+
   const finalResults = {
     metadata: {
       timestamp: new Date().toISOString(),
@@ -873,7 +960,10 @@ export async function runBuffBench(options: {
       files: logFiles,
     },
     metaAnalysis,
-    ...results,
+    // M5-T7: agent results are namespaced under `agents` so an agent id of
+    // 'metadata' or 'metaAnalysis' can no longer clobber the reserved keys
+    // via top-level key collision in FINAL_RESULTS.json.
+    agents: { ...results },
   }
 
   const finalResultsPath = path.join(logsDir, 'FINAL_RESULTS.json')
@@ -892,12 +982,12 @@ export async function runBuffBench(options: {
   console.log(`Traces saved to ${logsDir}`)
   console.log('\n=== Summary ===')
   for (const [agentId, data] of Object.entries(results)) {
-    const { validRuns, runsExcludingFailures } = summarizeAgentRuns(data)
+    const { validRuns, measuredRuns } = summarizeAgentRuns(data)
     const errorCount = data.runs.length - validRuns.length
     console.log(`\n${agentId}:`)
     console.log(`  Average Score: ${data.averageScore.toFixed(2)}/10`)
     console.log(
-      `  Average Score (excluding failures ≤1.0): ${data.averageScoreExcludingFailures.toFixed(2)}/10 (${runsExcludingFailures.length}/${validRuns.length} runs)`,
+      `  Average Score (measured, excluding failed judges): ${data.averageScoreExcludingFailures.toFixed(2)}/10 (${measuredRuns.length}/${validRuns.length} runs)`,
     )
     if (typeof data.averageIdiomScore === 'number') {
       console.log(

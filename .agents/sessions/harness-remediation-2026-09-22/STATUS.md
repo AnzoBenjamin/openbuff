@@ -463,3 +463,19 @@ Plan mechanics noted for the flip chain (M1-T7→M2-T4→M3-T3): the plan tool r
 
 Push of 86aff520c + this wave deferred until after this gate passes over the 3 wired files (pre-push CI-local gate re-runs).
 
+
+<!-- update_plan_status:appended -->
+## Wave A+B sweep execution + validation green — 2026-09-25 — 2026-09-25T15:41:04.937Z
+
+Wave A+B of the remaining M4 sweeps executed (user asked: continue repairs, remove budgets/watchdogs, explain payload-truncation fixes):
+
+VERIFICATIONS (disposition artifacts persisted under findings/): resolutions-M4-S2-spawn/jobs/cli.md (80 findings: ALREADY-RESOLVED 26, ACCEPTED 11, PARTIALLY-RESOLVED 1, ESCALATED 44 with exact fix plans; 3 audit claims superseded/stale — queue watchdog removed, paste-handler memoized, trackEvent no-op). resolutions-M4-S3.md (61 findings: ALREADY-RESOLVED 9 incl. M1-T7/M2-T5/M3-T1/M3-T4 evidence, ESCALATED 52 with per-finding plans; 5 HIGHs enumerated: C1 ancestor route-override precedence needs compat decision, C2 run_file_change_hooks approval bypass, C3 project apiKeyEnv trust gate, T1 lexical /usr/bin prefix skip defeats containment, T2 owned-temp extname-only refusal). resolutions-M4-S4.md (memory-context + common-contracts). resolutions-M4-S6.md + -tooling-ci-docs.md (88 findings: ALREADY-RESOLVED 21, ACCEPTED 5, ESCALATED 24 — 13 in-scope, 11 out-of-scope incl. all packages/internal). resolutions-M5-T7.md (21 findings).
+
+EDITS APPLIED: (M5-T7 evals) judge-model config in constants.ts + judge.ts, true-median/scoringStatus-based measuredRuns in run-buffbench.ts summarizeAgentRuns + averages, word-boundary classifyCommand + idiomScore clamp in deterministic-signals.ts, classifyBreadth + peakConcurrency fixes in plan-sharding-signals.ts, new judge-calibration.ts + gold-set fixture + calibration/adversarial tests. (M4-S6 indexer/code-map) parse.ts path-traversal guard + export buildTokenCallers, query.ts persisted-adjacency coverage validation + content-keyed fileTypeSetCache + IDF cache, chunks.ts outgoing-ambiguity rule, semantic.ts batch-drop, file-walker lstat re-verify, index-store compact serialization + default-off opt-in git-exclude, index-manager embedder rewire + semantic-tier wipe, grammar-wasm-repair byte cap/backoff/rehash. (Repair round, orchestrator-applied after 2 failed editor dispatches) main-nightly.ts now destructures results.agents (rest-spread had re-collected the key); makeJudgeResult/makeEvalRun fixtures forward idiomScore/scoringStatus overrides; wasm-repair terminal `return await reportMissing()` (TS2366); parse.ts global-fallback REVERTED to same-language-only — the indexer's pre-existing pinned call-navigation contract ('does not create cross-language raw-name call edges') contradicts the artifact's fallback plan; stale comment corrected, code-map test rewritten to pin the same-language-only rule + positive single-definition case; git-exclude test made hermetic with setWriteGitExclude(false) reset (module-global cross-file bleed class).
+
+VALIDATION (serialized): evals typecheck clean + buffbench/__tests__ 267 pass/0 fail; code-map typecheck clean + 150/0; indexer typecheck clean + 262/0.
+
+BUDGET/WATCHDOG STATUS (user question): already unlimited-by-default from the 2026-09-23 wave (gate-repair-budgets.ts null=unlimited, no-verdict retries Infinity, base2 MAX_*_NO_VERDICT_RETRIES Infinity); nothing re-added. Payload-truncation status: M0-T3 set_output chunking + durable-write fallback shipped; common/src/tools/params/utils.ts bounded truncation-recovery shipped; agent-side rule = split large artifacts across files, keep single payloads well under transport band.
+
+REMAINING: 44 S2 + 52 S3 + S4 + 13 in-scope S6 ESCALATED fixes queued for editor waves; S3-HIGH editor (C2/C3/T1/T2) + S6-scripts editor both died on transient network errors and are re-queued; M4-S5 blocked on S5-T7 (now implemented, needs certification); then M5 lanes and the M6 serial chain.
+

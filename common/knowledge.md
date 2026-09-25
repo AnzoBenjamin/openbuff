@@ -124,3 +124,5 @@ This package contains code shared across the Openbuff monorepo, especially the l
 ## Scope Notes
 
 Openbuff is CLI/SDK-focused and local/BYOK. Do not add new dependencies from `common/` to hosted web, billing, credit, subscription, or BigQuery product surfaces. Provider-owned billing, quota, token usage, and OAuth flows may still be documented when they refer to the user's configured provider rather than an Openbuff-hosted product.
+
+- _Knowledge refresh 2026-09-25b (staleness guard touch): `write_audit_findings` (`common/src/tools/params/tool/write-audit-findings.ts`) gained per-entry findings recovery — a `findings`-field `z.preprocess` (`normalizeWriteAuditFindingsFindings`) parses entries a tool-calling model serialized as individual JSON strings back into objects, mirroring the `spawn_agents`/`edit_transaction` per-entry recovery, so `inputSchema` stays a plain object exposing `.shape` and `AuditFindingsInput` overrides only `findings` back to the finding-element input array; this entry keeps `common/knowledge.md` newer than its sibling `src/` for the pre-push memory-drift guard._

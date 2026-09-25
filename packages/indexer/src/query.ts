@@ -520,7 +520,8 @@ function scoreFile(
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
   const chunkSnippets = topChunks.map(
-    (chunk) => `${chunk.chunkId} ${chunk.qualifiedName} L${chunk.startLine}-${chunk.endLine}`,
+    (chunk) =>
+      `${chunk.chunkId} ${chunk.qualifiedName} L${chunk.startLine}-${chunk.endLine}`,
   )
 
   const commandBoost = commandIntent ? commandDiscoveryBoost(file, tokens) : 0
@@ -559,8 +560,16 @@ function scoreFile(
  * Smoothed inverse document frequency per query token over the indexed corpus.
  * A token appearing in few files gets a high weight; one appearing nearly
  * everywhere gets a weight near 1. Only query tokens are scored, so this is
- * O(files × queryTokens).
+ * O(files × queryTokens) on a cache miss.
+ *
+ * The whole-corpus fallback (used when a token has no posting) is expensive,
+ * so the computed idf is cached per (index, token): a MetadataIndex is
+ * immutable once built and IndexManager swaps in a fresh object per rebuild,
+ * so a WeakMap keyed on the index object cannot serve stale values.
  */
+const IDF_CACHE_LIMIT = 512
+const idfCache = new WeakMap<MetadataIndex, Map<string, number>>()
+
 function computeIdfForTokens(
   index: MetadataIndex,
   tokens: string[],
@@ -572,7 +581,17 @@ function computeIdfForTokens(
     return idf
   }
 
+  let cache = idfCache.get(index)
+  if (!cache) {
+    cache = new Map()
+    idfCache.set(index, cache)
+  }
   for (const token of tokens) {
+    const cached = cache.get(token)
+    if (cached !== undefined) {
+      idf.set(token, cached)
+      continue
+    }
     let df = getPostingDocumentFrequency(index, token)
     if (df === undefined) {
       df = 0
@@ -582,7 +601,13 @@ function computeIdfForTokens(
     }
     // log((N+1)/(df+1)) + 1 — always >= 1 (the +1 floor keeps every match
     // contributing at least its base weight); rare tokens approach log(N)+1.
-    idf.set(token, Math.log((total + 1) / (df + 1)) + 1)
+    const value = Math.log((total + 1) / (df + 1)) + 1
+    if (cache.size >= IDF_CACHE_LIMIT) {
+      const oldest = cache.keys().next()
+      if (!oldest.done) cache.delete(oldest.value)
+    }
+    cache.set(token, value)
+    idf.set(token, value)
   }
   return idf
 }
@@ -908,7 +933,7 @@ function buildAdjacency(
   persisted?: Record<string, number[]>,
 ): GraphAdjacency {
   const adjacency: GraphAdjacency = new Map()
-  if (persisted) {
+  if (persisted && isPersistedAdjacencyCovered(edges, persisted)) {
     for (const [nodeId, edgeIndexes] of Object.entries(persisted)) {
       const nodeEdges = edgeIndexes
         .map((edgeIndex) => edges[edgeIndex])
@@ -929,9 +954,64 @@ function buildAdjacency(
   return adjacency
 }
 
-// Cache the normalized Set per fileTypes array reference to avoid
-// O(files x fileTypes) allocations when called inside scoring loops.
-const fileTypeSetCache = new WeakMap<string[], Set<string>>()
+/**
+ * Coverage validation for a persisted adjacency accelerator (reliability
+ * finding persisted-adjacency-trusted-without-coverage-check): the persisted
+ * map must list, for every node touched by an edge, exactly the edge indexes
+ * incident to that node — the invariant buildIndexQueryData writes. A
+ * partial/corrupt map would silently drop graph edges for unlisted nodes, so
+ * any mismatch makes the caller rebuild the adjacency from graph.edges. Runs
+ * once per index (the result is cached by adjacencyCache) and is O(edges).
+ */
+function isPersistedAdjacencyCovered(
+  edges: IndexEdge[],
+  persisted: Record<string, number[]>,
+): boolean {
+  const incident = new Map<string, Set<number>>()
+  edges.forEach((edge, edgeIndex) => {
+    let fromIndexes = incident.get(edge.from)
+    if (!fromIndexes) {
+      fromIndexes = new Set<number>()
+      incident.set(edge.from, fromIndexes)
+    }
+    fromIndexes.add(edgeIndex)
+    if (edge.to === edge.from) return
+    let toIndexes = incident.get(edge.to)
+    if (!toIndexes) {
+      toIndexes = new Set<number>()
+      incident.set(edge.to, toIndexes)
+    }
+    toIndexes.add(edgeIndex)
+  })
+  if (Object.keys(persisted).length !== incident.size) return false
+  for (const [nodeId, expectedIndexes] of incident) {
+    const listed = persisted[nodeId]
+    if (!Array.isArray(listed) || listed.length !== expectedIndexes.size) {
+      return false
+    }
+    for (const edgeIndex of listed) {
+      if (
+        typeof edgeIndex !== 'number' ||
+        !Number.isInteger(edgeIndex) ||
+        edgeIndex < 0 ||
+        edgeIndex >= edges.length ||
+        !expectedIndexes.has(edgeIndex)
+      ) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+// Cache the normalized Set per distinct fileTypes value so scoring loops do
+// not pay O(files x fileTypes) allocations per query. Keyed by the joined
+// array contents (not the caller's array reference) so in-place mutation of
+// options.fileTypes between queries cannot silently serve a stale Set.
+// Bounded FIFO: queries reuse a handful of distinct filter sets, so the map
+// stays tiny in practice.
+const FILE_TYPE_SET_CACHE_LIMIT = 128
+const fileTypeSetCache = new Map<string, Set<string>>()
 
 function matchesFileType(
   file: IndexedFile | undefined,
@@ -939,10 +1019,15 @@ function matchesFileType(
 ): boolean {
   if (!file) return false
   if (!fileTypes || fileTypes.length === 0) return true
-  let normalizedFileTypes = fileTypeSetCache.get(fileTypes)
+  const cacheKey = fileTypes.join('\0')
+  let normalizedFileTypes = fileTypeSetCache.get(cacheKey)
   if (!normalizedFileTypes) {
     normalizedFileTypes = new Set(fileTypes.map(normalizeFileType))
-    fileTypeSetCache.set(fileTypes, normalizedFileTypes)
+    if (fileTypeSetCache.size >= FILE_TYPE_SET_CACHE_LIMIT) {
+      const oldest = fileTypeSetCache.keys().next()
+      if (!oldest.done) fileTypeSetCache.delete(oldest.value)
+    }
+    fileTypeSetCache.set(cacheKey, normalizedFileTypes)
   }
   return normalizedFileTypes.has(normalizeFileType(file.ext))
 }

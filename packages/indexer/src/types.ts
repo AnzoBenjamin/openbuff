@@ -151,6 +151,12 @@ export interface IndexStatus {
   diagnostics: ParseDiagnostic[]
   coverage?: IndexCoverage
   lastBuildError?: IndexBuildError
+  /**
+   * Files whose embedding came back empty/invalid in the last successful
+   * semantic build and were dropped from the vector set (0/absent = full
+   * semantic recall for the indexed set).
+   */
+  semanticSkippedFiles?: number
   message: string
 }
 

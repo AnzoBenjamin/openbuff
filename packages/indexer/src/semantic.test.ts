@@ -227,4 +227,56 @@ describe('semantic engine', () => {
     // so the ratio is exact).
     expect(c2).toBeCloseTo(c1 * 2)
   })
+
+  test('fails the batch loudly when the embedder returns the wrong count', async () => {
+    // Regression for the M4-S6 silent-drop finding: a short (or over-long)
+    // batch is a provider contract violation, not a per-file gap — it must
+    // throw instead of silently leaving semantic recall holes.
+    const files = [file('a.ts', ['alpha']), file('b.ts', ['beta'])]
+    const shortBatch: EmbedFn = async (texts) =>
+      texts.slice(0, 1).map(() => [1, 0])
+    await expect(buildFileVectors(files, shortBatch)).rejects.toThrow(
+      'batch of 2',
+    )
+  })
+
+  test('records skipped paths when the embedder returns empty vectors', async () => {
+    const files = [file('good.ts', ['alpha']), file('empty.ts', ['beta'])]
+    const emptyForOne: EmbedFn = async (texts) =>
+      texts.map((text) => (text.includes('empty.ts') ? [] : [1, 0]))
+    const diagnostics = { skippedPaths: [] as string[], skippedCount: 0 }
+
+    const vectors = await buildFileVectors(
+      files,
+      emptyForOne,
+      64,
+      [],
+      diagnostics,
+    )
+
+    expect(vectors.map((entry) => entry.path)).toEqual(['good.ts'])
+    expect(diagnostics.skippedCount).toBe(1)
+    expect(diagnostics.skippedPaths).toEqual(['empty.ts'])
+  })
+
+  test('drops dimension-inconsistent vectors from the batch and records them', async () => {
+    const files = [file('normal.ts', ['alpha']), file('odd.ts', ['beta'])]
+    const mixedDimensions: EmbedFn = async (texts) =>
+      texts.map((text) => (text.includes('odd.ts') ? [1] : [1, 0]))
+    const diagnostics = { skippedPaths: [] as string[], skippedCount: 0 }
+
+    const vectors = await buildFileVectors(
+      files,
+      mixedDimensions,
+      64,
+      [],
+      diagnostics,
+    )
+
+    // A divergent vector would silently score 0 against every file in cosine
+    // similarity, so it is dropped and surfaced instead.
+    expect(vectors.map((entry) => entry.path)).toEqual(['normal.ts'])
+    expect(diagnostics.skippedCount).toBe(1)
+    expect(diagnostics.skippedPaths).toEqual(['odd.ts'])
+  })
 })

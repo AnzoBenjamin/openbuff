@@ -106,6 +106,15 @@ export function getPinnedGrammarAssetUrl(wasmFile: string): string | null {
 const MAX_REPAIR_ATTEMPTS = 3
 const ATTEMPT_TIMEOUT_MS = 30_000
 const DEFAULT_RETRY_DELAY_MS = 2_000
+/**
+ * Byte cap enforced while streaming the response body (reliability finding
+ * unbounded-arraybuffer-before-hash): a hijacked asset source must not be
+ * able to force a multi-GB allocation before the sha256 check runs. Pinned
+ * grammar WASM files are far below this bound.
+ */
+const MAX_WASM_DOWNLOAD_BYTES = 20 * 1024 * 1024
+/** Exported for the retry-backoff regression test. */
+export const REPAIR_RETRY_BASE_DELAY_MS = DEFAULT_RETRY_DELAY_MS
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms))
@@ -124,11 +133,87 @@ const releaseBody = async (response: Response): Promise<void> => {
   }
 }
 
+/**
+ * Stream the response body under a hard byte cap instead of buffering an
+ * unbounded arrayBuffer() before hashing (reliability finding
+ * unbounded-arraybuffer-before-hash). Rejects early on a declared
+ * Content-Length above the cap and aborts mid-stream when the running total
+ * exceeds it, so a hostile source cannot force a huge allocation. Returns
+ * null when the body is missing or exceeds the cap.
+ */
+const readBodyWithCap = async (
+  response: Response,
+  capBytes: number,
+): Promise<Uint8Array | null> => {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (
+    response.headers.has('content-length') &&
+    Number.isInteger(declaredLength) &&
+    declaredLength >= 0 &&
+    declaredLength > capBytes
+  ) {
+    await releaseBody(response)
+    return null
+  }
+  const reader = response.body?.getReader()
+  if (!reader) return null
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > capBytes) {
+        await reader.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return null
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
+}
+
+function parseRetryAfterSeconds(headerValue: string | null): number | null {
+  if (headerValue === null) return null
+  const seconds = Number.parseInt(headerValue, 10)
+  return Number.isInteger(seconds) && seconds >= 0 && seconds <= 3600
+    ? seconds
+    : null
+}
+
+/**
+ * Delay before the next repair attempt: honor Retry-After when the server
+ * sent one (seconds), otherwise back off exponentially with jitter so
+ * parallel repair attempts do not hammer a rate-limited CDN in lockstep
+ * (reliability finding wasm-repair-fixed-retry-delay).
+ */
+export function computeRetryDelayMs(
+  baseDelayMs: number,
+  attempt: number,
+  retryAfterSeconds: number | null,
+): number {
+  if (retryAfterSeconds !== null) return retryAfterSeconds * 1000
+  const exponential = baseDelayMs * 2 ** (attempt - 1)
+  const jitter = 0.5 + Math.random() * 0.5
+  return Math.round(exponential * jitter)
+}
+
 export async function repairGrammarWasm(params: {
   wasmFile: string
   targetDir: string
   fetchImpl?: typeof fetch
   retryDelayMs?: number
+  /** Test seam: overrides the module download byte cap. */
+  maxBodyBytes?: number
   onFailure?: (reason: string) => void
 }): Promise<string | null> {
   const fail = (reason: string): null => {
@@ -148,8 +233,10 @@ export async function repairGrammarWasm(params: {
 
   const fetchFn = params.fetchImpl ?? fetch
   const retryDelayMs = params.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
+  const maxBodyBytes = params.maxBodyBytes ?? MAX_WASM_DOWNLOAD_BYTES
   let lastErrorMessage: string | null = null
   let lastHttpStatus: number | null = null
+  let retryAfterSeconds: number | null = null
   let verifiedBytes: Uint8Array | null = null
 
   // Each attempt re-downloads, so the hash always checks fresh bytes. Only
@@ -162,7 +249,14 @@ export async function repairGrammarWasm(params: {
     try {
       const response = await fetchFn(sourceUrl, { signal: controller.signal })
       if (response.ok) {
-        const bytes = new Uint8Array(await response.arrayBuffer())
+        const bytes = await readBodyWithCap(response, maxBodyBytes)
+        if (bytes === null) {
+          // A missing or oversized body is deterministic corruption of the
+          // asset source: like a hash mismatch, retrying cannot fix it.
+          return fail(
+            `downloaded body missing or exceeded the ${maxBodyBytes}-byte cap`,
+          )
+        }
         const actualHash = createHash('sha256').update(bytes).digest('hex')
         if (actualHash !== asset.sha256) {
           // Retry cannot fix wrong bytes: fail immediately with a
@@ -178,6 +272,9 @@ export async function repairGrammarWasm(params: {
         // earlier fetch throw.
         lastHttpStatus = response.status
         lastErrorMessage = null
+        retryAfterSeconds = parseRetryAfterSeconds(
+          response.headers.get('retry-after'),
+        )
         await releaseBody(response)
       } else {
         await releaseBody(response)
@@ -192,7 +289,7 @@ export async function repairGrammarWasm(params: {
     }
     // Delay only between attempts to keep the worst-case latency bounded.
     if (attempt < MAX_REPAIR_ATTEMPTS) {
-      await sleep(retryDelayMs)
+      await sleep(computeRetryDelayMs(retryDelayMs, attempt, retryAfterSeconds))
     }
   }
 
@@ -224,6 +321,12 @@ export async function resolveGrammarWasmSource(params: {
   candidates: readonly string[]
   repairDir: string
   repairImpl?: typeof repairGrammarWasm
+  /**
+   * Test seam: force the post-repair pin re-verification even when a
+   * repairImpl stand-in produced the bytes (the production repair output is
+   * always re-verified).
+   */
+  forceRepairedBytesVerification?: boolean
 }): Promise<string> {
   const asset = PINNED_GRAMMAR_ASSETS[params.wasmFile]
   if (!asset) {
@@ -246,6 +349,11 @@ export async function resolveGrammarWasmSource(params: {
   // Capture the last repair failure reason so the final error below can
   // state WHY checksum-pinned repair failed.
   let failureReason: string | undefined
+  const reportMissing = async (): Promise<never> => {
+    throw new Error(
+      `Missing required tree-sitter asset ${params.wasmFile}; searched ${params.candidates.join(', ')} and checksum-pinned repair failed${failureReason ? `: ${failureReason}` : ''}`,
+    )
+  }
   const repaired = await (params.repairImpl ?? repairGrammarWasm)({
     wasmFile: params.wasmFile,
     targetDir: params.repairDir,
@@ -256,13 +364,37 @@ export async function resolveGrammarWasmSource(params: {
   if (repaired) {
     try {
       const stats = await fs.stat(repaired)
-      if (stats.isFile() && stats.size > 0) return repaired
+      if (stats.isFile() && stats.size > 0) {
+        // Re-verify the persisted bytes against the pin before trusting them
+        // (reliability finding repaired-wasm-never-reverified-at-load): the
+        // default repair wrote checksum-verified bytes, but anything could
+        // have touched the path between write and load; re-verifying here
+        // keeps this function's contract that a returned path matches the
+        // pin. A caller-supplied repairImpl stands in for the repair step in
+        // tests and is not required to write pin-matching bytes, so only the
+        // production repair output is re-verified.
+        if (
+          params.repairImpl === undefined ||
+          params.forceRepairedBytesVerification === true
+        ) {
+          const actualHash = createHash('sha256')
+            .update(await fs.readFile(repaired))
+            .digest('hex')
+          if (actualHash !== asset.sha256) {
+            failureReason =
+              'repaired file no longer matches the pinned checksum'
+            return await reportMissing()
+          }
+        }
+        return repaired
+      }
     } catch {
       // Fall through to the deterministic missing-asset error below.
     }
   }
 
-  throw new Error(
-    `Missing required tree-sitter asset ${params.wasmFile}; searched ${params.candidates.join(', ')} and checksum-pinned repair failed${failureReason ? `: ${failureReason}` : ''}`,
-  )
+  // return-await: reportMissing returns Promise<never>, but only an explicit
+  // return/throw satisfies the control-flow analyzer for this Promise<string>
+  // signature (TS2366) while preserving the thrown deterministic error.
+  return await reportMissing()
 }

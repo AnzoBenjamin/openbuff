@@ -1,6 +1,6 @@
 import z from 'zod/v4'
 
-import { jsonToolResultSchema } from '../utils'
+import { jsonToolResultSchema, parseJsonBounded } from '../utils'
 import { auditCoverageDomainSchema, auditCoverageDomains } from './audit-intelligence'
 
 import type { $ToolParams } from '../../constants'
@@ -190,7 +190,38 @@ function uniqueEntries(field: string) {
   return { message: `List each coverage.${field} entry at most once` }
 }
 
-const inputSchema = z
+/**
+ * Recovers findings entries a tool-calling model serialized as individual JSON
+ * strings inside the array (e.g. `findings: ["{...}", "{...}"]`). Mirrors the
+ * per-entry recovery normalizeSpawnAgentList already does for spawn_agents
+ * agents[] and normalizeTransactionEditList does for edit_transaction edits[]:
+ * the alias layer's coerceToArray recovers a stringified WHOLE array and
+ * comma-split fragments, but a well-formed array whose ELEMENTS are each a
+ * stringified object still reaches Zod as `findings[i]: expected object,
+ * received string`. Only string entries that parse to a plain object are
+ * replaced; anything else passes through untouched so genuinely malformed
+ * entries still fail validation (never silently dropped or guessed).
+ */
+function normalizeWriteAuditFindingsFindings(value: unknown): unknown {
+  if (!Array.isArray(value)) return value
+  let repaired = false
+  const findings = value.map((entry) => {
+    if (typeof entry !== 'string') return entry
+    const parsed = parseJsonBounded(entry)
+    if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed)
+    ) {
+      repaired = true
+      return parsed
+    }
+    return entry
+  })
+  return repaired ? findings : value
+}
+
+const auditFindingsObjectSchema = z
   .object({
     sessionSlug: auditIdentifierSchema.describe(
       `Existing durable audit session slug under .agents/sessions/. ${auditIdentifierRule}`,
@@ -206,8 +237,10 @@ const inputSchema = z
         `Exact snapshotId returned by inspect_codebase_structure, such as its 64-character sha256 digest. Required for a directly composable structuralReceipt; omitted only for legacy callers. ${auditIdentifierRule} ${snapshotCoverageCompletenessRule}`,
       ),
     findings: z
-      .array(auditFindingSchema)
-      .max(100)
+      .preprocess(
+        normalizeWriteAuditFindingsFindings,
+        z.array(auditFindingSchema).max(100),
+      )
       .describe(findingEntryHygieneRule),
     coverage: z
       .object({
@@ -276,6 +309,15 @@ const inputSchema = z
       }
     }
   })
+
+// Per-entry findings recovery runs as a preprocess on the findings field
+// (before that field's array parse, and after the shared alias layer's
+// whole-array/comma-split recovery, which applyToolInputAliases wraps around
+// this schema). Keeping the recovery on the field rather than wrapping the
+// whole object leaves inputSchema a plain object schema that still exposes
+// `.shape`. providerInputSchema is a separate plain-object surface, so this
+// recovery does not change the wire JSON Schema sent to providers.
+const inputSchema = auditFindingsObjectSchema
 
 /**
  * Wire-facing twin of `inputSchema`: `compileToolDefinitions` derives the wire
@@ -458,4 +500,13 @@ export const writeAuditFindingsParams = {
  * surfaces now agree on exactly what a caller may pass. The normalized parsed
  * result is `z.output<typeof inputSchema>` instead.
  */
-export type AuditFindingsInput = z.input<typeof inputSchema>
+// Per-entry findings recovery is now a preprocess on the findings field, so
+// that field's `z.input` widens to `unknown`. Override just `findings` back to
+// the finding-element input array (the accepted call surface, including the
+// legacy `api-abi` findings[].domain alias) so SDK consumers that read
+// `parsed.data.findings` stay typed; every other field keeps its declared
+// input type, including an omittable `noIssuesFound`.
+export type AuditFindingsInput = Omit<
+  z.input<typeof auditFindingsObjectSchema>,
+  'findings'
+> & { findings: z.input<typeof auditFindingSchema>[] }

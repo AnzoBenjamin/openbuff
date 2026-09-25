@@ -20,6 +20,7 @@ import {
   saveChunkSidecar,
   saveIndex,
   saveSemanticVectors,
+  setWriteGitExclude,
 } from './index-store'
 
 describe('index cache ownership', () => {
@@ -358,13 +359,11 @@ describe('index cache ownership', () => {
     const loaded = await loadSemanticVectors(root, 'model-a')
     expect(loaded.length).toBe(MAX_CARRIED_SEMANTIC_VECTORS + 1)
     // The oldest generation was pruned...
-    expect(loaded.some((entry) => entry.embeddingHash === 'hash-0')).toBe(
-      false,
-    )
+    expect(loaded.some((entry) => entry.embeddingHash === 'hash-0')).toBe(false)
     // ...the current index's vector survives...
-    expect(
-      loaded.some((entry) => entry.embeddingHash === 'hash-current'),
-    ).toBe(true)
+    expect(loaded.some((entry) => entry.embeddingHash === 'hash-current')).toBe(
+      true,
+    )
     // ...and the most recent carried-over hashes are retained.
     expect(
       loaded.some(
@@ -496,7 +495,9 @@ describe('index cache ownership', () => {
       contentHash: 'chunk-hash-a',
     })
     // Deterministic derived document: same index rebuilds the same record.
-    expect(buildChunkSidecarDocument(index).chunks).toEqual(sidecar?.chunks ?? {})
+    expect(buildChunkSidecarDocument(index).chunks).toEqual(
+      sidecar?.chunks ?? {},
+    )
   })
 
   test('treats missing/invalid sidecars as safe misses and round-trips helpers', async () => {
@@ -549,16 +550,23 @@ describe('index cache ownership', () => {
       files: { 'src/a.ts': file },
       graph: { nodes: {}, edges: [] },
     }
-    expect(await saveChunkSidecar(root, buildChunkSidecarDocument(index))).toBe(true)
-    expect((await loadChunkSidecar(root))?.chunks['stable-helper']?.contentHash).toBe(
-      'chunk-hash-helper',
+    expect(await saveChunkSidecar(root, buildChunkSidecarDocument(index))).toBe(
+      true,
     )
+    expect(
+      (await loadChunkSidecar(root))?.chunks['stable-helper']?.contentHash,
+    ).toBe('chunk-hash-helper')
     // A validator-rejected sidecar returns false instead of silently dropping
     // the write, and prior valid content is left intact for the caller to
     // fall back to chunkId/inline chunks.
     const rejected = buildChunkSidecarDocument(index)
     const leakedEntry = { ...rejected.chunks['stable-helper']!, kind: '' }
-    expect(await saveChunkSidecar(root, { ...rejected, chunks: { ...rejected.chunks, 'stable-bad': leakedEntry } })).toBe(false)
+    expect(
+      await saveChunkSidecar(root, {
+        ...rejected,
+        chunks: { ...rejected.chunks, 'stable-bad': leakedEntry },
+      }),
+    ).toBe(false)
     expect((await loadChunkSidecar(root))?.chunks['stable-bad']).toBeUndefined()
   })
 
@@ -624,6 +632,125 @@ describe('index cache ownership', () => {
         .map((v) => v.embeddingHash)
         .sort(),
     ).toEqual(['h1', 'h2'])
+  })
+
+  test('serializes large index artifacts compactly and small ones pretty', async () => {
+    // Regression for the M4-S6 pretty-print finding: big data files must not
+    // pay the ~2x byte/CPU cost of JSON.stringify(value, null, 2).
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-compact-'),
+    )
+    const bigFile = {
+      path: 'src/big.ts',
+      mtime: 1,
+      size: 1,
+      hash: 'hash-big',
+      ext: '.ts',
+      symbols: Array.from({ length: 400 }, (_, i) => `symbol${i}`),
+      imports: [],
+      headings: [],
+      concepts: [],
+    }
+    await saveIndex(
+      {
+        version: '2',
+        projectRoot: root,
+        builtAt: 1,
+        fileCount: 1,
+        files: { 'src/big.ts': bigFile },
+        graph: { nodes: {}, edges: [] },
+      },
+      root,
+    )
+    const rawIndex = await fs.promises.readFile(
+      path.join(getIndexDir(root), 'metadata.json'),
+      'utf8',
+    )
+    // Compact serialization: no pretty-printed indentation remains.
+    expect(rawIndex.includes('\n  "')).toBe(false)
+    // Still valid, still round-trips.
+    expect((await loadIndex(root))?.files['src/big.ts']?.hash).toBe('hash-big')
+
+    // A small document keeps the human-readable pretty format.
+    await saveChunkSidecar(root, {
+      version: CHUNK_SIDECAR_VERSION,
+      snapshotId: 's',
+      builtAt: 1,
+      projectRoot: root,
+      chunks: {},
+    })
+    const rawSidecar = await fs.promises.readFile(
+      path.join(getIndexDir(root), 'chunks.json'),
+      'utf8',
+    )
+    expect(rawSidecar.includes('\n  "')).toBe(true)
+  })
+
+  test('does not write .git/info/exclude by default and honors the per-root opt-in', async () => {
+    // Regression for the M4-S6 git-exclude finding: the unadvertised git
+    // metadata side effect must be opt-in, not opt-out, and the toggle must
+    // be scopeable per project root.
+    // Reset the module-global toggle first: bun runs every test file in one
+    // process, and a sibling suite enabling the toggle would otherwise break
+    // this default-off assertion (same cross-file test-bleed class fixed
+    // across the sdk/cli/agents suites).
+    setWriteGitExclude(false)
+    const rootA = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-gitexclude-a-'),
+    )
+    const rootB = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-gitexclude-b-'),
+    )
+    for (const root of [rootA, rootB]) {
+      await fs.promises.mkdir(path.join(root, '.git', 'info'), {
+        recursive: true,
+      })
+    }
+    const excludePathA = path.join(rootA, '.git', 'info', 'exclude')
+    const excludePathB = path.join(rootB, '.git', 'info', 'exclude')
+    await fs.promises.writeFile(excludePathA, 'original-a\n')
+    await fs.promises.writeFile(excludePathB, 'original-b\n')
+
+    // Default (no opt-in): no write at all, not even a read.
+    await saveIndex(
+      {
+        version: '2',
+        projectRoot: rootA,
+        builtAt: 1,
+        fileCount: 0,
+        files: {},
+        graph: { nodes: {}, edges: [] },
+      },
+      rootA,
+    )
+    expect(await fs.promises.readFile(excludePathA, 'utf8')).toBe(
+      'original-a\n',
+    )
+
+    // Per-root opt-in writes only that root.
+    setWriteGitExclude(true, rootB)
+    try {
+      await saveIndex(
+        {
+          version: '2',
+          projectRoot: rootB,
+          builtAt: 1,
+          fileCount: 0,
+          files: {},
+          graph: { nodes: {}, edges: [] },
+        },
+        rootB,
+      )
+      const contentB = await fs.promises.readFile(excludePathB, 'utf8')
+      expect(contentB).toContain('original-b\n')
+      expect(contentB).toContain('/.codebuff-index/')
+    } finally {
+      setWriteGitExclude(false, rootB)
+    }
+    // rootA stayed untouched throughout.
+    expect(await fs.promises.readFile(excludePathA, 'utf8')).toBe(
+      'original-a\n',
+    )
   })
 })
 
@@ -782,10 +909,7 @@ describe('releaseOwnedLock', () => {
   test('treats an already-reclaimed (missing) lock as released', async () => {
     const lockPath = await makeLockPath('openbuff-release-gone-')
     await expect(
-      releaseOwnedLock(
-        lockPath,
-        '424242:00000000-0000-0000-0000-000000000000',
-      ),
+      releaseOwnedLock(lockPath, '424242:00000000-0000-0000-0000-000000000000'),
     ).resolves.toBeUndefined()
   })
 })

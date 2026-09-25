@@ -24,8 +24,11 @@ async function main() {
   // Print results summary to stdout (email delivery was removed with the hosted
   // backend's loops integration; review the logs or wire a local notifier if
   // automated reporting is needed).
-  const { metadata, metaAnalysis, ...agentResults } = results
-  const summary = formatBuffBenchSummary(agentResults, metadata, metaAnalysis)
+  // runBuffBench namespaces agent results under the `agents` key (M5-T7
+  // key-collision fix); destructure it directly — a rest spread here would
+  // collect the `agents` property itself into the rest object.
+  const { metadata, metaAnalysis, agents } = results
+  const summary = formatBuffBenchSummary(agents, metadata, metaAnalysis)
   console.log('\n' + summary)
 
   process.exit(0)
