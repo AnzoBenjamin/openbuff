@@ -41,6 +41,8 @@ const wrapperVersions: Record<WrapperName, string> = {
 function runWrapperWithTarBlocked(wrapperPath: string, flag: string) {
   const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-release-wrapper-'))
   const preloadPath = path.join(tempDir, 'block-tar.cjs')
+  const configDir = path.join(tempDir, '.config', 'openbuff')
+  mkdirSync(configDir, { recursive: true })
 
   writeFileSync(
     preloadPath,
@@ -61,6 +63,7 @@ function runWrapperWithTarBlocked(wrapperPath: string, flag: string) {
         encoding: 'utf8',
         env: {
           ...process.env,
+          OPENBUFF_CONFIG_DIR: configDir,
           NODE_OPTIONS: '',
         },
       },
@@ -157,6 +160,9 @@ function runWrapperWithMockPlatform({
   platformKey,
   wrapperName,
   wrapperPath,
+  metadataVersion,
+  onConfigDir,
+  onBeforeCleanup,
 }: {
   arch: string
   cpuInfo?: string
@@ -166,6 +172,9 @@ function runWrapperWithMockPlatform({
   platformKey: string
   wrapperName: WrapperName
   wrapperPath: string
+  metadataVersion?: string
+  onConfigDir?: (configDir: string) => void
+  onBeforeCleanup?: (configDir: string) => void
 }) {
   const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-release-wrapper-'))
   const preloadPath = path.join(tempDir, 'mock-platform.cjs')
@@ -173,10 +182,14 @@ function runWrapperWithMockPlatform({
   const binaryName = getWrapperBinaryName(wrapperName)
 
   mkdirSync(configDir, { recursive: true })
+  onConfigDir?.(configDir)
   writeValidTreeSitterAssets(configDir)
   writeFileSync(
     path.join(configDir, getWrapperMetadataName(wrapperName)),
-    JSON.stringify({ version: wrapperVersions[wrapperName], platformKey }),
+    JSON.stringify({
+      version: metadataVersion ?? wrapperVersions[wrapperName],
+      platformKey,
+    }),
   )
   writeFileSync(
     path.join(configDir, binaryName),
@@ -191,7 +204,7 @@ function runWrapperWithMockPlatform({
   )
 
   try {
-    return spawnSync(
+    const result = spawnSync(
       process.execPath,
       ['--require', preloadPath, wrapperPath],
       {
@@ -210,6 +223,8 @@ function runWrapperWithMockPlatform({
         },
       },
     )
+    onBeforeCleanup?.(configDir)
+    return result
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
   }
@@ -706,6 +721,41 @@ describe('release wrapper update safety', () => {
   )
 
   test.each(wrappers)(
+    '%s preserves the crash-heal budget across a successful reinstall',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-crashheal-'))
+      const archive = Buffer.from('crashheal-archive')
+      const { config, fileName } = createDownloadHarness(tempDir, wrapperName)
+      try {
+        writeFileSync(
+          config.metadataPath,
+          JSON.stringify({
+            version: '1.0.0',
+            platformKey: 'linux-x64',
+            crashHeal: { count: 2, lastAt: 1234567890 },
+          }),
+        )
+        const { downloadBinary } = require(path.join(repoRoot, wrapperPath))
+        await downloadBinary('2.0.0', {
+          config,
+          platformKey: 'linux-x64',
+          httpGet: createMockHttpGet(fileName, archive),
+          extractArchive: ({ cwd }: { cwd: string }) =>
+            extractValidRelease(cwd, config.binaryName),
+        })
+
+        expect(JSON.parse(readFileSync(config.metadataPath, 'utf8'))).toEqual({
+          version: '2.0.0',
+          platformKey: 'linux-x64',
+          crashHeal: { count: 2, lastAt: 1234567890 },
+        })
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
     '%s repairs missing or corrupt assets and consumes pending metadata',
     async (wrapperName, wrapperPath) => {
       for (const damage of ['missing', 'corrupt'] as const) {
@@ -1106,6 +1156,340 @@ describe('release wrapper update safety', () => {
           }
         })
       }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s --version keeps the single-line stdout contract during wrapper skew',
+    (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-version-'))
+      const preloadPath = path.join(tempDir, 'block-tar.cjs')
+      const configDir = path.join(tempDir, '.config', 'openbuff')
+      const binaryName = getWrapperBinaryName(wrapperName)
+      mkdirSync(configDir, { recursive: true })
+      writeFileSync(
+        path.join(configDir, getWrapperMetadataName(wrapperName)),
+        JSON.stringify({
+          version: '9.8.7',
+          platformKey: `${process.platform}-${process.arch}`,
+        }),
+      )
+      writeFileSync(path.join(configDir, binaryName), '#!/bin/true\n')
+      chmodSync(path.join(configDir, binaryName), 0o755)
+      writeFileSync(
+        preloadPath,
+        `const Module = require('module')\n` +
+          `const originalLoad = Module._load\n` +
+          `Module._load = function(request, parent, isMain) {\n` +
+          `  if (request === 'tar') throw new Error('tar should not be required for version flags')\n` +
+          `  return originalLoad.apply(this, arguments)\n` +
+          `}\n`,
+      )
+      try {
+        const result = spawnSync(
+          process.execPath,
+          ['--require', preloadPath, wrapperPath, '--version'],
+          {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              OPENBUFF_CONFIG_DIR: configDir,
+              NODE_OPTIONS: '',
+            },
+          },
+        )
+
+        expect(result.status).toBe(0)
+        expect(result.stderr).toBe('')
+        expect(result.stdout.trim()).toBe(wrapperVersions[wrapperName])
+        expect(result.stdout).not.toContain('wrapper:')
+        expect(result.stdout).not.toContain('9.8.7')
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s falls back to the current binary when a staged update fails to download',
+    async (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-staged-fail-'))
+      const { config } = createDownloadHarness(tempDir, 'release')
+      try {
+        writeFileSync(config.binaryPath, 'existing')
+        writeFileSync(
+          config.metadataPath,
+          JSON.stringify({
+            version: '1.0.0',
+            platformKey: 'linux-x64',
+            pendingVersion: '9.9.9',
+          }),
+        )
+        const { ensureBinaryExists } = require(path.join(repoRoot, wrapperPath))
+        const errors: string[] = []
+
+        await ensureBinaryExists({
+          config,
+          currentVersion: '1.0.0',
+          packagedVersion: null,
+          downloadBinary: async () => {
+            throw new Error('download failed')
+          },
+          consoleError: (...args: unknown[]) =>
+            errors.push(args.map(String).join(' ')),
+        })
+
+        expect(errors.join('\n')).toContain('keeping current version')
+        const metadata = JSON.parse(readFileSync(config.metadataPath, 'utf8'))
+        expect(metadata.pendingVersion).toBeUndefined()
+        expect(metadata.failedPendingVersion.version).toBe('9.9.9')
+        expect(readFileSync(config.binaryPath, 'utf8')).toBe('existing')
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s skips retrying a recently failed staged version',
+    async (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-staged-skip-'))
+      const { config } = createDownloadHarness(tempDir, 'release')
+      const downloadedVersions: string[] = []
+      try {
+        writeValidTreeSitterAssets(tempDir)
+        writeFileSync(config.binaryPath, 'existing')
+        writeFileSync(
+          config.metadataPath,
+          JSON.stringify({
+            version: '1.0.0',
+            platformKey: 'linux-x64',
+            pendingVersion: '9.9.9',
+            failedPendingVersion: { version: '9.9.9', at: Date.now() },
+          }),
+        )
+        const { ensureBinaryExists } = require(path.join(repoRoot, wrapperPath))
+
+        await ensureBinaryExists({
+          config,
+          currentVersion: '1.0.0',
+          packagedVersion: null,
+          downloadBinary: async (version: string) => {
+            downloadedVersions.push(version)
+          },
+        })
+
+        expect(downloadedVersions).toEqual([])
+        expect(readFileSync(config.binaryPath, 'utf8')).toBe('existing')
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s probes the binary version asynchronously with a hard timeout',
+    async (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-probe-async-'))
+      try {
+        const binaryPath = path.join(tempDir, 'probe-binary')
+        const config = { binaryPath }
+        const { probeBinaryVersion } = require(path.join(repoRoot, wrapperPath))
+
+        writeFileSync(
+          binaryPath,
+          `#!/usr/bin/env node\nsetInterval(() => {}, 1000)\n`,
+        )
+        chmodSync(binaryPath, 0o755)
+        const hungProbe = probeBinaryVersion(config, 100)
+        expect(hungProbe).toBeInstanceOf(Promise)
+        await expect(hungProbe).resolves.toBeNull()
+
+        writeFileSync(
+          binaryPath,
+          `#!/usr/bin/env node\nconsole.log('3.2.1')\n`,
+        )
+        chmodSync(binaryPath, 0o755)
+        await expect(probeBinaryVersion(config, 5000)).resolves.toBe('3.2.1')
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s probes the binary version instead of downgrading when metadata is lost',
+    async (_, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-probe-'))
+      const { config } = createDownloadHarness(tempDir, 'release')
+      const downloadedVersions: string[] = []
+      try {
+        writeValidTreeSitterAssets(tempDir)
+        writeFileSync(config.binaryPath, 'existing')
+        const { ensureBinaryExists } = require(path.join(repoRoot, wrapperPath))
+
+        await ensureBinaryExists({
+          config,
+          currentVersion: null,
+          packagedVersion: '1.0.0',
+          probeBinaryVersion: async () => '2.5.0',
+          downloadBinary: async (version: string) => {
+            downloadedVersions.push(version)
+          },
+        })
+
+        expect(downloadedVersions).toEqual([])
+        const metadata = JSON.parse(readFileSync(config.metadataPath, 'utf8'))
+        expect(metadata.version).toBe('2.5.0')
+        expect(readFileSync(config.binaryPath, 'utf8')).toBe('existing')
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s keeps launching offline without persisting an unverified version claim',
+    async (wrapperName, wrapperPath) => {
+      const tempDir = mkdtempSync(path.join(tmpdir(), 'openbuff-offline-'))
+      const { config } = createDownloadHarness(tempDir, wrapperName)
+      const downloadedVersions: string[] = []
+      try {
+        writeValidTreeSitterAssets(tempDir)
+        writeFileSync(config.binaryPath, 'existing')
+        const { ensureBinaryExists } = require(path.join(repoRoot, wrapperPath))
+
+        await ensureBinaryExists({
+          config,
+          currentVersion: null,
+          packagedVersion: '1.2.3',
+          pendingVersion: null,
+          probeBinaryVersion: async () => null,
+          getLatestVersion: async () => {
+            throw new Error('network must not be reached')
+          },
+          downloadBinary: async (version: string) => {
+            downloadedVersions.push(version)
+          },
+        })
+
+        expect(downloadedVersions).toEqual([])
+        expect(readFileSync(config.binaryPath, 'utf8')).toBe('existing')
+        // An unverified binary must not gain a version/platformKey record:
+        // later launches would then trust it instead of repairing it.
+        expect(existsSync(config.metadataPath)).toBe(false)
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(wrappers)(
+    '%s --update exits non-zero when the new version fails to apply',
+    async (_, wrapperPath) => {
+      const { handleUpdateCommand } = require(path.join(repoRoot, wrapperPath))
+      let installedVersion = '1.0.0'
+      const exitCodes: number[] = []
+      const output: string[] = []
+      const baseOptions = {
+        pendingVersion: null,
+        latestVersion: '2.0.0',
+        consoleLog: (...args: unknown[]) =>
+          output.push(args.map(String).join(' ')),
+        consoleError: (...args: unknown[]) =>
+          output.push(args.map(String).join(' ')),
+        exit: (code: number) => exitCodes.push(code),
+      }
+
+      await handleUpdateCommand({
+        ...baseOptions,
+        currentVersion: '1.0.0',
+        downloadBinary: async () => {
+          installedVersion = '2.0.0'
+        },
+        getCurrentVersion: () => installedVersion,
+      })
+
+      expect(exitCodes).toEqual([0])
+      expect(output.join('\n')).toContain('Updated to 2.0.0.')
+
+      exitCodes.length = 0
+      output.length = 0
+      installedVersion = '1.0.0'
+
+      await handleUpdateCommand({
+        ...baseOptions,
+        currentVersion: '1.0.0',
+        downloadBinary: async () => {
+          // The download reports success but the apply never lands.
+        },
+        getCurrentVersion: () => installedVersion,
+      })
+
+      expect(exitCodes).toEqual([1])
+      expect(output.join('\n')).toContain(
+        'Could not update to 2.0.0; kept 1.0.0.',
+      )
+    },
+  )
+
+  test.each(wrappers)(
+    '%s repairs a crashing binary by quarantining it and clearing the version',
+    (wrapperName, wrapperPath) => {
+      let binaryGone = false
+      let quarantineExists = false
+      let metadataText = ''
+      const binaryName = getWrapperBinaryName(wrapperName)
+      const result = runWrapperWithMockPlatform({
+        arch: 'x64',
+        hardwareArch: 'x64',
+        platform: 'linux',
+        platformKey: 'linux-x64',
+        wrapperName,
+        wrapperPath,
+        onBeforeCleanup: (dir) => {
+          binaryGone = !existsSync(path.join(dir, binaryName))
+          quarantineExists = readdirSync(dir).some((name) =>
+            name.startsWith(`${binaryName}.crash-quarantine-`),
+          )
+          try {
+            metadataText = readFileSync(
+              path.join(dir, getWrapperMetadataName(wrapperName)),
+              'utf8',
+            )
+          } catch {
+            metadataText = ''
+          }
+        },
+      })
+      const metadata = metadataText ? JSON.parse(metadataText) : {}
+
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('quarantined the binary')
+      expect(binaryGone).toBe(true)
+      expect(quarantineExists).toBe(true)
+      expect(metadata.version).toBeUndefined()
+      expect(metadata.crashHeal.count).toBe(1)
+    },
+  )
+
+  test.each(wrappers)(
+    '%s notes wrapper skew at exit',
+    (wrapperName, wrapperPath) => {
+      const result = runWrapperWithMockPlatform({
+        arch: 'x64',
+        hardwareArch: 'x64',
+        platform: 'linux',
+        platformKey: 'linux-x64',
+        wrapperName,
+        wrapperPath,
+        metadataVersion: '9.9.9',
+      })
+
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('npm i -g')
+      expect(result.stderr).toContain(wrapperVersions[wrapperName])
     },
   )
 

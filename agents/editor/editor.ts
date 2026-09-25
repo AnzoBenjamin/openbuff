@@ -43,6 +43,10 @@ export const createCodeEditor = (options: {
   return {
     publisher,
     model: EDITOR_MODELS[model],
+    // Explicit output ceiling: without it, provider defaults (the Anthropic
+    // path defaults to ~4k) cut large multi-edit edit_transaction payloads
+    // mid-JSON, which surfaces as "no edit_transaction was submitted".
+    maxOutputTokens: 32000,
     displayName: 'Code Editor',
     spawnerPrompt:
       'Expert code editor that implements code changes. Spawn this agent with a compact, self-contained implementation brief containing requirements, target files, constraints/non-goals, relevant patterns, and code-level risks. Do not include validation commands, terminal cleanup, visual checks, review, git operations, or other parent-only work. The editor can read exact target files to recover missing or stale context and performs every mutation through edit_transaction, including capability-anchored range and symbol edits.',

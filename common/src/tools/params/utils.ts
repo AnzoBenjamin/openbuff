@@ -50,7 +50,21 @@ export function coerceToObject(val: unknown): unknown {
   return val
 }
 
-const MAX_REPAIRABLE_JSON_LENGTH = 256_000
+// Transport payloads are bounded by the model's per-response output budget, so
+// the classification/repair scan bound tracks the largest realistic tool-call
+// payload (1 MiB) instead of the legacy 256KB cap that left oversized
+// truncated edits unclassified (they surfaced as generic syntax errors). All
+// scans under this bound are linear; recovery parse attempts are additionally
+// candidate-capped for oversized payloads to keep worst-case CPU bounded.
+const MAX_REPAIRABLE_JSON_LENGTH = 1_048_576
+/**
+ * Legacy classification bound. Payloads at or under this size keep the
+ * original try-every-candidate recovery behavior; larger payloads cap the
+ * parse attempts at the latest MAX_TRUNCATION_RECOVERY_CANDIDATES container
+ * closers (latest-first is the highest-probability recovery boundary).
+ */
+const LEGACY_MAX_REPAIRABLE_JSON_LENGTH = 256_000
+const MAX_TRUNCATION_RECOVERY_CANDIDATES = 64
 
 /**
  * Repairs redundant or trailing JSON separators outside quoted strings. Only
@@ -223,8 +237,17 @@ export function tryRecoverTruncatedToolArguments(
   // Try candidates from LATEST to EARLIEST: append balanced closers for the
   // residual opens and let JSON.parse be the final gate. Same acceptance
   // semantics as before: the recovered object must be a plain non-empty
-  // object.
-  for (let k = candidates.length - 1; k >= 0; k--) {
+  // object. Oversized payloads cap the parse attempts at the latest N
+  // closers so per-candidate O(n) parses cannot accumulate into O(n²).
+  const candidateBudget =
+    rawInput.length > LEGACY_MAX_REPAIRABLE_JSON_LENGTH
+      ? MAX_TRUNCATION_RECOVERY_CANDIDATES
+      : candidates.length
+  for (
+    let k = candidates.length - 1;
+    k >= Math.max(0, candidates.length - candidateBudget);
+    k--
+  ) {
     const snapshot = candidates[k]
     let candidate = rawInput.slice(0, snapshot.pos + 1)
     for (let i = snapshot.openStack.length - 1; i >= 0; i--) {

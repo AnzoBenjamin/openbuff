@@ -95,6 +95,11 @@ export const getAgentStreamFromTemplate = (params: {
     maxRetries: 3,
     messages,
     model,
+    // Optional per-template output ceiling forwarded to streamText. Without
+    // it, provider defaults (the Anthropic path defaults to ~4k output
+    // tokens) truncate large tool-call payloads such as multi-edit
+    // edit_transaction transactions mid-JSON.
+    maxOutputTokens: template.maxOutputTokens,
     runId,
     signal: params.signal,
     spawnableAgents: getModelVisibleSpawnableAgents(template.spawnableAgents),
