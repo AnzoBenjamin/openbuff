@@ -21,7 +21,7 @@
 
 - _Knowledge refresh 2026-09-17: record_decision tool, memory-first skip/narrow in glob/list-directory/code-search/find-files-matching-content, indexer chunk-freshness sidecar, coordinator deterministic kinds, two-session cold-start test._
 
-- _Knowledge refresh 2026-09-24: ask-user Esc data-loss guard (`components/ask-user/skip-guard.ts` — first Esc with in-progress drafts warns, second confirms), exit drain extracted to `hooks/helpers/exit-queue-drain.ts` (`createQueuedPromptDrainer`, partial-failure semantics unit-testable), and `utils/tool-result-normalizer.ts` error-scan restricted to the tool-result envelope so nested payload errors no longer flip successful tools to failed._
+- _Knowledge refresh 2026-09-23: ask-user Esc data-loss guard (`components/ask-user/skip-guard.ts` — first Esc with in-progress drafts warns, second confirms), exit drain extracted to `hooks/helpers/exit-queue-drain.ts` (`createQueuedPromptDrainer`, partial-failure semantics unit-testable), and `utils/tool-result-normalizer.ts` error-scan restricted to the tool-result envelope so nested payload errors no longer flip successful tools to failed._
 
 - _Knowledge refresh 2026-09-24b (staleness guard touch): M3-T3 reliability wave landed test-only changes under `src/` — the /exit drain test now mirrors the one-at-a-time `clearQueue(1)` splicing contract (plus a partial-failure persistence test), three guarded-submit busy-path tests exercise `/resume-plan` queueing via `commands/__tests__/command-args.test.ts`, and `components/__tests__/build-mode-buttons.test.tsx` restores its mockLayout in `afterAll` so the xs layout no longer bleeds into status-bar tests; this entry keeps `cli/knowledge.md` newer than `src/` for the pre-push memory-drift guard._
 
