@@ -221,6 +221,21 @@ removed. Declare capabilities explicitly:
 }
 ```
 
+#### Output token ceiling
+
+`context.outputTokens` declares the model's per-response output token ceiling.
+It is forwarded to the provider as `maxOutputTokens` on agent streaming
+requests when the agent template does not declare its own `maxOutputTokens`.
+Precedence: agent template `maxOutputTokens` > per-model
+`modelCapabilities[modelId].context.outputTokens` >
+`defaultCapabilities.context.outputTokens` > provider default behavior.
+
+Without any of these, the provider's own default applies (the
+Anthropic-compatible path defaults to a small ~4k cap, which can truncate
+large tool-call payloads such as multi-edit transactions mid-JSON). Caveat:
+the `chatgpt-oauth` backend does not support `max_output_tokens`/`max_tokens`,
+so the ceiling is a no-op there.
+
 The shipped example `openbuff.d.example/providers.json` sets
 `defaultCapabilities.context.windowTokens: 500000` on every provider as a
 fallback baseline (copy `openbuff.d.example/` into your own `openbuff.d/`

@@ -3,11 +3,12 @@ import os from 'os'
 import path from 'path'
 
 import { describe, expect, spyOn, test, beforeEach, afterEach } from 'bun:test'
-import { APICallError } from 'ai'
+import { APICallError, NoOutputGeneratedError } from 'ai'
 import type { LanguageModel } from 'ai'
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 
 import * as modelProvider from '../model-provider'
+import * as retryConfig from '../../retry-config'
 import { promptAiSdkStream } from '../llm'
 import { resolveModelsToTry } from '../failover'
 import {
@@ -314,6 +315,45 @@ function makeStreamModel(text: string): LanguageModel {
   } as unknown as LanguageModel
 }
 
+/**
+ * Primary-side stub: doStream returns a stream that sends stream-start and
+ * then an in-stream error part carrying a real NoOutputGeneratedError, then
+ * closes cleanly. The fake surfaces the error through the stream itself —
+ * llm.ts's error-chunk handler re-throws `chunkValue.error`, which lands in
+ * the same catch block as the production path, where the AI SDK rejects
+ * `response.finishReason` with this exact error after a clean-closed
+ * content-free stream (e.g. the merged default request timeout aborting a
+ * hung provider stream before any content chunk). Note: this fixture does
+ * NOT reproduce the finishReason-rejection path itself; the AI SDK's
+ * step-transform flush would otherwise resolve a stream-start-only stream
+ * as a successful empty step (recordedSteps=1, finishReason 'unknown').
+ */
+function makeEmptyStreamModel(): LanguageModel {
+  return {
+    specificationVersion: 'v2',
+    provider: 'test-provider',
+    modelId: 'test-model',
+    doStream: async () => {
+      const parts = [
+        { type: 'stream-start' },
+        {
+          type: 'error',
+          error: new NoOutputGeneratedError({
+            message: 'No output generated. Check the stream for errors.',
+          }),
+        },
+      ] as LanguageModelV2StreamPart[]
+      const stream = new ReadableStream<LanguageModelV2StreamPart>({
+        start(controller) {
+          for (const part of parts) controller.enqueue(part)
+          controller.close()
+        },
+      })
+      return { stream, rawCall: { rawPrompt: null, rawSettings: {} } }
+    },
+  } as unknown as LanguageModel
+}
+
 /** Primary-side stub: doStream rejects with a failover-eligible
  *  (non-retryable) 401 APICallError. */
 function makeAuthErrorModel(): LanguageModel {
@@ -335,6 +375,7 @@ function makeAuthErrorModel(): LanguageModel {
 describe('promptAiSdkStream failover loop (integration)', () => {
   let tempDir: string | undefined
   let spiedGetModelForRequest: ReturnType<typeof spyOn> | undefined
+  let spiedWaitForBackoffDelay: ReturnType<typeof spyOn> | undefined
 
   beforeEach(() => {
     resetEnv()
@@ -344,6 +385,8 @@ describe('promptAiSdkStream failover loop (integration)', () => {
   afterEach(() => {
     spiedGetModelForRequest?.mockRestore()
     spiedGetModelForRequest = undefined
+    spiedWaitForBackoffDelay?.mockRestore()
+    spiedWaitForBackoffDelay = undefined
     if (tempDir) {
       fs.rmSync(tempDir, { recursive: true, force: true })
       tempDir = undefined
@@ -447,6 +490,124 @@ describe('promptAiSdkStream failover loop (integration)', () => {
     // The backup's text was streamed through to the caller.
     expect(textChunks.join('')).toContain('backup-content')
     // The generator returns a successful PromptResult (promptSuccess shape).
+    expect(result.aborted).toBe(false)
+  })
+
+  test('retries and failovers over an empty stream (NoOutputGeneratedError), then yields backup content', async () => {
+    // Regression for the empty-stream kill: in production the AI SDK rejects
+    // `response.finishReason` with NoOutputGeneratedError ("No output
+    // generated. Check the stream for errors.") when the provider opens a
+    // stream, sends zero content chunks, and closes cleanly — e.g. the merged
+    // default request timeout aborting a hung provider stream before any
+    // content chunk. That error has no HTTP status and is not a network
+    // error, so before the fix the first attempt threw immediately: no
+    // backoff waits, no failover, and spawned editor children died with
+    // 'Agent run error: No output generated.'
+    //
+    // The fake model below surfaces NoOutputGeneratedError as an in-stream
+    // error part instead; llm.ts's error-chunk handler re-throws it into the
+    // same catch block as the production path (it does not reproduce the
+    // finishReason rejection itself). With the fix, the empty-stream error is
+    // retried like a transient error (MAX_RETRIES_PER_MESSAGE backoff waits)
+    // before the outer loop failovers to the backup model.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-failover-'))
+    const configPath = path.join(tempDir, 'openbuff.json')
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        defaultModel: 'local/primary',
+        defaultReasoningEffort: 'low',
+        failoverModels: ['local/backup-a'],
+        providers: {
+          local: {
+            type: 'openai-compatible',
+            baseURL: 'http://127.0.0.1:11434/v1',
+            models: ['primary', 'backup-a'],
+          },
+        },
+      }),
+    )
+    process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
+
+    // Intercept the backoff wait so the retry path is observable (call
+    // count) without real sleeps, mirroring the getModelForRequest spy.
+    const backoffDelayCalls: number[] = []
+    spiedWaitForBackoffDelay = spyOn(
+      retryConfig,
+      'waitForBackoffDelay',
+    ).mockImplementation(async (params) => {
+      backoffDelayCalls.push(params.delayMs)
+    })
+
+    const preferModelParamCalls: boolean[] = []
+    spiedGetModelForRequest = spyOn(
+      modelProvider,
+      'getModelForRequest',
+    ).mockImplementation(async (params) => {
+      preferModelParamCalls.push(params.preferModelParam === true)
+      const base = {
+        isChatGptOAuth: false,
+        compatibility: {
+          supportsTools: true,
+          stripProviderMetadata: false,
+          stripCacheControl: false,
+          stringifyTextContent: false,
+          supportsRequiredToolChoice: true,
+          supportsStopSequences: true,
+        },
+      }
+      if (params.preferModelParam) {
+        return {
+          ...base,
+          model: makeStreamModel('backup-content'),
+          effectiveModel: 'local/backup-a',
+        }
+      }
+      return {
+        ...base,
+        model: makeEmptyStreamModel(),
+        effectiveModel: 'local/primary',
+      }
+    })
+
+    const promptParams = {
+      apiKey: 'test-key',
+      runId: 'run-1',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'empty stream probe' }] },
+      ] as never[],
+      clientSessionId: 'client-1',
+      fingerprintId: 'finger-1',
+      userInputId: 'input-1',
+      userId: undefined,
+      model: 'local/primary' as const,
+      agentId: undefined,
+      sendAction: async () => {},
+      logger: testLogger,
+      trackEvent: async () => {},
+      signal: new AbortController().signal,
+    }
+
+    const textChunks: string[] = []
+    const iterator = promptAiSdkStream(promptParams as never)[Symbol.asyncIterator]()
+    let next = await iterator.next()
+    while (!next.done) {
+      const chunk = next.value as { type: string; text?: string }
+      if (chunk.type === 'text' && typeof chunk.text === 'string') {
+        textChunks.push(chunk.text)
+      }
+      next = await iterator.next()
+    }
+    const result = next.value as { aborted: boolean; value?: string | null }
+
+    // The primary was attempted 4 times (initial + 3 retries), then the
+    // backup attempt carries preferModelParam=true (M8.1 failover seam).
+    expect(preferModelParamCalls).toEqual([false, false, false, false, true])
+    // The empty-stream error took the retry path: one backoff wait per retry
+    // (3 retries) instead of an immediate throw.
+    expect(backoffDelayCalls.length).toBe(3)
+    // The backup's text was streamed through to the caller.
+    expect(textChunks.join('')).toContain('backup-content')
     expect(result.aborted).toBe(false)
   })
 })

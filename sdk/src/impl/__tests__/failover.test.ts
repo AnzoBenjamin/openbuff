@@ -1,3 +1,4 @@
+import { NoOutputGeneratedError } from 'ai'
 import {
   createAuthError,
   createForbiddenError,
@@ -210,6 +211,48 @@ describe('isFailoverEligibleError', () => {
 
     expect(normalized).toBeDefined()
     expect(isFailoverEligibleError(normalized)).toBe(false)
+  })
+
+  it('returns true for the AI SDK NoOutputGeneratedError (empty stream, clean close)', () => {
+    // ai@5's DefaultStreamTextResult rejects `finishReason` with
+    // NoOutputGeneratedError ("No output generated. Check the stream for
+    // errors.") when the provider opens a stream, sends zero chunks (no text,
+    // no tool call, no error chunk), and closes cleanly. The primary produced
+    // nothing, so a backup model attempt is worthwhile; the failover loop's
+    // anyContentYielded guard protects against duplicating output.
+    expect(
+      isFailoverEligibleError(
+        new NoOutputGeneratedError({
+          message: 'No output generated. Check the stream for errors.',
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('returns false for a plain Error sharing the NoOutputGeneratedError message (marker-based classification, not message matching)', () => {
+    expect(
+      isFailoverEligibleError(
+        new Error('No output generated. Check the stream for errors.'),
+      ),
+    ).toBe(false)
+  })
+
+  it('still classifies by status alongside the empty-stream path: content-policy with a failover-eligible status stays NOT eligible, status-carrying errors classify by status', () => {
+    // The empty-stream check sits after the content-policy early-return, so a
+    // content-policy error carrying an otherwise failover-eligible status must
+    // still fail fast, and a plain status-carrying error still classifies by
+    // status (502 → eligible, 429 → retry-only).
+    expect(
+      isFailoverEligibleError(
+        createProviderContentPolicyError({ statusCode: 503 }),
+      ),
+    ).toBe(false)
+    expect(isFailoverEligibleError(createHttpError('bad gateway', 502))).toBe(
+      true,
+    )
+    expect(isFailoverEligibleError(createHttpError('rate limited', 429))).toBe(
+      false,
+    )
   })
 
   it('returns false for 408 request timeout — retry-only, not failover-eligible', () => {

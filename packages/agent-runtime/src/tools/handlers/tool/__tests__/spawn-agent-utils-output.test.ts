@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
+import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
+
 import {
   buildRuntimeAgentReceipt,
   normalizeSpawnedAgentOutput,
@@ -131,6 +133,247 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     expect(collapsed.verdict).toBe('LOOKS_GOOD')
     expect(collapsed.snapshotFingerprint).toBe('v3:' + 'a'.repeat(64))
     expect(collapsed.reviewedFiles).toEqual(['src/a.ts'])
+  })
+})
+
+/**
+ * Spawn receipt-layer hardening (R1–R3):
+ * - R1: one unbacked changed-file claim must not wipe the credit of OTHER
+ *   receipt-backed findings.
+ * - R2: buildRuntimeAgentReceipt never throws — malformed handoffs are
+ *   absorbed by happy-path guards, and any residual core failure falls back
+ *   to a field-complete schema-valid failed receipt.
+ * - R3: edit_transaction results that existed but parsed to zero mutation
+ *   receipts get an explicit diagnostic naming the unbacked claimed paths.
+ */
+describe('buildRuntimeAgentReceipt spawn receipt hardening', () => {
+  const appliedMutationResult = (path: string, callId: string) => {
+    const receiptId = `receipt-${callId}`
+    const action = {
+      actionId: `action-${callId}`,
+      index: 0,
+      action: 'update' as const,
+      path,
+      beforeHash: `before-${callId}`,
+      afterHash: `after-${callId}`,
+    }
+    return {
+      kind: 'file_mutation_result' as const,
+      version: 1 as const,
+      operationId: `operation-${callId}`,
+      outcome: 'applied' as const,
+      actions: [{ ...action, outcome: 'applied' as const }],
+      authorityTier: 'conditional_commit' as const,
+      receiptId,
+      authorityReceipt: {
+        kind: 'commit_receipt' as const,
+        version: 1 as const,
+        receiptId,
+        operationId: `operation-${callId}`,
+        callId,
+        authorityTier: 'conditional_commit' as const,
+        status: 'committed' as const,
+        actions: [{ ...action, status: 'committed' as const }],
+        finalHashes: { [path]: action.afterHash },
+      },
+      errors: [],
+      freshCapabilities: [],
+    }
+  }
+
+  test('credits receipt-backed findings when output overclaims other paths (R1)', () => {
+    const handoff = {
+      schemaVersion: 1,
+      taskId: 'task-overclaim',
+      role: 'repair-editor',
+      objective: 'Fix the reviewed findings.',
+      findings: [
+        {
+          id: 'F-BACKED',
+          text: 'Fix the real file.',
+          files: ['src/fixed.ts'],
+          snapshotFingerprint: 'v3:' + 'a'.repeat(64),
+        },
+        {
+          id: 'F-UNBACKED',
+          text: 'Only claims unbacked paths.',
+          files: ['src/forged.ts'],
+          snapshotFingerprint: 'v3:' + 'a'.repeat(64),
+        },
+      ],
+      permissions: {
+        readablePaths: ['src/fixed.ts'],
+        writablePaths: ['src/fixed.ts'],
+        allowedTools: ['edit_transaction'],
+      },
+    } as any
+
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'repair-editor',
+      agentId: 'repair-overclaim-credit',
+      handoff,
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: ['src/fixed.ts', 'src/forged.ts'],
+          findingsAddressed: ['F-BACKED', 'F-UNBACKED'],
+        },
+      },
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            toolCallId: 'call-genuine',
+            content: [
+              {
+                type: 'json',
+                value: appliedMutationResult('src/fixed.ts', 'call-genuine'),
+              },
+            ],
+          },
+        ],
+      } as any,
+    })
+
+    expect(receipt.changedFiles.map((file) => file.path)).toEqual([
+      'src/fixed.ts',
+    ])
+    expect(receipt.findingsAddressed).toEqual(['F-BACKED'])
+    expect(
+      receipt.errors.some((error) => error.message.includes('src/forged.ts')),
+    ).toBe(true)
+  })
+
+  test('does not throw for a handoff lacking findings (R2 happy-path hardening)', () => {
+    const handoff = {
+      schemaVersion: 1,
+      taskId: 'task-no-findings',
+      role: 'editor',
+      objective: 'Do the work.',
+      permissions: {
+        readablePaths: [],
+        writablePaths: [],
+        allowedTools: [],
+      },
+    } as any
+
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'custom-helper',
+      agentId: 'helper-no-findings',
+      handoff,
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: [],
+          findingsAddressed: ['F-MISSING'],
+        },
+      },
+    })
+
+    // Previously `handoff.findings.find(...)` threw a TypeError when the
+    // output claimed a finding id; the hardened deref absorbs it and simply
+    // does not credit the missing finding.
+    expect(agentReceiptSchema.safeParse(receipt).success).toBe(true)
+    expect(receipt.findingsAddressed).toEqual([])
+  })
+
+  test('does not throw for a handoff with an invalid role (R2 happy-path hardening)', () => {
+    const handoff = {
+      schemaVersion: 1,
+      taskId: 'task-bad-role',
+      role: 'not-a-real-role',
+      objective: 'Do the work.',
+      findings: [],
+      permissions: {
+        readablePaths: [],
+        writablePaths: [],
+        allowedTools: [],
+      },
+    } as any
+
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'custom-helper',
+      agentId: 'helper-bad-role',
+      handoff,
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'completed' },
+      },
+    })
+
+    // The invalid role must fall through to agentType inference instead of
+    // failing the strict receipt parse.
+    expect(agentReceiptSchema.safeParse(receipt).success).toBe(true)
+    expect(receipt.role).toBe('specialist')
+  })
+
+  test('falls back to a field-complete failed receipt when the core build throws (R2)', () => {
+    const throwingOutput = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('synthetic output traversal failure')
+        },
+      },
+    )
+
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'custom-helper',
+      agentId: 'helper-fallback',
+      output: throwingOutput,
+    })
+
+    // A strict parse here proves the fallback receipt is field-complete: a
+    // missing required field would throw inside the catch and reintroduce the
+    // original bug.
+    const parsed = agentReceiptSchema.parse(receipt)
+    expect(parsed.status).toBe('failed')
+    expect(parsed.taskId).toBe('spawn-helper-fallback')
+    expect(parsed.changedFiles).toEqual([])
+    expect(
+      parsed.errors.some(
+        (error) =>
+          error.retryable === false &&
+          error.message.includes('Receipt build failed') &&
+          error.message.includes('synthetic output traversal failure'),
+      ),
+    ).toBe(true)
+  })
+
+  test('diagnoses zero parseable mutation receipts despite edit_transaction results (R3)', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'repair-editor',
+      agentId: 'repair-zero-attestations',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: ['src/unbacked.ts'],
+        },
+      },
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            toolCallId: 'call-unparseable',
+            content: [{ type: 'json', value: { garbage: true } }],
+          },
+        ],
+      } as any,
+    })
+
+    const diagnostic = receipt.errors.find((error) =>
+      error.message.includes('edit_transaction'),
+    )
+    expect(diagnostic).toBeDefined()
+    expect(diagnostic?.message).toContain('src/unbacked.ts')
+    expect(diagnostic?.message).toContain(
+      'none yielded a parseable mutation receipt',
+    )
   })
 })
 
