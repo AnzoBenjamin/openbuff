@@ -207,7 +207,7 @@ export async function getMCPClient(
   }
 
   const client = new Client({
-    name: 'codebuff',
+    name: 'openbuff',
     version: '1.0.0',
   })
 
