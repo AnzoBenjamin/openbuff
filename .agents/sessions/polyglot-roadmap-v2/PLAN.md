@@ -22,21 +22,21 @@ Legend: `[ ]` pending · lang = implementation language · ships = the user-visi
 
 ## P0 — Safety & hygiene quick fixes (ships: safer defaults, honest evals)
 
-- [ ] P0-T1 Build child-process env from an allowlist and strip BYOK/OAuth/credential vars (sdk/src/env.ts:49, run-terminal-command.ts:413/:485). (SB-2) lang TS. gate: test that the child env lacks the provider keys; security-reviewer.
+- [x] P0-T1 Build child-process env from an allowlist and strip BYOK/OAuth/credential vars (sdk/src/env.ts:49, run-terminal-command.ts:413/:485). (SB-2) lang TS. gate: test that the child env lacks the provider keys; security-reviewer. (DONE, committed c87263595: getChildProcessEnv; 22/22 tests; sec-review NON_BLOCKING. Residuals SB2-F1 generic OPENAI/ANTHROPIC/OPENROUTER_API_KEY not stripped, SB2-F2 3d-assets blender spawn still full env — deferred.)
 - [ ] P0-T2 Approval reruns keep the original profile and use a one-shot approval token instead of `mode:'user'`. (SB-6) lang TS. gate: policy tests; security-reviewer.
-- [ ] P0-T3 Fix the tmux-cli teardown stray `'>` and add a `bash -n` test for the generated helper. Verify how the tmux-test profile applies. (SB-5) lang TS.
-- [ ] P0-T4 Launch Chrome with `--remote-debugging-pipe` and drop `--no-sandbox` where userns is available. (SB-7) lang TS.
+- [~] P0-T3 Fix the tmux-cli teardown stray `'>` and add a `bash -n` test for the generated helper. Verify how the tmux-test profile applies. (SB-5) lang TS. (PARTIAL, committed c87263595: stray `'>` removed. Not done: `bash -n` helper test + tmux-test profile-scope verification.)
+- [~] P0-T4 Launch Chrome with `--remote-debugging-pipe` and drop `--no-sandbox` where userns is available. (SB-7) lang TS. (PARTIAL, committed 10e048a42: chromeSandboxArgs() drops --no-sandbox on non-Linux / userns-available Linux, keeps it as root/undeterminable; 3/3 tests; sec-review NON_BLOCKING. Not done: --remote-debugging-pipe transport migration — deferred, CDP port stays 127.0.0.1 unauthenticated.)
 - [ ] P0-T5 Tree-sitter `rootNode.hasError` preflight for all 13 languages. Replace `isResultDelimiterBalanced`. (LI-02 tier 0, EV-3) lang TS (web-tree-sitter already shipped). gate: preflight tests per language.
 - [ ] P0-T6 Eval hygiene: use `scoringStatus` as the only exclusion rule, keep per-judge raw scores and variance, add `--repeats/--seed` and mean±SE plus score-per-dollar, and put a paired bootstrap + Wilcoxon on the promotion gate. (EL-1 lite, EL-4, EL-5 lite, EL-12) lang TS. gate: evals tests.
-- [ ] P0-T7 Small correctness fixes:
-  - derive the language-family maps from the registry and parse `.c` with tree-sitter-c (LI-11)
-  - registry ToolSpec argv/transport (LI-13)
-  - MCP client name `openbuff` (S4)
-  - dedupe the MCP config merge (EXT-3)
-  - move CLI `getDiffStats` off execSync (EV-6)
-  - aggregate background-agent cost into the parent (ORCH-5)
-  - rename sandbox-generator.test.ts or make it assert isolation (ORCH-2)
-  - rewrite evals/README for buffbench (EL-14)
+- [~] P0-T7 Small correctness fixes:
+  - [ ] derive the language-family maps from the registry and parse `.c` with tree-sitter-c (LI-11)
+  - [ ] registry ToolSpec argv/transport (LI-13)
+  - [x] MCP client name `openbuff` (S4) — committed ba6522502
+  - [ ] dedupe the MCP config merge (EXT-3)
+  - [ ] move CLI `getDiffStats` off execSync (EV-6)
+  - [ ] aggregate background-agent cost into the parent (ORCH-5)
+  - [ ] rename sandbox-generator.test.ts or make it assert isolation (ORCH-2)
+  - [ ] rewrite evals/README for buffbench (EL-14)
 
   lang TS.
 - [ ] P0-T8 Structured diagnostics: JSON/SARIF modes (cargo, ruff, pyright, eslint, go vet, clang, MSBuild) with real ranges and fix-its captured. (LI-05) lang TS.

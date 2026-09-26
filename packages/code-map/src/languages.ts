@@ -363,3 +363,45 @@ export async function getLanguageConfig(
 export function hasLanguageConfiguration(filePath: string): boolean {
   return findLanguageConfigByExtension(filePath) !== undefined
 }
+
+/**
+ * Advisory, fail-open tree-sitter syntax check for a candidate file content.
+ *
+ * Returns `{ available, hasError }`:
+ * - `available: false` when the file extension has no tree-sitter language, the
+ *   grammar cannot be loaded locally, `getLanguageConfig` returns undefined /
+ *   has no parser, or ANY error is thrown. Callers must treat this as "skip".
+ * - `available: true` with `hasError` reflecting `tree.rootNode.hasError`.
+ *
+ * This never throws and never opts into a network fetch: it relies solely on
+ * the already-shipped local grammar loader (which only fetches when
+ * CODEBUFF_IS_BINARY/CODEBUFF_WASM_DIR are set) and does not set those itself.
+ */
+export async function detectSyntaxErrorViaTreeSitter(
+  filePath: string,
+  content: string,
+): Promise<{ available: boolean; hasError: boolean }> {
+  try {
+    if (!hasLanguageConfiguration(filePath)) {
+      return { available: false, hasError: false }
+    }
+    const cfg = await getLanguageConfig(filePath)
+    if (!cfg || !cfg.parser) {
+      return { available: false, hasError: false }
+    }
+    const tree = cfg.parser.parse(content)
+    if (!tree) {
+      return { available: false, hasError: false }
+    }
+    const hasError = tree.rootNode.hasError
+    try {
+      tree.delete?.()
+    } catch {
+      // Some tree-sitter builds do not expose delete(); freeing is best-effort.
+    }
+    return { available: true, hasError }
+  } catch {
+    // Fail-open on any error (grammar unavailable, init failure, parse throw).
+    return { available: false, hasError: false }
+  }
+}

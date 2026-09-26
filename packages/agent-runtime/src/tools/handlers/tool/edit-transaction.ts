@@ -1143,7 +1143,10 @@ export const handleEditTransaction = (async (
   // (Bun.Transpiler), Python (structural validation), and Go (structural
   // validation). In Node.js, JS/TS validation is gracefully skipped.
   for (const file of transactionResult.files) {
-    const syntaxValidation = preflightValidateSyntax(file.path, file.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      file.path,
+      file.content,
+    )
     if (!syntaxValidation.valid) {
       // A preflight syntax failure is NOT a stale-anchor failure: the edits
       // were structurally applied but the resulting content has a syntax
@@ -1193,7 +1196,10 @@ export const handleEditTransaction = (async (
 
   for (const edit of edits) {
     if (edit.type !== 'create') continue
-    const syntaxValidation = preflightValidateSyntax(edit.path, edit.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      edit.path,
+      edit.content,
+    )
     if (!syntaxValidation.valid) {
       const truncated = looksLikeTruncatedEditContent(
         edit,

@@ -1,3 +1,5 @@
+import { detectSyntaxErrorViaTreeSitter } from '@codebuff/code-map'
+
 // Pre-flight syntax validation for edit tools (str_replace, write_file,
 // edit_transaction, apply_smart_patch). Catches syntax errors BEFORE dependent
 // edits stack on top of a broken file — today a malformed edit can cascade into
@@ -73,10 +75,10 @@ export function isJavaScriptLikePath(path: string): boolean {
  * content passes syntax validation (or when no validator applies to the file
  * type), or { valid: false, message } when a syntax error is detected.
  */
-export function preflightValidateSyntax(
+export async function preflightValidateSyntax(
   path: string,
   content: string,
-): SyntaxValidationResult {
+): Promise<SyntaxValidationResult> {
   if (isJavaScriptLikePath(path)) {
     return validateJavaScriptLikeSyntax(path, content)
   }
@@ -87,7 +89,22 @@ export function preflightValidateSyntax(
     return validateGoSyntax(content)
   }
 
-  return { valid: true, message: 'No syntax validation needed for this file.' }
+  // For the remaining supported languages (c, cpp, csharp, java, php, ruby,
+  // rust, swift, kotlin, gdscript) use a fail-open tree-sitter parse. Any
+  // uncertainty (grammar unavailable, init/parse error) is treated as a skip.
+  const res = await detectSyntaxErrorViaTreeSitter(path, content)
+  if (res.available && res.hasError) {
+    return {
+      valid: false,
+      message: `Tree-sitter detected a syntax error in ${path}.`,
+    }
+  }
+  return {
+    valid: true,
+    message: res.available
+      ? 'Tree-sitter syntax check passed.'
+      : 'No syntax validation available for this file.',
+  }
 }
 
 /**
