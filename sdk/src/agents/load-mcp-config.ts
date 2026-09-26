@@ -102,6 +102,61 @@ const getDefaultMcpConfigDirs = (includeProjectConfig: boolean): string[] => {
 }
 
 /**
+ * Process the raw string content of a single `mcp.json` file into `mergedConfig`.
+ *
+ * Parses the JSON, validates it against {@link mcpFileSchema}, resolves env var
+ * references, and merges the servers into `mergedConfig` (later calls override
+ * earlier ones). A validation or env-resolution failure for this file logs when
+ * `verbose` and returns early without merging, so one bad file does not abort
+ * the overall load. `JSON.parse` failures propagate to the caller's try/catch.
+ *
+ * This helper is synchronous so both the async and sync loaders can share it;
+ * each caller performs its own existence check and file read.
+ */
+function processMcpConfigFile(
+  content: string,
+  configPath: string,
+  mergedConfig: LoadedMCPConfig,
+  verbose: boolean,
+): void {
+  const rawConfig = JSON.parse(content)
+  const parseResult = mcpFileSchema.safeParse(rawConfig)
+
+  if (!parseResult.success) {
+    if (verbose) {
+      console.error(
+        `Invalid mcp.json at ${configPath}: ${parseResult.error.message}`,
+      )
+    }
+    return
+  }
+
+  const parsedConfig = parseResult.data
+
+  // Resolve environment variable references
+  try {
+    resolveMcpConfigEnv(parsedConfig)
+  } catch (error) {
+    if (verbose) {
+      console.error(error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  // Merge MCP servers (later directories override earlier ones)
+  for (const [serverName, serverConfig] of Object.entries(
+    parsedConfig.mcpServers,
+  )) {
+    mergedConfig.mcpServers[serverName] = serverConfig
+  }
+
+  // Track the last successfully loaded config path
+  if (Object.keys(parsedConfig.mcpServers).length > 0) {
+    mergedConfig._sourceFilePath = configPath
+  }
+}
+
+/**
  * Load MCP configuration from `mcp.json` files in `.agents` directories.
  *
  * By default, searches for mcp.json in:
@@ -151,41 +206,7 @@ export async function loadMCPConfig(options: {
       }
 
       const content = await fsPromises.readFile(configPath, 'utf8')
-      const rawConfig = JSON.parse(content)
-      const parseResult = mcpFileSchema.safeParse(rawConfig)
-
-      if (!parseResult.success) {
-        if (verbose) {
-          console.error(
-            `Invalid mcp.json at ${configPath}: ${parseResult.error.message}`,
-          )
-        }
-        continue
-      }
-
-      const parsedConfig = parseResult.data
-
-      // Resolve environment variable references
-      try {
-        resolveMcpConfigEnv(parsedConfig)
-      } catch (error) {
-        if (verbose) {
-          console.error(error instanceof Error ? error.message : String(error))
-        }
-        continue
-      }
-
-      // Merge MCP servers (later directories override earlier ones)
-      for (const [serverName, serverConfig] of Object.entries(
-        parsedConfig.mcpServers,
-      )) {
-        mergedConfig.mcpServers[serverName] = serverConfig
-      }
-
-      // Track the last successfully loaded config path
-      if (Object.keys(parsedConfig.mcpServers).length > 0) {
-        mergedConfig._sourceFilePath = configPath
-      }
+      processMcpConfigFile(content, configPath, mergedConfig, verbose)
     } catch (error) {
       if (verbose) {
         console.error(
@@ -228,41 +249,7 @@ export function loadMCPConfigSync(options: {
       }
 
       const content = fs.readFileSync(configPath, 'utf8')
-      const rawConfig = JSON.parse(content)
-      const parseResult = mcpFileSchema.safeParse(rawConfig)
-
-      if (!parseResult.success) {
-        if (verbose) {
-          console.error(
-            `Invalid mcp.json at ${configPath}: ${parseResult.error.message}`,
-          )
-        }
-        continue
-      }
-
-      const parsedConfig = parseResult.data
-
-      // Resolve environment variable references
-      try {
-        resolveMcpConfigEnv(parsedConfig)
-      } catch (error) {
-        if (verbose) {
-          console.error(error instanceof Error ? error.message : String(error))
-        }
-        continue
-      }
-
-      // Merge MCP servers (later directories override earlier ones)
-      for (const [serverName, serverConfig] of Object.entries(
-        parsedConfig.mcpServers,
-      )) {
-        mergedConfig.mcpServers[serverName] = serverConfig
-      }
-
-      // Track the last successfully loaded config path
-      if (Object.keys(parsedConfig.mcpServers).length > 0) {
-        mergedConfig._sourceFilePath = configPath
-      }
+      processMcpConfigFile(content, configPath, mergedConfig, verbose)
     } catch (error) {
       if (verbose) {
         console.error(

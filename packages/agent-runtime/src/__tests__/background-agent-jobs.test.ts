@@ -1336,6 +1336,54 @@ describe('spawn_agents background intent reconciliation', () => {
     expect(JSON.stringify(output)).toContain(newJobId)
   })
 
+  test('a completed background agent folds its cost into the parent creditsUsed', async () => {
+    const parentAgent = createMockAgent('parent', ['thinker'])
+    const childAgent = createMockAgent('thinker')
+    const { mainAgentState } = getInitialSessionState(mockFileContext)
+    mainAgentState.creditsUsed = 40
+
+    // The detached background child incurs 125 credits.
+    spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async (options) => ({
+        agentState: {
+          ...options.agentState,
+          creditsUsed: 125,
+          messageHistory: [assistantMessage('Mock agent response')],
+        },
+        output: {
+          type: 'lastMessage',
+          value: [assistantMessage('Mock agent response')],
+        },
+      }),
+    )
+
+    await handleSpawnAgents({
+      ...baseParams,
+      agentState: mainAgentState,
+      agentTemplate: parentAgent,
+      localAgentTemplates: { thinker: childAgent },
+      toolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-background-cost',
+        input: {
+          agents: [
+            { agent_type: 'thinker', prompt: 'background', background: true },
+          ],
+        },
+      },
+    })
+
+    // The parent returns before the detached coroutine settles, so wait for
+    // the settle chain (buildReceipt -> reconcile -> cost aggregation) to run.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const intents = mainAgentState.backgroundAgentJobs ?? []
+    expect(intents).toHaveLength(1)
+    expect(intents[0]!.status).toBe('completed')
+    // Parent starts at 40 and folds in the background child's 125 exactly once.
+    expect(mainAgentState.creditsUsed).toBe(165)
+  })
+
   test('a rejected background batch terminates the spawn_started events it already emitted', async () => {
     const parentAgent = createMockAgent('parent', ['thinker'])
     const childAgent = createMockAgent('thinker')

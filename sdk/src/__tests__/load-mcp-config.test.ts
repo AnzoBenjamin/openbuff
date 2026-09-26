@@ -300,4 +300,77 @@ describe('loadMCPConfig', () => {
       expect(asyncServer.command).toBe('async-command')
     }
   })
+
+  it('should resolve environment variable references', async () => {
+    const agentsDir = path.join(tempDir, '.agents')
+    fs.mkdirSync(agentsDir, { recursive: true })
+
+    process.env.TEST_MCP_ASYNC_API_KEY = 'resolved-async-key'
+
+    const mcpConfig = {
+      mcpServers: {
+        envServer: {
+          command: 'npx',
+          args: ['-y', 'my-mcp-server'],
+          env: {
+            API_KEY: '$TEST_MCP_ASYNC_API_KEY',
+          },
+        },
+      },
+    }
+    fs.writeFileSync(
+      path.join(agentsDir, 'mcp.json'),
+      JSON.stringify(mcpConfig, null, 2),
+    )
+
+    const result = await loadMCPConfig({
+      includeProjectConfig: true,
+      verbose: false,
+    })
+    expect(result.mcpServers.envServer).toBeDefined()
+    const envServer = result.mcpServers.envServer
+    if (isStdioConfig(envServer)) {
+      expect(envServer.env?.API_KEY).toBe('resolved-async-key')
+    }
+
+    delete process.env.TEST_MCP_ASYNC_API_KEY
+  })
+
+  it('should skip config if env var is missing', async () => {
+    const agentsDir = path.join(tempDir, '.agents')
+    fs.mkdirSync(agentsDir, { recursive: true })
+
+    const mcpConfig = {
+      mcpServers: {
+        missingEnvServer: {
+          command: 'npx',
+          args: ['-y', 'my-mcp-server'],
+          env: {
+            API_KEY: '$NONEXISTENT_VAR_ASYNC_12345',
+          },
+        },
+      },
+    }
+    fs.writeFileSync(
+      path.join(agentsDir, 'mcp.json'),
+      JSON.stringify(mcpConfig, null, 2),
+    )
+
+    const result = await loadMCPConfig({
+      includeProjectConfig: true,
+      verbose: false,
+    })
+    expect(result.mcpServers.missingEnvServer).toBeUndefined()
+  })
+
+  it('should handle invalid JSON gracefully', async () => {
+    const agentsDir = path.join(tempDir, '.agents')
+    fs.mkdirSync(agentsDir, { recursive: true })
+
+    fs.writeFileSync(path.join(agentsDir, 'mcp.json'), 'not valid json {')
+
+    // Should not throw - just skip the invalid file
+    const result = await loadMCPConfig({ verbose: false })
+    expect(result.mcpServers.invalidServer).toBeUndefined()
+  })
 })

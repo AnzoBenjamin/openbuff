@@ -67,7 +67,7 @@ import {
   resolveModelNameForAgent,
   setupOpenbuffProviderFromArgs,
 } from './utils/openbuff-provider'
-import { getDiffStats, type DiffStats } from './utils/git'
+import { getDiffStatsAsync, type DiffStats } from './utils/git'
 import {
   peekIndexStatus,
   shouldForceStatusLineForIndex,
@@ -442,20 +442,43 @@ export const Chat = ({
     return agentId ? resolveModelNameForAgent(agentId) : null
   }, [agentMode])
 
-  // Poll git diff stats: on mount, after streaming ends, and periodically
-  // while idle (cheap `git status --short` call).
+  // Poll git diff stats: on mount and periodically while idle. The git call
+  // runs off the render thread (getDiffStatsAsync). A per-effect AbortController
+  // + cancelled flag ensures a late-resolving result after unmount does not
+  // call setState, and only the latest in-flight refresh wins.
   useEffect(() => {
     const cwd = getProjectRoot() ?? process.cwd()
-    const refresh = () => setDiffStats(getDiffStats({ cwd }))
+    let cancelled = false
+    const controller = new AbortController()
+    const refresh = () => {
+      getDiffStatsAsync({ cwd, signal: controller.signal })
+        .then((stats) => {
+          if (!cancelled) setDiffStats(stats)
+        })
+        .catch(() => {})
+    }
     refresh()
     const interval = setInterval(refresh, 10_000)
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(interval)
+    }
   }, [])
   // Refresh diff stats when streaming completes (files may have changed).
   useEffect(() => {
-    if (!isStreaming) {
-      const cwd = getProjectRoot() ?? process.cwd()
-      setDiffStats(getDiffStats({ cwd }))
+    if (isStreaming) return
+    const cwd = getProjectRoot() ?? process.cwd()
+    let cancelled = false
+    const controller = new AbortController()
+    getDiffStatsAsync({ cwd, signal: controller.signal })
+      .then((stats) => {
+        if (!cancelled) setDiffStats(stats)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+      controller.abort()
     }
   }, [isStreaming])
 

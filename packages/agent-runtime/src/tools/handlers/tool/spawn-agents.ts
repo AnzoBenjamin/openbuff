@@ -660,6 +660,12 @@ export const handleSpawnAgents = (async (
                 workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
                 verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
               })
+              // Fold the background child's cost into the parent exactly
+              // like the foreground settle path aggregates subagent cost.
+              const backgroundCredits = result.agentState.creditsUsed || 0
+              if (backgroundCredits > 0) {
+                parentAgentState.creditsUsed += backgroundCredits
+              }
               settleSucceeded = true
               return {
                 agentId: result.agentState.agentId,
@@ -728,6 +734,13 @@ export const handleSpawnAgents = (async (
                     ? error.message
                     : String(error)
                 intent.receipt = receipt
+              }
+              // A failed/cancelled background child may still have incurred
+              // partial cost: fold it into the parent exactly like the
+              // foreground failed-agent path does.
+              const failedBackgroundCredits = subAgentState.creditsUsed || 0
+              if (failedBackgroundCredits > 0) {
+                parentAgentState.creditsUsed += failedBackgroundCredits
               }
             } finally {
               releaseWorkspacePathLease(parentAgentState, validated.leaseId)
