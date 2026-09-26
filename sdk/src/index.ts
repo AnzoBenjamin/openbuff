@@ -21,6 +21,7 @@ export type { NodeFileSystemOptions } from './tools/node-filesystem'
 export {
   diagnosticParsers,
   parseLanguageDiagnostics,
+  structuredDiagnosticParsers,
 } from './tools/language-diagnostics'
 export type {
   DiagnosticParser,
@@ -28,7 +29,10 @@ export type {
   LanguageDiagnostic,
   LanguageDiagnosticPosition,
   LanguageDiagnosticRange,
+  LanguageDiagnosticRelatedInfo,
   LanguageDiagnosticSeverity,
+  LanguageDiagnosticTextEdit,
+  LanguageDiagnosticTextEditApplicability,
 } from './tools/language-diagnostics'
 export {
   FilesystemAuthority,
