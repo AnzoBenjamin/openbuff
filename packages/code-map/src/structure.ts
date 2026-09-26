@@ -1,6 +1,7 @@
 import { getLanguageConfig } from './languages'
 
 import type { Node } from 'web-tree-sitter'
+import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
 
 /**
  * A single structural definition (function, class, method, type, …) extracted
@@ -298,11 +299,13 @@ function nodeEndIndex(node: Node): number | undefined {
 export function getLanguageTag(filePath: string): string {
   const dot = filePath.lastIndexOf('.')
   const ext = dot >= 0 ? filePath.slice(dot).toLowerCase() : ''
-  if (['.ts', '.tsx', '.mts', '.cts'].includes(ext)) return 'typescript'
-  if (['.js', '.jsx', '.mjs', '.cjs'].includes(ext)) return 'javascript'
-  if (['.c', '.h'].includes(ext)) return 'c'
-  if (['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'].includes(ext)) return 'cpp'
-  if (['.kt', '.kts'].includes(ext)) return 'kotlin'
+  // Reuse the shared ts/js/c/cpp/kotlin family map; ext already carries a
+  // leading dot so getLanguageFamily uses it verbatim (no path.extname). This
+  // fn keeps its own distinct superset mappings and fallback below.
+  const family = getLanguageFamily(ext)
+  if (['typescript', 'javascript', 'c', 'cpp', 'kotlin'].includes(family)) {
+    return family
+  }
   if (['.py', '.pyi'].includes(ext)) return 'python'
   if (['.rs'].includes(ext)) return 'rust'
   if (['.go'].includes(ext)) return 'go'

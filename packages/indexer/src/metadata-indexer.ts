@@ -33,6 +33,7 @@ import type {
 } from './types'
 import type { ParseCoverage, ParsedFileTokens } from '@codebuff/code-map'
 import type { WalkedFile, WalkProjectResult } from './file-walker'
+import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
 
 const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
 
@@ -724,18 +725,6 @@ function normalizeMutationPath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\.\//, '')
 }
 
-function getLanguageFamily(extension: string | undefined): string {
-  const normalized = extension?.toLowerCase() ?? ''
-  if (['.ts', '.tsx', '.mts', '.cts'].includes(normalized)) return 'typescript'
-  if (['.js', '.jsx', '.mjs', '.cjs'].includes(normalized)) return 'javascript'
-  if (['.c', '.h'].includes(normalized)) return 'c'
-  if (['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'].includes(normalized)) {
-    return 'cpp'
-  }
-  if (['.kt', '.kts'].includes(normalized)) return 'kotlin'
-  return normalized
-}
-
 function createParseDiagnostic(
   projectRoot: string,
   error: unknown,
@@ -922,6 +911,19 @@ function buildModuleAwareCallEdges(
     }
   }
 
+  // Language family depends only on a file's extension, so resolve it once per
+  // file (with its lone path.extname/toLowerCase allocation) instead of once
+  // per candidate edge inside the caller-resolution loops below.
+  const familyByPath = new Map<string, string>()
+  const familyForPath = (filePath: string): string => {
+    let family = familyByPath.get(filePath)
+    if (family === undefined) {
+      family = getLanguageFamily(files[filePath]?.ext)
+      familyByPath.set(filePath, family)
+    }
+    return family
+  }
+
   const edges: IndexEdge[] = []
   for (const [callerPath, parsed] of Object.entries(parseData)) {
     const caller = files[callerPath]
@@ -940,14 +942,16 @@ function buildModuleAwareCallEdges(
         .filter((filePath): filePath is string => Boolean(filePath)),
     )
 
+    // callerLanguage is invariant across this caller's calls and candidates,
+    // so hoist it out of the inner loops rather than recomputing it (and its
+    // path.extname/toLowerCase allocation) per call and per candidate edge.
+    const callerLanguage = familyForPath(callerPath)
     for (const call of parsed.calls) {
       const candidates = (definitions.get(call) ?? []).filter(
         (filePath) => filePath !== callerPath,
       )
       const sameLanguage = candidates.filter(
-        (filePath) =>
-          getLanguageFamily(files[filePath]?.ext) ===
-          getLanguageFamily(caller.ext),
+        (filePath) => familyForPath(filePath) === callerLanguage,
       )
       const languageCandidates = sameLanguage
       const importedCandidates = languageCandidates.filter((filePath) =>

@@ -1,5 +1,10 @@
 import { z } from 'zod/v4'
 
+import {
+  pairedBootstrapMeanDiffCI,
+  wilcoxonSignedRankTest,
+} from './statistics'
+
 import type { ComparisonResult } from './compare-runs'
 import type { AgentDefinition } from '@openbuff/sdk'
 
@@ -164,6 +169,19 @@ export interface ProposalPromotionPolicy {
   requireNoRegressions: boolean
   /** Reject when the dry run applied no proposals. */
   requireAppliedProposals: boolean
+  /**
+   * When true, require a statistically significant improvement (paired
+   * bootstrap CI lower bound > 0 AND Wilcoxon two-sided p <= maxPValue) before
+   * promotion. Requires per-task paired scores. Defaults to false (today's
+   * behavior).
+   */
+  requireSignificance?: boolean
+  /** Maximum acceptable Wilcoxon two-sided p-value. Default 0.05. */
+  maxPValue?: number
+  /** Bootstrap iteration count passed through to pairedBootstrapMeanDiffCI. */
+  bootstrapIterations?: number
+  /** Bootstrap RNG seed for reproducibility. */
+  bootstrapSeed?: number
 }
 
 export interface ProposalPromotionDecision {
@@ -368,6 +386,11 @@ export function decideProposalPromotion(params: {
   dryRun: ApplyProposalsResult
   comparison: ComparisonResult
   policy?: Partial<ProposalPromotionPolicy>
+  /**
+   * Optional per-task paired overall scores (before vs after). Required only
+   * when policy.requireSignificance is true; otherwise ignored.
+   */
+  pairedScores?: ReadonlyArray<{ before: number; after: number }>
 }): ProposalPromotionDecision {
   const policy = { ...defaultPromotionPolicy, ...params.policy }
   const reasons: string[] = []
@@ -386,6 +409,30 @@ export function decideProposalPromotion(params: {
     )
   }
 
+  // P0-T6: optional significance gate. When enabled we require a paired,
+  // per-task dataset and demand both a Wilcoxon p-value within maxPValue and a
+  // bootstrap CI lower bound strictly above zero.
+  let significanceSummary = ''
+  if (policy.requireSignificance) {
+    const maxPValue = policy.maxPValue ?? 0.05
+    if (!params.pairedScores || params.pairedScores.length === 0) {
+      // Fail closed: significance was demanded but the evidence is missing.
+      reasons.push('significance required but no paired per-task scores provided')
+    } else {
+      const wilcoxon = wilcoxonSignedRankTest(params.pairedScores)
+      const ci = pairedBootstrapMeanDiffCI(params.pairedScores, {
+        iterations: policy.bootstrapIterations,
+        seed: policy.bootstrapSeed,
+      })
+      significanceSummary = `, wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)}, bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
+      if (wilcoxon.pValueTwoSided > maxPValue || ci.lower <= 0) {
+        reasons.push(
+          `improvement not statistically significant (wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)} > ${maxPValue.toFixed(4)} or bootstrap CI lower ${ci.lower.toFixed(2)} <= 0; meanDiff=${ci.meanDiff.toFixed(2)}, CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}])`,
+        )
+      }
+    }
+  }
+
   return {
     accepted: reasons.length === 0,
     reasons:
@@ -393,7 +440,7 @@ export function decideProposalPromotion(params: {
         ? reasons
         : ['meets promotion threshold with no regressions'],
     proposalSummary: params.dryRun.summary,
-    comparisonSummary: `score ${params.comparison.overall.totalScoreDelta >= 0 ? '+' : ''}${params.comparison.overall.totalScoreDelta.toFixed(2)}, cost ${params.comparison.overall.totalCostDelta >= 0 ? '+' : ''}${params.comparison.overall.totalCostDelta.toFixed(0)}c, runs ${params.comparison.overall.totalBeforeRuns}→${params.comparison.overall.totalAfterRuns}`,
+    comparisonSummary: `score ${params.comparison.overall.totalScoreDelta >= 0 ? '+' : ''}${params.comparison.overall.totalScoreDelta.toFixed(2)}, cost ${params.comparison.overall.totalCostDelta >= 0 ? '+' : ''}${params.comparison.overall.totalCostDelta.toFixed(0)}c, runs ${params.comparison.overall.totalBeforeRuns}→${params.comparison.overall.totalAfterRuns}${significanceSummary}`,
   }
 }
 

@@ -6,6 +6,7 @@ import {
   detectLanguageProfiles,
   detectLanguageProfilesFromPaths,
   detectLanguageProfilesFromTask,
+  getLanguageFamily,
   formatLanguageProfilePrompt,
   formatLanguageProfilePromptForFileTree,
   selectLanguageProfiles,
@@ -341,6 +342,26 @@ describe('language profile prompts', () => {
         (profile) => profile.id,
       ),
     ).toEqual(['typescript', 'java'])
+  })
+
+  test('resolves language family for dot-directory paths, not just bare extensions', () => {
+    // Bare leading-dot extension input still resolves directly.
+    expect(getLanguageFamily('.ts')).toBe('typescript')
+    expect(getLanguageFamily('.JSX')).toBe('javascript')
+
+    // Files inside a dot-directory start with '.' but must go through
+    // path.extname so same-language caller edges are not dropped.
+    expect(getLanguageFamily('.storybook/main.ts')).toBe('typescript')
+    expect(getLanguageFamily('.config/foo.ts')).toBe('typescript')
+    expect(getLanguageFamily('.github/scripts/build.js')).toBe('javascript')
+
+    // Ordinary paths and undefined input keep their existing behavior.
+    expect(getLanguageFamily('src/App.tsx')).toBe('typescript')
+    expect(getLanguageFamily('native/lib.cpp')).toBe('cpp')
+    expect(getLanguageFamily(undefined)).toBe('')
+
+    // A leading-dot file with no extension (e.g. dotfile) yields ''.
+    expect(getLanguageFamily('.env')).toBe('')
   })
 
   test('falls back to repository languages when no focused signal exists', () => {

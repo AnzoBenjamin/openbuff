@@ -5,6 +5,7 @@ import { getLanguageConfig, hasLanguageConfiguration } from './languages'
 
 import type { LanguageConfig } from './languages'
 import type { Parser, Query } from 'web-tree-sitter'
+import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
 
 export const DEBUG_PARSING = false
 const IGNORE_TOKENS = ['__init__', '__post_init__', '__call__', 'constructor']
@@ -477,26 +478,32 @@ export function buildTokenCallers(
 ): TokenCallerMap {
   const definitions = new Map<
     string,
-    Array<{ filePath: string; extension: string }>
+    Array<{ filePath: string; family: string }>
   >()
 
   for (const [filePath, scores] of Object.entries(tokenScores)) {
+    // Language family depends only on filePath, so resolve it once per file
+    // (with its lone path.extname/toLowerCase allocation) instead of once per
+    // candidate edge inside the caller-resolution loops below.
+    const family = getLanguageFamily(path.extname(filePath).toLowerCase())
     for (const token of Object.keys(scores)) {
       ;(definitions.get(token) ?? definitions.set(token, []).get(token)!).push({
         filePath,
-        extension: path.extname(filePath).toLowerCase(),
+        family,
       })
     }
   }
 
   const tokenCallers: TokenCallerMap = {}
   for (const [callingFile, calls] of fileCallsMap.entries()) {
+    // callerLanguage is invariant across this file's calls and candidates, so
+    // hoist it out of the inner loops rather than recomputing it (and its
+    // path.extname/toLowerCase allocation) per call and per candidate edge.
+    const callerLanguage = getLanguageFamily(callingFile)
     for (const call of calls) {
       const candidates = definitions.get(call) ?? []
-      const callerLanguage = getLanguageFamily(callingFile)
       const sameLanguage = candidates.filter(
-        (candidate) =>
-          getLanguageFamily(candidate.extension) === callerLanguage,
+        (candidate) => candidate.family === callerLanguage,
       )
       // Same-language definitions only (M4-S6): cross-language raw-name
       // matches are ambiguous in polyglot monorepos — a .py and a .ts file
@@ -578,20 +585,6 @@ function topLevelPrefix(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/')
   const slash = normalized.indexOf('/')
   return slash === -1 ? '.' : normalized.slice(0, slash)
-}
-
-function getLanguageFamily(filePathOrExtension: string): string {
-  const extension = filePathOrExtension.startsWith('.')
-    ? filePathOrExtension.toLowerCase()
-    : path.extname(filePathOrExtension).toLowerCase()
-  if (['.ts', '.tsx', '.mts', '.cts'].includes(extension)) return 'typescript'
-  if (['.js', '.jsx', '.mjs', '.cjs'].includes(extension)) return 'javascript'
-  if (['.c', '.h'].includes(extension)) return 'c'
-  if (['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'].includes(extension)) {
-    return 'cpp'
-  }
-  if (['.kt', '.kts'].includes(extension)) return 'kotlin'
-  return extension
 }
 
 /**
