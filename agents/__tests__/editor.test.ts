@@ -1107,7 +1107,7 @@ describe('editor agent', () => {
       expect((result.value as any).input.output.status).toBe('blocked')
     })
 
-    test('does not attest findings from committed edits covering every finding file', () => {
+    test('attests only handoff findings backed by committed edits', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
         logger: noopLogger as any,
@@ -1117,6 +1117,10 @@ describe('editor agent', () => {
               {
                 id: 'review-finding',
                 files: ['src/finding.ts', 'src/finding.test.ts'],
+              },
+              {
+                id: 'unrelated-finding',
+                files: ['src/unrelated.ts'],
               },
             ],
           },
@@ -1171,7 +1175,61 @@ describe('editor agent', () => {
         'src/finding.ts',
         'src/finding.test.ts',
       ])
-      expect((result.value as any).input.output.findingsAddressed).toEqual([])
+      expect((result.value as any).input.output.findingsAddressed).toEqual([
+        'review-finding',
+      ])
+    })
+
+    test('repair-editor attests its handoff findings after a committed repair', () => {
+      const generator = repairEditor.handleSteps!({
+        agentState: createMockAgentState([]),
+        logger: noopLogger as any,
+        params: {
+          handoff: {
+            findings: [{ id: 'repair-finding', files: ['src/repaired.ts'] }],
+          },
+        },
+      } as any)
+      generator.next()
+
+      const result = generator.next({
+        agentState: createMockAgentState([
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            content: [
+              {
+                type: 'json',
+                value: withCommittedReceipt({
+                  kind: 'file_mutation_result',
+                  version: 1,
+                  operationId: 'repair-finding',
+                  outcome: 'applied',
+                  authorityTier: 'portable_path',
+                  actions: [
+                    {
+                      actionId: 'repair',
+                      index: 0,
+                      action: 'update',
+                      path: 'src/repaired.ts',
+                      outcome: 'applied',
+                      afterHash: 'repaired-after',
+                    },
+                  ],
+                  errors: [],
+                  freshCapabilities: [],
+                }),
+              },
+            ],
+          },
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect((result.value as any).input.output.findingsAddressed).toEqual([
+        'repair-finding',
+      ])
     })
 
     test('works with empty initial message history', () => {

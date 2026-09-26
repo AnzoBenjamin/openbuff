@@ -288,10 +288,16 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         changedFiles.length === 0
           ? collectFailedEditReason(newMessages, attemptedEditFiles)
           : undefined
-      // Changed paths prove only that mutations committed, not that a reviewer
-      // finding was semantically addressed. Leave finding attestation to the
-      // parent reviewer gate until an explicit trustworthy evidence channel exists.
-      const findingsAddressed: string[] = []
+      // A repair editor receives the exact finding set in params.handoff. It
+      // can claim only findings whose declared files intersect a committed
+      // mutation. The runtime receipt layer independently re-verifies that
+      // intersection against canonical mutation receipts before the parent
+      // gate trusts the claim, so this preserves the fail-closed handoff
+      // contract without making every completed repair look incomplete.
+      const findingsAddressed = extractAddressedHandoffFindingIds(
+        params,
+        changedFiles,
+      )
 
       const receiptResult = yield {
         toolName: 'set_output',
@@ -397,6 +403,45 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         const files = new Set<string>()
         visit(messages, files)
         return [...files]
+      }
+
+      function extractAddressedHandoffFindingIds(
+        value: unknown,
+        changedFiles: string[],
+      ): string[] {
+        if (!value || typeof value !== 'object') return []
+        const handoff = (value as Record<string, unknown>).handoff
+        if (!handoff || typeof handoff !== 'object' || Array.isArray(handoff)) {
+          return []
+        }
+        const findings = (handoff as Record<string, unknown>).findings
+        if (!Array.isArray(findings)) return []
+
+        const changedPaths = new Set(
+          changedFiles.map(normalizeFilePath).filter(Boolean),
+        )
+        if (changedPaths.size === 0) return []
+
+        const addressed = new Set<string>()
+        for (const finding of findings) {
+          if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
+            continue
+          }
+          const record = finding as Record<string, unknown>
+          const id = typeof record.id === 'string' ? record.id.trim() : ''
+          const files = Array.isArray(record.files) ? record.files : []
+          if (
+            id &&
+            files.some(
+              (file) =>
+                typeof file === 'string' &&
+                changedPaths.has(normalizeFilePath(file)),
+            )
+          ) {
+            addressed.add(id)
+          }
+        }
+        return [...addressed]
       }
 
       // Called only when `changedFiles.length === 0` (so the status resolves to
