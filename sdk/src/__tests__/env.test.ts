@@ -2,6 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 
 import {
   getChatGptOAuthTokenFromEnv,
+  getChildProcessEnv,
   getOpenbuffApiKeyFromEnv,
   getSdkEnv,
 } from '../env'
@@ -186,6 +187,55 @@ describe('sdk/env', () => {
       process.env.OPENBUFF_API_KEY = 'openbuff-key'
       process.env.CODEBUFF_API_KEY = 'codebuff-key'
       expect(getOpenbuffApiKeyFromEnv()).toBe('openbuff-key')
+    })
+  })
+
+  describe('getChildProcessEnv', () => {
+    const originalEnv = { ...process.env }
+
+    afterEach(() => {
+      Object.keys(process.env).forEach((key) => {
+        if (!(key in originalEnv)) {
+          delete process.env[key]
+        }
+      })
+      Object.assign(process.env, originalEnv)
+    })
+
+    test('omits the agent process own provider credentials', () => {
+      process.env.CODEBUFF_BYOK_OPENROUTER = 'byok-secret'
+      process.env.CODEBUFF_CHATGPT_OAUTH_TOKEN = 'codebuff-oauth-secret'
+      process.env.OPENBUFF_CHATGPT_OAUTH_TOKEN = 'openbuff-oauth-secret'
+      process.env.OPENBUFF_API_KEY = 'openbuff-api-secret'
+      process.env.CODEBUFF_API_KEY = 'codebuff-api-secret'
+
+      const env = getChildProcessEnv()
+
+      expect(env.CODEBUFF_BYOK_OPENROUTER).toBeUndefined()
+      expect(env.CODEBUFF_CHATGPT_OAUTH_TOKEN).toBeUndefined()
+      expect(env.OPENBUFF_CHATGPT_OAUTH_TOKEN).toBeUndefined()
+      expect(env.OPENBUFF_API_KEY).toBeUndefined()
+      expect(env.CODEBUFF_API_KEY).toBeUndefined()
+    })
+
+    test('preserves unrelated environment variables', () => {
+      process.env.PATH = '/usr/bin:/bin'
+      process.env.SOME_USER_VAR = 'keep'
+
+      const env = getChildProcessEnv()
+
+      expect(env.PATH).toBe('/usr/bin:/bin')
+      expect(env.SOME_USER_VAR).toBe('keep')
+    })
+
+    test('does not mutate process.env', () => {
+      process.env.CODEBUFF_API_KEY = 'codebuff-api-secret'
+      process.env.SOME_USER_VAR = 'keep'
+
+      getChildProcessEnv()
+
+      expect(process.env.CODEBUFF_API_KEY).toBe('codebuff-api-secret')
+      expect(process.env.SOME_USER_VAR).toBe('keep')
     })
   })
 })

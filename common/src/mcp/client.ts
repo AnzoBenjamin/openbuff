@@ -48,6 +48,76 @@ function substituteEnvInRecord(
   return result
 }
 
+/**
+ * Who authored an MCP server config. This decides whether `$VAR` references
+ * are expanded from this process's environment.
+ *
+ * - `'user'` / `'project'`: written by the local user (home or project
+ *   `mcp.json`, `openbuff.json`, local agent definitions). `$VAR` references
+ *   in stdio `env` and remote `headers` are substituted from `process.env`, as
+ *   before.
+ * - `'client'`: supplied by a protocol peer, e.g. an ACP editor sending
+ *   `session/new { mcpServers }`. Its values are used LITERALLY. Expanding them
+ *   would let an untrusted peer read BYOK/OAuth secrets out of this process
+ *   (e.g. an http server whose header is `Authorization: $OPENROUTER_API_KEY`
+ *   pointing at an attacker URL).
+ *
+ * Origin is always supplied by the caller, never read from config content, so
+ * an untrusted config cannot claim a trusted origin.
+ */
+export type MCPConfigOrigin = 'user' | 'project' | 'client'
+
+const DEFAULT_MCP_CONFIG_ORIGIN: MCPConfigOrigin = 'project'
+
+function originAllowsEnvSubstitution(origin: MCPConfigOrigin): boolean {
+  return origin === 'user' || origin === 'project'
+}
+
+export type ResolvedMCPConfigValues =
+  | {
+      type: 'stdio'
+      command: string
+      args: string[]
+      env: Record<string, string>
+    }
+  | {
+      type: 'http' | 'sse'
+      url: string
+      params: Record<string, string>
+      headers: Record<string, string>
+    }
+
+/**
+ * Returns the effective values used to connect to an MCP server. `$VAR`
+ * substitution applies only to trusted origins (see {@link MCPConfigOrigin}).
+ */
+export function resolveMCPConfigValues(
+  config: MCPConfig,
+  origin: MCPConfigOrigin,
+): ResolvedMCPConfigValues {
+  const substitute = originAllowsEnvSubstitution(origin)
+  if (config.type === 'stdio') {
+    return {
+      type: 'stdio',
+      command: config.command,
+      args: [...config.args],
+      env: substitute ? substituteEnvInRecord(config.env) : { ...config.env },
+    }
+  }
+  if (config.type === 'http' || config.type === 'sse') {
+    return {
+      type: config.type,
+      url: config.url,
+      params: { ...config.params },
+      headers: substitute
+        ? substituteEnvInRecord(config.headers)
+        : { ...config.headers },
+    }
+  }
+  config.type satisfies never
+  throw new Error(`Internal error: invalid MCP config type ${config.type}`)
+}
+
 function stableHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
@@ -66,71 +136,73 @@ function hashRecordValues(
   )
 }
 
-export function getMCPClientCacheKey(config: MCPConfig): string {
-  if (config.type === 'stdio') {
+export function getMCPClientCacheKey(
+  config: MCPConfig,
+  options?: { origin?: MCPConfigOrigin },
+): string {
+  const origin = options?.origin ?? DEFAULT_MCP_CONFIG_ORIGIN
+  const resolved = resolveMCPConfigValues(config, origin)
+  // Origin is part of the identity so a client-origin connection never
+  // reuses a running client created for a trusted origin (or vice versa).
+  if (resolved.type === 'stdio') {
     return JSON.stringify({
-      command: config.command,
-      args: config.args,
-      env: hashRecordValues(substituteEnvInRecord(config.env)),
+      origin,
+      command: resolved.command,
+      args: resolved.args,
+      env: hashRecordValues(resolved.env),
     })
   }
-  if (config.type === 'http') {
-    return JSON.stringify({
-      type: 'http',
-      url: config.url,
-      params: config.params,
-      headers: hashRecordValues(substituteEnvInRecord(config.headers)),
-    })
-  }
-  if (config.type === 'sse') {
-    return JSON.stringify({
-      type: 'sse',
-      url: config.url,
-      params: config.params,
-      headers: hashRecordValues(substituteEnvInRecord(config.headers)),
-    })
-  }
-  config.type satisfies never
-  throw new Error(
-    `Internal error in hashConfig: invalid MCP config type ${config.type}`,
-  )
+  return JSON.stringify({
+    origin,
+    type: resolved.type,
+    url: resolved.url,
+    params: resolved.params,
+    headers: hashRecordValues(resolved.headers),
+  })
 }
 
-export async function getMCPClient(config: MCPConfig): Promise<string> {
-  let key = getMCPClientCacheKey(config)
+export async function getMCPClient(
+  config: MCPConfig,
+  options?: { origin?: MCPConfigOrigin },
+): Promise<string> {
+  const origin = options?.origin ?? DEFAULT_MCP_CONFIG_ORIGIN
+  let key = getMCPClientCacheKey(config, { origin })
   if (key in runningClients) {
     return key
   }
 
+  const resolved = resolveMCPConfigValues(config, origin)
   let transport: Transport
-  if (config.type === 'stdio') {
+  if (resolved.type === 'stdio') {
     transport = new StdioClientTransport({
-      command: config.command,
-      args: config.args,
-      env: substituteEnvInRecord(config.env),
+      command: resolved.command,
+      args: resolved.args,
+      env: resolved.env,
       stderr: 'ignore',
     })
   } else {
-    const url = new URL(config.url)
-    for (const [key, value] of Object.entries(config.params)) {
+    const url = new URL(resolved.url)
+    for (const [key, value] of Object.entries(resolved.params)) {
       url.searchParams.set(key, value)
     }
-    const headers = substituteEnvInRecord(config.headers)
-    if (config.type === 'http') {
+    const headers = resolved.headers
+    if (resolved.type === 'http') {
       transport = new StreamableHTTPClientTransport(url, {
         requestInit: {
           headers,
         },
       })
-    } else if (config.type === 'sse') {
+    } else if (resolved.type === 'sse') {
       transport = new SSEClientTransport(url, {
         requestInit: {
           headers,
         },
       })
     } else {
-      config.type satisfies never
-      throw new Error(`Internal error: invalid MCP config type ${config.type}`)
+      resolved.type satisfies never
+      throw new Error(
+        `Internal error: invalid MCP config type ${resolved.type}`,
+      )
     }
   }
 

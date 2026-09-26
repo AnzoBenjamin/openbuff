@@ -7,7 +7,7 @@ import {
   stripColors,
   truncateStringWithMessage,
 } from '../../../common/src/util/string'
-import { getSystemProcessEnv } from '../env'
+import { getChildProcessEnv } from '../env'
 import {
   isProcessTreeAlive,
   killBackgroundJob,
@@ -410,7 +410,7 @@ export function runTerminalCommand({
       }
       const isWindows = os.platform() === 'win32'
       const processEnv = {
-        ...getSystemProcessEnv(),
+        ...getChildProcessEnv(),
         ...(env ?? {}),
       } as NodeJS.ProcessEnv
 
@@ -482,7 +482,7 @@ export function runTerminalCommand({
     >((resolve, reject) => {
       const isWindows = os.platform() === 'win32'
       const processEnv = {
-        ...getSystemProcessEnv(),
+        ...getChildProcessEnv(),
         ...(env ?? {}),
       } as NodeJS.ProcessEnv
 
