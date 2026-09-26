@@ -9,12 +9,16 @@ import {
 } from '@codebuff/common/browser-actions'
 
 import {
+  buildApng,
   buildPdfAttachmentMetadata,
   frameSelectorOffsetScript,
   getBrowserSessionKey,
   normalizeBrowserUrl,
+  parsePngChunks,
   recordNetworkEvent,
+  shareInFlightBrowserSpawn,
   translateFramePoint,
+  writePngChunk,
 } from '../tools/browser-logs'
 
 describe('browser_logs', () => {
@@ -364,5 +368,178 @@ describe('browser_logs', () => {
     expect(requests.has('req-0')).toBe(false)
     // No dangling response events were pushed for tracking-only requests.
     expect(networks).toHaveLength(0)
+  })
+})
+
+describe('APNG assembly (writePngChunk / buildApng)', () => {
+  // Independent bitwise CRC32 (no lookup table) so the chunk encoding's CRC
+  // output is validated against a reference implementation, not itself.
+  function referenceCrc32(bytes: Buffer): number {
+    let crc = 0xffffffff
+    for (const byte of bytes) {
+      crc ^= byte
+      for (let bit = 0; bit < 8; bit++) {
+        crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1
+      }
+    }
+    return (crc ^ 0xffffffff) >>> 0
+  }
+
+  function makeFrame(width: number, height: number, idat: Buffer): Buffer {
+    const ihdr = Buffer.alloc(13)
+    ihdr.writeUInt32BE(width, 0)
+    ihdr.writeUInt32BE(height, 4)
+    ihdr.writeUInt8(8, 8) // bit depth
+    ihdr.writeUInt8(6, 9) // color type RGBA
+    return Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      writePngChunk('IHDR', ihdr),
+      writePngChunk('IDAT', idat),
+      writePngChunk('IEND', Buffer.alloc(0)),
+    ])
+  }
+
+  test('writePngChunk encodes length, type, payload, and a reference-checked CRC', () => {
+    const payload = Buffer.from('payload-bytes')
+    const chunk = writePngChunk('tEXt', payload)
+
+    expect(chunk.readUInt32BE(0)).toBe(payload.length)
+    expect(chunk.subarray(4, 8).toString('ascii')).toBe('tEXt')
+    expect(chunk.subarray(8, 8 + payload.length).equals(payload)).toBe(true)
+    expect(chunk.readUInt32BE(8 + payload.length)).toBe(
+      referenceCrc32(Buffer.concat([Buffer.from('tEXt', 'ascii'), payload])),
+    )
+  })
+
+  test('writePngChunk concatenates multiple payload parts into one chunk', () => {
+    const chunk = writePngChunk('fdAT', Buffer.from('abc'), Buffer.from('def'))
+
+    expect(chunk.readUInt32BE(0)).toBe(6)
+    expect(chunk.subarray(8, 14).toString('ascii')).toBe('abcdef')
+    expect(chunk.length).toBe(18)
+    expect(chunk.readUInt32BE(14)).toBe(
+      referenceCrc32(Buffer.from('fdATabcdef', 'ascii')),
+    )
+  })
+
+  test('buildApng returns an empty buffer when there are no frames', () => {
+    expect(buildApng([]).length).toBe(0)
+  })
+
+  test('buildApng reassembles frames with valid chunk structure and CRCs', () => {
+    const firstIdat = Buffer.from('first-frame-image-data')
+    const secondIdat = Buffer.from('second-frame-image-data')
+
+    const apng = buildApng([
+      { buffer: makeFrame(4, 3, firstIdat), timestamp: 0 },
+      { buffer: makeFrame(4, 3, secondIdat), timestamp: 250 },
+    ])
+
+    const chunks = parsePngChunks(apng)
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      'IHDR',
+      'acTL',
+      'fcTL',
+      'IDAT',
+      'fcTL',
+      'fdAT',
+      'IEND',
+    ])
+
+    // acTL declares the frame count and an infinite loop count.
+    expect(chunks[1]!.data.readUInt32BE(0)).toBe(2)
+    expect(chunks[1]!.data.readUInt32BE(4)).toBe(0)
+
+    // The first frame keeps its IDAT payload byte-for-byte...
+    expect(chunks[3]!.data.equals(firstIdat)).toBe(true)
+    // ...and later frames become fdAT with their sequence number prefixed.
+    expect(chunks[4]!.data.readUInt32BE(0)).toBe(1)
+    expect(chunks[5]!.data.readUInt32BE(0)).toBe(2)
+    expect(chunks[5]!.data.subarray(4).equals(secondIdat)).toBe(true)
+
+    // fcTL carries the frame dimensions and the measured inter-frame delay.
+    expect(chunks[2]!.data.readUInt32BE(0)).toBe(0)
+    expect(chunks[2]!.data.readUInt32BE(4)).toBe(4)
+    expect(chunks[2]!.data.readUInt32BE(8)).toBe(3)
+    expect(chunks[2]!.data.readUInt16BE(20)).toBe(250)
+    expect(chunks[2]!.data.readUInt16BE(22)).toBe(1000)
+
+    // Every emitted chunk's stored CRC matches a reference CRC32 computed
+    // over the type and payload — the encoding path under repair.
+    let offset = 8
+    for (const chunk of chunks) {
+      const stored = apng.readUInt32BE(offset + 8 + chunk.data.length)
+      const expected = referenceCrc32(
+        Buffer.concat([Buffer.from(chunk.type, 'ascii'), chunk.data]),
+      )
+      expect(stored).toBe(expected)
+      offset += 12 + chunk.data.length
+    }
+  })
+})
+
+describe('shareInFlightBrowserSpawn (single-flight spawn guard)', () => {
+  test('concurrent calls for the same key share one in-flight spawn', async () => {
+    let spawnCount = 0
+    let release!: (session: string) => void
+    const spawnSession = () => {
+      spawnCount += 1
+      return new Promise<string>((resolve) => {
+        release = resolve
+      })
+    }
+
+    const first = shareInFlightBrowserSpawn('race-key', spawnSession)
+    const second = shareInFlightBrowserSpawn('race-key', spawnSession)
+
+    // Only one spawn attempt is made for the shared key.
+    expect(spawnCount).toBe(1)
+
+    release('session-a')
+    await expect(first).resolves.toBe('session-a')
+    // Both concurrent callers observe the same settled session.
+    await expect(second).resolves.toBe('session-a')
+  })
+
+  test('a settled spawn is cleared so the next call starts a fresh spawn', async () => {
+    let spawnCount = 0
+    const spawnSession = async () => {
+      spawnCount += 1
+      return `session-${spawnCount}`
+    }
+
+    expect(await shareInFlightBrowserSpawn('retry-key', spawnSession)).toBe(
+      'session-1',
+    )
+    expect(await shareInFlightBrowserSpawn('retry-key', spawnSession)).toBe(
+      'session-2',
+    )
+    expect(spawnCount).toBe(2)
+  })
+
+  test('concurrent callers share one failed spawn, which is then retriable', async () => {
+    let spawnCount = 0
+    const rejecters: Array<(error: Error) => void> = []
+    const spawnSession = () => {
+      spawnCount += 1
+      return new Promise<string>((_resolve, reject) => {
+        rejecters.push(reject)
+      })
+    }
+
+    const first = shareInFlightBrowserSpawn('fail-key', spawnSession)
+    const second = shareInFlightBrowserSpawn('fail-key', spawnSession)
+    expect(spawnCount).toBe(1)
+
+    rejecters[0]!(new Error('chrome failed to launch'))
+    await expect(first).rejects.toThrow('chrome failed to launch')
+    // Both concurrent callers observe the same failure — no second spawn.
+    await expect(second).rejects.toThrow('chrome failed to launch')
+
+    // The failed entry is cleared, so the next call spawns again.
+    const third = shareInFlightBrowserSpawn('fail-key', spawnSession)
+    expect(spawnCount).toBe(2)
+    rejecters[1]!(new Error('chrome failed to launch'))
+    await expect(third).rejects.toThrow('chrome failed to launch')
   })
 })
