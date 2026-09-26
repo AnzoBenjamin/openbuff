@@ -549,6 +549,61 @@ export function buildPdfAttachmentMetadata(data: string) {
   }
 }
 
+/**
+ * Decide whether Chrome must be launched with `--no-sandbox`.
+ *
+ * `--no-sandbox` disables Chrome's own OS-level sandbox and is a last resort:
+ * we only pass it when the sandbox genuinely cannot function in the current
+ * environment, otherwise Chrome runs sandboxed. Non-Linux platforms (macOS,
+ * Windows) never need it — Chrome's sandbox works out of the box there, so we
+ * return `[]`. On Linux we probe: running as root can't use the setuid
+ * sandbox without extra setup (common in CI/containers), and unprivileged
+ * user namespaces must be available for the namespace sandbox. When the
+ * sandbox can't work or availability is undeterminable we fail open with
+ * `['--no-sandbox']`, since a broken sandbox launch would hang the tool.
+ *
+ * Note: no `CHROME_DISABLE_SANDBOX` env escape hatch is wired up here. Adding
+ * one would require surfacing a new key from getSdkEnv() and editing the
+ * SdkEnv type in sdk/src/types/env.ts, which is out of scope per the task
+ * constraints (prefer skipping the hatch over a multi-file change).
+ */
+export function chromeSandboxArgs(): string[] {
+  // Chrome's sandbox works out of the box on macOS/Windows.
+  if (process.platform !== 'linux') return []
+
+  // The setuid sandbox won't work as root without extra setup; disable it.
+  // This matches common CI/container reality. process.getuid is undefined on
+  // non-POSIX platforms, so guard with a typeof check.
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    return ['--no-sandbox']
+  }
+
+  // Linux, non-root: probe unprivileged user-namespace availability.
+  try {
+    const clonePath = '/proc/sys/kernel/unprivileged_userns_clone'
+    if (existsSync(clonePath)) {
+      return readFileSync(clonePath, 'utf8').trim() === '1'
+        ? []
+        : ['--no-sandbox']
+    }
+  } catch {
+    return ['--no-sandbox']
+  }
+
+  try {
+    const maxPath = '/proc/sys/user/max_user_namespaces'
+    if (existsSync(maxPath)) {
+      const max = parseInt(readFileSync(maxPath, 'utf8').trim(), 10)
+      return Number.isFinite(max) && max > 0 ? [] : ['--no-sandbox']
+    }
+  } catch {
+    return ['--no-sandbox']
+  }
+
+  // Undeterminable: fail open so the tool doesn't hang on a broken sandbox.
+  return ['--no-sandbox']
+}
+
 async function ensureBrowserSession(
   sessionKey: string,
   owner?: BrowserSessionOwner,
@@ -569,7 +624,7 @@ async function ensureBrowserSession(
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-default-browser-check',
-      '--no-sandbox',
+      ...chromeSandboxArgs(),
       `--remote-debugging-port=${port}`,
       `--user-data-dir=${userDataDir}`,
       '--window-size=1280,720',
