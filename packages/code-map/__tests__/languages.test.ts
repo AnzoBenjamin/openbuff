@@ -20,7 +20,7 @@ describe('languages module', () => {
     it('should contain all expected language configurations', () => {
       expect(languageTable).toBeDefined()
       expect(Array.isArray(languageTable)).toBe(true)
-      expect(languageTable.length).toBe(14) // Current number of supported languages
+      expect(languageTable.length).toBe(15) // Current number of supported languages
     })
 
     it('should have proper structure for each language config', () => {
@@ -198,6 +198,33 @@ describe('languages module', () => {
       expect(config).toBeDefined()
       expect(config?.extensions).toContain('.py')
       expect(config?.wasmFile).toBe('tree-sitter-python.wasm')
+    })
+
+    it('should route C sources and headers to the dedicated C grammar', () => {
+      const cConfig = findLanguageConfigByExtension('fixture.c')
+      expect(cConfig).toBeDefined()
+      expect(cConfig?.extensions).toContain('.c')
+      expect(cConfig?.wasmFile).toBe('tree-sitter-c.wasm')
+
+      const hConfig = findLanguageConfigByExtension('fixture.h')
+      expect(hConfig).toBeDefined()
+      expect(hConfig?.extensions).toContain('.h')
+      expect(hConfig?.wasmFile).toBe('tree-sitter-c.wasm')
+
+      // The C row and C++ row must expose the same query/wasm pairing.
+      expect(cConfig?.queryPathOrContent).toBe(hConfig?.queryPathOrContent)
+    })
+
+    it('should keep C++ sources and headers on the C++ grammar', () => {
+      const cppConfig = findLanguageConfigByExtension('fixture.cpp')
+      expect(cppConfig).toBeDefined()
+      expect(cppConfig?.extensions).toContain('.cpp')
+      expect(cppConfig?.wasmFile).toBe('tree-sitter-cpp.wasm')
+
+      const ccConfig = findLanguageConfigByExtension('fixture.cc')
+      expect(ccConfig).toBeDefined()
+      expect(ccConfig?.extensions).toContain('.cc')
+      expect(ccConfig?.wasmFile).toBe('tree-sitter-cpp.wasm')
     })
 
     it('should return undefined for unsupported extensions', () => {

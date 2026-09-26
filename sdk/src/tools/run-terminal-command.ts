@@ -226,6 +226,7 @@ export function runTerminalCommand({
   signal,
   owner,
   authorizeHighImpactAction,
+  preApprovedAction,
 }: {
   command: string
   process_type: 'SYNC' | 'BACKGROUND'
@@ -254,6 +255,19 @@ export function runTerminalCommand({
         approvalRequired: boolean
       }
   >
+  /**
+   * One-shot pre-approved harness action carried on the internal
+   * post-approval rerun. When the freshly classified high-impact action
+   * matches it (same action+target), the rerun consumes it instead of
+   * requesting approval again, so the terminal permission profile is still
+   * enforced (unlike the old mode:'user' rerun which bypassed the whole
+   * policy).
+   */
+  preApprovedAction?: {
+    action: string
+    target: string
+    approvalReceiptId?: string
+  }
 }): Promise<CodebuffToolOutput<'run_terminal_command'>> {
   // The contract for `cwd` is "project root or a subdirectory of it". A
   // caller-supplied absolute path like `/etc` or a traversal like
@@ -310,7 +324,45 @@ export function runTerminalCommand({
 
   const highImpactAction =
     mode === 'assistant' ? classifyTerminalHarnessAction(command) : undefined
-  if (highImpactAction) {
+  // A matched one-shot pre-approval means this call is the post-approval
+  // rerun for the same action+target: the profile policy already ran above,
+  // so consume the pre-approval and fall through to execution instead of
+  // asking for approval again (which would loop approve->rerun->approve).
+  const matchedPreApproval =
+    highImpactAction &&
+    preApprovedAction &&
+    preApprovedAction.action === highImpactAction.action &&
+    preApprovedAction.target === highImpactAction.target
+      ? preApprovedAction
+      : undefined
+  // Harness metadata threaded onto the eventual output on the matched
+  // pre-approval path so callers see identical metadata whether the command
+  // took one hop (old user mode) or two (assistant approve -> assistant rerun).
+  const pendingHarnessMetadata =
+    highImpactAction && matchedPreApproval
+      ? {
+          ...(matchedPreApproval.approvalReceiptId
+            ? { approvalReceiptId: matchedPreApproval.approvalReceiptId }
+            : {}),
+          harnessAction: highImpactAction.action,
+          harnessTarget: highImpactAction.target,
+        }
+      : undefined
+  const finalizeHarnessMetadata = (
+    result: Promise<CodebuffToolOutput<'run_terminal_command'>>,
+  ): Promise<CodebuffToolOutput<'run_terminal_command'>> =>
+    pendingHarnessMetadata
+      ? result.then((output) => {
+          const part = output[0]
+          return [
+            {
+              ...part,
+              value: { ...part.value, ...pendingHarnessMetadata },
+            },
+          ]
+        })
+      : result
+  if (highImpactAction && !matchedPreApproval) {
     if (!authorizeHighImpactAction) {
       return Promise.resolve([
         {
@@ -344,11 +396,16 @@ export function runTerminalCommand({
           },
         ]
       }
+      // Approved: re-run with mode unchanged (still 'assistant') and the
+      // permission profile unchanged so the profile policy is STILL enforced
+      // on the rerun. A one-shot preApprovedAction lets that rerun skip only
+      // the harness re-authorization for this same action+target, never the
+      // profile — a command that escapes its profile stays denied.
       return runTerminalCommand({
         command,
         process_type,
         detach,
-        mode: 'user',
+        mode,
         permission_profile,
         allowed_paths,
         cwd,
@@ -357,6 +414,14 @@ export function runTerminalCommand({
         env,
         signal,
         owner,
+        authorizeHighImpactAction,
+        preApprovedAction: {
+          action: highImpactAction.action,
+          target: highImpactAction.target,
+          ...(decision.approvalReceiptId
+            ? { approvalReceiptId: decision.approvalReceiptId }
+            : {}),
+        },
       }).then((output) => {
         const part = output[0]
         return [
@@ -383,17 +448,19 @@ export function runTerminalCommand({
   ) {
     const safetyError = validateStagedCommit(containedCwd)
     if (safetyError) {
-      return Promise.resolve([
-        {
-          type: 'json',
-          value: {
-            command,
-            errorMessage: `Commit blocked by staged-diff safety policy: ${safetyError}`,
-            permissionDenied: true,
-            permissionProfile: permission_profile,
+      return finalizeHarnessMetadata(
+        Promise.resolve([
+          {
+            type: 'json',
+            value: {
+              command,
+              errorMessage: `Commit blocked by staged-diff safety policy: ${safetyError}`,
+              permissionDenied: true,
+              permissionProfile: permission_profile,
+            },
           },
-        },
-      ])
+        ]),
+      )
     }
   }
 
@@ -401,7 +468,7 @@ export function runTerminalCommand({
     // Capture pre-start dirty set (best-effort) so check_job can credit a
     // one-shot settlement dirty delta — same SYNC semantics, deferred to the
     // first settled observation. Soft-fail omits snapshot without failing start.
-    return (async () => {
+    return finalizeHarnessMetadata((async () => {
       if (signal?.aborted) {
         const reason = signal.reason
         throw reason instanceof Error
@@ -468,12 +535,12 @@ export function runTerminalCommand({
           },
         },
       ]
-    })()
+    })())
   }
 
   // SYNC: capture pre/post dirty paths against projectRoot so cwd subdirectory
   // commands still attribute project-relative paths. Soft-fail omits touchedPaths.
-  return (async () => {
+  return finalizeHarnessMetadata((async () => {
     const gitRoot = projectRoot ?? containedCwd
     const dirtyBefore = await listDirtyPaths(gitRoot, signal)
 
@@ -714,5 +781,5 @@ export function runTerminalCommand({
         ) as typeof part.value,
       },
     ]
-  })()
+  })())
 }

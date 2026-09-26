@@ -13,6 +13,7 @@ import { DEBUG_PARSING } from './parse'
 /* ------------------------------------------------------------------ */
 /* 1. Query imports (these work in all bundled environments)         */
 /* ------------------------------------------------------------------ */
+import cQuery from './tree-sitter-queries/tree-sitter-c-tags.scm'
 import csharpQuery from './tree-sitter-queries/tree-sitter-c_sharp-tags.scm'
 import cppQuery from './tree-sitter-queries/tree-sitter-cpp-tags.scm'
 import goQuery from './tree-sitter-queries/tree-sitter-go-tags.scm'
@@ -88,7 +89,12 @@ export const languageTable: LanguageConfig[] = [
     queryPathOrContent: csharpQuery,
   },
   {
-    extensions: ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'],
+    extensions: ['.c', '.h'],
+    wasmFile: WASM_FILES['tree-sitter-c.wasm'],
+    queryPathOrContent: cQuery,
+  },
+  {
+    extensions: ['.cc', '.cpp', '.cxx', '.hh', '.hpp', '.hxx'],
     wasmFile: WASM_FILES['tree-sitter-cpp.wasm'],
     queryPathOrContent: cppQuery,
   },
