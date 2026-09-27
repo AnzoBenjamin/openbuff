@@ -35,6 +35,10 @@ import {
  * - FileMutationResultV1 / CommitReceiptV1 wire round-trip vectors
  *   (reconciliation semantics live in
  *   common/src/tools/results/__tests__/filesystem.test.ts).
+ * - The CODEBUFF_RG_PATH env-override golden vectors live in the sdk
+ *   companion sdk/src/__tests__/x1-rg-env-override.test.ts, because the
+ *   resolution seam (sdk/src/native/ripgrep.ts) lives in sdk and common
+ *   cannot import sdk.
  */
 
 describe('compileToolJsonSchemas golden vectors', () => {
