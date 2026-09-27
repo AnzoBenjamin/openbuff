@@ -7,6 +7,7 @@ import { mcpConfigSchema } from '@codebuff/common/types/mcp'
 import { z } from 'zod/v4'
 
 import type { MCPConfig } from '@codebuff/common/types/mcp'
+import { markMCPConfigOrigin, type MCPConfigOrigin } from '@codebuff/common/mcp/client'
 
 /**
  * Schema for the mcp.json file format.
@@ -19,71 +20,14 @@ export const mcpFileSchema = z.object({
 export type MCPFileConfig = z.infer<typeof mcpFileSchema>
 
 /**
- * Loaded MCP configuration with resolved environment variables.
+ * Loaded MCP configuration. `$VAR` references in server env/headers are kept
+ * literal at load time and resolved once at connect time (see
+ * resolveMCPConfigValues in common/src/mcp/client.ts), gated by origin.
  */
 export type LoadedMCPConfig = {
   mcpServers: Record<string, MCPConfig>
   /** The file path this config was loaded from */
   _sourceFilePath: string
-}
-
-/**
- * Resolves environment variable references in MCP server env configs.
- * Values starting with `$` are treated as env var references (e.g., `'$NOTION_TOKEN'`).
- *
- * @param env - The env object from MCP config with possible $VAR_NAME references
- * @param mcpServerName - The MCP server name for error messages
- * @returns Resolved env object with all $VAR_NAME values replaced with actual values
- * @throws Error if a referenced environment variable is missing
- */
-// Bypass env architecture check - this file legitimately needs process.env access
-// to resolve $VAR_NAME references in MCP configs at runtime
-const envKey = 'env'
-const processEnv = process[envKey] as NodeJS.ProcessEnv
-
-function resolveMcpEnv(
-  env: Record<string, string> | undefined,
-  mcpServerName: string,
-): Record<string, string> {
-  if (!env) return {}
-
-  const resolved: Record<string, string> = {}
-
-  for (const [key, value] of Object.entries(env)) {
-    if (value.startsWith('$')) {
-      // $VAR_NAME reference - resolve from process.env
-      const envVarName = value.slice(1) // Remove the leading $
-      const envValue = processEnv[envVarName]
-
-      if (envValue === undefined) {
-        throw new Error(
-          `Missing environment variable '${envVarName}' required by MCP server '${mcpServerName}' in mcp.json`,
-        )
-      }
-
-      resolved[key] = envValue
-    } else {
-      // Plain string value - use as-is
-      resolved[key] = value
-    }
-  }
-
-  return resolved
-}
-
-/**
- * Resolves all MCP server env references in a config.
- * Mutates the mcpServers object to replace $VAR_NAME references with resolved values.
- *
- * @param config - The MCP file config to process
- * @throws Error if any referenced environment variable is missing
- */
-function resolveMcpConfigEnv(config: MCPFileConfig): void {
-  for (const [serverName, serverConfig] of Object.entries(config.mcpServers)) {
-    if ('command' in serverConfig && serverConfig.env) {
-      serverConfig.env = resolveMcpEnv(serverConfig.env, serverName)
-    }
-  }
 }
 
 const MCP_CONFIG_FILE_NAME = 'mcp.json'
@@ -102,13 +46,32 @@ const getDefaultMcpConfigDirs = (includeProjectConfig: boolean): string[] => {
 }
 
 /**
+ * Trusted origin for an MCP config loaded from `configPath`: `'user'` when
+ * the file lives under the user's home directory, `'project'` otherwise.
+ * Uses a normalized prefix check with a path-separator boundary so e.g.
+ * `/home/userX` never matches a home dir of `/home/user`.
+ */
+export function mcpConfigOriginForPath(configPath: string): MCPConfigOrigin {
+  const home = path.normalize(os.homedir())
+  const normalized = path.normalize(configPath)
+  if (
+    normalized === home ||
+    (normalized.startsWith(home) && normalized.charAt(home.length) === path.sep)
+  ) {
+    return 'user'
+  }
+  return 'project'
+}
+
+/**
  * Process the raw string content of a single `mcp.json` file into `mergedConfig`.
  *
- * Parses the JSON, validates it against {@link mcpFileSchema}, resolves env var
- * references, and merges the servers into `mergedConfig` (later calls override
- * earlier ones). A validation or env-resolution failure for this file logs when
- * `verbose` and returns early without merging, so one bad file does not abort
- * the overall load. `JSON.parse` failures propagate to the caller's try/catch.
+ * Parses the JSON, validates it against {@link mcpFileSchema}, and merges the
+ * servers into `mergedConfig` (later calls override earlier ones), marking each
+ * with its trusted origin. `$VAR` references are kept literal and resolved once
+ * at connect time. A validation failure for this file logs when `verbose` and
+ * returns early without merging, so one bad file does not abort the overall
+ * load. `JSON.parse` failures propagate to the caller's try/catch.
  *
  * This helper is synchronous so both the async and sync loaders can share it;
  * each caller performs its own existence check and file read.
@@ -133,21 +96,15 @@ function processMcpConfigFile(
 
   const parsedConfig = parseResult.data
 
-  // Resolve environment variable references
-  try {
-    resolveMcpConfigEnv(parsedConfig)
-  } catch (error) {
-    if (verbose) {
-      console.error(error instanceof Error ? error.message : String(error))
-    }
-    return
-  }
-
-  // Merge MCP servers (later directories override earlier ones)
+  // Merge MCP servers (later directories override earlier ones), marking each
+  // with its trusted origin so $VAR substitution keeps working for these
+  // on-disk configs while unmarked configs fail closed to 'client'.
+  const origin = mcpConfigOriginForPath(configPath)
   for (const [serverName, serverConfig] of Object.entries(
     parsedConfig.mcpServers,
   )) {
     mergedConfig.mcpServers[serverName] = serverConfig
+    markMCPConfigOrigin(serverConfig, origin)
   }
 
   // Track the last successfully loaded config path
@@ -165,7 +122,8 @@ function processMcpConfigFile(
  * - `{homedir}/.agents/mcp.json`
  *
  * Later directories take precedence, so project MCP servers override global ones.
- * Environment variable references (e.g., `$API_KEY`) are resolved from process.env.
+ * Environment variable references (e.g., `$API_KEY`) are kept literal here and
+ * resolved once at connect time (gated by origin).
  *
  * @param options.verbose - Whether to log errors during loading
  * @returns Record of MCP server configurations keyed by server name

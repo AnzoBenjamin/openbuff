@@ -12,8 +12,11 @@ import {
   spyOn,
 } from 'bun:test'
 
+import { originOf } from '@codebuff/common/mcp/client'
+
 import { loadLocalAgents } from '../agents/load-agents'
 
+import type { MCPConfig } from '@codebuff/common/types/mcp'
 import type {
   LoadedAgents,
   LoadedAgentDefinition,
@@ -1004,6 +1007,89 @@ describe('loadLocalAgents', () => {
       // The sibling-dir agent outside the trust root is never imported and
       // loading does not crash.
       expect(result['outside-agent']).toBeUndefined()
+    })
+  })
+
+  describe('mcpServers origin marking', () => {
+    // The loader stamps agent-embedded mcpServers with a trusted origin via
+    // markAllMCPConfigOrigins(..., mcpConfigOriginForPath(fullPath)). originOf
+    // takes an MCPConfig; the agent-definition mcpServers config type is
+    // structurally near-identical but nominally distinct (this is exactly why
+    // markAllMCPConfigOrigins is generic), and the origin registry keys on
+    // object identity, so the cast is safe here.
+    const originOfServer = (server: unknown) =>
+      originOf(server as unknown as MCPConfig)
+
+    test('stamps agent-embedded mcpServers with the project origin for project-path agents', async () => {
+      mkdirSync(agentsDir, { recursive: true })
+      writeAgentFile(
+        agentsDir,
+        'mcp-agent.ts',
+        `
+          export default {
+            id: 'mcp-agent',
+            displayName: 'MCP Agent',
+            model: '${MODEL_NAME}',
+            mcpServers: {
+              myServer: {
+                command: 'node',
+                args: ['server.js'],
+                env: { API_KEY: '$SOME_MCP_VAR' }
+              }
+            }
+          }
+        `,
+      )
+
+      const result: LoadedAgents = await loadLocalAgents({
+        agentsPath: agentsDir,
+      })
+
+      const agent: LoadedAgentDefinition | undefined = result['mcp-agent']
+      expect(agent).toBeDefined()
+      const server = agent!.mcpServers!.myServer
+      expect(server).toBeDefined()
+      // Removing the markAllMCPConfigOrigins call would leave the config
+      // unmarked (undefined → fail-closed 'client', breaking $VAR expansion
+      // for a legit local agent). A temp agents dir under tmpdir (not home)
+      // is classified 'project'.
+      expect(originOfServer(server)).toBe('project')
+    })
+
+    test('stamps agent-embedded mcpServers with the user origin for home-dir agents', async () => {
+      // Make the temp agents dir look like it lives under the user's home so
+      // mcpConfigOriginForPath classifies it as 'user' rather than 'project'.
+      // Passing the wrong origin here (e.g. 'project') would fail this case.
+      spyOn(os, 'homedir').mockReturnValue(tempDir)
+      mkdirSync(agentsDir, { recursive: true })
+      writeAgentFile(
+        agentsDir,
+        'home-mcp-agent.ts',
+        `
+          export default {
+            id: 'home-mcp-agent',
+            displayName: 'Home MCP Agent',
+            model: '${MODEL_NAME}',
+            mcpServers: {
+              homeServer: {
+                command: 'node',
+                args: ['server.js']
+              }
+            }
+          }
+        `,
+      )
+
+      const result: LoadedAgents = await loadLocalAgents({
+        agentsPath: agentsDir,
+      })
+
+      const agent: LoadedAgentDefinition | undefined =
+        result['home-mcp-agent']
+      expect(agent).toBeDefined()
+      const server = agent!.mcpServers!.homeServer
+      expect(server).toBeDefined()
+      expect(originOfServer(server)).toBe('user')
     })
   })
 })

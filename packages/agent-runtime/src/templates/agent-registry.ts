@@ -11,6 +11,10 @@ import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
+import {
+  markAllMCPConfigOrigins,
+  propagateMCPConfigOrigins,
+} from '@codebuff/common/mcp/client'
 
 /**
  * Single function to look up an agent template with clear priority order:
@@ -67,6 +71,10 @@ export async function getAgentTemplate(
         parsedAgentId: codebuffParsed,
       })
       if (dbAgent) {
+        // Database agents are untrusted protocol content: mark their MCP
+        // configs 'client' so $VAR references are never expanded. The cache
+        // stores this same object, so cached copies keep the mark.
+        markAllMCPConfigOrigins(dbAgent.mcpServers, 'client')
         databaseAgentCache.set(dbAgent.id, dbAgent)
         return dbAgent
       }
@@ -80,6 +88,12 @@ export async function getAgentTemplate(
     ...params,
     parsedAgentId: parsed,
   })
+  if (dbAgent) {
+    // Database agents are untrusted protocol content: mark their MCP
+    // configs 'client' so $VAR references are never expanded. The cache
+    // stores this same object, so cached copies keep the mark.
+    markAllMCPConfigOrigins(dbAgent.mcpServers, 'client')
+  }
   if (dbAgent && parsed.version && parsed.version !== 'latest') {
     // Cache only specific versions to avoid stale 'latest' results
     databaseAgentCache.set(dbAgent.id, dbAgent)
@@ -103,6 +117,52 @@ export function assembleLocalAgentTemplates(params: {
     agentTemplates: fileContext.agentTemplates,
     logger,
   })
+
+  // Origin marking for the validated templates that reach getMCPClient.
+  // Provenance — not the WeakMap alone — decides trust here: agentTemplates
+  // flowing through fileContext may have been cloned or serialized on the way
+  // in (client.run clones agentDefinitions; session-state overrides round-trip
+  // through JSON), which erases WeakMap origin marks. The string
+  // `executionSource` field survives those hops, so it is the durable
+  // provenance signal:
+  //
+  // - 'local'/'bundled' (trusted on-disk material, stamped by loadLocalAgents
+  //   and bundled templates): re-attach any source marks that survived the
+  //   hop (NEW-1 no-upgrade invariant), then blanket-mark the remaining
+  //   configs 'project' so $VAR substitution keeps working.
+  // - 'database' (untrusted protocol content fetched from the database, e.g.
+  //   re-passed through client.run({ agentDefinitions }) into
+  //   fileContext.agentTemplates): the 'client' mark applied at fetch time
+  //   does not survive serialization, so re-mark 'client' here — $VAR
+  //   references stay literal and an erased mark can never be silently
+  //   upgraded.
+  // - no recorded executionSource (unknown provenance): no blanket mark.
+  //   Unmarked configs fail closed to 'client' at resolve time, with the
+  //   one-time diagnosability warning when they still contain $VAR
+  //   references — never a silent 'project' upgrade.
+  //
+  // validateSingleAgent's Zod re-parse creates fresh mcpServers objects with
+  // no origin mark, so propagation must happen before any blanket mark: a
+  // 'client' source mark always propagates and can never be upgraded by the
+  // trusted blanket mark below.
+  for (const rawTemplate of Object.values(fileContext.agentTemplates ?? {})) {
+    const validated =
+      rawTemplate && typeof rawTemplate.id === 'string'
+        ? dynamicTemplates[rawTemplate.id]
+        : undefined
+    if (!validated) {
+      continue
+    }
+    propagateMCPConfigOrigins(rawTemplate.mcpServers, validated.mcpServers)
+    if (
+      rawTemplate.executionSource === 'local' ||
+      rawTemplate.executionSource === 'bundled'
+    ) {
+      markAllMCPConfigOrigins(validated.mcpServers, 'project')
+    } else if (rawTemplate.executionSource === 'database') {
+      markAllMCPConfigOrigins(validated.mcpServers, 'client')
+    }
+  }
 
   // Use dynamic templates only
 

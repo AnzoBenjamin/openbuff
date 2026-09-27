@@ -2,7 +2,17 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from 'bun:test'
+
+import { originOf } from '@codebuff/common/mcp/client'
 
 import {
   loadMCPConfig,
@@ -146,11 +156,12 @@ describe('loadMCPConfigSync', () => {
     expect(result._sourceFilePath).toContain('mcp.json')
   })
 
-  it('should resolve environment variable references', () => {
+  it('should retain $VAR references literally at load (resolved at connect time)', () => {
     const agentsDir = path.join(tempDir, '.agents')
     fs.mkdirSync(agentsDir, { recursive: true })
 
-    // Set env var for test
+    // Even with the env var set, load no longer substitutes: the literal is
+    // kept and resolved once at connect time (gated by origin).
     process.env.TEST_MCP_API_KEY = 'resolved-api-key'
 
     const mcpConfig = {
@@ -176,14 +187,14 @@ describe('loadMCPConfigSync', () => {
     expect(result.mcpServers.envServer).toBeDefined()
     const envServer = result.mcpServers.envServer
     if (isStdioConfig(envServer)) {
-      expect(envServer.env?.API_KEY).toBe('resolved-api-key')
+      expect(envServer.env?.API_KEY).toBe('$TEST_MCP_API_KEY')
     }
 
     // Cleanup
     delete process.env.TEST_MCP_API_KEY
   })
 
-  it('should skip config if env var is missing', () => {
+  it('should retain the literal when a referenced env var is missing (no skip at load)', () => {
     const agentsDir = path.join(tempDir, '.agents')
     fs.mkdirSync(agentsDir, { recursive: true })
 
@@ -203,13 +214,17 @@ describe('loadMCPConfigSync', () => {
       JSON.stringify(mcpConfig, null, 2),
     )
 
-    // Should not throw, just skip the server with missing env var
+    // Load no longer resolves env vars, so a missing var neither throws nor
+    // skips: the server is present holding the literal reference.
     const result = loadMCPConfigSync({
       includeProjectConfig: true,
       verbose: false,
     })
-    // The server with missing env var should not be loaded
-    expect(result.mcpServers.missingEnvServer).toBeUndefined()
+    expect(result.mcpServers.missingEnvServer).toBeDefined()
+    const missingEnvServer = result.mcpServers.missingEnvServer
+    if (isStdioConfig(missingEnvServer)) {
+      expect(missingEnvServer.env?.API_KEY).toBe('$NONEXISTENT_VAR_12345')
+    }
   })
 
   it('should load config from project .agents directory', () => {
@@ -301,10 +316,11 @@ describe('loadMCPConfig', () => {
     }
   })
 
-  it('should resolve environment variable references', async () => {
+  it('should retain $VAR references literally at load (async, resolved at connect time)', async () => {
     const agentsDir = path.join(tempDir, '.agents')
     fs.mkdirSync(agentsDir, { recursive: true })
 
+    // Even with the env var set, load no longer substitutes.
     process.env.TEST_MCP_ASYNC_API_KEY = 'resolved-async-key'
 
     const mcpConfig = {
@@ -330,13 +346,13 @@ describe('loadMCPConfig', () => {
     expect(result.mcpServers.envServer).toBeDefined()
     const envServer = result.mcpServers.envServer
     if (isStdioConfig(envServer)) {
-      expect(envServer.env?.API_KEY).toBe('resolved-async-key')
+      expect(envServer.env?.API_KEY).toBe('$TEST_MCP_ASYNC_API_KEY')
     }
 
     delete process.env.TEST_MCP_ASYNC_API_KEY
   })
 
-  it('should skip config if env var is missing', async () => {
+  it('should retain the literal when a referenced env var is missing (async, no skip at load)', async () => {
     const agentsDir = path.join(tempDir, '.agents')
     fs.mkdirSync(agentsDir, { recursive: true })
 
@@ -360,7 +376,11 @@ describe('loadMCPConfig', () => {
       includeProjectConfig: true,
       verbose: false,
     })
-    expect(result.mcpServers.missingEnvServer).toBeUndefined()
+    expect(result.mcpServers.missingEnvServer).toBeDefined()
+    const missingEnvServer = result.mcpServers.missingEnvServer
+    if (isStdioConfig(missingEnvServer)) {
+      expect(missingEnvServer.env?.API_KEY).toBe('$NONEXISTENT_VAR_ASYNC_12345')
+    }
   })
 
   it('should handle invalid JSON gracefully', async () => {
@@ -372,5 +392,98 @@ describe('loadMCPConfig', () => {
     // Should not throw - just skip the invalid file
     const result = await loadMCPConfig({ verbose: false })
     expect(result.mcpServers.invalidServer).toBeUndefined()
+  })
+})
+
+describe('MCP config origin marking', () => {
+  let tempHome: string
+  let tempProject: string
+  let originalCwd: string
+
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-config-home-'))
+    tempProject = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-config-proj-'))
+    originalCwd = process.cwd()
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    mock.restore()
+    fs.rmSync(tempHome, { recursive: true, force: true })
+    fs.rmSync(tempProject, { recursive: true, force: true })
+  })
+
+  function writeHomeMcpConfig(serverName: string, command: string): void {
+    const agentsDir = path.join(tempHome, '.agents')
+    fs.mkdirSync(agentsDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(agentsDir, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          [serverName]: { command, args: ['server.js'] },
+        },
+      }),
+    )
+  }
+
+  function writeProjectMcpConfig(serverName: string, command: string): void {
+    const agentsDir = path.join(tempProject, '.agents')
+    fs.mkdirSync(agentsDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(agentsDir, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          [serverName]: { command, args: ['server.js'] },
+        },
+      }),
+    )
+  }
+
+  it("should mark servers from a home-dir fixture as 'user' (sync)", () => {
+    process.chdir(tempProject)
+    spyOn(os, 'homedir').mockReturnValue(tempHome)
+    writeHomeMcpConfig('homeServer', 'node')
+
+    const result = loadMCPConfigSync({
+      includeProjectConfig: true,
+      verbose: false,
+    })
+    const homeServer = result.mcpServers.homeServer
+    expect(homeServer).toBeDefined()
+    if (homeServer) {
+      expect(originOf(homeServer)).toBe('user')
+    }
+  })
+
+  it("should mark servers from a project-dir fixture as 'project' (sync)", () => {
+    process.chdir(tempProject)
+    spyOn(os, 'homedir').mockReturnValue(tempHome)
+    writeProjectMcpConfig('projectServer', 'project-command')
+
+    const result = loadMCPConfigSync({
+      includeProjectConfig: true,
+      verbose: false,
+    })
+    const projectServer = result.mcpServers.projectServer
+    expect(projectServer).toBeDefined()
+    if (projectServer) {
+      expect(originOf(projectServer)).toBe('project')
+    }
+  })
+
+  it("should mark servers from a home-dir fixture as 'user' (async)", async () => {
+    process.chdir(tempProject)
+    spyOn(os, 'homedir').mockReturnValue(tempHome)
+    writeHomeMcpConfig('asyncHomeServer', 'node')
+
+    const result = await loadMCPConfig({
+      includeProjectConfig: true,
+      verbose: false,
+    })
+    const asyncHomeServer = result.mcpServers.asyncHomeServer
+    expect(asyncHomeServer).toBeDefined()
+    if (asyncHomeServer) {
+      expect(originOf(asyncHomeServer)).toBe('user')
+    }
   })
 })

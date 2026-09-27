@@ -21,18 +21,53 @@ const listToolsCache: Record<
 > = {}
 
 /**
+ * Thrown when a trusted-origin MCP config references a `$VAR` whose value is
+ * absent from this process's environment. Carries every missing variable name
+ * collected during a single substitution pass so one value/record produces one
+ * clear error. Only reachable on the trusted-origin substitution path
+ * ('user'/'project'); a 'client'-origin config never substitutes and never
+ * throws (NEW-1).
+ */
+export class MissingMcpEnvVarError extends Error {
+  readonly missingVars: string[]
+
+  constructor(missingVars: string[], label?: string) {
+    const plural = missingVars.length === 1 ? '' : 's'
+    const suffix = label ? ` (${label})` : ''
+    super(
+      `Missing environment variable${plural} ${missingVars.join(', ')} ` +
+        `referenced by MCP config${suffix}`,
+    )
+    this.name = 'MissingMcpEnvVarError'
+    this.missingVars = missingVars
+  }
+}
+
+/**
  * Substitutes environment variable references ($VAR_NAME) in a string with their values.
  * Supports both simple replacement ("$VAR_NAME") and interpolation ("Bearer $VAR_NAME").
+ *
+ * Uses a SINGLE `replace` pass (the substituted output is never re-scanned), so
+ * a resolved value that itself contains a `$`+uppercase sequence is emitted
+ * verbatim. Undefined vars are collected during the pass; if any were missing,
+ * a {@link MissingMcpEnvVarError} listing all of them is thrown after the pass.
  */
 function substituteEnvInValue(value: string): string {
-  return value.replace(/\$([A-Z_][A-Z0-9_]*)/g, (match, varName) => {
+  const missing: string[] = []
+  const result = value.replace(/\$([A-Z_][A-Z0-9_]*)/g, (match, varName) => {
     const envValue = process.env[varName]
     if (envValue === undefined) {
-      // Return original if env var not found
+      missing.push(varName)
+      // Keep the literal in the (discarded-on-throw) output; the missing var
+      // is recorded and reported once the whole value has been scanned.
       return match
     }
     return envValue
   })
+  if (missing.length > 0) {
+    throw new MissingMcpEnvVarError(missing)
+  }
+  return result
 }
 
 /**
@@ -49,6 +84,16 @@ function substituteEnvInRecord(
 }
 
 /**
+ * Matches a `$VAR_NAME`-style environment variable reference (same shape the
+ * substitution above expands for trusted origins). Used to detect configs
+ * whose values would previously have been expanded but are now used literally
+ * at the fail-closed 'client' origin.
+ */
+function containsEnvVarReference(value: string): boolean {
+  return /\$[A-Z_][A-Z0-9_]*/.test(value)
+}
+
+/**
  * Who authored an MCP server config. This decides whether `$VAR` references
  * are expanded from this process's environment.
  *
@@ -62,15 +107,191 @@ function substituteEnvInRecord(
  *   (e.g. an http server whose header is `Authorization: $OPENROUTER_API_KEY`
  *   pointing at an attacker URL).
  *
- * Origin is always supplied by the caller, never read from config content, so
- * an untrusted config cannot claim a trusted origin.
+ * Origin is recorded in the module-level registry ({@link markMCPConfigOrigin})
+ * by trusted callers, never read from config content, so an untrusted config
+ * cannot claim a trusted origin.
  */
 export type MCPConfigOrigin = 'user' | 'project' | 'client'
 
-const DEFAULT_MCP_CONFIG_ORIGIN: MCPConfigOrigin = 'project'
+/**
+ * Origin registry sidecar for MCP configs. Origin is stored out of band (a
+ * WeakMap keyed by the config object), never on the config itself, so an
+ * untrusted config cannot claim a trusted origin from its own content.
+ */
+const mcpConfigOrigins = new WeakMap<MCPConfig, MCPConfigOrigin>()
+
+/**
+ * Records the origin of an MCP config in the module-level registry.
+ *
+ * Overwrite rule (NEW-1): a config already marked 'client' can never be
+ * upgraded to a trusted origin. Trusted-loader blanket marks stamp whole
+ * `mcpServers` records 'project'/'user' unconditionally (e.g. local agent
+ * assembly over fileContext.agentTemplates), so without this guard an
+ * untrusted config that reached trusted material would silently regain $VAR
+ * expansion. Trusted origins may still overwrite each other (e.g.
+ * 'project' -> 'user'), and any origin may downgrade to 'client' (fail
+ * closed).
+ */
+export function markMCPConfigOrigin(
+  config: MCPConfig,
+  origin: MCPConfigOrigin,
+): void {
+  if (mcpConfigOrigins.get(config) === 'client') {
+    return
+  }
+  mcpConfigOrigins.set(config, origin)
+}
+
+/**
+ * Marks every MCP config in a server map (silently no-ops on undefined/empty)
+ * so trusted loaders can stamp a whole `mcpServers` record in one call.
+ * Entries already marked 'client' keep their untrusted mark (see
+ * {@link markMCPConfigOrigin}).
+ *
+ * The value type is generic because callers pass server maps typed by
+ * different (structurally near-identical) config schemas — the agent
+ * definition schema vs the validated MCPConfig schema — and only object
+ * identity matters for the WeakMap-backed mark.
+ */
+export function markAllMCPConfigOrigins<T extends object>(
+  servers: Record<string, T> | undefined,
+  origin: MCPConfigOrigin,
+): void {
+  if (!servers) {
+    return
+  }
+  for (const config of Object.values(servers)) {
+    markMCPConfigOrigin(config as MCPConfig, origin)
+  }
+}
+
+/**
+ * Re-attaches origin marks from a source record of MCP configs onto a freshly
+ * built target record keyed by the same server names.
+ *
+ * Validation re-parses (e.g. Zod in validateSingleAgent) create brand-new
+ * config objects that have no WeakMap entry, so a trusted blanket mark after
+ * the re-parse would silently upgrade any config that was already marked
+ * 'client' before the hop — defeating the NEW-1 no-upgrade invariant. This
+ * helper carries the source marks across the identity-losing hop first:
+ *
+ * - a 'client' source mark always propagates (downgrading an already trusted
+ *   target mark — fail closed);
+ * - a trusted source mark only fills in targets that are still unmarked.
+ */
+export function propagateMCPConfigOrigins<S extends object, T extends object>(
+  source: Record<string, S> | undefined,
+  target: Record<string, T> | undefined,
+): void {
+  if (!source || !target) {
+    return
+  }
+  for (const [name, targetConfig] of Object.entries(target)) {
+    const sourceConfig = source[name]
+    if (!sourceConfig) {
+      continue
+    }
+    const sourceOrigin = originOf(sourceConfig as MCPConfig)
+    if (!sourceOrigin) {
+      continue
+    }
+    if (
+      sourceOrigin === 'client' ||
+      originOf(targetConfig as MCPConfig) === undefined
+    ) {
+      markMCPConfigOrigin(targetConfig as MCPConfig, sourceOrigin)
+    }
+  }
+}
+
+/**
+ * Returns the origin recorded for an MCP config, or undefined when it is
+ * unmarked. Unmarked configs are treated as untrusted 'client' origins (fail
+ * closed): trusted on-disk loaders must mark their configs 'user' or
+ * 'project' explicitly to keep $VAR substitution.
+ */
+export function originOf(config: MCPConfig): MCPConfigOrigin | undefined {
+  return mcpConfigOrigins.get(config)
+}
 
 function originAllowsEnvSubstitution(origin: MCPConfigOrigin): boolean {
   return origin === 'user' || origin === 'project'
+}
+
+/**
+ * Emits a one-time warning when an UNMARKED config containing `$VAR`
+ * references is used at the fail-closed 'client' origin.
+ *
+ * Before origin marking existed, every config — including configs passed
+ * programmatically straight to `client.run` — had its `$VAR` references
+ * expanded from `process.env`. The fail-closed default now uses such values
+ * literally, so an upgrading SDK caller's MCP server can be launched with a
+ * literal `'$NOTION_TOKEN'`-style value whose only visible symptom is a
+ * remote-side auth failure. This warning is the diagnosability signal for
+ * that migration path; the fail-closed behavior itself is intentional.
+ *
+ * Never warns for:
+ * - explicitly marked 'client' configs (protocol peers): literal values are
+ *   the intended, security-motivated behavior there;
+ * - configs without any `$VAR` reference: their behavior did not change.
+ *
+ * Deduplication is keyed on the config content (type, endpoint, and the
+ * record holding the references), so repeated uses of an equivalent config
+ * warn once per process rather than once per call — bounded by the number of
+ * distinct unmarked configs, mirroring the `runningClients` registry.
+ */
+const failClosedWarnedKeys = new Set<string>()
+
+export function diagnoseFailClosedEnvRefs(
+  config: MCPConfig,
+  origin: MCPConfigOrigin,
+): void {
+  if (origin !== 'client' || originOf(config) !== undefined) {
+    return
+  }
+  const record = config.type === 'stdio' ? config.env : config.headers
+  const fieldsWithRefs = Object.entries(record)
+    .filter(([, value]) => containsEnvVarReference(value))
+    .map(([key]) => key)
+  if (fieldsWithRefs.length === 0) {
+    return
+  }
+  const dedupKey = JSON.stringify([
+    config.type,
+    config.type === 'stdio' ? config.command : config.url,
+    record,
+  ])
+  if (failClosedWarnedKeys.has(dedupKey)) {
+    return
+  }
+  failClosedWarnedKeys.add(dedupKey)
+  console.warn(
+    `[mcp] MCP server config has no recorded origin and is treated as ` +
+      `untrusted ('client' origin): $VAR references will NOT be expanded ` +
+      `from this process's environment; literal values are used as-is ` +
+      `(fields: ${fieldsWithRefs.join(', ')}). If this config is local and ` +
+      `trusted, load it via loadMCPConfig()/loadLocalAgents() or mark it ` +
+      `with markMCPConfigOrigin(config, 'project') before running.`,
+  )
+}
+
+/**
+ * Resolves the effective origin for an MCP config: an explicit `options`
+ * origin or a recorded mark wins; an unmarked config fails closed to
+ * 'client' — and, when that silent downgrade would change behavior (the
+ * config still contains `$VAR` references), emits the one-time
+ * diagnosability warning from {@link diagnoseFailClosedEnvRefs}.
+ */
+export function resolveMCPConfigOrigin(
+  config: MCPConfig,
+  options?: { origin?: MCPConfigOrigin },
+): MCPConfigOrigin {
+  const origin = options?.origin ?? originOf(config)
+  if (origin) {
+    return origin
+  }
+  diagnoseFailClosedEnvRefs(config, 'client')
+  return 'client'
 }
 
 export type ResolvedMCPConfigValues =
@@ -90,6 +311,16 @@ export type ResolvedMCPConfigValues =
 /**
  * Returns the effective values used to connect to an MCP server. `$VAR`
  * substitution applies only to trusted origins (see {@link MCPConfigOrigin}).
+ *
+ * Failure mode for batch callers (RF-1-7a1e4076): at a trusted
+ * ('user'/'project') origin a referenced-but-undefined `$VAR` throws
+ * {@link MissingMcpEnvVarError} (one error per value, listing every missing
+ * name collected in that value's single substitution pass). A 'client' origin
+ * never substitutes and so never throws. This function resolves exactly ONE
+ * config, so a caller that enumerates a whole `mcpServers` map (directly or via
+ * {@link getMCPClientCacheKey}) MUST isolate per config — as getMCPToolData
+ * does with Promise.allSettled — so one server's missing var loses only that
+ * server's identity/tools instead of aborting the entire enumeration.
  */
 export function resolveMCPConfigValues(
   config: MCPConfig,
@@ -124,11 +355,20 @@ function stableHash(value: unknown): string {
 
 function hashRecordValues(
   record: Record<string, string>,
+  options?: { caseInsensitiveKeys?: boolean },
 ): Record<string, string> {
+  // HTTP header names are case-insensitive, so they are normalized first when
+  // requested (later duplicates deterministically win). Env var names are
+  // case-sensitive — e.g. API_KEY and api_key are genuinely distinct variables
+  // on Linux — so they keep their original case; collapsing them would make
+  // two distinct stdio configs hash to the same cache identity and silently
+  // drop the second server's env.
+  const normalizeKey = options?.caseInsensitiveKeys
+    ? (key: string) => key.toLowerCase()
+    : (key: string) => key
   const normalized: Record<string, string> = {}
   for (const [key, value] of Object.entries(record)) {
-    // Header/env names are normalized first; later duplicates deterministically win.
-    normalized[key.toLowerCase()] = stableHash(value)
+    normalized[normalizeKey(key)] = stableHash(value)
   }
 
   return Object.fromEntries(
@@ -136,11 +376,21 @@ function hashRecordValues(
   )
 }
 
+/**
+ * Computes the cache identity for an MCP config. Because it resolves values
+ * through {@link resolveMCPConfigValues}, it inherits that function's
+ * trusted-origin throw (RF-1-7a1e4076): a missing `$VAR` at a 'user'/'project'
+ * origin throws {@link MissingMcpEnvVarError}, while a 'client' origin never
+ * throws. A batch caller enumerating a whole `mcpServers` map to build cache
+ * keys must therefore isolate per config so one bad server does not abort the
+ * whole batch.
+ */
 export function getMCPClientCacheKey(
   config: MCPConfig,
   options?: { origin?: MCPConfigOrigin },
 ): string {
-  const origin = options?.origin ?? DEFAULT_MCP_CONFIG_ORIGIN
+  // Fail closed: an unmarked config is an untrusted 'client' origin.
+  const origin = resolveMCPConfigOrigin(config, options)
   const resolved = resolveMCPConfigValues(config, origin)
   // Origin is part of the identity so a client-origin connection never
   // reuses a running client created for a trusted origin (or vice versa).
@@ -149,6 +399,7 @@ export function getMCPClientCacheKey(
       origin,
       command: resolved.command,
       args: resolved.args,
+      // Env var names are case-sensitive; keep their original case in the identity.
       env: hashRecordValues(resolved.env),
     })
   }
@@ -157,7 +408,8 @@ export function getMCPClientCacheKey(
     type: resolved.type,
     url: resolved.url,
     params: resolved.params,
-    headers: hashRecordValues(resolved.headers),
+    // HTTP header names are case-insensitive; normalize casing in the identity.
+    headers: hashRecordValues(resolved.headers, { caseInsensitiveKeys: true }),
   })
 }
 
@@ -165,7 +417,8 @@ export async function getMCPClient(
   config: MCPConfig,
   options?: { origin?: MCPConfigOrigin },
 ): Promise<string> {
-  const origin = options?.origin ?? DEFAULT_MCP_CONFIG_ORIGIN
+  // Fail closed: an unmarked config is an untrusted 'client' origin.
+  const origin = resolveMCPConfigOrigin(config, options)
   let key = getMCPClientCacheKey(config, { origin })
   if (key in runningClients) {
     return key
