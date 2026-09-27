@@ -312,6 +312,37 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
 }
 
 /**
+ * Derives the serve-time agent options, auto-wiring `session/load` restore
+ * from an injected journal-backed store. When `sessionData` is present and no
+ * `loadHandler` was supplied, the returned options carry a derived
+ * loadHandler that replays the durable journal
+ * (`AcpSessionData.restoreFromJournal`) so a restored session recovers its
+ * receipt history and last gate-state snapshot. A bridge that wants no
+ * restore simply omits `sessionData` or supplies its own `loadHandler` (a
+ * caller-provided loadHandler always wins). The input object is never
+ * mutated: a new object is built only in the derive branch, otherwise the
+ * input is returned unchanged.
+ */
+export function resolveAcpServeOptions(
+  options: Omit<AcpAgentOptions, 'connection'>,
+): Omit<AcpAgentOptions, 'connection'> {
+  if (!options.sessionData || options.loadHandler) {
+    return options
+  }
+  // Capture the store in a local const so the derived handler closes over the
+  // value observed here, not a later-cleared field on `options`.
+  const sessionData = options.sessionData
+  return {
+    ...options,
+    loadHandler: async ({ sessionId }) => {
+      // restoreFromJournal is best-effort and returns a boolean we ignore:
+      // loadSession's own success is independent of whether a journal existed.
+      await sessionData.restoreFromJournal(sessionId)
+    },
+  }
+}
+
+/**
  * Serves the agent over line-delimited JSON on stdio. Only call from a real
  * CLI entry (P1-T2 owns `openbuff serve`); it stays importable so the wiring
  * remains reviewable while the Agent object above stays testable.
@@ -319,6 +350,9 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
 export function serveAcpOverStdio(
   options: Omit<AcpAgentOptions, 'connection'>,
 ): void {
+  // Auto-derive the session/load restore handler from an injected journal-
+  // backed store once, then reuse it for every connection's agent.
+  const resolvedOptions = resolveAcpServeOptions(options)
   // ndJsonStream(output, input): the agent's stdout is the output wire and its
   // stdin is the input wire. Node/Bun streams are converted to their web
   // counterparts because the SDK's Stream type is defined over web streams;
@@ -332,7 +366,7 @@ export function serveAcpOverStdio(
   // skeleton. The connection lives for the lifetime of the process; the CLI
   // entry keeps running until the underlying stream closes.
   void new AgentSideConnection(
-    (conn) => createAcpAgent({ ...options, connection: conn }),
+    (conn) => createAcpAgent({ ...resolvedOptions, connection: conn }),
     stream,
   )
 }

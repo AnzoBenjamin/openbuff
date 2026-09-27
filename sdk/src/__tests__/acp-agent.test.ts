@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   AgentSideConnection,
@@ -13,12 +16,25 @@ import type {
   Stream,
 } from '@agentclientprotocol/sdk'
 
-import { createAcpAgent } from '../services/acp/acp-agent'
 import type {
+  FileMutationResultV1,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  getContentHash,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
+
+import {
+  createAcpAgent,
+  resolveAcpServeOptions,
+} from '../services/acp/acp-agent'
+import type {
+  AcpAgentOptions,
   AcpPromptHandler,
   AcpReverseRequests,
   AcpSessionUpdateSink,
 } from '../services/acp/acp-agent'
+import { AcpSessionData } from '../services/acp/session-data'
 
 function makeRecordingConnection(): {
   connection: AcpSessionUpdateSink
@@ -430,5 +446,234 @@ describe('acp agent skeleton', () => {
     })
 
     expect(seen).toEqual([reverseRequests])
+  })
+})
+
+const RESTORE_CONTENT = 'export const answer = 42\n'
+const RESTORE_CAP_TOKEN =
+  'cap.v3.1.2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+
+/**
+ * A real, schema-valid fully-applied mutation carrying the content-bearing
+ * fields the wire projection drops, so the journal round-trip exercises the
+ * same redaction path the store uses in production.
+ */
+function buildAppliedMutation(): FileMutationResultV1 {
+  const afterHash = getExactContentHash(RESTORE_CONTENT)
+  const lineCount = RESTORE_CONTENT.split('\n').length
+  return {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId: 'op-restore',
+    outcome: 'applied',
+    actions: [
+      {
+        actionId: 'act-restore',
+        index: 0,
+        action: 'create',
+        path: 'src/restored.ts',
+        outcome: 'applied',
+        beforeHash: null,
+        afterHash,
+        afterContent: RESTORE_CONTENT,
+        editAnchor: {
+          startLine: 1,
+          endLine: lineCount,
+          contentHash: getContentHash(RESTORE_CONTENT),
+          readCapability: RESTORE_CAP_TOKEN,
+        },
+      },
+    ],
+    authorityTier: 'conditional_commit',
+    receiptId: 'r-restore',
+    workspaceRevision: 3,
+    workspaceSnapshotId: 'ws-1',
+    authorityReceipt: {
+      kind: 'commit_receipt',
+      version: 1,
+      receiptId: 'r-restore',
+      operationId: 'op-restore',
+      callId: 'call-1',
+      authorityTier: 'conditional_commit',
+      status: 'committed',
+      actions: [
+        {
+          actionId: 'act-restore',
+          index: 0,
+          action: 'create',
+          path: 'src/restored.ts',
+          status: 'committed',
+          beforeHash: null,
+          afterHash,
+        },
+      ],
+      finalHashes: { 'src/restored.ts': afterHash },
+      workspaceRevision: 3,
+      workspaceSnapshotId: 'ws-1',
+    },
+    errors: [],
+    freshCapabilities: [
+      {
+        kind: 'whole_file',
+        version: 1,
+        token: RESTORE_CAP_TOKEN,
+        snapshot: {
+          kind: 'file_snapshot',
+          version: 1,
+          canonicalPath: 'src/restored.ts',
+          contentHash: getContentHash(RESTORE_CONTENT),
+          sizeBytes: new TextEncoder().encode(RESTORE_CONTENT).byteLength,
+          encoding: 'utf8',
+          readGeneration: 0,
+        },
+      },
+    ],
+  }
+}
+
+/** Serializes a gate payload exactly the way formatGateStateBlock does. */
+function formatGateStateBlock(payload: Record<string, unknown>): string {
+  return `<gate-state>${JSON.stringify(payload).replace(/<\//g, '<\\/')}</gate-state>`
+}
+
+describe('resolveAcpServeOptions', () => {
+  test('returns the input unchanged when no sessionData is injected', () => {
+    const options: Omit<AcpAgentOptions, 'connection'> = {
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+    }
+    // No sessionData → no derivation, identity is fine.
+    expect(resolveAcpServeOptions(options)).toBe(options)
+    expect(resolveAcpServeOptions(options).loadHandler).toBeUndefined()
+  })
+
+  test('returns the input unchanged when a caller loadHandler is already set', () => {
+    const callerLoadHandler = async () => {}
+    const options: Omit<AcpAgentOptions, 'connection'> = {
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      sessionData: new AcpSessionData(),
+      loadHandler: callerLoadHandler,
+    }
+    // Caller-provided loadHandler always wins: never overwritten.
+    const resolved = resolveAcpServeOptions(options)
+    expect(resolved).toBe(options)
+    expect(resolved.loadHandler).toBe(callerLoadHandler)
+  })
+
+  test('derives a loadHandler that replays the journal when only sessionData is set', async () => {
+    const restored: string[] = []
+    const sessionData = new AcpSessionData()
+    // Observe the derived handler calls restoreFromJournal for the session id.
+    ;(sessionData as { restoreFromJournal: (id: string) => Promise<boolean> }).restoreFromJournal =
+      async (id: string) => {
+        restored.push(id)
+        return true
+      }
+    const options: Omit<AcpAgentOptions, 'connection'> = {
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      sessionData,
+    }
+
+    const resolved = resolveAcpServeOptions(options)
+    // A new object is built; the input is not mutated.
+    expect(resolved).not.toBe(options)
+    expect(options.loadHandler).toBeUndefined()
+    expect(resolved.loadHandler).toBeInstanceOf(Function)
+    expect(resolved.sessionData).toBe(sessionData)
+
+    await resolved.loadHandler!({ sessionId: 's-derived' })
+    expect(restored).toEqual(['s-derived'])
+  })
+})
+
+describe('resolveAcpServeOptions load→restore integration', () => {
+  const tempDirs: string[] = []
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  function makeJournalDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-journal-'))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  test('loadSession replays the durable journal so getReceipts/gateState recover', async () => {
+    const journalDir = makeJournalDir()
+    const sessionId = 'session-to-restore'
+
+    // First store writes the durable journal for the session.
+    const first = new AcpSessionData({ journalDir })
+    first.recordReceipt(sessionId, buildAppliedMutation(), 'tool-1')
+    first.updateGateStateFromBlock(
+      sessionId,
+      formatGateStateBlock({
+        gate: 'validation/reviewer',
+        status: 'passed',
+        details: 'All gates passed.',
+      }),
+    )
+
+    // A SECOND fresh store starts empty; the derived loadHandler must replay
+    // the journal it finds on disk.
+    const second = new AcpSessionData({ journalDir })
+    // Poll for the fire-and-forget journal writes from the first store to
+    // settle before restore reads them back. Use a bounded async loop so the
+    // journal reads can be awaited without handing an async predicate to
+    // waitFor, which expects a synchronous () => boolean.
+    for (let attempt = 0; attempt < 200; attempt++) {
+      await second.restoreFromJournal(sessionId)
+      if (second.getReceipts(sessionId).receipts.length > 0) {
+        break
+      }
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    // Reset the second store's in-memory state by using a brand new store for
+    // the actual load path so the derived handler does the replaying.
+    const loadStore = new AcpSessionData({ journalDir })
+
+    const { connection } = makeRecordingConnection()
+    const resolved = resolveAcpServeOptions({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      sessionData: loadStore,
+    })
+    const agent = createAcpAgent({ ...resolved, connection })
+
+    // Empty before load.
+    expect(
+      (await agent.extMethod('openbuff/getReceipts', { sessionId }))
+        .receipts,
+    ).toEqual([])
+
+    // session/load drives the derived loadHandler → restoreFromJournal.
+    const response = await agent.loadSession({
+      cwd: '/tmp/openbuff-restore',
+      mcpServers: [],
+      sessionId,
+    })
+    expect(response).toEqual({})
+
+    const receipts = await agent.extMethod('openbuff/getReceipts', {
+      sessionId,
+    })
+    expect(receipts).toEqual({
+      receipts: [
+        {
+          operationId: 'op-restore',
+          receiptId: 'r-restore',
+          paths: ['src/restored.ts'],
+          actionIds: ['act-restore'],
+        },
+      ],
+    })
+
+    const gate = await agent.extMethod('openbuff/gateState', { sessionId })
+    expect(gate).toEqual({
+      phase: 'final_response_allowed',
+      currentTask: null,
+    })
   })
 })
