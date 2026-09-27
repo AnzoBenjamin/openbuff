@@ -144,4 +144,14 @@ Committed `d63c3a053` on `feat/polyglot-reaudit-roadmap` (pushed to PR #93):
 - **Dependency:** `@agentclientprotocol/sdk@1.5.0` added to sdk (user-approved per D9). Note: the dependency-manager tool repeatedly failed with `bun --filter` "No packages matched the filter" for both `sdk` and `@openbuff/sdk` — added via user-authorized `bun add` instead; the tool's filter construction needs a harness fix.
 - **Skeleton:** `sdk/src/services/acp/acp-agent.ts` — `createAcpAgent` (initialize with the SDK's PROTOCOL_VERSION + honest `loadSession: false`; newSession unique ids; prompt forwards text blocks to an injected `AcpPromptHandler` with per-chunk `sessionUpdate` streaming + AbortSignal; cancel; authenticate-refusal) over a private session map; `serveAcpOverStdio` (ndJsonStream + AgentSideConnection) ready for the P1-T2 bridge.
 - **Conformance:** 6/6 tests including a real `ClientSideConnection` paired over in-memory ndjson streams (true wire framing); sdk typecheck clean; code-reviewer LOOKS_GOOD.
-- **Remaining P1-T1:** session/load, permission/fs/terminal reverse requests, and Openbuff extension schemas generated from the X-1 Zod pipeline.
+- **Remaining P1-T1:** (none for the protocol surface — see the followup below)
+
+<!-- update_plan_status:appended -->
+## P1-T1 continuation complete (2026-09-27)
+
+The three remaining P1-T1 pieces landed in the followup pass:
+- **session/load:** `Agent.loadSession` implemented (session id registered in the same private map so prompt/cancel work; injected optional `loadHandler`, protocol error when absent); initialize now advertises `loadSession: true` honestly.
+- **Reverse requests:** an optional injected `reverseRequests` seam (requestPermission/readTextFile/writeTextFile/createTerminal, types taken verbatim from the SDK declarations) is threaded into the `AcpPromptHandler` input so a prompt turn can drive permission/fs/terminal round-trips; P1-T2 binds it to the real connection.
+- **Extension schemas (X-1 pipeline):** `sdk/src/services/acp/extensions.ts` — `openbuff/getReceipts`, `openbuff/askUser`, `openbuff/gateState` as Zod v4 contracts with `compileAcpExtensionJsonSchemas()` mirroring `compileToolJsonSchemas` (deterministic `z.toJSONSchema(io:'input')` per method, params+result); `extMethod` on the Agent validates params via safeParse (RequestError.invalidParams with the joined Zod issues on failure) and dispatches to an injected `extensionHandler` (method-not-found when absent/unknown).
+- **Validation:** ACP suites 16/16 (incl. the real ClientSideConnection wire test), full sdk suite 1713/1713, sdk typecheck clean.
+- **Still open under P1:** binding the extension handlers to real receipt/gate-state sources (P1-T2) and custom-tool schemas (P1-T4).

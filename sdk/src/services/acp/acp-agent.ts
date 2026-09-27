@@ -10,15 +10,27 @@ import {
 import type {
   Agent,
   CancelNotification,
+  CreateTerminalRequest,
+  CreateTerminalResponse,
   InitializeRequest,
   InitializeResponse,
+  LoadSessionRequest,
+  LoadSessionResponse,
   McpServer,
   NewSessionRequest,
   NewSessionResponse,
   PromptRequest,
   PromptResponse,
+  ReadTextFileRequest,
+  ReadTextFileResponse,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
   SessionNotification,
+  WriteTextFileRequest,
 } from '@agentclientprotocol/sdk'
+
+import { ACP_EXTENSION_METHODS, acpExtensionSchemas } from './extensions'
+import type { AcpExtensionMethod } from './extensions'
 
 /**
  * The injectable seam P1-T2 binds to the real core run: the ACP skeleton owns
@@ -31,6 +43,12 @@ export type AcpPromptHandler = (input: {
   promptText: string
   update: (chunkText: string) => Promise<void>
   signal: AbortSignal
+  /**
+   * Optional client-side reverse-request seam (P1-T2 binds it to the
+   * connection): lets a turn request permission, read/write files in the
+   * client's workspace, or create a terminal mid-prompt.
+   */
+  reverseRequests?: AcpReverseRequests
 }) => Promise<{ stopReason: 'end_turn' | 'cancelled' }>
 
 /**
@@ -43,6 +61,24 @@ export type AcpSessionUpdateSink = {
   sessionUpdate(params: SessionNotification): Promise<void>
 }
 
+/**
+ * The client-side reverse-request surface a prompt turn may need. The P1-T2
+ * bridge binds these to the SDK's `AgentSideConnection` methods so a prompt
+ * handler can request permission, touch the client filesystem, or spawn a
+ * terminal while the turn is in flight. Optional everywhere so tests can
+ * omit it.
+ */
+export type AcpReverseRequests = {
+  requestPermission(
+    params: RequestPermissionRequest,
+  ): Promise<RequestPermissionResponse>
+  readTextFile(params: ReadTextFileRequest): Promise<ReadTextFileResponse>
+  writeTextFile(params: WriteTextFileRequest): Promise<void>
+  createTerminal(
+    params: CreateTerminalRequest,
+  ): Promise<CreateTerminalResponse>
+}
+
 export type AcpAgentOptions = {
   /** Required by design: there is no default prompt handler to hide behind. */
   promptHandler: AcpPromptHandler
@@ -50,6 +86,27 @@ export type AcpAgentOptions = {
   connection: AcpSessionUpdateSink
   /** Human-readable name for P1-T2 logging; consumed by the serve bridge. */
   clientNameForLogging?: string
+  /**
+   * Optional resume path for `session/load`: restores external state for a
+   * previously created session id. Absent means `session/load` fails closed
+   * with a JSON-RPC method-not-found error.
+   */
+  loadHandler?: (input: { sessionId: string }) => Promise<void>
+  /**
+   * Optional reverse-request seam forwarded into the prompt handler's input;
+   * the P1-T2 bridge binds it to AgentSideConnection's requestPermission,
+   * readTextFile, writeTextFile, and createTerminal.
+   */
+  reverseRequests?: AcpReverseRequests
+  /**
+   * Optional dispatcher for Openbuff ACP extension methods (see
+   * ACP_EXTENSION_METHODS in ./extensions). Absent means every extension
+   * request fails with a JSON-RPC method-not-found error.
+   */
+  extensionHandler?: (input: {
+    method: string
+    params: unknown
+  }) => Promise<unknown>
 }
 
 /** Per-session state kept for later phases (P1-T2 core-run wiring). */
@@ -60,23 +117,62 @@ type AcpSessionState = {
 }
 
 /**
- * Builds the agent-side ACP v1 skeleton: initialize/newSession/prompt/cancel
- * over a private session map. The prompt handler and update sink are injected
- * so the real core run (P1-T2) stays out of the protocol layer.
+ * The concrete agent surface returned by createAcpAgent: the SDK Agent
+ * interface with the optional methods this skeleton actually implements
+ * (session/load and legacy extMethod) pinned as required, so callers and
+ * tests can invoke them directly while staying assignable to `Agent`.
  */
-export function createAcpAgent(options: AcpAgentOptions): Agent {
+export type AcpAgent = Agent & {
+  loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse>
+  extMethod(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>
+}
+
+/**
+ * Builds the agent-side ACP v1 skeleton:
+ * initialize/newSession/loadSession/prompt/cancel over a private session
+ * map, plus the Openbuff extension surface (extMethod) and the
+ * reverse-request seam for prompt turns. The prompt handler and update sink
+ * are injected so the real core run (P1-T2) stays out of the protocol layer.
+ */
+export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
   const sessions = new Map<string, AcpSessionState>()
 
   return {
     initialize(_params: InitializeRequest): InitializeResponse {
       // Mirror the declared InitializeResponse exactly: the version comes from
-      // the SDK constant (never hardcoded), and loadSession is honestly false
-      // because this skeleton does not implement session/load.
+      // the SDK constant (never hardcoded), and loadSession is honestly true
+      // now that session/load is implemented below.
       return {
         protocolVersion: PROTOCOL_VERSION,
-        agentCapabilities: { loadSession: false },
+        agentCapabilities: { loadSession: true },
         authMethods: [],
       }
+    },
+
+    async loadSession(
+      params: LoadSessionRequest,
+    ): Promise<LoadSessionResponse> {
+      if (!options.loadHandler) {
+        // session/load is advertised, but no resume path was injected: fail
+        // closed with a JSON-RPC method-not-found error rather than silently
+        // half-loading the session.
+        throw RequestError.methodNotFound('session/load')
+      }
+      // Register in the same private map newSession uses so subsequent
+      // prompt/cancel calls work against the loaded session id.
+      sessions.set(params.sessionId, {
+        cwd: params.cwd,
+        mcpServers: params.mcpServers,
+        abortController: null,
+      })
+      await options.loadHandler({ sessionId: params.sessionId })
+      // LoadSessionResponse's fields (modes/configOptions/_meta) are all
+      // optional per the SDK declarations; this skeleton restores no mode
+      // state, so the exact empty response shape is the honest reply.
+      return {}
     },
 
     newSession(params: NewSessionRequest): NewSessionResponse {
@@ -112,6 +208,7 @@ export function createAcpAgent(options: AcpAgentOptions): Agent {
       const result = await options.promptHandler({
         sessionId: params.sessionId,
         promptText,
+        reverseRequests: options.reverseRequests,
         update: async (chunkText) => {
           await options.connection.sessionUpdate({
             sessionId: params.sessionId,
@@ -130,6 +227,50 @@ export function createAcpAgent(options: AcpAgentOptions): Agent {
       // Notifications carry no response, so an unknown session id is a no-op
       // here rather than an error surface.
       sessions.get(params.sessionId)?.abortController?.abort()
+    },
+
+    async extMethod(
+      method: string,
+      params: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      if (
+        !ACP_EXTENSION_METHODS.includes(
+          method as AcpExtensionMethod,
+        ) ||
+        !options.extensionHandler
+      ) {
+        // Unknown extension methods and known methods with no injected
+        // dispatcher both fail closed as JSON-RPC method-not-found.
+        throw RequestError.methodNotFound(method)
+      }
+      const { params: paramsSchema } =
+        acpExtensionSchemas[method as AcpExtensionMethod]
+      const parsed = paramsSchema.safeParse(params)
+      if (!parsed.success) {
+        throw RequestError.invalidParams(
+          params,
+          `Invalid params for ACP extension '${method}': ${parsed.error.issues
+            .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+            .join('; ')}`,
+        )
+      }
+      const result = await options.extensionHandler({
+        method,
+        params: parsed.data,
+      })
+      if (
+        result === null ||
+        typeof result !== 'object' ||
+        Array.isArray(result)
+      ) {
+        // The Agent.extMethod contract returns a JSON object response; a
+        // non-object handler result would corrupt the wire, so fail closed.
+        throw RequestError.internalError(
+          { method },
+          `ACP extension handler for '${method}' returned a non-object response.`,
+        )
+      }
+      return result as Record<string, unknown>
     },
 
     // The Agent interface requires authenticate even though this skeleton

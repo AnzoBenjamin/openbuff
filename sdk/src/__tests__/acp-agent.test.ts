@@ -16,6 +16,7 @@ import type {
 import { createAcpAgent } from '../services/acp/acp-agent'
 import type {
   AcpPromptHandler,
+  AcpReverseRequests,
   AcpSessionUpdateSink,
 } from '../services/acp/acp-agent'
 
@@ -62,7 +63,7 @@ describe('acp agent skeleton', () => {
     })
 
     expect(response.protocolVersion).toBe(PROTOCOL_VERSION)
-    expect(response.agentCapabilities).toEqual({ loadSession: false })
+    expect(response.agentCapabilities).toEqual({ loadSession: true })
     expect(response.authMethods).toEqual([])
   })
 
@@ -212,7 +213,15 @@ describe('acp agent skeleton', () => {
     }
 
     void new AgentSideConnection(
-      (conn) => createAcpAgent({ promptHandler, connection: conn }),
+      (conn) =>
+        createAcpAgent({
+          promptHandler,
+          connection: conn,
+          extensionHandler: async () => ({
+            phase: 'wire-phase',
+            currentTask: null,
+          }),
+        }),
       agentStream,
     )
     const client = new ClientSideConnection(() => fakeClient, clientStream)
@@ -221,7 +230,7 @@ describe('acp agent skeleton', () => {
       protocolVersion: PROTOCOL_VERSION,
     })
     expect(initialized.protocolVersion).toBe(PROTOCOL_VERSION)
-    expect(initialized.agentCapabilities).toEqual({ loadSession: false })
+    expect(initialized.agentCapabilities).toEqual({ loadSession: true })
 
     const session = await client.newSession({
       cwd: '/tmp/openbuff-wire',
@@ -239,5 +248,187 @@ describe('acp agent skeleton', () => {
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: 'wire-chunk' },
     })
+
+    // Extension methods ride the same JSON-RPC wire: params are validated
+    // agent-side against the Zod contract before dispatch.
+    const gate = await client.extMethod('openbuff/gateState', {
+      sessionId: session.sessionId,
+    })
+    expect(gate).toEqual({ phase: 'wire-phase', currentTask: null })
+  })
+
+  test('loadSession fails closed with method-not-found when no loadHandler is injected', async () => {
+    const { connection } = makeRecordingConnection()
+    const agent = makeAgentWithDefaultHandler(connection)
+
+    let failure: unknown
+    try {
+      await agent.loadSession({
+        cwd: '/tmp/openbuff-a',
+        mcpServers: [],
+        sessionId: 'missing-session',
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(RequestError)
+    expect((failure as RequestError).code).toBe(-32601)
+  })
+
+  test('loadSession registers the session so prompt/cancel work and replies with the declared shape', async () => {
+    const { connection, updates } = makeRecordingConnection()
+    const loadedSessions: string[] = []
+    const promptHandler: AcpPromptHandler = async (input) => {
+      await input.update('resumed')
+      return { stopReason: 'end_turn' }
+    }
+    const agent = createAcpAgent({
+      promptHandler,
+      connection,
+      loadHandler: async (input) => {
+        loadedSessions.push(input.sessionId)
+      },
+    })
+
+    const response = await agent.loadSession({
+      cwd: '/tmp/openbuff-resume',
+      mcpServers: [],
+      sessionId: 'existing-session-id',
+    })
+
+    expect(loadedSessions).toEqual(['existing-session-id'])
+    // LoadSessionResponse's fields are all optional per the SDK
+    // declarations; the skeleton restores no mode state, so the exact empty
+    // response shape is the honest reply.
+    expect(response).toEqual({})
+
+    // The loaded id now lives in the same private session map as
+    // newSession: prompt streams through it and cancel is safe.
+    const promptResult = await agent.prompt({
+      sessionId: 'existing-session-id',
+      prompt: [{ type: 'text', text: 'continue' }],
+    })
+    expect(promptResult).toEqual({ stopReason: 'end_turn' })
+    expect(updates.at(0)?.sessionId).toBe('existing-session-id')
+    expect(agent.cancel({ sessionId: 'existing-session-id' })).toBeUndefined()
+  })
+
+  test('extMethod validates params against the Zod contract and dispatches the injected handler', async () => {
+    const { connection } = makeRecordingConnection()
+    const dispatched: Array<{ method: string; params: unknown }> = []
+    const agent = createAcpAgent({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      connection,
+      extensionHandler: async (input) => {
+        dispatched.push(input)
+        if (input.method === 'openbuff/gateState') {
+          return { phase: 'gated', currentTask: null }
+        }
+        return { answer: 'yes' }
+      },
+    })
+
+    const gate = await agent.extMethod('openbuff/gateState', {
+      sessionId: 's-1',
+    })
+    expect(gate).toEqual({ phase: 'gated', currentTask: null })
+
+    const ask = await agent.extMethod('openbuff/askUser', {
+      sessionId: 's-1',
+      question: 'Proceed?',
+      choices: ['yes', 'no'],
+    })
+    expect(ask).toEqual({ answer: 'yes' })
+
+    expect(dispatched).toEqual([
+      { method: 'openbuff/gateState', params: { sessionId: 's-1' } },
+      {
+        method: 'openbuff/askUser',
+        params: {
+          sessionId: 's-1',
+          question: 'Proceed?',
+          choices: ['yes', 'no'],
+        },
+      },
+    ])
+
+    // Invalid params fail closed as JSON-RPC invalid-params carrying the
+    // Zod issue list.
+    let invalidFailure: unknown
+    try {
+      await agent.extMethod('openbuff/askUser', { sessionId: 's-1' })
+    } catch (error) {
+      invalidFailure = error
+    }
+    expect(invalidFailure).toBeInstanceOf(RequestError)
+    expect((invalidFailure as RequestError).code).toBe(-32602)
+    expect((invalidFailure as RequestError).message).toContain(
+      'openbuff/askUser',
+    )
+
+    // Unknown extension methods fail closed as method-not-found even with
+    // a handler injected.
+    let unknownFailure: unknown
+    try {
+      await agent.extMethod('other/unknown', {})
+    } catch (error) {
+      unknownFailure = error
+    }
+    expect(unknownFailure).toBeInstanceOf(RequestError)
+    expect((unknownFailure as RequestError).code).toBe(-32601)
+  })
+
+  test('extMethod fails with method-not-found when no extension handler is injected', async () => {
+    const { connection } = makeRecordingConnection()
+    const agent = makeAgentWithDefaultHandler(connection)
+
+    let failure: unknown
+    try {
+      await agent.extMethod('openbuff/getReceipts', { sessionId: 's-1' })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(RequestError)
+    expect((failure as RequestError).code).toBe(-32601)
+  })
+
+  test('prompt threads the optional reverseRequests seam into the handler input', async () => {
+    const { connection } = makeRecordingConnection()
+    const seen: Array<unknown> = []
+    const reverseRequests: AcpReverseRequests = {
+      requestPermission: async () => {
+        throw new Error('not exercised here')
+      },
+      readTextFile: async () => {
+        throw new Error('not exercised here')
+      },
+      writeTextFile: async () => {
+        throw new Error('not exercised here')
+      },
+      createTerminal: async () => {
+        throw new Error('not exercised here')
+      },
+    }
+    const promptHandler: AcpPromptHandler = async (input) => {
+      seen.push(input.reverseRequests)
+      return { stopReason: 'end_turn' }
+    }
+    const agent = createAcpAgent({
+      promptHandler,
+      connection,
+      reverseRequests,
+    })
+
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-rr',
+      mcpServers: [],
+    })
+    await agent.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'hi' }],
+    })
+
+    expect(seen).toEqual([reverseRequests])
   })
 })
