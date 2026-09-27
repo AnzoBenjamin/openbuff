@@ -545,6 +545,60 @@ describe('metadata indexer', () => {
 
     expect(second.files['src/a.ts']).toEqual(first.files['src/a.ts'])
   })
+
+  test('skips re-reading unchanged files on incremental refresh (stat-gated hashing)', async () => {
+    const root = await makeTempProject({
+      'src/a.ts': 'export const a = 1\n',
+      'docs/a.md': '# Alpha\n\nalpha topic\n',
+    })
+    const first = await buildMetadataIndex(root)
+
+    const readFileSpy = spyOn(fs.promises, 'readFile')
+    try {
+      const second = await updateMetadataIndex(first, root)
+      expect(second.files['src/a.ts']?.hash).toBe(first.files['src/a.ts']?.hash)
+      expect(second.files['docs/a.md']?.hash).toBe(
+        first.files['docs/a.md']?.hash,
+      )
+      // Nothing changed on disk, so the refresh must not re-read/hash any
+      // indexed file: the stat gate short-circuits hashing for stat-matched
+      // files. (Ignore-file probe reads from the walker are filtered out.)
+      const readPaths = readFileSpy.mock.calls.map((call) => String(call[0]))
+      expect(readPaths).not.toContain(path.join(root, 'src/a.ts'))
+      expect(readPaths).not.toContain(path.join(root, 'docs/a.md'))
+    } finally {
+      readFileSpy.mockRestore()
+    }
+  })
+
+  test('falls back to hashing when the stat gate cannot stat a file', async () => {
+    const root = await makeTempProject({
+      'docs/a.md': '# Alpha\n\nalpha topic\n',
+    })
+    const first = await buildMetadataIndex(root)
+    await fs.promises.writeFile(
+      path.join(root, 'docs/a.md'),
+      '# Bravo\n\nbravo topic\n',
+      'utf8',
+    )
+
+    const statSpy = spyOn(fs.promises, 'stat').mockRejectedValue(
+      new Error('simulated stat failure'),
+    )
+    let second
+    try {
+      second = await updateMetadataIndex(first, root)
+    } finally {
+      statSpy.mockRestore()
+    }
+
+    // Stat failure must fall back to hashing so real content changes are
+    // still detected.
+    expect(second.files['docs/a.md']?.hash).not.toBe(
+      first.files['docs/a.md']?.hash,
+    )
+    expect(second.files['docs/a.md']?.headings).toContain('Bravo')
+  })
 })
 
 async function makeTempProject(files: Record<string, string>): Promise<string> {

@@ -39,6 +39,22 @@
  *   single-visited-set-shared-across-results .. CASE 5 (per-payload depth-aware
  *       memo; re-walk on strictly shallower reach)
  *
+ * X-2 additions — absolute "(after only)" rows (pure timing observations: no
+ * before/after exists for these seams, so no speedup ratio is printed; each
+ * case asserts only a small contract check on the shipped output):
+ *   token-counting seam: raw BPE encode vs 100k-char-cap extrapolation CASE 6a/6b
+ *   code_search JS-side rg line parse (formatCodeSearchOutput) ......... CASE 7
+ *   X-2a hot paths (D13): assignDepths sweep + getPostingCandidates ... CASE 8a/8b
+ *   tool-call stream parse (parseStreamChunk, 100KB in 1KB chunks) ..... CASE 9
+ *
+ * Manual-only X-2 rows (deliberately NOT measured here: they need a real
+ * TUI/process and cannot run deterministically in CI — listed so the X-2
+ * gate stays honest instead of shipping fake numbers):
+ *   TUI keystroke latency — p50/p99 keystroke-to-render in the real Ink TUI
+ *     via a scripted keystroke harness against a live terminal.
+ *   cold-start — CLI process spawn → first interactive prompt, warm vs cold
+ *     cache; process spawn timing is machine-dependent.
+ *
  * Each row reports the median of RUNS timed runs per op together with its
  * min/max range and MAD dispersion (RF-13), and every printed speedup ratio
  * carries the min/max quotient envelope of the two rows: an envelope that
@@ -73,12 +89,30 @@ import {
   creditSelfMutatedPathValue,
   publishSelfMutatedPaths,
 } from '../packages/agent-runtime/src/run-agent-step'
+import { countTokens } from '../packages/agent-runtime/src/util/token-counter'
+import { formatCodeSearchOutput } from '../common/src/util/format-code-search'
+import {
+  buildIndexQueryData,
+  getPostingCandidates,
+  MAX_POSTING_CANDIDATE_PATHS,
+} from '../packages/indexer/src/query-data'
 
+import type { SymbolRange } from '../packages/code-map/src/structure'
+import type { IndexedFile, MetadataIndex } from '../packages/indexer/src/types'
 import type { SupportedLanguageId } from '../common/src/util/language-capabilities'
 
 /** Fixed measurement baseline: identical constants for before and after rows. */
 const RUNS = 5
 const WARMUP_RUNS = 2
+
+/**
+ * Active baseline, overridable per invocation by runPerfGuardsBaseline
+ * options (the smoke test runs 1 timed run, 0 warmups, every case scaled to
+ * a single timed op). Defaults preserve the fixed baseline exactly.
+ */
+let activeRuns = RUNS
+let activeWarmups = WARMUP_RUNS
+let activeIterationsScale = 1
 const PATH_SIGNAL_TAIL = '(?=$|[\\s`\'"),:;])'
 
 /** Fixed workloads (deterministic; no I/O, no clock, no randomness). */
@@ -168,19 +202,26 @@ type Timing = {
 function measure(
   fn: () => number,
   iterations: number,
-  runs = RUNS,
+  runs = activeRuns,
 ): Timing {
+  // Iteration scale lets the smoke test collapse every case to a single timed
+  // op without touching the per-case iteration constants (1 is the floor so a
+  // 0 scale still times one real op per run).
+  const scaledIterations = Math.max(
+    1,
+    Math.round(iterations * activeIterationsScale),
+  )
   const once = () => {
     let checksum = 0
-    for (let i = 0; i < iterations; i++) checksum += fn()
+    for (let i = 0; i < scaledIterations; i++) checksum += fn()
     return checksum
   }
-  for (let w = 0; w < WARMUP_RUNS; w++) sink += once()
+  for (let w = 0; w < activeWarmups; w++) sink += once()
   const samples: number[] = []
   for (let r = 0; r < runs; r++) {
     const started = performance.now()
     sink += once()
-    samples.push((performance.now() - started) / iterations)
+    samples.push((performance.now() - started) / scaledIterations)
   }
   const medianMsPerOp = median(samples)
   return {
@@ -767,20 +808,383 @@ function runCase5(): void {
 }
 
 // ---------------------------------------------------------------------------
+// X-2 CASE 6 — token counting (shipped countTokens seam)
+// ---------------------------------------------------------------------------
 
-console.log('=== Perf-repair wave fixed-baseline benchmark (RF-1-41ffd2b0) ===')
-console.log(`Project: ${process.cwd()}`)
-console.log(`Date: ${new Date().toISOString()}`)
-console.log(
-  `Baseline: median [min..max]±MAD of ${RUNS} runs after ${WARMUP_RUNS} warmup runs; per-op ms on fixed workloads`,
+/**
+ * Deterministic ~50KB synthetic TS-like workload: one fixed snippet repeated
+ * to clear 50KB (no randomness). 50KB sits in the shipped counter's 8KB-100KB
+ * uncached band (above MAX_CACHEABLE_INPUT_CHARS, below MAX_BPE_ENCODE_CHARS),
+ * so every timed call performs a real BPE encode — the LRU can never serve
+ * these rows and the measurement stays honest.
+ */
+const TOKEN_WORKLOAD_SNIPPET = [
+  'export function computeRow(values: number[], index: number): number {',
+  '  const row = values[index] ?? 0',
+  '  return row * 2 + 1',
+  '}',
+  'const ROWS = Array.from({ length: 64 }, (_, i) => computeRow([i, i + 1], i % 64))',
+].join('\n')
+const TOKEN_WORKLOAD_REPEATS = 250
+const TOKEN_WORKLOAD = (TOKEN_WORKLOAD_SNIPPET + '\n').repeat(
+  TOKEN_WORKLOAD_REPEATS,
 )
-console.log('')
-runCase1()
-runCase2()
-runCase3()
-runCase4()
-runCase5()
-console.log('')
+
+function runCase6(): void {
+  // Contract check (outside the timed sections): the shipped counter must
+  // return a positive estimate on the fixed workload.
+  const rawTokens = countTokens(TOKEN_WORKLOAD)
+  if (!(rawTokens > 0)) {
+    console.error(`CASE 6 contract failure: countTokens returned ${rawTokens}`)
+    process.exit(1)
+  }
+  // Raw path: 50KB < MAX_BPE_ENCODE_CHARS (100k chars), so countTokens runs
+  // the full-BPE encode — the estimator the capped path extrapolates from.
+  const rawMs = measure(() => countTokens(TOKEN_WORKLOAD), 2)
+  const rawTokensPerSec = Math.round(rawTokens / (rawMs.medianMsPerOp / 1000))
+  console.log(
+    `  ${'CASE 6a'.padEnd(9)} ${'X-2: countTokens raw BPE encode (50KB < cap)'.padEnd(44)} ` +
+      `after ${formatTiming(rawMs)} ms/op  ` +
+      `${TOKEN_WORKLOAD.length}B → ${rawTokens} tokens (raw path, never LRU-cached above 8KB), ~${rawTokensPerSec} tokens/s`,
+  )
+
+  // Capped path: the 100k-char cap itself is what the DEPTH audit wants
+  // visible, so reproduce the shipped over-cap estimator shape exactly — a
+  // BPE_SAMPLE_CHARS (20k) prefix sample encoded through the same countTokens
+  // seam and extrapolated by the length ratio (token-counter.ts
+  // MAX_BPE_ENCODE_CHARS). The workload is capped by construction here so the
+  // cap's cost is in the baseline without a multi-minute multi-MB encode in CI.
+  const cappedExtrapolatedTokens = (): number => {
+    const sample = TOKEN_WORKLOAD.slice(0, 20_000)
+    return Math.floor(
+      (countTokens(sample) / sample.length) * TOKEN_WORKLOAD.length,
+    )
+  }
+  const cappedMs = measure(cappedExtrapolatedTokens, 3)
+  console.log(
+    `  ${'CASE 6b'.padEnd(9)} ${'X-2: 100k-char cap → sample extrapolation'.padEnd(44)} ` +
+      `after ${formatTiming(cappedMs)} ms/op  ` +
+      `20k-char sample encode + ratio extrapolation → ~${cappedExtrapolatedTokens()} tokens (shipped capped estimator shape)`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// X-2 CASE 7 — code_search dispatch cost (JS-side rg line parse only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Honest scope: the ripgrep spawn itself is I/O-bound and machine-dependent,
+ * so this case measures the cheap JS-side preparation seam the shipped
+ * code_search handler runs over every result set — formatCodeSearchOutput's
+ * per-line ripgrep parse/group loop (the parseRipgrepLine hot path) — over a
+ * fixed synthetic 200-line rg stdout. This row is "rg line parse throughput",
+ * NOT code_search end-to-end.
+ */
+const RG_LINES = 200
+const RG_STDOUT = Array.from(
+  { length: RG_LINES },
+  (_, i) =>
+    `packages/agent-runtime/src/module-${i % 20}.ts:${i + 1}:  const handle${i} = build(${i})`,
+).join('\n')
+
+function runCase7(): void {
+  // Contract check: every synthetic match line survives formatting.
+  const formatted = formatCodeSearchOutput(RG_STDOUT, { matchCount: RG_LINES })
+  if (!formatted.includes(`Found ${RG_LINES} matches`)) {
+    console.error('CASE 7 contract failure: match count header missing')
+    process.exit(1)
+  }
+  const parseMs = measure(
+    () => formatCodeSearchOutput(RG_STDOUT, { matchCount: RG_LINES }).length,
+    100,
+  )
+  console.log(
+    `  ${'CASE 7'.padEnd(9)} ${'X-2: code_search rg line parse (JS-side only)'.padEnd(44)} ` +
+      `after ${formatTiming(parseMs)} ms/op  ` +
+      `${RG_LINES}-line synthetic rg stdout through shipped formatCodeSearchOutput (rg spawn NOT measured: I/O-bound, machine-dependent)`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// X-2 CASE 8 — index refresh hot paths (X-2a hot paths, D13)
+// ---------------------------------------------------------------------------
+
+/**
+ * X-2a hot paths (D13), measured DIRECTLY: the metadata-indexer refresh loop
+ * stats and hashes real files (updateMetadataIndex is not runnable in-memory
+ * without a filesystem fixture), so the two hot functions this wave guarded
+ * are timed over synthetic workloads instead and attributed "X-2a hot paths
+ * (D13)" as the plan gate requires. The code-map module is imported
+ * dynamically so a heavy/tree-sitter load failure degrades to a printed skip
+ * rather than aborting the whole baseline.
+ */
+const X2A_SYMBOL_COUNT = 2000
+const X2A_VOCAB_TOKENS = 5000
+const X2A_QUERY_TOKENS = 40
+
+/** Synthetic symbol ranges: one wide container every 4th symbol, 3-line
+ * leaves between them, so the interval-stack sweep exercises real nesting. */
+function buildSyntheticSymbols(): SymbolRange[] {
+  const symbols: SymbolRange[] = []
+  for (let i = 0; i < X2A_SYMBOL_COUNT; i++) {
+    if (i % 4 === 0) {
+      const start = i * 2 + 1
+      symbols.push({
+        name: `container${i}`,
+        kind: 'class',
+        startLine: start,
+        endLine: start + 12,
+        depth: 0,
+      })
+    } else {
+      const start = i * 2 + 3
+      symbols.push({
+        name: `leaf${i}`,
+        kind: 'function',
+        startLine: start,
+        endLine: start + 3,
+        depth: 0,
+      })
+    }
+  }
+  return symbols
+}
+
+async function runCase8(): Promise<void> {
+  // --- X-2a hot path 1: assignDepths interval sweep over synthetic symbols.
+  try {
+    const { assignDepths } = await import('../packages/code-map/src/structure')
+    const symbols = buildSyntheticSymbols()
+    const withDepths = assignDepths(symbols.map((sym) => ({ ...sym })))
+    const maxDepth = Math.max(...withDepths.map((sym) => sym.depth))
+    if (withDepths.length !== symbols.length || !(maxDepth >= 0)) {
+      console.error('CASE 8a contract failure: unexpected assignDepths output')
+      process.exit(1)
+    }
+    const depthsMs = measure(
+      () => assignDepths(symbols.map((sym) => ({ ...sym }))).length,
+      20,
+    )
+    console.log(
+      `  ${'CASE 8a'.padEnd(9)} ${'X-2a hot paths (D13): assignDepths sweep'.padEnd(44)} ` +
+        `after ${formatTiming(depthsMs)} ms/op  ` +
+        `${X2A_SYMBOL_COUNT} synthetic SymbolRanges (interval-stack sweep, max depth ${maxDepth})`,
+    )
+  } catch (error) {
+    console.log(
+      `  ${'CASE 8a'.padEnd(9)} SKIPPED — code-map structure import failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+
+  // --- X-2a hot path 2: getPostingCandidates substring union over a large
+  // synthetic posting vocabulary (the X-2a-bounded scan).
+  const files: Record<string, IndexedFile> = {}
+  for (let i = 0; i < X2A_VOCAB_TOKENS; i++) {
+    const path = `packages/agent-runtime/src/file-${i}.ts`
+    files[path] = {
+      path,
+      mtime: 1_700_000_000_000 + i,
+      size: 1000 + (i % 97) * 13,
+      hash: `hash-${i}`,
+      ext: '.ts',
+      symbols: [`symbol${i}`],
+      imports: [],
+      headings: [],
+      concepts: [`tok${i}token`],
+    }
+  }
+  // The workload must engage the X-2a bounds this row is attributed to
+  // (case8b-workload-never-engages-bounds): all-exact >=8-char tokens would
+  // take the substring-scan skip branch and never exercise the scan loop or
+  // the MAX_POSTING_CANDIDATE_PATHS cap. Half the tokens are exact postings
+  // (the skip branch), half are short no-exact-posting prefixes ('tok') that
+  // substring-match the whole tok* vocabulary, driving the candidate union
+  // to the cap so the bounding fix is actually exercised and asserted below.
+  const queryTokens: string[] = []
+  for (let i = 0; i < X2A_QUERY_TOKENS; i++) {
+    queryTokens.push(i % 2 === 0 ? `tok${i}token` : 'tok')
+  }
+  const queryData = buildIndexQueryData(files, { nodes: {}, edges: [] })
+  const index: MetadataIndex = {
+    version: '2',
+    projectRoot: '/synthetic',
+    builtAt: 0,
+    fileCount: Object.keys(files).length,
+    files,
+    graph: { nodes: {}, edges: [] },
+    queryData,
+  }
+  const candidates = getPostingCandidates(index, queryTokens)
+  // Real shipped contract (query-data.ts getPostingCandidates): the
+  // substring-scan union is bounded by MAX_POSTING_CANDIDATE_PATHS, but
+  // exact-match postings are ALWAYS added on top of that capped union — the
+  // superset-preservation guarantee means exact matches are never dropped.
+  // So the final union is cap + (exact-match paths not already inside the
+  // capped substring union), never exactly the cap. Assert both sides:
+  //   (1) the substring-scan bound is ENGAGED (hard-fail if the scan never
+  //       reached the cap — that is the guard this row evidences), and
+  //   (2) the excess over the cap is at most the number of distinct
+  //       exact-match paths of the query tokens, computed from the same
+  //       workload's postings (the query tokens are already normalized, so
+  //       direct postings lookup mirrors the shipped exact-add step).
+  const exactMatchPaths = new Set<string>()
+  for (const token of queryTokens) {
+    for (const filePath of index.queryData?.postings[token] ?? []) {
+      exactMatchPaths.add(filePath)
+    }
+  }
+  if (
+    !candidates ||
+    candidates.size < MAX_POSTING_CANDIDATE_PATHS ||
+    candidates.size > exactMatchPaths.size + MAX_POSTING_CANDIDATE_PATHS
+  ) {
+    console.error(
+      `CASE 8b contract failure: expected the substring-scan union to engage the MAX_POSTING_CANDIDATE_PATHS bound (${MAX_POSTING_CANDIDATE_PATHS}) with exact-match paths added on top (≤ ${exactMatchPaths.size + MAX_POSTING_CANDIDATE_PATHS}), got ${candidates?.size ?? 'null'}`,
+    )
+    process.exit(1)
+  }
+  const candidatesMs = measure(
+    () => getPostingCandidates(index, queryTokens)?.size ?? 0,
+    20,
+  )
+  console.log(
+    `  ${'CASE 8b'.padEnd(9)} ${'X-2a hot paths (D13): getPostingCandidates'.padEnd(44)} ` +
+      `after ${formatTiming(candidatesMs)} ms/op  ` +
+      `${X2A_QUERY_TOKENS} query tokens (exact + substring prefix) over a ${X2A_VOCAB_TOKENS}-token vocabulary (${candidates.size} candidate paths — MAX_POSTING_CANDIDATE_PATHS=${MAX_POSTING_CANDIDATE_PATHS} bound engaged, exact-match paths added on top per the superset guarantee; ${exactMatchPaths.size} exact-match query-token paths)`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// X-2 CASE 9 — tool-call stream parse (shipped parseStreamChunk seam)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic ~100KB payload of prose segments alternating with complete
+ * tool calls, split into ~1KB chunks and fed through the shipped
+ * parseStreamChunk state machine — the same seam the stream loop runs per
+ * chunk (CASE 3 already pins its replay-cost guard; this row pins the
+ * absolute end-to-end stream parse cost).
+ */
+const STREAM_TOOL_CALL = (index: number): string =>
+  `${startToolTag}\n${JSON.stringify({
+    cb_tool_name: 'read_files',
+    paths: [`packages/agent-runtime/src/file-${index}.ts`],
+  })}\n${endToolTag}\n`
+const STREAM_TOOL_CALLS = 96
+const STREAM_SEGMENTS: string[] = []
+for (let i = 0; i < STREAM_TOOL_CALLS; i++) {
+  STREAM_SEGMENTS.push(
+    `Segment ${i}: ` +
+      'prose filler text for the stream parse workload. '.repeat(20) +
+      '\n',
+  )
+  STREAM_SEGMENTS.push(STREAM_TOOL_CALL(i))
+}
+const STREAM_PAYLOAD = STREAM_SEGMENTS.join('')
+const STREAM_CHUNK_SIZE = 1024
+const STREAM_CHUNKS: string[] = []
+for (let i = 0; i < STREAM_PAYLOAD.length; i += STREAM_CHUNK_SIZE) {
+  STREAM_CHUNKS.push(STREAM_PAYLOAD.slice(i, i + STREAM_CHUNK_SIZE))
+}
+
+function runCase9(): void {
+  const streamStats = (): {
+    toolCalls: number
+    chars: number
+    jsonErrors: number
+  } => {
+    const state = createStreamParserState()
+    let toolCalls = 0
+    let chars = 0
+    let jsonErrors = 0
+    for (const chunk of STREAM_CHUNKS) {
+      const result = parseStreamChunk(chunk, state)
+      toolCalls += result.toolCalls.length
+      chars += result.filteredText.length
+      for (const error of result.errors) {
+        if (error.code === 'invalid_tool_call_json') jsonErrors++
+      }
+    }
+    return { toolCalls, chars, jsonErrors }
+  }
+  // Contract check: framing only — every synthetic tool call is extracted
+  // exactly once, the payloads parse cleanly, and prose actually streams.
+  // Exact filteredText byte accounting is deliberately NOT asserted: the
+  // shipped parser emits bytes immediately after an end tag (the workload's
+  // per-call trailing newline) and retains a partial-tag carry in
+  // state.buffer, so the emitted total sits a few bytes off the prose-only
+  // sum (the same accounting CASE 3 handles via its like-for-like checksum).
+  const stats = streamStats()
+  if (
+    stats.toolCalls !== STREAM_TOOL_CALLS ||
+    stats.jsonErrors !== 0 ||
+    stats.chars === 0
+  ) {
+    console.error(
+      `CASE 9 contract failure: ${stats.toolCalls} tool calls, ${stats.jsonErrors} JSON errors, ${stats.chars} streamed chars (expected ${STREAM_TOOL_CALLS} calls, 0 errors, prose > 0)`,
+    )
+    process.exit(1)
+  }
+  const streamMs = measure(() => streamStats().toolCalls, 10)
+  console.log(
+    `  ${'CASE 9'.padEnd(9)} ${'X-2: tool-call stream parse (shipped seam)'.padEnd(44)} ` +
+      `after ${formatTiming(streamMs)} ms/op  ` +
+      `${STREAM_PAYLOAD.length}B in ${STREAM_CHUNKS.length} ~1KB chunks → ${stats.toolCalls} tool calls, ${stats.chars} streamed chars`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for runPerfGuardsBaseline. Defaults preserve the fixed measurement
+ * baseline exactly; the smoke test overrides them to keep the suite fast.
+ */
+export interface RunPerfGuardsBaselineOptions {
+  /** Timed runs per measurement (default: the fixed baseline RUNS). */
+  runs?: number
+  /** Warmup runs before timing (default: the fixed baseline WARMUP_RUNS). */
+  warmups?: number
+  /**
+   * Multiplier on every case's per-run iteration count (default 1). The smoke
+   * test uses a fraction to collapse each case to a single timed op.
+   */
+  iterationsScale?: number
+}
+
+/**
+ * Runs the full fixed-baseline benchmark and returns the measured rows.
+ * Exported so the smoke test can drive it with tiny iteration counts; the
+ * module itself only executes it when run directly (import.meta.main).
+ */
+export async function runPerfGuardsBaseline(
+  options: RunPerfGuardsBaselineOptions = {},
+): Promise<CaseRow[]> {
+  activeRuns = options.runs ?? RUNS
+  activeWarmups = options.warmups ?? WARMUP_RUNS
+  activeIterationsScale = options.iterationsScale ?? 1
+  rows.length = 0
+  sink = 0
+  console.log(
+    '=== Perf-repair wave fixed-baseline benchmark (RF-1-41ffd2b0) ===',
+  )
+  console.log(`Project: ${process.cwd()}`)
+  console.log(`Date: ${new Date().toISOString()}`)
+  console.log(
+    `Baseline: median [min..max]±MAD of ${activeRuns} runs after ${activeWarmups} warmup runs; per-op ms on fixed workloads`,
+  )
+  console.log('')
+  runCase1()
+  runCase2()
+  runCase3()
+  runCase4()
+  runCase5()
+  runCase6()
+  runCase7()
+  await runCase8()
+  runCase9()
+  console.log('')
 console.log('--- Evidence notes ---')
 console.log(
   '  CASE 1-2, 4: before/after rows differ ONLY in RegExp construction timing',
@@ -877,4 +1281,63 @@ console.log(
   '     speedup carries its min/max quotient envelope; envelopes spanning 1.0x',
 )
 console.log('     are marked within-noise and are not evidence of a speedup.')
+console.log(
+  '  X-2 CASE 6-9: absolute (after-only) timing rows on the shipped seams — no',
+)
+console.log(
+  '     before/after exists for these, so no speedup ratio is printed. CASE 6a/6b',
+)
+console.log(
+  '     make the 100k-char BPE cap visible (raw encode vs 20k-sample extrapolation);',
+)
+console.log(
+  '     CASE 7 measures the JS-side rg line parse only (rg spawn is I/O-bound and',
+)
+console.log(
+  '     machine-dependent, deliberately not measured); CASE 8 rows are attributed',
+)
+console.log(
+  '     "X-2a hot paths (D13)" — the indexer refresh loop stats real files, so its',
+)
+console.log(
+  '     two hot functions (assignDepths, getPostingCandidates) are measured directly;',
+)
+console.log(
+  "     CASE 8b's query workload engages the substring scan + MAX_POSTING_CANDIDATE_PATHS",
+)
+console.log(
+  '     bound (asserted: the union saturates the cap with exact-match paths added on',
+)
+console.log(
+  '     top per the superset-preservation guarantee), not just the exact-match path;',
+)
+console.log(
+  '     CASE 9 times the shipped parseStreamChunk seam over ~100KB in ~1KB chunks.',
+)
+console.log(
+  '  Manual-only X-2 rows (deliberately NOT measured here — they need a real',
+)
+console.log(
+  '     TUI/process and cannot run deterministically in CI; planned methods are',
+)
+console.log(
+  '     listed so the X-2 gate stays honest instead of shipping fake numbers):',
+)
+console.log(
+  '     TUI keystroke latency — scripted-keystroke p50/p99 keystroke-to-render',
+)
+console.log('       measured against the live Ink TUI in a real terminal;')
+console.log(
+  '     cold-start — CLI process spawn → first interactive prompt, warm vs cold',
+)
+console.log('     cache (process spawn timing is machine-dependent).')
 console.log(`Work checksum (defeats DCE): ${sink === 0 ? 0 : 1}`)
+  return [...rows]
+}
+
+if (import.meta.main) {
+  runPerfGuardsBaseline().catch((error: unknown) => {
+    console.error(error)
+    process.exit(1)
+  })
+}

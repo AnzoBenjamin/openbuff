@@ -272,15 +272,41 @@ export async function updateMetadataIndex(
     if (preciseDelta && !changedDeltaPaths.has(file.relativePath)) {
       continue
     }
+    // Stat-gated hashing (X-2a): unchanged files skip the content read +
+    // SHA-256 entirely. A file is treated as unchanged only when BOTH the
+    // walked mtime/size AND a fresh stat() match the indexed record — the
+    // walked mtime can be stale for precise-delta overlays rebuilt from the
+    // indexed record, and the fresh stat catches changes that land between
+    // the walk and this loop. Known tradeoff (the standard indexer one,
+    // prescribed by the DEPTH audit): a touch-less write that keeps mtime
+    // AND size identical is invisible to this gate. Stat failures fall back
+    // to hashing, preserving the previous behavior.
     let hash: string | undefined
-    try {
-      hash = file.asset
-        ? await hashBinaryFile(file.absolutePath)
-        : await hashFile(file.absolutePath)
-    } catch {
-      hashReadFailedPaths.add(file.relativePath)
-      changedFiles.push(file)
-      continue
+    if (indexed) {
+      try {
+        const stat = await fs.promises.stat(file.absolutePath)
+        if (
+          indexed.mtime === stat.mtimeMs &&
+          indexed.size === stat.size &&
+          indexed.mtime === file.mtime &&
+          indexed.size === file.size
+        ) {
+          hash = indexed.hash
+        }
+      } catch {
+        // Stat failure: fall back to hashing below (current behavior).
+      }
+    }
+    if (hash === undefined) {
+      try {
+        hash = file.asset
+          ? await hashBinaryFile(file.absolutePath)
+          : await hashFile(file.absolutePath)
+      } catch {
+        hashReadFailedPaths.add(file.relativePath)
+        changedFiles.push(file)
+        continue
+      }
     }
     hashByPath.set(file.relativePath, hash)
     const derivedMetadataPath = file.asset

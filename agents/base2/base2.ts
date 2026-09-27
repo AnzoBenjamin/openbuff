@@ -34,6 +34,10 @@ import {
   specialistRoutingSection,
 } from './quality-prompt-section'
 import { resolveModelToolNames, type UnlockedToolTier } from './tool-tiers'
+import {
+  BASE2_PROGRAMMATIC_TOOL_NAMES,
+  buildSpawnContractClauses,
+} from './spawn-contract'
 import { publisher } from '../constants'
 import {
   PLACEHOLDER,
@@ -456,16 +460,11 @@ export function createBase2(
     outputMode: 'last_message',
     includeMessageHistory: true,
     toolNames: modelToolNames,
-    programmaticToolNames: [
-      'spawn_agent_inline',
-      'git_status',
-      'run_file_change_hooks',
-      'inspect_codebase_structure',
-      'get_change_review_bundle',
-      'inspect_environment',
-      'get_affected_tests',
-      'get_build_targets',
-    ],
+    // Spread: the shared constant is readonly, while this property is a
+    // mutable array that each createBase2 call owns (the inline literal this
+    // replaces was also a fresh array per call). Emitted values stay
+    // byte-identical to the previous inline array.
+    programmaticToolNames: [...BASE2_PROGRAMMATIC_TOOL_NAMES],
     spawnableAgentToolMode: 'generic',
     programmaticConfig: {
       hasNoValidation,
@@ -577,7 +576,7 @@ ${
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
     : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> wait for the background job (check_job for agent readiness/exit; live job_update for users) -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. check_job is only the agent-side bridge to artifact inspection — do not poll solely for user progress. Make one bounded check_job follow per job with wait_for plus timeout_seconds, thread nextCursor across follows, and terminal state means STOP with no further follows. After 2 empty follows with no new actionable artifact or progress, do other work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher (finite commands stay SYNC), keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use \`code_search\` for ripgrep-style content search (do not basher grep); for several patterns, issue one \`code_search\` call per pattern — independent calls can go in the same message. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don't force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: basher needs \`params.command\` (a shell string); general-agent needs prompt + params.filePaths/directoryPaths (not files); thinker needs prompt packet (params only depth/outputSchemaHint); dependency-manager needs params.manager+params.operation from manifest evidence; architect/advisory needs prompt+files (snapshot_id optional); reviewer-family manual spawns omit params.snapshot_id (security-reviewer needs changed_files+snapshot_fingerprint); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "basher", "prompt": "...", "params": { "command": "..." } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use \`code_search\` for ripgrep-style content search (do not basher grep); for several patterns, issue one \`code_search\` call per pattern — independent calls can go in the same message. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don't force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: ${buildSpawnContractClauses()}; put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "basher", "prompt": "...", "params": { "command": "..." } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
 
 # Code Editing Mandates
 

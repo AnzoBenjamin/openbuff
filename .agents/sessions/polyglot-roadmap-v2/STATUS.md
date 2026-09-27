@@ -120,3 +120,19 @@ Committed `045365e2` on `feat/polyglot-reaudit-roadmap` (not pushed):
 - Coverage: `client.test.ts` (32 tests), `load-mcp-config.test.ts`, `load-agents.test.ts` (new `mcpServers origin marking` block asserting project/user), `agent-registry.test.ts` (NEW-1 client/project/re-parse/db-provenance suite). Full typecheck clean; migration-reviewer, compatibility-reviewer, and code-reviewer all LOOKS_GOOD.
 
 **P1-T2 is now unblocked** on the origin-registry axis. Remaining P1-T2 prerequisites from the P1-T1 design review: the approval commandHash contract change and the client-tool first-call approval hook.
+
+<!-- update_plan_status:appended -->
+## Cross-cutting foundations X-1…X-6 + P0-T5 remainder complete (2026-09-27)
+
+All six foundation tasks and the final P0-T5 item are done (details in PLAN.md):
+- **X-1 (contract freeze + golden vectors):** `compileToolJsonSchemas()` per-tool artifacts + the mapper's silent-`any` fallback now throws; golden-vector suite 32/32 (cap.v3 round-trip/scope-rejection, FileMutationResultV1/CommitReceiptV1 valid+reject vectors, deterministic per-tool schema pins — glob fixture regenerated from the real pipeline); base2 spawn-contract emission (`agents/base2/spawn-contract.ts`) with a byte-identical legacy fallback, roster-drift prose-sync test retired in favor of derived-clause coverage; spawn-contract/roster-drift/quality-prompt-snapshot 39/39, base2 242/242. The rg env override golden vector is deferred.
+- **X-2 (golden baselines):** `scripts/measure-perf-guards-baseline.ts` extended with CASE 6 (token counting, raw + capped), CASE 7 (rg line-parse, honestly labeled), CASE 8 (X-2a hot paths, D13-attributed), CASE 9 (stream parse); baseline run green (8/8 parity rows) with keystroke/cold-start documented as manual-only rows (no fake numbers).
+- **X-2a (D13 prerequisites):** stat-gated hashing (metadata-indexer 26/26), interval-stack `assignDepths` (structure 19/19), bounded vocabulary scan (new query-data suite) — all behavior-preserving.
+- **X-3a (user-confirmed deletion):** `packages/native-core/` + `native-core-build.yml` deleted, tsconfig reference removed, zero remaining references; the degraded-mode/telemetry loading pattern preserved first in `X-3B-DESIGN-NOTE.md`.
+- **X-3b (Rust workspace):** `rust/` cargo workspace with pinned `rust-toolchain.toml` (1.87.0), a real harness crate whose test passes (`cargo test` green), CI skeleton with the 5+ target matrix gated behind the first real crate, README + tracked Cargo.lock; the 5+ matrix lands with P5-T1.
+- **X-4 (D16 freeze):** `language-capability-manifest.ts` + golden-vector suite 11/11 (byte-frozen serialized registry, JSON round-trip, schema rejects unknown keys/stages); protocol/doctor/status-bar advertisement rides P1-T1/P1-T2.
+- **X-5 (sidecar supervisor):** `sdk/src/services/sidecar-supervisor.ts` (handshake/version negotiation, JSON-RPC with timeouts, exponential restart backoff + typed events, child env via `getChildProcessEnv`); fake-sidecar tests 6/6 (crash→restart, attempts-exhausted, requests-while-restarting, stop). Checksum-verified downloads land with the first real sidecar.
+- **X-6 (citations):** memory `:2670`→`:1553` (both occurrences), sixel `:155`→`:199` and depth-audit `:183–186`→`:196–199` (verified live), SUPERSEDED banner on `polyglot-native-waves/STATUS.md`.
+- **P0-T5 (EV-3 remainder):** `tryNearMatchAutoCorrect`'s delimiter gate is now the tree-sitter ERROR-node check on the full candidate content (bracket check kept only as the grammar-unavailable fail-open fallback); process-str-replace 159/159 with new EV-3 cases.
+
+**Validation:** full monorepo typecheck clean (including the env-architecture check after the supervisor's `process.env` read was routed through `getChildProcessEnv`). All work is on `feat/polyglot-reaudit-roadmap`, pending gate + commit.

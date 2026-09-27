@@ -1,0 +1,60 @@
+# X-3b: fresh Rust workspace CI (charter rule 2: CI runs the native path from
+# day one — build AND test, never a build-only path). One single-purpose job;
+# the target matrix stays commented out until the first real sidecar crate
+# ships (charter rule 2: gate matrix legs behind the first real crate).
+name: rust-workspace
+
+on:
+  push:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-workspace.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-workspace.yml"
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      # Explicit pin matches rust/rust-toolchain.toml; rustup installs it on
+      # uncached runners, so the job never depends on a preinstalled toolchain.
+      - uses: dtolnay/rust-toolchain@1.87.0
+
+      # Charter rule 3: toolchain cost stays O(1) — one reusable job with
+      # caching, not per-package setup steps.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+
+      # Nothing is uploaded yet — artifacts come with the first real sidecar
+      # (charter rule 4: no built-but-unpublished CI spend).
+
+      # Target matrix goes here once the first real sidecar crate ships
+      # (charter rule 2). Each leg must build AND smoke-test its binary —
+      # reuse the cli-release-build.yml cross-compile patterns (explicit
+      # `rustup target add` + static musl linking). Sketch:
+      #
+      # strategy:
+      #   matrix:
+      #     target:
+      #       - x86_64-unknown-linux-gnu
+      #       - x86_64-unknown-linux-musl
+      #       - aarch64-unknown-linux-gnu
+      #       - x86_64-pc-windows-msvc
+      #       - x86_64-apple-darwin
+      # steps:
+      #   - run: rustup target add ${{ matrix.target }}
+      #   - run: cargo build --workspace --target ${{ matrix.target }} --release
+      #   - run: cargo test --workspace --target ${{ matrix.target }}
+      #   - run: ./scripts/smoke-test-sidecar.sh ${{ matrix.target }}
