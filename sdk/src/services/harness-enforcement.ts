@@ -130,6 +130,10 @@ export type ClassifiedHarnessAction = {
     | 'external-network'
     | 'arbitrary-code'
     | 'workspace-delete'
+    // Client-origin MCP tool approval (P1-T2). Never RETURNED by
+    // `classifyTerminalHarnessAction`; used only so the `HarnessApprovalRequest`
+    // built for a client MCP tool call typechecks against this union.
+    | 'mcp-tool'
   target: string
   branch?: string
   commandHash: string

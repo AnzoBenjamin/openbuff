@@ -9,8 +9,10 @@ import {
 import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
 import {
   getMCPClient,
+  getMCPClientCacheKey,
   listMCPTools,
   callMCPTool,
+  resolveMCPConfigOrigin,
 } from '@codebuff/common/mcp/client'
 import { toolNames } from '@codebuff/common/tools/constants'
 import {
@@ -52,6 +54,7 @@ import type { MemoryV2ClientConfig } from './services/memory-v2/types'
 import {
   HarnessApprovalService,
   evaluateHarnessActionPolicy,
+  hashCommand,
 } from './services/harness-enforcement'
 import type {
   HarnessApprovalMode,
@@ -1061,6 +1064,12 @@ async function runOnce({
   // means no git_status observation has been emitted yet this turn, so the
   // first call always returns the full observation.
   let lastGitStatusFingerprint: string | null = null
+  // Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+  // Declared in this run closure (not module scope) so every run() call starts
+  // with a fresh approval scope and concurrent runs never share it. The FIRST
+  // client-origin call of each (server-config, tool) pair is gated behind the
+  // host approver; subsequent calls of the same tool this run run freely.
+  const approvedClientMcpTools = new Set<string>()
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
     apiKey,
@@ -1125,6 +1134,7 @@ async function runOnce({
         approvalReceiptIds,
         approvalMode,
         requestApproval,
+        approvedClientMcpTools,
         approvalService,
         harnessWorkspaceIdentity: workspaceJournal
           ? {
@@ -1754,6 +1764,7 @@ export async function handleToolCall({
   approvalReceiptIds,
   approvalMode,
   requestApproval,
+  approvedClientMcpTools,
   approvalService,
   harnessWorkspaceIdentity,
   getWorkspaceState,
@@ -1780,6 +1791,10 @@ export async function handleToolCall({
   approvalReceiptIds: string[]
   approvalMode: HarnessApprovalMode
   requestApproval?: OpenbuffClientOptions['requestApproval']
+  /** Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+   * Optional so existing direct callers/tests keep working; when absent, the
+   * gate still enforces approval but with a fresh local set for this call. */
+  approvedClientMcpTools?: Set<string>
   approvalService: HarnessApprovalService
   harnessWorkspaceIdentity?: {
     repositoryId: string
@@ -1815,6 +1830,63 @@ export async function handleToolCall({
 
   // Handle MCP tool calls when mcpConfig is present
   if (action.mcpConfig) {
+    // P1-T2: gate the FIRST call of each tool from a `client`-origin MCP
+    // config behind the host approval callback. Trusted origins
+    // (`user`/`project`, and any explicitly trusted mark) proceed unchanged
+    // with no approval. `resolveMCPConfigOrigin` fails closed to `client` for
+    // unmarked configs, so an unmarked config is gated too — matching every
+    // other origin consumer.
+    if (resolveMCPConfigOrigin(action.mcpConfig) === 'client') {
+      // Stable per-(server-config, tool) key. `getMCPClientCacheKey` is the
+      // same identity `getMCPClient` computes downstream, so computing it here
+      // first is safe. If it can ever throw for a malformed config, fall back
+      // to a JSON key so a key failure never bypasses the gate.
+      let cacheKey: string
+      try {
+        cacheKey = getMCPClientCacheKey(action.mcpConfig, { origin: 'client' })
+      } catch {
+        cacheKey = JSON.stringify(action.mcpConfig)
+      }
+      const approvalKey = `${cacheKey}\u0000${toolName}`
+      // When no per-run set is threaded in, use a fresh local set so behavior
+      // is defined (the gate still enforces approval for this call).
+      const approvedTools = approvedClientMcpTools ?? new Set<string>()
+      if (!approvedTools.has(approvalKey)) {
+        if (requestApproval) {
+          // NUL-free, human-readable approval target derived from the config.
+          const serverLabel =
+            action.mcpConfig.type === 'stdio'
+              ? action.mcpConfig.command
+              : action.mcpConfig.url
+          const approved = await requestApproval({
+            action: 'mcp-tool',
+            target: `${serverLabel} ${toolName}`,
+            commandHash: hashCommand(approvalKey),
+            reason: `MCP tool '${toolName}' comes from a client-supplied (untrusted) MCP server and is running for the first time this run.`,
+            risk: 'high',
+          })
+          if (!approved) {
+            // Denied: do NOT call the tool. Return the same error-output shape
+            // the branch uses for a thrown MCP error so callers parse it
+            // identically to a failed call.
+            return {
+              output: [
+                {
+                  type: 'json',
+                  value: {
+                    errorMessage: `Client MCP tool '${toolName}' was denied approval.`,
+                  },
+                },
+              ],
+            }
+          }
+        }
+        // Approved by the host, or fail-open when no host approver exists
+        // (headless/CI). Record the key so subsequent calls of this same tool
+        // this run run freely.
+        approvedTools.add(approvalKey)
+      }
+    }
     try {
       const mcpClientId = await getMCPClient(action.mcpConfig)
       const result = await callMCPTool(
