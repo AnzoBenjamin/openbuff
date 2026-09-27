@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { LocalHarnessStore } from './local-harness-store'
 
@@ -16,6 +16,7 @@ export type HarnessApprovalMode = 'balanced' | 'strict' | 'allow-all'
 export type ApprovalRecord = LocalHarnessRecord & {
   action: string
   target: string
+  commandHash: string
   grantedBy: 'user'
   expiresAt?: string
   consumedAt?: string
@@ -43,7 +44,12 @@ export class HarnessApprovalService {
 
   grant(
     scope: RecordScope,
-    params: { action: string; target: string; expiresAt?: string },
+    params: {
+      action: string
+      target: string
+      commandHash: string
+      expiresAt?: string
+    },
   ): ApprovalRecord {
     const timestamp = now()
     return this.store.put('approvals', {
@@ -55,6 +61,7 @@ export class HarnessApprovalService {
       updatedAt: timestamp,
       action: params.action,
       target: params.target,
+      commandHash: params.commandHash,
       grantedBy: 'user',
       ...(params.expiresAt ? { expiresAt: params.expiresAt } : {}),
     }) as ApprovalRecord
@@ -67,6 +74,7 @@ export class HarnessApprovalService {
     approvalId: string
     action: string
     target: string
+    commandHash: string
     snapshotId: string
   }): ApprovalRecord {
     // Race fix: read + consume must be one critical section. The read outside
@@ -89,6 +97,7 @@ export class HarnessApprovalService {
       if (
         existing.action !== params.action ||
         existing.target !== params.target ||
+        existing.commandHash !== params.commandHash ||
         existing.workspaceId !== params.workspaceId ||
         existing.runId !== params.runId ||
         existing.snapshotId !== params.snapshotId
@@ -123,6 +132,7 @@ export type ClassifiedHarnessAction = {
     | 'workspace-delete'
   target: string
   branch?: string
+  commandHash: string
 }
 
 export type HarnessApprovalRequest = ClassifiedHarnessAction & {
@@ -132,6 +142,15 @@ export type HarnessApprovalRequest = ClassifiedHarnessAction & {
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
+}
+
+/**
+ * Stable sha256 hex of the normalized command. Used to bind an approval to the
+ * EXACT command it was granted for, so an approval for one command can never
+ * authorize a different command that classifies to the same action+target.
+ */
+export function hashCommand(command: string): string {
+  return createHash('sha256').update(normalizeCommand(command)).digest('hex')
 }
 
 /**
@@ -145,6 +164,10 @@ export function classifyTerminalHarnessAction(
   rawCommand: string,
 ): ClassifiedHarnessAction | undefined {
   const command = normalizeCommand(rawCommand)
+  const commandHash = hashCommand(rawCommand)
+  const classify = ():
+    | Omit<ClassifiedHarnessAction, 'commandHash'>
+    | undefined => {
   const push = command.match(/^git\s+push(?:\s+(.+))?$/i)
   if (push) {
     const args =
@@ -260,6 +283,9 @@ export function classifyTerminalHarnessAction(
     return { action: 'workspace-delete', target: command }
   }
   return undefined
+  }
+  const result = classify()
+  return result ? { ...result, commandHash } : undefined
 }
 
 export class ChangeOwnershipService {

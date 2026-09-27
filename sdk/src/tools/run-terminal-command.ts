@@ -266,6 +266,7 @@ export function runTerminalCommand({
   preApprovedAction?: {
     action: string
     target: string
+    commandHash: string
     approvalReceiptId?: string
   }
 }): Promise<CodebuffToolOutput<'run_terminal_command'>> {
@@ -332,7 +333,8 @@ export function runTerminalCommand({
     highImpactAction &&
     preApprovedAction &&
     preApprovedAction.action === highImpactAction.action &&
-    preApprovedAction.target === highImpactAction.target
+    preApprovedAction.target === highImpactAction.target &&
+    preApprovedAction.commandHash === highImpactAction.commandHash
       ? preApprovedAction
       : undefined
   // Harness metadata threaded onto the eventual output on the matched
@@ -418,6 +420,7 @@ export function runTerminalCommand({
         preApprovedAction: {
           action: highImpactAction.action,
           target: highImpactAction.target,
+          commandHash: highImpactAction.commandHash,
           ...(decision.approvalReceiptId
             ? { approvalReceiptId: decision.approvalReceiptId }
             : {}),

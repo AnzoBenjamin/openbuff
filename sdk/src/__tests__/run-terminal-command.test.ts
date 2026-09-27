@@ -17,6 +17,7 @@ import {
   findWindowsBash,
   runTerminalCommand,
 } from '../tools/run-terminal-command'
+import { hashCommand } from '../services/harness-enforcement'
 
 describe('Windows bash prerequisite', () => {
   it('honors the Openbuff-specific Git Bash override', () => {
@@ -60,6 +61,87 @@ describe('runTerminalCommand cwd containment', () => {
       approvalRequired: true,
       harnessAction: 'push',
     })
+  })
+
+  it('carries a commandHash on the classified action and ignores a mismatched one-shot pre-approval', async () => {
+    // The one-shot pre-approval binds to the EXACT command hash: a pre-approval
+    // for the same action+target but a different command must NOT short-circuit
+    // approval, so authorizeHighImpactAction is still invoked.
+    let classifiedHash: string | undefined
+    const result = await runTerminalCommand({
+      command: 'git push origin feature-x',
+      process_type: 'SYNC',
+      mode: 'assistant',
+      permission_profile: 'git-commit',
+      cwd: process.cwd(),
+      projectRoot: process.cwd(),
+      timeout_seconds: 5,
+      preApprovedAction: {
+        action: 'push',
+        target: 'origin/feature-x',
+        commandHash: hashCommand('git push origin some-other-branch'),
+      },
+      authorizeHighImpactAction: async (action) => {
+        classifiedHash = action.commandHash
+        return {
+          allowed: false,
+          approvalRequired: true,
+          reason: 'No matching receipt.',
+        }
+      },
+    })
+
+    expect(classifiedHash).toBe(hashCommand('git push origin feature-x'))
+    expect(result[0].value).toMatchObject({
+      permissionDenied: true,
+      approvalRequired: true,
+      harnessAction: 'push',
+    })
+  })
+
+  it('consumes a matching one-shot pre-approval by exact command hash without re-requesting approval', async () => {
+    // A pre-approval whose commandHash equals the freshly classified command's
+    // hash short-circuits: authorizeHighImpactAction is never called and the
+    // command runs with the threaded harness metadata. A temp repo with no
+    // reachable 'origin' makes the push fail fast without touching the network.
+    const projectRoot = initTempGitRepo('terminal-hash-match-')
+    let approvalCalls = 0
+    try {
+      const result = await runTerminalCommand({
+        command: 'git push origin feature-x',
+        process_type: 'SYNC',
+        mode: 'assistant',
+        permission_profile: 'git-commit',
+        cwd: projectRoot,
+        projectRoot,
+        timeout_seconds: 15,
+        preApprovedAction: {
+          action: 'push',
+          target: 'origin/feature-x',
+          commandHash: hashCommand('git push origin feature-x'),
+          approvalReceiptId: 'r1',
+        },
+        authorizeHighImpactAction: async () => {
+          approvalCalls += 1
+          return { allowed: true, approvalReceiptId: 'r1' }
+        },
+      })
+      const value = result[0].value as {
+        permissionDenied?: boolean
+        approvalReceiptId?: string
+        harnessAction?: string
+        harnessTarget?: string
+      }
+
+      // The matching pre-approval short-circuits: authorize is never called.
+      expect(approvalCalls).toBe(0)
+      expect(value.permissionDenied).toBeUndefined()
+      expect(value.approvalReceiptId).toBe('r1')
+      expect(value.harnessAction).toBe('push')
+      expect(value.harnessTarget).toBe('origin/feature-x')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('keeps the permission profile enforced even when a high-impact command is approved', async () => {

@@ -2132,6 +2132,7 @@ export async function handleToolCall({
                 approvalId,
                 action: classified.action,
                 target: classified.target,
+                commandHash: classified.commandHash,
                 snapshotId,
               })
               const approvedDecision = evaluateHarnessActionPolicy({
@@ -2167,7 +2168,11 @@ export async function handleToolCall({
                   runId: rootRunId,
                   snapshotId,
                 },
-                { action: classified.action, target: classified.target },
+                {
+                  action: classified.action,
+                  target: classified.target,
+                  commandHash: classified.commandHash,
+                },
               )
               const receipt = approvalService.consume({
                 ...harnessWorkspaceIdentity,
@@ -2176,6 +2181,7 @@ export async function handleToolCall({
                 approvalId: grant.id,
                 action: classified.action,
                 target: classified.target,
+                commandHash: classified.commandHash,
               })
               const approvedDecision = evaluateHarnessActionPolicy({
                 ...classified,

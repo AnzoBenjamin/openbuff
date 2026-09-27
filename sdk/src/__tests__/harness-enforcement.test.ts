@@ -9,6 +9,7 @@ import {
   HarnessApprovalService,
   classifyTerminalHarnessAction,
   evaluateHarnessActionPolicy,
+  hashCommand,
 } from '../services/harness-enforcement'
 import { LocalHarnessStore } from '../services/local-harness-store'
 
@@ -37,6 +38,7 @@ describe('harness enforcement services', () => {
     const grant = service.grant(scope, {
       action: 'push',
       target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
     })
     expect(() =>
       service.consume({
@@ -46,6 +48,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/other',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }),
     ).toThrow('scope does not match')
@@ -57,6 +60,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }).consumedAt,
     ).toBeDefined()
@@ -68,9 +72,52 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }),
     ).toThrow('already consumed')
+  })
+
+  test('approvals bind to the exact command hash', () => {
+    const service = new HarnessApprovalService(setup())
+    const grant = service.grant(scope, {
+      action: 'push',
+      target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
+    })
+    // A command that classifies to the same action+target but is a DIFFERENT
+    // command (different hash) must NOT consume the approval.
+    expect(() =>
+      service.consume({
+        repositoryId: 'repo-1',
+        workspaceId: 'workspace-1',
+        runId: 'run-1',
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/feature',
+        commandHash: hashCommand('git push --force origin feature'),
+        snapshotId: 'snapshot-1',
+      }),
+    ).toThrow('scope does not match')
+    // The identical command's hash consumes it exactly once.
+    expect(
+      service.consume({
+        repositoryId: 'repo-1',
+        workspaceId: 'workspace-1',
+        runId: 'run-1',
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
+        snapshotId: 'snapshot-1',
+      }).consumedAt,
+    ).toBeDefined()
+  })
+
+  test('hashCommand is stable across whitespace normalization', () => {
+    expect(hashCommand('git  push   origin feature')).toBe(
+      hashCommand('git push origin feature'),
+    )
   })
 
   test('ownership receipts reject traversal and duplicate paths', () => {
@@ -142,15 +189,18 @@ describe('harness enforcement services', () => {
       action: 'push',
       target: 'origin/feature/x',
       branch: 'feature/x',
+      commandHash: hashCommand('git push -u origin feature/x'),
     })
     expect(classifyTerminalHarnessAction('git push')).toEqual({
       action: 'push',
       target: 'git push',
+      commandHash: hashCommand('git push'),
     })
     expect(classifyTerminalHarnessAction('git push origin HEAD:main')).toEqual({
       action: 'push',
       target: 'origin/main',
       branch: 'main',
+      commandHash: hashCommand('git push origin HEAD:main'),
     })
     expect(
       classifyTerminalHarnessAction('git push --force origin main'),
@@ -158,6 +208,7 @@ describe('harness enforcement services', () => {
       action: 'push',
       target: 'git push --force origin main',
       branch: 'main',
+      commandHash: hashCommand('git push --force origin main'),
     })
     expect(classifyTerminalHarnessAction('pnpm add zod')).toMatchObject({
       action: 'dependency-install',
@@ -241,6 +292,7 @@ describe('harness enforcement services', () => {
     expect(classifyTerminalHarnessAction('gh pr create --title test')).toEqual({
       action: 'pull-request',
       target: 'gh pr create --title test',
+      commandHash: hashCommand('gh pr create --title test'),
     })
     expect(classifyTerminalHarnessAction('bun test')).toBeUndefined()
     expect(classifyTerminalHarnessAction('nohup bun test')).toMatchObject({
@@ -260,6 +312,7 @@ describe('harness enforcement services', () => {
     const grant = service.grant(scope, {
       action: 'push',
       target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
     })
     // A parallel consumer holds the approvals kind lock, consumes the grant,
     // and commits the consumed revision inside the critical section. Our
@@ -286,6 +339,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }),
     ).toThrow('already consumed')
@@ -296,6 +350,7 @@ describe('harness enforcement services', () => {
     const grant = service.grant(scope, {
       action: 'push',
       target: 'origin/main',
+      commandHash: hashCommand('git push origin main'),
     })
     const consume = () =>
       service.consume({
@@ -305,6 +360,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/main',
+        commandHash: hashCommand('git push origin main'),
         snapshotId: 'snapshot-1',
       })
     const attempts = Array.from({ length: 8 }, () => {
