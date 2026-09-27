@@ -141,7 +141,7 @@ All six foundation tasks and the final P0-T5 item are done (details in PLAN.md):
 ## P1-T1 ACP skeleton complete (2026-09-27)
 
 Committed `d63c3a053` on `feat/polyglot-reaudit-roadmap` (pushed to PR #93):
-- **Dependency:** `@agentclientprotocol/sdk@1.5.0` added to sdk (user-approved per D9). Note: the dependency-manager tool repeatedly failed with `bun --filter` "No packages matched the filter" for both `sdk` and `@openbuff/sdk` — added via user-authorized `bun add` instead; the tool's filter construction needs a harness fix.
+- **Dependency:** `@agentclientprotocol/sdk@1.5.0` added to sdk (user-approved per D9). Note: the dependency-manager failed 4× with `bun --filter` "No packages matched the filter" — root cause investigated 2026-09-27: bun 1.3.14 has no `bun add --filter` (shipped in 1.4.0, PR #38333) and its space-form `--filter <name> run` matcher rejects valid workspaces; verified working invocation is `bun add --cwd <dir> <pkg>` (see LESSONS.md).
 - **Skeleton:** `sdk/src/services/acp/acp-agent.ts` — `createAcpAgent` (initialize with the SDK's PROTOCOL_VERSION + honest `loadSession: false`; newSession unique ids; prompt forwards text blocks to an injected `AcpPromptHandler` with per-chunk `sessionUpdate` streaming + AbortSignal; cancel; authenticate-refusal) over a private session map; `serveAcpOverStdio` (ndJsonStream + AgentSideConnection) ready for the P1-T2 bridge.
 - **Conformance:** 6/6 tests including a real `ClientSideConnection` paired over in-memory ndjson streams (true wire framing); sdk typecheck clean; code-reviewer LOOKS_GOOD.
 - **Remaining P1-T1:** (none for the protocol surface — see the followup below)
@@ -155,3 +155,11 @@ The three remaining P1-T1 pieces landed in the followup pass:
 - **Extension schemas (X-1 pipeline):** `sdk/src/services/acp/extensions.ts` — `openbuff/getReceipts`, `openbuff/askUser`, `openbuff/gateState` as Zod v4 contracts with `compileAcpExtensionJsonSchemas()` mirroring `compileToolJsonSchemas` (deterministic `z.toJSONSchema(io:'input')` per method, params+result); `extMethod` on the Agent validates params via safeParse (RequestError.invalidParams with the joined Zod issues on failure) and dispatches to an injected `extensionHandler` (method-not-found when absent/unknown).
 - **Validation:** ACP suites 16/16 (incl. the real ClientSideConnection wire test), full sdk suite 1713/1713, sdk typecheck clean.
 - **Still open under P1:** binding the extension handlers to real receipt/gate-state sources (P1-T2) and custom-tool schemas (P1-T4).
+
+<!-- update_plan_status:appended -->
+## ACP extension live-data wiring complete (2026-09-27)
+
+`openbuff/getReceipts` and `openbuff/gateState` now return live data without an injected handler:
+- **`sdk/src/services/acp/session-data.ts` (new):** bounded per-session store (256 newest receipts, one gate snapshot) with `recordReceipt` fed from the real `FileMutationResultV1` (`@codebuff/common/tools/results/filesystem`), `updateGateStateFromBlock` parsing the published `<gate-state>` JSON block contract (base2's `formatGateStateBlock`), and `toWireReceipt` building the design-§6.2 redacted envelope — drops `afterContent`/`patch`/`editAnchor` at every action, forces `freshCapabilities: []`, keeps `authorityReceipt` verbatim (cap.v3 tokens never leave the core).
+- **Default handlers in `extMethod`:** with `sessionData` injected and no explicit `extensionHandler`, `openbuff/getReceipts` flattens the live envelopes ({operationId, receiptId, paths, actionIds}, deduped, limit default 50/cap 256) and `openbuff/gateState` projects the parsed block (passed→`final_response_allowed`, failed/skipped→`blocked`, validation→`validating`, reviewer→`reviewing`); injected handlers still win. Run-loop feeding (`recordReceipt`/`updateGateStateFromBlock` from the real core) lands with P1-T2.
+- **Validation:** new `acp-session-data.test.ts` (real schema-built fixtures incl. redaction invariants + malformed-block persistence) + existing ACP suites all green, sdk typecheck clean.

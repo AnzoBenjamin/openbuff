@@ -31,6 +31,7 @@ import type {
 
 import { ACP_EXTENSION_METHODS, acpExtensionSchemas } from './extensions'
 import type { AcpExtensionMethod } from './extensions'
+import type { AcpSessionData } from './session-data'
 
 /**
  * The injectable seam P1-T2 binds to the real core run: the ACP skeleton owns
@@ -107,6 +108,15 @@ export type AcpAgentOptions = {
     method: string
     params: unknown
   }) => Promise<unknown>
+  /**
+   * Optional bounded per-session live-data store backing the read-only
+   * Openbuff extension methods ('openbuff/getReceipts' and
+   * 'openbuff/gateState') when no extensionHandler is injected. The P1-T2
+   * run loop records real receipts and published gate-state blocks here.
+   * An explicitly injected extensionHandler still wins (back-compat), and
+   * methods with no store fallback (askUser) still fail closed.
+   */
+  sessionData?: AcpSessionData
 }
 
 /** Per-session state kept for later phases (P1-T2 core-run wiring). */
@@ -233,14 +243,8 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       method: string,
       params: Record<string, unknown>,
     ): Promise<Record<string, unknown>> {
-      if (
-        !ACP_EXTENSION_METHODS.includes(
-          method as AcpExtensionMethod,
-        ) ||
-        !options.extensionHandler
-      ) {
-        // Unknown extension methods and known methods with no injected
-        // dispatcher both fail closed as JSON-RPC method-not-found.
+      if (!ACP_EXTENSION_METHODS.includes(method as AcpExtensionMethod)) {
+        // Unknown extension methods fail closed as JSON-RPC method-not-found.
         throw RequestError.methodNotFound(method)
       }
       const { params: paramsSchema } =
@@ -254,23 +258,45 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
             .join('; ')}`,
         )
       }
-      const result = await options.extensionHandler({
-        method,
-        params: parsed.data,
-      })
-      if (
-        result === null ||
-        typeof result !== 'object' ||
-        Array.isArray(result)
-      ) {
-        // The Agent.extMethod contract returns a JSON object response; a
-        // non-object handler result would corrupt the wire, so fail closed.
-        throw RequestError.internalError(
-          { method },
-          `ACP extension handler for '${method}' returned a non-object response.`,
-        )
+      // An explicitly injected handler wins for every method (back-compat
+      // with the static-data seam tests rely on).
+      if (options.extensionHandler) {
+        const result = await options.extensionHandler({
+          method,
+          params: parsed.data,
+        })
+        if (
+          result === null ||
+          typeof result !== 'object' ||
+          Array.isArray(result)
+        ) {
+          // The Agent.extMethod contract returns a JSON object response; a
+          // non-object handler result would corrupt the wire, so fail closed.
+          throw RequestError.internalError(
+            { method },
+            `ACP extension handler for '${method}' returned a non-object response.`,
+          )
+        }
+        return result as Record<string, unknown>
       }
-      return result as Record<string, unknown>
+      // Without an injected handler, the two read-only extension methods
+      // read the live per-session store. The params schema above already
+      // guaranteed sessionId (and the optional limit), so the narrowing
+      // below is schema-backed.
+      if (options.sessionData && method === 'openbuff/getReceipts') {
+        const { sessionId, limit } = parsed.data as {
+          sessionId: string
+          limit?: number
+        }
+        return options.sessionData.getReceipts(sessionId, limit)
+      }
+      if (options.sessionData && method === 'openbuff/gateState') {
+        const { sessionId } = parsed.data as { sessionId: string }
+        return options.sessionData.getGateState(sessionId)
+      }
+      // 'openbuff/askUser' (and any other method with no store fallback)
+      // has nothing to answer it: fail closed as method-not-found.
+      throw RequestError.methodNotFound(method)
     },
 
     // The Agent interface requires authenticate even though this skeleton
