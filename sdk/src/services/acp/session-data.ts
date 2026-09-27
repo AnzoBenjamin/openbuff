@@ -1,3 +1,5 @@
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+
 import type {
   FileMutationActionV1,
   FileMutationResultV1,
@@ -20,6 +22,32 @@ const MAX_RECEIPTS_PER_SESSION = 256
 /** Default and maximum `limit` served by `openbuff/getReceipts`. */
 const DEFAULT_RECEIPT_LIMIT = 50
 const MAX_RECEIPT_LIMIT = 256
+
+/**
+ * Constructor options for `AcpSessionData`. Everything is optional so the
+ * no-journal construction stays byte-identical to the pure in-memory store
+ * (the env-architecture checks forbid reading `process.env` in this layer,
+ * so the journal directory is always injected by the caller).
+ */
+export type AcpSessionDataOptions = {
+  /**
+   * When set, receipts and gate-state snapshots are mirrored to an
+   * append-only JSONL journal (`<journalDir>/<sessionId>.jsonl`) so a
+   * session restored via `session/load` can replay its history across
+   * process restarts. Omitted → no filesystem access at all.
+   */
+  journalDir?: string
+}
+
+/**
+ * One JSONL journal record. Receipts persist the ALREADY-REDACTED envelope
+ * returned by `toWireReceipt` (redaction is normative: what hits disk is
+ * exactly what the wire would see); gate snapshots persist the parsed
+ * `AcpGateStateSnapshot`, never the raw block text.
+ */
+type JournalLine =
+  | { kind: 'receipt_envelope'; envelope: AcpWireReceiptEnvelope }
+  | { kind: 'gate_state'; snapshot: AcpGateStateSnapshot }
 
 /**
  * The redacted receipt envelope wire shape (P1-T2-DESIGN §6.2): the mutation
@@ -259,32 +287,110 @@ function projectEnvelopeReceipt(envelope: AcpWireReceiptEnvelope): AcpWireReceip
 
 /**
  * Bounded live-data store for ACP sessions. One instance serves the whole
- * agent process; sessions are keyed by ACP session id.
+ * agent process; sessions are keyed by ACP session id. When constructed
+ * with a `journalDir`, every receipt/gate-state mutation is mirrored to a
+ * durable per-session JSONL journal (replayed via `restoreFromJournal`);
+ * without one the store stays purely in-memory with zero filesystem access.
  */
 export class AcpSessionData {
   /** Newest-last; capped at MAX_RECEIPTS_PER_SESSION by recordReceipt. */
   private readonly receiptsBySession = new Map<string, AcpWireReceiptEnvelope[]>()
   /** Latest gate-state snapshot per session (one per session, replace-on-update). */
   private readonly gateStateBySession = new Map<string, AcpGateStateSnapshot>()
+  /** Injected journal directory; undefined keeps the store purely in-memory. */
+  private readonly journalDir?: string
+  /** Directories already mkdir'd (lazy, recursive, once per journal dir). */
+  private readonly journalDirsCreated = new Set<string>()
+  /**
+   * Serializes all journal writes for this instance. Independent
+   * fire-and-forget writes could otherwise race the bounded rewrite (a late
+   * append could resurrect a dropped receipt or land after a truncating
+   * rewrite), so every write is chained behind the previous one.
+   */
+  private journalQueue: Promise<void> = Promise.resolve()
+
+  constructor(options?: AcpSessionDataOptions) {
+    this.journalDir = options?.journalDir
+  }
+
+  /** Journal IO is best-effort: failures are swallowed, never rethrown. */
+  private queueJournalWrite(write: () => Promise<void>): void {
+    this.journalQueue = this.journalQueue.then(write).catch(() => {})
+  }
+
+  /** Lazily creates the journal directory (recursive mkdir, once per dir). */
+  private async ensureJournalDir(dir: string): Promise<void> {
+    if (this.journalDirsCreated.has(dir)) return
+    await mkdir(dir, { recursive: true })
+    this.journalDirsCreated.add(dir)
+  }
+
+  /** Appends one complete JSON line (atomic enough for a single process). */
+  private appendJournalLine(sessionId: string, line: JournalLine): void {
+    const dir = this.journalDir
+    if (!dir) return
+    const filePath = `${dir}/${sessionId}.jsonl`
+    const encoded = `${JSON.stringify(line)}\n`
+    this.queueJournalWrite(async () => {
+      await this.ensureJournalDir(dir)
+      await appendFile(filePath, encoded, 'utf8')
+    })
+  }
+
+  /**
+   * Rewrites the session's journal from current in-memory state (newest
+   * MAX_RECEIPTS_PER_SESSION envelopes + latest snapshot), truncating the
+   * SAME file so it cannot grow without bound once receipts start dropping.
+   */
+  private rewriteJournal(sessionId: string): void {
+    const dir = this.journalDir
+    if (!dir) return
+    const receipts = this.receiptsBySession.get(sessionId) ?? []
+    const snapshot = this.gateStateBySession.get(sessionId)
+    const lines = receipts.map((envelope) => {
+      const line: JournalLine = { kind: 'receipt_envelope', envelope }
+      return JSON.stringify(line)
+    })
+    if (snapshot) {
+      const line: JournalLine = { kind: 'gate_state', snapshot }
+      lines.push(JSON.stringify(line))
+    }
+    const contents = lines.length > 0 ? `${lines.join('\n')}\n` : ''
+    this.queueJournalWrite(async () => {
+      await this.ensureJournalDir(dir)
+      await writeFile(`${dir}/${sessionId}.jsonl`, contents, 'utf8')
+    })
+  }
 
   /**
    * Records a redacted receipt envelope for a real file mutation. Unknown
-   * session ids are fine — the store creates the bucket lazily.
+   * session ids are fine — the store creates the bucket lazily. When a
+   * journalDir is configured, the already-redacted envelope is persisted:
+   * appended as one line, or (when this record dropped an older receipt in
+   * memory) the whole journal is rewritten from the bounded in-memory state
+   * so the file cannot grow without bound.
    */
   recordReceipt(
     sessionId: string,
     mutation: FileMutationResultV1,
     toolCallId?: string,
   ): void {
+    const envelope = toWireReceipt(mutation, sessionId, toolCallId)
     let receipts = this.receiptsBySession.get(sessionId)
     if (!receipts) {
       receipts = []
       this.receiptsBySession.set(sessionId, receipts)
     }
-    receipts.push(toWireReceipt(mutation, sessionId, toolCallId))
+    receipts.push(envelope)
     if (receipts.length > MAX_RECEIPTS_PER_SESSION) {
       receipts.splice(0, receipts.length - MAX_RECEIPTS_PER_SESSION)
+      this.rewriteJournal(sessionId)
+      return
     }
+    this.appendJournalLine(sessionId, {
+      kind: 'receipt_envelope',
+      envelope,
+    })
   }
 
   /**
@@ -301,7 +407,67 @@ export class AcpSessionData {
     const snapshot = parseGateStateBlock(blockText)
     if (snapshot) {
       this.gateStateBySession.set(sessionId, snapshot)
+      // Persist the parsed snapshot, never the raw block text.
+      this.appendJournalLine(sessionId, { kind: 'gate_state', snapshot })
     }
+  }
+
+  /**
+   * Replays `<journalDir>/<sessionId>.jsonl` into the in-memory maps so a
+   * `session/load`-restored session recovers its receipt history and last
+   * gate-state snapshot. Receipts replay newest-last capped at
+   * MAX_RECEIPTS_PER_SESSION; the snapshot is the last valid `gate_state`
+   * line. Malformed lines are skipped fail-closed and any read failure
+   * degrades to "no journal" — this never throws.
+   *
+   * Returns whether a journal file existed for the session.
+   */
+  async restoreFromJournal(sessionId: string): Promise<boolean> {
+    const dir = this.journalDir
+    if (!dir) return false
+    let text: string
+    try {
+      text = await readFile(`${dir}/${sessionId}.jsonl`, 'utf8')
+    } catch {
+      return false
+    }
+    const receipts: AcpWireReceiptEnvelope[] = []
+    let snapshot: AcpGateStateSnapshot | undefined
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.length === 0) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(trimmed)
+      } catch {
+        continue
+      }
+      if (!isPlainRecord(parsed)) continue
+      // Journal lines were written by this class, so the persisted record
+      // shapes are trusted after the plain-object shape check; the casts
+      // only restore the static types JSON round-tripping erased.
+      if (
+        parsed.kind === 'receipt_envelope' &&
+        isPlainRecord(parsed.envelope)
+      ) {
+        receipts.push(parsed.envelope as AcpWireReceiptEnvelope)
+        if (receipts.length > MAX_RECEIPTS_PER_SESSION) {
+          receipts.splice(0, receipts.length - MAX_RECEIPTS_PER_SESSION)
+        }
+      } else if (
+        parsed.kind === 'gate_state' &&
+        isPlainRecord(parsed.snapshot)
+      ) {
+        snapshot = parsed.snapshot as AcpGateStateSnapshot
+      }
+    }
+    if (receipts.length > 0) {
+      this.receiptsBySession.set(sessionId, receipts)
+    }
+    if (snapshot) {
+      this.gateStateBySession.set(sessionId, snapshot)
+    }
+    return true
   }
 
   /**

@@ -1,4 +1,13 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   fileMutationResultV1Schema,
@@ -437,5 +446,181 @@ describe('acp agent live session-data extension handlers', () => {
     }
     expect(failure).toBeInstanceOf(Error)
     expect(String(failure)).toContain('sessionId')
+  })
+})
+
+describe('acp session data journal', () => {
+  const tempDirs: string[] = []
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  function makeJournalDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-journal-'))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  function journalFilePath(dir: string, sessionId: string): string {
+    return `${dir}/${sessionId}.jsonl`
+  }
+
+  /**
+   * Journal writes are fire-and-forget, so tests poll for the expected
+   * settled line count instead of awaiting store internals. `mustContain`
+   * guards against sampling a transient interleaving mid-queue.
+   */
+  async function waitForJournalLines(
+    filePath: string,
+    expectedLines: number,
+    mustContain?: string,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 500; attempt++) {
+      const text = existsSync(filePath) ? readFileSync(filePath, 'utf8') : ''
+      const lineCount = text
+        .split('\n')
+        .filter((line) => line.trim().length > 0).length
+      if (
+        lineCount >= expectedLines &&
+        (mustContain === undefined || text.includes(mustContain))
+      ) {
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error(`journal ${filePath} never reached ${expectedLines} lines`)
+  }
+
+  test('recording receipts and gate state writes a replayable JSONL journal', async () => {
+    const dir = makeJournalDir()
+    const store = new AcpSessionData({ journalDir: dir })
+    store.recordReceipt('s-j', buildAppliedMutation(), 'tool-1')
+    store.updateGateStateFromBlock(
+      's-j',
+      formatGateStateBlock({
+        gate: 'validation/reviewer',
+        status: 'passed',
+        details: 'All gates passed.',
+      }),
+    )
+    const filePath = journalFilePath(dir, 's-j')
+    // Journal writes are fire-and-forget (lazy mkdir + appendFile), so file
+    // existence is only guaranteed once the polled line count has settled.
+    await waitForJournalLines(filePath, 2)
+    expect(existsSync(filePath)).toBe(true)
+
+    const restored = new AcpSessionData({ journalDir: dir })
+    expect(await restored.restoreFromJournal('s-j')).toBe(true)
+    expect(restored.getReceipts('s-j')).toEqual(store.getReceipts('s-j'))
+    expect(restored.getGateState('s-j')).toEqual({
+      phase: 'final_response_allowed',
+      currentTask: null,
+    })
+  })
+
+  test('persisted journal bytes stay redacted', async () => {
+    const dir = makeJournalDir()
+    const store = new AcpSessionData({ journalDir: dir })
+    store.recordReceipt('s-redact', buildAppliedMutation(), 'tool-2')
+    store.updateGateStateFromBlock(
+      's-redact',
+      formatGateStateBlock({
+        gate: 'validation',
+        status: 'running',
+        details: 'working',
+      }),
+    )
+    const filePath = journalFilePath(dir, 's-redact')
+    await waitForJournalLines(filePath, 2)
+
+    const raw = readFileSync(filePath, 'utf8')
+    expect(raw).toContain('"receipt_envelope"')
+    expect(raw).toContain('"gate_state"')
+    // Redaction is normative on disk too: the content payload and the cap
+    // token must never appear in the journal bytes.
+    expect(raw).not.toContain(AFTER_CONTENT)
+    expect(raw).not.toContain('"afterContent"')
+    expect(raw).not.toContain(CAP_TOKEN)
+  })
+
+  test('restoreFromJournal skips malformed lines without throwing', async () => {
+    const dir = makeJournalDir()
+    const store = new AcpSessionData({ journalDir: dir })
+    store.recordReceipt('s-corrupt', buildAppliedMutation(), 'tool-3')
+    store.updateGateStateFromBlock(
+      's-corrupt',
+      formatGateStateBlock({
+        gate: 'validation',
+        status: 'failed',
+        details: 'boom',
+      }),
+    )
+    const filePath = journalFilePath(dir, 's-corrupt')
+    await waitForJournalLines(filePath, 2)
+
+    const good = readFileSync(filePath, 'utf8')
+    writeFileSync(
+      filePath,
+      `not json at all\n{"kind":"unknown_kind"}\n{truncated json\n${good}`,
+      'utf8',
+    )
+
+    const restored = new AcpSessionData({ journalDir: dir })
+    expect(await restored.restoreFromJournal('s-corrupt')).toBe(true)
+    expect(restored.getReceipts('s-corrupt')).toEqual(
+      store.getReceipts('s-corrupt'),
+    )
+    expect(restored.getGateState('s-corrupt')).toEqual({
+      phase: 'blocked',
+      currentTask: null,
+    })
+  })
+
+  test('cap overflow rewrites the journal to the newest 256 receipts plus the snapshot', async () => {
+    const dir = makeJournalDir()
+    const store = new AcpSessionData({ journalDir: dir })
+    for (let i = 0; i < 300; i++) {
+      store.recordReceipt(
+        's-cap',
+        buildAppliedMutation({ operationId: `op-${i}`, receiptId: `r-${i}` }),
+      )
+    }
+    store.updateGateStateFromBlock(
+      's-cap',
+      formatGateStateBlock({
+        gate: 'validation/reviewer',
+        status: 'passed',
+        details: 'done',
+      }),
+    )
+    const filePath = journalFilePath(dir, 's-cap')
+    await waitForJournalLines(filePath, 257, '"gate_state"')
+
+    const lines = readFileSync(filePath, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+    expect(lines).toHaveLength(257)
+    expect(lines.filter((line) => line.includes('"receipt_envelope"'))).toHaveLength(
+      256,
+    )
+    expect(lines.filter((line) => line.includes('"gate_state"'))).toHaveLength(1)
+
+    const restored = new AcpSessionData({ journalDir: dir })
+    expect(await restored.restoreFromJournal('s-cap')).toBe(true)
+    const { receipts } = restored.getReceipts('s-cap', 300)
+    expect(receipts).toHaveLength(256)
+    expect(receipts[0]?.operationId).toBe('op-299')
+    expect(receipts.at(-1)?.operationId).toBe('op-44')
+  })
+
+  test('without journalDir restore returns false and nothing is written', async () => {
+    const store = new AcpSessionData()
+    store.recordReceipt('s-plain', buildAppliedMutation())
+    expect(await store.restoreFromJournal('s-plain')).toBe(false)
+    expect(store.getReceipts('s-plain').receipts).toHaveLength(1)
   })
 })
