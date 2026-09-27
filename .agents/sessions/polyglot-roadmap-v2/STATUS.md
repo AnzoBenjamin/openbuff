@@ -136,3 +136,12 @@ All six foundation tasks and the final P0-T5 item are done (details in PLAN.md):
 - **P0-T5 (EV-3 remainder):** `tryNearMatchAutoCorrect`'s delimiter gate is now the tree-sitter ERROR-node check on the full candidate content (bracket check kept only as the grammar-unavailable fail-open fallback); process-str-replace 159/159 with new EV-3 cases.
 
 **Validation:** full monorepo typecheck clean (including the env-architecture check after the supervisor's `process.env` read was routed through `getChildProcessEnv`). All work is on `feat/polyglot-reaudit-roadmap`, pending gate + commit.
+
+<!-- update_plan_status:appended -->
+## P1-T1 ACP skeleton complete (2026-09-27)
+
+Committed `d63c3a053` on `feat/polyglot-reaudit-roadmap` (pushed to PR #93):
+- **Dependency:** `@agentclientprotocol/sdk@1.5.0` added to sdk (user-approved per D9). Note: the dependency-manager tool repeatedly failed with `bun --filter` "No packages matched the filter" for both `sdk` and `@openbuff/sdk` — added via user-authorized `bun add` instead; the tool's filter construction needs a harness fix.
+- **Skeleton:** `sdk/src/services/acp/acp-agent.ts` — `createAcpAgent` (initialize with the SDK's PROTOCOL_VERSION + honest `loadSession: false`; newSession unique ids; prompt forwards text blocks to an injected `AcpPromptHandler` with per-chunk `sessionUpdate` streaming + AbortSignal; cancel; authenticate-refusal) over a private session map; `serveAcpOverStdio` (ndJsonStream + AgentSideConnection) ready for the P1-T2 bridge.
+- **Conformance:** 6/6 tests including a real `ClientSideConnection` paired over in-memory ndjson streams (true wire framing); sdk typecheck clean; code-reviewer LOOKS_GOOD.
+- **Remaining P1-T1:** session/load, permission/fs/terminal reverse requests, and Openbuff extension schemas generated from the X-1 Zod pipeline.

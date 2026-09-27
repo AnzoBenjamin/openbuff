@@ -114,6 +114,7 @@
       "version": "1.0.0",
       "dependencies": {
         "@anthropic-ai/claude-code": "^2.0.56",
+        "@codebuff/agent-runtime": "workspace:*",
         "@codebuff/code-map": "workspace:*",
         "@codebuff/common": "workspace:*",
         "@codebuff/internal": "workspace:*",
