@@ -361,9 +361,9 @@ export interface Edit3dAssetParams {
     | {
         type: 'set_object_transform'
         object: string
-        location?: any[]
-        rotation_degrees?: any[]
-        scale?: any[]
+        location?: [number, number, number]
+        rotation_degrees?: [number, number, number]
+        scale?: [number, number, number]
       }
     | {
         type: 'set_render_resolution'
