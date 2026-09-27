@@ -54,14 +54,17 @@ export const getSystemProcessEnv = (): NodeJS.ProcessEnv => {
  * Environment for spawned child shell commands (e.g. run_terminal_command).
  *
  * Returns a shallow copy of process.env with the agent process's own
- * provider credentials removed. Child shell commands legitimately need the
- * rest of the environment (PATH, HOME, and the user's own project vars), so
- * we delete only the specific keys that hold Openbuff's own BYOK/OAuth/API
- * credentials — a child command (or a compromised dependency it invokes)
- * must not be able to read those secrets. Keys are deleted by exact name (no
- * wildcard filtering) so the user's own variables are never disturbed;
- * deleting an absent key is a harmless no-op. The copy is a new object so
- * process.env itself is never mutated.
+ * provider credentials removed, along with the generic upstream provider
+ * API keys the agent process may hold (OPENAI_API_KEY, ANTHROPIC_API_KEY,
+ * OPENROUTER_API_KEY). Child shell commands legitimately need the rest of
+ * the environment (PATH, HOME, and the user's own project vars), so we
+ * delete only the specific keys that hold Openbuff's own BYOK/OAuth/API
+ * credentials AND those generic upstream provider keys — a child command
+ * (or a compromised dependency it invokes) must not be able to read those
+ * secrets. Keys are deleted by exact name (no wildcard filtering) so the
+ * user's own variables are never disturbed; deleting an absent key is a
+ * harmless no-op. The copy is a new object so process.env itself is never
+ * mutated.
  */
 export const getChildProcessEnv = (): NodeJS.ProcessEnv => {
   const env = { ...process.env }
@@ -70,6 +73,9 @@ export const getChildProcessEnv = (): NodeJS.ProcessEnv => {
   delete env[OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR]
   delete env['OPENBUFF_API_KEY']
   delete env['CODEBUFF_API_KEY']
+  delete env['OPENAI_API_KEY']
+  delete env['ANTHROPIC_API_KEY']
+  delete env['OPENROUTER_API_KEY']
   return env
 }
 

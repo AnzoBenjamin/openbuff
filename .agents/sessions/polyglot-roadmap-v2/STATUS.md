@@ -83,3 +83,40 @@ Verified and recorded in P1-T1-DESIGN.md §13, under "Database agent templates".
 - NEW-1 origin registry, including M-1…M-3.
 - Approval commandHash contract change.
 - Client-tool first-call approval hook.
+
+<!-- update_plan_status:appended -->
+## P0 progress — 2026-09-26
+
+Committed on `feat/polyglot-reaudit-roadmap` (not pushed):
+- **P0-T1** child-env credential strip — `c87263595`.
+- **P0-T3** tmux teardown fix (partial; `bash -n` test + profile verification still open) — `c87263595`.
+- **P0-T4** Chrome `chromeSandboxArgs` (partial; `--remote-debugging-pipe` transport still open) — `10e048a42`.
+- **P0-T5** tree-sitter `hasError` preflight for the 10 previously-unvalidated languages (async, fail-open) — `ad75fa62c`.
+- **P0-T6** eval statistics + significance gate — `6da95613a`.
+- **P0-T7** all 8 sub-items done — `ba6522502`, `398a77a2c`, `6da95613a`, `b30dcfd2d`.
+- **P0-T2** approval-rerun one-shot token (SB-6), sec-review LOOKS_GOOD — `b30dcfd2d`.
+- **LI-11 remainder** dedicated tree-sitter-c grammar for `.c`/`.h` — `b30dcfd2d`.
+
+**Still open in P0:** P0-T8 (structured JSON/SARIF diagnostics). Deferred residuals: SB2-F1 (generic OPENAI/ANTHROPIC/OPENROUTER_API_KEY not stripped from child env), SB2-F2 (blender spawn full env), EV-3 `isResultDelimiterBalanced` replacement.
+
+**Update — P0-T3/P0-T4 completed (2026-09-26).** Committed `e66f2f0cc`:
+- **P0-T3 (SB-5) done:** `agents/__tests__/tmux-cli.test.ts` runs `bash -n` over the tmux-cli agent's generated helper/setup/teardown scripts (4/4 pass) and pins the declared `tmux-test` profile. Profile-scope finding surfaced honestly: the agent-runtime handler forwards `permission_profile: 'full-access'` for all agents, so `tmux-test` is enforced at the policy-function layer, not the runtime handler layer — documented, not silently rewired.
+- **P0-T4 (SB-7) done:** `sdk/src/tools/cdp-pipe-transport.ts` (new, NUL-framed fd 3/4 transport; bounded buffers fail closed; request correlation; bounded outbound backpressure) and `browser-logs.ts` migrated pipe-first with per-executable `detectPipeSupport` (timeout fails closed, demonstrable failure falls back to `--remote-debugging-port=0` ws bridge with bounded backpressure and teardown disposal), multiplexed flatten-session routing, stale-session rollback, APNG chunk assembly without payload copies, ws-URL token redaction, and ownerless-session reaping. 76/76 tests; migration/performance/security reviewer rounds all LOOKS_GOOD.
+
+**Update — P0-T8 completed (2026-09-26).** Committed `92039a5a`:
+- **P0-T8 (LI-05) done:** `sdk/src/tools/language-diagnostics.ts` now has six structured parsers tried before the regex fallbacks — cargo/rustc `--message-format=json` (native 1-based spans, `suggested_replacement` fix-its with `suggestion_applicability` mapped to an exported `LanguageDiagnosticTextEditApplicability`), ruff `--output-format=json` (fix.edits, case-insensitive severity), pyright `--outputjson` (LSP-style 0-based line/character), eslint `-f json` (offset-mapped fix-its when source is available), `go vet -json`/`golangci-lint --out-format=json`, and SARIF 2.1.0 (uriBaseId resolution against `originalUriBaseIds`, `%SRCROOT%` placeholder stripping, percent-decoded URIs, ErrorLog file ingest with a bounded cwd-honoring read). `LanguageDiagnostic` gained optional `fixes`/`relatedInformation`; both barrels export the new types. The default parse runs structured + regex dual-pass with content-aware dedupe and an interleaved MAX_DIAGNOSTICS cap so structured output can never starve plain-text stderr diagnostics, and the plain-text go-vet path skips JSON lines so mixed runs are never double-counted. 31/31 language-diagnostics tests; 29/29 file-change-hooks tests; full typecheck clean; compatibility-reviewer + code-reviewer LOOKS_GOOD.
+
+The P0 batch (P0-T1 through P0-T8) is now fully complete.
+
+<!-- update_plan_status:appended -->
+## P1-T2 groundwork — NEW-1 MCP origin registry complete (2026-09-27)
+
+Committed `045365e2` on `feat/polyglot-reaudit-roadmap` (not pushed):
+- **NEW-1 origin registry (M-1…M-3) done.** `common/src/mcp/client.ts` records config origin out of band in a WeakMap (`markMCPConfigOrigin`/`markAllMCPConfigOrigins`/`originOf`), never from config content, with a no-upgrade guard (a `'client'` mark can never be raised to a trusted origin) and a fail-closed default (unmarked → `'client'`, no `$VAR` expansion, one-time `diagnoseFailClosedEnvRefs` warning).
+  - **M-1:** trusted on-disk loaders mark their configs — `load-mcp-config.ts` marks `mcp.json` servers `'user'`/`'project'` by path; `load-agents.ts` marks agent-embedded `mcpServers` by path.
+  - **M-2:** database-fetched templates mark `'client'` on fetch/cache (`agent-registry.ts`, `database.ts`); `assembleLocalAgentTemplates` re-marks `'database'`-provenance configs `'client'` so the identity-losing Zod re-parse into `fileContext.agentTemplates` cannot upgrade them, and `propagateMCPConfigOrigins` carries marks across the re-parse.
+  - **M-3:** `resolveMCPConfigOrigin` fails closed to `'client'` for unknown-provenance configs; the trusted blanket mark is provenance-gated so unmarked source configs are never silently upgraded.
+- **Single connect-time `$VAR` substitution.** Removed all loader-side env resolution (`resolveMcpEnv`/`resolveMcpConfigEnv`/`resolveAgentMcpEnv`); `resolveMCPConfigValues` is now the sole, origin-gated substitution site (one pass, no re-scan). Missing vars throw `MissingMcpEnvVarError` uniformly across whole-value env, inline env, and http/sse headers — but only on the trusted branch; `'client'` origins pass values through literally and never throw. Env-key case is preserved in cache identity so `API_KEY`/`api_key` stay distinct.
+- Coverage: `client.test.ts` (32 tests), `load-mcp-config.test.ts`, `load-agents.test.ts` (new `mcpServers origin marking` block asserting project/user), `agent-registry.test.ts` (NEW-1 client/project/re-parse/db-provenance suite). Full typecheck clean; migration-reviewer, compatibility-reviewer, and code-reviewer all LOOKS_GOOD.
+
+**P1-T2 is now unblocked** on the origin-registry axis. Remaining P1-T2 prerequisites from the P1-T1 design review: the approval commandHash contract change and the client-tool first-call approval hook.

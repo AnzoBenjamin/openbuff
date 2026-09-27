@@ -218,6 +218,44 @@ describe('sdk/env', () => {
       expect(env.CODEBUFF_API_KEY).toBeUndefined()
     })
 
+    test('omits generic upstream provider API keys', () => {
+      process.env.OPENAI_API_KEY = 'openai-secret'
+      process.env.ANTHROPIC_API_KEY = 'anthropic-secret'
+      process.env.OPENROUTER_API_KEY = 'openrouter-secret'
+
+      const env = getChildProcessEnv()
+
+      expect(env.OPENAI_API_KEY).toBeUndefined()
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+      expect(env.OPENROUTER_API_KEY).toBeUndefined()
+    })
+
+    test('preserves a non-credential var while stripping generic provider keys', () => {
+      process.env.OPENAI_API_KEY = 'openai-secret'
+      process.env.ANTHROPIC_API_KEY = 'anthropic-secret'
+      process.env.OPENROUTER_API_KEY = 'openrouter-secret'
+      process.env.SOME_USER_VAR = 'keep'
+
+      const env = getChildProcessEnv()
+
+      expect(env.OPENAI_API_KEY).toBeUndefined()
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+      expect(env.OPENROUTER_API_KEY).toBeUndefined()
+      expect(env.SOME_USER_VAR).toBe('keep')
+    })
+
+    test('does not mutate process.env when stripping generic provider keys', () => {
+      process.env.OPENAI_API_KEY = 'openai-secret'
+      process.env.ANTHROPIC_API_KEY = 'anthropic-secret'
+      process.env.OPENROUTER_API_KEY = 'openrouter-secret'
+
+      getChildProcessEnv()
+
+      expect(process.env.OPENAI_API_KEY).toBe('openai-secret')
+      expect(process.env.ANTHROPIC_API_KEY).toBe('anthropic-secret')
+      expect(process.env.OPENROUTER_API_KEY).toBe('openrouter-secret')
+    })
+
     test('preserves unrelated environment variables', () => {
       process.env.PATH = '/usr/bin:/bin'
       process.env.SOME_USER_VAR = 'keep'
