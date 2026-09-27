@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { isIP } from 'node:net'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
@@ -294,6 +295,177 @@ export function resolveMCPConfigOrigin(
   return 'client'
 }
 
+/**
+ * Recognizes a host written entirely as numeric IPv4 components — decimal
+ * ('2130706433', '127.1'), hex ('0x7f.0.0.1'), or octal ('0177.0.0.1') — the
+ * non-dotted forms that net.isIP does not recognize but that URL parsers and
+ * resolvers interpret as IPv4 addresses.
+ */
+function isNumericIpv4Candidate(host: string): boolean {
+  return host
+    .split('.')
+    .every(
+      (component) =>
+        /^\d+$/.test(component) || /^0[xX][0-9a-fA-F]+$/.test(component),
+    )
+}
+
+/**
+ * Parses one component of a numeric IPv4 encoding. Accepts decimal ('10'),
+ * hex ('0x7f'), and octal ('0177', per inet_aton leading-zero semantics);
+ * returns null for a malformed component (e.g. the invalid octal '008').
+ */
+function parseIpv4NumericComponent(component: string): number | null {
+  if (/^0[xX][0-9a-fA-F]+$/.test(component)) {
+    const value = parseInt(component, 16)
+    return Number.isInteger(value) ? value : null
+  }
+  if (/^0[0-9]+$/.test(component)) {
+    // A leading zero makes the component octal; digits outside 0-7 are
+    // malformed rather than decimal.
+    if (!/^[0-7]+$/.test(component.slice(1))) {
+      return null
+    }
+    const value = parseInt(component, 8)
+    return Number.isInteger(value) ? value : null
+  }
+  if (/^\d+$/.test(component)) {
+    const value = parseInt(component, 10)
+    return Number.isInteger(value) ? value : null
+  }
+  return null
+}
+
+/**
+ * Canonicalizes a numeric IPv4 host written in a non-dotted or shorthand
+ * form into the standard dotted-quad string, following inet_aton semantics:
+ * all but the last component are single bytes and the last component carries
+ * the remaining bytes ('127.1' -> 127.0.0.1, '2130706433' -> 127.0.0.1).
+ * Returns null when the host is not a valid numeric IPv4 encoding.
+ */
+function canonicalizeIpv4Shorthand(host: string): string | null {
+  const components = host.split('.')
+  if (components.length > 4) {
+    return null
+  }
+  const values: number[] = []
+  for (const component of components) {
+    const value = parseIpv4NumericComponent(component)
+    if (value === null) {
+      return null
+    }
+    values.push(value)
+  }
+  // The last component spans (5 - components.length) bytes of the address;
+  // every earlier component is a single byte.
+  const lastMultiplier = 256 ** (5 - components.length)
+  for (let i = 0; i < values.length - 1; i++) {
+    if (values[i] > 255) {
+      return null
+    }
+  }
+  const last = values[values.length - 1]
+  if (last >= lastMultiplier) {
+    return null
+  }
+  let address = 0
+  for (let i = 0; i < values.length - 1; i++) {
+    address = address * 256 + values[i]
+  }
+  address = address * lastMultiplier + last
+  return [
+    (address >>> 24) & 255,
+    (address >>> 16) & 255,
+    (address >>> 8) & 255,
+    address & 255,
+  ].join('.')
+}
+
+/**
+ * True for a private/loopback/link-local/metadata address that a client-origin
+ * (untrusted protocol peer, NEW-1) MCP server must not be allowed to reach.
+ *
+ * Synchronous and dependency-free (node:net only): it does NOT perform DNS
+ * resolution, so a bare unresolved hostname that is not one of the blocked
+ * suffixes/names returns false. DNS-rebinding hardening is a separate concern
+ * (noted for P1-T2). Non-dotted/shorthand numeric IPv4 encodings
+ * ('2130706433', '127.1', '0x7f.0.0.1', '0177.0.0.1') are canonicalized and
+ * re-checked before the hostname fallback, and a malformed numeric host fails
+ * closed. This mirrors the IPv4/IPv6 private-range shape of agent-runtime's
+ * web-search-utils, re-implemented locally because common cannot depend on
+ * packages/agent-runtime.
+ */
+export function isBlockedMcpAddress(host: string): boolean {
+  const kind = isIP(host)
+  if (kind === 4) {
+    return isBlockedIpv4(host)
+  }
+  if (kind === 6) {
+    return isBlockedIpv6(host)
+  }
+  // Non-dotted/shorthand numeric IPv4 encodings are not recognized by isIP
+  // but resolve to IPv4 addresses when used as URL hosts. Canonicalize and
+  // re-check; a numeric host that fails canonicalization is malformed and
+  // fails closed (blocked).
+  if (isNumericIpv4Candidate(host)) {
+    const canonical = canonicalizeIpv4Shorthand(host)
+    return canonical === null ? true : isBlockedIpv4(canonical)
+  }
+  // Non-IP host: block loopback/metadata names and internal suffixes.
+  const lower = host.toLowerCase()
+  return (
+    lower === 'localhost' ||
+    lower.endsWith('.localhost') ||
+    lower.endsWith('.local') ||
+    lower.endsWith('.internal') ||
+    lower === 'metadata' ||
+    lower === 'metadata.google.internal'
+  )
+}
+
+function isBlockedIpv4(host: string): boolean {
+  const parts = host.split('.').map((p) => Number(p))
+  if (
+    parts.length !== 4 ||
+    parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
+  ) {
+    // Malformed input reaching this synchronous guard fails closed.
+    return true
+  }
+  const [a, b, c] = parts
+  if (a === 0) return true // 0.0.0.0/8
+  if (a === 10) return true // 10.0.0.0/8
+  if (a === 127) return true // 127.0.0.0/8 loopback
+  if (a === 100 && b >= 64 && b <= 127) return true // 100.64.0.0/10 CGNAT
+  if (a === 169 && b === 254) return true // 169.254.0.0/16 link-local + metadata
+  if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
+  if (a === 192 && b === 168) return true // 192.168.0.0/16
+  if (a === 192 && b === 0 && c === 0) return true // 192.0.0.0/24
+  if (a === 198 && (b === 18 || b === 19)) return true // 198.18.0.0/15 benchmarking
+  if (a >= 224) return true // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved
+  return false
+}
+
+function isBlockedIpv6(host: string): boolean {
+  const lower = host.toLowerCase()
+  if (lower === '::1' || lower === '::') return true
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d) defers to the IPv4 rule.
+  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  if (mapped) {
+    return isBlockedIpv4(mapped[1])
+  }
+  const firstHextet = lower.split(':')[0]
+  if (firstHextet) {
+    const value = parseInt(firstHextet, 16)
+    if (!Number.isNaN(value)) {
+      if ((value & 0xfe00) === 0xfc00) return true // fc00::/7 (unique-local, fc/fd)
+      if ((value & 0xffc0) === 0xfe80) return true // fe80::/10 (link-local)
+      if ((value & 0xff00) === 0xff00) return true // ff00::/8 (multicast)
+    }
+  }
+  return false
+}
+
 export type ResolvedMCPConfigValues =
   | {
       type: 'stdio'
@@ -435,6 +607,18 @@ export async function getMCPClient(
     })
   } else {
     const url = new URL(resolved.url)
+    // SEC-3 SSRF guard: a client-origin (untrusted peer, NEW-1) remote server
+    // must not be allowed to reach a private/loopback/link-local/metadata
+    // host. Trusted origins ('user'/'project') are legitimate local configs
+    // and are never restricted. This throws before any transport/socket is
+    // constructed for a blocked host.
+    const hostname = url.hostname.replace(/^\[|\]$/g, '')
+    if (origin === 'client' && isBlockedMcpAddress(hostname)) {
+      throw new Error(
+        `MCP client-origin server "${resolved.url}" refused: host ` +
+          `${hostname} is a private/loopback address`,
+      )
+    }
     for (const [key, value] of Object.entries(resolved.params)) {
       url.searchParams.set(key, value)
     }
