@@ -2687,7 +2687,18 @@ const definition: AgentDefinition = {
 
         if (Array.isArray(toolMessage.content)) {
           for (const part of toolMessage.content) {
-            if (part.type === 'json' && part.value) {
+            // D24/PR-T6: a truthy primitive JSON part value (non-empty
+            // string, non-zero number, or true) crashed the `in` checks
+            // below with "Cannot use 'in' operator to search for
+            // 'exitCode'/'answers' in <primitive>". Require a non-null
+            // object here (legit JSON arrays still flow through) so every
+            // subsequent `in` check is safe; falsy values (null, 0, '')
+            // are still skipped exactly as before.
+            if (
+              part.type === 'json' &&
+              part.value !== null &&
+              typeof part.value === 'object'
+            ) {
               const value = part.value as Record<string, unknown>
 
               if (

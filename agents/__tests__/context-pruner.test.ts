@@ -5065,3 +5065,113 @@ describe('context-pruner dual-budget behavior', () => {
     expect(countKnowledgeMemoryEntries(content, 'Validation Results')).toBe(12)
   })
 })
+
+describe('context-pruner non-object JSON part values (D24/PR-T6 crash regression)', () => {
+  let mockAgentState: AgentState
+
+  beforeEach(() => {
+    mockAgentState = createMockAgentState([], 0)
+  })
+
+  const runHandleSteps = (messages: Message[]) => {
+    mockAgentState.messageHistory = messages
+    mockAgentState.contextTokenCount = 250000
+    const mockLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }
+    const generator = contextPruner.handleSteps!({
+      agentState: mockAgentState,
+      logger: mockLogger,
+      params: { maxContextLength: 200000 },
+    })
+    const results: any[] = []
+    let result = generator.next()
+    while (!result.done) {
+      if (typeof result.value === 'object') {
+        results.push(result.value)
+      }
+      result = generator.next()
+    }
+    return results
+  }
+
+  test('completes when an ask_user tool result carries a string-valued JSON part', () => {
+    // D24/PR-T6: a truthy-primitive JSON part value used to crash the pruner
+    // with "Cannot use 'in' operator to search for 'answers' in <string>".
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', 'boom — not an object'),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    const content = results[0].input.messages[0].content[0].text
+    expect(content).toContain('<conversation_summary>')
+    // The string part is simply not summarized as user answers.
+    expect(content).not.toContain('User answered:')
+    expect(content).not.toContain('User skipped question')
+  })
+
+  test('completes when an ask_user tool result carries a non-zero numeric JSON part value', () => {
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', 42),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    expect(results[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
+
+  test('completes when an ask_user tool result carries a boolean JSON part value', () => {
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', true),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    expect(results[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
+
+  test('completes when a run_terminal_command result carries a string-valued JSON part', () => {
+    // D24/PR-T6: the identical 'exitCode' in value hazard for a primitive value.
+    const messages = [
+      createMessage('user', 'Run tests'),
+      createToolCallMessage('call-1', 'run_terminal_command', {
+        command: 'npm test',
+      }),
+      createToolResultMessage('call-1', 'run_terminal_command', 'boom — not an object'),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    const content = results[0].input.messages[0].content[0].text
+    expect(content).toContain('<conversation_summary>')
+    expect(content).not.toContain('Command failed with exit code')
+  })
+})
