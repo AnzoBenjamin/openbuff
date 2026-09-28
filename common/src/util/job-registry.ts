@@ -17,6 +17,9 @@
  * run in any JS runtime.
  */
 
+import { realClock } from '../deps/real-runtime-deps'
+import type { Clock } from '../types/contracts/agent-runtime'
+
 /** The kind of execution unit backing a background job. */
 export type JobKind = 'process' | 'agent'
 
@@ -251,6 +254,8 @@ export interface JobRegistryOptions {
    * kind) keep the registry-wide defaults.
    */
   kindBounds?: Partial<Record<JobKind, JobKindBounds>>
+  /** Deterministic wall clock for job lifecycle timestamps (P2-T1). Defaults to realClock when omitted. */
+  clock?: Clock
 }
 
 /**
@@ -388,6 +393,7 @@ export class JobRegistry {
   private readonly outputByteLimit: number
   private readonly settledTtlMs: number
   private readonly kindBounds: Partial<Record<JobKind, JobKindBounds>>
+  private readonly clock: Clock
 
   constructor(options: JobRegistryOptions = {}) {
     this.eventBufferLimit =
@@ -396,6 +402,8 @@ export class JobRegistry {
       options.outputByteLimit ?? DEFAULT_JOB_OUTPUT_BYTE_LIMIT
     this.settledTtlMs = options.settledTtlMs ?? SETTLED_JOB_TTL_MS
     this.kindBounds = options.kindBounds ?? {}
+    // P2-T1b: lifecycle timestamps use the injected clock (realClock default).
+    this.clock = options.clock ?? realClock
   }
 
   /**
@@ -415,7 +423,7 @@ export class JobRegistry {
       state: 'queued',
       owner,
       label,
-      createdAt: Date.now(),
+      createdAt: this.clock.now(),
     }
     this.records.set(job.jobId, {
       job,
@@ -799,7 +807,7 @@ export class JobRegistry {
     const record = this.records.get(jobId)
     if (!record) return undefined
 
-    const timestamp = Date.now()
+    const timestamp = this.clock.now()
     let transitionedTo: JobState | undefined
     if (payload.type === 'lifecycle') {
       // `queued` is the create-time stamp; reduceJobState only governs

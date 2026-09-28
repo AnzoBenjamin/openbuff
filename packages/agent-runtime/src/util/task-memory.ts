@@ -401,6 +401,7 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
   current?: TaskMemoryV1
   receipt: AgentReceipt
   objective?: string
+  now?: number
 }): TaskMemoryV1 {
   const { current, receipt } = params
   const evidence: TaskMemoryEvidenceV1[] = receipt.evidence
@@ -417,7 +418,8 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
         ? boundText(item.freshnessHash, 256)
         : undefined,
       workspaceRevision: item.workspaceRevision ?? receipt.workspaceRevision,
-      verifiedAt: Date.now(),
+      // P2-T1b: verifiedAt uses the injected clock when threaded.
+      verifiedAt: params.now ?? Date.now(),
     }))
   const blockers =
     receipt.status === 'blocked' || receipt.status === 'failed'
@@ -624,11 +626,13 @@ function deriveToolEvidence(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): DerivedToolEvidence {
   const { toolName, callId, output, workspaceState } = params
-  // TODO(P2-T1b): thread clock.now() into deriveToolEvidence.verifiedAt once the
-  // per-tool-result path carries the injected Clock. Not §5 replay-critical; deferred.
-  const verifiedAt = Date.now()
+  // P2-T1b: verifiedAt uses the injected clock when threaded.
+  // TODO(P2-T1b): the bufferToolEvidence callers cannot reach deps.clock yet,
+  // so they omit `now` and this stays on the Date.now() fallback path.
+  const verifiedAt = params.now ?? Date.now()
   const source = boundText(`${toolName}:${callId}`, 1_000)
   const evidence: TaskMemoryEvidenceV1[] = []
   const filesInspected: string[] = []
