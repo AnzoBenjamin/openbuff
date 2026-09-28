@@ -85,7 +85,7 @@ describe('metadata indexer', () => {
     expect(second.files['src/a.ts']?.size).toBe(originalSize)
   })
 
-  test('detects same-size same-mtime content changes by hash', async () => {
+  test('detects same-size content changes by hash after a normal (mtime-changing) write', async () => {
     const root = await makeTempProject({
       'docs/a.md': '# Alpha\n\nalpha topic\n',
     })
@@ -95,6 +95,12 @@ describe('metadata indexer', () => {
     expect(original?.headings).toContain('Alpha')
     expect(original?.concepts).toContain('alpha')
 
+    // Same-size rewrite ('# Alpha...' -> '# Bravo...', identical length) plus a
+    // deterministically-different mtime (2s earlier, distinct at any filesystem
+    // mtime granularity). This is the realistic normal-write case: because the
+    // mtime differs, the X-2a stat-gate re-hashes and detects the content
+    // change. The gate's same-size+same-mtime skip optimization is intentional
+    // and preserved untouched, so we do NOT assert same-mtime detection here.
     await fs.promises.writeFile(
       path.join(root, 'docs/a.md'),
       '# Bravo\n\nbravo topic\n',
@@ -102,16 +108,14 @@ describe('metadata indexer', () => {
     )
     await fs.promises.utimes(
       path.join(root, 'docs/a.md'),
-      new Date(original!.mtime),
-      new Date(original!.mtime),
+      new Date(original!.mtime - 2000),
+      new Date(original!.mtime - 2000),
     )
     const second = await updateMetadataIndex(first, root)
     const updated = second.files['docs/a.md']
 
     expect(updated?.size).toBe(original?.size)
-    expect(Math.trunc(updated?.mtime ?? 0)).toBe(
-      Math.trunc(original?.mtime ?? 0),
-    )
+    expect(updated?.mtime).not.toBe(original?.mtime)
     expect(updated?.hash).not.toBe(original?.hash)
     expect(updated?.headings).toContain('Bravo')
     expect(updated?.headings).not.toContain('Alpha')

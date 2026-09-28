@@ -566,16 +566,19 @@ const toolName = 'edit_transaction'
 const endsAgentStep = false
 
 // PR-T4 (D22) wave 2: plain-text SEARCH/REPLACE edit blocks for `edits`,
-// gated behind the default-off OPENBUFF_EDIT_BLOCKS flag. The flag is read
-// exactly once at module load, so the flag-off artifacts (description text,
-// JSON schemas, generated TS definitions, golden vectors) stay byte-identical
-// to the pre-feature surface. The wave-1 preprocess
-// (normalizeTransactionEditList) re-reads the flag per parse, so a module
-// built with the flag off still translates valid block payloads if the flag
-// is enabled later in-process (tests). The string arms below additionally
-// re-check the flag at parse time so a flag-on-built module fail-closes on
-// blocks as soon as the runtime flag is disabled again.
-const editBlocksEnabled = areEditBlocksEnabled()
+// gated behind the default-off OPENBUFF_EDIT_BLOCKS flag. The flag is
+// evaluated at access time on the exported params (via getters below), not
+// captured once at module load, so a process that imports this module with
+// the flag off and later enables it (tests) sees the flag-on surface. Both
+// the description text and providerInputSchema are precomputed as flag-on and
+// flag-off constants; the getters just select between them, so the flag-off
+// artifacts (description text, JSON schemas, generated TS definitions, golden
+// vectors) stay byte-identical to the pre-feature surface. The wave-1
+// preprocess (normalizeTransactionEditList) re-reads the flag per parse, so a
+// module built with the flag off still translates valid block payloads if the
+// flag is enabled later in-process. The string arms below additionally
+// re-check the flag at parse time so the surface fail-closes on blocks as soon
+// as the runtime flag is disabled again.
 
 // Only fires for strings the preprocess did not translate into an edits
 // array, i.e. invalid block payloads: the arm rejects them with a
@@ -611,10 +614,11 @@ const inputSchema = z
   .describe(
     'Preflight related edits together, then apply them in one coordinated client-side transaction with deterministic order and explicit rollback outcomes.',
   )
-const providerInputSchema = z.object({
-  edits: editBlocksEnabled
-    ? z.union([editBlockStringSchema, providerEditsSchema])
-    : providerEditsSchema,
+const providerInputSchemaFlagOn = z.object({
+  edits: z.union([editBlockStringSchema, providerEditsSchema]),
+})
+const providerInputSchemaFlagOff = z.object({
+  edits: providerEditsSchema,
 })
 
 const baseDescription = `
@@ -697,15 +701,20 @@ Rules:
 - Blocks cover str_replace-style replacements only; other edit types (create, delete, move, patch, replace_range, rewrite_symbol, structured, write_file) still require the JSON array form.
 `.trim()
 
-const description = editBlocksEnabled
-  ? `${baseDescription}\n\n${editBlocksDescriptionSection}`
-  : baseDescription
+const descriptionFlagOn = `${baseDescription}\n\n${editBlocksDescriptionSection}`
+const descriptionFlagOff = baseDescription
 
 export const editTransactionParams = {
   toolName,
   endsAgentStep,
-  description,
+  get description() {
+    return areEditBlocksEnabled() ? descriptionFlagOn : descriptionFlagOff
+  },
   inputSchema,
-  providerInputSchema,
+  get providerInputSchema() {
+    return areEditBlocksEnabled()
+      ? providerInputSchemaFlagOn
+      : providerInputSchemaFlagOff
+  },
   outputSchema: jsonToolResultSchema(editTransactionResultSchema),
 } satisfies $ToolParams
