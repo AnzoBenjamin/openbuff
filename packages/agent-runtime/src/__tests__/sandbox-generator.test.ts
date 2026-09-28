@@ -3,7 +3,7 @@ import {
   getInitialAgentState,
   type AgentState,
 } from '@codebuff/common/types/session-state'
-import { afterEach, beforeEach, describe, expect, test, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
   clearAgentGeneratorCache,
@@ -25,15 +25,19 @@ describe('programmatic generator execution (in-host-realm, NOT isolated)', () =>
   let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 
   beforeEach(() => {
-    agentRuntimeImpl = { ...TEST_AGENT_RUNTIME_IMPL, sendAction: () => {} }
+    // Inject a deterministic id generator so identity ids are stable, replacing
+    // the previous spyOn(crypto, 'randomUUID').
+    agentRuntimeImpl = {
+      ...TEST_AGENT_RUNTIME_IMPL,
+      sendAction: () => {},
+      idGen: {
+        uuid: () => 'mock-uuid-0000-0000-0000-000000000000',
+        prefixedId: (prefix: string, separator = '-') =>
+          `${prefix}${separator}mock-uuid-0000-0000-0000-000000000000`,
+      },
+    }
 
     clearAgentGeneratorCache()
-
-    // Mock dependencies
-    spyOn(crypto, 'randomUUID').mockImplementation(
-      () =>
-        'mock-uuid-0000-0000-0000-000000000000' as `${string}-${string}-${string}-${string}-${string}`,
-    )
 
     // Reuse common test data structure
     mockAgentState = {

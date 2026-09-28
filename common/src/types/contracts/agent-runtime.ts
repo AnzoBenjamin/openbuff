@@ -26,6 +26,14 @@ import type {
 import type { Logger } from './logger'
 import type { CodebuffFileSystem } from '../filesystem'
 
+/** Deterministic id generation (P2-T1). */
+export interface IdGen {
+  /** replaces crypto.randomUUID() */
+  uuid(): string
+  /** prefixed id, e.g. prefixedId('xml') -> 'xml-<uuid>' */
+  prefixedId(prefix: string, separator?: string): string
+}
+
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
   // Environment
@@ -62,6 +70,10 @@ export type AgentRuntimeDeps = {
   // Other
   logger: Logger
   fetch: typeof globalThis.fetch
+
+  // Determinism (P2-T1)
+  /** Injectable id generator; resolves to realIdGen when omitted. */
+  idGen?: IdGen
 }
 
 /** Per-run dependencies */

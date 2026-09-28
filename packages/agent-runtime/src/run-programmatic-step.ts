@@ -43,6 +43,7 @@ import type {
 } from '@codebuff/common/types/messages/content-part'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * Cap on how many DISTINCT base2 template ids the blank-projectRoot warning
@@ -265,6 +266,10 @@ export async function runProgrammaticStep(
   } = params
   let { stepNumber } = params
 
+  // Resolve the injectable id generator once at the runtime entry so replay
+  // (P2-T2) can reproduce identity ids deterministically.
+  const idGen = params.idGen ?? realIdGen
+
   if (!template.handleSteps) {
     throw new Error('No step handler found for agent template ' + template.id)
   }
@@ -486,7 +491,7 @@ export async function runProgrammaticStep(
     }
   }
 
-  const agentStepId = crypto.randomUUID()
+  const agentStepId = idGen.uuid()
 
   // Initialize state for tool execution
   const toolCalls: CodebuffToolCall[] = []
@@ -889,7 +894,8 @@ async function executeSingleToolCall(
     )
   }
 
-  const toolCallId = crypto.randomUUID()
+  const idGen = params.idGen ?? realIdGen
+  const toolCallId = idGen.uuid()
   const includeStructuredToolCall = toolCallToExecute.includeToolCall === true
   const excludeToolFromMessageHistory = !includeStructuredToolCall
 

@@ -147,6 +147,7 @@ import type {
   CustomToolDefinitions,
   ProjectFileContext,
 } from '@codebuff/common/util/file'
+import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * M1-T5: redact secrets from a message before it reaches a log sink. Handles
@@ -533,9 +534,13 @@ export const runAgentStep = async (
 
   const startTime = Date.now()
 
+  // Resolve the injectable id generator once at the runtime entry so replay
+  // (P2-T2) can reproduce identity ids deterministically.
+  const idGen = params.idGen ?? realIdGen
+
   // Generates a unique ID for each main prompt run (ie: a step of the agent loop)
   // This is used to link logs within a single agent loop
-  const agentStepId = crypto.randomUUID()
+  const agentStepId = idGen.uuid()
   trackEvent({
     event: AnalyticsEvent.AGENT_STEP,
     userId: userId ?? '',
