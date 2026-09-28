@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-28T21:09:36.535Z",
+  "files": {
+    "packages/agent-runtime/src/llm-api/context7-api.ts": {
+      "dateNow": 20,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/llm-api/gemini-with-fallbacks.ts": {
+      "dateNow": 1,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/orchestration/discovery-coordinator.ts": {
+      "dateNow": 3,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/orchestration/workflow-engine.ts": {
+      "dateNow": 2,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/run-agent-step.ts": {
+      "dateNow": 5,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/tool-stream-parser.ts": {
+      "dateNow": 0,
+      "randomUuid": 1
+    },
+    "packages/agent-runtime/src/tools/handlers/tool/check-background-agent.ts": {
+      "dateNow": 1,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/tools/handlers/tool/read-docs.ts": {
+      "dateNow": 3,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/tools/handlers/tool/record-decision.ts": {
+      "dateNow": 1,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": {
+      "dateNow": 5,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/tools/handlers/tool/update-plan-status.ts": {
+      "dateNow": 1,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/tools/handlers/tool/web-search.ts": {
+      "dateNow": 7,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/tools/tool-executor.ts": {
+      "dateNow": 2,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/util/background-agent-jobs.ts": {
+      "dateNow": 3,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/util/cache-debug.ts": {
+      "dateNow": 0,
+      "randomUuid": 1
+    },
+    "packages/agent-runtime/src/util/context-archive.ts": {
+      "dateNow": 2,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/util/context-consolidation-runner.ts": {
+      "dateNow": 1,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/util/orchestration-ledger.ts": {
+      "dateNow": 1,
+      "randomUuid": 1
+    },
+    "packages/agent-runtime/src/util/task-memory.ts": {
+      "dateNow": 2,
+      "randomUuid": 0
+    },
+    "packages/agent-runtime/src/util/workspace-path-leases.ts": {
+      "dateNow": 6,
+      "randomUuid": 1
+    }
+  }
+}
