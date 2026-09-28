@@ -6,7 +6,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
-import type { MCPConfig } from '../types/mcp'
+import type { MCPConfig, MCPConfigOrigin } from '../types/mcp'
 import type { ToolResultOutput } from '../types/messages/content-part'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type {
@@ -111,8 +111,14 @@ function containsEnvVarReference(value: string): boolean {
  * Origin is recorded in the module-level registry ({@link markMCPConfigOrigin})
  * by trusted callers, never read from config content, so an untrusted config
  * cannot claim a trusted origin.
+ *
+ * The type itself is defined in `../types/mcp` (a Client-free module) and
+ * re-exported here for back-compat; keeping the definition out of this
+ * SDK-heavy module prevents the MCP `Client` type graph from leaking into the
+ * SDK's public `.d.ts` bundle through trusted-loader modules that only need
+ * the origin type.
  */
-export type MCPConfigOrigin = 'user' | 'project' | 'client'
+export type { MCPConfigOrigin } from '../types/mcp'
 
 /**
  * Origin registry sidecar for MCP configs. Origin is stored out of band (a

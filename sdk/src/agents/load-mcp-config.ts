@@ -6,8 +6,8 @@ import path from 'path'
 import { mcpConfigSchema } from '@codebuff/common/types/mcp'
 import { z } from 'zod/v4'
 
-import type { MCPConfig } from '@codebuff/common/types/mcp'
-import { markMCPConfigOrigin, type MCPConfigOrigin } from '@codebuff/common/mcp/client'
+import type { MCPConfig, MCPConfigOrigin } from '@codebuff/common/types/mcp'
+import { markMCPConfigOrigin } from '@codebuff/common/mcp/client'
 
 /**
  * Schema for the mcp.json file format.

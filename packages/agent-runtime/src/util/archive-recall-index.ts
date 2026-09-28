@@ -185,8 +185,13 @@ const openInMemoryDb = async (opts?: {
   if (opts?.createDatabase) {
     return opts.createDatabase(':memory:') as SqliteDb
   }
-  // Dynamic import keeps this module typecheck-clean in packages whose
-  // tsconfig lacks bun-types; narrowed structurally to `SqliteDb` above.
+  // Narrowed structurally to `SqliteDb` above. The `bun:sqlite` specifier is
+  // unresolvable in tsconfigs without bun-types (e.g. the SDK declaration
+  // build's tsconfig.build.json uses `types: ["node"]` and transitively
+  // typechecks this file), so suppress the module-resolution error there; the
+  // cast supplies the type and the fail-open path handles a missing module at
+  // runtime.
+  // @ts-ignore -- bun:sqlite has no type declarations without bun-types
   const { Database } = (await import('bun:sqlite')) as unknown as BunSqliteModule
   return new Database(':memory:')
 }
