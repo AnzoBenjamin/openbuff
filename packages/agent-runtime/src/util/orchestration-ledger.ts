@@ -97,7 +97,10 @@ export function appendOrchestrationEvent(params: {
   return ledger
 }
 
-export function reconcileInterruptedLedgerSpawns(state: AgentState): void {
+export function reconcileInterruptedLedgerSpawns(
+  state: AgentState,
+  now?: number,
+): void {
   const events = state.orchestrationLedger?.events ?? []
   const finished = new Set(
     events
@@ -118,9 +121,10 @@ export function reconcileInterruptedLedgerSpawns(state: AgentState): void {
       alreadyInterrupted.has(event.spawnId)
     )
       continue
-    // TODO(P2-T1b): pass clock.now() once spawn/lifecycle deps carry the injected Clock.
+    // P2-T1b: interrupted-spawn events use the caller's injected clock.
     appendOrchestrationEvent({
       state,
+      now,
       event: {
         type: 'interrupted',
         runId: state.runId ?? state.agentId,

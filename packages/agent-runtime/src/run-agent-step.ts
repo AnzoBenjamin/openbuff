@@ -1448,7 +1448,7 @@ export async function loopAgentSteps(
   // before the first LLM request, so waiting for the streaming callback would
   // make the first compaction use the legacy fallback even for 500k/1M models.
   initialAgentState.contextWindowTokens = resolvedModelContextWindow
-  reconcileInterruptedLedgerSpawns(initialAgentState)
+  reconcileInterruptedLedgerSpawns(initialAgentState, clock.now())
   reconcileInterruptedPathLeases(initialAgentState)
   // Discovery shard claims are durable parent state too: a shard left 'active'
   // by an interrupted spawn would otherwise make claimDiscoveryShard throw for
@@ -1480,7 +1480,7 @@ export async function loopAgentSteps(
       },
     })
   }
-  reconcileInterruptedBackgroundAgentIntents(initialAgentState)
+  reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
 
   if (signal.aborted) {
     return {

@@ -35,6 +35,7 @@
  * outlive the CLI process.
  */
 
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   isTerminalJobState,
   jobRegistry,
@@ -351,7 +352,7 @@ function createBackgroundAgentJobRecord(params: {
     status: 'running',
     // P2-T1b: lifecycle timestamps use the injected clock when threaded; the
     // registry stamps startedAt itself.
-    startedAt: startedCoreJob.startedAt ?? params.now ?? Date.now(),
+    startedAt: startedCoreJob.startedAt ?? params.now ?? realClock.now(),
     chunks: [],
     readOffset: 0,
     consumerCursors: new Map(),
@@ -622,7 +623,7 @@ export function reconcileInterruptedBackgroundAgentIntents(
     if (job.status === 'running' && !getBackgroundAgentJob(job.jobId)) {
       job.status = 'interrupted'
       // P2-T1b: interrupted timestamps use the injected clock when threaded.
-      job.completedAt = now ?? Date.now()
+      job.completedAt = now ?? realClock.now()
       job.error =
         'Background agent host process/session ended before a terminal receipt was recorded.'
     }
@@ -823,9 +824,8 @@ export function cancelBackgroundAgentJob(
   // 'running', absorbing once terminal); the adapter performs the real abort.
   registry.cancel(jobId)
   job.status = 'cancelled'
-  // TODO(P2-T1b): cancelled timestamps use the injected clock when threaded;
-  // the Date.now() fallback stays until every caller threads `now`.
-  job.completedAt = now ?? Date.now()
+  // P2-T1b: cancelled timestamps use the caller's injected clock.
+  job.completedAt = now ?? realClock.now()
   job.error = error
   job.abortController.abort(new Error(error))
   return { cancelled: true, status: 'cancelled' }
@@ -894,9 +894,8 @@ export function abandonPreLaunchBackgroundAgentJob(
     })
   }
   job.status = 'error'
-  // TODO(P2-T1b): abandoned timestamps use the injected clock when threaded;
-  // the Date.now() fallback stays until every caller threads `now`.
-  job.completedAt = now ?? Date.now()
+  // P2-T1b: abandoned timestamps use the caller's injected clock.
+  job.completedAt = now ?? realClock.now()
   job.error = reason
   if (!job.abortController.signal.aborted) {
     job.abortController.abort(new Error(reason))

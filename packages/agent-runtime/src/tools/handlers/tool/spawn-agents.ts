@@ -1,4 +1,5 @@
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { MAX_SPAWN_BATCH_SIZE } from '@codebuff/common/constants/agents'
 
 import {
@@ -50,6 +51,7 @@ import type {
 } from '@codebuff/common/tools/list'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { AgentHandoff } from '@codebuff/common/types/agent-handoff'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { JSONObject, JSONValue } from '@codebuff/common/types/json'
@@ -149,6 +151,7 @@ export const handleSpawnAgents = (async (
     userInputId: string
     sendSubagentChunk: SendSubagentChunk
     writeToClient: (chunk: string | PrintModeEvent) => void
+    clock?: Clock
   } & ParamsExcluding<
     typeof validateAndGetAgentTemplate,
     'agentTypeStr' | 'parentAgentTemplate'
@@ -198,7 +201,10 @@ export const handleSpawnAgents = (async (
   // that vanished mid-turn keeps a 'running' intent for the rest of the turn
   // and can reject a later legitimate background spawn. Same field writes as
   // the turn-entry pass and idempotent, so a retried spawn behaves identically.
-  reconcileInterruptedBackgroundAgentIntents(parentAgentState)
+  reconcileInterruptedBackgroundAgentIntents(
+    parentAgentState,
+    (params.clock ?? realClock).now(),
+  )
 
   // Validate the complete batch before launching any detached work. Without
   // this preflight, an invalid later entry could throw after earlier
@@ -642,7 +648,7 @@ export const handleSpawnAgents = (async (
               )
               if (intent) {
                 intent.status = 'completed'
-                intent.completedAt = Date.now()
+                intent.completedAt = (params.clock ?? realClock).now()
                 intent.childRunId = result.agentState.runId
                 intent.receipt = receipt
               }
@@ -725,7 +731,7 @@ export const handleSpawnAgents = (async (
               )
               if (intent) {
                 intent.status = cancelled ? 'cancelled' : 'error'
-                intent.completedAt = Date.now()
+                intent.completedAt = (params.clock ?? realClock).now()
                 // Keep the cancellation reason check_background_agent already
                 // recorded; fall back to the adapter's canonical reason.
                 intent.error = cancelled
@@ -775,9 +781,10 @@ export const handleSpawnAgents = (async (
   } catch (error) {
     const abandonReason =
       'Background agent spawn failed before its coroutine was launched.'
+    const abandonedAt = (params.clock ?? realClock).now()
     for (const job of backgroundJobs) {
       if (wiredBackgroundJobIds.has(job.jobId)) continue
-      abandonPreLaunchBackgroundAgentJob(job, abandonReason)
+      abandonPreLaunchBackgroundAgentJob(job, abandonReason, abandonedAt)
       // The durable intent doubles as the per-root background budget, so an
       // abandoned job's intent must settle here too instead of counting as
       // 'running' for the rest of the turn. Jobs whose coroutine WAS launched
@@ -787,7 +794,7 @@ export const handleSpawnAgents = (async (
       )
       if (intent && intent.status === 'running') {
         intent.status = 'error'
-        intent.completedAt = Date.now()
+        intent.completedAt = abandonedAt
         intent.error = abandonReason
       }
     }

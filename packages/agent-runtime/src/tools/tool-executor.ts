@@ -63,6 +63,7 @@ import {
   bufferToolEvidenceForStep,
   recordToolEvidenceInTaskMemory,
 } from '../util/task-memory'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { ensureZodSchema } from './prompts'
 
 import type { AgentTemplate } from '../templates/types'
@@ -3315,6 +3316,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
         // Identity result means the derived evidence is byte-identical to what
         // is already stored, so the commit was skipped: assigning would be a
@@ -3329,6 +3331,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
       }
     } catch (error) {

@@ -3,6 +3,7 @@ import {
   taskMemoryV1Schema,
 } from '@codebuff/common/types/task-memory'
 import { stableHash } from '@codebuff/common/util/stable-hash'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 
 import type {
   TaskMemoryDraftV1,
@@ -419,7 +420,7 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
         : undefined,
       workspaceRevision: item.workspaceRevision ?? receipt.workspaceRevision,
       // P2-T1b: verifiedAt uses the injected clock when threaded.
-      verifiedAt: params.now ?? Date.now(),
+      verifiedAt: params.now ?? realClock.now(),
     }))
   const blockers =
     receipt.status === 'blocked' || receipt.status === 'failed'
@@ -629,10 +630,8 @@ function deriveToolEvidence(params: {
   now?: number
 }): DerivedToolEvidence {
   const { toolName, callId, output, workspaceState } = params
-  // P2-T1b: verifiedAt uses the injected clock when threaded.
-  // TODO(P2-T1b): the bufferToolEvidence callers cannot reach deps.clock yet,
-  // so they omit `now` and this stays on the Date.now() fallback path.
-  const verifiedAt = params.now ?? Date.now()
+  // P2-T1b: verifiedAt uses the injected clock (the tool executor threads it).
+  const verifiedAt = params.now ?? realClock.now()
   const source = boundText(`${toolName}:${callId}`, 1_000)
   const evidence: TaskMemoryEvidenceV1[] = []
   const filesInspected: string[] = []
@@ -816,11 +815,18 @@ export function recordToolEvidenceInTaskMemory(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): TaskMemoryV1 | undefined {
   const { current, toolName, callId, output, workspaceState } = params
   return commitDerivedToolEvidence({
     current,
-    derived: deriveToolEvidence({ toolName, callId, output, workspaceState }),
+    derived: deriveToolEvidence({
+      toolName,
+      callId,
+      output,
+      workspaceState,
+      now: params.now,
+    }),
     workspaceState,
   })
 }
@@ -845,6 +851,7 @@ export function bufferToolEvidenceForStep(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): void {
   const { owner, toolName, callId, output, workspaceState } = params
   const derived = deriveToolEvidence({
@@ -852,6 +859,7 @@ export function bufferToolEvidenceForStep(params: {
     callId,
     output,
     workspaceState,
+    now: params.now,
   })
   if (derived.evidence.length === 0) return
   const buffered = BUFFERED_STEP_EVIDENCE.get(owner)
