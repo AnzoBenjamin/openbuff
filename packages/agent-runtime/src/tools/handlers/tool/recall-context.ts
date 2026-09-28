@@ -1,6 +1,9 @@
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
-import { recallFromArchive } from '../../../util/context-archive'
+import {
+  recallEmptyResultMessage,
+  recallFromArchiveIndexed,
+} from '../../../util/archive-recall-index'
 import { searchConsolidations } from '../../../util/context-consolidation'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
@@ -21,10 +24,14 @@ export const handleRecallContext = (async (params: {
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
   const { previousToolCallFinished, toolCall, agentState } = params
   await previousToolCallFinished
-  // recallFromArchive and searchConsolidations are pure, bounded scans over
-  // in-memory arrays — no I/O, no throwing call surface — so the handler is
+  // recallFromArchiveIndexed builds a per-call in-memory FTS5 index over the
+  // bounded archive and fails open to the substring scanner — no I/O beyond
+  // the in-memory db and no throwing call surface — so the handler stays
   // straight glue and needs no best-effort error envelope.
-  const result = recallFromArchive(agentState.compactionArchive, toolCall.input.query)
+  const result = await recallFromArchiveIndexed(
+    agentState.compactionArchive,
+    toolCall.input.query,
+  )
   // Bounded summary hits from the canary-gated background consolidator
   // (OR-ranked). Omitted entirely when none exist, so the output contract is
   // additive: consumers that ignore the field keep verbatim-only behavior.
@@ -38,8 +45,9 @@ export const handleRecallContext = (async (params: {
       ...(consolidations.length > 0 ? { consolidations } : {}),
       ...(result.matches.length === 0 && consolidations.length === 0
         ? {
-            message:
-              'No archived pre-compaction content matched. Archived transcripts exist only after a compaction pass rewrote history; verify facts against live files with read_files instead.',
+            // D27: when the FTS5 index failed open, note it so the caller can
+            // tell a failed index apart from a healthy empty one.
+            message: recallEmptyResultMessage(result),
           }
         : {}),
     }),

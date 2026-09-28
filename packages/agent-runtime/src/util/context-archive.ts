@@ -215,7 +215,7 @@ const toText = (message: Message): string => {
  * other snapshot (and legacy eviction snapshots without `steps`) falls back
  * to `stepBase`-based slice-local numbering, per the documented contract.
  */
-const stepProvenance = (
+export const stepProvenance = (
   snapshot: ContextArchiveSnapshot,
   index: number,
 ): number => {
