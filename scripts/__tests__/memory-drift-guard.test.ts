@@ -1,5 +1,6 @@
-import { expect, test, beforeEach, afterEach } from 'bun:test'
+import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   writeFileSync,
@@ -12,6 +13,7 @@ import { execSync } from 'node:child_process'
 
 import {
   runMemoryDriftGuard,
+  buildMarkdownSnapshot,
   formatMemoryDriftReport,
   checkPath,
   checkEdges,
@@ -25,6 +27,9 @@ import {
   checkTodoFixme,
   checkBrokenLink,
   checkTaskMemory,
+  loadReviewReceipt,
+  verifyReceiptCoversPair,
+  sha256FileHash,
 } from '../memory-drift-guard'
 
 /**
@@ -789,6 +794,49 @@ test('memory-drift guard skips other SKIP_PATH_PREFIXES like evals/test-repos', 
   expect(brokenFindings.some(touched)).toBe(false)
 })
 
+// chmod 0o000 does not block reads for the superuser (or on Windows), so the
+// unreadable-file fixture cannot be reproduced there.
+const canTestUnreadableFile =
+  process.platform !== 'win32' &&
+  !(typeof process.getuid === 'function' && process.getuid() === 0)
+
+test.skipIf(!canTestUnreadableFile)(
+  'unreadable markdown file is skipped instead of crashing the guard',
+  () => {
+    mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+    const unreadable = join(tmpRoot, 'docs', 'secret.md')
+    writeFileSync(unreadable, 'See `src/missing.ts`.\n')
+    const readable = join(tmpRoot, 'docs', 'open.md')
+    writeFileSync(readable, 'See `src/missing.ts`.\n')
+    chmodSync(unreadable, 0o000)
+
+    // The snapshot drops files whose read fails, so the CI-blocking gate must
+    // skip the unreadable file rather than re-reading it per checker and
+    // crashing runMemoryDriftGuard.
+    expect(() => runMemoryDriftGuard(tmpRoot)).not.toThrow()
+
+    const snapshot = buildMarkdownSnapshot(tmpRoot)
+    expect(
+      snapshot.files.some((p) => p.includes('docs/secret.md')),
+    ).toBe(false)
+    expect(
+      snapshot.linesByFile.has(unreadable),
+    ).toBe(false)
+    // No checker emits findings for the unreadable file.
+    expect(
+      checkPath(tmpRoot, snapshot).some((f) =>
+        f.path.includes('docs/secret.md'),
+      ),
+    ).toBe(false)
+    // Control: the readable twin with identical content still flags.
+    expect(
+      checkPath(tmpRoot, snapshot).some((f) => f.path.includes('docs/open.md')),
+    ).toBe(true)
+
+    chmodSync(unreadable, 0o644)
+  },
+)
+
 test('formatMemoryDriftReport reports clean pass when score is zero', () => {
   const report = formatMemoryDriftReport({
     score: 0,
@@ -1043,4 +1091,185 @@ test('integration: runMemoryDriftGuard returns sum score and 11 checkers in orde
   }
   const report = formatMemoryDriftReport(result)
   expect(report.startsWith('Memory drift guard:')).toBe(true)
+})
+
+describe('staleness checker review-receipt suppression', () => {
+  /** Canonical stale fixture: knowledge.md committed before sibling src/. */
+  function seedStalePair(): {
+    knowledgePath: string
+    srcFile: string
+    srcRel: string
+    /** Project-relative path of the committed src file (receipt hash key). */
+    srcFileKey: string
+    mdRel: string
+  } {
+    initGitRepo(tmpRoot)
+    mkdirSync(join(tmpRoot, 'packages', 'demo', 'src'), { recursive: true })
+    const knowledgePath = join(tmpRoot, 'packages', 'demo', 'knowledge.md')
+    writeFileSync(knowledgePath, '# demo\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/knowledge.md'],
+      'add knowledge',
+      '2023-01-01T00:00:00',
+    )
+    const srcFile = join(tmpRoot, 'packages', 'demo', 'src', 'index.ts')
+    writeFileSync(srcFile, 'export const x = 1\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/src/index.ts'],
+      'add src',
+      '2024-06-01T00:00:00',
+    )
+    return {
+      knowledgePath,
+      srcFile,
+      srcRel: 'packages/demo/src',
+      srcFileKey: 'packages/demo/src/index.ts',
+      mdRel: 'packages/demo/knowledge.md',
+    }
+  }
+
+  /** Write a receipt-shaped JSON object to the receipt file. */
+  function writeReceiptObject(receipt: Record<string, unknown>): void {
+    mkdirSync(join(tmpRoot, '.openbuff', 'memory'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, '.openbuff', 'memory', 'review-receipt.json'),
+      JSON.stringify(receipt),
+    )
+  }
+
+  /** Write raw (possibly malformed) receipt file content. */
+  function writeRawReceipt(text: string): void {
+    mkdirSync(join(tmpRoot, '.openbuff', 'memory'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, '.openbuff', 'memory', 'review-receipt.json'),
+      text,
+    )
+  }
+
+  const staleFindingFor =
+    (mdRel: string) =>
+    (finding: { path: string }): boolean =>
+      finding.path === mdRel
+
+  test('a valid receipt with matching hashes suppresses the stale finding', () => {
+    const pair = seedStalePair()
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+    // fileHashes keys are INDIVIDUAL committed file paths (what the guard
+    // verifies against `git log -1 --name-only` output), not directory
+    // pathspecs.
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(
+      false,
+    )
+  })
+
+  test('a receipt with a stale/mismatched hash for one file does NOT suppress', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: `sha256:${'0'.repeat(64)}` },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('a receipt stops suppressing once the attested source bytes change', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(
+      false,
+    )
+    // The source bytes drift after the review: the receipt no longer attests
+    // the current bytes, so the finding stands again (fail closed).
+    writeFileSync(pair.srcFile, 'export const x = 2\n')
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('a receipt with no hash entry for a committed src file does not suppress', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [],
+      fileHashes: {},
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('malformed or missing receipt behaves as absent (finding stands)', () => {
+    const pair = seedStalePair()
+    // Missing receipt.
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+    // Malformed JSON.
+    writeRawReceipt('{ not json')
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+  })
+
+  test('a non-LOOKS_GOOD verdict does not suppress', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'NON_BLOCKING',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcRel]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('loadReviewReceipt is fail-open and verifyReceiptCoversPair verifies current bytes', () => {
+    const pair = seedStalePair()
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    const receipt = loadReviewReceipt(tmpRoot)
+    expect(receipt?.verdict).toBe('LOOKS_GOOD')
+    expect(receipt?.fileHashes[pair.srcFileKey]).toBe(
+      sha256FileHash(pair.srcFile),
+    )
+    const files = ['packages/demo/src/index.ts']
+    expect(verifyReceiptCoversPair(tmpRoot, receipt!, files)).toBe(true)
+    // Current bytes only: drift, absence, and a wrong verdict all fail.
+    writeFileSync(pair.srcFile, 'export const x = 2\n')
+    expect(verifyReceiptCoversPair(tmpRoot, receipt!, files)).toBe(false)
+    expect(
+      verifyReceiptCoversPair(tmpRoot, receipt!, ['packages/demo/src/gone.ts']),
+    ).toBe(false)
+    expect(
+      verifyReceiptCoversPair(
+        tmpRoot,
+        { ...receipt!, verdict: 'NON_BLOCKING' },
+        files,
+      ),
+    ).toBe(false)
+  })
 })

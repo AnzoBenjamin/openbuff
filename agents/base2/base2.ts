@@ -1557,6 +1557,15 @@ ${guideSections}
         ((activeWorkState.currentPhase === 'awaiting_validation' ||
           activeWorkState.currentPhase === 'awaiting_review') &&
           activeWorkState.changedFiles.length > 0)
+      // PR-T5 (D23) Slice 2: docs-only edit tracking. `editsHappened` keeps
+      // its exact existing semantics (it also gates validation hooks and the
+      // unsafe-state guard, and narrowing it would change those), so a
+      // docs-only edit additionally records this distinct turn-scoped flag.
+      // It does NOT by itself force a reviewer re-run: the reviewer-skip
+      // decision below uses it to pick the dedicated docs-only skip reason
+      // when the reviewable set is unchanged since the last review. A dirty
+      // REVIEWABLE file always re-arms the reviewer exactly as before.
+      let docsOnlyEditsHappened = false
       let gatePassedForCurrentEdits = false
       let finalResponseGateOpen =
         activeWorkState.currentPhase === 'final_response_allowed' &&
@@ -1869,6 +1878,13 @@ ${guideSections}
         )
         if (files.length > 0) {
           editsHappened = true
+          // PR-T5 (D23) Slice 2: an edit batch that touched NO reviewable
+          // file is docs-only bookkeeping and must not by itself demand a
+          // fresh reviewer pass; record the distinct flag for the skip
+          // decision.
+          if (selectReviewableGateFiles(files).length === 0) {
+            docsOnlyEditsHappened = true
+          }
           editsThisStep = true
           recordChangedFiles(files)
           activeWorkState.latestWorkSummary = `Latest detected edit/work touched: ${files.join(', ')}`
@@ -1893,6 +1909,11 @@ ${guideSections}
         }
         if (messageFiles.length > 0) {
           editsHappened = true
+          // PR-T5 (D23) Slice 2: same docs-only classification as the
+          // tool-result edit path above.
+          if (selectReviewableGateFiles(messageFiles).length === 0) {
+            docsOnlyEditsHappened = true
+          }
           editsThisStep = true
           recordChangedFiles(messageFiles)
           activeWorkState.latestWorkSummary = `Latest direct edit/work from message history touched: ${messageFiles.join(', ')}`
@@ -2001,6 +2022,11 @@ ${guideSections}
             })
           ) {
             editsHappened = true
+            // PR-T5 (D23) Slice 2: same docs-only classification as the
+            // tool-result edit path above.
+            if (selectReviewableGateFiles([file]).length === 0) {
+              docsOnlyEditsHappened = true
+            }
             recordChangedFiles([file], { fromStatusObservation: true })
             activeWorkState.latestWorkSummary = `Git status shows pending changed files: ${Array.from(pendingGateFiles).join(', ')}`
             markActiveWorkStateChanged()
@@ -5300,6 +5326,21 @@ ${guideSections}
           reviewableGateScopeFiles.length > 0 &&
           isAttestableSnapshotFingerprint(reviewableFingerprint) &&
           matchingReviewReceipt
+        // PR-T5 (D23) Slice 2: docs-only edits that happened after the last
+        // reviewer pass are distinguished from a plainly unchanged reviewable
+        // set. Two signals, either of which suffices: a this-turn edit that
+        // touched no reviewable file (docsOnlyEditsHappened), or a
+        // non-reviewable path already sitting in the frozen gate scope
+        // (pending/dirty docs bookkeeping, e.g. edited after the review that
+        // produced the matching receipt). This only refines the SKIP LABEL:
+        // the skip condition itself is unchanged, so a dirty reviewable file
+        // still re-arms the reviewer exactly as before.
+        const nonReviewableGateScopeFiles = gateScopeFiles.filter(
+          (file) => !isReviewableGateFile(file),
+        )
+        const docsOnlyEditsAfterLastReview =
+          reviewableSetAlreadyReviewed &&
+          (docsOnlyEditsHappened || nonReviewableGateScopeFiles.length > 0)
         const skipReviewerForReviewableScope =
           runReviewerGate &&
           editsHappened &&
@@ -5315,7 +5356,9 @@ ${guideSections}
           const reviewerSkipReason =
             reviewableGateScopeFiles.length === 0
               ? 'reviewer skip: no reviewable source files'
-              : 'reviewer skip: reviewable source set unchanged since last review'
+              : docsOnlyEditsAfterLastReview
+                ? 'reviewer skip: docs-only edits after last review'
+                : 'reviewer skip: reviewable source set unchanged since last review'
           markActiveWorkStateChanged()
           emitGateTelemetry({
             currentPhase: 'awaiting_review',
@@ -5327,7 +5370,9 @@ ${guideSections}
             skipReason:
               reviewableGateScopeFiles.length === 0
                 ? 'reviewer-skip-no-reviewable-source-files'
-                : 'reviewer-skip-reviewable-set-unchanged',
+                : docsOnlyEditsAfterLastReview
+                  ? 'reviewer-skip-docs-only-after-review'
+                  : 'reviewer-skip-reviewable-set-unchanged',
           })
           yield {
             toolName: 'add_message',
@@ -5340,7 +5385,9 @@ ${guideSections}
                   'skipped',
                   reviewableGateScopeFiles.length === 0
                     ? `reviewer-skip-no-reviewable-source-files: pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
-                    : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewableGateScopeFiles.join(', ') || '(none)'}`,
+                    : docsOnlyEditsAfterLastReview
+                      ? `reviewer-skip-docs-only-after-review: non-reviewable files: ${nonReviewableGateScopeFiles.join(', ') || '(none)'}`
+                      : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewableGateScopeFiles.join(', ') || '(none)'}`,
                 ),
               ].join('\n'),
             },
@@ -10268,6 +10315,15 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
                     .map((advisory) => compactReceiptString(advisory, 180)),
                 }
               : {}),
+            // PR-T5 (D23) Slice 1: hash entries are exact content markers
+            // (compacting their text would corrupt them), so only the COUNT is
+            // bounded here — same shape as the reviewedFiles slice above.
+            ...(receipt.reviewedFileHashes &&
+            receipt.reviewedFileHashes.length > 0
+              ? {
+                  reviewedFileHashes: receipt.reviewedFileHashes.slice(0, 4),
+                }
+              : {}),
             receiptTruncated: true,
           }
           if (
@@ -10284,11 +10340,31 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             // advisoryCount survives so a consumer can still tell advisories
             // existed even though the texts did not fit the storage bound.
             advisories: undefined,
+            // PR-T5 (D23) Slice 1 — clean drop (not corruption): at the
+            // extreme bound the receipt keeps no per-file content bindings at
+            // all, so the storage invariant holds for arbitrarily wide
+            // reviews and no partially-truncated hash list can be mistaken
+            // for full coverage.
+            reviewedFileHashes: undefined,
           }
         }
 
         const gateId = `${reviewer}:${expectedFingerprint}`
         const reviewedFiles = normalizeGateFileList(result.reviewedFiles ?? [])
+        // PR-T5 (D23) Slice 1: bind the receipt to per-file content. For each
+        // reviewed file, capture the current readGateFileContentMarker and
+        // keep it only when it is a creditable content marker (a real sha256
+        // hash or a stable `missing` deletion); non-creditable markers
+        // (`unreadable:*`, ...) are skipped entirely rather than persisted as
+        // error strings. Both inline helpers are hoisted `function`
+        // declarations in this serialized handleSteps scope, so calling them
+        // here is safe even though their declarations appear later in the
+        // source.
+        const reviewedFileHashes = reviewedFiles.flatMap((file) => {
+          const marker = readGateFileContentMarker(file)
+          if (!isCreditableContentMarker(marker)) return []
+          return [{ path: file, hash: marker }]
+        })
         // Advisories are the reviewer's non-blocking observations. They are
         // recorded (and surfaced) but never become repair targets, which is
         // what lets a LOOKS_GOOD verdict carry cosmetic notes instead of
@@ -10315,6 +10391,10 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             compactReceiptString(value, MAX_RECEIPT_TEXT_LENGTH),
           ),
           reviewedFileCount: reviewedFiles.length,
+          // Omitted entirely when no reviewed file carries a creditable
+          // content marker, so receipts over virtual/legacy paths keep their
+          // exact prior serialized shape.
+          ...(reviewedFileHashes.length > 0 ? { reviewedFileHashes } : {}),
           ...(result.coverage ? { coverage: result.coverage } : {}),
           dimensions: result.dimensions ?? {},
           findings: (result.findingRecords ?? []).map((finding) => {

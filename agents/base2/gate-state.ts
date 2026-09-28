@@ -28,6 +28,20 @@ export type Base2ReviewReceipt = {
   snapshotFingerprint: string
   reviewedFiles: string[]
   reviewedFileCount?: number
+  /**
+   * PR-T5 (D23) Slice 1 — per-file content bindings for the reviewed files.
+   * One entry per reviewed file whose `readGateFileContentMarker` is a
+   * creditable content marker (`sha256:<hex>:<length>` for a present file,
+   * `missing` for a stable deletion); files whose marker is not creditable
+   * (`unreadable:*`, ...) are skipped entirely rather than storing error
+   * strings. `hash` is the full content marker captured at receipt time, so a
+   * downstream consumer (e.g. the memory-drift-guard review receipt) can
+   * verify the exact reviewed bytes. ADDITIVE and optional: legacy receipts
+   * without this field stay valid, and `fitReceiptToStorageBound` bounds the
+   * list (slices to 4 entries on compaction, clean-drops it at the extreme
+   * bound) so a wide review cannot break the serialized-size invariant.
+   */
+  reviewedFileHashes?: Array<{ path: string; hash: string }>
   coverage?: 'covered' | 'missing' | 'n/a'
   dimensions: Record<string, string>
   findings: Array<{

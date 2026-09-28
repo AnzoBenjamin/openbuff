@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { dirname, relative, resolve, sep, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -115,12 +116,18 @@ export type MarkdownSnapshot = {
 }
 
 export function buildMarkdownSnapshot(root: string): MarkdownSnapshot {
-  const files = [...markdownFiles(root)]
+  const files: string[] = []
   const linesByFile = new Map<string, string[]>()
-  for (const filePath of files) {
+  for (const filePath of markdownFiles(root)) {
     try {
       linesByFile.set(filePath, readFileSync(filePath, 'utf8').split('\n'))
+      files.push(filePath)
     } catch (err) {
+      // An unreadable file cannot be checked by any checker, so it is dropped
+      // from the snapshot ENTIRELY (not just its lines): keeping it in
+      // `files` would make every checker fall back to a direct re-read that
+      // re-throws here, crashing runMemoryDriftGuard (the CI gate) instead
+      // of skipping the file.
       console.debug(
         `[memory-drift-guard] buildMarkdownSnapshot read failed for ${filePath}: ${
           err instanceof Error ? err.message : String(err)
@@ -141,7 +148,9 @@ function snapshotFiles(
 
 /**
  * Lines for one file from the shared snapshot, falling back to a direct read
- * when the checker was called without one (or the snapshot read failed).
+ * only when the checker was called without a snapshot. Files whose snapshot
+ * read failed are excluded from `snapshot.files`, so this fallback is never
+ * reached for an unreadable file.
  */
 function snapshotFileLines(
   snapshot: MarkdownSnapshot | undefined,
@@ -359,6 +368,22 @@ export function checkIndexSync(root: string): Finding[] {
   return findings
 }
 
+/**
+ * Flags knowledge.md / *.knowledge.md files whose last commit is older than
+ * the last commit of their sibling src/ (or topic-relevant src subset).
+ *
+ * PR-T5 (D23) Slice 3 — recorded review receipts: before emitting a stale
+ * finding for a pair, the guard consults
+ * `<root>/.openbuff/memory/review-receipt.json` (loaded ONCE per call). A
+ * receipt with verdict LOOKS_GOOD whose `fileHashes` entry for EVERY file of
+ * the pair's last source commit (`git log -1 --name-only --format= --
+ * <srcRelative>`, batched like batchLastCommitEpochs) matches the CURRENT
+ * sha256 of the raw bytes on disk means those exact bytes were reviewed, so
+ * the stale finding is suppressed. Any missing entry, hash mismatch, or
+ * unreadable file keeps the finding standing. FAIL-OPEN on the receipt
+ * itself: a missing, unreadable, or malformed receipt is treated as absent
+ * and the guard never requires it to exist for correctness.
+ */
 export function checkStaleness(
   root: string,
   snapshot?: MarkdownSnapshot,
@@ -419,6 +444,20 @@ export function checkStaleness(
       const topic = key.slice(separator + 1)
       topicEpochs.set(key, lastCommitEpochForTopic(root, srcRel, topic))
     }
+    // PR-T5 (D23) Slice 3: load the recorded review receipt ONCE per call and
+    // list each candidate pair's last src-commit files in one batched pass
+    // (mirroring batchLastCommitEpochs). The receipt is optional gitignored
+    // local state: absent/unreadable/malformed behaves exactly as before.
+    const receipt = loadReviewReceipt(root)
+    // Batched last-src-commit file lists are only needed to verify a receipt:
+    // with no usable receipt the default path keeps its exact prior git-call
+    // profile (staleness epochs + dirty set only).
+    const srcCommitFilesByPath = receipt
+      ? batchLastCommitFiles(
+          root,
+          candidates.map((c) => c.srcRelative),
+        )
+      : new Map<string, string[]>()
     const findings: Finding[] = []
     for (const c of candidates) {
       if (dirtySet.has(c.projectPath)) continue
@@ -429,6 +468,22 @@ export function checkStaleness(
           : (topicEpochs.get(`${c.srcRelative}\0${c.topic}`) ?? null)
       if (lastCommitSource === null || lastCommitMd === null) continue
       if (lastCommitSource > lastCommitMd) {
+        // Receipt attestation first: a LOOKS_GOOD receipt whose recorded
+        // hashes still match the CURRENT bytes of every file in the last
+        // source commit means those exact bytes were reviewed, so the stale
+        // finding is suppressed for this pair. Anything else (a missing
+        // entry, a hash mismatch, an unreadable file, a wrong verdict, an
+        // absent receipt) leaves the finding standing.
+        const sourceCommitFiles = srcCommitFilesByPath.get(c.srcRelative) ?? []
+        if (
+          receipt &&
+          verifyReceiptCoversPair(root, receipt, sourceCommitFiles)
+        ) {
+          console.debug(
+            `[memory-drift-guard] staleness suppressed by review receipt: ${c.projectPath}`,
+          )
+          continue
+        }
         findings.push({
           path: c.projectPath,
           line: 1,
@@ -457,6 +512,164 @@ function batchLastCommitEpochs(
   const out = new Map<string, number | null>()
   for (const ps of pathspecs) out.set(ps, lastCommitEpoch(root, ps))
   return out
+}
+
+/**
+ * PR-T5 (D23) Slice 3 — recorded review receipt consumed by `checkStaleness`.
+ *
+ * Shape contract (`.openbuff/memory/review-receipt.json`, gitignored local
+ * state like the task-memory.json precedent):
+ * `{ schemaVersion: 1, reviewer: string, verdict: 'LOOKS_GOOD',
+ * reviewedFiles: string[], fileHashes: Record<path, sha256-hex>,
+ * recordedAt: string }`. The receipt attests that a reviewer returned
+ * LOOKS_GOOD over exact file bytes; `fileHashes` binds those bytes so the
+ * guard can verify at check time that the attested content is still on disk.
+ */
+export type RecordedReviewReceipt = {
+  schemaVersion: number
+  reviewer: string
+  verdict: string
+  reviewedFiles: string[]
+  fileHashes: Record<string, string>
+  recordedAt: string
+}
+
+/**
+ * Load the recorded review receipt.
+ *
+ * FAIL-OPEN by contract: a missing, unreadable, malformed, or shapeless
+ * receipt is treated as ABSENT (null) and is never required for correctness —
+ * the staleness gate behaves exactly as before whenever the receipt cannot be
+ * trusted. Only a structurally valid record is returned.
+ */
+export function loadReviewReceipt(root: string): RecordedReviewReceipt | null {
+  const receiptFile = join(root, '.openbuff', 'memory', 'review-receipt.json')
+  if (!existsSync(receiptFile)) {
+    return null
+  }
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(receiptFile, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null
+    }
+    const record = parsed as Record<string, unknown>
+    if (
+      typeof record.schemaVersion !== 'number' ||
+      typeof record.reviewer !== 'string' ||
+      typeof record.verdict !== 'string' ||
+      typeof record.recordedAt !== 'string' ||
+      !Array.isArray(record.reviewedFiles) ||
+      !record.reviewedFiles.every((file) => typeof file === 'string') ||
+      !record.fileHashes ||
+      typeof record.fileHashes !== 'object' ||
+      Array.isArray(record.fileHashes) ||
+      !Object.values(record.fileHashes).every(
+        (hash) => typeof hash === 'string',
+      )
+    ) {
+      return null
+    }
+    return {
+      schemaVersion: record.schemaVersion,
+      reviewer: record.reviewer,
+      verdict: record.verdict,
+      reviewedFiles: record.reviewedFiles as string[],
+      fileHashes: Object.fromEntries(
+        Object.entries(record.fileHashes as Record<string, string>),
+      ),
+      recordedAt: record.recordedAt,
+    }
+  } catch (err) {
+    console.debug(
+      `[memory-drift-guard] loadReviewReceipt failed for ${receiptFile}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+    return null
+  }
+}
+
+/**
+ * sha256 over the RAW bytes currently on disk for `absolutePath`, hex-encoded.
+ * No CRLF/newline normalization: a git blob hash is not reproducible here, so
+ * the receipt is written against this same raw-bytes hash at review time and
+ * verified against it at check time.
+ */
+export function sha256FileHash(absolutePath: string): string {
+  return createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
+}
+
+/**
+ * Files changed by the LAST git commit touching each pathspec, batched one
+ * `git log -1 --name-only --format= -- <pathspec>` per distinct pathspec
+ * (mirroring batchLastCommitEpochs). `--format=` suppresses the commit
+ * header, so stdout is exactly one committed filename per line. A directory
+ * pathspec resolves to the files of the last commit touching that directory;
+ * a pathspec with no git history yields an empty list.
+ */
+export function batchLastCommitFiles(
+  root: string,
+  pathspecs: string[],
+): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const ps of [...new Set(pathspecs)]) {
+    out.set(ps, lastCommitFiles(root, ps))
+  }
+  return out
+}
+
+/** Files of the last commit touching `pathspec` (empty when git has none). */
+function lastCommitFiles(root: string, pathspec: string): string[] {
+  let stdout: string
+  try {
+    stdout = execFileSync(
+      'git',
+      ['log', '-1', '--name-only', '--format=', '--', pathspec],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    )
+  } catch {
+    return []
+  }
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+}
+
+/**
+ * True when the receipt attests the CURRENT bytes of every file in the pair's
+ * last source commit. Verification is current-bytes-only: each file's hash is
+ * recomputed from disk and compared against the receipt's recorded
+ * `fileHashes[path]`, so a receipt written for older bytes never suppresses a
+ * finding. Any file missing from the receipt, absent or unreadable on disk,
+ * or hashed differently fails the check, and `verdict` must be LOOKS_GOOD.
+ * An empty commit-file list can never be attested.
+ */
+export function verifyReceiptCoversPair(
+  root: string,
+  receipt: RecordedReviewReceipt,
+  sourceCommitFiles: string[],
+): boolean {
+  if (receipt.verdict !== 'LOOKS_GOOD') return false
+  if (sourceCommitFiles.length === 0) return false
+  for (const projectPath of sourceCommitFiles) {
+    const recordedHash = receipt.fileHashes[projectPath]
+    if (typeof recordedHash !== 'string' || recordedHash.length === 0) {
+      return false
+    }
+    const absolutePath = join(root, projectPath)
+    if (!existsSync(absolutePath)) return false
+    try {
+      if (sha256FileHash(absolutePath) !== recordedHash) return false
+    } catch {
+      return false
+    }
+  }
+  return true
 }
 
 function batchDirtySet(root: string, pathspecs: string[]): Set<string> {
@@ -564,23 +777,6 @@ function lastCommitEpochForTopic(
   }
   const epoch = Number.parseInt(trimmed, 10)
   return Number.isFinite(epoch) ? epoch : null
-}
-
-function pathHasWorkingTreeChanges(root: string, pathspec: string): boolean {
-  try {
-    const stdout = execFileSync(
-      'git',
-      ['status', '--porcelain', '--', pathspec],
-      {
-        cwd: root,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      },
-    )
-    return stdout.trim() !== ''
-  } catch {
-    return false
-  }
 }
 
 /**
