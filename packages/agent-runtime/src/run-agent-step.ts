@@ -86,7 +86,10 @@ import {
   evictStaleToolResults,
   EVICTION_KEEP_RECENT_STEPS,
 } from './util/tool-result-eviction'
-import { archivePreCompaction } from './util/context-archive'
+import {
+  archiveEvictedToolResults,
+  archivePreCompaction,
+} from './util/context-archive'
 import { maybeRunBackgroundConsolidation } from './util/context-consolidation-runner'
 import { verifyExtractionCoverage } from './util/compaction-verification'
 import {
@@ -2152,6 +2155,15 @@ export async function loopAgentSteps(
             // mechanical-trim branches: previously read paths require a
             // fresh read before the next edit.
             revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
+            // D26: archive the evicted segments' full content BEFORE the
+            // tombstoned history replaces the originals, so recall_context can
+            // still recover the detail. Cheap in-memory append on agentState;
+            // a no-op when the evictor reported nothing (its `evicted` field is
+            // omitted on the no-op paths).
+            const evictedCandidates = evictionResult.evicted
+            if (evictedCandidates && evictedCandidates.length > 0) {
+              archiveEvictedToolResults(currentAgentState, evictedCandidates)
+            }
             currentAgentState.messageHistory = evictionResult.messages
             evictedTokensThisIteration = evictionResult.tokensSaved
             evictedCountThisIteration = evictionResult.evictedCount

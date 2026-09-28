@@ -164,6 +164,19 @@ export type ToolResultEvictionResult = {
   messages: Message[]
   tokensSaved: number
   evictedCount: number
+  /**
+   * D26: full pre-tombstone copies of each evicted candidate (identity, FULL
+   * original content, and step provenance) for the archive leg
+   * (`archiveEvictedToolResults`). Omitted on the no-op paths — no candidates,
+   * or savings below the floor — so existing callers and tests see no change;
+   * the recorded content is never the tombstone or slimmed replacement.
+   */
+  evicted?: Array<{
+    toolCallId: string
+    toolName: string
+    content: ToolMessage['content']
+    stepIndex: number
+  }>
 }
 
 /**
@@ -281,6 +294,18 @@ export function evictStaleToolResults(
 
   const tombstonesByMessage = new Map<ToolMessage, string>()
   const slimmedContentByMessage = new Map<ToolMessage, ToolMessage['content']>()
+  // D26: candidates are already collected, so capture each one's identity,
+  // FULL original content, and step provenance (the same `stepIndexOf` map
+  // the filter used) BEFORE tombstoning replaces the body in the returned
+  // history. The input messages are never mutated, so `candidate.content` is
+  // the original body.
+  const evictedCandidates: NonNullable<ToolResultEvictionResult['evicted']> =
+    candidates.map((candidate) => ({
+      toolCallId: candidate.toolCallId,
+      toolName: candidate.toolName,
+      content: candidate.content,
+      stepIndex: stepIndexOf.get(candidate) ?? 0,
+    }))
   for (const candidate of candidates) {
     const slimmedContent = slimmedContentForMessage(candidate)
     if (slimmedContent !== undefined) {
@@ -315,7 +340,12 @@ export function evictStaleToolResults(
     return { messages, tokensSaved: 0, evictedCount: 0 }
   }
 
-  return { messages: nextMessages, tokensSaved, evictedCount: candidates.length }
+  return {
+    messages: nextMessages,
+    tokensSaved,
+    evictedCount: candidates.length,
+    evicted: evictedCandidates,
+  }
 }
 
 /**

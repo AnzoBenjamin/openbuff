@@ -504,3 +504,63 @@ describe('receipt-preserving eviction (mutation receipts survive)', () => {
     }
   })
 })
+
+/**
+ * D26: the evictor reports each evicted candidate's identity, FULL original
+ * content, and step provenance for the archive leg
+ * (`archiveEvictedToolResults`) — and stays silent (no `evicted` field) on
+ * the no-op paths so existing callers and tests see no change.
+ */
+describe('evicted field (D26 archive provenance)', () => {
+  it('omits evicted on the no-candidates path', () => {
+    const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
+    const nothing = evictStaleToolResults(messages, {
+      keepRecentSteps: EVICTION_KEEP_RECENT_STEPS + 5,
+    })
+    expect(nothing.messages).toBe(messages)
+    expect('evicted' in nothing).toBe(false)
+    expect(nothing.evicted).toBeUndefined()
+  })
+
+  it('omits evicted when savings are below the floor', () => {
+    const small: Message[] = []
+    for (let i = 0; i < EVICTION_KEEP_RECENT_STEPS + 2; i++) {
+      small.push(assistantStep(`call-${i}`))
+      small.push({
+        role: 'tool',
+        toolCallId: `call-${i}`,
+        toolName: 'read_files',
+        content: [{ type: 'json', value: { output: 'tiny' } }],
+      })
+    }
+    const result = evictStaleToolResults(small)
+    expect(result.messages).toBe(small)
+    expect(result.tokensSaved).toBe(0)
+    expect('evicted' in result).toBe(false)
+    expect(result.evicted).toBeUndefined()
+  })
+
+  it('returns one entry per evicted candidate with FULL pre-tombstone content', () => {
+    const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
+    const result = evictStaleToolResults(messages)
+    expect(result.evictedCount).toBe(2)
+    expect(result.evicted).toHaveLength(2)
+    expect(result.evicted![0].toolCallId).toBe('call-0')
+    expect(result.evicted![0].toolName).toBe('read_files')
+    expect(result.evicted![0].stepIndex).toBe(0)
+    expect(result.evicted![1].toolCallId).toBe('call-1')
+    expect(result.evicted![1].stepIndex).toBe(1)
+    for (const entry of result.evicted!) {
+      // FULL original content, never the tombstone that replaced it in
+      // `result.messages`.
+      expect(JSON.stringify(entry.content)).not.toContain(
+        '[tool result evicted to free context',
+      )
+      const part = entry.content[0]
+      expect(part.type).toBe('json')
+      if (part.type === 'json') {
+        expect(part.value).toEqual({ output: 'x'.repeat(40_000) })
+      }
+    }
+  })
+})
