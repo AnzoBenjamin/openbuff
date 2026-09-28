@@ -1,7 +1,13 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, it } from 'bun:test'
 
-import { classifyRunResume, createRunJournal } from '../run-journal'
+import {
+  classifyChildRun,
+  classifyRunResume,
+  createRunJournal,
+  executeChildReplay,
+  planChildResume,
+} from '../run-journal'
 
 import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
 
@@ -317,6 +323,240 @@ describe('kill-9 mid-tool-call resume (P2-T2-DESIGN §6)', () => {
       expect(journal.toolResultFor(runId, 'A')).toEqual({ result: 'A-done' })
       expect(journal.toolResultFor(runId, 'B')).toEqual({ result: 'B-done' })
       expect(classifyRunResume(journal, runId)).toEqual({ kind: 'clean' })
+    } finally {
+      journal.close()
+    }
+  })
+})
+
+describe('nested child spawn resume (P2-T2-DESIGN §4d)', () => {
+  it('parent with an in-flight child spawn resumes from the child’s own journal', () => {
+    const parentRunId = 'parent-1'
+    const childRunId = 'child-1'
+    const journal = makeJournal()
+    try {
+      // Parent: a completed step, then a spawn of child-1 that never got its
+      // terminal step_boundary journaled in the parent.
+      journal.append(parentRunId, {
+        eventType: 'step_boundary',
+        stepNumber: 0,
+        correlation: 's0',
+        payload: { status: 'completed' },
+      })
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 1,
+        correlation: childRunId,
+        payload: { agentType: 'helper' },
+      })
+
+      // Child runs its own nested loop, journaled under ITS runId, and
+      // finishes with a clean terminal tail.
+      journal.append(childRunId, {
+        eventType: 'llm_request',
+        stepNumber: 0,
+        correlation: 'cl0',
+        payload: { model: 'm' },
+      })
+      journal.append(childRunId, {
+        eventType: 'tool_call',
+        stepNumber: 1,
+        correlation: 'c1-tool',
+        payload: { toolName: 'toolC1' },
+      })
+      journal.append(childRunId, {
+        eventType: 'tool_result',
+        stepNumber: 1,
+        correlation: 'c1-tool',
+        payload: { result: null },
+      })
+      journal.append(childRunId, {
+        eventType: 'step_boundary',
+        stepNumber: 1,
+        correlation: 'cs1',
+        payload: { status: 'completed' },
+      })
+      const childLastSeq = journal.lastEvent(childRunId)!.seq
+      expect(childLastSeq).toBe(3)
+
+      expect(classifyChildRun(journal, childRunId)).toEqual({
+        kind: 'child_completed',
+        lastEventSeq: childLastSeq,
+      })
+      expect(planChildResume(journal, parentRunId)).toEqual({
+        kind: 'needs_children',
+        inFlight: [],
+        awaiting: [{ childRunId, childLastSeq }],
+      })
+      expect(executeChildReplay(journal, childRunId)).toEqual({
+        kind: 'replayed_completed',
+        childRunId,
+        lastSeq: childLastSeq,
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('parent with a crashed in-flight child requires live execution', () => {
+    const parentRunId = 'parent-2'
+    const childRunId = 'child-2'
+    const journal = makeJournal()
+    try {
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: childRunId,
+        payload: { agentType: 'helper' },
+      })
+      // Child was kill-9'd mid-tool: tool_call journaled, no tool_result.
+      journal.append(childRunId, {
+        eventType: 'llm_request',
+        stepNumber: 0,
+        correlation: 'cl0',
+        payload: { model: 'm' },
+      })
+      journal.append(childRunId, {
+        eventType: 'tool_call',
+        stepNumber: 1,
+        correlation: 'c2-tool',
+        payload: { toolName: 'toolC2' },
+      })
+
+      expect(classifyChildRun(journal, childRunId)).toEqual({
+        kind: 'child_in_flight_tool',
+        childRunId,
+        toolCallId: 'c2-tool',
+      })
+      const plan = planChildResume(journal, parentRunId)
+      expect(plan).toEqual({
+        kind: 'needs_children',
+        inFlight: [
+          {
+            kind: 'child_in_flight_tool',
+            childRunId,
+            toolCallId: 'c2-tool',
+          },
+        ],
+        awaiting: [],
+      })
+      expect(executeChildReplay(journal, childRunId)).toEqual({
+        kind: 'live_execution_required',
+        childRunId,
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('crashed child with no journaled output classifies unknown', () => {
+    const parentRunId = 'parent-3'
+    const childRunId = 'child-3'
+    const journal = makeJournal()
+    try {
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: childRunId,
+        payload: { agentType: 'helper' },
+      })
+      // childRunId NEVER journaled anything: recording intent without progress.
+
+      expect(classifyChildRun(journal, childRunId)).toEqual({
+        kind: 'child_unknown',
+        childRunId,
+      })
+      expect(planChildResume(journal, parentRunId)).toEqual({
+        kind: 'needs_children',
+        inFlight: [{ kind: 'child_unknown', childRunId }],
+        awaiting: [],
+      })
+      expect(executeChildReplay(journal, childRunId)).toEqual({
+        kind: 'child_unknown',
+        childRunId,
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('a reconciled child is skipped (spawn followed by matching step_boundary)', () => {
+    const parentRunId = 'parent-4'
+    const childRunId = 'child-4'
+    const journal = makeJournal()
+    try {
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: childRunId,
+        payload: { agentType: 'helper' },
+      })
+      journal.append(parentRunId, {
+        eventType: 'step_boundary',
+        stepNumber: 1,
+        correlation: childRunId,
+        payload: { status: 'completed' },
+      })
+      expect(planChildResume(journal, parentRunId)).toEqual({
+        kind: 'live_continue',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('empty parent journal is live_continue', () => {
+    const journal = makeJournal()
+    try {
+      expect(planChildResume(journal, 'parent-empty')).toEqual({
+        kind: 'live_continue',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('re-plan is idempotent: appending the terminal step_boundary flips to live_continue', () => {
+    const parentRunId = 'parent-1-replan'
+    const childRunId = 'child-1-replan'
+    const journal = makeJournal()
+    try {
+      journal.append(parentRunId, {
+        eventType: 'step_boundary',
+        stepNumber: 0,
+        correlation: 's0',
+        payload: { status: 'completed' },
+      })
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 1,
+        correlation: childRunId,
+        payload: { agentType: 'helper' },
+      })
+      // Child completes with a clean tail.
+      journal.append(childRunId, {
+        eventType: 'step_boundary',
+        stepNumber: 0,
+        correlation: 'cs0',
+        payload: { status: 'completed' },
+      })
+      const childLastSeq = journal.lastEvent(childRunId)!.seq
+      expect(planChildResume(journal, parentRunId)).toEqual({
+        kind: 'needs_children',
+        inFlight: [],
+        awaiting: [{ childRunId, childLastSeq }],
+      })
+
+      // Parent later records the child's terminal boundary → reconciled.
+      journal.append(parentRunId, {
+        eventType: 'step_boundary',
+        stepNumber: 2,
+        correlation: childRunId,
+        payload: { status: 'completed' },
+      })
+      expect(planChildResume(journal, parentRunId)).toEqual({
+        kind: 'live_continue',
+      })
     } finally {
       journal.close()
     }

@@ -225,3 +225,160 @@ export function classifyRunResume(
 
   return { kind: 'clean' }
 }
+
+/**
+ * P2-T2-DESIGN §4d: disposition of a SINGLE child run, read from the child's
+ * own journal (the child's runId = the parent journal's spawn `correlation`).
+ */
+export type ChildRunDisposition =
+  | { kind: 'child_completed'; lastEventSeq: number }
+  | { kind: 'child_in_flight_tool'; childRunId: string; toolCallId: string }
+  | { kind: 'child_in_flight_llm'; childRunId: string }
+  | { kind: 'child_unknown'; childRunId: string }
+
+/**
+ * P2-T2-DESIGN §4d: classify a SINGLE child run by reading its own journal
+ * (the child's runId = the parent journal's spawn `correlation` key).
+ * - A clean classification (step_boundary/tool_result tail) counts as
+ *   child_completed (lastEventSeq = that tail's seq).
+ * - child_in_flight_tool / child_in_flight_llm mirror classifyRunResume but
+ *   return the childRunId verbatim.
+ * - child_unknown: the child journal has NO events at all for the childRunId
+ *   (recording intent without any child progress).
+ */
+export function classifyChildRun(
+  reader: JournalReader,
+  childRunId: string,
+): ChildRunDisposition {
+  const inner = classifyRunResume(reader, childRunId)
+  if (inner.kind === 'in_flight_tool') {
+    return {
+      kind: 'child_in_flight_tool',
+      childRunId,
+      toolCallId: inner.toolCallId,
+    }
+  }
+  if (inner.kind === 'in_flight_llm') {
+    return { kind: 'child_in_flight_llm', childRunId }
+  }
+  const last = reader.lastEvent(childRunId)
+  if (last === undefined) return { kind: 'child_unknown', childRunId }
+  return { kind: 'child_completed', lastEventSeq: last.seq }
+}
+
+/**
+ * P2-T2-DESIGN §4d: parent-side plan for resuming with children.
+ * - live_continue: no in-flight children; the parent can resume from its own
+ *   tail.
+ * - needs_children: the parent must first reconcile children — inFlight are
+ *   still running/in-flight (and may require live re-execution per §8),
+ *   awaiting are child_completed children whose results must be cross-checked
+ *   and fed back into the parent loop.
+ */
+export type ResumePlan =
+  | { kind: 'live_continue' }
+  | {
+      kind: 'needs_children'
+      inFlight: Array<ChildRunDisposition>
+      awaiting: Array<{ childRunId: string; childLastSeq: number }>
+    }
+
+/**
+ * P2-T2-DESIGN §4d: scan the parent run's journal for `spawn` events
+ * (correlation = childRunId) whose childRunId does NOT ALSO have a matching
+ * terminal `step_boundary` after it in the parent journal — the practical
+ * signal that the child's terminal step boundary was never journaled because
+ * the process died before the child (or the parent recording it) finished.
+ * A spawn WITH a later `step_boundary` sharing that correlation is already
+ * reconciled → skipped (not included in the plan). Spawn events without a
+ * correlation cannot identify a child and are skipped.
+ *
+ * For each unreconciled childRunId, classify the CHILD journal via
+ * classifyChildRun and fold into a ResumePlan.
+ */
+export function planChildResume(
+  reader: JournalReader,
+  parentRunId: string,
+): ResumePlan {
+  const events = reader.events(parentRunId)
+  const inFlight: Array<ChildRunDisposition> = []
+  const awaiting: Array<{ childRunId: string; childLastSeq: number }> = []
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i]
+    if (event.eventType !== 'spawn') continue
+    const childRunId = event.correlation
+    if (childRunId == null) continue
+    if (hasTerminalStepBoundaryAfter(events, childRunId, i + 1)) continue
+
+    const disposition = classifyChildRun(reader, childRunId)
+    if (disposition.kind === 'child_completed') {
+      awaiting.push({
+        childRunId,
+        childLastSeq: disposition.lastEventSeq,
+      })
+    } else {
+      inFlight.push(disposition)
+    }
+  }
+
+  if (inFlight.length === 0 && awaiting.length === 0) {
+    return { kind: 'live_continue' }
+  }
+  return { kind: 'needs_children', inFlight, awaiting }
+}
+
+/**
+ * P2-T2-DESIGN §4d helper: does the parent journal contain a terminal
+ * `step_boundary` whose correlation matches childRunId at or after fromIndex?
+ */
+function hasTerminalStepBoundaryAfter(
+  events: Array<JournalEvent & { seq: number }>,
+  childRunId: string,
+  fromIndex: number,
+): boolean {
+  for (let i = fromIndex; i < events.length; i++) {
+    const e = events[i]
+    if (e.eventType === 'step_boundary' && e.correlation === childRunId) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * P2-T2-DESIGN §4d replay-leg outcome for one child run.
+ */
+export type ChildReplayOutcome =
+  | { kind: 'replayed_completed'; childRunId: string; lastSeq: number }
+  | { kind: 'live_execution_required'; childRunId: string }
+  | { kind: 'child_unknown'; childRunId: string }
+
+/**
+ * P2-T2-DESIGN §4d: drive ONE child's completion from its own journal (the
+ * replay leg): infer its recorded state (lastEvent tail + toolResultFor)
+ * without executing anything. Returns replayed_completed when the child
+ * journal shows a clean terminal tail; live_execution_required for an
+ * in-flight tool/llm that must be re-executed by the parent's restart logic
+ * (the residual risk §8 names); child_unknown when the child journaled
+ * nothing.
+ */
+export function executeChildReplay(
+  reader: JournalReader,
+  childRunId: string,
+): ChildReplayOutcome {
+  const disposition = classifyChildRun(reader, childRunId)
+  switch (disposition.kind) {
+    case 'child_completed':
+      return {
+        kind: 'replayed_completed',
+        childRunId,
+        lastSeq: disposition.lastEventSeq,
+      }
+    case 'child_in_flight_tool':
+    case 'child_in_flight_llm':
+      return { kind: 'live_execution_required', childRunId }
+    case 'child_unknown':
+      return { kind: 'child_unknown', childRunId }
+  }
+}
