@@ -496,3 +496,50 @@ export function planBackgroundAgentResume(params: {
     }
   })
 }
+
+/** Combined resume view of one run: own tail, children, background intents. */
+export type RunResumeReport = {
+  runId: string
+  self: RunResumeClassification
+  children: ResumePlan
+  background: BackgroundResumeDecision[]
+}
+
+/**
+ * P2-T2 loop-entry resume report: folds classifyRunResume, planChildResume and
+ * planBackgroundAgentResume into one pure, read-only view so the live loop can
+ * surface what a resume would do. It never executes or mutates anything; the
+ * replay driver that acts on it is a later slice.
+ */
+export function buildRunResumeReport(params: {
+  reader: JournalReader
+  runId: string
+  intents?: ReadonlyArray<BackgroundAgentIntent>
+  isRerunnable?: (agentType: string) => boolean
+}): RunResumeReport {
+  const { reader, runId } = params
+  return {
+    runId,
+    self: classifyRunResume(reader, runId),
+    children: planChildResume(reader, runId),
+    background: planBackgroundAgentResume({
+      intents: params.intents ?? [],
+      reader,
+      parentRunId: runId,
+      isRerunnable: params.isRerunnable,
+    }),
+  }
+}
+
+/** True when the report shows nothing to resume (fresh or cleanly finished run). */
+export function isRunResumeReportClean(report: RunResumeReport): boolean {
+  return (
+    report.self.kind === 'clean' &&
+    report.children.kind === 'live_continue' &&
+    report.background.every(
+      (decision) =>
+        decision.kind === 'skip_terminal' ||
+        decision.kind === 'already_respawned',
+    )
+  )
+}

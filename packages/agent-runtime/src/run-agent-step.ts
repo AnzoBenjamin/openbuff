@@ -34,6 +34,10 @@ import { additionalSystemPrompts } from './system-prompt/prompts'
 import { getAgentTemplate } from './templates/agent-registry'
 import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
+  buildRunResumeReport,
+  isRunResumeReportClean,
+} from './util/run-journal'
+import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
 } from './templates/prompts'
@@ -1481,6 +1485,22 @@ export async function loopAgentSteps(
     })
   }
   reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
+  // P2-T2: when a journal reader is wired and this state carries a prior
+  // runId, surface what a resume would do (own tail, children, background
+  // intents). Read-only: the replay driver that acts on it is a later slice.
+  if (params.journalReader && initialAgentState.runId) {
+    const resumeReport = buildRunResumeReport({
+      reader: params.journalReader,
+      runId: initialAgentState.runId,
+      intents: initialAgentState.backgroundAgentJobs,
+    })
+    if (!isRunResumeReportClean(resumeReport)) {
+      logger.warn(
+        { resumeReport },
+        'Run journal shows interrupted work from a previous run',
+      )
+    }
+  }
 
   if (signal.aborted) {
     return {

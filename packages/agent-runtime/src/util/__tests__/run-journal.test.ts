@@ -3,9 +3,11 @@ import { describe, expect, it } from 'bun:test'
 
 import { reconcileInterruptedBackgroundAgentIntents } from '../background-agent-jobs'
 import {
+  buildRunResumeReport,
   classifyChildRun,
   classifyRunResume,
   createRunJournal,
+  isRunResumeReportClean,
   DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES,
   executeChildReplay,
   planBackgroundAgentResume,
@@ -712,5 +714,73 @@ describe('background agent resume policy (P2-T2-DESIGN §4d slice 3)', () => {
   it('default allowlist excludes side-effecting agents', () => {
     expect(DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES.has('editor')).toBe(false)
     expect(DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES.has('basher')).toBe(false)
+  })
+})
+
+describe('buildRunResumeReport (loop-entry resume view)', () => {
+  it('an empty journal with no intents is clean', () => {
+    const journal = makeJournal()
+    try {
+      const report = buildRunResumeReport({ reader: journal, runId: 'fresh' })
+      expect(report).toEqual({
+        runId: 'fresh',
+        self: { kind: 'clean' },
+        children: { kind: 'live_continue' },
+        background: [],
+      })
+      expect(isRunResumeReportClean(report)).toBe(true)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('combines an in-flight tool, an in-flight child, and an interrupted background intent', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('parent-r', {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: 'child-r',
+        payload: { agentType: 'helper' },
+      })
+      journal.append('parent-r', {
+        eventType: 'tool_call',
+        stepNumber: 1,
+        correlation: 'tc-r',
+        payload: { toolName: 'write_file' },
+      })
+      journal.append('child-r', {
+        eventType: 'llm_request',
+        stepNumber: 0,
+        correlation: 'cl-r',
+        payload: { model: 'm' },
+      })
+
+      const report = buildRunResumeReport({
+        reader: journal,
+        runId: 'parent-r',
+        intents: [
+          {
+            jobId: 'bg-r',
+            agentType: 'file-picker',
+            status: 'interrupted',
+            startedAt: 1_000,
+            completedAt: 2_000,
+          },
+        ],
+      })
+      expect(report.self).toEqual({ kind: 'in_flight_tool', toolCallId: 'tc-r' })
+      expect(report.children).toEqual({
+        kind: 'needs_children',
+        inFlight: [{ kind: 'child_in_flight_llm', childRunId: 'child-r' }],
+        awaiting: [],
+      })
+      expect(report.background).toEqual([
+        { kind: 'respawn', jobId: 'bg-r', agentType: 'file-picker' },
+      ])
+      expect(isRunResumeReportClean(report)).toBe(false)
+    } finally {
+      journal.close()
+    }
   })
 })
