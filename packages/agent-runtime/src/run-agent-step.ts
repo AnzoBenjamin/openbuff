@@ -918,6 +918,24 @@ export const runAgentStep = async (
   let fullResponse = ''
   const toolResults: ToolMessage[] = []
 
+  // P2-T2 slice 1: journal the LLM request BEFORE the stream so a crash
+  // mid-stream is classifiable as an in-flight LLM call on resume
+  // (P2-T2-DESIGN §2). Payload is BOUNDED — model + message count only — since
+  // this is the hot path.
+  // TODO(P2-T2): full request payload capture rides a later slice
+  if (agentState.runId && params.journalWriter) {
+    params.journalWriter.append(agentState.runId, {
+      eventType: 'llm_request',
+      // TODO(P2-T2): thread real stepNumber into runAgentStep
+      stepNumber: 0,
+      correlation: agentStepId,
+      payload: {
+        model: agentTemplate?.model,
+        messageCount: agentState.messageHistory.length,
+      },
+    })
+  }
+
   // Raw stream from AI SDK
   const stream = getAgentStreamFromTemplate({
     ...params,
@@ -969,6 +987,17 @@ export const runAgentStep = async (
   toolResults.push(...newToolResults)
 
   fullResponse = fullResponseAfterStream
+
+  // P2-T2 slice 1: journal the LLM response, closing the llm_request boundary.
+  if (agentState.runId && params.journalWriter) {
+    params.journalWriter.append(agentState.runId, {
+      eventType: 'llm_response',
+      // TODO(P2-T2): thread real stepNumber into runAgentStep
+      stepNumber: 0,
+      correlation: agentStepId,
+      payload: { messageId: messageId ?? null },
+    })
+  }
 
   // Credit broker/owned mutations for concurrent-instance gate isolation.
   // processStream mutates agentState.messageHistory in its finally, but the

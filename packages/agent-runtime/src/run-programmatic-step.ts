@@ -673,6 +673,26 @@ export async function runProgrammaticStep(
       } else {
         logger.error('No runId found for agent state after finishing agent run')
       }
+
+      // P2-T2 slice 1: journal the step boundary + one spawn event per newly
+      // spawned child run (P2-T2-DESIGN §2). Additive and guarded on runId.
+      if (agentState.runId && params.journalWriter) {
+        const newChildRunIds = agentState.childRunIds.slice(childrenBefore)
+        params.journalWriter.append(agentState.runId, {
+          eventType: 'step_boundary',
+          stepNumber,
+          correlation: agentStepId,
+          payload: { status: 'completed', childRunIds: newChildRunIds },
+        })
+        for (const childRunId of newChildRunIds) {
+          params.journalWriter.append(agentState.runId, {
+            eventType: 'spawn',
+            stepNumber,
+            correlation: childRunId,
+            payload: { childRunId },
+          })
+        }
+      }
       stepNumber++
 
       if (toolCall.toolName === 'end_turn') {
@@ -896,6 +916,35 @@ async function executeSingleToolCall(
 
   const idGen = params.idGen ?? realIdGen
   const toolCallId = idGen.uuid()
+
+  // P2-T2 slice 1: replay idempotency short-circuit (P2-T2-DESIGN §4c).
+  // A journaled tool_result is never re-executed on replay: if this exact
+  // toolCallId already completed before a crash, reuse the recorded result
+  // verbatim in the same shape the normal path produces (latestToolResult =
+  // toolResults[last]?.content) instead of re-running a side-effecting tool.
+  if (agentState.runId && params.journalReader) {
+    const replayed = params.journalReader.toolResultFor(
+      agentState.runId,
+      toolCallId,
+    )
+    if (replayed !== undefined) {
+      const recordedResult = (
+        replayed as { result?: ToolResultOutput[] | null }
+      ).result
+      const replayedToolMessage: ToolMessage = {
+        role: 'tool',
+        toolCallId,
+        toolName: toolCallToExecute.toolName,
+        content: (recordedResult ?? []) as ToolResultOutput[],
+      }
+      // NOTE(James): agentState.messageHistory is readonly for some reason (?!).
+      agentState.messageHistory = [...agentState.messageHistory]
+      agentState.messageHistory.push(replayedToolMessage)
+      toolResults.push(replayedToolMessage)
+      return toolResults[toolResults.length - 1]?.content
+    }
+  }
+
   const includeStructuredToolCall = toolCallToExecute.includeToolCall === true
   const excludeToolFromMessageHistory = !includeStructuredToolCall
 
@@ -927,6 +976,23 @@ async function executeSingleToolCall(
   }
 
   const toolResultsToAddToMessageHistory: ToolMessage[] = []
+
+  // P2-T2 slice 1: tool_call is the completion-marker boundary (P2-T2-DESIGN
+  // §4) and MUST be journaled before the tool executes, so a crash mid-tool is
+  // classifiable as an in-flight tool call on resume.
+  if (agentState.runId && params.journalWriter) {
+    params.journalWriter.append(agentState.runId, {
+      eventType: 'tool_call',
+      // TODO(P2-T2): thread real stepNumber into executeSingleToolCall
+      stepNumber: 0,
+      correlation: toolCallId,
+      payload: {
+        toolName: toolCallToExecute.toolName,
+        input: toolCallToExecute.input,
+      },
+    })
+  }
+
   // Execute the tool call
   await executeToolCall({
     ...params,
@@ -1009,6 +1075,21 @@ async function executeSingleToolCall(
 
   // Get the latest tool result
   const latestToolResult = toolResults[toolResults.length - 1]?.content
+
+  // P2-T2 slice 1: tool_result closes the tool_call boundary; a journaled
+  // result is what the replay short-circuit above later reuses.
+  if (agentState.runId && params.journalWriter) {
+    params.journalWriter.append(agentState.runId, {
+      eventType: 'tool_result',
+      // TODO(P2-T2): thread real stepNumber into executeSingleToolCall
+      stepNumber: 0,
+      correlation: toolCallId,
+      payload: {
+        toolName: toolCallToExecute.toolName,
+        result: latestToolResult ?? null,
+      },
+    })
+  }
 
   if (
     toolCallToExecute.includeToolCall === undefined &&

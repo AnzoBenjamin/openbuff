@@ -40,6 +40,34 @@ export interface Clock {
   now(): number
 }
 
+/** One append-only run-journal event (P2-T2). JSON-serializable payload. */
+export interface JournalEvent {
+  eventType:
+    | 'llm_request'
+    | 'llm_response'
+    | 'tool_call'
+    | 'tool_result'
+    | 'spawn'
+    | 'step_boundary'
+    | 'error'
+  stepNumber: number
+  correlation?: string | null
+  payload: unknown
+}
+
+/** Append-only journal writer (P2-T2). Mints `seq` monotonically per runId. */
+export interface JournalWriter {
+  append(runId: string, event: JournalEvent): void
+}
+
+/** Journal reader used for crash classification and replay (P2-T2). */
+export interface JournalReader {
+  lastEvent(runId: string): (JournalEvent & { seq: number }) | undefined
+  events(runId: string): Array<JournalEvent & { seq: number }>
+  /** tool_result payload for a toolCallId, if journaled (replay short-circuit). */
+  toolResultFor(runId: string, toolCallId: string): unknown | undefined
+}
+
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
   // Environment
@@ -82,6 +110,12 @@ export type AgentRuntimeDeps = {
   idGen?: IdGen
   /** Injectable wall-clock; resolves to realClock when omitted. */
   clock?: Clock
+
+  // Durable run journal (P2-T2)
+  /** Append-only run-journal writer; when omitted, no journaling occurs. */
+  journalWriter?: JournalWriter
+  /** Run-journal reader for crash classification + replay short-circuit. */
+  journalReader?: JournalReader
 }
 
 /** Per-run dependencies */
