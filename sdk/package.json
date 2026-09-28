@@ -61,6 +61,7 @@
     "@agentclientprotocol/sdk": "^1.5.0",
     "@ai-sdk/anthropic": "2.0.50",
     "@jitl/quickjs-wasmfile-release-sync": "0.31.0",
+    "@types/ws": "8.18.1",
     "@vscode/tree-sitter-wasm": "0.1.4",
     "ai": "^5.0.52",
     "diff": "8.0.3",
