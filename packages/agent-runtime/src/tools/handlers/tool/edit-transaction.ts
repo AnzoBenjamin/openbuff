@@ -349,6 +349,11 @@ export const handleEditTransaction = (async (
     requestClientToolCall,
     requestOptionalFile,
   } = params
+  // D22/PR-T4: with the edit-blocks flag enabled the provider schema accepts
+  // a raw block payload string, but the preprocess translates it into edit
+  // objects before this handler runs — a string can never reach here, and the
+  // runtime inputSchema deliberately has no string arm so this stays typed as
+  // the edit-object array.
   const edits = toolCall.input.edits.map((edit) => ({
     ...edit,
     path: normalizeToolPath(edit.path),
