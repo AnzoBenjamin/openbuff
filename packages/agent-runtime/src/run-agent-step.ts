@@ -460,6 +460,11 @@ export const runAgentStep = async (
     system: string
     n?: number
 
+    // P2-T2: 1-based step index within the agent loop (loopAgentSteps passes
+    // totalSteps). Optional and additive: omitted → journal stepNumber 0 exactly
+    // as pre-P2-T2, so other callers are unchanged.
+    stepNumber?: number
+
     trackEvent: TrackEventFn
     promptAiSdk: PromptAiSdkFn
   } & ParamsExcluding<
@@ -918,20 +923,21 @@ export const runAgentStep = async (
   let fullResponse = ''
   const toolResults: ToolMessage[] = []
 
-  // P2-T2 slice 1: journal the LLM request BEFORE the stream so a crash
-  // mid-stream is classifiable as an in-flight LLM call on resume
-  // (P2-T2-DESIGN §2). Payload is BOUNDED — model + message count only — since
-  // this is the hot path.
-  // TODO(P2-T2): full request payload capture rides a later slice
+  // P2-T2: journal the LLM request BEFORE the stream so a crash mid-stream is
+  // classifiable as an in-flight LLM call on resume (P2-T2-DESIGN §2/§4a).
+  // Slice 1 kept the payload bounded; the journal now stores the FULL request
+  // payload per §8 ('the journal stores FULL payloads ... bound via retention,
+  // not truncation') since replay re-issues recorded requests.
   if (agentState.runId && params.journalWriter) {
     params.journalWriter.append(agentState.runId, {
       eventType: 'llm_request',
-      // TODO(P2-T2): thread real stepNumber into runAgentStep
-      stepNumber: 0,
+      stepNumber: params.stepNumber ?? 0,
       correlation: agentStepId,
       payload: {
         model: agentTemplate?.model,
-        messageCount: agentState.messageHistory.length,
+        system,
+        n: params.n ?? null,
+        messages: agentState.messageHistory,
       },
     })
   }
@@ -988,14 +994,16 @@ export const runAgentStep = async (
 
   fullResponse = fullResponseAfterStream
 
-  // P2-T2 slice 1: journal the LLM response, closing the llm_request boundary.
+  // P2-T2: journal the LLM response, closing the llm_request boundary. The
+  // journaled request/response pair defaults to re-issuing the recorded
+  // request from the prior agentState checkpoint — messageId is for telemetry
+  // correlation for body-bearing providers.
   if (agentState.runId && params.journalWriter) {
     params.journalWriter.append(agentState.runId, {
       eventType: 'llm_response',
-      // TODO(P2-T2): thread real stepNumber into runAgentStep
-      stepNumber: 0,
+      stepNumber: params.stepNumber ?? 0,
       correlation: agentStepId,
-      payload: { messageId: messageId ?? null },
+      payload: { messageId: messageId ?? null, fullResponse },
     })
   }
 
@@ -2852,6 +2860,7 @@ export async function loopAgentSteps(
           n,
           prompt: currentPrompt,
           runId,
+          stepNumber: totalSteps,
           spawnParams: currentParams,
           system,
           tools,

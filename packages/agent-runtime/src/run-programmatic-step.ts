@@ -879,6 +879,9 @@ type ExecuteToolCallsArrayParams = Omit<
   agentState: AgentState
   addProgrammaticToolResultContext?: (message: Message) => void
   onResponseChunk: (chunk: string | PrintModeEvent) => void
+  // P2-T2: real step index from runProgrammaticStep's params (both internal
+  // call sites spread {...params}, so the parent value flows through).
+  stepNumber: number
 }
 
 /**
@@ -983,8 +986,7 @@ async function executeSingleToolCall(
   if (agentState.runId && params.journalWriter) {
     params.journalWriter.append(agentState.runId, {
       eventType: 'tool_call',
-      // TODO(P2-T2): thread real stepNumber into executeSingleToolCall
-      stepNumber: 0,
+      stepNumber: params.stepNumber,
       correlation: toolCallId,
       payload: {
         toolName: toolCallToExecute.toolName,
@@ -1081,8 +1083,7 @@ async function executeSingleToolCall(
   if (agentState.runId && params.journalWriter) {
     params.journalWriter.append(agentState.runId, {
       eventType: 'tool_result',
-      // TODO(P2-T2): thread real stepNumber into executeSingleToolCall
-      stepNumber: 0,
+      stepNumber: params.stepNumber,
       correlation: toolCallId,
       payload: {
         toolName: toolCallToExecute.toolName,
