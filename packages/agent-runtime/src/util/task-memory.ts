@@ -626,6 +626,8 @@ function deriveToolEvidence(params: {
   workspaceState?: WorkspaceStateV1
 }): DerivedToolEvidence {
   const { toolName, callId, output, workspaceState } = params
+  // TODO(P2-T1b): thread clock.now() into deriveToolEvidence.verifiedAt once the
+  // per-tool-result path carries the injected Clock. Not §5 replay-critical; deferred.
   const verifiedAt = Date.now()
   const source = boundText(`${toolName}:${callId}`, 1_000)
   const evidence: TaskMemoryEvidenceV1[] = []

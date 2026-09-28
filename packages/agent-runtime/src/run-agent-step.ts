@@ -147,7 +147,7 @@ import type {
   CustomToolDefinitions,
   ProjectFileContext,
 } from '@codebuff/common/util/file'
-import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
+import { realClock, realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * M1-T5: redact secrets from a message before it reaches a log sink. Handles
@@ -537,6 +537,7 @@ export const runAgentStep = async (
   // Resolve the injectable id generator once at the runtime entry so replay
   // (P2-T2) can reproduce identity ids deterministically.
   const idGen = params.idGen ?? realIdGen
+  const clock = params.clock ?? realClock
 
   // Generates a unique ID for each main prompt run (ie: a step of the agent loop)
   // This is used to link logs within a single agent loop
@@ -1070,6 +1071,7 @@ export const runAgentStep = async (
       current: agentState.taskMemory,
       draft: compactedMemoryDraft,
       expectedRevision: agentState.taskMemory?.revision ?? -1,
+      now: clock.now(),
     })
     agentState.messageHistory = [
       userMessage({
@@ -1398,6 +1400,9 @@ export async function loopAgentSteps(
   if (!agentTemplate) {
     throw new Error(`Agent template not found for type: ${agentType}`)
   }
+  // Resolve the injectable clock once at the loop entry (mirrors runAgentStep)
+  // so replay (P2-T2) can reproduce persisted-state timestamps deterministically.
+  const clock = params.clock ?? realClock
   const resolvedModelContextWindow = resolveModelContextWindow?.({
     agentId: agentTemplate.id,
     model: agentTemplate.model,
@@ -1424,6 +1429,7 @@ export async function loopAgentSteps(
   ) {
     appendOrchestrationEvent({
       state: initialAgentState,
+      now: clock.now(),
       event: {
         type: 'model_selected',
         runId: initialAgentState.runId ?? initialAgentState.agentId,
@@ -2167,7 +2173,11 @@ export async function loopAgentSteps(
             // omitted on the no-op paths).
             const evictedCandidates = evictionResult.evicted
             if (evictedCandidates && evictedCandidates.length > 0) {
-              archiveEvictedToolResults(currentAgentState, evictedCandidates)
+              archiveEvictedToolResults(
+                currentAgentState,
+                evictedCandidates,
+                clock.now(),
+              )
             }
             currentAgentState.messageHistory = evictionResult.messages
             evictedTokensThisIteration = evictionResult.tokensSaved
@@ -2308,6 +2318,7 @@ export async function loopAgentSteps(
             historyBeforeProgrammatic,
             'semantic_compaction',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
         }
         // M3-T2: incremental accounting — heap allocation for every message in
@@ -2630,6 +2641,7 @@ export async function loopAgentSteps(
             currentAgentState.messageHistory,
             'mechanical_trim',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages

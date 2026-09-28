@@ -105,6 +105,8 @@ export const handleRecordDecision = (async (params: {
         historicalSummary: '',
         evidence: [],
         revision: 0,
+        // TODO(P2-T1b): inject Clock via the tool-handler deps signature; convert
+        // updatedAt and the evidenceId timestamp for deterministic replay.
         updatedAt: Date.now(),
         checksum: 'record-decision-init',
       }

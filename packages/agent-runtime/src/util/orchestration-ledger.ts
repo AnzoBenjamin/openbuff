@@ -50,6 +50,7 @@ export function appendOrchestrationEvent(params: {
   state: AgentState
   event: OrchestrationEventDraftV1
   expectedRevision?: number
+  now?: number
 }): OrchestrationLedgerV1 {
   const current = params.state.orchestrationLedger
   const eventId = params.event.eventId ?? randomUUID()
@@ -82,7 +83,7 @@ export function appendOrchestrationEvent(params: {
     schemaVersion: 1,
     eventId,
     sequence,
-    timestamp: params.event.timestamp ?? Date.now(),
+    timestamp: params.event.timestamp ?? params.now ?? Date.now(),
   })
   const revision = (current?.revision ?? -1) + 1
   const events = compactEvents([...(current?.events ?? []), event])
@@ -117,6 +118,7 @@ export function reconcileInterruptedLedgerSpawns(state: AgentState): void {
       alreadyInterrupted.has(event.spawnId)
     )
       continue
+    // TODO(P2-T1b): pass clock.now() once spawn/lifecycle deps carry the injected Clock.
     appendOrchestrationEvent({
       state,
       event: {

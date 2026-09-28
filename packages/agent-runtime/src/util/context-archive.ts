@@ -98,12 +98,13 @@ export function archivePreCompaction(
   messages: Message[],
   action: ContextArchiveSnapshot['action'],
   keepRecentSteps: number,
+  now?: number,
 ): void {
   const source = messages
   if (archivedSources.has(source)) return
   const stored = source.slice(-MAX_ARCHIVE_MESSAGES)
   const snapshot: ContextArchiveSnapshot = {
-    archivedAt: mintArchivedAt(Date.now()),
+    archivedAt: mintArchivedAt(now ?? Date.now()),
     action,
     keepRecentSteps,
     stepBase: source.length - stored.length,
@@ -148,6 +149,7 @@ export function archiveEvictedToolResults(
     content: ToolMessage['content']
     stepIndex: number
   }>,
+  now?: number,
 ): void {
   if (evicted.length === 0) return
   const existing = agentState.compactionArchive ?? []
@@ -165,7 +167,7 @@ export function archiveEvictedToolResults(
   // must not bypass its 8×200×4k size contract. Newest entries win.
   const bounded = fresh.slice(-MAX_ARCHIVE_MESSAGES)
   const snapshot: ContextArchiveSnapshot = {
-    archivedAt: mintArchivedAt(Date.now()),
+    archivedAt: mintArchivedAt(now ?? Date.now()),
     action: 'tool_result_eviction',
     // Eviction snapshots are not tied to a recency window of the archive
     // itself; provenance lives in `steps` instead.

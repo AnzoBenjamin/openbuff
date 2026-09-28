@@ -348,6 +348,12 @@ function createBackgroundAgentJobRecord(params: {
     agentName,
     owner,
     status: 'running',
+    // TODO(P2-T1b): thread injected Clock through background-agent-jobs deps.
+    // startedAt/completedAt are replay-critical (P2-T2-DESIGN §5) but these
+    // module-level lifecycle fns receive no deps; converting cleanly requires
+    // clock threading through spawn/lifecycle handlers. Deferred to keep the
+    // slice bounded (mirrors slice-1 tool-stream-parser deferral). Until then,
+    // P2-T2 replay reconstructs these timestamps from the journal, not recompute.
     startedAt: startedCoreJob.startedAt ?? Date.now(),
     chunks: [],
     readOffset: 0,

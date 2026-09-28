@@ -34,6 +34,12 @@ export interface IdGen {
   prefixedId(prefix: string, separator?: string): string
 }
 
+/** Deterministic wall-clock (P2-T1). */
+export interface Clock {
+  /** replaces Date.now() for persisted state-timestamps */
+  now(): number
+}
+
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
   // Environment
@@ -74,6 +80,8 @@ export type AgentRuntimeDeps = {
   // Determinism (P2-T1)
   /** Injectable id generator; resolves to realIdGen when omitted. */
   idGen?: IdGen
+  /** Injectable wall-clock; resolves to realClock when omitted. */
+  clock?: Clock
 }
 
 /** Per-run dependencies */

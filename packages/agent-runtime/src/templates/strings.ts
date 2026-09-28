@@ -167,6 +167,8 @@ export async function formatPrompt(
   const toInject: Record<PlaceholderValue, () => string | Promise<string>> = {
     [PLACEHOLDER.AGENT_NAME]: () =>
       agentTemplate ? agentTemplate.displayName || 'Unknown Agent' : 'Buffy',
+    // NOTE(P2-T1): CURRENT_DATE is non-persisted prompt content, intentionally NOT
+    // clock-injected. If prompt-identical replay is later required, thread Clock here.
     [PLACEHOLDER.CURRENT_DATE]: () => formatCurrentDate(new Date()),
     [PLACEHOLDER.FILE_TREE_PROMPT_SMALL]: () =>
       getProjectFileTreePrompt({
