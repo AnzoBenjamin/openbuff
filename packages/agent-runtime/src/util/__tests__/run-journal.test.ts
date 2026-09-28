@@ -1,15 +1,19 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, it } from 'bun:test'
 
+import { reconcileInterruptedBackgroundAgentIntents } from '../background-agent-jobs'
 import {
   classifyChildRun,
   classifyRunResume,
   createRunJournal,
+  DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES,
   executeChildReplay,
+  planBackgroundAgentResume,
   planChildResume,
 } from '../run-journal'
 
 import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 /** Deterministic clock so created_at is reproducible in tests. */
 const fixedClock = { now: () => 1_000 }
@@ -560,5 +564,153 @@ describe('nested child spawn resume (P2-T2-DESIGN §4d)', () => {
     } finally {
       journal.close()
     }
+  })
+})
+
+describe('background agent resume policy (P2-T2-DESIGN §4d slice 3)', () => {
+  type Intent = NonNullable<AgentState['backgroundAgentJobs']>[number]
+  const interrupted = (jobId: string, agentType: string): Intent => ({
+    jobId,
+    agentType,
+    status: 'interrupted',
+    startedAt: 1_000,
+    completedAt: 2_000,
+  })
+
+  it('interrupted background job is reconciled then re-spawned from its intent', () => {
+    const state = {
+      backgroundAgentJobs: [
+        {
+          jobId: 'bg-gone-1',
+          agentType: 'file-picker',
+          status: 'running',
+          startedAt: 1_000,
+        },
+        {
+          jobId: 'bg-gone-2',
+          agentType: 'editor',
+          status: 'running',
+          startedAt: 1_000,
+        },
+        {
+          jobId: 'bg-done',
+          agentType: 'thinker',
+          status: 'completed',
+          startedAt: 1_000,
+          completedAt: 2_000,
+        },
+      ],
+    } as unknown as AgentState
+
+    // The jobIds are not in the live registry: the host process "died".
+    reconcileInterruptedBackgroundAgentIntents(state, 5_000)
+    const [gone1, gone2, done] = state.backgroundAgentJobs!
+    expect(gone1.status).toBe('interrupted')
+    expect(gone1.completedAt).toBe(5_000)
+    expect(gone2.status).toBe('interrupted')
+    expect(gone2.completedAt).toBe(5_000)
+    expect(done.status).toBe('completed')
+    expect(done.completedAt).toBe(2_000)
+
+    expect(
+      planBackgroundAgentResume({ intents: state.backgroundAgentJobs! }),
+    ).toEqual([
+      { kind: 'respawn', jobId: 'bg-gone-1', agentType: 'file-picker' },
+      {
+        kind: 'needs_confirmation',
+        jobId: 'bg-gone-2',
+        agentType: 'editor',
+        reason: expect.any(String),
+      },
+      { kind: 'skip_terminal', jobId: 'bg-done', status: 'completed' },
+    ])
+  })
+
+  it('still-running intent is reported, not re-spawned', () => {
+    expect(
+      planBackgroundAgentResume({
+        intents: [
+          {
+            jobId: 'bg-live',
+            agentType: 'file-picker',
+            status: 'running',
+            startedAt: 1_000,
+          },
+        ],
+      }),
+    ).toEqual([{ kind: 'still_running', jobId: 'bg-live' }])
+  })
+
+  it('re-plan is idempotent once the re-spawn is journaled', () => {
+    const journal = makeJournal()
+    try {
+      const intents = [interrupted('bg-x', 'file-picker')]
+      const plan = () =>
+        planBackgroundAgentResume({
+          intents,
+          reader: journal,
+          parentRunId: 'parent-bg',
+        })
+      expect(plan()).toEqual([
+        { kind: 'respawn', jobId: 'bg-x', agentType: 'file-picker' },
+      ])
+
+      // Non-matching spawn markers must not count.
+      journal.append('parent-bg', {
+        eventType: 'spawn',
+        stepNumber: 1,
+        correlation: 'child-a',
+        payload: 'bg-x',
+      })
+      journal.append('parent-bg', {
+        eventType: 'spawn',
+        stepNumber: 2,
+        correlation: 'child-b',
+        payload: { respawnOf: 'other' },
+      })
+      expect(plan()).toEqual([
+        { kind: 'respawn', jobId: 'bg-x', agentType: 'file-picker' },
+      ])
+
+      journal.append('parent-bg', {
+        eventType: 'spawn',
+        stepNumber: 3,
+        correlation: 'child-respawn',
+        payload: { respawnOf: 'bg-x' },
+      })
+      const respawnSeq = journal.lastEvent('parent-bg')!.seq
+      expect(plan()).toEqual([
+        { kind: 'already_respawned', jobId: 'bg-x', respawnSpawnSeq: respawnSeq },
+      ])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('custom isRerunnable overrides the default allowlist', () => {
+    expect(
+      planBackgroundAgentResume({
+        intents: [interrupted('bg-e', 'editor')],
+        isRerunnable: () => true,
+      }),
+    ).toEqual([{ kind: 'respawn', jobId: 'bg-e', agentType: 'editor' }])
+    expect(
+      planBackgroundAgentResume({
+        intents: [interrupted('bg-f', 'file-picker')],
+        isRerunnable: () => false,
+      }),
+    ).toEqual([
+      {
+        kind: 'needs_confirmation',
+        jobId: 'bg-f',
+        agentType: 'file-picker',
+        reason: expect.any(String),
+      },
+    ])
+  })
+
+  it('default allowlist excludes side-effecting agents', () => {
+    expect(DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES.has('editor')).toBe(false)
+    expect(DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES.has('basher')).toBe(false)
   })
 })

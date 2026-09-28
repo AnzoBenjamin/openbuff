@@ -28,6 +28,7 @@ import type {
   JournalReader,
   JournalWriter,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 /**
  * Narrow structural subset of the bun:sqlite `Database` API this module uses,
@@ -381,4 +382,117 @@ export function executeChildReplay(
     case 'child_unknown':
       return { kind: 'child_unknown', childRunId }
   }
+}
+
+/** One durable background-agent intent persisted on the parent AgentState. */
+export type BackgroundAgentIntent = NonNullable<
+  AgentState['backgroundAgentJobs']
+>[number]
+
+/**
+ * P2-T2-DESIGN §4d idempotency guard: read-only agent types whose
+ * re-execution has no workspace side effects, so an interrupted intent can be
+ * re-spawned without confirmation.
+ */
+export const DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES: ReadonlySet<string> =
+  new Set([
+    'file-picker',
+    'researcher-web',
+    'researcher-docs',
+    'librarian',
+    'thinker',
+    'code-reviewer',
+  ])
+
+export type BackgroundResumeDecision =
+  | { kind: 'respawn'; jobId: string; agentType: string }
+  | { kind: 'already_respawned'; jobId: string; respawnSpawnSeq: number }
+  | {
+      kind: 'needs_confirmation'
+      jobId: string
+      agentType: string
+      reason: string
+    }
+  | {
+      kind: 'skip_terminal'
+      jobId: string
+      status: 'completed' | 'error' | 'cancelled'
+    }
+  | { kind: 'still_running'; jobId: string }
+
+/**
+ * P2-T2-DESIGN §4d / §9 slice 3: background-agent resume policy.
+ *
+ * Background agents are process-scoped, so a kill-9 destroys the coroutine.
+ * The default policy is re-spawn-from-intent: an `interrupted` intent (see
+ * reconcileInterruptedBackgroundAgentIntents, which the caller must run first;
+ * this planner never mutates state) is re-spawned when its agent type is known
+ * to be idempotent, otherwise it needs confirmation. A caller that re-spawns
+ * must journal a parent `spawn` event whose payload includes
+ * `respawnOf: <original jobId>`; that marker makes re-planning idempotent.
+ * Resume-from-own-journal for background agents is deferred until background
+ * coroutines journal their own stream.
+ */
+export function planBackgroundAgentResume(params: {
+  intents: ReadonlyArray<BackgroundAgentIntent>
+  reader?: JournalReader
+  parentRunId?: string
+  isRerunnable?: (agentType: string) => boolean
+}): BackgroundResumeDecision[] {
+  const isRerunnable =
+    params.isRerunnable ??
+    ((agentType: string) =>
+      DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES.has(agentType))
+  const parentSpawns =
+    params.reader && params.parentRunId
+      ? params.reader
+          .events(params.parentRunId)
+          .filter((event) => event.eventType === 'spawn')
+      : []
+
+  return params.intents.map((intent): BackgroundResumeDecision => {
+    switch (intent.status) {
+      case 'running':
+        return { kind: 'still_running', jobId: intent.jobId }
+      case 'completed':
+      case 'error':
+      case 'cancelled':
+        return {
+          kind: 'skip_terminal',
+          jobId: intent.jobId,
+          status: intent.status,
+        }
+      case 'interrupted': {
+        const respawn = parentSpawns.find((event) => {
+          const payload = event.payload
+          return (
+            typeof payload === 'object' &&
+            payload !== null &&
+            (payload as Record<string, unknown>).respawnOf === intent.jobId
+          )
+        })
+        if (respawn) {
+          return {
+            kind: 'already_respawned',
+            jobId: intent.jobId,
+            respawnSpawnSeq: respawn.seq,
+          }
+        }
+        if (isRerunnable(intent.agentType)) {
+          return {
+            kind: 'respawn',
+            jobId: intent.jobId,
+            agentType: intent.agentType,
+          }
+        }
+        return {
+          kind: 'needs_confirmation',
+          jobId: intent.jobId,
+          agentType: intent.agentType,
+          reason:
+            'agent type is not known to be idempotent; re-running may repeat workspace side effects',
+        }
+      }
+    }
+  })
 }
