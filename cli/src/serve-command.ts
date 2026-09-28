@@ -15,8 +15,13 @@ import type { ServeBridgeClient } from '@openbuff/sdk'
  * optional caller-supplied token.
  */
 export type ServeCommandArgs =
-  | { transport: 'stdio' }
-  | { transport: 'socket'; socketPath: string; token?: string }
+  | { transport: 'stdio'; agentId?: string }
+  | {
+      transport: 'socket'
+      socketPath: string
+      token?: string
+      agentId?: string
+    }
 
 /**
  * Fully-injectable seams for `runAcpServeCommand`. Every dependency defaults
@@ -74,6 +79,7 @@ export async function runAcpServeCommand(
       client,
       sessionData,
       transport: { kind: 'stdio' },
+      agentId: args.agentId,
       signal: deps?.signal,
     })
   }
@@ -83,6 +89,7 @@ export async function runAcpServeCommand(
     client,
     sessionData,
     transport: { kind: 'socket', socketPath: args.socketPath, token },
+    agentId: args.agentId,
     signal: deps?.signal,
   })
   // Connection info to STDERR so a client can connect; token never hits stdout.

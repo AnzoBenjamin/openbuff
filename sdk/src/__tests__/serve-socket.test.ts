@@ -15,6 +15,11 @@ import type { Client, Stream } from '@agentclientprotocol/sdk'
 
 import { serveAcpOverSocket } from '../serve/socket-listener'
 import type { ServeAcpOverSocketOptions } from '../serve/socket-listener'
+import { createServeBridge } from '../serve/bridge'
+import type { ServeBridgeClient } from '../serve/bridge'
+import { AcpSessionData } from '../services/acp/session-data'
+import type { RunState } from '../run-state'
+import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 
 async function waitFor(
   predicate: () => boolean,
@@ -74,6 +79,7 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
   function connectAuthedClient(
     socketPath: string,
     token: string,
+    onSessionUpdate?: (params: Parameters<Client['sessionUpdate']>[0]) => void,
   ): { client: ClientSideConnection; socket: Socket } {
     const socket = connect(socketPath)
     sockets.push(socket)
@@ -88,7 +94,11 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
       requestPermission: async () => {
         throw new Error('requestPermission must not be called by the skeleton')
       },
-      sessionUpdate: async () => {},
+      // A no-op by default; when a sink is passed, session/update notifications
+      // (e.g. agent_message_chunk) are surfaced to the test.
+      sessionUpdate: async (params) => {
+        onSessionUpdate?.(params)
+      },
     }
     const client = new ClientSideConnection(() => fakeClient, stream)
     return { client, socket }
@@ -113,6 +123,94 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
     })
     expect(initialized.protocolVersion).toBe(PROTOCOL_VERSION)
     expect(initialized.agentCapabilities).toEqual({ loadSession: true })
+  })
+
+  test('e2e: a full prompt turn through the serve bridge carries only sanitized JSON-RPC on the wire', async () => {
+    const socketPath = join(dir, 'e2e.sock')
+    const token = 'e2e-token'
+
+    // The tool_call payload string that MUST NOT reach the client: the bridge
+    // structurally drops tool_call events, so no chunk should contain it.
+    const toolCallMarker = 'read_files-tool-call-should-be-dropped'
+
+    // FAKE client: its `.run` drives handleEvent with the scripted PrintMode
+    // events (text -> forwarded, cap.v3 text -> forwarded redacted, tool_call
+    // -> dropped), then resolves a minimal RunState-ish object. No process
+    // spawning; mirrors serve-bridge.test.ts's makeFakeClient RunState shape.
+    const fakeRunClient: ServeBridgeClient = {
+      async run(runOptions) {
+        const events: PrintModeEvent[] = [
+          { type: 'text', text: 'hello from agent' },
+          { type: 'text', text: 'token cap.v3.AAAA.BBBB.CCCC leak' },
+          {
+            type: 'tool_call',
+            toolCallId: 't1',
+            toolName: 'read_files',
+            input: { marker: toolCallMarker },
+          },
+        ]
+        for (const event of events) {
+          await runOptions.handleEvent?.(event)
+        }
+        return { output: { type: 'error', message: 'done' } } as RunState
+      },
+    }
+
+    const { promptHandler } = createServeBridge({
+      client: fakeRunClient,
+      sessionData: new AcpSessionData(),
+    })
+
+    // startServer spreads overrides over its default promptHandler, so passing
+    // promptHandler here replaces the stub with the real bridge handler.
+    let listening = false
+    startServer({
+      socketPath,
+      token,
+      promptHandler,
+      onListening: () => {
+        listening = true
+      },
+    })
+    await waitFor(() => listening)
+
+    // Capture every agent_message_chunk text delivered via session/update.
+    const chunks: string[] = []
+    const { client } = connectAuthedClient(socketPath, token, (params) => {
+      const update = params.update
+      if (
+        update.sessionUpdate === 'agent_message_chunk' &&
+        update.content.type === 'text'
+      ) {
+        chunks.push(update.content.text)
+      }
+    })
+
+    await client.initialize({ protocolVersion: PROTOCOL_VERSION })
+    const session = await client.newSession({ cwd: dir, mcpServers: [] })
+    const response = await client.prompt({
+      sessionId: session.sessionId,
+      prompt: [{ type: 'text', text: 'do it' }],
+    })
+
+    expect(response.stopReason).toBe('end_turn')
+
+    // The two text events forward as chunks; the tool_call event is dropped.
+    await waitFor(() => chunks.length >= 2)
+
+    // (a) The plain assistant text reached the client verbatim.
+    expect(chunks).toContain('hello from agent')
+
+    // (b) The cap.v3 token arrived REDACTED: no chunk carries the raw token,
+    // and the redaction marker proves sanitizeOutbound ran on the socket path.
+    expect(chunks.some((chunk) => chunk.includes('cap.v3.'))).toBe(false)
+    expect(chunks.some((chunk) => chunk.includes('[REDACTED_CAPABILITY]'))).toBe(
+      true,
+    )
+
+    // (c) The tool_call event was structurally dropped: no chunk carries its
+    // payload marker.
+    expect(chunks.some((chunk) => chunk.includes(toolCallMarker))).toBe(false)
   })
 
   test('bad token destroys the connection and reports onAuthFailure', async () => {

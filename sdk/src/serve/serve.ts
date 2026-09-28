@@ -23,6 +23,8 @@ export type RunServeOptions = {
   client: ServeBridgeClient
   /** Live per-session store backing the read-only ACP extension methods. */
   sessionData: AcpSessionData
+  /** Which Openbuff agent each prompt turn runs in the bridge. Defaults to 'base'. */
+  agentId?: string
   /** Transport selection: stdio (default) or a unix domain socket. NO TCP. */
   transport:
     | { kind: 'stdio' }
@@ -42,8 +44,13 @@ export type RunServeOptions = {
 export function runServe(options: RunServeOptions): {
   close: () => Promise<void>
 } {
-  const { client, sessionData, transport, logger, signal } = options
-  const { promptHandler } = createServeBridge({ client, sessionData, logger })
+  const { client, sessionData, transport, logger, signal, agentId } = options
+  const { promptHandler } = createServeBridge({
+    client,
+    sessionData,
+    logger,
+    agentId,
+  })
 
   if (transport.kind === 'stdio') {
     // serveAcpOverStdio applies resolveAcpServeOptions internally (confirmed in

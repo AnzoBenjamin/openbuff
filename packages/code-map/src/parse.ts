@@ -608,27 +608,6 @@ function resolveWithinProjectRoot(
   return resolved
 }
 
-/**
- * Resolve a caller-supplied relative path onto projectRoot safely: rejects
- * absolute paths, '..' segments, and NUL before joining, then resolves and
- * verifies the final absolute path stays under projectRoot. Returns null for
- * any path that would escape the project root.
- */
-function resolveWithinProjectRoot(
-  projectRoot: string,
-  filePath: string,
-): string | null {
-  if (filePath.includes('\0')) return null
-  const normalized = filePath.replace(/\\/g, '/').replace(/^\.\//, '')
-  if (!normalized) return null
-  if (path.isAbsolute(filePath) || normalized.startsWith('/')) return null
-  if (normalized.split('/').includes('..')) return null
-  const resolved = path.resolve(projectRoot, normalized)
-  const root = path.resolve(projectRoot)
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null
-  return resolved
-}
-
 function getKnownFileSize(filePath: string): number {
   try {
     return fs.statSync(filePath).size

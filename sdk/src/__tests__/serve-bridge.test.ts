@@ -367,4 +367,106 @@ describe('createServeBridge', () => {
 
     expect(result.stopReason).toBe('end_turn')
   })
+
+  test('attaches marked client MCP servers to client.run at client origin (same identity)', async () => {
+    const sessionData = new AcpSessionData()
+    let marked: Record<string, MCPConfig> | undefined
+    let captured: (RunOptions & OpenbuffClientOptions) | undefined
+    const client = makeFakeClient({
+      beforeResolve: (runOptions) => {
+        captured = runOptions
+      },
+    })
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      markClientMcpServers: (record) => {
+        marked = record
+      },
+    })
+    const mcpServers: McpServer[] = [
+      {
+        name: 'local',
+        command: 'node',
+        args: ['server.js'],
+        env: [{ name: 'TOKEN', value: '$SECRET' }],
+      },
+      {
+        type: 'http',
+        name: 'remote',
+        url: 'https://example.com/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer abc' }],
+      },
+      { type: 'acp', name: 'acp-srv', serverId: 'acp-1' },
+    ]
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+      mcpServers,
+    })
+
+    expect(captured?.mcpServers).toBeDefined()
+    // The acp-type server has no core transport equivalent and is skipped.
+    expect(Object.keys(captured!.mcpServers!).sort()).toEqual([
+      'local',
+      'remote',
+    ])
+    for (const config of Object.values(captured!.mcpServers!)) {
+      expect(originOf(config)).toBe('client')
+    }
+    // The exact same marked object reaches both the run seam and the host hook,
+    // proving the identity-keyed WeakMap origin marks survive the attach.
+    expect(captured!.mcpServers).toBe(marked)
+  })
+
+  test('passes no mcpServers to client.run when none are advertised, and still runs', async () => {
+    const sessionData = new AcpSessionData()
+    let captured: (RunOptions & OpenbuffClientOptions) | undefined
+    let ran = false
+    const client = makeFakeClient({
+      beforeResolve: (runOptions) => {
+        captured = runOptions
+        ran = true
+      },
+    })
+    const { promptHandler } = createServeBridge({ client, sessionData })
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+      mcpServers: [],
+    })
+    expect(ran).toBe(true)
+    expect(captured?.mcpServers).toBeUndefined()
+
+    // A second dispatch with NO mcpServers at all. Use a FRESH capture var so
+    // TS control-flow does not narrow a reused-then-reset variable to
+    // `undefined` (the closure re-assignment is invisible to the type checker,
+    // which would otherwise make `.mcpServers` an access on `never`).
+    let capturedAbsent: (RunOptions & OpenbuffClientOptions) | undefined
+    let ranAbsent = false
+    const clientAbsent = makeFakeClient({
+      beforeResolve: (runOptions) => {
+        capturedAbsent = runOptions
+        ranAbsent = true
+      },
+    })
+    const { promptHandler: promptHandlerAbsent } = createServeBridge({
+      client: clientAbsent,
+      sessionData,
+    })
+    await promptHandlerAbsent({
+      sessionId: 's2',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+    expect(ranAbsent).toBe(true)
+    expect(capturedAbsent?.mcpServers).toBeUndefined()
+  })
 })

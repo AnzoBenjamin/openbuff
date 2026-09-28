@@ -97,21 +97,24 @@ export function createServeBridge(options: ServeBridgeOptions): {
     }
 
     // Ingest trust boundary (P1-T2 SEC): mark every client-advertised MCP
-    // server 'client' origin BEFORE the run so any such server the host later
-    // attaches is already untrusted for the run loop's per-tool approval gate
-    // and SSRF guard. Marking is idempotent (an existing 'client' mark is never
-    // upgraded), so re-marking across turns is safe. The core RunOptions has no
-    // mcpServers param — the bridge ONLY marks them client-origin and hands
-    // them to the host via markClientMcpServers; attaching them is the host's
-    // job.
-    if (
-      options.markClientMcpServers &&
-      Array.isArray(input.mcpServers) &&
-      input.mcpServers.length > 0
-    ) {
-      const clientMcpServers = acpMcpServersToConfigRecord(input.mcpServers)
+    // server 'client' origin BEFORE the run so any such server that reaches the
+    // run loop is already untrusted for the per-tool approval gate and SSRF
+    // guard. Marking is idempotent (an existing 'client' mark is never
+    // upgraded), so re-marking across turns is safe.
+    //
+    // The bridge now ATTACHES these client-advertised servers to the run via
+    // client.run({ mcpServers }) at 'client' origin (previously they were only
+    // handed to the host via markClientMcpServers). The SAME marked record is
+    // both attached to the run and passed to the optional markClientMcpServers
+    // observability hook, so the WeakMap origin marks — keyed by config object
+    // identity — survive to the run loop's getMCPToolData /
+    // resolveMCPConfigOrigin. When the client advertised no servers, nothing is
+    // attached and that path is unchanged.
+    let clientMcpServers: Record<string, MCPConfig> | undefined
+    if (Array.isArray(input.mcpServers) && input.mcpServers.length > 0) {
+      clientMcpServers = acpMcpServersToConfigRecord(input.mcpServers)
       markAllMCPConfigOrigins(clientMcpServers, 'client')
-      options.markClientMcpServers(clientMcpServers)
+      options.markClientMcpServers?.(clientMcpServers)
     }
 
     await client.run({
@@ -121,6 +124,7 @@ export function createServeBridge(options: ServeBridgeOptions): {
       onFilesystemMutation: (event: FilesystemMutationEvent) =>
         sessionData.recordReceiptFromMutationEvent(input.sessionId, event),
       signal: input.signal,
+      ...(clientMcpServers ? { mcpServers: clientMcpServers } : {}),
     })
 
     // A run that ended via the abort signal maps to 'cancelled'; a naturally

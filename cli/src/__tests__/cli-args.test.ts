@@ -101,4 +101,25 @@ describe('serve subcommand parsing', () => {
       token: 'abc',
     })
   })
+
+  test('parses --agent into serve.agentId for stdio', () => {
+    expect(parse(['serve', '--agent', 'foo']).serve).toEqual({
+      transport: 'stdio',
+      agentId: 'foo',
+    })
+  })
+
+  test('parses --socket with --agent', () => {
+    expect(
+      parse(['serve', '--socket', '/tmp/x.sock', '--agent', 'foo']).serve,
+    ).toEqual({
+      transport: 'socket',
+      socketPath: '/tmp/x.sock',
+      agentId: 'foo',
+    })
+  })
+
+  test('leaves serve.agentId undefined for bare serve', () => {
+    expect(parse(['serve']).serve?.agentId).toBeUndefined()
+  })
 })

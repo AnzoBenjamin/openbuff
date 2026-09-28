@@ -14,6 +14,7 @@ import {
   callMCPTool,
   resolveMCPConfigOrigin,
 } from '@codebuff/common/mcp/client'
+import type { MCPConfig } from '@codebuff/common/types/mcp'
 import { toolNames } from '@codebuff/common/tools/constants'
 import {
   fileMutationResultV1Schema,
@@ -230,6 +231,17 @@ export type OpenbuffClientOptions = {
   projectFiles?: Record<string, string>
   knowledgeFiles?: Record<string, string>
   agentDefinitions?: AgentDefinition[]
+  /**
+   * Host-supplied MCP servers to attach to the agent being run. They are
+   * merged (by object REFERENCE, never cloned) into the resolved agent
+   * template's `mcpServers` after the session state is built, so the run
+   * loop's getMCPToolData picks them up. Callers that need these treated as
+   * untrusted (e.g. the serve bridge, for client-advertised servers) mark them
+   * with markAllMCPConfigOrigins BEFORE passing them here; run() never
+   * re-marks or clones them, so the identity-keyed origin marks survive to
+   * resolveMCPConfigOrigin.
+   */
+  mcpServers?: Record<string, MCPConfig>
   maxAgentSteps?: number
   env?: Record<string, string>
   /** Harness control-plane state root. Defaults to the Openbuff config directory. */
@@ -594,6 +606,7 @@ async function runOnce({
   projectFiles,
   knowledgeFiles,
   agentDefinitions,
+  mcpServers,
   maxAgentSteps = MAX_AGENT_STEPS_DEFAULT,
   env,
   harnessStateDir,
@@ -816,6 +829,26 @@ async function runOnce({
       logger,
       workspaceMoves: persistedWorkspaceMoves,
     })
+  }
+  // Attach host-supplied MCP servers to the RESOLVED agent template so the run
+  // loop's getMCPToolData reads them. This runs AFTER sessionState is fully
+  // built (post initialSessionState / applyOverridesToSessionState, both of
+  // which JSON-clone), so merging the SAME MCPConfig object references here is
+  // never cloned again. Object identity MUST be preserved: origin marks are
+  // recorded in the mcpConfigOrigins WeakMap keyed by config object identity,
+  // so cloning would strip the caller's 'client' marks and
+  // getMCPToolData / resolveMCPConfigOrigin would no longer see them. run()
+  // never re-marks or re-origins them — it only merges references. Scoped to
+  // the single resolved agentId's template; if that template is missing this
+  // no-ops safely.
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    const targetTemplate = sessionState.fileContext.agentTemplates?.[agentId]
+    if (targetTemplate) {
+      targetTemplate.mcpServers = {
+        ...targetTemplate.mcpServers,
+        ...mcpServers,
+      }
+    }
   }
   // Snapshot the hydrated task memory so post-run persistence can merge the
   // final memory into it. The runtime replaces this property rather than

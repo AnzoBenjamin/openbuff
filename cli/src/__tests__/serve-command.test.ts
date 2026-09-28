@@ -126,4 +126,16 @@ describe('runAcpServeCommand', () => {
 
     expect(h.journalDirsSeen).toEqual([{ journalDir: '/custom/acp-journal' }])
   })
+
+  test('threads agentId into the runServeImpl call', async () => {
+    const h = makeHarness()
+    const args: ServeCommandArgs = { transport: 'stdio', agentId: 'my-agent' }
+
+    await runAcpServeCommand(args, h.deps)
+
+    expect(h.runServeCalls).toHaveLength(1)
+    expect((h.runServeCalls[0] as { agentId?: string }).agentId).toBe(
+      'my-agent',
+    )
+  })
 })
