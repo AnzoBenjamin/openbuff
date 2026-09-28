@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -617,22 +617,19 @@ describe('resolveAcpServeOptions load→restore integration', () => {
       }),
     )
 
-    // A SECOND fresh store starts empty; the derived loadHandler must replay
-    // the journal it finds on disk.
-    const second = new AcpSessionData({ journalDir })
-    // Poll for the fire-and-forget journal writes from the first store to
-    // settle before restore reads them back. Use a bounded async loop so the
-    // journal reads can be awaited without handing an async predicate to
-    // waitFor, which expects a synchronous () => boolean.
+    // The first store's journal writes are fire-and-forget; settle them by
+    // polling the on-disk file directly (both the receipt and gate-state
+    // lines) before the load path reads them back.
+    const journalFile = join(journalDir, `${sessionId}.jsonl`)
     for (let attempt = 0; attempt < 200; attempt++) {
-      await second.restoreFromJournal(sessionId)
-      if (second.getReceipts(sessionId).receipts.length > 0) {
+      const text = existsSync(journalFile) ? readFileSync(journalFile, 'utf8') : ''
+      if (text.includes('"receipt_envelope"') && text.includes('"gate_state"')) {
         break
       }
       await new Promise((r) => setTimeout(r, 10))
     }
-    // Reset the second store's in-memory state by using a brand new store for
-    // the actual load path so the derived handler does the replaying.
+    // A fresh store starts empty; the derived loadHandler must replay the
+    // settled journal it finds on disk.
     const loadStore = new AcpSessionData({ journalDir })
 
     const { connection } = makeRecordingConnection()

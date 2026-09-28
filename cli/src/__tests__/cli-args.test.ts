@@ -65,3 +65,40 @@ describe('production CLI argument parser', () => {
     },
   )
 })
+
+describe('serve subcommand parsing', () => {
+  test('leaves serve undefined when the subcommand is not used', () => {
+    expect(parse([]).serve).toBeUndefined()
+    expect(parse(['hello']).serve).toBeUndefined()
+  })
+
+  test('parses bare `serve` as stdio transport', () => {
+    expect(parse(['serve']).serve).toEqual({ transport: 'stdio' })
+  })
+
+  test('parses --stdio as stdio transport', () => {
+    expect(parse(['serve', '--stdio']).serve).toEqual({ transport: 'stdio' })
+  })
+
+  test('errors when --socket is given without a path', () => {
+    expect(() => parse(['serve', '--socket'])).toThrow()
+  })
+
+  test('parses --socket with a path', () => {
+    expect(parse(['serve', '--socket', '/tmp/x.sock']).serve).toEqual({
+      transport: 'socket',
+      socketPath: '/tmp/x.sock',
+    })
+  })
+
+  test('parses --socket with a path and --socket-token', () => {
+    expect(
+      parse(['serve', '--socket', '/tmp/x.sock', '--socket-token', 'abc'])
+        .serve,
+    ).toEqual({
+      transport: 'socket',
+      socketPath: '/tmp/x.sock',
+      token: 'abc',
+    })
+  })
+})

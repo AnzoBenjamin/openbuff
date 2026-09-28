@@ -140,6 +140,13 @@ export type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 export * from './client'
+export { createServeBridge } from './serve/bridge'
+export type { ServeBridgeClient, ServeBridgeOptions } from './serve/bridge'
+export { sanitizeOutbound } from './serve/outbound-filter'
+export { serveAcpOverSocket } from './serve/socket-listener'
+export type { ServeAcpOverSocketOptions } from './serve/socket-listener'
+export { runServe } from './serve/serve'
+export type { RunServeOptions } from './serve/serve'
 export * from './custom-tool'
 export * from './native/ripgrep'
 export * from './run-state'

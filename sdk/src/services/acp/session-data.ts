@@ -6,6 +6,32 @@ import type {
 } from '@codebuff/common/tools/results/filesystem'
 
 /**
+ * Structural mirror of the run loop's `FilesystemMutationEvent`
+ * (sdk/src/run.ts). Declared locally rather than imported to avoid an sdk
+ * run.ts → session-data.ts import cycle: run.ts pulls in the entire tool
+ * surface, so even a type-only import risks a cycle, and the shape here is
+ * tiny and stable. This is the run-loop's confirmed-mutation channel
+ * (workspaceRevision/snapshotId correlated); it carries only paths/hashes/ids
+ * and already excludes `afterContent`/`patch`/`editAnchor`, so recording it is
+ * redaction-preserving by construction.
+ */
+type FilesystemMutationEventLike = {
+  toolName: string
+  callId: string
+  operationId: string
+  receiptId?: string
+  workspaceRevision: number
+  workspaceSnapshotId: string
+  actions: Array<{
+    action: 'create' | 'update' | 'delete' | 'move'
+    path: string
+    destinationPath?: string
+    beforeHash: string | null
+    afterHash: string | null
+  }>
+}
+
+/**
  * Bounded per-session live data backing the read-only Openbuff ACP extension
  * methods (`openbuff/getReceipts`, `openbuff/gateState`). The P1-T2 run loop
  * records real `FileMutationResultV1` receipts and published gate-state
@@ -375,7 +401,77 @@ export class AcpSessionData {
     mutation: FileMutationResultV1,
     toolCallId?: string,
   ): void {
-    const envelope = toWireReceipt(mutation, sessionId, toolCallId)
+    this.pushEnvelope(sessionId, toWireReceipt(mutation, sessionId, toolCallId))
+  }
+
+  /**
+   * Records a redacted receipt directly from the run loop's
+   * `FilesystemMutationEvent` — its confirmed-mutation channel
+   * (workspaceRevision/snapshotId correlated). That event already carries no
+   * content-bearing fields (`afterContent`/`patch`/`editAnchor` are excluded by
+   * construction) — only paths, hashes, and ids — so projecting it into an
+   * envelope is redaction-preserving with nothing content-bearing to drop. The
+   * event's actions have no `actionId`, so a stable synthetic id
+   * (`${operationId}:${index}`) is used, and `freshCapabilities` is `[]` since
+   * no cap.v3 token ever rides this channel.
+   */
+  recordReceiptFromMutationEvent(
+    sessionId: string,
+    event: FilesystemMutationEventLike,
+    toolCallId?: string,
+  ): void {
+    const actions: FileMutationActionV1[] = event.actions.map(
+      (action, index) => ({
+        actionId: `${event.operationId}:${index}`,
+        index,
+        action: action.action,
+        path: action.path,
+        ...(action.destinationPath !== undefined
+          ? { destinationPath: action.destinationPath }
+          : {}),
+        outcome: 'applied' as const,
+        beforeHash: action.beforeHash,
+        afterHash: action.afterHash,
+      }),
+    )
+    const mutation: FileMutationResultV1 = {
+      kind: 'file_mutation_result',
+      version: 1,
+      operationId: event.operationId,
+      outcome: 'applied',
+      actions,
+      authorityTier: 'conditional_commit',
+      ...(event.receiptId !== undefined ? { receiptId: event.receiptId } : {}),
+      workspaceRevision: event.workspaceRevision,
+      workspaceSnapshotId: event.workspaceSnapshotId,
+      errors: [],
+      freshCapabilities: [],
+    }
+    const envelope: AcpWireReceiptEnvelope = {
+      kind: 'openbuff.receipt_envelope',
+      version: 1,
+      sessionId,
+      laneId: 'main',
+      mutation,
+    }
+    if (toolCallId !== undefined) {
+      envelope.toolCallId = toolCallId
+    }
+    this.pushEnvelope(sessionId, envelope)
+  }
+
+  /**
+   * Shared receipt-storage tail for `recordReceipt` and
+   * `recordReceiptFromMutationEvent`: appends the already-redacted envelope to
+   * the bounded per-session buffer (newest wins, capped at
+   * MAX_RECEIPTS_PER_SESSION) and mirrors it to the journal — a plain append,
+   * or a full rewrite from the bounded in-memory state whenever this push
+   * dropped an older receipt so the file cannot grow without bound.
+   */
+  private pushEnvelope(
+    sessionId: string,
+    envelope: AcpWireReceiptEnvelope,
+  ): void {
     let receipts = this.receiptsBySession.get(sessionId)
     if (!receipts) {
       receipts = []
