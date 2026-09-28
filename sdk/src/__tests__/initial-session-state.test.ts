@@ -17,6 +17,7 @@ import { saveMergedTaskMemory } from '../services/task-memory-store'
 import type { MockStatResult } from '@codebuff/common/testing/mock-types'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { SessionState } from '@codebuff/common/types/session-state'
 
 describe('Initial Session State', () => {
   let mockFs: CodebuffFileSystem
@@ -677,5 +678,97 @@ describe('Initial Session State', () => {
     } finally {
       rmSync(projectRoot, { recursive: true, force: true })
     }
+  })
+
+  test('applyOverridesToSessionState preserves compactionArchive and contextConsolidations', async () => {
+    // P2-T2 slice 1: the wholesale JSON clone in applyOverridesToSessionState
+    // is the existing restore contract — it must PRESERVE unknown/optional
+    // AgentState fields so a resumed run can recall archived pre-compaction
+    // facts (recall_context) from a previous session's archive, including a
+    // D26 `tool_result_eviction` snapshot and background consolidations.
+    // Tool content legitimately contains token-like keys; inside the
+    // archived json STRING body `refreshTokenCount` is ordinary data.
+    const compactionArchive = [
+      {
+        archivedAt: 4_000,
+        action: 'tool_result_eviction',
+        keepRecentSteps: 0,
+        steps: [9],
+        reason: 'deterministic tool-result eviction (stale recency)',
+        messages: [
+          {
+            role: 'tool',
+            toolCallId: 'call-3',
+            toolName: 'read_files',
+            content: [
+              {
+                type: 'json',
+                value:
+                  JSON.stringify({
+                    note: 'evicted body',
+                    refreshTokenCount: 3,
+                  }) + '='.repeat(1_500),
+              },
+            ],
+          },
+        ],
+      },
+    ]
+    const contextConsolidations = [
+      {
+        consolidatedAt: 4_100,
+        sourceArchivedAts: [4_000],
+        action: 'semantic_compaction',
+        summary: 'Compacted read of src/auth.ts; refreshTokenCount=3 verbatim.',
+        coveredMessages: 1,
+      },
+    ]
+    const baseSessionState = {
+      mainAgentState: {
+        agentId: 'main',
+        agentType: null,
+        agentContext: {},
+        subagents: [],
+        messageHistory: [],
+        stepsRemaining: 5,
+        compactionArchive,
+        contextConsolidations,
+      },
+      fileContext: {
+        fileTreeSource: 'live',
+        fileTree: [],
+        fileTokenScores: {},
+        tokenCallers: {},
+        knowledgeFiles: {},
+        userKnowledgeFiles: {},
+        agentTemplates: {},
+        customToolDefinitions: {},
+        skills: [],
+        systemInfo: {},
+      },
+    } as unknown as SessionState
+
+    const restored = await applyOverridesToSessionState(
+      undefined,
+      baseSessionState,
+      {},
+      { logger: mockLogger },
+    )
+    const restoredMainAgentState = restored.mainAgentState as unknown as {
+      compactionArchive?: unknown[]
+      contextConsolidations?: unknown[]
+    }
+
+    // Both optional fields survive the restore clone deep-equal.
+    expect(restoredMainAgentState.compactionArchive).toEqual(compactionArchive)
+    expect(restoredMainAgentState.contextConsolidations).toEqual(
+      contextConsolidations,
+    )
+
+    // No sanitizer corruption markers in the restored archive subtree.
+    const serialized = JSON.stringify(restoredMainAgentState.compactionArchive)
+    expect(serialized).not.toContain('[Openbuff truncated')
+    expect(serialized).not.toContain('[REDACTED]')
+    expect(serialized).toContain('refreshTokenCount')
   })
 })
