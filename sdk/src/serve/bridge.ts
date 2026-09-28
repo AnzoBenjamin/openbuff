@@ -1,3 +1,5 @@
+import { markAllMCPConfigOrigins } from '@codebuff/common/mcp/client'
+
 import { sanitizeOutbound } from './outbound-filter'
 
 import type { AcpPromptHandler } from '../services/acp/acp-agent'
@@ -8,6 +10,7 @@ import type {
   RunOptions,
 } from '../run'
 import type { RunState } from '../run-state'
+import type { McpServer } from '@agentclientprotocol/sdk'
 import type { MCPConfig } from '@codebuff/common/types/mcp'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
@@ -33,10 +36,17 @@ export type ServeBridgeOptions = {
    */
   sessionData: AcpSessionData
   /**
-   * Reserved for the CLI wave: lets the host mark which MCP servers the client
-   * advertised so the run can attach them. Accepted here (everything reaches
-   * the bridge via options — this layer never reads `process.env`) but not
-   * exercised by the Wave-1 core.
+   * Which Openbuff agent each prompt turn runs. Defaults to `'base'`.
+   */
+  agentId?: string
+  /**
+   * Lets the host mark which MCP servers the client advertised as untrusted
+   * ('client' origin) at ingest, so any such server the host later attaches to
+   * a run is already treated as untrusted by the run loop's per-tool approval
+   * gate and SSRF guard. Everything reaches the bridge via options — this layer
+   * never reads `process.env`. The bridge marks and forwards the servers here;
+   * the core RunOptions has no mcpServers param, so attaching them is the
+   * host's job.
    */
   markClientMcpServers?: (mcpServers: Record<string, MCPConfig>) => void
   /** Optional structured logger forwarded by the host; unused in Wave-1 core. */
@@ -68,6 +78,7 @@ export function createServeBridge(options: ServeBridgeOptions): {
   sessionData: AcpSessionData
 } {
   const { client, sessionData } = options
+  const agentId = options.agentId ?? 'base'
 
   const promptHandler: AcpPromptHandler = async (input) => {
     /**
@@ -85,8 +96,26 @@ export function createServeBridge(options: ServeBridgeOptions): {
       await input.update(sanitizeOutbound(text))
     }
 
+    // Ingest trust boundary (P1-T2 SEC): mark every client-advertised MCP
+    // server 'client' origin BEFORE the run so any such server the host later
+    // attaches is already untrusted for the run loop's per-tool approval gate
+    // and SSRF guard. Marking is idempotent (an existing 'client' mark is never
+    // upgraded), so re-marking across turns is safe. The core RunOptions has no
+    // mcpServers param — the bridge ONLY marks them client-origin and hands
+    // them to the host via markClientMcpServers; attaching them is the host's
+    // job.
+    if (
+      options.markClientMcpServers &&
+      Array.isArray(input.mcpServers) &&
+      input.mcpServers.length > 0
+    ) {
+      const clientMcpServers = acpMcpServersToConfigRecord(input.mcpServers)
+      markAllMCPConfigOrigins(clientMcpServers, 'client')
+      options.markClientMcpServers(clientMcpServers)
+    }
+
     await client.run({
-      agent: 'base',
+      agent: agentId,
       prompt: input.promptText,
       handleEvent,
       onFilesystemMutation: (event: FilesystemMutationEvent) =>
@@ -114,4 +143,67 @@ function extractForwardableText(event: PrintModeEvent): string | undefined {
     return event.text
   }
   return undefined
+}
+
+/**
+ * Folds an ACP `{ name, value }[]` list (stdio `env` / remote `headers`) into
+ * the `Record<string, string>` shape the core {@link MCPConfig} uses. Later
+ * entries win on a duplicate name.
+ */
+function acpEntriesToRecord(
+  entries: Array<{ name: string; value: string }>,
+): Record<string, string> {
+  // Null-prototype for the same reason as acpMcpServersToConfigRecord: an
+  // attacker-controlled env/header name must never reach an inherited setter.
+  const record: Record<string, string> = Object.create(null)
+  for (const { name, value } of entries) {
+    record[name] = value
+  }
+  return record
+}
+
+/**
+ * Converts client-advertised ACP `McpServer[]` into the core
+ * `Record<string, MCPConfig>` keyed by each server's `name`. Only the
+ * transports the core {@link MCPConfig} union actually supports are emitted:
+ * - `stdio` (the ACP variant with no `type` discriminant) → core stdio config,
+ *   with `env` folded into a record;
+ * - `http` / `sse` → core remote config, with `headers` folded into a record
+ *   (`params` is empty — ACP advertises none);
+ * - `acp` → SKIPPED: the core union has no ACP-transport equivalent.
+ *
+ * Pure and synchronous so it can run inline before the async `client.run`.
+ * Unknown/empty inputs simply produce no entries.
+ */
+function acpMcpServersToConfigRecord(
+  servers: McpServer[],
+): Record<string, MCPConfig> {
+  // Null-prototype so an attacker-controlled server name like '__proto__',
+  // 'constructor', or 'prototype' becomes a plain own key instead of hitting
+  // an inherited setter (which would silently drop the entry from
+  // Object.values/entries and thus from the client-origin marking pass).
+  const record: Record<string, MCPConfig> = Object.create(null)
+  for (const server of servers) {
+    if ('type' in server) {
+      // http | sse | acp — the variants carrying the ACP `type` discriminant.
+      if (server.type === 'http' || server.type === 'sse') {
+        record[server.name] = {
+          type: server.type,
+          url: server.url,
+          params: {},
+          headers: acpEntriesToRecord(server.headers),
+        }
+      }
+      // 'acp': skipped — no core equivalent transport.
+      continue
+    }
+    // McpServerStdio is the only ACP variant without a `type` discriminant.
+    record[server.name] = {
+      type: 'stdio',
+      command: server.command,
+      args: [...server.args],
+      env: acpEntriesToRecord(server.env),
+    }
+  }
+  return record
 }

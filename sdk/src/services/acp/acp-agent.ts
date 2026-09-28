@@ -45,6 +45,12 @@ export type AcpPromptHandler = (input: {
   update: (chunkText: string) => Promise<void>
   signal: AbortSignal
   /**
+   * The client-advertised MCP servers for this session (from
+   * newSession/loadSession), forwarded so the P1-T2 bridge can mark them
+   * untrusted ('client' origin) at ingest before any run attaches them.
+   */
+  mcpServers?: McpServer[]
+  /**
    * Optional client-side reverse-request seam (P1-T2 binds it to the
    * connection): lets a turn request permission, read/write files in the
    * client's workspace, or create a terminal mid-prompt.
@@ -218,6 +224,7 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       const result = await options.promptHandler({
         sessionId: params.sessionId,
         promptText,
+        mcpServers: session.mcpServers,
         reverseRequests: options.reverseRequests,
         update: async (chunkText) => {
           await options.connection.sessionUpdate({

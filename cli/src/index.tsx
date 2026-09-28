@@ -44,6 +44,7 @@ import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { setOscDetectedTheme } from './utils/theme-system'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
+import { runAcpServeCommand } from './serve-command'
 
 const require = createRequire(import.meta.url)
 
@@ -314,6 +315,7 @@ async function main(): Promise<void> {
     cwd,
     initialMode,
     trustProjectAgents,
+    serve,
   } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
 
   const isPublishCommand = cliArgv[2] === 'publish'
@@ -351,6 +353,14 @@ async function main(): Promise<void> {
   if (isPublishCommand) {
     logger.error(red('Agent publishing is disabled in local mode.'))
     process.exit(1)
+  }
+
+  // `openbuff serve` never launches the OpenTUI renderer: stdout is the ACP
+  // protocol wire, so we start the bridge and return from main() before the
+  // renderer is created. The stdio/socket transport keeps the event loop alive.
+  if (serve) {
+    await runAcpServeCommand(serve)
+    return
   }
 
   if (clearLogs) {

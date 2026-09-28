@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
+import { originOf } from '@codebuff/common/mcp/client'
+
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import type { MCPConfig } from '@codebuff/common/types/mcp'
+import type { McpServer } from '@agentclientprotocol/sdk'
 
 import { createServeBridge } from '../serve/bridge'
 import type { ServeBridgeClient } from '../serve/bridge'
@@ -211,5 +215,156 @@ describe('createServeBridge', () => {
       signal: controller.signal,
     })
     expect(cancelled.stopReason).toBe('cancelled')
+  })
+
+  test('runs the client with a custom agentId when provided', async () => {
+    const sessionData = new AcpSessionData()
+    let captured: (RunOptions & OpenbuffClientOptions) | undefined
+    const client = makeFakeClient({
+      beforeResolve: (runOptions) => {
+        captured = runOptions
+      },
+    })
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      agentId: 'my-agent',
+    })
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+
+    expect(captured?.agent).toBe('my-agent')
+  })
+
+  test('defaults the client agentId to base when unset', async () => {
+    const sessionData = new AcpSessionData()
+    let captured: (RunOptions & OpenbuffClientOptions) | undefined
+    const client = makeFakeClient({
+      beforeResolve: (runOptions) => {
+        captured = runOptions
+      },
+    })
+    const { promptHandler } = createServeBridge({ client, sessionData })
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+
+    expect(captured?.agent).toBe('base')
+  })
+
+  test('marks client-advertised MCP servers client-origin at ingest and skips acp', async () => {
+    const sessionData = new AcpSessionData()
+    let marked: Record<string, MCPConfig> | undefined
+    const client = makeFakeClient({})
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      markClientMcpServers: (record) => {
+        marked = record
+      },
+    })
+    const mcpServers: McpServer[] = [
+      {
+        name: 'local',
+        command: 'node',
+        args: ['server.js'],
+        env: [{ name: 'TOKEN', value: '$SECRET' }],
+      },
+      {
+        type: 'http',
+        name: 'remote',
+        url: 'https://example.com/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer abc' }],
+      },
+      { type: 'acp', name: 'acp-srv', serverId: 'acp-1' },
+    ]
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+      mcpServers,
+    })
+
+    expect(marked).toBeDefined()
+    // The acp-type server has no core transport equivalent and is skipped.
+    expect(Object.keys(marked!).sort()).toEqual(['local', 'remote'])
+    expect(marked!['acp-srv']).toBeUndefined()
+
+    expect(marked!.local).toEqual({
+      type: 'stdio',
+      command: 'node',
+      args: ['server.js'],
+      // ACP env is used literally at 'client' origin (no $VAR expansion).
+      env: { TOKEN: '$SECRET' },
+    })
+    expect(marked!.remote).toEqual({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      params: {},
+      headers: { Authorization: 'Bearer abc' },
+    })
+
+    for (const config of Object.values(marked!)) {
+      expect(originOf(config)).toBe('client')
+    }
+  })
+
+  test('does not call markClientMcpServers for empty or absent mcpServers', async () => {
+    const sessionData = new AcpSessionData()
+    let called = false
+    const client = makeFakeClient({})
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      markClientMcpServers: () => {
+        called = true
+      },
+    })
+
+    const empty = await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+      mcpServers: [],
+    })
+    expect(called).toBe(false)
+    expect(empty.stopReason).toBe('end_turn')
+
+    const absent = await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+    expect(called).toBe(false)
+    expect(absent.stopReason).toBe('end_turn')
+  })
+
+  test('never marks when markClientMcpServers is absent but the run still proceeds', async () => {
+    const sessionData = new AcpSessionData()
+    const client = makeFakeClient({})
+    const { promptHandler } = createServeBridge({ client, sessionData })
+
+    const result = await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+      mcpServers: [{ name: 'local', command: 'node', args: [], env: [] }],
+    })
+
+    expect(result.stopReason).toBe('end_turn')
   })
 })
