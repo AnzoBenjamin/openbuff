@@ -1665,15 +1665,56 @@ const definition: AgentDefinition = {
         KNOWLEDGE_MEMORY_MIN_BUDGET_TOKENS,
         Math.floor(targetContextLength * KNOWLEDGE_MEMORY_MAX_BUDGET_FRACTION),
       )
+      // D25 (CQ-T1): blockers and reviewReceipts are deliberately excluded from
+      // ceiling eviction. Open reviewer blockers and reviewer attestation
+      // fingerprints are the run's key survival evidence, so the whole-block
+      // ceiling loop never evicts them while any ordinary retention list still
+      // has entries. Their per-field count caps (maxBlockers, maxReviewReceipts)
+      // and per-entry text caps still bound them earlier in this function, and
+      // once the ordinary lists drain the loop below reclaims superseded review
+      // history (newest receipt and blocker per reviewer agent type) before
+      // shrinking the task contract, so the hard ceiling stays an enforceable
+      // upper bound — it is what keeps deeper retention from crowding out the
+      // live working set on small windows.
+      // Regression evidence (performance specialist): the exclusion, the
+      // superseded-review collapse, and the ordinary-lists-first ordering are
+      // pinned by evals/compaction-retention/scenario.test.ts S6/S7/S8/S9 —
+      // small-window blocker/receipt survival, ceiling enforcement under a
+      // worst-case pinned payload, resolved-review reclamation, and eviction
+      // ordering under pressure.
       const EVICTION_ORDER: KnowledgeMemoryListField[] = [
         'postEditAnchors',
         'filesInspected',
         'decisions',
         'validationResults',
-        'reviewReceipts',
         'editsMade',
-        'blockers',
       ]
+      // Superseded-review collapse: keep only the newest entry per reviewer
+      // agent type. Receipts dedupe only on exact text and each carries a
+      // distinct fingerprint/verdict line, so without this collapse a resolved
+      // review's older receipts stay pinned verbatim forever and the
+      // D25-excluded fields could never be reclaimed by the ceiling loop.
+      // Entries without a recognizable `agentType: ` prefix share one bucket
+      // and keep only their newest line.
+      const reviewerEntryKey = (entry: string): string => {
+        const match = entry.match(/^([^:]{1,64}):\s/)
+        return match ? match[1] : '(unattributed)'
+      }
+      const collapseToNewestPerReviewer = (entries: string[]): boolean => {
+        if (entries.length <= 1) return false
+        const newestIndexByKey = new Map<string, number>()
+        entries.forEach((entry, index) => {
+          newestIndexByKey.set(reviewerEntryKey(entry), index)
+        })
+        if (newestIndexByKey.size === entries.length) return false
+        const keptIndexes = [...newestIndexByKey.values()].sort((a, b) => a - b)
+        entries.splice(
+          0,
+          entries.length,
+          ...keptIndexes.map((index) => entries[index]),
+        )
+        return true
+      }
       while (estimateKnowledgeMemoryTokens(km) > ceiling) {
         const field = EVICTION_ORDER.find((key) => km[key].length > 0)
         if (field) {
@@ -1689,8 +1730,21 @@ const definition: AgentDefinition = {
           )
           continue
         }
-        // Every list is empty: the task contract itself is over the ceiling.
-        // Shrink it toward the floor instead of dropping it, halving per pass.
+        // Before shrinking the task contract, reclaim superseded review
+        // history: a newer receipt or blocker from the same reviewer agent
+        // type supersedes the older ones, so resolved-review evidence stops
+        // consuming pinned-block budget here (reviewReceipts previously had
+        // zero eviction pressure at any budget level). At least one receipt
+        // and one blocker per reviewer agent type survive, preserving the D25
+        // survival evidence while keeping the ceiling enforceable.
+        const collapsedReceipts = collapseToNewestPerReviewer(
+          km.reviewReceipts,
+        )
+        const collapsedBlockers = collapseToNewestPerReviewer(km.blockers)
+        if (collapsedReceipts || collapsedBlockers) continue
+        // Every list is empty and no superseded review history remains: the
+        // task contract itself is over the ceiling. Shrink it toward the floor
+        // instead of dropping it, halving per pass.
         if (km.nextAction.length > KNOWLEDGE_MEMORY_MIN_NEXT_ACTION_CHARS) {
           km.nextAction = capTextPreservingEnds(
             km.nextAction,
@@ -1711,7 +1765,7 @@ const definition: AgentDefinition = {
           )
           continue
         }
-        // Both are at their floor: keep them (R3) rather than looping forever.
+        // Everything is at its floor/bound: keep it (R3) rather than looping.
         break
       }
     }

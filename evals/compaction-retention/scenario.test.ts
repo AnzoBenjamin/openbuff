@@ -14,6 +14,12 @@
  *                     trailing instruction survives (beginning-and-end goal).
  *  - S5 blocker      : open reviewer blocker + structured review receipt survive
  *                     a compaction pass with the receipt fingerprint intact.
+ *  - S7 ceiling      : worst-case pinned payload collapses superseded review
+ *                     history so the hard ceiling stays an enforceable bound.
+ *  - S8 resolved     : a passing review supersedes older receipts from the same
+ *                     reviewer under ceiling pressure.
+ *  - S9 eviction     : ceiling pressure drains ordinary retention lists before
+ *                     touching receipts, blockers, or the task contract.
  *
  * The metrics are the deliverable; the assertions are the regression floor.
  */
@@ -538,6 +544,10 @@ describe('compaction retention scenario', () => {
     expect(measurement.block).toContain(SEEDED_NEXT_ACTION)
     // Regression floor only: deeper list evidence is legitimately evicted here.
     expect(measurement.recallRate).toBeGreaterThanOrEqual(0.5)
+    // D25 blocking floor: the open reviewer blocker is never evicted by the
+    // whole-block ceiling loop, even at the 8k-class window.
+    expect(measurement.block).toContain(SEEDED_BLOCKER)
+    expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(1)
   })
 
   test('S3 large window buys strictly deeper list retention than the baseline', () => {
@@ -631,5 +641,326 @@ describe('compaction retention scenario', () => {
     ).toBeGreaterThanOrEqual(1)
     // The reviewer's BLOCKING finding is pinned alongside the seeded blocker.
     expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(2)
+  })
+
+  test('S6 small window keeps both the open blocker and the review receipt fingerprint', () => {
+    // D25 guarantee under pressure: at the SAME 8k-class small-window budget as
+    // S2, both the open blocker and the reviewer attestation fingerprint must
+    // survive the ceiling loop verbatim.
+    const measurement = measureRetention({
+      id: 'S6-small-window-blocker-receipt',
+      claim:
+        'the 8k-class small window keeps both the open blocker and the review receipt fingerprint',
+      messages: seedHistory({ includeReviewReceipt: true }),
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+      },
+      mustSurvive: [SEEDED_BLOCKER, SEEDED_RECEIPT_FINGERPRINT],
+    })
+
+    expect(measurement.recallRate).toBe(1)
+    expect(measurement.block).toContain(SEEDED_BLOCKER)
+    expect(measurement.block).toContain(
+      `snapshot=${SEEDED_RECEIPT_FINGERPRINT}`,
+    )
+    expect(
+      measurement.retainedEntryCounts.reviewReceipts,
+    ).toBeGreaterThanOrEqual(1)
+    expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(1)
+  })
+
+  test('S7 worst-case pinned payload still lands under the hard ceiling', () => {
+    // Ceiling-enforceability regression (performance specialist): blockers and
+    // reviewReceipts are excluded from EVICTION_ORDER (D25/CQ-T1), so once the
+    // ordinary lists drain the loop must reclaim superseded review history —
+    // newest receipt and blocker per reviewer agent type — instead of breaking
+    // with the block over its ceiling. 12 receipts (6 per reviewer type) with
+    // near-cap findings plus near-cap goal/next-action text drive the 8k-class
+    // block past its 1,500-token ceiling before the collapse runs.
+    const ceilingFingerprint = (index: number): string =>
+      `ceiling${String(index).padStart(2, '0')}`.padEnd(64, 'x')
+    const goalText = [
+      'CEIL-GOAL-HEAD: drive the pinned block over its small-window ceiling.',
+      'ceiling filler '.repeat(80),
+      'CEIL-GOAL-TAIL',
+    ].join('\n')
+    const nextRequiredAction =
+      'ceiling action filler '.repeat(32) + 'CEIL-ACTION-TAIL'
+    const messages: Message[] = [
+      { ...createMessage('user', goalText), tags: ['USER_PROMPT'] },
+      ...Array.from({ length: 12 }, (_, index) => index).flatMap((index) => {
+        const agentType =
+          index % 2 === 0 ? 'code-reviewer' : 'security-reviewer'
+        return [
+          createToolCallMessage(`ceiling-review-${index}`, 'spawn_agent_inline', {
+            agent_type: agentType,
+          }),
+          createToolResultMessage(
+            `ceiling-review-${index}`,
+            'spawn_agent_inline',
+            {
+              schemaVersion: 3,
+              family: 'reviewer',
+              verdict: 'BLOCKING',
+              snapshotFingerprint: ceilingFingerprint(index),
+              reviewedFiles: [SEEDED_INSPECTED_PATH],
+              coverage: 'covered',
+              dimensions: { correctness: 'block' },
+              findings: [
+                {
+                  severity: 'critical',
+                  dimension: 'correctness',
+                  summary: `CEIL-FINDING-${index}: ${'z'.repeat(560)}`,
+                  evidence: ['ceiling pressure fixture'],
+                  correction: 'Resolve the ceiling pressure finding.',
+                },
+              ],
+              requirementCoverage: [],
+            },
+          ),
+        ]
+      }),
+    ]
+
+    const measurement = measureRetention({
+      id: 'S7-small-window-ceiling-enforced',
+      claim:
+        'superseded-review collapse brings the worst-case pinned block back under its ceiling',
+      messages,
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+        nextRequiredAction,
+      },
+      mustSurvive: [ceilingFingerprint(10), ceilingFingerprint(11)],
+    })
+
+    // The hard ceiling stays an enforceable upper bound after the D25 exclusion.
+    expect(measurement.blockTokens).toBeLessThanOrEqual(1_500)
+    // The task contract survives the pass (truncated toward its floor only if
+    // the collapse alone cannot close the gap).
+    expect(measurement.block).toContain('Goal:')
+    expect(measurement.block).toContain('CEIL-GOAL-HEAD')
+    expect(measurement.block).toContain('CEIL-GOAL-TAIL')
+    expect(measurement.block).toContain('Next Action:')
+    expect(measurement.block).toContain('CEIL-ACTION-TAIL')
+    // The newest receipt and blocker per reviewer agent type survive verbatim.
+    expect(measurement.block).toContain(`snapshot=${ceilingFingerprint(10)}`)
+    expect(measurement.block).toContain(`snapshot=${ceilingFingerprint(11)}`)
+    expect(measurement.block).toContain('CEIL-FINDING-10')
+    expect(measurement.block).toContain('CEIL-FINDING-11')
+    // Superseded same-reviewer receipts and their blockers are reclaimed.
+    expect(measurement.block).not.toContain(`snapshot=${ceilingFingerprint(8)}`)
+    expect(measurement.block).not.toContain(`snapshot=${ceilingFingerprint(6)}`)
+    expect(measurement.block).not.toContain('CEIL-FINDING-8')
+    expect(measurement.block).not.toContain('CEIL-FINDING-6')
+  })
+
+  test('S8 a passing review supersedes older receipts from the same reviewer', () => {
+    // Resolved-review history regression (performance specialist): review
+    // receipts dedupe only on exact text and each carries a distinct
+    // fingerprint/verdict line, so without eviction pressure the receipts of
+    // resolved reviews stay pinned verbatim forever. Under ceiling pressure the
+    // superseded-review collapse keeps only the newest receipt per reviewer, so
+    // the LOOKS_GOOD verdict replaces the superseded BLOCKING history. The
+    // passing review also clears the reviewer's own blockers; unattributed
+    // residual blockers collapse to their newest line.
+    const resolveFingerprint = (index: number): string =>
+      `resolved${String(index).padStart(2, '0')}`.padEnd(64, 'r')
+    const clearedFingerprint = 'cleared'.padEnd(64, 'g')
+    // 12 unattributed residual blockers (~224 chars each, under the 240-char
+    // cap) keep the block over the 1,500-token ceiling even after the receipt
+    // collapse, so the blocker collapse runs too: zero-padded ids keep the
+    // substring assertions exact.
+    const residualBlockers = Array.from({ length: 12 }, (_, index) =>
+      `BLOCKING: RESOLVE-RESIDUAL-${String(index + 1).padStart(2, '0')} ${'q'.repeat(195)}`,
+    )
+    const goalText = [
+      'RESOLVE-GOAL-HEAD: verify resolved reviews stop consuming pinned budget.',
+      'resolve filler '.repeat(80),
+      'RESOLVE-GOAL-TAIL',
+    ].join('\n')
+    const messages: Message[] = [
+      { ...createMessage('user', goalText), tags: ['USER_PROMPT'] },
+      ...Array.from({ length: 12 }, (_, index) => index).flatMap((index) => {
+        const cleared = index === 11
+        return [
+          createToolCallMessage(`resolve-review-${index}`, 'spawn_agent_inline', {
+            agent_type: 'code-reviewer',
+          }),
+          createToolResultMessage(
+            `resolve-review-${index}`,
+            'spawn_agent_inline',
+            {
+              schemaVersion: 3,
+              family: 'reviewer',
+              verdict: cleared ? 'LOOKS_GOOD' : 'BLOCKING',
+              snapshotFingerprint: cleared
+                ? clearedFingerprint
+                : resolveFingerprint(index),
+              reviewedFiles: [SEEDED_INSPECTED_PATH],
+              coverage: 'covered',
+              dimensions: cleared
+                ? { correctness: 'pass' }
+                : { correctness: 'block' },
+              findings: cleared
+                ? []
+                : [
+                    {
+                      severity: 'critical',
+                      dimension: 'correctness',
+                      summary:
+                        `w${index}`.padEnd(600, 'w') +
+                        ` RESOLVE-FINDING-${index}`,
+                      evidence: ['resolve pressure fixture'],
+                      correction: 'Resolve the pressure finding.',
+                    },
+                  ],
+              requirementCoverage: [],
+            },
+          ),
+        ]
+      }),
+      ...residualBlockers.map((blocker) => createMessage('assistant', blocker)),
+    ]
+
+    const measurement = measureRetention({
+      id: 'S8-resolved-review-reclaimed',
+      claim:
+        'a passing review supersedes older receipts from the same reviewer under ceiling pressure',
+      messages,
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+        nextRequiredAction:
+          'resolve action filler '.repeat(32) + 'RESOLVE-ACTION-TAIL',
+      },
+      mustSurvive: [clearedFingerprint],
+    })
+
+    expect(measurement.blockTokens).toBeLessThanOrEqual(1_500)
+    // The newest (passing) receipt for the reviewer survives verbatim...
+    expect(measurement.block).toContain(`snapshot=${clearedFingerprint}`)
+    expect(measurement.block).toContain('verdict=LOOKS_GOOD')
+    // ...while the superseded BLOCKING receipts are reclaimed.
+    expect(measurement.block).not.toContain(
+      `snapshot=${resolveFingerprint(10)}`,
+    )
+    expect(measurement.block).not.toContain('verdict=BLOCKING')
+    // The passing review cleared the reviewer's own blockers; the unattributed
+    // residual blockers collapse to their newest line.
+    expect(measurement.block).not.toContain('RESOLVE-FINDING-10')
+    expect(measurement.block).toContain('RESOLVE-RESIDUAL-12')
+    expect(measurement.block).not.toContain('RESOLVE-RESIDUAL-01')
+    expect(measurement.block).toContain('Goal:')
+    expect(measurement.block).toContain('Next Action:')
+    expect(measurement.block).toContain('RESOLVE-ACTION-TAIL')
+  })
+
+  test('S9 ceiling pressure drains ordinary lists before touching receipts or blockers', () => {
+    // Eviction-order regression (performance specialist): D25 excludes
+    // reviewReceipts and blockers from EVICTION_ORDER, and the
+    // superseded-review collapse only runs after every ordinary retention list
+    // is drained. S7's fixture starts with empty ordinary lists, so the
+    // ordering preference is asserted here instead: this fixture starts well
+    // over the 8k-class ceiling with ordinary evidence (reads, decisions,
+    // edits, anchors) plus exactly one receipt and one blocker, and the
+    // ordinary capacity alone is enough to get back under the ceiling — so
+    // the loop must resolve the pressure by evicting ordinary lists while the
+    // receipt, the blocker, and the full-length task contract all survive
+    // untouched.
+    const orderingFingerprint = 'ordering'.padEnd(64, 'o')
+    const goalText = [
+      'ORDER-GOAL-HEAD: prove ceiling pressure drains ordinary lists first.',
+      'ordering filler '.repeat(90),
+      'ORDER-GOAL-TAIL',
+    ].join('\n')
+    const longInspectedPaths = Array.from(
+      { length: 40 },
+      (_, index) =>
+        `packages/agent-runtime/src/retention/ceiling/module-${String(index).padStart(2, '0')}/inspected-${'p'.repeat(90)}.ts`,
+    )
+    const decisionLines = Array.from(
+      { length: 20 },
+      (_, index) =>
+        `Decision: keep ceiling-pressure rationale ${index} ${'d'.repeat(180)}`,
+    )
+    const messages: Message[] = [
+      { ...createMessage('user', goalText), tags: ['USER_PROMPT'] },
+      ...createSuccessfulReadMessages(longInspectedPaths),
+      createMessage('assistant', decisionLines.join('\n')),
+      ...createCommittedEditMessages(EDITED_PATHS),
+      ...createValidationMessages(VALIDATION_COMMAND_COUNT),
+      createMessage('assistant', SEEDED_BLOCKER),
+      ...[
+        createToolCallMessage('ordering-review', 'spawn_agent_inline', {
+          agent_type: 'code-reviewer',
+        }),
+        createToolResultMessage('ordering-review', 'spawn_agent_inline', {
+          schemaVersion: 3,
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: orderingFingerprint,
+          reviewedFiles: [SEEDED_INSPECTED_PATH],
+          coverage: 'covered',
+          dimensions: { correctness: 'pass' },
+          findings: [],
+          requirementCoverage: [],
+        }),
+      ],
+    ]
+
+    const measurement = measureRetention({
+      id: 'S9-ceiling-eviction-order',
+      claim:
+        'ceiling pressure evicts ordinary retention lists before touching receipts, blockers, or the task contract',
+      messages,
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+        nextRequiredAction:
+          'ordering action filler '.repeat(32) + 'ORDER-ACTION-TAIL',
+      },
+      mustSurvive: [SEEDED_BLOCKER, orderingFingerprint],
+    })
+
+    // The hard ceiling is enforced...
+    expect(measurement.blockTokens).toBeLessThanOrEqual(1_500)
+    // ...by evicting ordinary retention lists: postEditAnchors and
+    // filesInspected sit first in EVICTION_ORDER, so at least one eviction
+    // chunk must have been dropped from the 13 retained inspected paths.
+    expect(measurement.retainedEntryCounts.filesInspected).toBeLessThanOrEqual(
+      10,
+    )
+    // ...while the D25-excluded receipt and blocker stay pinned verbatim.
+    expect(measurement.retainedEntryCounts.reviewReceipts).toBe(1)
+    expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(1)
+    expect(measurement.block).toContain(`snapshot=${orderingFingerprint}`)
+    expect(measurement.block).toContain(SEEDED_BLOCKER)
+    // The loop never reached the task-contract fallback (the ordinary capacity
+    // alone closed the gap): the pinned goal keeps its full small-window cap
+    // instead of being halved toward the floor.
+    const goal = extractGoalSection(measurement.block)
+    expect(goal).toBeDefined()
+    expect(goal!.length).toBeGreaterThan(1_000)
+    expect(goal!).toContain('ORDER-GOAL-HEAD')
+    expect(goal!).toContain('ORDER-GOAL-TAIL')
   })
 })

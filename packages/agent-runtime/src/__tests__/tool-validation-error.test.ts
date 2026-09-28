@@ -1580,6 +1580,55 @@ describe('tool validation error handling', () => {
       expect(after.byTool.read_files).toBe(beforeForTool + 1)
     })
 
+    it('unserializes a fully stringified spawn_agents array including a nested stringified params object', () => {
+      // D21 slice-2 closure pin (PR-T3, option A decision 2026-09-28): the
+      // observed failure class — `agents[0]: expected object, received
+      // string` — is repaired by the generic walker at the tool-input level,
+      // so schema flattening of the published providerInputSchema is not
+      // needed. This test pins the walker's recursion coverage in code: the
+      // whole-array string unserializes against the declared array schema,
+      // and the nested stringified `params` object unserializes via the
+      // properties traversal (double-encoding covered by recursion, not just
+      // one level).
+      const beforeTotal = getToolArgNormalizationStats().total
+      const beforeForTool =
+        getToolArgNormalizationStats().byTool.spawn_agents ?? 0
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'spawn_agents',
+          toolCallId: 'd21-unserialize-agents-recursion-tool-call-id',
+          input: {
+            agents: JSON.stringify([
+              {
+                agent_type: 'basher',
+                prompt: 'Run tests',
+                params: JSON.stringify({ command: 'bun test' }),
+              },
+            ]),
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.agents).toEqual([
+          {
+            agent_type: 'basher',
+            prompt: 'Run tests',
+            params: { command: 'bun test' },
+          },
+        ])
+      }
+      // Both the whole-array and the nested-object unserializes count (the
+      // exact delta is an implementation detail; at least one per tool is the
+      // never-silent contract).
+      const after = getToolArgNormalizationStats()
+      expect(after.total).toBeGreaterThanOrEqual(beforeTotal + 1)
+      expect(after.byTool.spawn_agents).toBeGreaterThanOrEqual(
+        beforeForTool + 1,
+      )
+    })
+
     it('unserializes a stringified string-array field', () => {
       const result = parseRawToolCall({
         rawToolCall: {
