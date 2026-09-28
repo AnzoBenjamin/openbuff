@@ -22,9 +22,11 @@ import {
 } from '../tools/handlers/tool/edit-read-state'
 import type { FileProcessingState } from '../tools/handlers/tool/write-file'
 import {
+  __resetToolArgNormalizationStatsForTest,
   buildSpawnAgentsHandlerFailureOutput,
   buildUnavailableToolMessage,
   executeToolCall,
+  getToolArgNormalizationStats,
   normalizeNativeToolOutput,
   parseRawCustomToolCall,
   parseRawToolCall,
@@ -1538,6 +1540,145 @@ describe('tool validation error handling', () => {
       })
 
       expect('error' in result).toBe(true)
+    })
+  })
+
+  describe('generic schema-driven stringified array/object unserialize (D21 slice 1)', () => {
+    beforeEach(() => {
+      __resetToolArgNormalizationStatsForTest()
+    })
+
+    it('unserializes a stringified array field and recurses into the items schema', () => {
+      // Snapshot primitives EAGERLY: getToolArgNormalizationStats returns the
+      // live module-level stats object, so holding that reference and reading
+      // `.total` inside a later assertion would observe the parse's own
+      // increment (the object-aliasing trap).
+      const beforeTotal = getToolArgNormalizationStats().total
+      const beforeForTool =
+        getToolArgNormalizationStats().byTool.read_files ?? 0
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-unserialize-ranges-tool-call-id',
+          input: {
+            ranges: '[{"path":"a.ts","startLine":"5","endLine":"10"}]',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        // The parsed array flowed into the normal items traversal, so the
+        // nested integer strings were coerced against the items schema too.
+        expect(result.input.ranges).toEqual([
+          { path: 'a.ts', startLine: 5, endLine: 10 },
+        ])
+      }
+      // Every successful unserialize is counted per tool (never silent).
+      const after = getToolArgNormalizationStats()
+      expect(after.total).toBe(beforeTotal + 1)
+      expect(after.byTool.read_files).toBe(beforeForTool + 1)
+    })
+
+    it('unserializes a stringified string-array field', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-unserialize-paths-tool-call-id',
+          input: { paths: '["src/a.ts"]' },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.paths).toEqual(['src/a.ts'])
+      }
+    })
+
+    it('unserializes a stringified object field and coerces its declared properties', () => {
+      const hash = getContentHash('line')
+      const readCapability = encodeReadCapabilityToken({
+        startLine: 100,
+        endLine: 156,
+        hash,
+        scope: {
+          projectId: mockFileContext.projectRoot,
+          path: 'src/a.ts',
+          runId: 'test-run-id',
+        },
+      })
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'replace_range',
+          toolCallId: 'd21-unserialize-occurrence-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            readCapability,
+            occurrence: '{"match":"literal block","occurrence":"2"}',
+            newContent: 'replacement',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        // `occurrence` is object-typed in the schema, so the string
+        // unserialized; its properties were then visited, coercing the nested
+        // integer string while the string-typed `match` stays verbatim.
+        expect(result.input.occurrence?.match).toBe('literal block')
+        expect(result.input.occurrence?.occurrence).toBe(2)
+      }
+    })
+
+    it('fails closed when a declared-array field holds a non-JSON string', () => {
+      const before = getToolArgNormalizationStats().total
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-fail-closed-nonjson-tool-call-id',
+          input: { ranges: 'not valid json {' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      // A failed parse is never counted: only successful unserializes count.
+      expect(getToolArgNormalizationStats().total).toBe(before)
+    })
+
+    it('fails closed when a declared-array field parses to a non-array', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-fail-closed-nonarray-tool-call-id',
+          input: { ranges: '{"path":"a.ts"}' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+    })
+
+    it('never unserializes string-typed fields and does not count them', () => {
+      const before = getToolArgNormalizationStats()
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'str_replace',
+          toolCallId: 'd21-string-field-untouched-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            replacements: [{ oldString: '[1, 2, 3]', newString: '{"a":1}' }],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        // oldString/newString are declared string-typed in the schema, so
+        // JSON-looking content is never unserialized (schema-keyed guard).
+        expect(result.input.replacements[0].oldString).toBe('[1, 2, 3]')
+        expect(result.input.replacements[0].newString).toBe('{"a":1}')
+      }
+      const after = getToolArgNormalizationStats()
+      expect(after.total).toBe(before.total)
     })
   })
 
