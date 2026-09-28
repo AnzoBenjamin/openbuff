@@ -174,3 +174,118 @@ The second remaining P1-T2 security prerequisite (the first, the approval comman
 - **Security review:** security-reviewer verdict NON_BLOCKING — two low observations (fail-open is a documented host-integration tradeoff bounded by the SEC-3 SSRF guard + literal client-origin values; `'mcp-tool'` omitted from `evaluateHarnessActionPolicy`'s high-impact set is unreachable defense-in-depth), no code change required.
 
 Both P1-T2 security prerequisites are now satisfied. The remaining P1-T2 work is the `openbuff serve --stdio|--socket` bridge itself (client-origin marking at the ingest boundary, `sanitizeOutbound`, socket peer-cred auth, CLI entry) plus the `@agentclientprotocol/sdk` dependency (already added).
+
+<!-- update_plan_status:appended -->
+## P1-T2 serve bridge landed (2026-09-28) — 2026-09-28T05:52:01.984Z
+
+The `openbuff serve` ACP bridge is now built end-to-end (both security prerequisites already landed earlier):
+- **Wave 1 — sdk core:** `sdk/src/serve/bridge.ts` `createServeBridge` binds the ACP `AcpPromptHandler` to `OpenbuffClient.run()`: it forwards ONLY model-visible assistant text (`PrintModeEvent` type `'text'`) through `sanitizeOutbound`, structurally DROPS `tool_call`/`tool_result`, records confirmed mutations via `AcpSessionData.recordReceiptFromMutationEvent` (new adapter over `FilesystemMutationEvent`, redaction-preserving by construction), scans forwarded text for `<gate-state>` blocks, and maps an aborted run to `stopReason:'cancelled'`. `sdk/src/serve/outbound-filter.ts` `sanitizeOutbound` redacts cap.v3 tokens + provider-secret value shapes (SEC-1 last-line filter). `recordReceipt` refactored to share a `pushEnvelope` tail.
+- **Wave 2 — transport + CLI:** `sdk/src/serve/socket-listener.ts` `serveAcpOverSocket` (SEC-4: owner-only/non-symlink/no-group-write parent-dir check, exclusive `.lock`, stale-socket unlink, 0o600 socket, constant-time token auth with an auth-timeout, no TCP, idempotent close, geteuid-guarded so socket mode fails loud on Windows); `sdk/src/serve/serve.ts` `runServe` selects stdio vs socket over the Wave-1 bridge; `cli/src/cli-args.ts` gained a `serve` subcommand (`--stdio` default / `--socket [path]` / `--socket-token`) parsed WITHOUT registering a commander subcommand on the prompt parser (so positional prompts are never treated as commands). `--socket` with no path now errors instead of silently degrading to stdio (compatibility-reviewer finding cleared).
+- **Validation:** sdk full suite 1756/1756, serve suites 17/17, cli-args 15/15, sdk+cli typecheck clean. code-reviewer LOOKS_GOOD; compatibility-reviewer's one NON_BLOCKING finding (socket-optional-path-silent-stdio) repaired and re-validated.
+- **Still deferred:** wiring `runServe` into `cli/src/index.tsx` (the `serve` subcommand is parsed but not yet dispatched — noted in a code comment); client-origin marking of client-supplied `mcpServers` at the bridge ingest boundary (the `markClientMcpServers` seam exists on ServeBridgeOptions but is not yet exercised); the run-loop is bound to `agent:'base'` as a starting default.
+
+## Protocol reliability amendments added to the plan (2026-09-28)
+
+Per the user's request after the JSON/XML + subagent-output discussion, six amendments (D19–D24) were added to SPEC.md under a new "Protocol reliability amendments (2026-09-28)" section, and a matching PR task set (PR-T1..PR-T6) was inserted into PLAN.md ahead of P1 with dependency + traceability updates:
+- D19/PR-T1 typed subagent handoff envelope (outcome ok/missing_output/schema_invalid/truncated/crashed; no silent false completions) — precedes P2-T8.
+- D20/PR-T2 out-of-band output store + bounded parent summary + last_message fragment merge (removes spawn-agent-utils inline truncation).
+- D21/PR-T3 tool-argument normalization at dispatch (unserialize stringified JSON, log+count; flatten double-encoding-prone schemas: edits/agents/followups).
+- D22/PR-T4 plain-text edit payloads (SEARCH/REPLACE or diff blocks; JSON keeps only metadata) behind an eval-confirmed flag; XML never parsed from model text.
+- D23/PR-T5 content-hash attestation + gate arming policy (docs-only edits don't re-arm review; memory-drift guard accepts a recorded receipt).
+- D24/PR-T6 fail-loud structured outputs + the context-pruner crash fix.
+
+Live evidence for every amendment exists in this session: the first STATUS.md append was rejected twice because the `edits` array itself was serialized as a string — the exact D21 failure class — and had to be re-issued as a real array.
+
+## Session design docs incorporated into the plan (2026-09-28)
+
+Per the user's request, the standalone files under this session dir were folded into PLAN.md so the plan is self-contained:
+- A "Design documents" index was added to the PLAN header pointing at P1-T1-DESIGN.md (normative ACP contract, GV-01…GV-30, §12 security), P1-T2-DESIGN.md (bridge design; its §6 prerequisites are all landed), X-3B-DESIGN-NOTE.md (Rust workspace charter), D24-OUTPUT-LOSS-TRACE.md (confirmed status fail-open behind D24/PR-T6) and LESSONS.md (bun 1.3.x `--filter` dependency rule).
+- The P1-T1 PLAN entry now cites the protocol contract and records that the design doc's §13 prerequisite list (origin registry, commandHash, first-call approval hook) is fully landed.
+- The P1-T2 PLAN entry was expanded from `[ ]` to `[~]`: DONE = the bridge core landed 2026-09-28 (serve files, SEC-4 socket auth, sanitizeOutbound, approval commandHash + first-call MCP approval gate, client-origin ingest marking + identity-preserving attach, journal restore, getReceipts/gateState); REMAINING = the P1-T1-DESIGN-derived surface (ext v1 methods + GV fixtures, full event-bridge mapping, session/load replay, NEW-2 trust default, NEW-3 holdback, NEW-6 sensitive rawInput, SEC-7 containment, limits, NEW-7 rebinding pinning).
+- A dependency-rule bullet was added to PLAN's Dependencies section: dependency mutations go through `bun add --cwd <ws>` (LESSONS.md bun 1.3.x finding).
+- X-3b already cited its design note; no change needed. EVENTS.jsonl is a runtime event log, not plan content — deliberately not incorporated.
+
+## Compaction quality & archive recall amendments added to the plan (2026-09-28)
+
+Per the user's follow-up (compaction too lightweight; recall_context returns nothing; would language unlocks help), four amendments (D25–D28) were added to SPEC.md under "Compaction quality & archive recall amendments (2026-09-28)" and a CQ task set (CQ-T1..T4) to PLAN.md:
+- D25/CQ-T1 eval-gated hosted-model retention floor (open blockers + eviction pointers + next-action preserved verbatim; the existing retention evals become a blocking gate).
+- D26/CQ-T2 evictions become archived first-class records (rides D20/P2-T2).
+- D27/CQ-T3 recall_context indexed over archives (TS FTS5 first via P8-T8 pull-forward; Rust tantivy tier rides P6-T6).
+- D28 language roles: Python sidecar (D2) extended to compaction selection — LLMLingua-2/summarizer/reranker run natively, absorbing P9-T7's quality core; Rust (X-3b) covers retrieval speed only.
+- PLAN cross-refs updated: P9-T7 scoped down, P8-T8 annotated as pulled forward for archives; dependency lines + traceability tail extended.
+
+## PR-T1 typed handoff envelope landed (2026-09-28)
+
+PR-T1 (D19) is implemented and reviewed:
+- `common/src/types/agent-handoff.ts`: additive optional `outcome` enum on `agentReceiptSchema` (`ok`/`missing_output`/`schema_invalid`/`truncated`/`crashed`); legacy receipts without it stay valid.
+- `spawn-agent-utils.ts` `buildRuntimeAgentReceiptOrThrow`: outcome derived from runtime evidence (precedence crashed > missing_output > schema_invalid > truncated > ok). A runtime-derived non-ok outcome downgrades a would-be `completed` receipt to `partial` with an explicit retryable error unless runtime-attested mutations are the completion authority (RF-2 preserved).
+- Closes both holes from D24-OUTPUT-LOSS-TRACE.md: the status fail-open (researcher-web/librarian/thinker runs without set_output resolved to `completed` with zero errors) and the child self-declared-status rescue (`findReceiptStatus` crediting a nested `status:'completed'`).
+- Validation: fault-injection suite 23/23 (9 new tests incl. the D24 regression), full handlers dir 228/228, common+agent-runtime typecheck clean, code-reviewer LOOKS_GOOD.
+- Meta-evidence: the STATUS.md append for this note was itself rejected once with `edits: expected array, received string` — the exact D21 failure class this envelope is designed to eliminate.
+
+## PR-T2 out-of-band output store landed (2026-09-28)
+
+PR-T2 (D20) is implemented on top of the PR-T1 envelope:
+- `spawn-agent-utils.ts` `normalizeSpawnedAgentOutput` now merges multi-fragment `lastMessage` outputs into one assistant message before bounding (the token-sized-fragment `omittedItems: 100+` failure class), conservatively — any non-all-assistant-text shape returns unchanged.
+- `boundAgentOutputForParent` oversize paths (verdict-shaped fast path + general fallback) persist the FULL serialized output to `os.tmpdir()/openbuff-spawn-output/<sha256>.json` and the parent-visible shape gains `artifactPath`/`artifactBytes`/`artifact` pointer fields; `artifactPath` is in `HIGH_FIDELITY_STRING_FIELDS` so the pointer is never clipped. Write is best-effort fail-open (tmp unwritable → fields omitted, receipt unchanged).
+- Validation: suite 35/35 (12 new), handlers dir 240/240, agent-runtime typecheck exit 0 (after repairing a TS2305 tmpdir mis-import); code-reviewer LOOKS_GOOD.
+
+## PR-T3 tool-argument normalization landed (2026-09-28)
+
+PR-T3 (D21) slice 1 — generic schema-driven unserialize at the dispatch boundary:
+- `tool-executor.ts` `coerceInputScalarsBySchema` walker: string values whose DECLARED schema type is 'array' or 'object' are JSON-parsed and accepted only on shape match; failures pass through unchanged (fail-closed, never thrown); parsed containers continue through the existing items/properties traversal, so nested coercion and nested object-strings normalize too.
+- Every success increments a module-level `toolArgNormalizationStats` (total + per-tool) with an accessor + test reset — the "logged + counted, never silently" requirement.
+- Schema flattening half DEFERRED with rationale recorded in PLAN.md: `edits`/`agents` already have dedicated repair paths and flattening the published provider schemas would change the wire contract mid-flight and invalidate the D17/X-1 golden vectors; the walker is the schema-keyed net for every other tool and for per-entry strings (followups).
+- Validation: tool-validation-error 122/122 (new D21 describe block incl. an object-aliasing test fix — the stats getter returns the live object, so tests snapshot primitives eagerly), X-1 golden vectors 20/20, coerce-to-array 85/85, common+agent-runtime typecheck exit 0.
+
+Live D21 evidence in this same session: the PR-T2 repair-editor `spawn_agents` call was rejected with `agents[0]: expected object, received string` — the exact double-encoding failure class this walker now repairs at the dispatch boundary.
+
+## PR-T4 plain-text edit payloads implemented (2026-09-28, flag OFF; security-review pending)
+
+PR-T4 (D22) implemented behind `OPENBUFF_EDIT_BLOCKS` (default off; flag-off path is byte-identical — X-1 golden vectors 20/20):
+- `common/src/tools/params/edit-blocks.ts`: pure fail-closed `parseEditBlocks` (exact SEARCH/divider/REPLACE markers only, marker-collision detection with blockIndex for content-injection attempts, CRLF handled, 100%-block-content rule, never guesses) + `areEditBlocksEnabled` (find-files truthy-set pattern) + test override.
+- `normalizeTransactionEditList` runs the parser first under the flag when the payload contains a SEARCH marker, feeding the existing per-entry pipeline (type inference, bounds, refinements unchanged); parse errors fall through to the existing JSON diagnostics.
+- Flag-gated provider surface in `edit-transaction.ts`: description section + providerInputSchema string arm only when the flag is on at module load; the runtime inputSchema has NO string arm (the preprocess translates before schema evaluation), keeping `CodebuffToolCall` edits typed as the edit array and the handler untouched (this restructure fixed the TS7006/TS2322 inference fallout from the first union attempt).
+- Deterministic eval scaffold `evals/edit-blocks/scenario.test.ts` (EB1 equivalence through the real schema, EB2 escaping-overhead with block≤json assertions for code fixtures, EB3 adversarial injection fails closed end-to-end, EB4 flag-off identity) + README noting the live completion-rate A/B (the actual flip gate) requires agent runs and stays manual.
+- Validation: edit-blocks 26/26, common params 202/202, eval 10/10, handlers 240/240, common+agent-runtime typecheck exit 0.
+
+## PR-T5 content-hash attestation + gate arming landed (2026-09-28)
+
+PR-T5 (D23) — three slices:
+- `Base2ReviewReceipt.reviewedFileHashes?: Array<{path, hash}>` (agents/base2/gate-state.ts, additive) populated at receipt build in base2.ts via `readGateFileContentMarker` for creditable markers only — reviewer receipts now carry per-file content hashes instead of session-timestamp identity.
+- Docs-only edits after a reviewer pass skip the reviewer (`reviewer skip: docs-only edits after last review`, telemetry `reviewer-skip-docs-only-after-review`); base2.ts splits `editsHappened` into reviewable vs docs-only edit flags — the per-file content-marker eviction still catches real drift in reviewed files.
+- `scripts/memory-drift-guard.ts` `checkStaleness` consults `<root>/.openbuff/memory/review-receipt.json` (loaded once per call, fail-open: missing/malformed = absent); a LOOKS_GOOD receipt whose `fileHashes` match the CURRENT sha256 of every file in the pair's last src commit (batched `git log -1 --name-only`) suppresses the stale finding — drift, missing entries, or wrong verdict keep it standing.
+- Tests: memory-drift-guard 57/57 (7 new receipt tests; one fixture fix — receipt hash keys are individual committed file paths, not directory pathspecs), base2 receipt-hash + docs-only-skip tests green, agents + scripts typecheck exit 0.
+
+## PR-T6 context-pruner crash fix landed (2026-09-28) — PR set complete
+
+PR-T6 (D24) — the fail-loud half already landed in PR-T1 (typed `missing_output` outcome + status downgrade + retryable error; D24 regression test pins that a set_output-less researcher-web run no longer resolves `completed`). This task's remaining half:
+- `agents/context-pruner.ts`: the tool-message JSON-part loop now guards `part.value` with object-type + null checks, so the `'exitCode' in value` and `'answers' in value` checks can no longer throw `TypeError: Cannot use 'in' operator` on truthy primitives (the crash reproduced 3x live this session). Arrays still flow through; falsy/0/null are still skipped; no downstream behavior change for well-formed objects.
+- New describe block in `agents/__tests__/context-pruner.test.ts` reproduces the crash shapes (string value, `42`, `true`, and a string-valued `run_terminal_command` part), each asserting the pruner completes without throwing.
+- Validation: pruner suite 127/127, agents typecheck exit 0, full monorepo typecheck green.
+
+With PR-T1 through PR-T6 all landed, the protocol-reliability task set is complete; only PR-T3's schema-flattening half and PR-T4's live A/B eval remain deferred (both documented in PLAN.md).
+
+## PR-T3 slice 2 closed as superseded + CQ-T1 retention floor landed (2026-09-28)
+
+**PR-T3 slice 2 (D21 schema flattening): CLOSED, option A — no-op with recorded rationale.** The original premise (schema depth empirically triggers double-encoding) is superseded by slice 1's dispatch repair. Per-tool disposition verified from source: `followups` is already flat; `agents` needs per-agent `params` namespaces; `edits` escaping is solved by D22's block format. The walker's recursion coverage (stringified whole-`agents` array + nested stringified `params`) is now pinned by a regression test (tool-validation-error.test.ts D21 block, 12/12). Zero golden-vector churn — no providerInputSchema artifact changed. Re-open trigger recorded in PLAN.md: sustained per-tool repair rates in toolArgNormalizationStats.
+
+**CQ-T1 (D25) hosted-model retention floor: TS slice LANDED.** `enforceKnowledgeMemoryBudgets` in `agents/context-pruner.ts` excludes `blockers` and `reviewReceipts` from the whole-block ceiling `EVICTION_ORDER` (D25 — open reviewer blockers and reviewer attestation fingerprints survive any compaction pass verbatim; per-field count/text caps still bound them). The performance-specialist round then hardened the guarantee: a superseded-review collapse (`collapseToNewestPerReviewer`) reclaims resolved-review history — the newest receipt + blocker per reviewer agent type — under ceiling pressure, so the hard ceiling remains an enforceable upper bound (the original naive exclusion could render the block ~1.4–1.6x over ceiling on small windows; the collapse closes that, and the ceiling loop still terminates with strict progress on every branch). The compaction-retention eval is now the blocking regression floor with nine scenarios: S1–S5 unchanged, S2 strengthened (seeded blocker survives the 8k-class window), S6 (blocker + receipt fingerprint both survive the small window, recall 1.0), S7 (worst-case pinned payload lands under the hard ceiling), S8 (a passing review supersedes older receipts from the same reviewer, and the LOOKS_GOOD receipt replaces the superseded BLOCKING history), S9 (ceiling pressure drains ordinary lists before touching receipts, blockers, or the task contract). Validation: compaction-retention 9/9, context-pruner 127/127, agents typecheck exit 0. Remaining for CQ-T1 proper: eviction pointers ride CQ-T2/D26; the selection-quality core stays with the D2 Python sidecar (D28).
+
+## Review receipt seeded — drift-guard suppression exercised end-to-end (2026-09-28)
+
+`.openbuff/memory/review-receipt.json` was seeded from the PR-T4 edit-blocks LOOKS_GOOD review (gate receipt 52yJXHzIQkQ): fileHashes carry raw-byte sha256 of the four files in the last commit touching `common/src` (the PR-T4 commit). Verified live: the memory-drift guard's only stale finding (`common/knowledge.md` vs `common/src`) is now suppressed with the log line `staleness suppressed by review receipt: common/knowledge.md`, and `guard:memory-drift` exits 0 with zero findings — the first end-to-end exercise of the PR-T5 receipt path against real repo state, replacing the timestamp-only knowledge.md touch pattern.
+
+## CQ-T2 evictions archived + CQ-T4 multi-pass drift sweep landed (2026-09-28)
+
+**CQ-T2 (D26) — evicted tool-result segments become retrievable archive records.** The "eviction is deliberately NOT archived" decision in `context-archive.ts` is superseded: `ContextArchiveSnapshot` gains an additive optional `tool_result_eviction` action plus `steps?: number[]` (original-transcript step provenance) and `reason?: string`; `evictStaleToolResults` returns an additive `evicted?: Array<{toolCallId, toolName, content, stepIndex}>` carrying the FULL pre-tombstone content (omitted on no-op paths); new `archiveEvictedToolResults` persists them identity-keyed, bounded by the existing archive cap (oldest dropped first), wired live in `run-agent-step.ts` before the history swap. `recallFromArchive` scans eviction snapshots as first-class recall sources. Gate test: round-trip — an archived fact is recallable after eviction. Validation: context-archive + tool-result-eviction suites 31/31, agent-runtime 1958/1958, common 1450/1450, common+agent-runtime typecheck exit 0. Journal persistence rides P2-T2.
+
+**CQ-T4 (D25) — multi-pass drift sweep.** The compaction-retention eval gains S10 (three consecutive small-window passes, each pass's real set_messages output fed back as the next pass's input; blocker + receipt fingerprint survive every pass, final recall 1.0) and S11 (two cycles alternating baseline → small-window budget, proving the floor holds across window-size oscillation); a runSinglePass refactor exposes the compacted transcript for re-feeding; the README's single-pass-only known-gap note is closed. Validation: compaction-retention 11/11.
+
+**PR-T4 live A/B: environment blocker recorded.** This session's environment has no OPENBUFF_API_KEY and no .openbuff/providers.json (verified via env + filesystem check), so the live completion-rate A/B cannot run here — it needs a provider-configured environment or the eval-runner CI path once P8-T0 lands. The deterministic half (10/10, block/json 0.795–0.984) is recorded in PLAN.md.
+
+Meta-evidence: the STATUS.md append for this note was rejected once with `edits: expected array, received string` — the D21 failure class — before being re-issued as a real array.
+
+## CQ-T3 indexed recall_context landed (2026-09-28)
+
+**CQ-T3 (D27, TS slice) — `recall_context` queries an FTS5 index instead of brute-force substring scans, and empty is distinguishable from failed.** New `packages/agent-runtime/src/util/archive-recall-index.ts`: `recallFromArchiveIndexed` builds an IN-MEMORY bun:sqlite FTS5 index per call over flattened archive rows (dynamic `await import('bun:sqlite')`, no new npm deps; per-call build is the right shape while the archive is in-memory 8×200×4k — bounded, deterministic, cache-invalidation-free). Rows reuse the exported `stepProvenance` from context-archive.ts, so eviction snapshots' original-transcript steps flow through. User queries are sanitized (FTS5 operator/syntax chars stripped, terms double-quote-wrapped) so hostile input can never cause a syntax-error fallback. The `recall_context` handler emits additive `indexState: 'indexed' | 'fallback'` plus a bounded `indexError` — the D27 empty-vs-failed distinction — and fail-opens to the byte-identical `recallFromArchive` on any index failure (bun:sqlite unavailable, FTS5 unsupported, build/query error, >16MB text cap) with scanner-identical results. Gate test: recall-over-archive integration with seeded facts — indexed round-trip incl. eviction-snapshot step provenance, healthy-empty vs failed-index distinguishable, hostile-query sanitization, newest-first ordering, fail-open parity, shape compat. One debugger round fixed the fixture-vs-scanner provenance parity (rows now pin scanner-parity step semantics). Validation: archive-recall-index + context-archive suites 37/37, common full 1450/1450, agent-runtime + common typecheck exit 0. Remaining for CQ-T3 proper: BM25 ranking is available but recency-first ordering is kept for scanner-contract compatibility (documented in the module); Rust tantivy tier stays P6-T6.
