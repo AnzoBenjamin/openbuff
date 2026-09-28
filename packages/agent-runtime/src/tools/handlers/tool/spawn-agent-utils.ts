@@ -14,7 +14,11 @@ import {
   agentReceiptSchema,
   agentRoleSchema,
 } from '@codebuff/common/types/agent-handoff'
+import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { loopAgentSteps } from '../../../run-agent-step'
 import { getAgentTemplate } from '../../../templates/agent-registry'
@@ -586,6 +590,11 @@ const HIGH_FIDELITY_STRING_FIELDS = new Set([
   'fullLogPath',
   'logFile',
   'jobId',
+  // PR-T2 (D20): oversize-fallback artifact pointer — a short verbatim scratch
+  // path the parent reads back via read_files. Same contract as
+  // fullLogPath/logFile: never truncated, so compaction cannot clip the
+  // pointer out of the receipt.
+  'artifactPath',
 ])
 const PARENT_AGENT_OUTPUT_ARRAY_ITEMS = 48
 // extractedLines is control-plane: the basher 80-line extract must survive
@@ -842,6 +851,35 @@ function summarizeNestedAgentOutput(value: unknown): unknown {
   }
 }
 
+/**
+ * PR-T2 (D20) Part B: best-effort persistence of the FULL untruncated child
+ * output when the parent-visible shape must fall back to a truncated receipt.
+ * Content-addressed by the sha256 of the serialized payload, so the same
+ * content always maps to the same scratch path (idempotent overwrite).
+ * `tmpdir()` is resolved at call time so TMPDIR overrides in tests are
+ * respected. Returns the artifact path, or undefined on ANY error — the
+ * oversize fallback must stay lossless-of-receipt even when tmp is unwritable.
+ */
+let oversizeArtifactDirEnsured = false
+
+function persistOversizeArtifact(serialized: string): string | undefined {
+  try {
+    const dir = join(tmpdir(), 'openbuff-spawn-output')
+    if (!oversizeArtifactDirEnsured) {
+      mkdirSync(dir, { recursive: true })
+      oversizeArtifactDirEnsured = true
+    }
+    const artifactPath = join(
+      dir,
+      `${createHash('sha256').update(serialized).digest('hex')}.json`,
+    )
+    writeFileSync(artifactPath, serialized)
+    return artifactPath
+  } catch {
+    return undefined
+  }
+}
+
 function boundAgentOutputForParent(
   value: unknown,
   agentType?: string,
@@ -879,6 +917,18 @@ function boundAgentOutputForParent(
   }
   if (serialized === undefined) return compacted
   if (serialized.length <= PARENT_AGENT_OUTPUT_MAX_CHARS) return compacted
+  // PR-T2 (D20) Part B: persist the FULL serialized payload so the truncated
+  // parent-visible shape below stays recoverable via read_files. On any
+  // persistence error the three artifact fields are omitted entirely and the
+  // fallback shapes stay byte-identical.
+  const artifactPath = persistOversizeArtifact(serialized)
+  const artifactFields = artifactPath
+    ? {
+        artifactPath,
+        artifactBytes: serialized.length,
+        artifact: 'Full untruncated output persisted; read with read_files.',
+      }
+    : {}
   if (compacted && typeof compacted === 'object' && !Array.isArray(compacted)) {
     const record = compacted as Record<string, unknown>
     const valueRecord =
@@ -894,6 +944,7 @@ function boundAgentOutputForParent(
     ) {
       return {
         ...(record.type ? { type: record.type } : {}),
+        ...artifactFields,
         value: {
           schemaVersion: valueRecord.schemaVersion,
           verdict: valueRecord.verdict,
@@ -923,7 +974,68 @@ function boundAgentOutputForParent(
     // parks the run on "did not return the required structured snapshot
     // attestation" despite a complete review.
     ...(attestationCore ?? {}),
+    ...artifactFields,
     summary: `${serialized.slice(0, 48_000)}...[truncated child output]...${serialized.slice(-8_000)}`,
+  }
+}
+
+/**
+ * PR-T2 (D20) Part A: providers often split one logical assistant answer into
+ * dozens of token-sized assistant messages under `lastMessage` mode; naive
+ * compaction then reports 100+ omittedItems and clips the answer mid-sentence.
+ * Conservatively collapse ONLY an unambiguous shape: a `lastMessage` wrapper
+ * whose value is 2+ assistant messages, each carrying exclusively
+ * `{ type: 'text', text: string }` content parts. The texts are concatenated
+ * in order with blank-line separators into a single assistant message. Extra
+ * message fields (e.g. `tags`) are ignored, and the first message's role is
+ * carried over. Any other shape — single message, mixed roles, non-text
+ * parts, wrong envelope — is returned UNCHANGED. Never mutates the input.
+ */
+function mergeLastMessageFragments(output: unknown): unknown {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return output
+  }
+  const record = output as Record<string, unknown>
+  if (record.type !== 'lastMessage' || !Array.isArray(record.value)) {
+    return output
+  }
+  const messages = record.value
+  if (messages.length <= 1) return output
+  const isTextOnlyAssistantMessage = (
+    message: unknown,
+  ): message is {
+    role: string
+    content: Array<{ type: 'text'; text: string }>
+  } => {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return false
+    }
+    const entry = message as Record<string, unknown>
+    if (entry.role !== 'assistant' || !Array.isArray(entry.content)) {
+      return false
+    }
+    return entry.content.every(
+      (part) =>
+        !!part &&
+        typeof part === 'object' &&
+        (part as Record<string, unknown>).type === 'text' &&
+        typeof (part as Record<string, unknown>).text === 'string',
+    )
+  }
+  const texts: string[] = []
+  for (const message of messages) {
+    if (!isTextOnlyAssistantMessage(message)) return output
+    for (const part of message.content) texts.push(part.text)
+  }
+  const firstMessage = messages[0] as { role: string }
+  return {
+    type: 'lastMessage',
+    value: [
+      {
+        role: firstMessage.role,
+        content: [{ type: 'text', text: texts.join('\n\n') }],
+      },
+    ],
   }
 }
 
@@ -931,6 +1043,11 @@ export function normalizeSpawnedAgentOutput(
   output: any,
   agentType?: string,
 ): any {
+  // PR-T2 (D20) Part A: collapse fragmented lastMessage assistant runs FIRST,
+  // before the undefined/error/structured branches, so the merged single
+  // message flows through the normal compaction path. A no-op for every other
+  // shape (the helper returns its input unchanged).
+  output = mergeLastMessageFragments(output)
   // M0-T3 output durability: a child that never called set_output must never
   // surface as an undefined/null/empty value that the parent cannot
   // distinguish from real (possibly compact) output. Emit an explicit partial
