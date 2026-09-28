@@ -599,6 +599,8 @@ const CONTROL_PLANE_ARRAY_FIELDS = new Set([
   'requirementsAddressed',
   'acceptanceCriteriaAddressed',
   'findingsAddressed',
+  'mutationReceipts',
+  'recovery',
   'errors',
   'unresolved',
   'requestedValidation',
@@ -1639,19 +1641,114 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   const foundOutputStatus = findReceiptStatus(params.output)
   const mutationsComplete =
     mutationAgent && hasMutationProgress && errors.length === 0
+  // D19/PR-T1: derive the typed handoff outcome from runtime evidence.
+  // crashed/missing_output/schema_invalid read the RAW params.output (and the
+  // set_output rejection recorded on agent state); truncated reads the
+  // NORMALIZED output. One normalization pass total, reused below as the
+  // receipt's `normalizedOutput`. Precedence when multiple apply:
+  // crashed > missing_output > schema_invalid > truncated > ok.
+  const rawOutputRecord =
+    params.output &&
+    typeof params.output === 'object' &&
+    !Array.isArray(params.output)
+      ? (params.output as Record<string, unknown>)
+      : undefined
+  const crashEnvelopeMessage =
+    rawOutputRecord &&
+    rawOutputRecord.type === 'error' &&
+    typeof rawOutputRecord.message === 'string' &&
+    rawOutputRecord.message.startsWith('Subagent ') &&
+    rawOutputRecord.message.includes(' crashed: ')
+      ? rawOutputRecord.message
+      : undefined
+  const rawOutputMissing =
+    params.output === undefined ||
+    params.output === null ||
+    (typeof params.output === 'string' && !params.output.trim())
+  const lastSetOutputError = params.agentState?.lastSetOutputError
+  const lastSetOutputErrorText =
+    typeof lastSetOutputError === 'string' && lastSetOutputError.trim()
+      ? lastSetOutputError.trim()
+      : undefined
+  const normalizedOutput = normalizeSpawnedAgentOutput(
+    params.output,
+    params.agentType,
+  )
+  const normalizedOutputRecord =
+    normalizedOutput &&
+    typeof normalizedOutput === 'object' &&
+    !Array.isArray(normalizedOutput)
+      ? (normalizedOutput as Record<string, unknown>)
+      : undefined
+  const normalizedTruncationRecord =
+    normalizedOutputRecord?.truncation &&
+    typeof normalizedOutputRecord.truncation === 'object'
+      ? (normalizedOutputRecord.truncation as Record<string, unknown>)
+      : undefined
+  const normalizedOutputTruncated =
+    normalizedOutputRecord?.truncated === true ||
+    (typeof normalizedTruncationRecord?.omittedItems === 'number' &&
+      normalizedTruncationRecord.omittedItems > 0) ||
+    (typeof normalizedTruncationRecord?.omittedChars === 'number' &&
+      normalizedTruncationRecord.omittedChars > 0)
+  const outcome:
+    | 'ok'
+    | 'missing_output'
+    | 'schema_invalid'
+    | 'truncated'
+    | 'crashed' =
+    params.error || crashEnvelopeMessage
+      ? 'crashed'
+      : rawOutputMissing
+        ? 'missing_output'
+        : lastSetOutputErrorText
+          ? 'schema_invalid'
+          : normalizedOutputTruncated
+            ? 'truncated'
+            : 'ok'
+  // D24 fail-closed: a runtime-derived non-ok outcome must never yield a
+  // completed receipt unless runtime-attested mutations are the completion
+  // authority (RF-2). `truncated` stays visible via the outcome field without
+  // downgrading — reviewer receipts legitimately complete while truncated in
+  // transit, and the attestation-core rescue already preserves their verdict.
+  const envelopeUnderminesCompletion =
+    outcome !== 'ok' &&
+    outcome !== 'truncated' &&
+    !mutationsComplete &&
+    params.status === undefined
   const resolvedStatus = completionContractFailed
     ? 'partial'
     : errors.length > 0
       ? 'failed'
       : mutationsComplete
         ? 'completed'
-        : (params.status ??
-          foundOutputStatus ??
-          (mutationAgent ? 'blocked' : 'completed'))
-  const normalizedOutput = normalizeSpawnedAgentOutput(
-    params.output,
-    params.agentType,
-  )
+        : envelopeUnderminesCompletion
+          ? 'partial'
+          : (params.status ??
+            foundOutputStatus ??
+            (mutationAgent ? 'blocked' : 'completed'))
+  if (envelopeUnderminesCompletion) {
+    if (outcome === 'crashed') {
+      // Dedupe: params.error already contributed an equivalent crash error
+      // entry above; only the degrade-envelope crash needs its own diagnostic.
+      if (!params.error) {
+        errors.push({
+          message: `${params.agentType} receipt outcome 'crashed': ${crashEnvelopeMessage}`,
+          retryable: false,
+        })
+      }
+    } else if (outcome === 'missing_output') {
+      errors.push({
+        message: `${params.agentType} receipt outcome 'missing_output': ${params.agentType} ended without calling set_output`,
+        retryable: true,
+      })
+    } else if (outcome === 'schema_invalid') {
+      errors.push({
+        message: `${params.agentType} receipt outcome 'schema_invalid': ${lastSetOutputErrorText}`,
+        retryable: true,
+      })
+    }
+  }
   // mutationsComplete requires errors.length === 0, so a mutationAgent blocked due to
   // missing permission (which surfaces as a receipt error) cannot be coerced to completed
   // here; this only reconciles stale blocked/null child output when runtime-attested mutations exist.
@@ -1719,6 +1816,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     role: inferredRole,
     agentId: params.agentId,
     status: resolvedStatus,
+    outcome,
     workspaceRevision:
       latestMutation?.workspaceRevision ??
       params.agentState?.workspaceState?.revision ??

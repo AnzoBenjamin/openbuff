@@ -451,3 +451,247 @@ describe('buildRuntimeAgentReceipt output durability', () => {
     })
   })
 })
+
+/**
+ * D19/PR-T1: typed handoff `outcome` on the runtime spawn receipt, derived
+ * inside `buildRuntimeAgentReceiptOrThrow` from runtime evidence with
+ * precedence crashed > missing_output > schema_invalid > truncated > ok, plus
+ * the fail-closed D24 downgrade: a non-ok outcome (except `truncated`) must
+ * never resolve to `completed` unless runtime-attested mutations are the
+ * completion authority (RF-2), with exactly one diagnostic error appended.
+ */
+describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
+  const appliedMutationResult = (path: string, callId: string) => {
+    const receiptId = `receipt-${callId}`
+    const action = {
+      actionId: `action-${callId}`,
+      index: 0,
+      action: 'update' as const,
+      path,
+      beforeHash: `before-${callId}`,
+      afterHash: `after-${callId}`,
+    }
+    return {
+      kind: 'file_mutation_result' as const,
+      version: 1 as const,
+      operationId: `operation-${callId}`,
+      outcome: 'applied' as const,
+      actions: [{ ...action, outcome: 'applied' as const }],
+      authorityTier: 'conditional_commit' as const,
+      receiptId,
+      authorityReceipt: {
+        kind: 'commit_receipt' as const,
+        version: 1 as const,
+        receiptId,
+        operationId: `operation-${callId}`,
+        callId,
+        authorityTier: 'conditional_commit' as const,
+        status: 'committed' as const,
+        actions: [{ ...action, status: 'committed' as const }],
+        finalHashes: { [path]: action.afterHash },
+      },
+      errors: [],
+      freshCapabilities: [],
+    }
+  }
+
+  test('downgrades a missing child output to partial with outcome missing_output (D24 regression)', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a1',
+      output: undefined,
+    })
+    // Previously this resolved to 'completed' with zero errors — the D24
+    // fail-open this test pins shut.
+    expect(receipt.status).toBe('partial')
+    expect(receipt.outcome).toBe('missing_output')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "researcher-web receipt outcome 'missing_output': researcher-web ended without calling set_output",
+        retryable: true,
+      },
+    ])
+    expect(receipt.output).toEqual({
+      summary: '',
+      partial: true,
+      errorMessage: 'researcher-web ended without calling set_output',
+    })
+  })
+
+  test('records schema_invalid from a stale lastSetOutputError and downgrades to partial', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-schema-invalid',
+      output: { type: 'structuredOutput', value: { answer: 'x' } },
+      agentState: {
+        messageHistory: [],
+        lastSetOutputError: 'Missing required fields: status',
+      } as any,
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "researcher-web receipt outcome 'schema_invalid': Missing required fields: status",
+        retryable: true,
+      },
+    ])
+  })
+
+  test('keeps a truncated reviewer receipt at its resolved status (no downgrade)', () => {
+    const fingerprint = 'v3:' + 'd'.repeat(64)
+    const big = 'x'.repeat(33_000)
+    const payload: Record<string, string> = {}
+    for (const field of [
+      'text',
+      'message',
+      'summary',
+      'answer',
+      'report',
+      'digest',
+      'stdout',
+      'stderr',
+    ]) {
+      payload[field] = big
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'security-reviewer',
+      agentId: 'a-truncated',
+      output: {
+        nested: {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          status: 'completed',
+          snapshotFingerprint: fingerprint,
+          coverage: 'covered',
+          reviewedFiles: ['src/a.ts'],
+          ...payload,
+        },
+      },
+    })
+    // `truncated` records the outcome without downgrading: a completing
+    // reviewer receipt keeps its resolved status.
+    expect(receipt.outcome).toBe('truncated')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+  })
+
+  test('marks a degrade-envelope crash as crashed and partial with a non-retryable error', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'thinker',
+      agentId: 'a-crash-envelope',
+      output: { type: 'error', message: 'Subagent thinker crashed: boom' },
+    })
+    expect(receipt.outcome).toBe('crashed')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message: "thinker receipt outcome 'crashed': Subagent thinker crashed: boom",
+        retryable: false,
+      },
+    ])
+  })
+
+  test('records crashed for a params.error run without duplicating the crash error', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'thinker',
+      agentId: 'a-crash-error',
+      output: undefined,
+      error: new Error('boom'),
+    })
+    expect(receipt.outcome).toBe('crashed')
+    expect(receipt.status).toBe('failed')
+    // Exactly one crash error: the params.error entry, no duplicate downgrade
+    // diagnostic appended on top of it.
+    expect(receipt.errors).toEqual([{ message: 'boom', retryable: false }])
+  })
+
+  test('keeps outcome ok with completed status for a normal structured output', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-ok',
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'completed', summary: 'done' },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+  })
+
+  test('mutation authority keeps a mutation agent completed despite missing_output', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'editor',
+      agentId: 'a-editor-missing-output',
+      output: undefined,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            toolCallId: 'call-applied',
+            content: [
+              {
+                type: 'json',
+                value: appliedMutationResult('src/edited.ts', 'call-applied'),
+              },
+            ],
+          },
+        ],
+      } as any,
+    })
+    // RF-2: runtime-attested mutations stay the completion authority, so the
+    // receipt is completed while still recording the missing child output.
+    expect(receipt.status).toBe('completed')
+    expect(receipt.outcome).toBe('missing_output')
+    expect(receipt.errors).toEqual([])
+    expect(receipt.changedFiles.map((file) => file.path)).toEqual([
+      'src/edited.ts',
+    ])
+  })
+
+  test('a child self-declared completed status does not rescue a schema_invalid run', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-self-declared',
+      output: { nested: { status: 'completed' } },
+      agentState: {
+        messageHistory: [],
+        lastSetOutputError: 'Missing required fields: answer',
+      } as any,
+    })
+    // findReceiptStatus would credit the nested self-declared 'completed'; the
+    // outcome-derived downgrade must override it.
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "researcher-web receipt outcome 'schema_invalid': Missing required fields: answer",
+        retryable: true,
+      },
+    ])
+  })
+
+  test('agentReceiptSchema accepts outcome and legacy receipts without it', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-schema-field',
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'completed', summary: 'done' },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(agentReceiptSchema.parse({ ...receipt, outcome: 'ok' }).outcome).toBe(
+      'ok',
+    )
+    // Legacy receipts without the additive field keep parsing under .strict().
+    const legacy: Record<string, unknown> = { ...receipt }
+    delete legacy.outcome
+    expect(agentReceiptSchema.parse(legacy).outcome).toBeUndefined()
+  })
+})
