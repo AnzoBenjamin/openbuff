@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
+import { chatThemes } from '../../../utils/theme-system'
+
 import type { ImageContentBlock } from '../../../types/chat'
 
 // Collaborators are mocked so the native <image> branch and the metadata
@@ -21,11 +23,12 @@ mock.module('../../../utils/image-display', () => ({
 }))
 
 mock.module('../../../hooks/use-theme', () => ({
-  useTheme: () => ({
-    foreground: '#ffffff',
-    muted: '#888888',
-    border: '#444444',
-  }),
+  // A complete real theme, not a partial stub: bun's mock.module is global to
+  // the test process, so later test files that render theme-consuming
+  // components (DiffViewer reads theme.name via DIFF_LINE_COLORS) would
+  // otherwise crash on undefined fields. Mirrors the plan-box.test.tsx pattern.
+  useTheme: () => chatThemes.dark,
+  initializeThemeStore: () => {},
 }))
 
 const { ImageBlock } = await import('../image-block')
