@@ -428,10 +428,14 @@ async function main() {
     targetInfo.platform === 'win32' ? `${binaryName}.exe` : binaryName
   const outputFile = join(binDir, outputFilename)
 
-  // Collect all NEXT_PUBLIC_* environment variables
+  // Collect all NEXT_PUBLIC_* environment variables. JSON.stringify quotes
+  // each value as a valid double-quoted JS string literal (escaping embedded
+  // quotes and backslashes), so a value containing `"` cannot produce a
+  // malformed --define argument. `value ?? ''` stays: JSON.stringify(undefined)
+  // would otherwise return the string 'undefined'.
   const nextPublicEnvVars = Object.entries(process.env)
     .filter(([key]) => key.startsWith('NEXT_PUBLIC_'))
-    .map(([key, value]) => [`process.env.${key}`, `"${value ?? ''}"`])
+    .map(([key, value]) => [`process.env.${key}`, JSON.stringify(value ?? '')])
 
   const defineFlags = [
     ['process.env.NODE_ENV', '"production"'],

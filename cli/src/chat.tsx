@@ -112,6 +112,72 @@ import {
 } from './hooks/use-exit-handler'
 import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
 
+// Shared mention-selection helpers. The three mention-selection sites
+// (handleMentionItemClick, onMentionMenuSelect's trySelectAtIndex, and
+// onMentionMenuComplete) resolve the same replacement string from the same
+// match lists and apply the same input splice; these pure module-scope
+// helpers keep that logic in one place. setInputValue/setAgentSelectedIndex
+// stay at the call sites so each hook closure keeps its own dependencies.
+type MentionAgentMatch = { id: string }
+type MentionFileMatch = { filePath: string; isDirectory: boolean }
+
+type MentionReplacement = {
+  replacement: string
+  selectedFile?: MentionFileMatch
+}
+
+/**
+ * Resolve the mention replacement for `index` against the agent/file match
+ * lists. With `useFallback` false (click and Enter-select), an out-of-range
+ * or missing entry yields null and the caller aborts. With `useFallback` true
+ * (tab-complete), a missing entry falls back to the first entry of the same
+ * list; null is returned only when that list is empty. `selectedFile` is set
+ * for file matches so the caller can run the addPendingFileMention side
+ * effect.
+ */
+const resolveMentionReplacement = (
+  index: number,
+  agentMatches: readonly MentionAgentMatch[],
+  fileMatches: readonly MentionFileMatch[],
+  useFallback: boolean,
+): MentionReplacement | null => {
+  if (index < agentMatches.length) {
+    const selected = useFallback
+      ? agentMatches[index] || agentMatches[0]
+      : agentMatches[index]
+    if (!selected) return null
+    return { replacement: `@${selected.id} ` }
+  }
+  const fileIndex = index - agentMatches.length
+  const selectedFile = useFallback
+    ? fileMatches[fileIndex] || fileMatches[0]
+    : fileMatches[fileIndex]
+  if (!selectedFile) return null
+  return {
+    selectedFile,
+    replacement: `@${selectedFile.filePath} `,
+  }
+}
+
+/**
+ * Splice a mention replacement into the input at the active mention token
+ * (the `@` at `startIndex` followed by `query`), returning the new text and
+ * the cursor position just after the inserted replacement.
+ */
+const buildMentionReplacement = (
+  inputValue: string,
+  startIndex: number,
+  query: string,
+  replacement: string,
+): { text: string; cursorPosition: number } => {
+  const before = inputValue.slice(0, startIndex)
+  const after = inputValue.slice(startIndex + 1 + query.length)
+  return {
+    text: before + replacement + after,
+    cursorPosition: before.length + replacement.length,
+  }
+}
+
 export const Chat = ({
   headerContent,
   initialPrompt,
@@ -726,31 +792,27 @@ export const Chat = ({
     (index: number) => {
       if (mentionContext.startIndex < 0) return
 
-      let replacement: string
-      if (index < agentMatches.length) {
-        const selected = agentMatches[index]
-        if (!selected) return
-        replacement = `@${selected.id} `
-      } else {
-        const fileIndex = index - agentMatches.length
-        const selectedFile = fileMatches[fileIndex]
-        if (!selectedFile) return
+      const resolved = resolveMentionReplacement(
+        index,
+        agentMatches,
+        fileMatches,
+        false,
+      )
+      if (!resolved) return
+      if (resolved.selectedFile) {
         addPendingFileMention(
-          selectedFile.filePath,
-          selectedFile.isDirectory,
+          resolved.selectedFile.filePath,
+          resolved.selectedFile.isDirectory,
           getProjectRoot(),
         )
-        replacement = `@${selectedFile.filePath} `
       }
-      const before = inputValue.slice(0, mentionContext.startIndex)
-      const after = inputValue.slice(
-        mentionContext.startIndex + 1 + mentionContext.query.length,
+      const { text, cursorPosition } = buildMentionReplacement(
+        inputValue,
+        mentionContext.startIndex,
+        mentionContext.query,
+        resolved.replacement,
       )
-      setInputValue({
-        text: before + replacement + after,
-        cursorPosition: before.length + replacement.length,
-        lastEditDueToNav: false,
-      })
+      setInputValue({ text, cursorPosition, lastEditDueToNav: false })
       setAgentSelectedIndex(0)
     },
     [
@@ -1241,31 +1303,27 @@ export const Chat = ({
         if (mentionContext.startIndex < 0) return
 
         const trySelectAtIndex = (index: number): boolean => {
-          let replacement: string
-          if (index < agentMatches.length) {
-            const selected = agentMatches[index]
-            if (!selected) return false
-            replacement = `@${selected.id} `
-          } else {
-            const fileIndex = index - agentMatches.length
-            const selectedFile = fileMatches[fileIndex]
-            if (!selectedFile) return false
+          const resolved = resolveMentionReplacement(
+            index,
+            agentMatches,
+            fileMatches,
+            false,
+          )
+          if (!resolved) return false
+          if (resolved.selectedFile) {
             addPendingFileMention(
-              selectedFile.filePath,
-              selectedFile.isDirectory,
+              resolved.selectedFile.filePath,
+              resolved.selectedFile.isDirectory,
               getProjectRoot(),
             )
-            replacement = `@${selectedFile.filePath} `
           }
-          const before = inputValue.slice(0, mentionContext.startIndex)
-          const after = inputValue.slice(
-            mentionContext.startIndex + 1 + mentionContext.query.length,
+          const { text, cursorPosition } = buildMentionReplacement(
+            inputValue,
+            mentionContext.startIndex,
+            mentionContext.query,
+            resolved.replacement,
           )
-          setInputValue({
-            text: before + replacement + after,
-            cursorPosition: before.length + replacement.length,
-            lastEditDueToNav: false,
-          })
+          setInputValue({ text, cursorPosition, lastEditDueToNav: false })
           setAgentSelectedIndex(0)
           return true
         }
@@ -1277,38 +1335,27 @@ export const Chat = ({
         // Complete the word without executing - same as select for mentions
         if (mentionContext.startIndex < 0) return
 
-        let replacement: string
-        const index = agentSelectedIndex
-        if (index < agentMatches.length) {
-          const selected =
-            agentMatches.length > 0
-              ? agentMatches[index] || agentMatches[0]
-              : undefined
-          if (!selected) return
-          replacement = `@${selected.id} `
-        } else {
-          const fileIndex = index - agentMatches.length
-          const selectedFile =
-            fileMatches.length > 0
-              ? fileMatches[fileIndex] || fileMatches[0]
-              : undefined
-          if (!selectedFile) return
+        const resolved = resolveMentionReplacement(
+          agentSelectedIndex,
+          agentMatches,
+          fileMatches,
+          true,
+        )
+        if (!resolved) return
+        if (resolved.selectedFile) {
           addPendingFileMention(
-            selectedFile.filePath,
-            selectedFile.isDirectory,
+            resolved.selectedFile.filePath,
+            resolved.selectedFile.isDirectory,
             getProjectRoot(),
           )
-          replacement = `@${selectedFile.filePath} `
         }
-        const before = inputValue.slice(0, mentionContext.startIndex)
-        const after = inputValue.slice(
-          mentionContext.startIndex + 1 + mentionContext.query.length,
+        const { text, cursorPosition } = buildMentionReplacement(
+          inputValue,
+          mentionContext.startIndex,
+          mentionContext.query,
+          resolved.replacement,
         )
-        setInputValue({
-          text: before + replacement + after,
-          cursorPosition: before.length + replacement.length,
-          lastEditDueToNav: false,
-        })
+        setInputValue({ text, cursorPosition, lastEditDueToNav: false })
         setAgentSelectedIndex(0)
       },
       onOpenFileMenuWithTab: () => {
