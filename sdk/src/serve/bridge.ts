@@ -14,6 +14,7 @@ import type { McpServer } from '@agentclientprotocol/sdk'
 import type { MCPConfig } from '@codebuff/common/types/mcp'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import { printModeToSessionUpdates } from './event-bridge'
 
 /**
  * The structural slice of `OpenbuffClient` the bridge needs: just `.run`. The
@@ -49,6 +50,27 @@ export type ServeBridgeOptions = {
    * host's job.
    */
   markClientMcpServers?: (mcpServers: Record<string, MCPConfig>) => void
+  /**
+   * ACP event richness (P1-T2b, §4.2). `'acp'` (the default) keeps subagent
+   * text, nested-run reasoning, and telemetry variants off the wire; `'full'`
+   * enables subagent text and the `_openbuff.dev/event` ext notifications.
+   */
+  eventsMode?: 'acp' | 'full'
+  /**
+   * Seam for every non-text payload the §4.2 event bridge emits (tool_call,
+   * tool_call_update, plan, usage_update, agent_thought_chunk) plus
+   * `{ method, params }` `_openbuff.dev/event` ext notifications. When
+   * absent, non-text payloads are dropped and the bridge keeps the Wave-1
+   * text-only behavior. Emitting to the real ACP connection is a later wave;
+   * this callback is the transport-free seam.
+   */
+  onSessionUpdate?: (payload: unknown) => void | Promise<void>
+  /**
+   * Absolute project root `tool_call` locations are resolved against. When
+   * omitted, location paths stay relative instead of being silently resolved
+   * against the process cwd.
+   */
+  projectRoot?: string
   /** Optional structured logger forwarded by the host; unused in Wave-1 core. */
   logger?: Logger
 }
@@ -59,10 +81,15 @@ export type ServeBridgeOptions = {
  * live `AcpSessionData` store the read-only ACP extension methods serve.
  *
  * Security posture (P1-T1-DESIGN §12.1 SEC-1):
- * - The bridge NEVER forwards `tool_call`/`tool_result` events or raw tool
- *   output to the client — those are structurally DROPPED. Only model-visible
- *   assistant text (`PrintModeEvent` of type `'text'`) is forwarded, and when
- *   unsure whether an event carries such text the bridge DROPS it.
+ * - By default (no `onSessionUpdate`), the bridge NEVER forwards
+ *   `tool_call`/`tool_result` events or raw tool output to the client — those
+ *   are structurally DROPPED. Only model-visible assistant text
+ *   (`PrintModeEvent` of type `'text'`) is forwarded, and when unsure whether
+ *   an event carries such text the bridge DROPS it.
+ * - When the host supplies `onSessionUpdate` (P1-T2b), the §4.2-mapped tool
+ *   cards, plan entries, usage updates, and `_openbuff.dev/event` ext
+ *   notifications flow through that seam; `rawOutput` is still never emitted
+ *   and tool results cross only as capped `content` text.
  * - Every forwarded chunk passes through {@link sanitizeOutbound} before it
  *   crosses the ACP wire, so a cap.v3 token or provider secret that slipped
  *   into assistant text is redacted as a last line of defense.
@@ -79,21 +106,40 @@ export function createServeBridge(options: ServeBridgeOptions): {
 } {
   const { client, sessionData } = options
   const agentId = options.agentId ?? 'base'
+  const eventsMode = options.eventsMode ?? 'acp'
+  const projectRoot = options.projectRoot ?? ''
 
   const promptHandler: AcpPromptHandler = async (input) => {
     /**
-     * Forwards ONLY model-visible assistant text. `tool_call`/`tool_result`
-     * and every other variant are dropped (return without forwarding). The
-     * raw text feeds gate-state parsing (a no-op when there is no block), and
-     * the sanitized copy is what crosses the wire.
+     * Maps every event through the §4.2 event bridge and forwards the
+     * resulting payloads: `agent_message_chunk` text goes out via `update`
+     * (sanitized), and every other payload goes to the optional
+     * `onSessionUpdate` seam — dropped when the host did not supply it, which
+     * reproduces the Wave-1 text-only behavior. The raw text feeds gate-state
+     * parsing (a no-op when there is no block), and the sanitized copy is
+     * what crosses the wire.
      */
     const handleEvent = async (event: PrintModeEvent): Promise<void> => {
-      const text = extractForwardableText(event)
-      if (text === undefined) return
-      // Record any published gate-state block from the model-visible text; the
-      // store's parser is a no-op when the chunk carries no block.
-      sessionData.updateGateStateFromBlock(input.sessionId, text)
-      await input.update(sanitizeOutbound(text))
+      const payloads = printModeToSessionUpdates(event, {
+        sessionId: input.sessionId,
+        // The run id is not carried on the prompt-handler input yet; the CLI
+        // wave supplies it, so `messageId` is omitted for now.
+        runId: undefined,
+        eventsMode,
+        projectRoot,
+        toolKind: acpToolKind,
+      })
+      for (const payload of payloads) {
+        const text = extractForwardableText(payload)
+        if (text === undefined) {
+          await options.onSessionUpdate?.(payload)
+          continue
+        }
+        // Record any published gate-state block from the model-visible text; the
+        // store's parser is a no-op when the chunk carries no block.
+        sessionData.updateGateStateFromBlock(input.sessionId, text)
+        await input.update(sanitizeOutbound(text))
+      }
     }
 
     // Ingest trust boundary (P1-T2 SEC): mark every client-advertised MCP
@@ -136,17 +182,81 @@ export function createServeBridge(options: ServeBridgeOptions): {
 }
 
 /**
- * Extracts the model-visible assistant text from a `PrintModeEvent`, or
- * `undefined` when the event carries none. Conservative by design: only the
- * `'text'` variant (the assistant message-text chunk) is forwardable. Every
- * other variant — including `tool_call`, `tool_result`, and reasoning deltas —
- * returns `undefined` so the caller drops it.
+ * Extracts the model-visible assistant text from a mapped `agent_message_chunk`
+ * payload, or `undefined` when the payload carries none. Conservative by
+ * design: only the text content of an `agent_message_chunk` is forwardable
+ * through the streaming `update` seam; every other payload is handed to the
+ * optional `onSessionUpdate` seam instead.
  */
-function extractForwardableText(event: PrintModeEvent): string | undefined {
-  if (event.type === 'text' && typeof event.text === 'string') {
-    return event.text
+function extractForwardableText(payload: unknown): string | undefined {
+  if (!isPlainRecord(payload)) return undefined
+  if (payload.sessionUpdate !== 'agent_message_chunk') return undefined
+  const content = payload.content
+  if (!isPlainRecord(content)) return undefined
+  if (content.type !== 'text' || typeof content.text !== 'string') {
+    return undefined
   }
-  return undefined
+  return content.text
+}
+
+/** Type guard for the plain-object payloads the event bridge emits. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The §4.6 tool `kind` mapping — the single table in code, pinned by the
+ * design contract. Tool names reach this table from model-controlled tool
+ * calls, so the record has a null prototype: a name like `'__proto__'` must
+ * never hit an inherited setter.
+ */
+const TOOL_KINDS: Record<string, string> = Object.assign(Object.create(null), {
+  read_files: 'read',
+  read_outline: 'read',
+  read_subtree: 'read',
+  read_image: 'read',
+  read_logs: 'read',
+  list_directory: 'read',
+  git_status: 'read',
+  code_search: 'search',
+  glob: 'search',
+  query_index: 'search',
+  find_files: 'search',
+  find_files_matching_content: 'search',
+  str_replace: 'edit',
+  write_file: 'edit',
+  edit_transaction: 'edit',
+  replace_range: 'edit',
+  rewrite_symbol: 'edit',
+  create_plan: 'edit',
+  update_plan_status: 'edit',
+  run_terminal_command: 'execute',
+  run_file_change_hooks: 'execute',
+  run_targeted_validation: 'execute',
+  kill_job: 'execute',
+  web_search: 'fetch',
+  read_docs: 'fetch',
+  browser_logs: 'fetch',
+  think_deeply: 'think',
+})
+
+/**
+ * Resolves the §4.6 `kind` for a tool call. A mutation whose only action is
+ * `delete` → `'delete'`; whose only action is `move` → `'move'`. The
+ * `inspect_*` prefix family maps to `'read'`; everything else — including
+ * `spawn_agents` and MCP/custom tools — is `'other'`.
+ */
+function acpToolKind(
+  toolName: string,
+  mutation?: { actions: Array<{ action: string }> },
+): string {
+  if (mutation !== undefined && mutation.actions.length > 0) {
+    const actions = new Set(mutation.actions.map((entry) => entry.action))
+    if (actions.size === 1 && actions.has('delete')) return 'delete'
+    if (actions.size === 1 && actions.has('move')) return 'move'
+  }
+  if (toolName.startsWith('inspect_')) return 'read'
+  return TOOL_KINDS[toolName] ?? 'other'
 }
 
 /**

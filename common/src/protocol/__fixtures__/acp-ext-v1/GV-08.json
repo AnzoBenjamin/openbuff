@@ -1,0 +1,73 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "toolCall": {
+        "toolCallId": "call_9",
+        "title": "Approve push: origin feature/x",
+        "kind": "execute",
+        "status": "pending"
+      },
+      "options": [
+        {
+          "optionId": "allow_once",
+          "name": "Allow once",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "reject_once",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "_meta": {
+        "openbuff.dev": {
+          "approval": {
+            "action": "push",
+            "target": "origin",
+            "branch": "feature/x",
+            "risk": "high",
+            "reason": "git push to remote",
+            "scope": {
+              "workspaceId": "ws_1",
+              "runId": "run_root_1",
+              "snapshotId": "workspace.v1.12.abcdef01"
+            }
+          }
+        }
+      }
+    }
+  },
+  "allowOnceResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow_once"
+      }
+    }
+  },
+  "cancelResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "cancelled"
+      }
+    }
+  },
+  "rejectOnceResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "reject_once"
+      }
+    }
+  }
+}

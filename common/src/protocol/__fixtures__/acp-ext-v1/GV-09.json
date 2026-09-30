@@ -1,0 +1,21 @@
+{
+  "notification": {
+    "jsonrpc": "2.0",
+    "method": "_openbuff.dev/gate_state",
+    "params": {
+      "state": {
+        "kind": "openbuff.gate_state",
+        "version": 1,
+        "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+        "status": "passed",
+        "pendingFiles": [],
+        "passedFiles": [
+          "src/a.ts"
+        ],
+        "reviewerVerdict": "LOOKS_GOOD",
+        "validationSummary": "typecheck ok; 12 tests passed",
+        "fingerprint": "v3:0123456789abc"
+      }
+    }
+  }
+}

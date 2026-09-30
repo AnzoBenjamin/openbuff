@@ -7,15 +7,22 @@ import {
   classifyChildRun,
   classifyRunResume,
   createRunJournal,
+  executeReplayActions,
   isRunResumeReportClean,
   DEFAULT_RERUNNABLE_BACKGROUND_AGENT_TYPES,
   executeChildReplay,
   planBackgroundAgentResume,
   planChildResume,
+  planReplayActions,
 } from '../run-journal'
-import type { BackgroundResumeDecision } from '../run-journal'
+import type {
+  BackgroundResumeDecision,
+  ReplayAction,
+  RunResumeReport,
+} from '../run-journal'
 
 import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
 
 /** Deterministic clock so created_at is reproducible in tests. */
@@ -1274,6 +1281,521 @@ describe('buildRunResumeReport (loop-entry resume view)', () => {
         { kind: 'respawn', jobId: 'bg-r', agentType: 'file-picker' },
       ])
       expect(isRunResumeReportClean(report)).toBe(false)
+    } finally {
+      journal.close()
+    }
+  })
+})
+
+/**
+ * P2-T2 final REPLAY SLICE: planReplayActions / executeReplayActions — the
+ * pure planning→execution seam that ACTS on a RunResumeReport.
+ */
+describe('planReplayActions (pure planner over RunResumeReport)', () => {
+  const noopLogger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  } as unknown as Logger
+
+  const makeReport = (
+    overrides: Partial<RunResumeReport> = {},
+  ): RunResumeReport => ({
+    runId: 'parent-p',
+    self: { kind: 'clean' },
+    children: { kind: 'live_continue' },
+    background: [],
+    ...overrides,
+  })
+
+  it('plans awaiting children as replay_child/replayed_completed', () => {
+    const plan = planReplayActions(
+      makeReport({
+        children: {
+          kind: 'needs_children',
+          inFlight: [],
+          awaiting: [
+            { childRunId: 'child-a', childLastSeq: 3 },
+            { childRunId: 'child-b', childLastSeq: 1 },
+          ],
+        },
+      }),
+    )
+    expect(plan.actions).toEqual([
+      {
+        kind: 'replay_child',
+        childRunId: 'child-a',
+        verdict: 'replayed_completed',
+      },
+      {
+        kind: 'replay_child',
+        childRunId: 'child-b',
+        verdict: 'replayed_completed',
+      },
+    ])
+    expect(plan.truncated).toBeUndefined()
+  })
+
+  it('plans in-flight children as live_execution_required and unknown children as child_unknown', () => {
+    const plan = planReplayActions(
+      makeReport({
+        children: {
+          kind: 'needs_children',
+          inFlight: [
+            {
+              kind: 'child_in_flight_tool',
+              childRunId: 'child-t',
+              toolCallId: 'tc',
+            },
+            { kind: 'child_in_flight_llm', childRunId: 'child-l' },
+            { kind: 'child_incomplete_tail', childRunId: 'child-i' },
+            { kind: 'child_unknown', childRunId: 'child-u' },
+          ],
+          awaiting: [],
+        },
+      }),
+    )
+    expect(plan.actions).toEqual([
+      {
+        kind: 'replay_child',
+        childRunId: 'child-t',
+        verdict: 'live_execution_required',
+      },
+      {
+        kind: 'replay_child',
+        childRunId: 'child-l',
+        verdict: 'live_execution_required',
+      },
+      {
+        kind: 'replay_child',
+        childRunId: 'child-i',
+        verdict: 'live_execution_required',
+      },
+      {
+        kind: 'replay_child',
+        childRunId: 'child-u',
+        verdict: 'child_unknown',
+      },
+    ])
+  })
+
+  it('passes background respawn and needs_confirmation decisions through verbatim', () => {
+    const plan = planReplayActions(
+      makeReport({
+        background: [
+          { kind: 'respawn', jobId: 'bg-1', agentType: 'file-picker' },
+          {
+            kind: 'needs_confirmation',
+            jobId: 'bg-2',
+            agentType: 'editor',
+            reason: 'agent type is not known to be idempotent',
+          },
+          { kind: 'skip_terminal', jobId: 'bg-3', status: 'completed' },
+          { kind: 'still_running', jobId: 'bg-4' },
+          {
+            kind: 'already_respawned',
+            jobId: 'bg-5',
+            respawnSpawnSeq: 7,
+          },
+        ],
+      }),
+    )
+    expect(plan.actions).toEqual([
+      {
+        kind: 'respawn_background',
+        jobId: 'bg-1',
+        agentType: 'file-picker',
+      },
+      {
+        kind: 'needs_confirmation',
+        jobId: 'bg-2',
+        agentType: 'editor',
+        reason: 'agent type is not known to be idempotent',
+      },
+    ])
+  })
+
+  it('plans no actions for a clean report', () => {
+    const plan = planReplayActions(makeReport())
+    expect(plan.actions).toEqual([])
+    expect(plan.truncated).toBeUndefined()
+  })
+
+  it('is deterministic: repeated planning yields identical plans', () => {
+    const report = makeReport({
+      children: {
+        kind: 'needs_children',
+        inFlight: [{ kind: 'child_unknown', childRunId: 'child-u' }],
+        awaiting: [{ childRunId: 'child-a', childLastSeq: 0 }],
+      },
+      background: [
+        { kind: 'respawn', jobId: 'bg-1', agentType: 'file-picker' },
+      ],
+    })
+    expect(planReplayActions(report)).toEqual(planReplayActions(report))
+  })
+
+  it('truncates children beyond maxReplays deterministically, recording the first dropped childRunId', () => {
+    const awaiting = Array.from({ length: 5 }, (_, i) => ({
+      childRunId: `child-${i}`,
+      childLastSeq: i,
+    }))
+    const plan = planReplayActions(
+      makeReport({
+        children: { kind: 'needs_children', inFlight: [], awaiting },
+      }),
+      { maxReplays: 2 },
+    )
+    expect(plan.actions).toHaveLength(2)
+    expect(plan.actions).toEqual([
+      {
+        kind: 'replay_child',
+        childRunId: 'child-0',
+        verdict: 'replayed_completed',
+      },
+      {
+        kind: 'replay_child',
+        childRunId: 'child-1',
+        verdict: 'replayed_completed',
+      },
+    ])
+    expect(plan.truncated).toEqual({
+      kind: 'children',
+      firstDroppedChildRunId: 'child-2',
+    })
+  })
+
+  it('the cap covers in-flight children too and never truncates background actions', () => {
+    const plan = planReplayActions(
+      makeReport({
+        children: {
+          kind: 'needs_children',
+          inFlight: [
+            { kind: 'child_unknown', childRunId: 'child-inflight' },
+          ],
+          awaiting: [
+            { childRunId: 'child-0', childLastSeq: 0 },
+            { childRunId: 'child-1', childLastSeq: 1 },
+          ],
+        },
+        background: [
+          { kind: 'respawn', jobId: 'bg-1', agentType: 'file-picker' },
+        ],
+      }),
+      { maxReplays: 1 },
+    )
+    // Planner order: awaiting first, then inFlight — child-inflight is the
+    // first dropped child; the background action is never truncated.
+    expect(plan.actions).toEqual([
+      {
+        kind: 'replay_child',
+        childRunId: 'child-0',
+        verdict: 'replayed_completed',
+      },
+      {
+        kind: 'respawn_background',
+        jobId: 'bg-1',
+        agentType: 'file-picker',
+      },
+    ])
+    expect(plan.truncated).toEqual({
+      kind: 'children',
+      firstDroppedChildRunId: 'child-1',
+    })
+  })
+
+  it('defaults maxReplays to 8', () => {
+    const awaiting = Array.from({ length: 10 }, (_, i) => ({
+      childRunId: `child-${i}`,
+      childLastSeq: i,
+    }))
+    const plan = planReplayActions(
+      makeReport({
+        children: { kind: 'needs_children', inFlight: [], awaiting },
+      }),
+    )
+    expect(plan.actions).toHaveLength(8)
+    expect(plan.truncated).toEqual({
+      kind: 'children',
+      firstDroppedChildRunId: 'child-8',
+    })
+  })
+})
+
+describe('executeReplayActions (seam driver)', () => {
+  const noopLogger = {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  } as unknown as Logger
+
+  const childAction = (
+    childRunId: string,
+    verdict: 'replayed_completed' | 'live_execution_required' | 'child_unknown',
+  ): ReplayAction => ({ kind: 'replay_child', childRunId, verdict })
+
+  it('invokes seams in planner order and counts attempts and successes', async () => {
+    const calls: string[] = []
+    const result = await executeReplayActions(
+      [
+        childAction('child-a', 'replayed_completed'),
+        { kind: 'respawn_background', jobId: 'bg-1', agentType: 'file-picker' },
+        {
+          kind: 'needs_confirmation',
+          jobId: 'bg-2',
+          agentType: 'editor',
+          reason: 'why',
+        },
+      ],
+      {
+        logger: noopLogger,
+        replayChild: async (childRunId, verdict) => {
+          calls.push(`replay:${childRunId}:${verdict}`)
+        },
+        respawnBackground: async (jobId, agentType) => {
+          calls.push(`respawn:${jobId}:${agentType}`)
+        },
+        requestConfirmation: async () => true,
+      },
+    )
+    expect(calls).toEqual([
+      'replay:child-a:replayed_completed',
+      'respawn:bg-1:file-picker',
+    ])
+    expect(result).toEqual({ attempted: 3, succeeded: 3, failed: [] })
+  })
+
+  it('skips every action when no seams are wired (additive-optional)', async () => {
+    const result = await executeReplayActions(
+      [
+        childAction('child-a', 'replayed_completed'),
+        { kind: 'respawn_background', jobId: 'bg-1', agentType: 'file-picker' },
+        {
+          kind: 'needs_confirmation',
+          jobId: 'bg-2',
+          agentType: 'editor',
+          reason: 'why',
+        },
+      ],
+      { logger: noopLogger },
+    )
+    expect(result).toEqual({ attempted: 0, succeeded: 0, failed: [] })
+  })
+
+  it('a declined confirmation (requestConfirmation → false) is a SKIP, never auto-run', async () => {
+    let confirmations = 0
+    const result = await executeReplayActions(
+      [
+        {
+          kind: 'needs_confirmation',
+          jobId: 'bg-2',
+          agentType: 'editor',
+          reason: 'why',
+        },
+      ],
+      {
+        logger: noopLogger,
+        requestConfirmation: async () => {
+          confirmations += 1
+          return false
+        },
+      },
+    )
+    expect(confirmations).toBe(1)
+    expect(result.attempted).toBe(1)
+    expect(result.succeeded).toBe(0)
+    expect(result.failed).toEqual([])
+  })
+
+  it('a confirmed needs_confirmation action counts as succeeded', async () => {
+    const result = await executeReplayActions(
+      [
+        {
+          kind: 'needs_confirmation',
+          jobId: 'bg-ok',
+          agentType: 'file-picker',
+          reason: 'why',
+        },
+      ],
+      {
+        logger: noopLogger,
+        requestConfirmation: async () => true,
+      },
+    )
+    expect(result).toEqual({ attempted: 1, succeeded: 1, failed: [] })
+  })
+
+  it('a failed seam is recorded in failed[] with a bounded message and does not abort later actions', async () => {
+    const calls: string[] = []
+    const result = await executeReplayActions(
+      [
+        childAction('child-boom', 'live_execution_required'),
+        childAction('child-after', 'replayed_completed'),
+      ],
+      {
+        logger: noopLogger,
+        replayChild: async (childRunId) => {
+          if (childRunId === 'child-boom') {
+            throw new Error('boom')
+          }
+          calls.push(childRunId)
+        },
+      },
+    )
+    expect(calls).toEqual(['child-after'])
+    expect(result.attempted).toBe(2)
+    expect(result.succeeded).toBe(1)
+    expect(result.failed).toHaveLength(1)
+    expect(result.failed[0].action).toEqual(
+      childAction('child-boom', 'live_execution_required'),
+    )
+    expect(result.failed[0].error).toBe('boom')
+  })
+
+  it('bounds long seam error messages', async () => {
+    const result = await executeReplayActions(
+      [childAction('child-long', 'replayed_completed')],
+      {
+        logger: noopLogger,
+        replayChild: async () => {
+          throw new Error('x'.repeat(1000))
+        },
+      },
+    )
+    expect(result.failed).toHaveLength(1)
+    expect(result.failed[0].error.length).toBeLessThanOrEqual(304)
+    expect(result.failed[0].error.endsWith('...')).toBe(true)
+  })
+})
+
+describe('replay driver integration (report → plan → execute)', () => {
+  it('drives a fixture journal through buildRunResumeReport → planReplayActions → executeReplayActions', async () => {
+    const parentRunId = 'parent-driver'
+    const journal = makeJournal()
+    try {
+      // Fixture: an awaiting child (completed cleanly), an in-flight child
+      // (killed mid-tool), and an interrupted rerunnable background intent.
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: 'child-done',
+        payload: { agentType: 'helper' },
+      })
+      journal.append('child-done', {
+        eventType: 'llm_request',
+        stepNumber: 0,
+        correlation: 'cd0',
+        payload: { model: 'm' },
+      })
+      journal.append('child-done', {
+        eventType: 'step_boundary',
+        stepNumber: 0,
+        correlation: 'cd-done',
+        payload: { status: 'completed' },
+      })
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 1,
+        correlation: 'child-crashed',
+        payload: { agentType: 'helper' },
+      })
+      journal.append('child-crashed', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'cc-tool',
+        payload: { toolName: 'write_file' },
+      })
+
+      const report = buildRunResumeReport({
+        reader: journal,
+        runId: parentRunId,
+        intents: [
+          {
+            jobId: 'bg-driver',
+            agentType: 'file-picker',
+            status: 'interrupted',
+            startedAt: 1_000,
+            completedAt: 2_000,
+          },
+        ],
+      })
+      expect(isRunResumeReportClean(report)).toBe(false)
+
+      const plan = planReplayActions(report)
+      expect(plan.actions).toEqual([
+        {
+          kind: 'replay_child',
+          childRunId: 'child-done',
+          verdict: 'replayed_completed',
+        },
+        {
+          kind: 'replay_child',
+          childRunId: 'child-crashed',
+          verdict: 'live_execution_required',
+        },
+        {
+          kind: 'respawn_background',
+          jobId: 'bg-driver',
+          agentType: 'file-picker',
+        },
+      ])
+
+      const calls: string[] = []
+      const result = await executeReplayActions(plan.actions, {
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+        } as unknown as Logger,
+        replayChild: async (childRunId, verdict) => {
+          calls.push(`replay:${childRunId}:${verdict}`)
+        },
+        respawnBackground: async (jobId, agentType) => {
+          calls.push(`respawn:${jobId}:${agentType}`)
+        },
+      })
+      expect(calls).toEqual([
+        'replay:child-done:replayed_completed',
+        'replay:child-crashed:live_execution_required',
+        'respawn:bg-driver:file-picker',
+      ])
+      expect(result).toEqual({ attempted: 3, succeeded: 3, failed: [] })
+
+      // The driver's seams are logging-only by contract: the journal was NOT
+      // mutated (no reconciliation markers or terminal boundaries appended).
+      expect(journal.events(parentRunId)).toHaveLength(2)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('a clean report plans and executes nothing (fresh runs stay byte-identical)', async () => {
+    const journal = makeJournal()
+    try {
+      const report = buildRunResumeReport({ reader: journal, runId: 'fresh' })
+      expect(isRunResumeReportClean(report)).toBe(true)
+      const plan = planReplayActions(report)
+      let seamCalls = 0
+      const result = await executeReplayActions(plan.actions, {
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+        } as unknown as Logger,
+        replayChild: async () => {
+          seamCalls += 1
+        },
+        respawnBackground: async () => {
+          seamCalls += 1
+        },
+      })
+      expect(plan.actions).toEqual([])
+      expect(seamCalls).toBe(0)
+      expect(result).toEqual({ attempted: 0, succeeded: 0, failed: [] })
     } finally {
       journal.close()
     }

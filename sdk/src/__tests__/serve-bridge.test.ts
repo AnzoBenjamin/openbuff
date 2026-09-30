@@ -469,4 +469,138 @@ describe('createServeBridge', () => {
     expect(ranAbsent).toBe(true)
     expect(capturedAbsent?.mcpServers).toBeUndefined()
   })
+
+  test('non-text payloads reach onSessionUpdate while text still streams via update', async () => {
+    const sessionData = new AcpSessionData()
+    const received: unknown[] = []
+    const client = makeFakeClient({
+      events: [
+        {
+          type: 'tool_call',
+          toolCallId: 't1',
+          toolName: 'read_files',
+          input: { path: 'src/a.ts' },
+        },
+        { type: 'text', text: 'visible' },
+      ],
+    })
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      onSessionUpdate: (payload) => {
+        received.push(payload)
+      },
+    })
+    const { updates, update } = collectUpdates()
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update,
+      signal: new AbortController().signal,
+    })
+
+    // Text still streams through update (sanitized); the mapped tool card
+    // goes through the new seam instead.
+    expect(updates).toEqual(['visible'])
+    expect(received).toHaveLength(1)
+    expect(received[0]).toMatchObject({
+      sessionUpdate: 'tool_call',
+      toolCallId: 't1',
+      kind: 'read',
+      status: 'pending',
+      // No projectRoot option supplied, so the location stays relative.
+      locations: [{ path: 'src/a.ts' }],
+    })
+  })
+
+  test('without onSessionUpdate, non-text payloads are dropped (Wave-1 behavior)', async () => {
+    const sessionData = new AcpSessionData()
+    const client = makeFakeClient({
+      events: [
+        { type: 'tool_start', toolCallId: 't1' },
+        {
+          type: 'tool_result',
+          toolCallId: 't1',
+          toolName: 'read_files',
+          output: [{ type: 'json', value: { ok: true } }],
+        },
+        { type: 'phase', phase: 'planning' },
+        { type: 'text', text: 'visible' },
+      ],
+    })
+    const { promptHandler } = createServeBridge({ client, sessionData })
+    const { updates, update } = collectUpdates()
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update,
+      signal: new AbortController().signal,
+    })
+
+    expect(updates).toEqual(['visible'])
+  })
+
+  test('eventsMode full forwards telemetry variants as _openbuff.dev/event payloads', async () => {
+    const sessionData = new AcpSessionData()
+    const received: unknown[] = []
+    const phaseEvent: PrintModeEvent = { type: 'phase', phase: 'planning' }
+    const client = makeFakeClient({ events: [phaseEvent] })
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      eventsMode: 'full',
+      onSessionUpdate: (payload) => {
+        received.push(payload)
+      },
+    })
+    const { updates, update } = collectUpdates()
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update,
+      signal: new AbortController().signal,
+    })
+
+    expect(updates).toEqual([])
+    expect(received).toEqual([
+      {
+        method: '_openbuff.dev/event',
+        params: { sessionId: 's1', event: phaseEvent },
+      },
+    ])
+  })
+
+  test('eventsMode full forwards subagent text through the sanitized update seam', async () => {
+    const sessionData = new AcpSessionData()
+    const received: unknown[] = []
+    const client = makeFakeClient({
+      events: [{ type: 'text', text: 'child says cap.v3.1.2.ABCdef here', agentId: 'agent-2' }],
+    })
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      eventsMode: 'full',
+      onSessionUpdate: (payload) => {
+        received.push(payload)
+      },
+    })
+    const { updates, update } = collectUpdates()
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update,
+      signal: new AbortController().signal,
+    })
+
+    // Subagent text is an agent_message_chunk, so it crosses via update —
+    // sanitized like every other forwarded chunk.
+    expect(updates).toHaveLength(1)
+    expect(updates[0]).not.toContain('cap.v3.')
+    expect(updates[0]).toContain('[REDACTED_CAPABILITY]')
+    expect(received).toEqual([])
+  })
 })

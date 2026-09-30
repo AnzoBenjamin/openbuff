@@ -35,7 +35,9 @@ import { getAgentTemplate } from './templates/agent-registry'
 import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
   buildRunResumeReport,
+  executeReplayActions,
   isRunResumeReportClean,
+  planReplayActions,
 } from './util/run-journal'
 import {
   buildAgentToolSet,
@@ -1499,6 +1501,45 @@ export async function loopAgentSteps(
         { resumeReport },
         'Run journal shows interrupted work from a previous run',
       )
+      // P2-T2 final REPLAY SLICE: the report is now ACTED ON structurally —
+      // planned (bounded) and executed through caller-injected seams. These
+      // seams are LOGGING-ONLY: replayChild records the child's disposition
+      // and respawnBackground records the intended respawn without touching
+      // live state. They must NOT re-drive children or respawn background
+      // jobs here: reconcileInterruptedBackgroundAgentIntents above already
+      // reconciled the intents, so a real respawn in the seam would
+      // double-respawn, and P2-T8 upgrades these seams without touching the
+      // planner. Unwired/confirmed seams skip, so a clean report fires no
+      // actions and this wiring stays byte-identical for fresh runs.
+      const replayPlan = planReplayActions(resumeReport)
+      if (replayPlan.actions.length > 0) {
+        const replayResult = await executeReplayActions(replayPlan.actions, {
+          logger,
+          replayChild: async (childRunId, verdict) => {
+            logger.debug(
+              { runId: initialAgentState.runId, childRunId, verdict },
+              'Journal replay: child disposition planned (logging-only seam)',
+            )
+          },
+          respawnBackground: async (jobId, agentType) => {
+            logger.debug(
+              { runId: initialAgentState.runId, jobId, agentType },
+              'Journal replay: background respawn intended (logging-only seam; intents already reconciled)',
+            )
+          },
+        })
+        logger.debug(
+          {
+            runId: initialAgentState.runId,
+            plannedActions: replayPlan.actions.length,
+            truncated: replayPlan.truncated,
+            attempted: replayResult.attempted,
+            succeeded: replayResult.succeeded,
+            failed: replayResult.failed,
+          },
+          'Journal replay actions executed',
+        )
+      }
     }
   }
 

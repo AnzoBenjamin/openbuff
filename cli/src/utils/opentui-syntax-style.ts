@@ -112,3 +112,45 @@ export function createMarkdownSyntaxStyle(
     },
   } satisfies Record<string, StyleDefinitionInput>)
 }
+
+/**
+ * Maps our MarkdownPalette onto an OpenTUI 0.5 SyntaxStyle for the native
+ * <code> renderable (CodeRenderable), used when standalone code text is
+ * rendered outside markdown (PLAN.md P1-T6).
+ *
+ * Verified against the installed @opentui/core 0.5.12, not invented:
+ * - CodeOptions (node_modules/@opentui/core/renderables/Code.d.ts) takes the
+ *   SyntaxStyle via the required `syntaxStyle` option; unstyled spans are
+ *   drawn with the renderable's own fg/bg (TextBufferOptions), so the base
+ *   codeTextFg/codeBackground look is applied by the <code> element itself
+ *   (see components/blocks/code-block.tsx), NOT by a style entry.
+ * - Style names below are tree-sitter capture groups emitted by the shipped
+ *   highlights queries (node_modules/@opentui/core/assets/typescript/
+ *   highlights.scm and the shared ecma query it embeds): comment, string,
+ *   number, boolean, constant, keyword, function, type, module, attribute,
+ *   label, string.escape. CodeRenderable resolves each highlight's group
+ *   name against these registered names.
+ *
+ * Palette mapping (attribute-only where no palette field is unambiguous,
+ * matching createMarkdownSyntaxStyle's don't-guess-colors philosophy):
+ * - strings/numbers reuse inlineCodeFg (legacy code-token accent color).
+ * - functions/types reuse codeHeaderFg (legacy code header color).
+ * - modules/attributes reuse linkFg.
+ * - comments/keywords/booleans/constants get attribute-only styling.
+ */
+export function createCodeSyntaxStyle(palette: MarkdownPalette): SyntaxStyle {
+  return SyntaxStyle.fromStyles({
+    comment: { dim: true },
+    string: { fg: palette.inlineCodeFg },
+    'string.escape': { bold: true },
+    number: { fg: palette.inlineCodeFg },
+    boolean: { bold: true },
+    constant: { bold: true },
+    keyword: { bold: true },
+    function: { fg: palette.codeHeaderFg },
+    type: { fg: palette.codeHeaderFg },
+    module: { fg: palette.linkFg },
+    attribute: { fg: palette.linkFg },
+    label: { italic: true },
+  } satisfies Record<string, StyleDefinitionInput>)
+}

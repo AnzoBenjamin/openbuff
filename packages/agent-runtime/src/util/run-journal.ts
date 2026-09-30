@@ -28,6 +28,7 @@ import type {
   JournalReader,
   JournalWriter,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
 
 /**
@@ -765,4 +766,275 @@ export function isRunResumeReportClean(report: RunResumeReport): boolean {
         decision.kind === 'already_respawned',
     )
   )
+}
+
+/**
+ * P2-T2 final REPLAY SLICE (design §4d/§9): the planning→execution seam that
+ * ACTS on a RunResumeReport. `planReplayActions` is pure — it derives a
+ * bounded, ordered action list from the report without reading files or
+ * mutating anything — and `executeReplayActions` drives that list through
+ * caller-injected seams. The CALLER owns HOW a child is re-driven or a
+ * background job is respawned; the driver only invokes the seam. Every seam
+ * is additive-optional: an unwired run skips the action instead of failing,
+ * so runs without the replay driver wired behave byte-identically. In
+ * particular the background respawn seam must NOT re-run
+ * reconcileInterruptedBackgroundAgentIntents, which the caller has already
+ * executed before planning (a second pass would double-respawn).
+ */
+
+/** One bounded action the replay driver may take for an interrupted run. */
+export type ReplayAction =
+  | {
+      kind: 'replay_child'
+      childRunId: string
+      verdict:
+        | 'replayed_completed'
+        | 'live_execution_required'
+        | 'child_unknown'
+    }
+  | { kind: 'respawn_background'; jobId: string; agentType: string }
+  | {
+      kind: 'needs_confirmation'
+      jobId: string
+      agentType: string
+      reason: string
+    }
+
+/** The planner's output: ordered actions plus optional truncation evidence. */
+export type ReplayPlan = {
+  actions: ReplayAction[]
+  /** Set only when bounded planning dropped children beyond the cap. */
+  truncated?: { kind: 'children'; firstDroppedChildRunId: string }
+}
+
+/** Default cap on replay_child actions per plan (design §9: bounded planning). */
+const DEFAULT_MAX_REPLAYS = 8
+
+/**
+ * Pure planner over a RunResumeReport (design §4d/§9). Never reads files,
+ * never mutates, and is deterministic: the action order follows the report's
+ * own order (awaiting children, then in-flight children, then background
+ * decisions), so repeated planning of the same report yields identical plans.
+ *
+ * - `awaiting` children were already classified child_completed by
+ *   planChildResume, so they plan as replay_child/replayed_completed — the
+ *   planner does not re-derive what the classifier computed.
+ * - `inFlight` dispositions map through the same disposition→verdict mapping
+ *   executeChildReplay uses: an in-flight tool/llm tail or an incomplete tail
+ *   is live_execution_required; an unknown child is child_unknown.
+ * - background decisions of kind 'respawn' plan as respawn_background and
+ *   'needs_confirmation' pass through verbatim; skip_terminal,
+ *   already_respawned, and still_running need no action.
+ *
+ * Bounded: at most `maxReplays` (default 8) replay_child actions are emitted;
+ * children beyond the cap are dropped in planner order and the FIRST dropped
+ * childRunId is recorded on the plan. Background actions are never truncated.
+ */
+export function planReplayActions(
+  report: RunResumeReport,
+  opts: { maxReplays?: number } = {},
+): ReplayPlan {
+  const maxReplays = opts.maxReplays ?? DEFAULT_MAX_REPLAYS
+  const actions: ReplayAction[] = []
+  let truncated: ReplayPlan['truncated']
+  let childActionCount = 0
+
+  const pushChild = (
+    childRunId: string,
+    verdict: 'replayed_completed' | 'live_execution_required' | 'child_unknown',
+  ): boolean => {
+    if (childActionCount >= maxReplays) {
+      truncated ??= { kind: 'children', firstDroppedChildRunId: childRunId }
+      return false
+    }
+    actions.push({ kind: 'replay_child', childRunId, verdict })
+    childActionCount += 1
+    return true
+  }
+
+  if (report.children.kind === 'needs_children') {
+    for (const child of report.children.awaiting) {
+      if (!pushChild(child.childRunId, 'replayed_completed')) break
+    }
+    for (const disposition of report.children.inFlight) {
+      // planChildResume never folds a child_completed disposition into
+      // inFlight; this guard only narrows the union so childRunId is readable.
+      if (disposition.kind === 'child_completed') continue
+      const verdict =
+        disposition.kind === 'child_unknown'
+          ? 'child_unknown'
+          : 'live_execution_required'
+      if (!pushChild(disposition.childRunId, verdict)) break
+    }
+  }
+
+  for (const decision of report.background) {
+    if (decision.kind === 'respawn') {
+      actions.push({
+        kind: 'respawn_background',
+        jobId: decision.jobId,
+        agentType: decision.agentType,
+      })
+    } else if (decision.kind === 'needs_confirmation') {
+      actions.push({
+        kind: 'needs_confirmation',
+        jobId: decision.jobId,
+        agentType: decision.agentType,
+        reason: decision.reason,
+      })
+    }
+  }
+
+  const plan: ReplayPlan = { actions }
+  if (truncated) plan.truncated = truncated
+  return plan
+}
+
+/** Caller-injected seams the executor drives; every seam is optional. */
+export type ReplayDeps = {
+  /**
+   * How to re-drive one child run (the CALLER owns how — live re-drive,
+   * replay-from-journal, or queueing). The driver only invokes the seam with
+   * the planner's verdict.
+   */
+  replayChild?: (childRunId: string, verdict: string) => Promise<void>
+  /**
+   * How to respawn one background job. Must NOT re-run
+   * reconcileInterruptedBackgroundAgentIntents: the caller has already
+   * reconciled intents before planning, and a second pass would
+   * double-respawn.
+   */
+  respawnBackground?: (jobId: string, agentType: string) => Promise<void>
+  /**
+   * Confirmation gate for needs_confirmation actions. Returning false — or
+   * leaving the seam unwired — SKIPS the action: a non-idempotent background
+   * job is never auto-run.
+   */
+  requestConfirmation?: (
+    jobId: string,
+    agentType: string,
+    reason: string,
+  ) => Promise<boolean>
+  logger: Logger
+}
+
+/** Bounded outcome of driving a ReplayPlan's actions through the seams. */
+export type ReplayExecutionResult = {
+  /** Actions for which a seam was actually invoked (skips do not count). */
+  attempted: number
+  /**
+   * Attempted actions whose seam resolved successfully; a declined
+   * confirmation is a skip, not a success.
+   */
+  succeeded: number
+  /** Attempted actions whose seam threw, with bounded error messages. */
+  failed: Array<{ action: ReplayAction; error: string }>
+}
+
+/** Upper bound on a recorded seam error message (design §9: bounded surface). */
+const MAX_REPLAY_ERROR_LENGTH = 300
+
+function boundedReplayErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.length <= MAX_REPLAY_ERROR_LENGTH
+    ? message
+    : `${message.slice(0, MAX_REPLAY_ERROR_LENGTH)}...`
+}
+
+/**
+ * Execute a ReplayPlan's actions through the injected seams, in order. A seam
+ * absence skips its action (additive-optional: an unwired run performs no
+ * replay work and stays byte-identical); a declined confirmation likewise
+ * SKIPS — needs_confirmation actions are never auto-run. A seam that throws
+ * is recorded in `failed` with a bounded message and does not abort the
+ * remaining actions.
+ */
+export async function executeReplayActions(
+  actions: ReadonlyArray<ReplayAction>,
+  deps: ReplayDeps,
+): Promise<ReplayExecutionResult> {
+  const { logger } = deps
+  const result: ReplayExecutionResult = {
+    attempted: 0,
+    succeeded: 0,
+    failed: [],
+  }
+
+  for (const action of actions) {
+    switch (action.kind) {
+      case 'replay_child': {
+        if (!deps.replayChild) {
+          logger.debug(
+            { childRunId: action.childRunId },
+            'Replay seam not wired; skipping replay_child',
+          )
+          continue
+        }
+        result.attempted += 1
+        try {
+          await deps.replayChild(action.childRunId, action.verdict)
+          result.succeeded += 1
+        } catch (error) {
+          result.failed.push({
+            action,
+            error: boundedReplayErrorMessage(error),
+          })
+        }
+        break
+      }
+      case 'respawn_background': {
+        if (!deps.respawnBackground) {
+          logger.debug(
+            { jobId: action.jobId },
+            'Respawn seam not wired; skipping respawn_background',
+          )
+          continue
+        }
+        result.attempted += 1
+        try {
+          await deps.respawnBackground(action.jobId, action.agentType)
+          result.succeeded += 1
+        } catch (error) {
+          result.failed.push({
+            action,
+            error: boundedReplayErrorMessage(error),
+          })
+        }
+        break
+      }
+      case 'needs_confirmation': {
+        if (!deps.requestConfirmation) {
+          logger.debug(
+            { jobId: action.jobId },
+            'Confirmation seam not wired; skipping needs_confirmation (never auto-run)',
+          )
+          continue
+        }
+        result.attempted += 1
+        try {
+          const confirmed = await deps.requestConfirmation(
+            action.jobId,
+            action.agentType,
+            action.reason,
+          )
+          if (confirmed) {
+            result.succeeded += 1
+          } else {
+            logger.debug(
+              { jobId: action.jobId },
+              'Confirmation declined; needs_confirmation action skipped',
+            )
+          }
+        } catch (error) {
+          result.failed.push({
+            action,
+            error: boundedReplayErrorMessage(error),
+          })
+        }
+        break
+      }
+    }
+  }
+
+  return result
 }

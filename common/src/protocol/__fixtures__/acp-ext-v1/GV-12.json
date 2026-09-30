@@ -1,0 +1,17 @@
+{
+  "_note": "Semantic vector (§8 GV-12): a session/cancel notification followed by the pending session/prompt resolving with stopReason 'cancelled'. The pending GV-08 request, if any, also resolves cancelled, which maps the approval to false.",
+  "cancel": {
+    "jsonrpc": "2.0",
+    "method": "session/cancel",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3"
+    }
+  },
+  "promptResult": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "stopReason": "cancelled"
+    }
+  }
+}
