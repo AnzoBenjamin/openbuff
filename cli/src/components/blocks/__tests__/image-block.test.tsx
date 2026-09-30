@@ -1,0 +1,93 @@
+import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+
+import type { ImageContentBlock } from '../../../types/chat'
+
+// Collaborators are mocked so the native <image> branch and the metadata
+// fallback branch can be driven per test (same mock.module-before-dynamic-
+// import pattern as content-with-markdown.test.tsx). The inline-support flag
+// is read during render, so per-test mutation is enough.
+let inlineImageSupported = true
+
+mock.module('../../../utils/terminal-images', () => ({
+  supportsInlineImages: () => inlineImageSupported,
+  getImageSupportDescription: () =>
+    inlineImageSupported ? 'stub inline images' : 'No inline image support',
+}))
+
+mock.module('../../../utils/image-display', () => ({
+  calculateDisplaySize: () => ({ width: 40, height: 12 }),
+}))
+
+mock.module('../../../hooks/use-theme', () => ({
+  useTheme: () => ({
+    foreground: '#ffffff',
+    muted: '#888888',
+    border: '#444444',
+  }),
+}))
+
+const { ImageBlock } = await import('../image-block')
+
+const makeBlock = (
+  overrides: Partial<ImageContentBlock> = {},
+): ImageContentBlock => ({
+  type: 'image',
+  // base64 for "hello"
+  image: 'aGVsbG8=',
+  mediaType: 'image/png',
+  filename: 'photo.png',
+  size: 2048,
+  width: 640,
+  height: 480,
+  ...overrides,
+})
+
+describe('ImageBlock', () => {
+  beforeEach(() => {
+    inlineImageSupported = true
+  })
+
+  test('renders the native <image> renderable with a data-URI source when inline images are supported', () => {
+    const markup = renderToStaticMarkup(
+      <ImageBlock block={makeBlock()} availableWidth={80} />,
+    )
+
+    // D47 Stage 4: the raw escape-sequence emission is replaced by the
+    // 0.5.12 native <image> renderable, sourced from the block's base64
+    // data via a data URI (ImageSource accepts string) and auto protocol.
+    expect(markup).toContain('<image')
+    expect(markup).toContain('data:image/png;base64,aGVsbG8=')
+    expect(markup).toContain('protocol="auto"')
+    // Caption metadata still renders alongside the native image.
+    expect(markup).toContain('photo.png')
+    expect(markup).toContain('2.0KB')
+    // No metadata fallback card in this branch.
+    expect(markup).not.toContain('Image attachment')
+  })
+
+  test('falls back to the metadata card when the terminal has no inline image support', () => {
+    inlineImageSupported = false
+
+    const markup = renderToStaticMarkup(
+      <ImageBlock block={makeBlock()} availableWidth={80} />,
+    )
+
+    expect(markup).toContain('Image attachment')
+    expect(markup).not.toContain('<image')
+    expect(markup).toContain('No inline image support')
+  })
+
+  test('shows the redaction note instead of an image when image data is omitted', () => {
+    const markup = renderToStaticMarkup(
+      <ImageBlock
+        block={makeBlock({ image: '', imageRedacted: true })}
+        availableWidth={80}
+      />,
+    )
+
+    expect(markup).toContain('Image data omitted from saved chat state.')
+    expect(markup).not.toContain('<image')
+  })
+})

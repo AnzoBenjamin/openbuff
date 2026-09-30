@@ -42,6 +42,7 @@ import {
 } from './utils/renderer-cleanup'
 import { initializeSkillRegistry } from './utils/skill-registry'
 import { detectTerminalTheme } from './utils/terminal-color-detection'
+import { detectTerminalImageSupport } from './utils/terminal-images'
 import { setOscDetectedTheme } from './utils/theme-system'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
@@ -492,6 +493,14 @@ async function main(): Promise<void> {
     backgroundColor: 'transparent',
     exitOnCtrlC: false,
     screenMode: 'alternate-screen',
+    // D47 Stage 4: request the raw kitty image transport when our protocol
+    // detection says the terminal runs kitty — our detection module stays the
+    // source of truth (kittyImageTransport verified on CliRendererConfig in
+    // node_modules/@opentui/core/renderer.d.ts). Omitted otherwise so
+    // OpenTUI's own capability probing applies.
+    ...(detectTerminalImageSupport() === 'kitty'
+      ? { kittyImageTransport: 'raw' as const }
+      : {}),
   })
 
   if (smokeBootscreenTimer) {

@@ -365,16 +365,16 @@ export const MessageWithAgents = memo(
 /**
  * Renders agent markdown content through OpenTUI 0.5's native <markdown>
  * renderable. Native setup failures (syntax style construction or shared
- * tree-sitter client creation) degrade to the wrapped plain-text path
- * instead of crashing the agent message render, matching the
- * degrade-to-plain-text contract documented for ContentWithMarkdown.
+ * tree-sitter client creation) degrade to a plain-text <text> element
+ * (native wrapMode handles wrapping) instead of crashing the agent message
+ * render, matching the degrade-to-plain-text contract documented for
+ * ContentWithMarkdown.
  */
 const renderAgentNativeMarkdown = (
   key: string,
   content: string,
   isStreaming: boolean,
   palette: MarkdownPalette | undefined,
-  fallbackWidth: number,
   fallbackFg: string | undefined,
 ): ReactNode => {
   try {
@@ -395,9 +395,11 @@ const renderAgentNativeMarkdown = (
       error,
       'Native markdown rendering failed to set up; degrading to plain text',
     )
+    // D47 Stage 4: the <text> element's native wrapMode: 'word' handles
+    // wrapping, so the raw content is passed through without JS pre-wrap.
     return (
       <text key={key} style={{ wrapMode: 'word', fg: fallbackFg }}>
-        {wrapTextPreservingNewlines(content, fallbackWidth)}
+        {content}
       </text>
     )
   }
@@ -469,8 +471,9 @@ const AgentMessage = memo(
 
     // D47 Stage 2: the legacy remark renderer was removed, so markdown agent
     // content renders through the native <markdown> renderable (with native
-    // setup failures degrading to plain text) and plain text keeps the
-    // wrapTextPreservingNewlines path.
+    // setup failures degrading to plain text). D47 Stage 4: plain text is
+    // passed through unwrapped — the native wrapMode: 'word' on the <text>
+    // element handles wrapping.
     const agentPalette: MarkdownPalette | undefined = markdownPalette
       ? {
           ...markdownPalette,
@@ -478,9 +481,6 @@ const AgentMessage = memo(
         }
       : undefined
     const isMarkdownContent = hasMarkdown(rawDisplayContent)
-    const plainTextContent = isMarkdownContent
-      ? ''
-      : wrapTextPreservingNewlines(rawDisplayContent, agentContentWidth)
 
     const handleTitleClick = (): void => {
       onToggleCollapsed(message.id)
@@ -571,7 +571,6 @@ const AgentMessage = memo(
                     rawDisplayContent,
                     isStreaming,
                     agentPalette,
-                    agentContentWidth,
                     theme?.foreground,
                   )
                 ) : (
@@ -579,7 +578,7 @@ const AgentMessage = memo(
                     key={`agent-content-${message.id}`}
                     style={{ wrapMode: 'word', fg: theme?.foreground }}
                   >
-                    {plainTextContent}
+                    {rawDisplayContent}
                   </text>
                 ))}
             </Button>

@@ -23,8 +23,8 @@ interface ContentWithMarkdownProps {
  * (jsx-namespace.d.ts declares `markdown: MarkdownProps`). The legacy
  * remark-based renderer was removed in D47 Stage 2, so a native setup
  * failure (syntax style construction, shared tree-sitter client creation, or
- * element setup throwing) degrades to plain text via
- * wrapTextPreservingNewlines instead of falling back to a legacy renderer.
+ * element setup throwing) degrades to a bare <text> element (native
+ * wrapMode handles wrapping) instead of falling back to a legacy renderer.
  * Prop names verified against
  * node_modules/@opentui/react/src/types/components.d.ts
  * (MarkdownProps = ComponentProps<MarkdownOptions, MarkdownRenderable>).
@@ -33,7 +33,6 @@ const renderNativeMarkdown = (
   content: string,
   isStreaming: boolean,
   palette: MarkdownPalette,
-  safeCodeBlockWidth: number,
 ): ReactNode => {
   try {
     const syntaxStyle = createMarkdownSyntaxStyle(palette)
@@ -58,7 +57,10 @@ const renderNativeMarkdown = (
       error,
       'Native markdown rendering failed to set up; degrading to plain text',
     )
-    return wrapTextPreservingNewlines(content, safeCodeBlockWidth)
+    // D47 Stage 4: degrade contract kept — no <markdown> element and the raw
+    // content stays visible — but the <text> element's native wrapMode:
+    // 'word' handles wrapping instead of JS pre-wrap.
+    return <text style={{ wrapMode: 'word' }}>{content}</text>
   }
 }
 
@@ -75,13 +77,8 @@ export const ContentWithMarkdown = memo(
       return wrapTextPreservingNewlines(content, safeCodeBlockWidth)
     }
 
-    // renderNativeMarkdown cannot return null: its catch degrades to wrapped
-    // plain text, so the result is used directly.
-    return renderNativeMarkdown(
-      content,
-      isStreaming,
-      palette,
-      safeCodeBlockWidth,
-    )
+    // renderNativeMarkdown cannot return null: its catch degrades to a plain
+    // <text> element, so the result is used directly.
+    return renderNativeMarkdown(content, isStreaming, palette)
   },
 )
