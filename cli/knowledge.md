@@ -386,7 +386,7 @@ All text styling components (`<strong>`, `<em>`, `<span>`, etc.) **MUST** be nes
 
 ```tsx
 // This will cause a black screen!
-function renderMarkdown(content: string) {
+function renderStyledInline(content: string) {
   return (
     <>
       <strong>Bold text</strong>
@@ -400,7 +400,7 @@ function renderMarkdown(content: string) {
 
 ```tsx
 // All styling must be inside <text>
-function renderMarkdown(content: string) {
+function renderStyledInline(content: string) {
   return (
     <text wrap>
       <strong>Bold text</strong>
@@ -436,47 +436,51 @@ function renderMarkdown(content: string) {
 - `<u>` - Underlined text
 - `<br>` - Line break
 
-### Markdown Rendering Implementation
+### Native OpenTUI 0.5 renderables (D47 migration)
 
-**SUCCESS**: Rich markdown rendering has been implemented using `unified` + `remark-parse` with OpenTUI components.
+**SUCCESS**: Rich markdown rendering now uses OpenTUI 0.5.12's native `<markdown>` renderable — there is no remark/unified pipeline anymore.
 
-**Key Insight**: OpenTUI does **not support nested `<text>` components**. Since `chat.tsx` already wraps content in a `<text>` component, the markdown renderer must return **inline JSX elements only** (no `<text>` wrappers).
+**Key Insight**: A renderable CANNOT nest inside a `<text>` element. `<markdown>` must be placed inside a `<box>` as a **sibling** of `<text>`, not a child of it.
 
 **Correct Implementation Pattern**:
 
 ```tsx
-// ✅ CORRECT: Return inline elements that go INSIDE the parent <text>
-export function renderMarkdown(markdown: string): ReactNode {
-  const inlineElements = [
-    <strong>Bold text</strong>,
-    ' and ',
-    <em>italic text</em>,
-  ]
-  return <>{inlineElements}</>
-}
-
-// In chat.tsx:
-;<text wrap>{renderMarkdown(message.content)}</text>
+// ✅ CORRECT: <markdown> is a sibling of <text> under a <box>
+<box style={{ flexDirection: 'column' }}>
+  <markdown
+    content={message.content}
+    syntaxStyle={syntaxStyle}
+    treeSitterClient={treeSitterClient}
+    streaming={isStreaming}
+    conceal
+    concealCode={false}
+    internalBlockMode="top-level"
+  />
+</box>
 ```
-
-**Incorrect Pattern** (causes black screen):
 
 ```tsx
-// ❌ WRONG: Returning <text> components creates nested <text>
-export function renderMarkdown(markdown: string): ReactNode {
-  return (
-    <text wrap>
-      <strong>Bold text</strong>
-    </text>
-  )
-}
+// ❌ WRONG: A renderable inside <text> throws at commit (whole app blanks)
+<text wrap>
+  <markdown content={message.content} />
+</text>
 ```
 
-The implementation uses:
+**Degrade-to-plain-text contract**: if native setup throws (`createMarkdownSyntaxStyle` / `getSharedTreeSitterClient`), the component catches and falls back to plain text (`wrapTextPreservingNewlines` or `<text wrapMode="word">`). Implementations:
 
-- `markdownToInline()`: Converts markdown AST to array of inline JSX elements
-- `renderInlineContent()`: Renders inline styling (`<strong>`, `<em>`, `<span>`)
-- Returns a fragment `<>{inlineElements}</>` that can be safely placed inside parent `<text>`
+- `cli/src/components/blocks/content-with-markdown.tsx` — `renderNativeMarkdown`, used by `ContentWithMarkdown` and `PlanBox`
+- `cli/src/components/message-with-agents.tsx` — `renderAgentNativeMarkdown` for `AgentMessage`
+
+**Legacy renderer removed (D47 Stage 2)**: `renderMarkdown`, `renderStreamingMarkdown`, `markdownToInline`, and `renderInlineContent` no longer exist. `cli/src/utils/markdown-renderer.tsx` now only exports `hasMarkdown`, `hasIncompleteCodeFence`, and the `MarkdownPalette` interface; the `unified` / `remark-parse` / `remark-gfm` / `remark-breaks` dependencies were dropped from `cli/package.json`.
+
+**Syntax highlighting** comes from the shared tree-sitter client, not a local highlighter (the dead stub cli/src/utils/syntax-highlighter.tsx was deleted):
+
+- `cli/src/utils/tree-sitter-client.ts` — `getSharedTreeSitterClient` (lazy singleton, idempotent `addDefaultParsers`, asset-existence filtering, failure caching)
+- `cli/src/utils/opentui-syntax-style.ts` — `createMarkdownSyntaxStyle` maps a `MarkdownPalette` to a 0.5 `SyntaxStyle`
+
+**Diffs** render via the native `<diff>` renderable: `cli/src/components/tools/diff-viewer.tsx` renders one `<diff>` per visible hunk (unified/split views, width-gated line-number gutters via the exported `showLineNumbersGate`, per-hunk collapse).
+
+**Images** render via the native `<image>` renderable in `cli/src/components/blocks/image-block.tsx` (data-URI source, `protocol="auto"`, gated on `supportsInlineImages` from `cli/src/utils/terminal-images.ts`); `cli/src/index.tsx` passes `kittyImageTransport: 'raw'` to `createCliRenderer` when `detectTerminalImageSupport() === 'kitty'`.
 
 ## React Reconciliation Issues
 
@@ -762,104 +766,27 @@ const Parent = () => {
 
 This pattern allows multiple styled components to be composed together within a single `<text>` element while avoiding the "Text must be created inside of a text node" error.
 
-### Markdown Renderer Fragment Issue
+### Markdown Renderer Fragment Issue (Removed Renderer)
 
-**CRITICAL**: When `renderMarkdown()` returns a Fragment, it contains a **mix of JSX elements AND raw text strings** (newlines, text content, etc.). These raw strings become text nodes that violate OpenTUI's reconciler rules if not wrapped properly.
+The legacy remark-based markdown renderer described here was removed in D47 Stage 2. There is no `renderMarkdown()` Fragment output anymore; markdown now renders through the native `<markdown>` renderable (see "Native OpenTUI 0.5 renderables (D47 migration)" above), which is placed inside a `<box>`, never inside `<text>`.
 
-**The problem:**
+The still-valid general principle behind the old lesson: raw strings passed directly under `<box>` become text nodes outside any `<text>` container and violate OpenTUI's reconciler rules. The plain-text degrade path therefore always wraps content in `<text>`:
 
 ```tsx
-// renderMarkdown() returns something like:
-<>
-  <strong>Bold text</strong>
-  '\n'                          // ⚠️ Raw string!
-  <span>More content</span>
-  '\n'                          // ⚠️ Raw string!
-</>
-
-// ❌ WRONG: Passing directly to <box>
+// ✅ CORRECT: raw strings / plain text need a <text> wrapper under <box>
 <box>
-  {renderMarkdown(content)}     // Raw strings create text nodes outside <text>
+  <text wrap>{plainTextContent}</text>
 </box>
+
+// ❌ WRONG: raw string directly under <box>
+<box>{plainTextContent}</box>
 ```
-
-**The solution:**
-
-```tsx
-// ✅ CORRECT: Always wrap markdown output in <text>
-<box>
-  <text wrap>
-    {renderMarkdown(content)}   // Raw strings now inside <text> element
-  </text>
-</box>
-```
-
-**Real-world example from BranchItem component:**
-
-The bug occurred when tool toggles were rendered. Agent toggles worked fine, but tool toggles crashed.
-
-**Why agents worked:**
-
-```tsx
-// Agent content always wrapped in <text>
-<text wrap style={{ fg: theme.agentText }}>
-  {nestedBlock.content}
-</text>
-```
-
-**Why tools failed before fix:**
-
-```tsx
-// Tool content passed directly to <box> - raw strings violated reconciler rules!
-<box>{displayContent} // Could be renderMarkdown() output with raw strings</box>
-```
-
-**The fix:**
-
-```tsx
-// Always wrap ALL content in <text>, whether string or ReactNode
-<box>
-  <text wrap fg={theme.agentText}>
-    {content} // Safe for both strings and markdown Fragments
-  </text>
-</box>
-```
-
-**Key lesson:** Any component that receives content from `renderMarkdown()` or `renderStreamingMarkdown()` MUST wrap it in a `<text>` element, even if the content might be ReactNode. The Fragment can contain raw strings that need the text wrapper to be valid.
 
 ## Toggle Branch Rendering
 
-Agent and tool toggles in the TUI render inside `<text>` components. Expanded content must resolve to plain strings or StyledText-compatible fragments (`<span>`, `<strong>`, `<em>`). Any React tree we pass into a toggle must either already be a `<text>` node or be wrapped in one so that downstream child elements never escape a text container. If we hand off plain markdown React fragments directly to `<box>`, OpenTUI will crash because the fragments often expand to bare `<span>` elements.
+Agent and tool toggles in the TUI render inside `<text>` components. Expanded content must resolve to plain strings or StyledText-compatible fragments (`<span>`, `<strong>`, `<em>`). Any React tree we pass into a toggle must either already be a `<text>` node or be wrapped in one so that downstream child elements never escape a text container. If we hand off raw strings or bare inline elements (`<span>` etc.) directly to `<box>`, OpenTUI will crash because they escape the text container.
 
-Example:
-Tool markdown output (via `renderMarkdown`) now gets wrapped in a `<text>` element before reaching `BranchItem`. Without this wrapper, the renderer emits `<span>` nodes that hit `<box>` and cause `Component of type "span" must be created inside of a text node`. Wrapping the markdown and then composing it with any extra metadata keeps OpenTUI happy.
-
-```tsx
-const displayContent = renderContentWithMarkdown(fullContent, false, options)
-
-const renderableDisplayContent = displayContent ? (
-  <text
-    fg={resolveThemeColor(theme.agentText)}
-    style={{ wrapMode: 'word' }}
-    attributes={theme.messageTextAttributes || undefined}
-  >
-    {displayContent}
-  </text>
-) : null
-
-const combinedContent = toolRenderConfig.content ? (
-  <box
-    style={{ flexDirection: 'column', gap: renderableDisplayContent ? 1 : 0 }}
-  >
-    <box style={{ flexDirection: 'column', gap: 0 }}>
-      {toolRenderConfig.content}
-    </box>
-    {renderableDisplayContent}
-  </box>
-) : (
-  renderableDisplayContent
-)
-```
+Current flow (D47): agent/tool toggle expanded content renders either as plain text (wrapped in `<text>`) or through the native `<markdown>` element, routed via `ContentWithMarkdown` (`cli/src/components/blocks/content-with-markdown.tsx`) for tool blocks and `renderAgentNativeMarkdown` (`cli/src/components/message-with-agents.tsx`) for agent messages — both with the degrade-to-plain-text contract described above.
 
 ### TextNodeRenderable Constraint
 
