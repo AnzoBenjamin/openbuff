@@ -339,6 +339,79 @@ function runCommand(
   }
 }
 
+/**
+ * Marker the built CLI's `--smoke-opentui` probe prints on success
+ * (cli/src/index.tsx, consumed verbatim). Keep in sync with that probe.
+ */
+export const OPENTUI_SMOKE_OK_MARKER = 'opentui smoke ok'
+
+/**
+ * Pure argv for the standalone-binary smoke probe: the built binary is
+ * spawned with the `--smoke-opentui` flag implemented in cli/src/index.tsx
+ * (createTestRenderer over the packaged native library; never takes over
+ * the terminal). Exported so unit tests can pin the probe invocation
+ * without spawning anything.
+ */
+export function buildOpentuiSmokeArgs(): string[] {
+  return ['--smoke-opentui']
+}
+
+/**
+ * Assert the captured stdout of a `--smoke-opentui` probe run contains the
+ * success marker. Kept pure so the unit tests can pin the acceptance
+ * contract (marker present → pass, absent → fail closed) without spawning
+ * a binary.
+ */
+export function assertOpentuiSmokeOutput(stdout: string): void {
+  if (!stdout.includes(OPENTUI_SMOKE_OK_MARKER)) {
+    throw new Error(
+      `Standalone-binary smoke output does not contain "${OPENTUI_SMOKE_OK_MARKER}"; the built binary did not complete the OpenTUI native-library probe`,
+    )
+  }
+}
+
+/** Hard wall-clock budget for the standalone-binary smoke spawn. */
+const SMOKE_BUILT_BINARY_TIMEOUT_MS = 60_000
+/** Cap on the stdout/stderr echoed into a smoke failure, for readable logs. */
+const SMOKE_OUTPUT_FAIL_SLICE = 8 * 1024
+
+/**
+ * Spawn the freshly built standalone binary with the `--smoke-opentui` probe
+ * and require it to print the success marker. The probe runs with a hard
+ * timeout so a hung binary fails the build with a bounded, actionable error
+ * instead of stalling CI. On failure the captured stdout/stderr are included
+ * in the thrown error (which main's handler prints). No shell interpolation:
+ * the binary path and probe flag are passed directly to spawnSync.
+ */
+function runBuiltBinarySmoke(binaryPath: string): void {
+  logAlways(
+    `Running standalone-binary smoke on ${binaryPath} (--smoke-opentui, ${SMOKE_BUILT_BINARY_TIMEOUT_MS / 1000}s timeout)`,
+  )
+  const result = spawnSync(binaryPath, buildOpentuiSmokeArgs(), {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: SMOKE_BUILT_BINARY_TIMEOUT_MS,
+    env: process.env,
+  })
+  const stdout = result.stdout?.toString() ?? ''
+  const stderr = result.stderr?.toString() ?? ''
+  if (result.error) {
+    throw new Error(
+      `Standalone-binary smoke could not run ${binaryPath}: ${result.error.message}`,
+    )
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `Standalone-binary smoke failed for ${binaryPath} with exit code ${result.status}${
+        result.signal ? ` (signal ${result.signal})` : ''
+      }\n--- stdout ---\n${stdout.slice(0, SMOKE_OUTPUT_FAIL_SLICE)}\n--- stderr ---\n${stderr.slice(0, SMOKE_OUTPUT_FAIL_SLICE)}`,
+    )
+  }
+  assertOpentuiSmokeOutput(stdout)
+  logAlways(
+    `✅ Standalone-binary smoke passed: the built binary resolves the OpenTUI native library (${OPENTUI_SMOKE_OK_MARKER})`,
+  )
+}
+
 function getTargetInfo(): TargetInfo {
   if (OVERRIDE_TARGET && OVERRIDE_PLATFORM && OVERRIDE_ARCH) {
     return {
@@ -392,6 +465,9 @@ function getTargetInfo(): TargetInfo {
 async function main() {
   const [, , binaryNameArg, version] = process.argv
   const binaryName = binaryNameArg ?? 'codecane'
+  // Opt-in standalone-binary smoke (--smoke-built-binary). Default CI/release
+  // invocations are unchanged: without the flag no smoke runs.
+  const smokeBuiltBinary = process.argv.includes('--smoke-built-binary')
 
   if (!version) {
     throw new Error('Version argument is required when building a binary')
@@ -400,6 +476,16 @@ async function main() {
   log(`Building ${binaryName} @ ${version}`)
 
   const targetInfo = getTargetInfo()
+  // Resolved once up front so a misconfigured OPENTUI_LIBC fails the build
+  // immediately (before the agent/SDK prebuilds) instead of mid-build, and
+  // reused for the compile subprocess env below.
+  const targetOpentuiLibc = resolveTargetOpentuiLibc(
+    targetInfo.platform,
+    process.env,
+  )
+  if (smokeBuiltBinary) {
+    log('Standalone-binary smoke (--smoke-built-binary) enabled')
+  }
   const binDir = join(cliRoot, 'bin')
 
   if (!existsSync(binDir)) {
@@ -502,7 +588,19 @@ async function main() {
         .join(' ')}`,
     )
 
-    runCommand(COMPILER_BIN, buildArgs, { cwd: cliRoot })
+    // Pin the runtime libc resolution for the compiled binary: the 0.5.x
+    // @opentui/core resolver reads OPENTUI_LIBC at runtime, so leaving it to
+    // the ambient build environment would make the binary's native library
+    // selection non-deterministic. Only Linux targets get the variable, and
+    // only when it resolved to an explicit variant; an unset/empty value
+    // means the runtime default (glibc) and stays unset. process.env is
+    // spread so the compile subprocess keeps PATH and every other variable.
+    const compileEnv =
+      targetInfo.platform === 'linux' && targetOpentuiLibc
+        ? { ...process.env, OPENTUI_LIBC: targetOpentuiLibc }
+        : process.env
+
+    runCommand(COMPILER_BIN, buildArgs, { cwd: cliRoot, env: compileEnv })
   } finally {
     releaseOpenTuiBundleLock()
   }
@@ -559,6 +657,15 @@ async function main() {
 
   if (targetInfo.platform !== 'win32') {
     chmodSync(outputFile, 0o755)
+  }
+
+  // Opt-in standalone-binary smoke (the OpenTUI standalone-test acceptance
+  // gate). Non-legacy lane only: the legacy macOS lane pairs a separate
+  // prebuilt dylib and is validated by its own gates.
+  if (smokeBuiltBinary && !IS_LEGACY_MACOS_BUILD) {
+    runBuiltBinarySmoke(outputFile)
+  } else if (smokeBuiltBinary) {
+    log('Skipping standalone-binary smoke: not supported on the legacy macOS lane')
   }
 
   logAlways(
@@ -1470,14 +1577,18 @@ function patchOpenTuiCoreNativeLoaderForLegacy() {
   logAlways(`Patched OpenTUI 0.5.x native library resolver: ${patchedPath}`)
 }
 
-main().catch((error: unknown) => {
-  if (error instanceof Error) {
-    console.error(error.message)
-  } else {
-    console.error(error)
-  }
-  process.exit(1)
-})
+// Guarded so the unit tests in cli/src/__tests__ can import this module for
+// its exported pure helpers without executing a full build.
+if (import.meta.main) {
+  main().catch((error: unknown) => {
+    if (error instanceof Error) {
+      console.error(error.message)
+    } else {
+      console.error(error)
+    }
+    process.exit(1)
+  })
+}
 
 /**
  * Find web-tree-sitter's tree-sitter.wasm in any plausible node_modules
@@ -1722,9 +1833,46 @@ function assertTarballIntegrity(
   )
 }
 
+/**
+ * Resolve the libc variant a build target must use for its OpenTUI native
+ * bundle, mirroring the @opentui/core 0.5.x runtime resolver
+ * (getCurrentNodeAssetTarget in the shipped chunk bundle): only Linux targets
+ * consult OPENTUI_LIBC — unset or empty means the runtime default (glibc) and
+ * resolves to null, "glibc" and "musl" pass through, and any other non-empty
+ * value throws the exact message the runtime resolver throws, so a
+ * misconfigured environment fails at build time with the same actionable text
+ * the compiled binary would print at runtime. Non-Linux targets have no libc
+ * variant and return null regardless of the variable's value, matching the
+ * runtime resolver, which never validates it off Linux.
+ */
+export function resolveTargetOpentuiLibc(
+  targetPlatform: string,
+  env: Record<string, string | undefined>,
+): 'glibc' | 'musl' | null {
+  if (targetPlatform !== 'linux') return null
+  const libc = env.OPENTUI_LIBC
+  if (libc === undefined || libc === '') return null
+  if (libc === 'glibc' || libc === 'musl') return libc
+  throw new Error(
+    `On Linux, OPENTUI_LIBC must be unset, empty, "glibc", or "musl", got ${JSON.stringify(libc)}`,
+  )
+}
+
 async function ensureOpenTuiNativeBundle(targetInfo: TargetInfo) {
-  const packageName = `@opentui/core-${targetInfo.platform}-${targetInfo.arch}`
-  const packageFolder = `core-${targetInfo.platform}-${targetInfo.arch}`
+  // Mirror the @opentui/core 0.5.x runtime resolver: a musl-targeted build
+  // must fetch, verify, and install the `-musl` native bundle (its digest is
+  // already pinned in OPENTUI_TARBALL_SHA512) — without the suffix the glibc
+  // bundle would be installed and the compiled binary would fail to load its
+  // native library on musl systems.
+  const libc = resolveTargetOpentuiLibc(targetInfo.platform, process.env)
+  const libcSuffix = libc === 'musl' ? '-musl' : ''
+  const libcLabel =
+    targetInfo.platform === 'linux' ? (libc ?? 'glibc (default)') : 'n/a'
+  log(
+    `Ensuring OpenTUI native bundle for ${targetInfo.platform}-${targetInfo.arch}${libcSuffix} (libc: ${libcLabel})`,
+  )
+  const packageName = `@opentui/core-${targetInfo.platform}-${targetInfo.arch}${libcSuffix}`
+  const packageFolder = `core-${targetInfo.platform}-${targetInfo.arch}${libcSuffix}`
   const installTargets = [
     {
       label: 'workspace root',
@@ -1743,7 +1891,7 @@ async function ensureOpenTuiNativeBundle(targetInfo: TargetInfo) {
   )
   if (missingTargets.length === 0) {
     log(
-      `OpenTUI native bundle already present for ${targetInfo.platform}-${targetInfo.arch}`,
+      `OpenTUI native bundle already present for ${targetInfo.platform}-${targetInfo.arch}${libcSuffix}`,
     )
     return
   }
