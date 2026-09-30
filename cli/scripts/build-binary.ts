@@ -24,10 +24,7 @@ import { fileURLToPath } from 'url'
 
 import { resolveGrammarWasmSource } from '../../packages/code-map/src/grammar-wasm-repair'
 import { LANGUAGE_WASM_FILES } from '../../packages/code-map/src/wasm-files'
-import {
-  patchOpenTuiLegacyNativeLoaderSource,
-  restoreOpenTuiNativeLoaderSource,
-} from './open-tui-legacy-patch'
+import { restoreOpenTuiNativeLoaderSource } from './open-tui-legacy-patch'
 
 type TargetInfo = {
   bunTarget: string
@@ -484,8 +481,12 @@ async function main() {
   try {
     patchOpenTuiAssetPaths()
     restoreOpenTuiCoreNativeLoader()
+    restoreOpenTui05NativeLoaderPath()
     if (IS_LEGACY_MACOS_BUILD) {
       assertLegacyMacOSBuildConfig(targetInfo)
+      verifyLegacyBundleShapeFixtures()
+      assertLegacyCompilerSatisfiesOpentuiEngines()
+      verifyLegacyOpentuiDylibMatchesPin()
       patchOpenTuiCoreNativeLoaderForLegacy()
     } else {
       await ensureOpenTuiNativeBundle(targetInfo)
@@ -561,6 +562,24 @@ async function main() {
   )
 }
 
+/**
+ * Legacy macOS lane requirement (finding RF-1-8372bc6f): the legacy build
+ * lane must keep working against the OpenTUI 0.5.x bundle shape. For the
+ * pinned @opentui/core 0.5.x release the lane requires, and the gates in the
+ * legacy branch of main() enforce, exactly:
+ * 1. the 0.5.x native-library resolver (resolveNativeLibraryPath) appears
+ *    exactly once across the shipped index/chunk-*.js bundles, in one of the
+ *    two shapes recorded in verifyLegacyBundleShapeFixtures, so the sibling
+ *    libopentui.dylib patch applies and restores losslessly (the fixture
+ *    self-check plus the in-patch round-trip verification inside
+ *    patchOpenTuiCoreNativeLoaderForLegacy provide runtime evidence);
+ * 2. the shipped legacy libopentui.dylib's source version matches the
+ *    installed @opentui/core (verifyLegacyOpentuiDylibMatchesPin);
+ * 3. the legacy compiler satisfies the installed core's engines.bun floor
+ *    (assertLegacyCompilerSatisfiesOpentuiEngines).
+ * Every gate fails closed and logs its own runtime evidence line at build
+ * time.
+ */
 function assertLegacyMacOSBuildConfig(targetInfo: TargetInfo) {
   if (
     targetInfo.platform !== 'darwin' ||
@@ -864,6 +883,494 @@ function releaseOpenTuiBundleLock(): void {
   }
 }
 
+/**
+ * OpenTUI 0.5.x replaced the 0.2.x template-literal platform import
+ * (`await import(`@opentui/core-${process.platform}-${process.arch}/index.ts`)`)
+ * with resolveNativeLibraryPath() backed by static per-platform imports, so
+ * the 0.2.x-only patch in ./open-tui-legacy-patch.ts no longer finds a loader
+ * to rewrite and every legacy macOS build failed closed. The legacy macOS
+ * lane still ships a macOS 11-compatible libopentui.dylib next to the
+ * executable, so the 0.5.x resolver assignment is rewritten to that sibling
+ * path. In the shipped @opentui/core 0.5.12 bundle the resolver lives inside
+ * a chunk-*.js bundle and declares `var targetLibPath;` separately from its
+ * later assignment (`targetLibPath = await resolveNativeLibraryPath();`), so
+ * the pattern must match the bare assignment as well as a combined
+ * `var`-declaration form. The original statement is preserved verbatim in a
+ * marker comment so restoreOpenTui05NativeLoaderSource() can revert the patch
+ * exactly; restoring must always run before a legacy patch is re-applied to
+ * the shared node_modules bundle. The legacy replacement text is
+ * byte-identical to the 0.2.x legacy loader in ./open-tui-legacy-patch.ts, so
+ * restoreOpenTuiCoreNativeLoader() must not touch files carrying 0.5.x patch
+ * evidence (the marker comment or a 0.5.x resolver): rewriting them to the
+ * 0.2.x canonical loader would corrupt the 0.5.x bundle before its own
+ * restore runs.
+ */
+const OPEN_TUI_05_RESOLVER_PATTERN =
+  /\b(?:var\s+)?targetLibPath\s*=\s*(?:await\s+)?resolveNativeLibraryPath\s*\(\s*\)\s*;/g
+const OPEN_TUI_05_RESOLVER_LEGACY_REPLACEMENT =
+  'var targetLibPath = process.execPath.slice(0, process.execPath.lastIndexOf("/") + 1) + "libopentui.dylib";'
+const OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER =
+  '__OPENBUFF_LEGACY_05_RESOLVER_ORIGINAL__'
+
+/** True when `source` carries OpenTUI 0.5.x's resolveNativeLibraryPath loader. */
+function isOpenTui05NativeLoaderSource(source: string): boolean {
+  return [...source.matchAll(OPEN_TUI_05_RESOLVER_PATTERN)].length > 0
+}
+
+/**
+ * Rewrite OpenTUI 0.5.x's resolveNativeLibraryPath() loader to the sibling
+ * dylib path used by the legacy macOS lane. Throws when the loader is absent
+ * or ambiguous instead of patching a bundle of unknown shape.
+ */
+function patchOpenTui05NativeLoaderSource(source: string): string {
+  const matches = [...source.matchAll(OPEN_TUI_05_RESOLVER_PATTERN)]
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one OpenTUI 0.5.x native library resolver, found ${matches.length}`,
+    )
+  }
+  const original = matches[0]![0]
+  return source.replace(
+    original,
+    `/*${OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER} ${JSON.stringify(original)}*/\n${OPEN_TUI_05_RESOLVER_LEGACY_REPLACEMENT}`,
+  )
+}
+
+/**
+ * Revert patchOpenTui05NativeLoaderSource (a no-op on unpatched sources).
+ * Fails closed when the marker exists but the recorded-original/legacy block
+ * cannot be matched: silently returning here would leave a stale
+ * legacy-patched 0.5.x resolver in the shared node_modules bundle for the
+ * non-legacy build to compile with no signal that anything went wrong.
+ */
+function restoreOpenTui05NativeLoaderSource(source: string): string {
+  const markerStart = `/*${OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER} `
+  const start = source.indexOf(markerStart)
+  if (start === -1) return source
+  const end = source.indexOf('*/', start)
+  if (end === -1) {
+    throw new Error(
+      `Found an unterminated ${OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER} comment; the shared OpenTUI 0.5.x bundle carries a corrupt legacy patch and cannot be restored — reinstall @opentui/core before building`,
+    )
+  }
+  const markerBlock = source.slice(start, end + 2)
+  let original: string
+  try {
+    const parsed: unknown = JSON.parse(
+      source.slice(start + markerStart.length, end),
+    )
+    if (typeof parsed !== 'string') {
+      throw new Error('the recorded original is not a JSON string')
+    }
+    original = parsed
+  } catch (error) {
+    throw new Error(
+      `Could not restore the OpenTUI 0.5.x native library resolver: the ${OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER} comment does not record the original resolver as a JSON string (${error instanceof Error ? error.message : String(error)}); the shared OpenTUI 0.5.x bundle carries a corrupt legacy patch — reinstall @opentui/core before building`,
+    )
+  }
+  const patchedBlock = `${markerBlock}\n${OPEN_TUI_05_RESOLVER_LEGACY_REPLACEMENT}`
+  if (!source.includes(patchedBlock)) {
+    throw new Error(
+      `Found the ${OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER} comment but not the legacy resolver block it recorded; the shared OpenTUI 0.5.x bundle carries a stale legacy patch of an unexpected shape — reinstall @opentui/core before building`,
+    )
+  }
+  return source.replace(patchedBlock, original)
+}
+
+/**
+ * OpenTUI 0.5.x ships its JS as an index entry plus code-split chunk-*.js
+ * bundles (chunk-bun-*.js in @opentui/core 0.5.12). The native-library
+ * resolver and the tree-sitter asset references live in the chunks, so every
+ * scan of the shared node_modules bundle must consider both layouts.
+ */
+function isOpentuiCoreBundleFile(file: string): boolean {
+  return (
+    file.endsWith('.js') &&
+    (file.startsWith('index') || file.startsWith('chunk'))
+  )
+}
+
+function restoreOpenTui05NativeLoaderPath() {
+  const coreDirs = [
+    join(repoRoot, 'node_modules', '@opentui', 'core'),
+    join(cliRoot, 'node_modules', '@opentui', 'core'),
+  ]
+  const searchedFiles = new Set<string>()
+
+  for (const coreDir of coreDirs) {
+    if (!existsSync(coreDir)) continue
+    for (const file of readdirSync(coreDir)) {
+      if (!isOpentuiCoreBundleFile(file)) continue
+      const bundlePath = join(coreDir, file)
+      if (searchedFiles.has(bundlePath)) continue
+      searchedFiles.add(bundlePath)
+
+      const source = readFileSync(bundlePath, 'utf8')
+      const restored = restoreOpenTui05NativeLoaderSource(source)
+      if (restored !== source) {
+        // Atomic replace (see writeBundleFileAtomically): concurrent
+        // build-binary invocations share this node_modules bundle.
+        writeBundleFileAtomically(bundlePath, restored)
+        logAlways(
+          `Restored OpenTUI 0.5.x native resolver (reverted stale legacy patch): ${bundlePath}`,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * The legacy macOS lane copies a prebuilt libopentui.dylib next to the
+ * executable while the compiled binary embeds the JS bindings of the
+ * @opentui/core version pinned in cli/package.json. The two FFI surfaces
+ * must match: newer OpenTUI versions add FFI entry points (clipboard, audio)
+ * and change struct layouts, so a dylib built from an older OpenTUI source
+ * crashes or misbehaves under newer bindings. Callers that know the dylib's
+ * source version declare it via OPENBUFF_LEGACY_OPENTUI_VERSION, and it must
+ * equal the installed @opentui/core version. Without that declaration the
+ * gate still fails closed on the drift it can observe from the workspace:
+ * the legacy lane (0.5.x native-library resolver patch plus the shipped
+ * dylib pairing) is validated only against the pinned @opentui/core version,
+ * so an installed core that has moved off the pin must not compile the
+ * legacy lane.
+ */
+function verifyLegacyOpentuiDylibMatchesPin() {
+  const installedCoreVersion = readInstalledOpentuiCoreVersion()
+  const dylibVersion = process.env.OPENBUFF_LEGACY_OPENTUI_VERSION
+  if (dylibVersion) {
+    if (dylibVersion !== installedCoreVersion) {
+      throw new Error(
+        `Legacy libopentui.dylib version ${dylibVersion} does not match the installed @opentui/core ${installedCoreVersion}; rebuild the legacy dylib from the matching OpenTUI source before building the legacy lane.`,
+      )
+    }
+    logAlways(
+      `Verified legacy libopentui.dylib version ${dylibVersion} matches @opentui/core ${installedCoreVersion}`,
+    )
+    return
+  }
+  const pinnedCoreVersion = readPinnedOpentuiCoreVersion()
+  if (installedCoreVersion !== pinnedCoreVersion) {
+    throw new Error(
+      `Installed @opentui/core ${installedCoreVersion} does not match the pinned version ${pinnedCoreVersion} in cli/package.json; the legacy macOS lane (0.5.x native-library resolver patch and libopentui.dylib pairing) is validated only against the pin. Install @opentui/core ${pinnedCoreVersion} or declare the legacy dylib's source version via OPENBUFF_LEGACY_OPENTUI_VERSION.`,
+    )
+  }
+  logAlways(
+    `Verified legacy lane against @opentui/core pin ${pinnedCoreVersion} (installed ${installedCoreVersion})`,
+  )
+}
+
+type OpentuiCorePackageInfo = {
+  version?: string
+  engines?: { bun?: string; node?: string }
+}
+
+function readInstalledOpentuiCorePackage(): OpentuiCorePackageInfo {
+  for (const base of [cliRoot, repoRoot]) {
+    const corePackagePath = join(
+      base,
+      'node_modules',
+      '@opentui',
+      'core',
+      'package.json',
+    )
+    if (!existsSync(corePackagePath)) continue
+    return JSON.parse(readFileSync(corePackagePath, 'utf8')) as OpentuiCorePackageInfo
+  }
+  throw new Error(
+    'Could not read the installed @opentui/core version from node_modules/@opentui/core/package.json',
+  )
+}
+
+function readInstalledOpentuiCoreVersion(): string {
+  const { version } = readInstalledOpentuiCorePackage()
+  if (!version) {
+    throw new Error(
+      'The installed @opentui/core package.json does not declare a version',
+    )
+  }
+  return version
+}
+
+/**
+ * Parse a dot-separated numeric version (e.g. '1.2.0') into numeric parts.
+ * Returns null when any component is not fully numeric — including prerelease
+ * suffixes ('1.2.0-beta.1' must fail closed, not silently parse its '0-beta'
+ * component as the numeric part 0) — so callers never compare a version they
+ * cannot interpret exactly.
+ */
+function parseNumericVersionParts(version: string): number[] | null {
+  const parts = version.split('.')
+  if (parts.length === 0) return null
+  const numericParts: number[] = []
+  for (const part of parts) {
+    if (!/^[0-9]+$/.test(part)) return null
+    numericParts.push(Number.parseInt(part, 10))
+  }
+  return numericParts
+}
+
+/**
+ * Compare two numeric version part lists, padding the shorter with zeros so
+ * a shorter bound (e.g. the [2] ceiling of '^1') compares correctly against
+ * a longer version (e.g. '1.5.0').
+ */
+function compareVersionParts(a: number[], b: number[]): number {
+  const length = Math.max(a.length, b.length)
+  for (let i = 0; i < length; i++) {
+    const aPart = a[i] ?? 0
+    const bPart = b[i] ?? 0
+    if (aPart !== bPart) return aPart < bPart ? -1 : 1
+  }
+  return 0
+}
+
+/**
+ * Exclusive upper bound, as numeric parts, of a `^` or `~` floor per semver
+ * range semantics: `^a.b.c` excludes (a+1).0.0 — or 0.(b+1).0 / 0.0.(c+1)
+ * when the leading majors are zero — and `~a.b.c` excludes a.(b+1).0 (a bare
+ * `~a` or `^a` excludes (a+1).0.0). Without this ceiling the legacy-lane
+ * gate would treat these comparators as unbounded >= floors and accept a
+ * far newer compiler than the range declares.
+ */
+function caretTildeCeiling(
+  operator: '^' | '~',
+  floorParts: number[],
+): number[] {
+  const [major = 0, minor = 0, patch = 0] = floorParts
+  if (operator === '^') {
+    if (floorParts.length === 1 || major > 0) return [major + 1]
+    if (floorParts.length === 2 || minor > 0) return [0, minor + 1]
+    return [0, 0, patch + 1]
+  }
+  if (floorParts.length === 1) return [major + 1]
+  return [major, minor + 1]
+}
+
+/**
+ * Minimal engines-range check for the legacy-lane gate: a range is satisfied
+ * when at least one `||` alternative is satisfied and every space-separated
+ * comparator inside an alternative is satisfied. Supported operators are
+ * >=, >, <=, <, =, and `^`/`~` as semver ranges with an exclusive ceiling
+ * (`^1.0.0` is [1.0.0, 2.0.0), `~1.2.0` is [1.2.0, 1.3.0)) — not bare >=
+ * floors. Anything the parser cannot interpret — including prerelease
+ * versions on either side of a comparison — fails closed so the gate never
+ * silently skips a check it could not evaluate.
+ */
+function isVersionSatisfyingRange(version: string, range: string): boolean {
+  const versionParts = parseNumericVersionParts(version)
+  if (!versionParts) return false
+  return range.split('||').some((alternative) =>
+    alternative
+      .trim()
+      .split(/\s+/)
+      .every((comparator) => {
+        const match = /^(>=|<=|>|<|=|\^|~)?\s*v?([0-9][0-9.]*)$/.exec(
+          comparator.trim(),
+        )
+        if (!match) return false
+        const floorParts = parseNumericVersionParts(match[2]!)
+        if (!floorParts) return false
+        switch (match[1]) {
+          case '^':
+          case '~': {
+            const ceiling = caretTildeCeiling(match[1], floorParts)
+            return (
+              compareVersionParts(versionParts, floorParts) >= 0 &&
+              compareVersionParts(versionParts, ceiling) < 0
+            )
+          }
+          case '>':
+            return compareVersionParts(versionParts, floorParts) > 0
+          case '<':
+            return compareVersionParts(versionParts, floorParts) < 0
+          case '<=':
+            return compareVersionParts(versionParts, floorParts) <= 0
+          case '=':
+          case undefined:
+            return compareVersionParts(versionParts, floorParts) === 0
+          default:
+            return compareVersionParts(versionParts, floorParts) >= 0
+        }
+      }),
+  )
+}
+
+/**
+ * The legacy macOS lane compiles src/index.tsx with a Bun 1.0-era compiler
+ * (COMPILER_BIN predates --production; see the buildArgs branch in main),
+ * while the bundle it embeds — the installed @opentui/core — declares a
+ * minimum Bun version in its engines field that the JS bundle's syntax may
+ * depend on. verifyLegacyOpentuiDylibMatchesPin gates the dylib FFI pairing
+ * but cannot observe the compiler, so this gate runs `COMPILER_BIN --version`
+ * and fails closed when it does not satisfy the installed core's engines.bun
+ * floor: a legacy lane compiled by an older compiler against a newer JS
+ * bundle must fail at build time instead of misparsing or crashing at
+ * runtime.
+ */
+function assertLegacyCompilerSatisfiesOpentuiEngines() {
+  const corePackage = readInstalledOpentuiCorePackage()
+  if (!corePackage.version) {
+    throw new Error(
+      'The installed @opentui/core package.json does not declare a version; cannot evaluate the legacy compiler gate',
+    )
+  }
+  const bunFloor = corePackage.engines?.bun
+  if (!bunFloor) {
+    log(
+      `Installed @opentui/core ${corePackage.version} declares no engines.bun floor; skipping the legacy compiler gate`,
+    )
+    return
+  }
+  const versionResult = spawnSync(COMPILER_BIN, ['--version'], {
+    stdio: 'pipe',
+  })
+  if (versionResult.status !== 0) {
+    throw new Error(
+      `Could not read ${COMPILER_BIN} --version (exit code ${versionResult.status}); the legacy macOS lane cannot verify the compiler against @opentui/core ${corePackage.version}'s engines.bun floor (${bunFloor})`,
+    )
+  }
+  const compilerVersion =
+    versionResult.stdout?.toString().trim().split(/\s+/).pop() ?? ''
+  if (!isVersionSatisfyingRange(compilerVersion, bunFloor)) {
+    throw new Error(
+      `The legacy macOS lane compiles with ${COMPILER_BIN} ${compilerVersion}, which does not satisfy @opentui/core ${corePackage.version}'s engines.bun floor (${bunFloor}). The 0.5.x JS bundle may use syntax the legacy compiler cannot parse or compile; use a compiler at or above the floor or pin an @opentui/core version the legacy compiler supports before building the legacy lane.`,
+    )
+  }
+  logAlways(
+    `Verified legacy compiler ${COMPILER_BIN} ${compilerVersion} satisfies @opentui/core ${corePackage.version} engines.bun (${bunFloor})`,
+  )
+}
+
+/** A legacy-gate self-check expectation that must fail with `expectedSubstring`. */
+function expectLegacySelfCheckFailure(
+  label: string,
+  expectedSubstring: string,
+  thrower: () => unknown,
+): void {
+  try {
+    thrower()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!message.includes(expectedSubstring)) {
+      throw new Error(
+        `Legacy gate self-check (${label}) failed with an unexpected error: ${message}`,
+      )
+    }
+    return
+  }
+  throw new Error(
+    `Legacy gate self-check (${label}) did not fail closed as required`,
+  )
+}
+
+/**
+ * Deterministic runtime evidence for the legacy lane's 0.5.x bundle-shape
+ * contract (see the requirement comment above assertLegacyMacOSBuildConfig).
+ * Runs on every legacy build BEFORE the real shipped bundle is patched and
+ * fails closed when the recorded 0.5.12 fixture shapes no longer match the
+ * resolver regex, when the patch/restore cycle is lossy, when a corrupt
+ * legacy patch is not rejected on restore, or when the engines-range gate
+ * mis-evaluates a version. The REAL shipped 0.5.12 chunk bundles are
+ * additionally verified by the round-trip check inside
+ * patchOpenTuiCoreNativeLoaderForLegacy, so only a successful legacy build
+ * run against the actual node_modules bundle completes the runtime evidence
+ * for the lane.
+ */
+function verifyLegacyBundleShapeFixtures(): void {
+  // Recorded from the shipped @opentui/core 0.5.12 chunk bundles: the
+  // resolver appears both as a combined `var` declaration+assignment and as
+  // a bare assignment following a separate `var targetLibPath;` declaration.
+  const resolverFixtures = [
+    'var targetLibPath = await resolveNativeLibraryPath();',
+    'var targetLibPath;\nconst nativeModule = await import("./native.js");\ntargetLibPath = await resolveNativeLibraryPath();',
+  ]
+  for (const fixture of resolverFixtures) {
+    // Unpatched restore must be a no-op.
+    if (restoreOpenTui05NativeLoaderSource(fixture) !== fixture) {
+      throw new Error(
+        'Legacy gate self-check: restoreOpenTui05NativeLoaderSource modified an unpatched 0.5.12 fixture',
+      )
+    }
+    const patched = patchOpenTui05NativeLoaderSource(fixture)
+    if (!patched.includes(OPEN_TUI_05_RESOLVER_LEGACY_REPLACEMENT)) {
+      throw new Error(
+        'Legacy gate self-check: the 0.5.12 fixture patch does not carry the sibling-dylib legacy resolver',
+      )
+    }
+    if (restoreOpenTui05NativeLoaderSource(patched) !== fixture) {
+      throw new Error(
+        'Legacy gate self-check: the 0.5.12 resolver patch does not round-trip losslessly',
+      )
+    }
+  }
+  expectLegacySelfCheckFailure(
+    '0.5.12 resolver absent',
+    'found 0',
+    () => patchOpenTui05NativeLoaderSource('var unrelated = 1;'),
+  )
+  expectLegacySelfCheckFailure(
+    '0.5.12 resolver ambiguous',
+    'found 2',
+    () =>
+      patchOpenTui05NativeLoaderSource(
+        `${resolverFixtures[0]}\n${resolverFixtures[0]}`,
+      ),
+  )
+  expectLegacySelfCheckFailure(
+    'corrupt legacy patch marker on restore',
+    'stale legacy patch',
+    () =>
+      restoreOpenTui05NativeLoaderSource(
+        `/*${OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER} ${JSON.stringify(resolverFixtures[0])}*/\nvar unrelated = 1;`,
+      ),
+  )
+
+  // Spot-check the engines.bun range gate the legacy compiler check relies
+  // on, including the fail-closed cases (^/~ ceilings, prerelease versions,
+  // unparseable versions).
+  const rangeChecks: Array<[version: string, range: string, expected: boolean]> = [
+    ['1.3.11', '^1.2.0', true],
+    ['1.2.11', '^1.2.0', true],
+    ['2.0.0', '^1.2.0', false],
+    ['1.2.11', '~1.2.0', true],
+    ['1.3.11', '~1.2.0', false],
+    ['1.3.11', '>=1.0.0', true],
+    ['1.0.0', '^1.2.0', false],
+    ['1.3.11-beta.1', '^1.2.0', false],
+    ['1.9.5', '^1.0.0 || >=1.9.0', true],
+    ['1.3.11', '^2.0.0 || <1.0.0', false],
+    ['not-a-version', '^1.0.0', false],
+  ]
+  for (const [version, range, expected] of rangeChecks) {
+    if (isVersionSatisfyingRange(version, range) !== expected) {
+      throw new Error(
+        `Legacy gate self-check: isVersionSatisfyingRange(${version}, ${range}) should be ${expected}`,
+      )
+    }
+  }
+  logAlways(
+    'Legacy gate self-check OK: 0.5.12 resolver fixtures patch/restore round-trip, corrupt-patch restore fails closed, engines.bun range gate verified',
+  )
+}
+
+/**
+ * Read the @opentui/core version pinned in cli/package.json, stripping any
+ * range prefix (`^`, `~`, `>=`) so a ranged pin still compares equal to the
+ * exact installed version.
+ */
+function readPinnedOpentuiCoreVersion(): string {
+  const packageJson = JSON.parse(
+    readFileSync(join(cliRoot, 'package.json'), 'utf8'),
+  ) as { dependencies?: Record<string, string> }
+  const pinned = packageJson.dependencies?.['@opentui/core']
+  if (!pinned) {
+    throw new Error(
+      'cli/package.json does not declare an @opentui/core dependency; cannot verify the legacy lane against the pin',
+    )
+  }
+  return pinned.replace(/^[^0-9]*/, '')
+}
+
 function restoreOpenTuiCoreNativeLoader() {
   const coreDirs = [
     join(repoRoot, 'node_modules', '@opentui', 'core'),
@@ -880,6 +1387,18 @@ function restoreOpenTuiCoreNativeLoader() {
       searchedFiles.add(bundlePath)
 
       const source = readFileSync(bundlePath, 'utf8')
+      // Under the 0.5.12 bundle layout this 0.2.x restore must not touch
+      // files carrying 0.5.x native-loader evidence: the 0.2.x legacy loader
+      // text is byte-identical to OPEN_TUI_05_RESOLVER_LEGACY_REPLACEMENT, so
+      // a stale 0.5.x legacy patch would otherwise be misread as a 0.2.x
+      // patch here and rewritten to the 0.2.x canonical platform import,
+      // corrupting the 0.5.x bundle before its own restore runs below.
+      if (
+        source.includes(OPEN_TUI_05_RESOLVER_ORIGINAL_MARKER) ||
+        isOpenTui05NativeLoaderSource(source)
+      ) {
+        continue
+      }
       const restored = restoreOpenTuiNativeLoaderSource(source)
       if (restored !== source) {
         // Atomic replace (see writeBundleFileAtomically): concurrent
@@ -906,35 +1425,45 @@ function patchOpenTuiCoreNativeLoaderForLegacy() {
   for (const coreDir of coreDirs) {
     if (!existsSync(coreDir)) continue
     for (const file of readdirSync(coreDir)) {
-      if (!file.startsWith('index') || !file.endsWith('.js')) continue
+      if (!isOpentuiCoreBundleFile(file)) continue
       const bundlePath = join(coreDir, file)
       if (searchedFiles.has(bundlePath)) continue
       searchedFiles.add(bundlePath)
 
       const source = readFileSync(bundlePath, 'utf8')
-      if (
-        !source.includes('@opentui/core-${process.platform}-${process.arch}')
-      ) {
+      if (!isOpenTui05NativeLoaderSource(source)) {
         continue
       }
-      const patched = patchOpenTuiLegacyNativeLoaderSource(source)
+      const patched = patchOpenTui05NativeLoaderSource(source)
+      // Runtime evidence that the legacy patch is losslessly reversible on
+      // the REAL shipped 0.5.12 chunk bundle (the fixture self-check covers
+      // only the recorded shapes): the shared node_modules bundle must be
+      // restorable for non-legacy builds, so a one-way patch must fail this
+      // legacy build instead of poisoning the shared copy.
+      const roundTripped = restoreOpenTui05NativeLoaderSource(patched)
+      if (roundTripped !== source) {
+        throw new Error(
+          `The legacy resolver patch does not round-trip on ${bundlePath}: restoring the patched source does not reproduce the original bundle; refusing to compile the legacy lane against a one-way patch`,
+        )
+      }
       // Atomic replace (see writeBundleFileAtomically): concurrent
       // build-binary invocations share this node_modules bundle, so a plain
       // writeFileSync could tear it or persist a mixed patched/restored
       // state.
       writeBundleFileAtomically(bundlePath, patched)
+      logAlways(`Verified legacy resolver patch round-trip: ${bundlePath}`)
       patchedPath = bundlePath
     }
   }
 
   if (!patchedPath) {
     throw new Error(
-      `Could not find OpenTUI's dynamic platform loader in:\n  - ${[
+      `Could not find OpenTUI's 0.5.x native library resolver (resolveNativeLibraryPath) in:\n  - ${[
         ...searchedFiles,
       ].join('\n  - ')}`,
     )
   }
-  logAlways(`Patched OpenTUI legacy native loader: ${patchedPath}`)
+  logAlways(`Patched OpenTUI 0.5.x native library resolver: ${patchedPath}`)
 }
 
 main().catch((error: unknown) => {
@@ -1043,22 +1572,64 @@ function patchOpenTuiAssetPaths() {
   const indexPath = join(coreDir, indexFile)
   const content = readFileSync(indexPath, 'utf8')
 
+  // OpenTUI 0.2.x embedded a hard-coded build-machine __dirname pointing into
+  // its own source tree ('packages/core/src/lib/tree-sitter/assets'). 0.5.x
+  // no longer contains that pattern, so under the 0.5.12 pin the old rewrite
+  // silently no-opped and left it unverified whether tree-sitter assets
+  // resolve inside the compiled binary. Keep the 0.2.x rewrite for any
+  // residue, then verify the 0.5.x bundle: it must not embed a build-machine
+  // asset path and must carry a relative tree-sitter grammar asset reference
+  // (a quoted ./…tree-sitter-*.wasm specifier, not the bare substring).
   const absolutePathPattern =
     /var __dirname = ".*?packages\/core\/src\/lib\/tree-sitter\/assets";/
-  if (!absolutePathPattern.test(content)) {
-    log('OpenTUI core bundle already has relative asset paths')
+  if (absolutePathPattern.test(content)) {
+    const replacement =
+      'var __dirname = path3.join(path3.dirname(fileURLToPath(new URL(".", import.meta.url))), "lib/tree-sitter/assets");'
+
+    const patched = content.replace(absolutePathPattern, replacement)
+    // Atomic replace (see writeBundleFileAtomically): concurrent build-binary
+    // invocations share this node_modules bundle, so a plain writeFileSync
+    // could tear it or persist a mixed patched/restored state.
+    writeBundleFileAtomically(indexPath, patched)
+    logAlways('Patched OpenTUI core tree-sitter asset paths')
     return
   }
 
-  const replacement =
-    'var __dirname = path3.join(path3.dirname(fileURLToPath(new URL(".", import.meta.url))), "lib/tree-sitter/assets");'
-
-  const patched = content.replace(absolutePathPattern, replacement)
-  // Atomic replace (see writeBundleFileAtomically): concurrent build-binary
-  // invocations share this node_modules bundle, so a plain writeFileSync
-  // could tear it or persist a mixed patched/restored state.
-  writeBundleFileAtomically(indexPath, patched)
-  logAlways('Patched OpenTUI core tree-sitter asset paths')
+  const buildMachineAssetPath = 'packages/core/src/lib/tree-sitter/assets'
+  // 0.5.12 moved every tree-sitter asset reference out of the index entry
+  // into its chunk-*.js bundles, so the 0.5.x verification must inspect every
+  // bundle file: checking only the index entry fails valid 0.5.12 builds.
+  const bundleFiles = readdirSync(coreDir).filter(isOpentuiCoreBundleFile)
+  const bundleContents = bundleFiles.map((file) =>
+    readFileSync(join(coreDir, file), 'utf8'),
+  )
+  const offendingBundleIndex = bundleContents.findIndex((bundleContent) =>
+    bundleContent.includes(buildMachineAssetPath),
+  )
+  if (offendingBundleIndex !== -1) {
+    throw new Error(
+      `OpenTUI core bundle embeds a build-machine tree-sitter asset path that would not resolve inside a compiled binary: ${join(coreDir, bundleFiles[offendingBundleIndex]!)}`,
+    )
+  }
+  // The bare substring 'tree-sitter' is satisfied vacuously (identifiers,
+  // the web-tree-sitter package specifier, module paths), so require a
+  // relative asset reference to a tree-sitter grammar wasm — exactly what
+  // the compiled binary must resolve, e.g.
+  // "./assets/javascript/tree-sitter-javascript.wasm" in the 0.5.12 chunks.
+  const relativeTreeSitterWasmReference =
+    /["'`]\.{1,2}\/[^"'`]*tree-sitter[^"'`]*\.wasm["'`]/
+  if (
+    !bundleContents.some((bundleContent) =>
+      relativeTreeSitterWasmReference.test(bundleContent),
+    )
+  ) {
+    throw new Error(
+      `OpenTUI core bundle has no relative tree-sitter grammar asset reference (./…tree-sitter-*.wasm) to verify; refusing to compile a binary that may not resolve its grammar assets: ${indexPath}`,
+    )
+  }
+  logAlways(
+    'Verified OpenTUI core tree-sitter asset paths resolve relatively (0.5.x bundle)',
+  )
 }
 
 // The OpenTUI native bundle is downloaded here via a direct registry fetch
@@ -1067,43 +1638,84 @@ function patchOpenTuiAssetPaths() {
 // manifest, which covers the sibling wasm assets staged elsewhere in this
 // script. Digests are pinned per released tarball version; re-pin (update
 // every entry together) whenever the OpenTUI core version bumps.
-const OPENTUI_TARBALL_SHA256: Record<string, string> = {
-  '@opentui/core-linux-x64': '703e55d1e46bf218986075748278435c85a13d86143065bd1897d2ab3e822ba9',
-  '@opentui/core-linux-arm64': '08b8398bdaebc1a2b76b6a8a0a32c81d834c3bedf48d19f5d4b55a29be6b9508',
-  '@opentui/core-darwin-x64': '9490d919f8fbace385267cf96160ee1b261cb5d12aeeaaf3290783db4ec176de',
-  '@opentui/core-darwin-arm64': 'a323160f881f7b618ac0115f5a2c3dc1ba630aeb6f779d2d4ddf9a247b02a6f0',
-  '@opentui/core-win32-x64': '3479016a17c32f2d77b4b7576cc9870393e65369c54daae876db11723d789429',
+// Re-pinned 2026-09-28 for @opentui/core 0.5.12 (0.2.2 → 0.5.12 migration,
+// Stage 1); the version is read from the installed core's package.json, so
+// only these digests change on a bump.
+/**
+ * Pinned integrity digests for the OpenTUI optional native packages, copied
+ * from the `sha512-…` integrity records bun.lock resolved for the
+ * @opentui/core 0.5.12 optionalDependencies. Because the pin shares a source
+ * with the lock, assertTarballIntegrity cross-checks every pinned digest
+ * against the dist.integrity the registry publishes for the exact version
+ * (fetched live during the build) before trusting it: a compromised or
+ * mistyped bun.lock record now fails the build instead of propagating
+ * verbatim into this gate. assertTarballIntegrity fails
+ * closed when a package has no entry, so EVERY optional native package the
+ * fetch path can target must be pinned — including @opentui/core-win32-arm64
+ * and the musl Linux variants — so a win32-arm64 build that needs
+ * ensureOpenTuiNativeBundle verifies its tarball instead of hard-failing on a
+ * missing digest, and an OpenTUI version bump must re-pin every digest before
+ * the build ships unverified tarballs.
+ */
+const OPENTUI_TARBALL_SHA512: Record<string, string> = {
+  '@opentui/core-linux-x64': 'sha512-eZiCjEzwbb6qClPPfk32Nha9xmr9obt69Xj0+9SKsXxWLBKkjQEGOMRoh/R9ObaQF4aq8If1xV3VEY0sD9W9vg==',
+  '@opentui/core-linux-arm64': 'sha512-XeKhuIaEtgipvuPHbl4qPOBj+Ut+2zObmsxMVM1jDcjz/FatG9PGeGQPx1G1SnvH2AgpT4K+eCu7DUF0+yIqoQ==',
+  '@opentui/core-darwin-x64': 'sha512-uRrQJdHmLUSj3PV23QPi3WSimYTTxcXnVouxF6U4xMXlOv4N3SxnHfVwMRQkPqbGOfvVWHeLE6FdK4C+ubU0sQ==',
+  '@opentui/core-darwin-arm64': 'sha512-YdVnP0tAyerBNl0mIcmQEOotPeZzW1VnSXKBl5cyZ5e6nDd2Y+ui/8eRPpn1oqcamf1NCnzS4ohMgejOvna8Zg==',
+  '@opentui/core-win32-x64': 'sha512-KTwtwpfd2zF9opVh3SyRJYDd1o3Xv4XL8OZb8Zi+CqWUel6Y2IDCiVivCv8fGJt3J7wOIXXtuZI9ZUkLyKJCiQ==',
+  '@opentui/core-win32-arm64': 'sha512-aLbm6870Ybls6CYL4zMOCImTBPLZHZMUXJFGqMI44lIWxitkAtT6zg5lYA4oRqFRzzryDclxr29+hDgT3p3Blw==',
+  '@opentui/core-linux-x64-musl': 'sha512-WWW0hVBoSYZ3D6AgZ4u2Y5/u/IyIq2pDb+4yI3WgJ70Wyt6ofHy+6kRGRgbXFn1p+rPInAHjCXD2v6C7iEKSrA==',
+  '@opentui/core-linux-arm64-musl': 'sha512-VZ2sNMw1d/r1SLPjUbOP9LKscKz1CQjID8adTL6gG8Lrrq+mYcIUxutyB+P/eG0J/7oRZLPR6OMt7dUOap6RTg==',
 }
 
-const UNPINNED_DIGEST = 'UNPINNED'
-
 /**
- * Assert the sha256 digest of a downloaded OpenTUI tarball against
- * OPENTUI_TARBALL_SHA256. Skips with a warning when no digest is pinned;
- * throws when the downloaded bytes do not match the pinned digest.
+ * Assert the sha512 integrity of a downloaded OpenTUI tarball against BOTH
+ * independent sources: the registry's published dist.integrity for the exact
+ * version (fetched live during this build) and the pinned
+ * OPENTUI_TARBALL_SHA512 record. The pinned digests were copied from
+ * bun.lock, so on their own they only verify the tarball against whatever
+ * the lock resolved — cross-checking pin vs registry and downloaded bytes vs
+ * registry makes a compromised or mistyped lock record fail the build
+ * instead of propagating verbatim into this gate. Fails closed when no
+ * digest is pinned for the package (an OpenTUI version bump without
+ * re-pinned digests must never ship unverified tarballs) or when the
+ * registry publishes no integrity for the version, so the tarball is never
+ * accepted on a single unverifiable source.
  */
-function assertTarballSha256(
+function assertTarballIntegrity(
   tarballBuffer: Uint8Array,
   packageName: string,
   version: string,
+  registryIntegrity: string | undefined,
 ) {
-  const actual = createHash('sha256')
+  const actual = `sha512-${createHash('sha512')
     .update(tarballBuffer)
-    .digest('hex')
-  const expected = OPENTUI_TARBALL_SHA256[packageName]
-  if (expected === undefined || expected === UNPINNED_DIGEST) {
-    logAlways(
-      `WARNING: no pinned sha256 digest for ${packageName}@${version}; skipping tarball integrity verification (actual sha256: ${actual} — pin it in OPENTUI_TARBALL_SHA256 to enforce integrity)`,
+    .digest('base64')}`
+  if (registryIntegrity === undefined) {
+    throw new Error(
+      `The registry published no dist.integrity for ${packageName}@${version}; refusing to verify the tarball against the bun.lock-derived pin alone (actual integrity: ${actual}). Build against a registry that publishes integrity metadata (CODEBUFF_NPM_REGISTRY / NPM_REGISTRY_URL) — OpenTUI native tarballs are never fetched unverified.`,
     )
-    return
+  }
+  const expected = OPENTUI_TARBALL_SHA512[packageName]
+  if (expected === undefined) {
+    throw new Error(
+      `No pinned sha512 integrity for ${packageName}@${version} in OPENTUI_TARBALL_SHA512 (actual integrity: ${actual}; registry integrity: ${registryIntegrity}). Pin the digest before building — OpenTUI native tarballs are never fetched unverified.`,
+    )
   }
 
-  if (actual !== expected) {
+  if (registryIntegrity !== actual) {
     throw new Error(
-      `Downloaded OpenTUI tarball ${packageName}@${version} failed sha256 verification: expected ${expected}, got ${actual}`,
+      `Downloaded OpenTUI tarball ${packageName}@${version} does not match the registry-published integrity: registry ${registryIntegrity}, downloaded ${actual}`,
     )
   }
-  log(`Verified sha256 for ${packageName}@${version}`)
+  if (expected !== registryIntegrity) {
+    throw new Error(
+      `Pinned OPENTUI_TARBALL_SHA512 digest for ${packageName}@${version} (${expected}) does not match the dist.integrity the registry publishes for that version (${registryIntegrity}); the bun.lock record the pin was copied from is wrong or compromised — re-pin from the registry-published integrity before building`,
+    )
+  }
+  log(
+    `Verified sha512 integrity for ${packageName}@${version} (pin == registry == downloaded bytes)`,
+  )
 }
 
 async function ensureOpenTuiNativeBundle(targetInfo: TargetInfo) {
@@ -1165,11 +1777,13 @@ async function ensureOpenTuiNativeBundle(targetInfo: TargetInfo) {
       {
         dist?: {
           tarball?: string
+          integrity?: string
         }
       }
     >
   }
-  const tarballUrl = metadata.versions?.[version]?.dist?.tarball
+  const dist = metadata.versions?.[version]?.dist
+  const tarballUrl = dist?.tarball
   if (!tarballUrl) {
     throw new Error(`Tarball URL missing for ${packageName}@${version}`)
   }
@@ -1186,7 +1800,7 @@ async function ensureOpenTuiNativeBundle(targetInfo: TargetInfo) {
     // The download (including its body read) completed inside the retried
     // fetch above; a stall or network failure mid-body was already retried
     // there instead of reaching this point.
-    assertTarballSha256(tarballBuffer, packageName, version)
+    assertTarballIntegrity(tarballBuffer, packageName, version, dist?.integrity)
     await Bun.write(tarballPath, tarballBuffer)
 
     for (const target of missingTargets) {

@@ -21,6 +21,7 @@
     "release": "bun run scripts/release.ts",
     "test": "NODE_ENV=production bun test",
     "test:tmux-poc": "bun run src/__tests__/tmux-poc.ts",
+    "smoke:opentui-05": "bun run src/index-05.tsx",
     "typecheck": "tsc --noEmit -p ."
   },
   "sideEffects": [
@@ -34,10 +35,8 @@
     "@codebuff/indexer": "workspace:*",
     "@openbuff/sdk": "workspace:*",
     "@gravity-ai/api": "^0.1.2",
-    "@opentui/core": "0.2.2",
-    "@opentui/react": "0.2.2",
-    "opentui-core-05": "npm:@opentui/core@0.5.12",
-    "opentui-react-05": "npm:@opentui/react@0.5.12",
+    "@opentui/core": "0.5.12",
+    "@opentui/react": "0.5.12",
     "@tanstack/react-query": "^5.90.12",
     "commander": "^14.0.1",
     "immer": "^10.1.3",
@@ -47,8 +46,7 @@
     "pino": "9.4.0",
     "picocolors": "^1.1.1",
     "posthog-node": "^5.8.0",
-    "react": "^19.0.0",
-    "react-reconciler": "^0.32.0",
+    "react": "19.2.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
@@ -63,8 +61,7 @@
   "devDependencies": {
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@types/react-reconciler": "^0.32.0",
-    "react-dom": "^19.0.0",
+    "react-dom": "19.2.0",
     "strip-ansi": "^7.1.2"
   }
 }

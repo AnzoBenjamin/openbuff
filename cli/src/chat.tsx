@@ -1737,10 +1737,23 @@ export const Chat = ({
         flexGrow: 1,
       }}
     >
+      {/* D47 Stage 1: OpenTUI 0.5's native stickyScroll/stickyStart is
+          deliberately NOT enabled here. With stickyScroll live, OpenTUI's
+          native code re-pins scrollTop to the bottom on every content
+          growth, so it would be a SECOND independent writer of scrollTop on
+          this scrollbox alongside use-scroll-management's auto-scroll
+          effect — two writers with no evidence they cooperate (e.g. a user
+          scrolling up during streaming: native stickyScroll re-pins on the
+          next content growth while the JS effect may also force
+          scrollTop = maxScroll, fighting the user's scroll intent or
+          resurrecting auto-follow after they deliberately scrolled away).
+          use-scroll-management remains the single validated scrollTop
+          writer: its auto-scroll effect follows new content only while the
+          user is at/near the bottom (autoScrollEnabledRef), and
+          scrollUp/scrollDown/scrollToLatest stay available for keyboard
+          paging and the jump-to-latest control. */}
       <scrollbox
         ref={scrollRef as React.Ref<ScrollBoxRenderable>}
-        stickyScroll
-        stickyStart="bottom"
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{

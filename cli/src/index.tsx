@@ -15,6 +15,7 @@ import path from 'path'
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
 import { getProjectFileTree } from '@codebuff/common/project-file-tree'
 import { createCliRenderer } from '@opentui/core'
+import { createTestRenderer } from '@opentui/core/testing'
 import { createRoot } from '@opentui/react'
 import {
   QueryClient,
@@ -109,15 +110,18 @@ function createQueryClient(): QueryClient {
 async function main(): Promise<void> {
   // CI/release gate: prove that the packaged OpenTUI native library can be
   // resolved and can create a renderer without depending on terminal output.
-  // Full-screen rendering is not deterministic when stdout is a pipe (notably
-  // on legacy Intel macOS), so the release smoke test uses this explicit probe
-  // for the native FFI boundary and tests full TUI rendering separately where
-  // the platform supports it reliably.
+  // Uses the OpenTUI 0.5 test renderer (createTestRenderer from
+  // @opentui/core/testing): it drives the renderer with a mock stdin and never
+  // takes over the terminal, since full-screen rendering is not deterministic
+  // when stdout is a pipe (notably on legacy Intel macOS). The 0.2.x
+  // `testing: true` renderer config option was removed in 0.5.x, so the probe
+  // can no longer disable terminal takeover that way. The release smoke test
+  // uses this explicit probe for the native FFI boundary and tests full TUI
+  // rendering separately where the platform supports it reliably.
   if (process.argv.includes('--smoke-opentui')) {
     try {
-      const renderer = await createCliRenderer({
+      const { renderer } = await createTestRenderer({
         exitSignals: [],
-        testing: true,
         useThread: process.platform !== 'linux',
       })
       await renderer.destroy()
