@@ -138,4 +138,53 @@ describe('runAcpServeCommand', () => {
       'my-agent',
     )
   })
+
+  test('reports the effective project-agent trust decision on stderr', async () => {
+    const trusted = makeHarness()
+    await runAcpServeCommand(
+      { transport: 'stdio', trustProjectAgents: true },
+      trusted.deps,
+    )
+    expect(trusted.stderrLines).toContain(
+      'openbuff serve: project agents trusted',
+    )
+
+    const hintPath = '/custom/config/trusted-roots.json'
+    const untrusted = makeHarness({ trustedRootsPath: hintPath })
+    await runAcpServeCommand(
+      { transport: 'stdio', trustProjectAgents: false },
+      untrusted.deps,
+    )
+    expect(untrusted.stderrLines).toContain(
+      `openbuff serve: project agents untrusted (use --trust-project-agents or add the project root to ${hintPath})`,
+    )
+  })
+
+  test('reports the socket transport as untrusted by default too', async () => {
+    const h = makeHarness()
+    await runAcpServeCommand(
+      { transport: 'socket', socketPath: '/tmp/x.sock' },
+      h.deps,
+    )
+    expect(
+      h.stderrLines.some((l) =>
+        l.startsWith('openbuff serve: project agents untrusted'),
+      ),
+    ).toBe(true)
+    expect(h.stderrLines).not.toContain(
+      'openbuff serve: project agents trusted',
+    )
+  })
+
+  test('threads the live process env as credentialEnv into runServeImpl (NEW-3)', async () => {
+    const h = makeHarness()
+    await runAcpServeCommand({ transport: 'stdio' }, h.deps)
+
+    const call = h.runServeCalls[0] as {
+      credentialEnv?: Record<string, string | undefined>
+    }
+    // The CLI hands the host environment to runServe so the SDK can collect
+    // the configured credential VALUES for the streaming holdback.
+    expect(call.credentialEnv).toBe(process.env)
+  })
 })

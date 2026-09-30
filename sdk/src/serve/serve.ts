@@ -1,5 +1,6 @@
 import { createServeBridge } from './bridge'
 import { serveAcpOverSocket } from './socket-listener'
+import { collectCredentialValues } from './outbound'
 import { serveAcpOverStdio } from '../services/acp/acp-agent'
 
 import type { ServeBridgeClient } from './bridge'
@@ -25,6 +26,15 @@ export type RunServeOptions = {
   sessionData: AcpSessionData
   /** Which Openbuff agent each prompt turn runs in the bridge. Defaults to 'base'. */
   agentId?: string
+  /**
+   * NEW-3 (§12.8): the environment the host runs with, consulted ONLY for
+   * the configured credential env keys the streaming holdback must never
+   * split. Collected with `collectCredentialValues` and handed to the serve
+   * bridge as `credentialValues`; omitted → no value-level holdback (the
+   * 256-char cap.v3 floor still applies). This layer never reads
+   * `process.env` itself — the host passes the environment in.
+   */
+  credentialEnv?: Record<string, string | undefined>
   /** Transport selection: stdio (default) or a unix domain socket. NO TCP. */
   transport:
     | { kind: 'stdio' }
@@ -50,6 +60,11 @@ export function runServe(options: RunServeOptions): {
     sessionData,
     logger,
     agentId,
+    // NEW-3 (§12.8): collect the configured credential VALUES from the
+    // host-supplied environment so the streaming holdback can enforce the
+    // no-split invariant for real credentials (an empty environment yields
+    // the bridge's default empty list).
+    credentialValues: collectCredentialValues(options.credentialEnv ?? {}),
   })
 
   if (transport.kind === 'stdio') {

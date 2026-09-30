@@ -13,16 +13,18 @@ export type ParsedArgs = {
   trustProjectAgents: boolean
   /**
    * Populated ONLY when the `serve` subcommand ran (undefined otherwise).
-   * NOTE: wiring `openbuff serve` into cli/src/index.tsx is a FOLLOW-UP wave;
-   * this wave only PARSES the subcommand.
+   * `trustProjectAgents` mirrors the serve-level `--trust-project-agents`
+   * flag (default false); cli/src/index.tsx resolves the effective serve
+   * trust (flag OR trusted-roots allowlist) from it (NEW-2, design §12.8).
    */
   serve?:
-    | { transport: 'stdio'; agentId?: string }
+    | { transport: 'stdio'; agentId?: string; trustProjectAgents: boolean }
     | {
         transport: 'socket'
         socketPath: string
         token?: string
         agentId?: string
+        trustProjectAgents: boolean
       }
 }
 
@@ -61,6 +63,10 @@ export function parseCliArgs(
         '--agent <id>',
         'Run a specific agent id for served prompt turns (default: base)',
       )
+      .option(
+        '--trust-project-agents',
+        'Allow executable agents and MCP config from this project or its parent directory',
+      )
       .allowExcessArguments(true)
     if (options.exitOverride) {
       serveProgram.exitOverride()
@@ -71,11 +77,14 @@ export function parseCliArgs(
     const serveOpts = serveProgram.opts()
     const serveAgentId =
       typeof serveOpts.agent === 'string' ? serveOpts.agent : undefined
+    // Serve-level trust flag (NEW-2): defaults to false when absent.
+    const serveTrustProjectAgents = serveOpts.trustProjectAgents === true
     const serve: ParsedArgs['serve'] =
       typeof serveOpts.socket === 'string'
         ? {
             transport: 'socket',
             socketPath: serveOpts.socket,
+            trustProjectAgents: serveTrustProjectAgents,
             ...(typeof serveOpts.socketToken === 'string'
               ? { token: serveOpts.socketToken }
               : {}),
@@ -83,6 +92,7 @@ export function parseCliArgs(
           }
         : {
             transport: 'stdio',
+            trustProjectAgents: serveTrustProjectAgents,
             ...(serveAgentId ? { agentId: serveAgentId } : {}),
           }
     return {

@@ -4,7 +4,9 @@ import path from 'node:path'
 import { AcpSessionData, runServe } from '@openbuff/sdk'
 
 import { getProjectRoot } from './project-files'
+import { getSystemProcessEnv } from './utils/env'
 import { getCodebuffClient } from './utils/codebuff-client'
+import { resolveTrustedRootsPath } from './utils/trusted-roots'
 
 import type { ServeBridgeClient } from '@openbuff/sdk'
 
@@ -12,15 +14,23 @@ import type { ServeBridgeClient } from '@openbuff/sdk'
  * The parsed `openbuff serve` transport selection (mirrors
  * `ParsedArgs.serve`): stdio serves ACP over the process stdio streams, and
  * socket serves it over a SEC-4-authenticated unix domain socket with an
- * optional caller-supplied token.
+ * optional caller-supplied token. `trustProjectAgents` carries the effective
+ * serve trust decision (flag OR trusted-roots allowlist, resolved in
+ * cli/src/index.tsx) reported on the stderr banner; optional so injected
+ * callers can omit it.
  */
 export type ServeCommandArgs =
-  | { transport: 'stdio'; agentId?: string }
+  | {
+      transport: 'stdio'
+      agentId?: string
+      trustProjectAgents?: boolean
+    }
   | {
       transport: 'socket'
       socketPath: string
       token?: string
       agentId?: string
+      trustProjectAgents?: boolean
     }
 
 /**
@@ -34,6 +44,12 @@ export type RunAcpServeDeps = {
   runServeImpl?: typeof runServe
   generateToken?: () => string
   writeStderr?: (line: string) => void
+  /**
+   * Resolved trusted-roots allowlist path for the untrusted banner hint
+   * (defaults to resolveTrustedRootsPath()); injected in tests so the banner
+   * never depends on the real env.
+   */
+  trustedRootsPath?: string
   journalDir?: string
   signal?: AbortSignal
 }
@@ -69,6 +85,21 @@ export async function runAcpServeCommand(
     deps?.journalDir ??
     path.join(getProjectRoot(), '.openbuff', 'acp-journal')
 
+  // NEW-2 (design §12.8): report the project-scope agent/MCP trust decision
+  // on stderr for BOTH transports (stdout is the ACP protocol wire). The hint
+  // names the ACTUAL resolved allowlist path (config-dir precedence:
+  // OPENBUFF_CONFIG_DIR / XDG_CONFIG_HOME / APPDATA), never a hardcoded
+  // ~/.config guess (reviewer finding trusted-roots-path-ignores-config-env /
+  // RF-14). Tests inject trustedRootsPath to stay hermetic.
+  const trustedRootsHintPath =
+    deps?.trustedRootsPath ?? resolveTrustedRootsPath()
+  writeStderr(
+    'openbuff serve: project agents ' +
+      (args.trustProjectAgents
+        ? 'trusted'
+        : `untrusted (use --trust-project-agents or add the project root to ${trustedRootsHintPath})`),
+  )
+
   const sessionData = makeSessionData({ journalDir })
   const client = await getClient()
 
@@ -81,6 +112,9 @@ export async function runAcpServeCommand(
       transport: { kind: 'stdio' },
       agentId: args.agentId,
       signal: deps?.signal,
+      // NEW-3 (§12.8): hand the live environment to runServe so the SDK
+      // collects the configured credential VALUES for the streaming holdback.
+      credentialEnv: getSystemProcessEnv(),
     })
   }
 
@@ -91,6 +125,8 @@ export async function runAcpServeCommand(
     transport: { kind: 'socket', socketPath: args.socketPath, token },
     agentId: args.agentId,
     signal: deps?.signal,
+    // NEW-3 (§12.8): same credential collection for the socket transport.
+    credentialEnv: getSystemProcessEnv(),
   })
   // Connection info to STDERR so a client can connect; token never hits stdout.
   writeStderr(`openbuff serve: ACP v1 over unix socket ${args.socketPath}`)

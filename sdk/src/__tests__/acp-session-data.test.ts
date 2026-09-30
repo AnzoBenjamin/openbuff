@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -23,6 +24,7 @@ import type {
   AcpPromptHandler,
   AcpSessionUpdateSink,
 } from '../services/acp/acp-agent'
+import { defaultCapabilityMapV1 } from '../services/acp/ext-methods'
 import {
   AcpSessionData,
   parseGateStateBlock,
@@ -158,8 +160,10 @@ describe('acp session data store', () => {
     expect(wireJson).not.toContain('"patch"')
     expect(wireJson).not.toContain(CAP_TOKEN)
     expect(envelope.mutation.freshCapabilities).toEqual([])
-    expect(envelope.mutation.actions[0]?.afterContent).toBeUndefined()
-    expect(envelope.mutation.actions[0]?.editAnchor).toBeUndefined()
+    // The wire action type no longer carries content-bearing keys, so assert
+    // their ABSENCE by key (a property read would not typecheck).
+    expect(envelope.mutation.actions[0]).not.toHaveProperty('afterContent')
+    expect(envelope.mutation.actions[0]).not.toHaveProperty('editAnchor')
 
     // authorityReceipt (ids/hashes/statuses only) is preserved verbatim.
     expect(envelope.mutation.authorityReceipt).toEqual(mutation.authorityReceipt)
@@ -622,5 +626,83 @@ describe('acp session data journal', () => {
     store.recordReceipt('s-plain', buildAppliedMutation())
     expect(await store.restoreFromJournal('s-plain')).toBe(false)
     expect(store.getReceipts('s-plain').receipts).toHaveLength(1)
+  })
+
+  test('traversal session ids never escape the journal directory on writes', async () => {
+    const dir = makeJournalDir()
+    const store = new AcpSessionData({ journalDir: dir })
+
+    // The ACP client fully controls sessionId via session/load and the id is
+    // interpolated into the journal path — a `../` id must never become an
+    // append/create write outside the journal directory.
+    const evilId = '../evil'
+    store.recordReceipt(evilId, buildAppliedMutation(), 'tool-1')
+    store.updateGateStateFromBlock(
+      evilId,
+      formatGateStateBlock({
+        gate: 'validation',
+        status: 'failed',
+        details: 'x',
+      }),
+    )
+    store.setCapabilities(
+      evilId,
+      defaultCapabilityMapV1({ journalAvailable: true }),
+    )
+
+    // Positive control in the SAME store: a safe id journals fine, proving
+    // the skipped writes above were gated by the id, not a dead journal.
+    // Journal writes are serialized through one queue, so once this line
+    // lands every earlier (skipped) write has been processed.
+    store.recordReceipt('s-safe', buildAppliedMutation(), 'tool-2')
+    await waitForJournalLines(journalFilePath(dir, 's-safe'), 1)
+
+    // The exact path the unguarded interpolation would have written.
+    expect(existsSync(journalFilePath(dir, evilId))).toBe(false)
+    expect(readdirSync(dir)).toEqual(['s-safe.jsonl'])
+
+    // Fail closed means skipping the durable journal only — the in-memory
+    // store still works for the unsafe id.
+    expect(store.getReceipts(evilId).receipts).toHaveLength(1)
+    expect(store.getGateState(evilId).phase).toBe('blocked')
+    expect(store.getCapabilities(evilId)).toBeDefined()
+  })
+
+  test('restoreFromJournal refuses traversal session ids without reading outside the journal dir', async () => {
+    // Plant a decoy journal at the traversal target: replay must never
+    // resolve `../evil` against it.
+    const sibling = makeJournalDir()
+    writeFileSync(
+      `${sibling}/evil.jsonl`,
+      `${JSON.stringify({
+        kind: 'gate_state',
+        snapshot: {
+          gate: 'validation',
+          status: 'failed',
+          details: 'planted',
+          phase: 'blocked',
+        },
+      })}\n`,
+      'utf8',
+    )
+    const store = new AcpSessionData({ journalDir: `${sibling}/inner` })
+    expect(await store.restoreFromJournal('../evil')).toBe(false)
+    expect(store.getGateState('../evil').phase).toBe('idle')
+
+    // Other unsafe shapes fail closed the same way.
+    expect(await store.restoreFromJournal('../../etc/passwd')).toBe(false)
+    expect(await store.restoreFromJournal('a/b')).toBe(false)
+    expect(await store.restoreFromJournal('a\\b')).toBe(false)
+    expect(await store.restoreFromJournal('')).toBe(false)
+
+    // UUID-shaped ids (what session/new actually issues) still journal and
+    // replay normally.
+    const dir = makeJournalDir()
+    const goodId = '3f6b1f5e-2c9a-4f5b-8c0d-1a2b3c4d5e6f'
+    const good = new AcpSessionData({ journalDir: dir })
+    good.recordReceipt(goodId, buildAppliedMutation(), 'tool-1')
+    await waitForJournalLines(journalFilePath(dir, goodId), 1)
+    const reloaded = new AcpSessionData({ journalDir: dir })
+    expect(await reloaded.restoreFromJournal(goodId)).toBe(true)
   })
 })

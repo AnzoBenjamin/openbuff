@@ -107,6 +107,9 @@ describe('printModeToSessionUpdates', () => {
         kind: 'edit',
         status: 'pending',
         locations: [{ path: '/proj/src/a.ts' }],
+        // NEW-6: rawInput rides every tool card; src/a.ts is not a sensitive
+        // path, so the content-bearing field passes through unredacted.
+        rawInput: { content: 'x', path: 'src/a.ts' },
       },
     ])
   })
@@ -128,8 +131,223 @@ describe('printModeToSessionUpdates', () => {
         title: 'code_search',
         kind: 'other',
         status: 'pending',
+        // NEW-6: rawInput rides every tool card.
+        rawInput: { query: 'x' },
       },
     ])
+  })
+
+  test('NEW-6: a sensitive-path replace_range tool_call redacts the top-level newContent field', () => {
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-env',
+        toolName: 'replace_range',
+        input: {
+          path: '.env',
+          newContent: 'OPENROUTER_API_KEY=sk-live-abc123\n',
+          oldString: 'OPENROUTER_API_KEY=sk-live-old\n',
+        },
+      },
+      makeCtx(),
+    )
+    expect(updates).toEqual([
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-env',
+        title: 'replace_range',
+        kind: 'other',
+        status: 'pending',
+        locations: [{ path: '/proj/.env' }],
+        // NEW-6/GV-25: `newContent` is a content-bearing rawInput field, so a
+        // card touching a sensitive path must never leak the replacement text.
+        rawInput: {
+          path: '.env',
+          newContent: '[sensitive]',
+          oldString: '[sensitive]',
+        },
+      },
+    ])
+  })
+
+  test('NEW-6: a non-sensitive-path replace_range keeps newContent unredacted', () => {
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-src',
+        toolName: 'replace_range',
+        input: {
+          path: 'src/a.ts',
+          newContent: 'export const answer = 42\n',
+          oldString: 'export const answer = 41\n',
+        },
+      },
+      makeCtx(),
+    )
+    expect(updates).toEqual([
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-src',
+        title: 'replace_range',
+        kind: 'other',
+        status: 'pending',
+        locations: [{ path: '/proj/src/a.ts' }],
+        rawInput: {
+          path: 'src/a.ts',
+          newContent: 'export const answer = 42\n',
+          oldString: 'export const answer = 41\n',
+        },
+      },
+    ])
+  })
+
+  test('NEW-6: a sensitive-path edit_transaction redacts nested structured-edit operation text', () => {
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-structured',
+        toolName: 'edit_transaction',
+        input: {
+          path: '.env',
+          edits: [
+            {
+              id: 'insert-secret',
+              type: 'structured',
+              path: '.env',
+              operation: {
+                kind: 'insert_text',
+                position: { line: 1, column: 1 },
+                text: 'OPENROUTER_API_KEY=sk-live-secret',
+              },
+            },
+            {
+              id: 'add-import',
+              type: 'structured',
+              path: '.env',
+              operation: {
+                kind: 'insert_import',
+                importStatement: 'import { apiKey } from "./secrets"',
+              },
+            },
+          ],
+        },
+      },
+      makeCtx(),
+    )
+    expect(updates).toEqual([
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-structured',
+        title: 'edit_transaction',
+        kind: 'other',
+        status: 'pending',
+        locations: [{ path: '/proj/.env' }],
+        // NEW-6/GV-25: the nested content positions of structured edits
+        // (`operation.text` / `operation.importStatement`) are file content a
+        // flat field list cannot see, so the element rule is deep: every
+        // string at every depth inside an edit element is redacted while
+        // numeric/structural fields (position) survive.
+        rawInput: {
+          path: '.env',
+          edits: [
+            {
+              id: '[sensitive]',
+              type: '[sensitive]',
+              path: '[sensitive]',
+              operation: {
+                kind: '[sensitive]',
+                position: { line: 1, column: 1 },
+                text: '[sensitive]',
+              },
+            },
+            {
+              id: '[sensitive]',
+              type: '[sensitive]',
+              path: '[sensitive]',
+              operation: {
+                kind: '[sensitive]',
+                importStatement: '[sensitive]',
+              },
+            },
+          ],
+        },
+      },
+    ])
+  })
+
+  test('NEW-6: a sensitive-path edit_transaction redacts occurrence-targeted replace_range edits', () => {
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-occurrence',
+        toolName: 'edit_transaction',
+        input: {
+          path: 'secrets.keys',
+          edits: [
+            {
+              type: 'replace_range',
+              path: 'secrets.keys',
+              readCapability: 'cap.v3.1.436.AAAA.BBBB',
+              occurrence: { match: 'private key material line' },
+              newContent: 'replacement private key material',
+            },
+          ],
+        },
+      },
+      makeCtx(),
+    )
+    expect(updates).toEqual([
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-occurrence',
+        title: 'edit_transaction',
+        kind: 'other',
+        status: 'pending',
+        locations: [{ path: '/proj/secrets.keys' }],
+        // NEW-6/GV-25: `occurrence.match` names the exact file text being
+        // replaced, and the edit's readCapability is a cap.v3 token — both
+        // must never cross the wire for a sensitive-path card.
+        rawInput: {
+          path: 'secrets.keys',
+          edits: [
+            {
+              type: '[sensitive]',
+              path: '[sensitive]',
+              readCapability: '[sensitive]',
+              occurrence: { match: '[sensitive]' },
+              newContent: '[sensitive]',
+            },
+          ],
+        },
+      },
+    ])
+  })
+
+  test('NEW-6: a non-sensitive-path edit_transaction keeps nested edit content unredacted', () => {
+    const input = {
+      path: 'src/a.ts',
+      edits: [
+        {
+          type: 'structured',
+          path: 'src/a.ts',
+          operation: {
+            kind: 'insert_text',
+            position: { line: 3, column: 1 },
+            text: 'export const answer = 42',
+          },
+        },
+      ],
+    }
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-src-structured',
+        toolName: 'edit_transaction',
+        input,
+      },
+      makeCtx(),
+    )
+    expect((updates[0] as { rawInput: unknown }).rawInput).toEqual(input)
   })
 
   test('tool_start maps to tool_call_update in_progress', () => {

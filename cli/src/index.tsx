@@ -44,6 +44,7 @@ import { initializeSkillRegistry } from './utils/skill-registry'
 import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { detectTerminalImageSupport } from './utils/terminal-images'
 import { setOscDetectedTheme } from './utils/theme-system'
+import { isTrustedProjectRoot, loadTrustedRoots } from './utils/trusted-roots'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
 import { runAcpServeCommand } from './serve-command'
@@ -345,14 +346,41 @@ async function main(): Promise<void> {
     initialMode: initialMode ?? 'DEFAULT',
   })
 
+  // NEW-2 serve trust (design §12.8): `openbuff serve` loads project-scope
+  // `.agents/**` agent definitions and project `.agents/mcp.json` ONLY when
+  // the user started serve with `--trust-project-agents` OR the project
+  // root's realpath appears in the user-level allowlist
+  // (~/.config/openbuff/trusted-roots.json, owner-only 0600). Trust is never
+  // inferred from `session/new` cwd or any client-supplied field, and every
+  // allowlist read/validation error fails closed (untrusted). On the TUI
+  // path `effectiveTrust` stays equal to the raw `--trust-project-agents`
+  // flag, so non-serve behavior is unchanged.
+  let effectiveTrust = trustProjectAgents
+  if (serve) {
+    // The serve subcommand carries its own --trust-project-agents; the
+    // top-level program hardcodes trustProjectAgents to false for serve runs.
+    effectiveTrust = serve.trustProjectAgents
+    if (!effectiveTrust) {
+      try {
+        effectiveTrust = isTrustedProjectRoot(
+          fs.realpathSync(projectRoot),
+          await loadTrustedRoots(),
+        )
+      } catch {
+        // Fail closed: realpathSync threw (e.g. missing project root) so
+        // serve stays untrusted (effectiveTrust is false here).
+      }
+    }
+  }
+
   // Initialize agent registry (loads user agents via SDK).
   // When --agent is provided, skip local .agents to avoid overrides.
   if (isPublishCommand || !hasAgentOverride) {
-    await initializeAgentRegistry({ trustProjectAgents })
+    await initializeAgentRegistry({ trustProjectAgents: effectiveTrust })
   }
 
   // Initialize skill registry (loads skills from .agents/skills)
-  await initializeSkillRegistry({ trustProjectSkills: trustProjectAgents })
+  await initializeSkillRegistry({ trustProjectSkills: effectiveTrust })
 
   // Handle publish command before rendering the app
   if (isPublishCommand) {
@@ -364,7 +392,7 @@ async function main(): Promise<void> {
   // protocol wire, so we start the bridge and return from main() before the
   // renderer is created. The stdio/socket transport keeps the event loop alive.
   if (serve) {
-    await runAcpServeCommand(serve)
+    await runAcpServeCommand({ ...serve, trustProjectAgents: effectiveTrust })
     return
   }
 

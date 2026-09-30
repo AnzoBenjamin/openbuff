@@ -1,6 +1,11 @@
 import { markAllMCPConfigOrigins } from '@codebuff/common/mcp/client'
 
-import { sanitizeOutbound } from './outbound-filter'
+import {
+  OPENBUFF_CAPABILITIES_CHANGED_NOTIFICATION,
+  OPENBUFF_GATE_STATE_NOTIFICATION,
+  defaultCapabilityMapV1,
+} from '../services/acp/ext-methods'
+import { OutboundHoldback } from './outbound'
 
 import type { AcpPromptHandler } from '../services/acp/acp-agent'
 import type { AcpSessionData } from '../services/acp/session-data'
@@ -71,9 +76,31 @@ export type ServeBridgeOptions = {
    * against the process cwd.
    */
   projectRoot?: string
+  /**
+   * NEW-3 (§12.8): the configured credential VALUES the streaming holdback
+   * must never split across chunk frames. Injected by the host (the CLI
+   * collects them from its configured env keys) — this layer NEVER reads
+   * `process.env`. Empty by default; the holdback still retains its 256-char
+   * floor so cap.v3 tokens cannot straddle frames.
+   */
+  credentialValues?: string[]
   /** Optional structured logger forwarded by the host; unused in Wave-1 core. */
   logger?: Logger
 }
+
+/** §12.8 NEW-3: the idle flush window (ms), driven by one unref'd timer. */
+const IDLE_FLUSH_MS = 250
+/** §6.1 rate limit: at most one capabilities_changed push per 250 ms. */
+const CAPABILITIES_PUSH_MIN_INTERVAL_MS = 250
+
+/**
+ * The honest P1 serve capability map (§6.1) is built per session by
+ * `defaultCapabilityMapV1` (in ../services/acp/ext-methods): it is derived
+ * from the serving process's REAL posture — in particular `journal.resume`/
+ * `journal.replay` come from whether the backing store actually mirrors to a
+ * durable journal, so a host using a purely in-memory `AcpSessionData` never
+ * advertises resume/replay that `session/load` cannot honor.
+ */
 
 /**
  * The seam the `openbuff serve` CLI (LATER wave) instantiates: it binds the
@@ -108,16 +135,140 @@ export function createServeBridge(options: ServeBridgeOptions): {
   const agentId = options.agentId ?? 'base'
   const eventsMode = options.eventsMode ?? 'acp'
   const projectRoot = options.projectRoot ?? ''
+  const credentialValues = options.credentialValues ?? []
+  // NEW-3 (§12.8): per-(sessionId, messageId) streaming holdbacks. The two
+  // single-sink instances keep flush routing trivial: message pieces route to
+  // `input.update`, thought pieces to `onSessionUpdate`.
+  const messageHoldback = new OutboundHoldback()
+  const thoughtHoldback = new OutboundHoldback()
+  /** Last-notified ext-v1 gate-state projection JSON per session. */
+  const lastGateStateJson = new Map<string, string>()
+  /** Last-notified capability map JSON per session. */
+  const lastCapabilitiesJson = new Map<string, string>()
+  /** Rate-limit timestamp for the capabilities_changed push, per session. */
+  const lastCapabilitiesPushAt = new Map<string, number>()
+
+  /**
+   * §6.1: pushes `_openbuff.dev/capabilities_changed` when the session's map
+   * changed since the last push, rate-limited to one push per 250 ms and
+   * always sending the full map. A no-op without `onSessionUpdate`.
+   */
+  const maybeNotifyCapabilitiesChanged = async (
+    sessionId: string,
+  ): Promise<void> => {
+    if (!options.onSessionUpdate) return
+    const capabilities = sessionData.getCapabilities(sessionId)
+    if (capabilities === undefined) return
+    const json = JSON.stringify(capabilities)
+    if (lastCapabilitiesJson.get(sessionId) === json) return
+    const now = Date.now()
+    const last = lastCapabilitiesPushAt.get(sessionId)
+    if (last !== undefined && now - last < CAPABILITIES_PUSH_MIN_INTERVAL_MS) {
+      // Rate-limited: keep the previous notified JSON so the next call can
+      // retry the push after the window.
+      return
+    }
+    lastCapabilitiesPushAt.set(sessionId, now)
+    lastCapabilitiesJson.set(sessionId, json)
+    await options.onSessionUpdate({
+      method: OPENBUFF_CAPABILITIES_CHANGED_NOTIFICATION,
+      params: { capabilities },
+    })
+  }
+
+  /**
+   * §6.4: pushes `_openbuff.dev/gate_state {state}` whenever the projected
+   * ext-v1 gate state differs from the last push for the session. A no-op
+   * without `onSessionUpdate`.
+   */
+  const maybeNotifyGateState = async (sessionId: string): Promise<void> => {
+    if (!options.onSessionUpdate) return
+    const state = sessionData.getGateStateV1(sessionId)
+    const json = JSON.stringify(state)
+    if (lastGateStateJson.get(sessionId) === json) return
+    lastGateStateJson.set(sessionId, json)
+    await options.onSessionUpdate({
+      method: OPENBUFF_GATE_STATE_NOTIFICATION,
+      params: { state },
+    })
+  }
 
   const promptHandler: AcpPromptHandler = async (input) => {
     /**
+     * NEW-3 (§12.8) flush helpers, scoped to this prompt turn AND this
+     * session: one bridge instance serves every socket connection, so held
+     * windows are keyed by (sessionId, messageId) and every flush releases
+     * ONLY the OWNING session's windows through this turn's sinks — a
+     * concurrent turn for a different session must never have its held text
+     * released here (reviewer finding shared-holdback-cross-turn-flush /
+     * RF-12).
+     * - flushHoldbacks releases this session's held windows, routing message
+     *   pieces to `input.update` and thought pieces to `onSessionUpdate`
+     *   (flushed thought pieces are emitted as fresh `agent_thought_chunk`
+     *   payloads).
+     * - ensureIdleFlusher lazily starts ONE unref'd interval per turn that
+     *   releases THIS session's windows idle for IDLE_FLUSH_MS;
+     *   stopIdleFlusher clears it in the turn's finally so no per-chunk
+     *   timer ever exists.
+     */
+    const flushHoldbacks = async (): Promise<void> => {
+      const now = Date.now()
+      for (const piece of messageHoldback.flushSession(input.sessionId, now)) {
+        await input.update(piece)
+      }
+      for (const piece of thoughtHoldback.flushSession(input.sessionId, now)) {
+        await options.onSessionUpdate?.({
+          sessionUpdate: 'agent_thought_chunk',
+          content: { type: 'text', text: piece },
+        })
+      }
+    }
+    let idleTimer: ReturnType<typeof setInterval> | undefined
+    const ensureIdleFlusher = (): void => {
+      if (idleTimer !== undefined) return
+      idleTimer = setInterval(() => {
+        const now = Date.now()
+        for (const piece of messageHoldback.flushIdleSession(
+          input.sessionId,
+          now,
+          IDLE_FLUSH_MS,
+        )) {
+          void input.update(piece)
+        }
+        for (const piece of thoughtHoldback.flushIdleSession(
+          input.sessionId,
+          now,
+          IDLE_FLUSH_MS,
+        )) {
+          void options.onSessionUpdate?.({
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: piece },
+          })
+        }
+      }, IDLE_FLUSH_MS)
+      // A flush timer must never keep the process alive on its own.
+      idleTimer.unref?.()
+    }
+    const stopIdleFlusher = (): void => {
+      if (idleTimer === undefined) return
+      clearInterval(idleTimer)
+      idleTimer = undefined
+    }
+
+    /**
      * Maps every event through the §4.2 event bridge and forwards the
-     * resulting payloads: `agent_message_chunk` text goes out via `update`
-     * (sanitized), and every other payload goes to the optional
-     * `onSessionUpdate` seam — dropped when the host did not supply it, which
-     * reproduces the Wave-1 text-only behavior. The raw text feeds gate-state
-     * parsing (a no-op when there is no block), and the sanitized copy is
-     * what crosses the wire.
+     * resulting payloads. `agent_message_chunk` text flows through the
+     * message holdback (pieces are already sanitized by the holdback's emit
+     * path) and out via `update`; `agent_thought_chunk` text flows through
+     * the thought holdback and out via `onSessionUpdate`. Every other payload
+     * goes to the optional `onSessionUpdate` seam — dropped when the host did
+     * not supply it, which reproduces the Wave-1 text-only behavior. A
+     * `tool_call`/`tool_call_update` payload is a §12.8 flush trigger: held
+     * text is released BEFORE the tool card so the wire order stays
+     * text → tool. The raw (unsanitized) text feeds gate-state parsing by
+     * design — redacting the block would break the parser — while the
+     * holdback's emit path and the NEW-4 chokepoint still redact the
+     * outbound copy.
      */
     const handleEvent = async (event: PrintModeEvent): Promise<void> => {
       const payloads = printModeToSessionUpdates(event, {
@@ -130,15 +281,65 @@ export function createServeBridge(options: ServeBridgeOptions): {
         toolKind: acpToolKind,
       })
       for (const payload of payloads) {
-        const text = extractForwardableText(payload)
-        if (text === undefined) {
+        if (!isPlainRecord(payload)) {
           await options.onSessionUpdate?.(payload)
           continue
         }
-        // Record any published gate-state block from the model-visible text; the
-        // store's parser is a no-op when the chunk carries no block.
-        sessionData.updateGateStateFromBlock(input.sessionId, text)
-        await input.update(sanitizeOutbound(text))
+        const isMessageChunk = payload.sessionUpdate === 'agent_message_chunk'
+        const isThoughtChunk = payload.sessionUpdate === 'agent_thought_chunk'
+        if (
+          !isMessageChunk &&
+          !isThoughtChunk &&
+          (payload.sessionUpdate === 'tool_call' ||
+            payload.sessionUpdate === 'tool_call_update')
+        ) {
+          // Flush trigger (§12.8): release held text before the tool card.
+          await flushHoldbacks()
+        }
+        if (isMessageChunk) {
+          const text = extractForwardableText(payload)
+          if (text === undefined) {
+            await options.onSessionUpdate?.(payload)
+            continue
+          }
+          // Record any published gate-state block from the model-visible text;
+          // the store's parser is a no-op when the chunk carries no block.
+          sessionData.updateGateStateFromBlock(input.sessionId, text)
+          await maybeNotifyGateState(input.sessionId)
+          ensureIdleFlusher()
+          for (const piece of messageHoldback.push(
+            input.sessionId,
+            messageIdKey(payload),
+            text,
+            credentialValues,
+            Date.now(),
+          )) {
+            await input.update(piece)
+          }
+          continue
+        }
+        if (isThoughtChunk) {
+          const thought = extractThoughtText(payload)
+          if (thought === undefined) {
+            await options.onSessionUpdate?.(payload)
+            continue
+          }
+          ensureIdleFlusher()
+          for (const piece of thoughtHoldback.push(
+            input.sessionId,
+            messageIdKey(payload),
+            thought,
+            credentialValues,
+            Date.now(),
+          )) {
+            await options.onSessionUpdate?.({
+              ...payload,
+              content: { type: 'text', text: piece },
+            })
+          }
+          continue
+        }
+        await options.onSessionUpdate?.(payload)
       }
     }
 
@@ -163,15 +364,35 @@ export function createServeBridge(options: ServeBridgeOptions): {
       options.markClientMcpServers?.(clientMcpServers)
     }
 
-    await client.run({
-      agent: agentId,
-      prompt: input.promptText,
-      handleEvent,
-      onFilesystemMutation: (event: FilesystemMutationEvent) =>
-        sessionData.recordReceiptFromMutationEvent(input.sessionId, event),
-      signal: input.signal,
-      ...(clientMcpServers ? { mcpServers: clientMcpServers } : {}),
-    })
+    // §6.1: a session with no stored capability map gets the honest P1 serve
+    // default BEFORE the first turn, so `_openbuff.dev/capabilities/get`
+    // never fails for an open session and the change push has a baseline.
+    // The journal flags are derived from the store's real posture, not
+    // hardcoded (a purely in-memory store advertises no resume/replay).
+    if (sessionData.getCapabilities(input.sessionId) === undefined) {
+      sessionData.setCapabilities(
+        input.sessionId,
+        defaultCapabilityMapV1({ journalAvailable: sessionData.hasJournal() }),
+      )
+    }
+    await maybeNotifyCapabilitiesChanged(input.sessionId)
+
+    try {
+      await client.run({
+        agent: agentId,
+        prompt: input.promptText,
+        handleEvent,
+        onFilesystemMutation: (event: FilesystemMutationEvent) =>
+          sessionData.recordReceiptFromMutationEvent(input.sessionId, event),
+        signal: input.signal,
+        ...(clientMcpServers ? { mcpServers: clientMcpServers } : {}),
+      })
+    } finally {
+      // §12.8 NEW-3 flush contract: turn end AND cancel release everything
+      // held; the idle timer is stopped so no per-turn timer outlives the turn.
+      stopIdleFlusher()
+      await flushHoldbacks()
+    }
 
     // A run that ended via the abort signal maps to 'cancelled'; a naturally
     // settled run is 'end_turn'.
@@ -202,6 +423,23 @@ function extractForwardableText(payload: unknown): string | undefined {
 /** Type guard for the plain-object payloads the event bridge emits. */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** The holdback window key for a chunk payload: its messageId, else 'default'. */
+function messageIdKey(payload: Record<string, unknown>): string {
+  return typeof payload.messageId === 'string' ? payload.messageId : 'default'
+}
+
+/** Extracts the text of an `agent_thought_chunk` payload, else undefined. */
+function extractThoughtText(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const content = payload.content
+  if (!isPlainRecord(content)) return undefined
+  if (content.type !== 'text' || typeof content.text !== 'string') {
+    return undefined
+  }
+  return content.text
 }
 
 /**

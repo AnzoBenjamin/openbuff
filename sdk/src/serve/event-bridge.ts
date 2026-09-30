@@ -129,6 +129,106 @@ function collectLocations(
   return locations
 }
 
+/**
+ * NEW-6 (§12.8, GV-25): paths whose basename marks credential material.
+ * Case-insensitive on the basename: `.env`/`.env.*`, `*.pem`, `*.key`,
+ * `id_rsa`/`id_rsa.*`, `id_ed25519`/`id_ed25519.*`, `.git-credentials`,
+ * `.netrc`, `credentials`, and `secrets.*`.
+ */
+export function isSensitivePath(p: string): boolean {
+  const basename = p.split(/[\\/]/).pop() ?? p
+  const lower = basename.toLowerCase()
+  if (lower === '.env' || lower.startsWith('.env.')) return true
+  if (lower.endsWith('.pem') || lower.endsWith('.key')) return true
+  if (lower === 'id_rsa' || lower.startsWith('id_rsa.')) return true
+  if (lower === 'id_ed25519' || lower.startsWith('id_ed25519.')) return true
+  if (
+    lower === '.git-credentials' ||
+    lower === '.netrc' ||
+    lower === 'credentials'
+  ) {
+    return true
+  }
+  return lower.startsWith('secrets.')
+}
+
+/** The placeholder NEW-6 substitutes into content-bearing rawInput fields. */
+const SENSITIVE_PLACEHOLDER = '[sensitive]'
+
+/** Top-level rawInput string fields redacted for a sensitive path. */
+const RAW_INPUT_CONTENT_KEYS = [
+  'content',
+  'newString',
+  'oldString',
+  'diff',
+  // `replace_range` carries its replacement text in `newContent`; a card
+  // touching a sensitive path must never leak it (NEW-6/GV-25).
+  'newContent',
+]
+
+/** rawInput list fields whose element string values are redacted at every depth. */
+const RAW_INPUT_LIST_KEYS = ['replacements', 'edits']
+
+/**
+ * NEW-6 element-level redaction: EVERY string value at EVERY depth inside a
+ * `replacements`/`edits` element becomes "[sensitive]". Edit elements carry
+ * file content in nested positions a flat field list cannot cover — a
+ * `structured` edit's `operation.text`/`importStatement`, a
+ * `replace_range` edit's `occurrence.match`, or any future nested
+ * content-bearing field — so the element rule is shape-recursive, not
+ * field-listed. Arrays and plain objects are rebuilt; everything else passes
+ * through.
+ */
+function redactAllStringsDeep(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return SENSITIVE_PLACEHOLDER
+  }
+  if (Array.isArray(value)) {
+    return value.map((element) => redactAllStringsDeep(element))
+  }
+  if (isRecord(value)) {
+    const copy: Record<string, unknown> = {}
+    for (const [field, fieldValue] of Object.entries(value)) {
+      copy[field] = redactAllStringsDeep(fieldValue)
+    }
+    return copy
+  }
+  return value
+}
+
+/**
+ * Builds the NEW-6 redacted rawInput copy: top-level content-bearing string
+ * fields become "[sensitive]", and EVERY string value of every
+ * `replacements`/`edits` element becomes "[sensitive]" at EVERY nesting
+ * depth (covering nested `content`/`newString`/`oldString`/`newContent`
+ * inside edit elements, plus the nested content positions of structured and
+ * occurrence-targeted edits). All other top-level fields — paths, ids,
+ * flags — pass through untouched.
+ */
+function redactSensitiveRawInput(
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const redacted: Record<string, unknown> = { ...input }
+  for (const key of RAW_INPUT_CONTENT_KEYS) {
+    if (typeof redacted[key] === 'string') {
+      redacted[key] = SENSITIVE_PLACEHOLDER
+    }
+  }
+  for (const key of RAW_INPUT_LIST_KEYS) {
+    const list = redacted[key]
+    if (!Array.isArray(list)) continue
+    redacted[key] = list.map((element) =>
+      isRecord(element) ? redactAllStringsDeep(element) : element,
+    )
+  }
+  return redacted
+}
+
+/** Whether any collected tool_call location points at a sensitive path. */
+function anyLocationSensitive(locations: Array<{ path: string }>): boolean {
+  return locations.some((location) => isSensitivePath(location.path))
+}
+
 type MutationActionSummary = {
   outcome: string
   path: string
@@ -289,9 +389,13 @@ export function printModeToSessionUpdates(
         status: 'pending',
       }
       if (locations.length > 0) payload.locations = locations
-      // `rawInput` is deliberately not attached here: §12.1 requires input to
-      // pass the full outbound redaction pass before emission, which the
-      // transport chokepoint owns.
+      // NEW-6 (§12.8): rawInput rides every tool card. When any collected
+      // location path is sensitive, the content-bearing input fields are
+      // replaced with "[sensitive]" (GV-25) before emission; the §12.1
+      // transport chokepoint stays the last line of defense for the rest.
+      payload.rawInput = anyLocationSensitive(locations)
+        ? redactSensitiveRawInput(event.input)
+        : event.input
       return [payload]
     }
     case 'tool_start': {

@@ -19,6 +19,7 @@ import {
   resolveAcpServeOptions,
 } from '../services/acp/acp-agent'
 import type { AcpAgentOptions } from '../services/acp/acp-agent'
+import { sanitizeOutboundStream } from './outbound'
 
 /**
  * Options for {@link serveAcpOverSocket}. Everything the ACP agent needs
@@ -303,8 +304,13 @@ function handleConnection(
     if (rest.length > 0) {
       socket.unshift(rest)
     }
+    // NEW-4 chokepoint (§12.8): every serialized frame — including
+    // SDK-generated JSON-RPC errors and agent→client requests — crosses
+    // sanitizeOutbound before the wire; clean frames stay byte-identical.
     const stream = ndJsonStream(
-      Writable.toWeb(socket) as unknown as WritableStream<Uint8Array>,
+      sanitizeOutboundStream(
+        Writable.toWeb(socket) as unknown as WritableStream<Uint8Array>,
+      ),
       Readable.toWeb(socket) as unknown as ReadableStream<Uint8Array>,
     )
     // A fresh AgentSideConnection per socket: the session map inside

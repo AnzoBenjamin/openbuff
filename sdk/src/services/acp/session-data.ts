@@ -1,9 +1,19 @@
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 
+import {
+  capabilityMapV1Schema,
+  toWireMutation as toWireMutationV1,
+  type CapabilityMapV1,
+  type GateStateV1,
+  type LaneV1,
+  type WireFileMutationResultV1,
+} from '@codebuff/common/protocol/acp-ext-v1'
 import type {
   FileMutationActionV1,
   FileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
+
+import { defaultCapabilityMapV1 } from './ext-methods'
 
 /**
  * Structural mirror of the run loop's `FilesystemMutationEvent`
@@ -74,6 +84,7 @@ export type AcpSessionDataOptions = {
 type JournalLine =
   | { kind: 'receipt_envelope'; envelope: AcpWireReceiptEnvelope }
   | { kind: 'gate_state'; snapshot: AcpGateStateSnapshot }
+  | { kind: 'capabilities'; capabilities: CapabilityMapV1 }
 
 /**
  * The redacted receipt envelope wire shape (P1-T2-DESIGN §6.2): the mutation
@@ -89,7 +100,7 @@ export type AcpWireReceiptEnvelope = {
   sessionId: string
   toolCallId?: string
   laneId: 'main'
-  mutation: FileMutationResultV1
+  mutation: WireFileMutationResultV1
 }
 
 /** Projected receipt row served by `openbuff/getReceipts`. */
@@ -111,6 +122,7 @@ export type AcpGatePhase =
   | 'validating'
   | 'reviewing'
   | 'blocked'
+  | 'skipped'
   | 'final_response_allowed'
 
 export type AcpGateStateResult = {
@@ -155,28 +167,90 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Builds the wire mutation for a receipt envelope: drops the
- * content-bearing fields (`afterContent`, `patch`, `editAnchor`) from every
- * action and replaces `freshCapabilities` with `[]` so cap.v3 tokens never
- * leave the core. The action schema is a single object shape whose optional
- * content fields may be populated by any `action` kind, so destructuring the
- * three keys covers every variant; `authorityReceipt` is untouched.
+ * Allowlist gate for interpolating a session id into a journal path. The
+ * ACP client fully controls the id via session/load (loadSession accepts
+ * any string), so only single-segment filename-safe ids may ever reach the
+ * filesystem: alphanumerics plus `.`, `_`, `~`, `-` — never a path
+ * separator, never the traversal tokens `.`/`..`, bounded to one NAME_MAX
+ * component. Ids issued by session/new are UUIDs and always pass.
+ */
+const JOURNAL_SAFE_SESSION_ID_RE = /^[A-Za-z0-9._~-]+$/
+
+function isJournalSafeSessionId(sessionId: string): boolean {
+  return (
+    sessionId.length <= 255 &&
+    sessionId !== '.' &&
+    sessionId !== '..' &&
+    JOURNAL_SAFE_SESSION_ID_RE.test(sessionId)
+  )
+}
+
+/**
+ * GV-07 replay gate for journal-restored receipt envelopes: the journal lives
+ * under the project root, which serve mode treats as untrusted, so a replayed
+ * envelope is accepted only when it is ALREADY redaction-clean — every action
+ * must lack the content-bearing fields (`afterContent`, `patch`,
+ * `editAnchor`) and `freshCapabilities` must be exactly empty. The ext-v1
+ * dispatcher re-validates the full `receiptEnvelopeV1Schema` again at serve
+ * time; this gate keeps content-bearing journal bytes out of the store in the
+ * first place.
+ */
+function isRedactionCleanWireEnvelope(
+  value: Record<string, unknown>,
+): value is AcpWireReceiptEnvelope {
+  if (
+    value.kind !== 'openbuff.receipt_envelope' ||
+    value.version !== 1 ||
+    typeof value.sessionId !== 'string' ||
+    value.sessionId.length === 0 ||
+    value.laneId !== 'main'
+  ) {
+    return false
+  }
+  if (value.toolCallId !== undefined && typeof value.toolCallId !== 'string') {
+    return false
+  }
+  const mutation = value.mutation
+  if (
+    !isPlainRecord(mutation) ||
+    mutation.kind !== 'file_mutation_result' ||
+    mutation.version !== 1 ||
+    !Array.isArray(mutation.actions)
+  ) {
+    return false
+  }
+  for (const action of mutation.actions) {
+    if (!isPlainRecord(action)) return false
+    if ('afterContent' in action || 'patch' in action || 'editAnchor' in action) {
+      return false
+    }
+  }
+  const freshCapabilities = mutation.freshCapabilities
+  if (!Array.isArray(freshCapabilities) || freshCapabilities.length !== 0) {
+    return false
+  }
+  return true
+}
+
+/**
+ * Builds the wire mutation for a receipt envelope: the published §6.2
+ * projection drops the content-bearing fields (`afterContent`, `patch`,
+ * `editAnchor`) from every action, pins `freshCapabilities` to the empty
+ * tuple, and keeps `authorityReceipt` verbatim (it holds only ids, hashes,
+ * tiers, and statuses).
  */
 export function toWireMutation(
   mutation: FileMutationResultV1,
-): FileMutationResultV1 {
-  const redactedActions: FileMutationActionV1[] = mutation.actions.map(
-    (action) => {
-      const {
-        afterContent: _afterContent,
-        editAnchor: _editAnchor,
-        patch: _patch,
-        ...rest
-      } = action
-      return rest
-    },
-  )
-  return { ...mutation, actions: redactedActions, freshCapabilities: [] }
+): WireFileMutationResultV1 {
+  // The published §6.2 wire projection (in @codebuff/common) is the single
+  // source of truth: it REBUILDS the mutation field-by-field against the
+  // strict wire allowlist instead of spreading the internal shape, so no
+  // field outside wireFileMutationResultV1Schema survives into the stored
+  // envelope. Every envelope the store records — including one recorded
+  // through the public recordReceipt path carrying content-bearing fields or
+  // fresh capabilities — therefore parses against the ext-v1 receipt
+  // contract at serve time instead of collapsing to receipt_not_found.
+  return toWireMutationV1(mutation)
 }
 
 /** Builds the redacted receipt envelope for one recorded mutation. */
@@ -205,7 +279,12 @@ function projectGatePhase(
   if (status === 'passed') {
     return 'final_response_allowed'
   }
-  if (status === 'failed' || status === 'skipped') {
+  if (status === 'skipped') {
+    // A skip is its own recorded status (the ext-v1 gate contract carries
+    // 'skipped' plus skipReason), distinct from a failure.
+    return 'skipped'
+  }
+  if (status === 'failed') {
     return 'blocked'
   }
   // Non-terminal (or unrecognized) status: the gate alone decides, and the
@@ -312,6 +391,56 @@ function projectEnvelopeReceipt(envelope: AcpWireReceiptEnvelope): AcpWireReceip
 }
 
 /**
+ * Projects the latest gate snapshot onto the ext-v1 GateStateV1 (§6.4). The
+ * published `<gate-state>` block carries no file lists, so `pendingFiles` and
+ * `passedFiles` are honest empties, and every optional field is omitted
+ * unless the snapshot actually recorded it.
+ */
+function projectGateStateV1(
+  snapshot: AcpGateStateSnapshot | undefined,
+  sessionId: string,
+): GateStateV1 {
+  let status: GateStateV1['status']
+  switch (snapshot?.phase) {
+    case 'final_response_allowed':
+      status = 'passed'
+      break
+    case 'skipped':
+      // The ext-v1 contract defines 'skipped' (plus an optional skipReason) as
+      // its own status: a deliberately skipped gate must not carry failure
+      // semantics to ext-v1 consumers.
+      status = 'skipped'
+      break
+    case 'blocked':
+      status = 'failed'
+      break
+    case 'validating':
+      status = 'validating'
+      break
+    case 'reviewing':
+      status = 'reviewing'
+      break
+    default:
+      status = 'idle'
+  }
+  return {
+    kind: 'openbuff.gate_state',
+    version: 1,
+    sessionId,
+    status,
+    pendingFiles: [],
+    passedFiles: [],
+    // The producer's `details` line IS the published skip explanation (the
+    // gate-state block emitter records the skip reason as `details`), so a
+    // skipped snapshot surfaces it as the contract's optional skipReason;
+    // nothing is invented when the producer recorded none.
+    ...(snapshot?.phase === 'skipped' && snapshot.details.length > 0
+      ? { skipReason: snapshot.details }
+      : {}),
+  }
+}
+
+/**
  * Bounded live-data store for ACP sessions. One instance serves the whole
  * agent process; sessions are keyed by ACP session id. When constructed
  * with a `journalDir`, every receipt/gate-state mutation is mirrored to a
@@ -323,6 +452,10 @@ export class AcpSessionData {
   private readonly receiptsBySession = new Map<string, AcpWireReceiptEnvelope[]>()
   /** Latest gate-state snapshot per session (one per session, replace-on-update). */
   private readonly gateStateBySession = new Map<string, AcpGateStateSnapshot>()
+  /** Latest ext-v1 capability map per session (one per session, replace-on-set). */
+  private readonly capabilitiesBySession = new Map<string, CapabilityMapV1>()
+  /** Latest confirmed workspace revision per session (drives the main lane). */
+  private readonly workspaceRevisionBySession = new Map<string, number>()
   /** Injected journal directory; undefined keeps the store purely in-memory. */
   private readonly journalDir?: string
   /** Directories already mkdir'd (lazy, recursive, once per journal dir). */
@@ -351,11 +484,28 @@ export class AcpSessionData {
     this.journalDirsCreated.add(dir)
   }
 
+  /**
+   * Resolves the session's journal path, or undefined when journaling is
+   * disabled OR the session id is unsafe to interpolate into a path. Every
+   * journal read/write goes through this gate so a client-controlled
+   * sessionId (`session/load` accepts any id) can never escape `journalDir`
+   * into an append/create write or read of `.jsonl` files elsewhere. Fails
+   * closed: the in-memory store keeps working, only the journal IO is
+   * skipped.
+   */
+  private journalFilePathFor(sessionId: string): string | undefined {
+    const dir = this.journalDir
+    if (dir === undefined || !isJournalSafeSessionId(sessionId)) {
+      return undefined
+    }
+    return `${dir}/${sessionId}.jsonl`
+  }
+
   /** Appends one complete JSON line (atomic enough for a single process). */
   private appendJournalLine(sessionId: string, line: JournalLine): void {
     const dir = this.journalDir
-    if (!dir) return
-    const filePath = `${dir}/${sessionId}.jsonl`
+    const filePath = this.journalFilePathFor(sessionId)
+    if (dir === undefined || filePath === undefined) return
     const encoded = `${JSON.stringify(line)}\n`
     this.queueJournalWrite(async () => {
       await this.ensureJournalDir(dir)
@@ -370,7 +520,8 @@ export class AcpSessionData {
    */
   private rewriteJournal(sessionId: string): void {
     const dir = this.journalDir
-    if (!dir) return
+    const filePath = this.journalFilePathFor(sessionId)
+    if (dir === undefined || filePath === undefined) return
     const receipts = this.receiptsBySession.get(sessionId) ?? []
     const snapshot = this.gateStateBySession.get(sessionId)
     const lines = receipts.map((envelope) => {
@@ -381,10 +532,15 @@ export class AcpSessionData {
       const line: JournalLine = { kind: 'gate_state', snapshot }
       lines.push(JSON.stringify(line))
     }
+    const capabilities = this.capabilitiesBySession.get(sessionId)
+    if (capabilities) {
+      const line: JournalLine = { kind: 'capabilities', capabilities }
+      lines.push(JSON.stringify(line))
+    }
     const contents = lines.length > 0 ? `${lines.join('\n')}\n` : ''
     this.queueJournalWrite(async () => {
       await this.ensureJournalDir(dir)
-      await writeFile(`${dir}/${sessionId}.jsonl`, contents, 'utf8')
+      await writeFile(filePath, contents, 'utf8')
     })
   }
 
@@ -401,6 +557,7 @@ export class AcpSessionData {
     mutation: FileMutationResultV1,
     toolCallId?: string,
   ): void {
+    this.trackWorkspaceRevision(sessionId, mutation.workspaceRevision)
     this.pushEnvelope(sessionId, toWireReceipt(mutation, sessionId, toolCallId))
   }
 
@@ -452,11 +609,15 @@ export class AcpSessionData {
       version: 1,
       sessionId,
       laneId: 'main',
-      mutation,
+      // The envelope carries the §6.2 wire projection (freshCapabilities is
+      // the empty tuple the wire schema pins), so the typed store shape and
+      // the published ext-v1 contract cannot drift.
+      mutation: toWireMutation(mutation),
     }
     if (toolCallId !== undefined) {
       envelope.toolCallId = toolCallId
     }
+    this.trackWorkspaceRevision(sessionId, event.workspaceRevision)
     this.pushEnvelope(sessionId, envelope)
   }
 
@@ -509,21 +670,115 @@ export class AcpSessionData {
   }
 
   /**
+   * Tracks the latest confirmed workspace revision for a session (the main
+   * lane's `baseRevision`, §6.3). Monotonic: a lower revision never rewinds
+   * the recorded value.
+   */
+  private trackWorkspaceRevision(
+    sessionId: string,
+    revision: number | undefined,
+  ): void {
+    if (
+      typeof revision !== 'number' ||
+      !Number.isFinite(revision) ||
+      revision < 0
+    ) {
+      return
+    }
+    const current = this.workspaceRevisionBySession.get(sessionId)
+    if (current === undefined || revision > current) {
+      this.workspaceRevisionBySession.set(sessionId, revision)
+    }
+  }
+
+  /**
+   * Stores the session's ext-v1 capability map (§6.1, replace-on-set) and
+   * journals it so a restored session keeps its advertised snapshot.
+   */
+  setCapabilities(sessionId: string, capabilities: CapabilityMapV1): void {
+    this.capabilitiesBySession.set(sessionId, capabilities)
+    this.appendJournalLine(sessionId, { kind: 'capabilities', capabilities })
+  }
+
+  /** Returns the session's ext-v1 capability map, or undefined when never set. */
+  getCapabilities(sessionId: string): CapabilityMapV1 | undefined {
+    return this.capabilitiesBySession.get(sessionId)
+  }
+
+  /**
+   * Whether this store mirrors to a durable journal directory. Drives the
+   * §6.1 capability map's honest `journal` flags: a purely in-memory store
+   * must not advertise resume/replay that `session/load` cannot honor.
+   */
+  hasJournal(): boolean {
+    return this.journalDir !== undefined
+  }
+
+  /**
+   * Fetches one full redacted receipt envelope by its mutation receiptId
+   * (§6.2). Envelopes recorded without a receiptId are NOT fetchable by id —
+   * they only surface in the `openbuff/getReceipts` list projection. The same
+   * applies to envelopes recorded without a `toolCallId`: the published
+   * ext-v1 result contract (`receiptEnvelopeV1Schema`) requires one, so a
+   * tool-less envelope has no wire representation and is not addressable by
+   * `_openbuff.dev/receipts/get`.
+   */
+  getReceipt(
+    sessionId: string,
+    receiptId: string,
+  ): AcpWireReceiptEnvelope | undefined {
+    const receipts = this.receiptsBySession.get(sessionId) ?? []
+    return receipts.find(
+      (envelope) =>
+        envelope.mutation.receiptId === receiptId &&
+        envelope.toolCallId !== undefined,
+    )
+  }
+
+  /**
+   * The single P1 lane (§6.3): `main`, active, baseRevision = the latest
+   * confirmed workspace revision (0 before any mutation is confirmed).
+   */
+  getMainLane(sessionId: string): LaneV1 {
+    return {
+      kind: 'openbuff.lane',
+      version: 1,
+      laneId: 'main',
+      status: 'active',
+      baseRevision: this.workspaceRevisionBySession.get(sessionId) ?? 0,
+      agentIds: [],
+    }
+  }
+
+  /**
+   * Projects the session's latest gate snapshot onto the ext-v1 GateStateV1
+   * (§6.4). A session with no published block reports `idle`.
+   */
+  getGateStateV1(sessionId: string): GateStateV1 {
+    return projectGateStateV1(this.gateStateBySession.get(sessionId), sessionId)
+  }
+
+  /**
    * Replays `<journalDir>/<sessionId>.jsonl` into the in-memory maps so a
    * `session/load`-restored session recovers its receipt history and last
    * gate-state snapshot. Receipts replay newest-last capped at
    * MAX_RECEIPTS_PER_SESSION; the snapshot is the last valid `gate_state`
    * line. Malformed lines are skipped fail-closed and any read failure
-   * degrades to "no journal" — this never throws.
+   * degrades to "no journal" — this never throws. Receipt envelopes are
+   * replayed only when already redaction-clean (GV-07), and capability
+   * lines re-derive the honest baseline map instead of serving the
+   * replayed bytes verbatim.
    *
    * Returns whether a journal file existed for the session.
    */
   async restoreFromJournal(sessionId: string): Promise<boolean> {
-    const dir = this.journalDir
-    if (!dir) return false
+    // The same gate guards the READ side: replaying a traversal id must
+    // not read outside the journal directory either.
+    const filePath = this.journalFilePathFor(sessionId)
+    if (filePath === undefined) return false
     let text: string
     try {
-      text = await readFile(`${dir}/${sessionId}.jsonl`, 'utf8')
+      text = await readFile(filePath, 'utf8')
     } catch {
       return false
     }
@@ -539,14 +794,20 @@ export class AcpSessionData {
         continue
       }
       if (!isPlainRecord(parsed)) continue
-      // Journal lines were written by this class, so the persisted record
-      // shapes are trusted after the plain-object shape check; the casts
-      // only restore the static types JSON round-tripping erased.
+      // The journal lives under the project root, which serve mode treats
+      // as untrusted. Receipt envelopes are accepted only when proven
+      // redaction-clean (the gate above); gate-state lines restore
+      // best-effort (the plain-object check only bridges the JSON
+      // round-trip); capability lines only validate the SHAPE — the stored
+      // map is re-derived from this store's real posture, never served from
+      // the replayed bytes (a schema-valid line from a tampered journal must
+      // not become a security advertisement).
       if (
         parsed.kind === 'receipt_envelope' &&
         isPlainRecord(parsed.envelope)
       ) {
-        receipts.push(parsed.envelope as AcpWireReceiptEnvelope)
+        if (!isRedactionCleanWireEnvelope(parsed.envelope)) continue
+        receipts.push(parsed.envelope)
         if (receipts.length > MAX_RECEIPTS_PER_SESSION) {
           receipts.splice(0, receipts.length - MAX_RECEIPTS_PER_SESSION)
         }
@@ -555,6 +816,18 @@ export class AcpSessionData {
         isPlainRecord(parsed.snapshot)
       ) {
         snapshot = parsed.snapshot as AcpGateStateSnapshot
+      } else if (parsed.kind === 'capabilities') {
+        const replayed = capabilityMapV1Schema.safeParse(parsed.capabilities)
+        if (replayed.success) {
+          // Honest re-derivation: journal replay exists so a restored session
+          // HAS a capability map (§6.1) — its journal flags come from THIS
+          // store, and every other field is the honest P1 serve default. The
+          // replayed values are validated but never trusted.
+          this.capabilitiesBySession.set(
+            sessionId,
+            defaultCapabilityMapV1({ journalAvailable: this.hasJournal() }),
+          )
+        }
       }
     }
     if (receipts.length > 0) {

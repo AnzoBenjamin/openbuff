@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { describe, expect, test } from 'bun:test'
 
 import { originOf } from '@codebuff/common/mcp/client'
@@ -501,16 +505,25 @@ describe('createServeBridge', () => {
     })
 
     // Text still streams through update (sanitized); the mapped tool card
-    // goes through the new seam instead.
+    // goes through the new seam instead. The §6.1 baseline
+    // capabilities_changed (sent before the first turn) and the §6.4 idle
+    // gate_state notification (sent after the first message chunk) ride the
+    // seam alongside it.
     expect(updates).toEqual(['visible'])
-    expect(received).toHaveLength(1)
+    expect(received).toHaveLength(3)
     expect(received[0]).toMatchObject({
+      method: '_openbuff.dev/capabilities_changed',
+    })
+    expect(received[1]).toMatchObject({
       sessionUpdate: 'tool_call',
       toolCallId: 't1',
       kind: 'read',
       status: 'pending',
       // No projectRoot option supplied, so the location stays relative.
       locations: [{ path: 'src/a.ts' }],
+    })
+    expect(received[2]).toMatchObject({
+      method: '_openbuff.dev/gate_state',
     })
   })
 
@@ -565,12 +578,18 @@ describe('createServeBridge', () => {
     })
 
     expect(updates).toEqual([])
-    expect(received).toEqual([
-      {
-        method: '_openbuff.dev/event',
-        params: { sessionId: 's1', event: phaseEvent },
-      },
-    ])
+    // The §6.1 baseline capabilities_changed precedes the telemetry ext
+    // notification: a session with no stored map gets the honest P1 default
+    // before its first turn.
+    expect(received).toHaveLength(2)
+    expect(received[0]).toMatchObject({
+      method: '_openbuff.dev/capabilities_changed',
+      params: { capabilities: { kind: 'openbuff.capabilities', version: 1 } },
+    })
+    expect(received[1]).toEqual({
+      method: '_openbuff.dev/event',
+      params: { sessionId: 's1', event: phaseEvent },
+    })
   })
 
   test('eventsMode full forwards subagent text through the sanitized update seam', async () => {
@@ -597,10 +616,98 @@ describe('createServeBridge', () => {
     })
 
     // Subagent text is an agent_message_chunk, so it crosses via update —
-    // sanitized like every other forwarded chunk.
+    // sanitized like every other forwarded chunk. The §6.1 baseline
+    // capabilities_changed and §6.4 idle gate_state notifications ride the
+    // seam; subagent text itself does not.
     expect(updates).toHaveLength(1)
     expect(updates[0]).not.toContain('cap.v3.')
     expect(updates[0]).toContain('[REDACTED_CAPABILITY]')
-    expect(received).toEqual([])
+    expect(received).toHaveLength(2)
+    expect(received[0]).toMatchObject({
+      method: '_openbuff.dev/capabilities_changed',
+    })
+    expect(received[1]).toMatchObject({
+      method: '_openbuff.dev/gate_state',
+    })
+  })
+
+  test('NEW-3: host-injected credentialValues are held back and redacted across chunk boundaries', async () => {
+    const sessionData = new AcpSessionData()
+    const secret = 'sk-super-secret-value-42'
+    const client = makeFakeClient({
+      events: [
+        { type: 'text', text: 'key is ' },
+        { type: 'text', text: `${secret} ok` },
+      ],
+    })
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData,
+      credentialValues: [secret],
+    })
+    const { updates, update } = collectUpdates()
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update,
+      signal: new AbortController().signal,
+    })
+
+    const joined = updates.join('')
+    // No single frame, and no concatenation of frames, carries the secret:
+    // the value-level no-split invariant only holds because the HOST injected
+    // the configured credential values through ServeBridgeOptions.
+    expect(joined).not.toContain(secret)
+    expect(joined).toContain('[REDACTED_SECRET]')
+    expect(joined).toContain('key is')
+  })
+
+  test('§6.1: the baseline capability map derives journal flags from the store (an in-memory store advertises no resume/replay)', async () => {
+    const sessionData = new AcpSessionData()
+    const client = makeFakeClient({})
+    const { promptHandler } = createServeBridge({ client, sessionData })
+
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+
+    const map = sessionData.getCapabilities('s1')
+    expect(map).toBeDefined()
+    // A purely in-memory store must not advertise resume/replay that
+    // session/load cannot honor.
+    expect(map!.journal).toEqual({ resume: false, replay: false })
+    expect(map!.sandbox).toEqual({
+      tier: 'lexical',
+      enforced: false,
+      network: 'unrestricted',
+    })
+    expect(map!.gate).toEqual({ enabled: true })
+  })
+
+  test('§6.1: a journal-backed store honestly advertises resume/replay', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'serve-bridge-journal-'))
+    try {
+      const sessionData = new AcpSessionData({ journalDir: dir })
+      const client = makeFakeClient({})
+      const { promptHandler } = createServeBridge({ client, sessionData })
+
+      await promptHandler({
+        sessionId: 's1',
+        promptText: 'hi',
+        update: async () => {},
+        signal: new AbortController().signal,
+      })
+
+      expect(sessionData.getCapabilities('s1')?.journal).toEqual({
+        resume: true,
+        replay: true,
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

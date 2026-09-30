@@ -73,11 +73,17 @@ describe('serve subcommand parsing', () => {
   })
 
   test('parses bare `serve` as stdio transport', () => {
-    expect(parse(['serve']).serve).toEqual({ transport: 'stdio' })
+    expect(parse(['serve']).serve).toEqual({
+      transport: 'stdio',
+      trustProjectAgents: false,
+    })
   })
 
   test('parses --stdio as stdio transport', () => {
-    expect(parse(['serve', '--stdio']).serve).toEqual({ transport: 'stdio' })
+    expect(parse(['serve', '--stdio']).serve).toEqual({
+      transport: 'stdio',
+      trustProjectAgents: false,
+    })
   })
 
   test('errors when --socket is given without a path', () => {
@@ -88,6 +94,7 @@ describe('serve subcommand parsing', () => {
     expect(parse(['serve', '--socket', '/tmp/x.sock']).serve).toEqual({
       transport: 'socket',
       socketPath: '/tmp/x.sock',
+      trustProjectAgents: false,
     })
   })
 
@@ -99,6 +106,7 @@ describe('serve subcommand parsing', () => {
       transport: 'socket',
       socketPath: '/tmp/x.sock',
       token: 'abc',
+      trustProjectAgents: false,
     })
   })
 
@@ -106,6 +114,7 @@ describe('serve subcommand parsing', () => {
     expect(parse(['serve', '--agent', 'foo']).serve).toEqual({
       transport: 'stdio',
       agentId: 'foo',
+      trustProjectAgents: false,
     })
   })
 
@@ -116,10 +125,52 @@ describe('serve subcommand parsing', () => {
       transport: 'socket',
       socketPath: '/tmp/x.sock',
       agentId: 'foo',
+      trustProjectAgents: false,
     })
   })
 
   test('leaves serve.agentId undefined for bare serve', () => {
     expect(parse(['serve']).serve?.agentId).toBeUndefined()
+  })
+
+  test('defaults serve trust to false for both variants', () => {
+    expect(parse(['serve']).serve?.trustProjectAgents).toBe(false)
+    expect(
+      parse(['serve', '--socket', '/tmp/x.sock']).serve?.trustProjectAgents,
+    ).toBe(false)
+  })
+
+  test('parses --trust-project-agents into the stdio variant', () => {
+    expect(parse(['serve', '--trust-project-agents']).serve).toEqual({
+      transport: 'stdio',
+      trustProjectAgents: true,
+    })
+  })
+
+  test('parses --trust-project-agents into the socket variant', () => {
+    expect(
+      parse(['serve', '--socket', '/tmp/x.sock', '--trust-project-agents'])
+        .serve,
+    ).toEqual({
+      transport: 'socket',
+      socketPath: '/tmp/x.sock',
+      trustProjectAgents: true,
+    })
+  })
+
+  test('parses --trust-project-agents together with --agent', () => {
+    expect(
+      parse(['serve', '--trust-project-agents', '--agent', 'foo']).serve,
+    ).toEqual({
+      transport: 'stdio',
+      agentId: 'foo',
+      trustProjectAgents: true,
+    })
+  })
+
+  test('keeps the serve-level trust flag out of the top-level result', () => {
+    expect(parse(['serve', '--trust-project-agents']).trustProjectAgents).toBe(
+      false,
+    )
   })
 })

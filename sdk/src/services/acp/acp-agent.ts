@@ -29,6 +29,16 @@ import type {
   WriteTextFileRequest,
 } from '@agentclientprotocol/sdk'
 
+import { receiptEnvelopeV1Schema } from '@codebuff/common/protocol/acp-ext-v1'
+
+import { sanitizeOutboundStream } from '../../serve/outbound'
+import {
+  OPENBUFF_EXT_METHOD_PREFIX,
+  OPENBUFF_EXT_METHODS,
+  defaultCapabilityMapV1,
+  openbuffExtMethodSchemas,
+} from './ext-methods'
+import type { OpenbuffExtMethod } from './ext-methods'
 import { ACP_EXTENSION_METHODS, acpExtensionSchemas } from './extensions'
 import type { AcpExtensionMethod } from './extensions'
 import type { AcpSessionData } from './session-data'
@@ -185,6 +195,22 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         abortController: null,
       })
       await options.loadHandler({ sessionId: params.sessionId })
+      // §6.1: a restored session also never answers capabilities/get with
+      // -32601. Journal replay stores an honest re-derived map only when the
+      // journal carried a capabilities line, so a restored session whose
+      // journal predates the §6.1 store still gets the baseline here.
+      const sessionData = options.sessionData
+      if (
+        sessionData &&
+        sessionData.getCapabilities(params.sessionId) === undefined
+      ) {
+        sessionData.setCapabilities(
+          params.sessionId,
+          defaultCapabilityMapV1({
+            journalAvailable: sessionData.hasJournal(),
+          }),
+        )
+      }
       // LoadSessionResponse's fields (modes/configOptions/_meta) are all
       // optional per the SDK declarations; this skeleton restores no mode
       // state, so the exact empty response shape is the honest reply.
@@ -198,6 +224,23 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         mcpServers: params.mcpServers,
         abortController: null,
       })
+      // §6.1: seed the honest baseline capability map at session creation so
+      // `_openbuff.dev/capabilities/get` never fails for an open session —
+      // not even between session/new and the first prompt. The journal flags
+      // reflect the injected store's real posture (a purely in-memory store
+      // advertises no resume/replay), and the map is always derived locally.
+      const sessionData = options.sessionData
+      if (
+        sessionData &&
+        sessionData.getCapabilities(sessionId) === undefined
+      ) {
+        sessionData.setCapabilities(
+          sessionId,
+          defaultCapabilityMapV1({
+            journalAvailable: sessionData.hasJournal(),
+          }),
+        )
+      }
       return { sessionId }
     },
 
@@ -250,6 +293,52 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       method: string,
       params: Record<string, unknown>,
     ): Promise<Record<string, unknown>> {
+      // Ext-v1 namespaced methods (§6) dispatch first: the legacy `openbuff/*`
+      // names below never overlap the `_openbuff.dev/` prefix. Params are
+      // validated with the ext-v1 schemas, an injected extensionHandler keeps
+      // winning (back-compat), and otherwise the live store serves the method.
+      if (method.startsWith(OPENBUFF_EXT_METHOD_PREFIX)) {
+        const known = OPENBUFF_EXT_METHODS.find(
+          (candidate) => candidate === method,
+        )
+        if (!known) {
+          // Unknown ext-v1 methods follow the ACP rule for unknown extension
+          // methods: -32601.
+          throw RequestError.methodNotFound(method)
+        }
+        const { params: paramsSchema } = openbuffExtMethodSchemas[known]
+        const parsed = paramsSchema.safeParse(params)
+        if (!parsed.success) {
+          throw RequestError.invalidParams(
+            params,
+            `Invalid params for ACP extension '${method}': ${parsed.error.issues
+              .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+              .join('; ')}`,
+          )
+        }
+        if (options.extensionHandler) {
+          const result = await options.extensionHandler({
+            method,
+            params: parsed.data,
+          })
+          if (
+            result === null ||
+            typeof result !== 'object' ||
+            Array.isArray(result)
+          ) {
+            throw RequestError.internalError(
+              { method },
+              `ACP extension handler for '${method}' returned a non-object response.`,
+            )
+          }
+          return result as Record<string, unknown>
+        }
+        return dispatchExtV1Method(
+          known,
+          parsed.data as Record<string, unknown>,
+          options.sessionData,
+        )
+      }
       if (!ACP_EXTENSION_METHODS.includes(method as AcpExtensionMethod)) {
         // Unknown extension methods fail closed as JSON-RPC method-not-found.
         throw RequestError.methodNotFound(method)
@@ -319,6 +408,80 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
 }
 
 /**
+ * Dispatches one KNOWN ext-v1 `_openbuff.dev/*` method (§6) against the live
+ * store. Wire shapes pinned by the golden vectors: `lanes/create` and
+ * `lanes/land` are -32601 with `data["openbuff.dev"] = {code:
+ * 'capability_disabled', capability: 'lanes'}` while lanes are unsupported
+ * (GV-10), and an unknown receipt id is -32002 with `code:
+ * 'receipt_not_found'` (§6.2).
+ */
+async function dispatchExtV1Method(
+  method: OpenbuffExtMethod,
+  params: Record<string, unknown>,
+  sessionData: AcpSessionData | undefined,
+): Promise<Record<string, unknown>> {
+  if (!sessionData) {
+    // Without the live store there is nothing to serve ext-v1 methods from:
+    // fail closed (mirrors the legacy askUser path).
+    throw RequestError.methodNotFound(method)
+  }
+  const data = params as { sessionId?: unknown; receiptId?: unknown }
+  const sessionId = typeof data.sessionId === 'string' ? data.sessionId : ''
+  switch (method) {
+    case '_openbuff.dev/capabilities/get': {
+      const capabilities = sessionData.getCapabilities(sessionId)
+      if (capabilities === undefined) {
+        // The ext surface was never negotiated/stored for this session.
+        throw RequestError.methodNotFound(method)
+      }
+      return capabilities
+    }
+    case '_openbuff.dev/receipts/get': {
+      const receiptId = typeof data.receiptId === 'string' ? data.receiptId : ''
+      const envelope = sessionData.getReceipt(sessionId, receiptId)
+      if (envelope === undefined) {
+        throw new RequestError(
+          -32002,
+          `Unknown receipt id '${receiptId}'.`,
+          { 'openbuff.dev': { code: 'receipt_not_found', receiptId } },
+        )
+      }
+      // GV-07: the redaction-enforcing ext-v1 wire contract is validated on
+      // EVERY serve path — including journal-restored sessions — so a tampered
+      // journal (or any future internal regression) can never publish
+      // content-bearing mutation fields (`afterContent`/`patch`/`editAnchor`)
+      // or fresh cap.v3 tokens across the wire. Envelopes the store records
+      // are built with the §6.2 wire projection (toWireMutation), so every
+      // legitimately recorded receipt conforms to this strict shape and is
+      // served; only a non-conforming envelope has no wire representation and
+      // is unaddressable (receipt_not_found).
+      const parsedEnvelope = receiptEnvelopeV1Schema.safeParse(envelope)
+      if (!parsedEnvelope.success) {
+        throw new RequestError(
+          -32002,
+          `Unknown receipt id '${receiptId}'.`,
+          { 'openbuff.dev': { code: 'receipt_not_found', receiptId } },
+        )
+      }
+      return {
+        receipt: parsedEnvelope.data,
+      } as Record<string, unknown>
+    }
+    case '_openbuff.dev/lanes/list':
+      return {
+        lanes: [sessionData.getMainLane(sessionId)],
+      }
+    case '_openbuff.dev/lanes/create':
+    case '_openbuff.dev/lanes/land':
+      throw new RequestError(-32601, 'Method not found', {
+        'openbuff.dev': { code: 'capability_disabled', capability: 'lanes' },
+      })
+    case '_openbuff.dev/gate_state/get':
+      return sessionData.getGateStateV1(sessionId)
+  }
+}
+
+/**
  * Derives the serve-time agent options, auto-wiring `session/load` restore
  * from an injected journal-backed store. When `sessionData` is present and no
  * `loadHandler` was supplied, the returned options carry a derived
@@ -364,8 +527,13 @@ export function serveAcpOverStdio(
   // stdin is the input wire. Node/Bun streams are converted to their web
   // counterparts because the SDK's Stream type is defined over web streams;
   // the cast bridges the node-vs-DOM WritableStream typing duality.
+  // NEW-4 chokepoint (§12.8): every serialized frame — including
+  // SDK-generated JSON-RPC errors and agent→client requests — passes through
+  // sanitizeOutbound before the wire. Clean frames stay byte-identical.
   const stream = ndJsonStream(
-    Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
+    sanitizeOutboundStream(
+      Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
+    ),
     Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
   )
   // AgentSideConnection is marked @deprecated in favor of the `agent()` app
