@@ -2,17 +2,14 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-import * as realMarkdownRenderer from '../../../utils/markdown-renderer'
-
 import type { MarkdownPalette } from '../../../utils/markdown-renderer'
 
 // The component under test is imported (below) only after these mocks
-// register, so its native-markdown collaborators and the legacy renderer
-// resolve to the doubles configured per test.
+// register, so its native-markdown collaborators resolve to the doubles
+// configured per test. The legacy remark renderer no longer exists after D47
+// Stage 2, so only the two live collaborators are mocked.
 const createMarkdownSyntaxStyleCalls: MarkdownPalette[] = []
 let getSharedTreeSitterClientCalls = 0
-const renderMarkdownCalls: string[] = []
-const renderStreamingMarkdownCalls: string[] = []
 let syntaxStyleSetupError: Error | null = null
 let treeSitterClientSetupError: Error | null = null
 
@@ -35,18 +32,6 @@ mock.module('../../../utils/tree-sitter-client', () => ({
       throw treeSitterClientSetupError
     }
     return '__stub-tree-sitter-client__'
-  },
-}))
-
-mock.module('../../../utils/markdown-renderer', () => ({
-  ...realMarkdownRenderer,
-  renderMarkdown: (content: string) => {
-    renderMarkdownCalls.push(content)
-    return `legacy-static:${content}`
-  },
-  renderStreamingMarkdown: (content: string) => {
-    renderStreamingMarkdownCalls.push(content)
-    return `legacy-streaming:${content}`
   },
 }))
 
@@ -87,8 +72,6 @@ describe('ContentWithMarkdown', () => {
   beforeEach(() => {
     createMarkdownSyntaxStyleCalls.length = 0
     getSharedTreeSitterClientCalls = 0
-    renderMarkdownCalls.length = 0
-    renderStreamingMarkdownCalls.length = 0
     syntaxStyleSetupError = null
     treeSitterClientSetupError = null
   })
@@ -97,48 +80,45 @@ describe('ContentWithMarkdown', () => {
     const markup = renderContent('# Hello *world*')
 
     // The native renderable is selected with our syntax style and shared
-    // tree-sitter client wired in, and the legacy renderer is not used.
+    // tree-sitter client wired in.
     expect(markup).toContain('<markdown')
     expect(markup).toContain('Hello *world*')
     expect(markup).toContain('__stub-syntax-style__')
     expect(markup).toContain('__stub-tree-sitter-client__')
     expect(createMarkdownSyntaxStyleCalls).toHaveLength(1)
     expect(getSharedTreeSitterClientCalls).toBe(1)
-    expect(renderMarkdownCalls).toHaveLength(0)
-    expect(renderStreamingMarkdownCalls).toHaveLength(0)
   })
 
-  test('falls back to the legacy renderer when syntax style setup throws', () => {
+  test('degrades to wrapped plain text when syntax style setup throws', () => {
     syntaxStyleSetupError = new Error('syntax style setup failed')
 
     const markup = renderContent('**bold** fallback')
 
-    expect(markup).toContain('legacy-static:**bold** fallback')
-    expect(renderMarkdownCalls).toEqual(['**bold** fallback'])
+    // Plain-text degradation: the raw content reaches the wrapped output and
+    // no native markdown element is rendered.
+    expect(markup).toContain('**bold** fallback')
+    expect(markup).not.toContain('<markdown')
     expect(createMarkdownSyntaxStyleCalls).toHaveLength(1)
     expect(getSharedTreeSitterClientCalls).toBe(0)
-    expect(renderStreamingMarkdownCalls).toHaveLength(0)
   })
 
-  test('falls back to the legacy renderer when tree-sitter client setup throws', () => {
+  test('degrades to wrapped plain text when tree-sitter client setup throws', () => {
     treeSitterClientSetupError = new Error('tree-sitter client setup failed')
 
     const markup = renderContent('`code` fallback')
 
-    expect(markup).toContain('legacy-static:`code` fallback')
-    expect(renderMarkdownCalls).toEqual(['`code` fallback'])
+    expect(markup).toContain('`code` fallback')
+    expect(markup).not.toContain('<markdown')
     expect(createMarkdownSyntaxStyleCalls).toHaveLength(1)
     expect(getSharedTreeSitterClientCalls).toBe(1)
-    expect(renderStreamingMarkdownCalls).toHaveLength(0)
   })
 
-  test('streaming content falls back to the legacy streaming renderer', () => {
+  test('streaming markdown content degrades to wrapped plain text', () => {
     syntaxStyleSetupError = new Error('syntax style setup failed')
 
     const markup = renderContent('# streaming fallback', true)
 
-    expect(markup).toContain('legacy-streaming:# streaming fallback')
-    expect(renderStreamingMarkdownCalls).toEqual(['# streaming fallback'])
-    expect(renderMarkdownCalls).toHaveLength(0)
+    expect(markup).toContain('# streaming fallback')
+    expect(markup).not.toContain('<markdown')
   })
 })

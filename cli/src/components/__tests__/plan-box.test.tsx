@@ -3,7 +3,6 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import { computeTerminalLayout } from '../../hooks/use-terminal-layout'
-import { renderMarkdown } from '../../utils/markdown-renderer'
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 
 type CapturedButton = {
@@ -55,6 +54,25 @@ mock.module('../../hooks/use-theme', () => ({
   initializeThemeStore: () => {},
 }))
 
+// PlanBox routes markdown content through ContentWithMarkdown, whose native
+// setup collaborators are mocked here so plan degradation can be forced
+// (mirroring content-with-markdown.test.tsx). Declared before the dynamic
+// import below so the mock factory closes over the variable.
+let syntaxStyleSetupError: Error | null = null
+
+mock.module('../../utils/opentui-syntax-style', () => ({
+  createMarkdownSyntaxStyle: () => {
+    if (syntaxStyleSetupError) {
+      throw syntaxStyleSetupError
+    }
+    return '__stub-syntax-style__'
+  },
+}))
+
+mock.module('../../utils/tree-sitter-client', () => ({
+  getSharedTreeSitterClient: () => '__stub-tree-sitter-client__',
+}))
+
 const { PlanBox } = await import('../renderers/plan-box')
 
 const theme = chatThemes.dark
@@ -63,6 +81,7 @@ const markdownPalette = createMarkdownPalette(theme)
 describe('PlanBox', () => {
   beforeEach(() => {
     capturedButtons.length = 0
+    syntaxStyleSetupError = null
   })
 
   test('renders markdown plan content and execute action', () => {
@@ -82,9 +101,12 @@ describe('PlanBox', () => {
     expect(markup).toContain('Build Plan')
     expect(markup).toContain('Ship it')
     expect(markup).toContain('Execute Plan')
-    // The heading really went through the markdown renderer.
-    expect(markup).toContain(markdownPalette.headingFg[1])
-    expect(markup).not.toContain('# Build Plan')
+    // The plan content renders through the native <markdown> renderable.
+    // react-dom/server serializes the content prop verbatim into the element
+    // attribute, so the raw source text (including the heading marker) is
+    // present in static markup; the native renderer conceals it at render
+    // time, which static markup cannot observe.
+    expect(markup).toContain('<markdown')
   })
 
   test('renders artifact metadata and commands when present', () => {
@@ -283,55 +305,64 @@ describe('PlanBox', () => {
     expect(markup).toContain('Execute Plan')
   })
 
-  test('clamps the markdown code block width to the 10-column minimum for narrow layouts', () => {
-    // The clamp under test: PlanBox passes Math.max(10, availableWidth - 8).
-    const MIN_CODE_BLOCK_WIDTH = 10
-    const NARROW_AVAILABLE_WIDTH = 0
-    const UNCLAMPED_WIDTH = NARROW_AVAILABLE_WIDTH - 8
-    // Template literal so the fence reaches the markdown renderer as a real
-    // code block instead of a single raw text line.
-    const codeSource = `\`\`\`ts
-const ok = true
-\`\`\``
-    // Every rendered code segment carries the code background, so counting them
-    // measures how many wrapped rows the chosen width produced without
-    // depending on where markdown-renderer breaks the line.
-    const countCodeSegments = (html: string): number =>
-      html.split(markdownPalette.codeBackground).length - 1
-    const renderAtWidth = (codeBlockWidth: number): string =>
-      renderToStaticMarkup(
-        <text>
-          {renderMarkdown(codeSource, {
-            codeBlockWidth,
-            palette: markdownPalette,
-          })}
-        </text>,
-      )
-
+  test('renders markdown plan content through the native <markdown> element', () => {
+    // Markdown syntax (a heading) is required so hasMarkdown() routes the
+    // content through the native renderable rather than the plain-text path.
     const markup = renderToStaticMarkup(
       <PlanBox
-        planContent={codeSource}
-        availableWidth={NARROW_AVAILABLE_WIDTH}
+        planContent="## Plan body"
+        availableWidth={80}
         markdownPalette={markdownPalette}
         onBuildFast={() => {}}
       />,
     )
 
-    // A code block was rendered: language header + code background styling.
-    expect(markup).toContain('// ts')
-    expect(markup).toContain(markdownPalette.codeBackground)
-    expect(markup).not.toContain('```')
+    // Markdown content renders inside the native renderable, not a legacy
+    // span pipeline.
+    expect(markup).toContain('<markdown')
+    expect(markup).toContain('Plan body')
+  })
 
-    // Without the clamp the width would be -8, which the wrapper floors to a
-    // single column and fragments into one segment per character. PlanBox must
-    // instead render exactly what an explicit 10-column render produces.
-    const clampedSegments = countCodeSegments(
-      renderAtWidth(MIN_CODE_BLOCK_WIDTH),
+  test('renders fenced code content through the native <markdown> element', () => {
+    // Template literal so the fence reaches the component as a real
+    // multi-line code block instead of a single raw text line.
+    const codeSource = `\`\`\`ts
+const ok = true
+\`\`\``
+    const markup = renderToStaticMarkup(
+      <PlanBox
+        planContent={codeSource}
+        availableWidth={80}
+        markdownPalette={markdownPalette}
+        onBuildFast={() => {}}
+      />,
     )
-    const unclampedSegments = countCodeSegments(renderAtWidth(UNCLAMPED_WIDTH))
 
-    expect(countCodeSegments(markup)).toBe(clampedSegments)
-    expect(clampedSegments).toBeLessThan(unclampedSegments)
+    // A code block was rendered through the native renderable. react-dom/
+    // server serializes the content prop verbatim (fence markers included),
+    // so only the presence of the native element and the code source is
+    // observable here; concealment happens at native render time.
+    expect(markup).toContain('<markdown')
+    expect(markup).toContain('const ok = true')
+  })
+
+  test('degrades markdown plan content to plain text when native setup throws', () => {
+    syntaxStyleSetupError = new Error('syntax style setup failed')
+
+    const markup = renderToStaticMarkup(
+      <PlanBox
+        planContent="## Plan body"
+        availableWidth={80}
+        markdownPalette={markdownPalette}
+        onBuildFast={() => {}}
+      />,
+    )
+
+    // Degrade-to-plain-text contract inherited from ContentWithMarkdown: the
+    // raw source text reaches the plain-text path and no native element is
+    // rendered.
+    expect(markup).toContain('Plan body')
+    expect(markup).not.toContain('<markdown')
   })
 
   test('filters out customArtifacts with empty label', () => {

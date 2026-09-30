@@ -56,6 +56,26 @@ mock.module('../../hooks/use-terminal-layout', () => ({
   useTerminalLayout: () => computeTerminalLayout(80, 24),
 }))
 
+// Native-markdown collaborators are mocked so agent-message tests can force
+// native setup failures (mirroring content-with-markdown.test.tsx). Declared
+// before the dynamic import below so the mock factory closes over it.
+let syntaxStyleSetupError: Error | null = null
+
+mock.module('../../utils/opentui-syntax-style', () => ({
+  createMarkdownSyntaxStyle: () => {
+    if (syntaxStyleSetupError) {
+      throw syntaxStyleSetupError
+    }
+    // String marker so the stub is observable as a native element attribute
+    // in the static markup below.
+    return '__stub-syntax-style__'
+  },
+}))
+
+mock.module('../../utils/tree-sitter-client', () => ({
+  getSharedTreeSitterClient: () => '__stub-tree-sitter-client__',
+}))
+
 const { MessageWithAgents } = await import('../message-with-agents')
 
 enableMapSet()
@@ -167,6 +187,7 @@ const initializeStore = (
 
 beforeEach(() => {
   capturedButtons.length = 0
+  syntaxStyleSetupError = null
   initializeStore()
   useChatStore.setState({ streamingAgents: new Set<string>() })
 })
@@ -579,6 +600,82 @@ describe('MessageWithAgents', () => {
       expect(markup).toContain('Full expanded content here')
       // When expanded, should show the expanded indicator
       expect(markup).toContain('▾')
+    })
+  })
+
+  describe('agent markdown rendering', () => {
+    test('renders expanded agent markdown content through the native <markdown> renderable', () => {
+      const message = createAgentMessage(
+        'agent-md',
+        '# Agent heading\n\nSome **bold** body',
+        'MD Agent',
+        {
+          metadata: { isCollapsed: false },
+        },
+      )
+
+      const markup = renderToStaticMarkup(
+        <MessageWithAgents
+          {...baseMessageWithAgentsProps}
+          message={message}
+        />,
+      )
+
+      // The native renderable is selected with our syntax style and shared
+      // tree-sitter client wired in (observable via the stub attributes).
+      expect(markup).toContain('<markdown')
+      expect(markup).toContain('Agent heading')
+      expect(markup).toContain('Some **bold** body')
+      expect(markup).toContain('__stub-syntax-style__')
+      expect(markup).toContain('__stub-tree-sitter-client__')
+    })
+
+    test('renders non-markdown agent content as plain text without the native renderable', () => {
+      const message = createAgentMessage(
+        'agent-plain',
+        'Plain agent output',
+        'Plain Agent',
+        {
+          metadata: { isCollapsed: false },
+        },
+      )
+
+      const markup = renderToStaticMarkup(
+        <MessageWithAgents
+          {...baseMessageWithAgentsProps}
+          message={message}
+        />,
+      )
+
+      // The plain-text path keeps the wrapped text and never mounts the
+      // native renderable.
+      expect(markup).toContain('Plain agent output')
+      expect(markup).not.toContain('<markdown')
+    })
+
+    test('degrades agent markdown content to plain text when native setup throws', () => {
+      syntaxStyleSetupError = new Error('syntax style setup failed')
+
+      const message = createAgentMessage(
+        'agent-md-degrade',
+        '## Degrading agent body',
+        'Degrading Agent',
+        {
+          metadata: { isCollapsed: false },
+        },
+      )
+
+      const markup = renderToStaticMarkup(
+        <MessageWithAgents
+          {...baseMessageWithAgentsProps}
+          message={message}
+        />,
+      )
+
+      // Degrade-to-plain-text contract: a native setup throw falls back to
+      // the wrapped plain-text path instead of crashing the render.
+      expect(markup).toContain('Degrading agent body')
+      expect(markup).not.toContain('<markdown')
     })
   })
 })

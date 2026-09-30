@@ -2,8 +2,6 @@ import { memo } from 'react'
 
 import { logger } from '../../utils/logger'
 import {
-  renderMarkdown,
-  renderStreamingMarkdown,
   hasMarkdown,
   type MarkdownPalette,
 } from '../../utils/markdown-renderer'
@@ -23,9 +21,11 @@ interface ContentWithMarkdownProps {
 /**
  * Renders chat content with OpenTUI 0.5's native <markdown> renderable
  * (jsx-namespace.d.ts declares `markdown: MarkdownProps`). The legacy
- * remark-based renderer stays as the fallback for any native setup failure:
- * syntax style construction, shared tree-sitter client creation, or element
- * setup throwing. Prop names verified against
+ * remark-based renderer was removed in D47 Stage 2, so a native setup
+ * failure (syntax style construction, shared tree-sitter client creation, or
+ * element setup throwing) degrades to plain text via
+ * wrapTextPreservingNewlines instead of falling back to a legacy renderer.
+ * Prop names verified against
  * node_modules/@opentui/react/src/types/components.d.ts
  * (MarkdownProps = ComponentProps<MarkdownOptions, MarkdownRenderable>).
  */
@@ -33,14 +33,15 @@ const renderNativeMarkdown = (
   content: string,
   isStreaming: boolean,
   palette: MarkdownPalette,
-): ReactNode | null => {
+  safeCodeBlockWidth: number,
+): ReactNode => {
   try {
     const syntaxStyle = createMarkdownSyntaxStyle(palette)
     const treeSitterClient = getSharedTreeSitterClient()
     // treeSitterClient is optional on MarkdownOptions, so a null client still
     // renders (code fences just lose tree-sitter highlighting). conceal=true
     // hides markdown markers while concealCode={false} keeps fenced code
-    // visible, matching the legacy renderer's output style.
+    // visible, matching the removed legacy renderer's output style.
     return (
       <markdown
         content={content}
@@ -55,9 +56,9 @@ const renderNativeMarkdown = (
   } catch (error) {
     logger.error(
       error,
-      'Native markdown rendering failed to set up; using legacy renderer',
+      'Native markdown rendering failed to set up; degrading to plain text',
     )
-    return null
+    return wrapTextPreservingNewlines(content, safeCodeBlockWidth)
   }
 }
 
@@ -74,15 +75,13 @@ export const ContentWithMarkdown = memo(
       return wrapTextPreservingNewlines(content, safeCodeBlockWidth)
     }
 
-    const native = renderNativeMarkdown(content, isStreaming, palette)
-    if (native !== null) {
-      return native
-    }
-
-    const options = { codeBlockWidth: safeCodeBlockWidth, palette }
-    if (isStreaming) {
-      return renderStreamingMarkdown(content, options)
-    }
-    return renderMarkdown(content, options)
+    // renderNativeMarkdown cannot return null: its catch degrades to wrapped
+    // plain text, so the result is used directly.
+    return renderNativeMarkdown(
+      content,
+      isStreaming,
+      palette,
+      safeCodeBlockWidth,
+    )
   },
 )

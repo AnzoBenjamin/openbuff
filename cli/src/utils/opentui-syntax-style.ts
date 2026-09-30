@@ -34,21 +34,38 @@ import type { MarkdownPalette } from './markdown-renderer'
  *   markdown style key; there is no key for plain code text.
  * - dividerFg: thematic breaks reuse the "conceal" group (see above), which
  *   carries blockquoteBorderFg here; no separate divider key exists.
+ *
+ * D47 Stage 2: with the legacy renderer removed, the palette argument is
+ * optional and accepts a Partial<MarkdownPalette>; every missing field falls
+ * back to the former legacy defaults, so both
+ * createMarkdownSyntaxStyle(agentPalette ?? {}) and an undefined palette work
+ * without throwing.
  */
+// Former legacy-renderer defaults (markdown-renderer.tsx before D47 Stage 2).
+const DEFAULT_HEADING_FG: Record<number, string> = {
+  1: 'magenta',
+  2: 'green',
+  3: 'green',
+  4: 'green',
+  5: 'green',
+  6: 'green',
+}
+
 export function createMarkdownSyntaxStyle(
-  palette: MarkdownPalette,
+  palette?: Partial<MarkdownPalette>,
 ): SyntaxStyle {
-  const codeBackground = palette.codeMonochrome
+  const headingFg = { ...DEFAULT_HEADING_FG, ...palette?.headingFg }
+  const codeBackground = palette?.codeMonochrome
     ? undefined
-    : palette.codeBackground
+    : palette?.codeBackground ?? '#0d1117'
 
   return SyntaxStyle.fromStyles({
     // Fallback for unstyled markdown text: leave terminal defaults intact.
     default: {},
     // Markdown.ts renders inline codespans with the "markup.raw" group; our
-    // legacy renderer draws them bold on the code background.
+    // legacy renderer drew them bold on the code background.
     'markup.raw': {
-      fg: palette.inlineCodeFg,
+      fg: palette?.inlineCodeFg ?? '#86efac',
       bg: codeBackground,
       bold: true,
     },
@@ -56,42 +73,42 @@ export function createMarkdownSyntaxStyle(
     'markup.italic': { italic: true },
     // Legacy strikethrough (mdast "delete") renders with TextAttributes.DIM.
     'markup.strikethrough': { dim: true },
-    'markup.link': { fg: palette.linkFg },
-    'markup.link.url': { fg: palette.linkFg },
-    'markup.link.label': { fg: palette.linkFg },
-    'markup.list': { fg: palette.listBulletFg },
-    'markup.quote': { fg: palette.blockquoteTextFg },
+    'markup.link': { fg: palette?.linkFg ?? '#3B82F6' },
+    'markup.link.url': { fg: palette?.linkFg ?? '#3B82F6' },
+    'markup.link.label': { fg: palette?.linkFg ?? '#3B82F6' },
+    'markup.list': { fg: palette?.listBulletFg ?? 'white' },
+    'markup.quote': { fg: palette?.blockquoteTextFg ?? 'gray' },
     // Drives blockquote border color (and hr/divider color) in Markdown.ts.
-    conceal: { fg: palette.blockquoteBorderFg },
+    conceal: { fg: palette?.blockquoteBorderFg ?? 'gray' },
     // Base heading style; Markdown.ts table header cells use "markup.heading"
     // with our headingFg[3] color, falling back to the deepest configured one.
     'markup.heading': {
       bold: true,
-      fg: palette.headingFg[3] ?? palette.headingFg[6],
+      fg: headingFg[3] ?? headingFg[6],
     },
     'markup.heading.1': {
       bold: true,
-      fg: palette.headingFg[1] ?? palette.headingFg[6],
+      fg: headingFg[1] ?? headingFg[6],
     },
     'markup.heading.2': {
       bold: true,
-      fg: palette.headingFg[2] ?? palette.headingFg[6],
+      fg: headingFg[2] ?? headingFg[6],
     },
     'markup.heading.3': {
       bold: true,
-      fg: palette.headingFg[3] ?? palette.headingFg[6],
+      fg: headingFg[3] ?? headingFg[6],
     },
     'markup.heading.4': {
       bold: true,
-      fg: palette.headingFg[4] ?? palette.headingFg[6],
+      fg: headingFg[4] ?? headingFg[6],
     },
     'markup.heading.5': {
       bold: true,
-      fg: palette.headingFg[5] ?? palette.headingFg[6],
+      fg: headingFg[5] ?? headingFg[6],
     },
     'markup.heading.6': {
       bold: true,
-      fg: palette.headingFg[6],
+      fg: headingFg[6],
     },
   } satisfies Record<string, StyleDefinitionInput>)
 }
