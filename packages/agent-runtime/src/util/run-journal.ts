@@ -97,6 +97,53 @@ function defaultCreateDatabase(path: string): SqliteDb {
 }
 
 /**
+ * SQLITE_BUSY (or a busy-timeout exhaustion) raised by a concurrent writer
+ * holding the write lock. Only this class of error is retried in append();
+ * anything else propagates immediately.
+ */
+function isSqliteBusyError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /SQLITE_BUSY|database is locked|database table is locked/i.test(
+      error.message,
+    )
+  )
+}
+
+/**
+ * Whether a ROLLBACK failure means there is simply no transaction left to
+ * unwind (e.g. the COMMIT already ended it): the connection is clean either
+ * way, so the caller can safely issue another BEGIN IMMEDIATE.
+ */
+function isNoActiveTransactionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /no transaction is active|cannot rollback/i.test(error.message)
+  )
+}
+
+/**
+ * Roll the current transaction back, retrying while the ROLLBACK itself
+ * fails with SQLITE_BUSY (a concurrent writer can hold the write lock the
+ * rollback needs; the connection's busy_timeout bounds each wait). Returns
+ * true only when the transaction is confirmed closed — the rollback
+ * succeeded, or there was no transaction left to unwind — so the caller can
+ * safely issue another BEGIN IMMEDIATE.
+ */
+function rollbackTransaction(db: SqliteDb, attempts = 3): boolean {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      db.run('ROLLBACK;')
+      return true
+    } catch (rollbackError) {
+      if (isNoActiveTransactionError(rollbackError)) return true
+      if (!isSqliteBusyError(rollbackError)) return false
+    }
+  }
+  return false
+}
+
+/**
  * Build/open a journal. `path` ':memory:' for tests; `opts.createDatabase` is
  * the injectable seam. Constructs the schema idempotently and injects the
  * Clock for created_at (default realClock).
@@ -110,6 +157,12 @@ export function createRunJournal(params: {
   const clock = params.clock ?? realClock
   const create = params.createDatabase ?? defaultCreateDatabase
   const db = create(path) as SqliteDb
+
+  // Bound how long a write waits on a lock held by a concurrent writer (e.g.
+  // another process reading/resuming the same project journal) instead of
+  // surfacing SQLITE_BUSY as a throw on the synchronous append hot path.
+  // Harmless for :memory: databases.
+  db.run('PRAGMA busy_timeout = 5000;')
 
   // WAL + NORMAL durability for on-disk dbs; harmless to skip for :memory:.
   if (path !== ':memory:') {
@@ -128,23 +181,77 @@ export function createRunJournal(params: {
     seq: row.seq,
   })
 
+  // Connection-level state, NOT per-call state: when an append attempt
+  // fails and its ROLLBACK cannot close the transaction (bounded SQLITE_BUSY
+  // retries exhausted while a concurrent writer holds the write lock), the
+  // connection is left with a still-open transaction. The NEXT append on
+  // this journal must unwind it before issuing BEGIN IMMEDIATE — or that
+  // BEGIN throws a non-busy "cannot start a transaction within a
+  // transaction" error that poisons the connection for the process lifetime,
+  // even after the concurrent writer releases the lock.
+  let strandedTransaction = false
+  let lastError: unknown
+
   return {
     append(runId: string, event: JournalEvent): void {
-      // Next seq is monotonic gap-free per runId: coalesce null MAX to -1, +1.
-      const maxRow = db
-        .query('SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ?')
-        .get(runId) as { max_seq: number | null } | undefined
-      const nextSeq = (maxRow?.max_seq ?? -1) + 1
-      db.run(
-        'INSERT INTO run_events (run_id, seq, step_number, event_type, correlation, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        runId,
-        nextSeq,
-        event.stepNumber,
-        event.eventType,
-        event.correlation ?? null,
-        JSON.stringify(event.payload),
-        clock.now(),
-      )
+      // Next seq is monotonic gap-free per runId. The read-then-insert is
+      // wrapped in a BEGIN IMMEDIATE transaction so two appends cannot mint
+      // the same seq (a PK violation on (run_id, seq)) or interleave rows.
+      // BEGIN IMMEDIATE takes the write lock up front, so the MAX read is
+      // guaranteed to see the transaction's own writes under SQLite's
+      // serialized write model; WAL + NORMAL durability stays unchanged.
+      // A concurrent writer holding the write lock surfaces as SQLITE_BUSY:
+      // the connection's busy_timeout makes BEGIN IMMEDIATE wait instead of
+      // throwing, and this small bounded retry absorbs any residual busy
+      // error instead of aborting the journal append mid-run.
+      const maxAttempts = 3
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (strandedTransaction) {
+          if (!rollbackTransaction(db)) {
+            // The transaction could not be unwound after bounded retries:
+            // surface the original busy error — matching this loop's retry
+            // contract — instead of letting BEGIN IMMEDIATE throw a
+            // non-busy "cannot start a transaction within a transaction"
+            // error that would poison the connection.
+            throw lastError
+          }
+          strandedTransaction = false
+        }
+        try {
+          db.run('BEGIN IMMEDIATE;')
+          try {
+            const maxRow = db
+              .query(
+                'SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ?',
+              )
+              .get(runId) as { max_seq: number | null } | undefined
+            const nextSeq = (maxRow?.max_seq ?? -1) + 1
+            db.run(
+              'INSERT INTO run_events (run_id, seq, step_number, event_type, correlation, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              runId,
+              nextSeq,
+              event.stepNumber,
+              event.eventType,
+              event.correlation ?? null,
+              JSON.stringify(event.payload),
+              clock.now(),
+            )
+            db.run('COMMIT;')
+            return
+          } catch (error) {
+            // A failed INSERT/COMMIT leaves the transaction open, and the
+            // rollback below can itself fail with SQLITE_BUSY while a
+            // concurrent writer holds the write lock — which would strand
+            // the open transaction (see strandedTransaction above).
+            strandedTransaction = !rollbackTransaction(db)
+            throw error
+          }
+        } catch (error) {
+          lastError = error
+          if (!isSqliteBusyError(error)) throw error
+        }
+      }
+      throw lastError
     },
 
     lastEvent(runId: string): (JournalEvent & { seq: number }) | undefined {
@@ -166,11 +273,27 @@ export function createRunJournal(params: {
     },
 
     toolResultFor(runId: string, toolCallId: string): unknown | undefined {
+      // Correlation-reuse guard — the reader-side mirror of the guard
+      // classifyRunResume applies. A retried tool call reuses the same
+      // correlation, so the newest tool_result with a matching correlation
+      // can be an EARLIER attempt's result: only a tool_result recorded
+      // AFTER the latest tool_call carrying that correlation completes THAT
+      // attempt, and anything earlier must resolve to undefined so the
+      // replay cross-check re-executes a genuinely in-flight tool call under
+      // live control instead of silently reusing a stale result. Fail
+      // closed: no tool_call with this correlation at all means the journal
+      // cannot prove any attempt of this call completed.
+      const callRow = db
+        .query(
+          "SELECT seq FROM run_events WHERE run_id = ? AND event_type = 'tool_call' AND correlation = ? ORDER BY seq DESC LIMIT 1",
+        )
+        .get(runId, toolCallId) as { seq: number } | undefined
+      if (!callRow) return undefined
       const row = db
         .query(
-          "SELECT payload FROM run_events WHERE run_id = ? AND event_type = 'tool_result' AND correlation = ? ORDER BY seq DESC LIMIT 1",
+          "SELECT payload FROM run_events WHERE run_id = ? AND event_type = 'tool_result' AND correlation = ? AND seq > ? ORDER BY seq DESC LIMIT 1",
         )
-        .get(runId, toolCallId) as { payload: string } | undefined
+        .get(runId, toolCallId, callRow.seq) as { payload: string } | undefined
       return row ? JSON.parse(row.payload) : undefined
     },
 
@@ -185,9 +308,15 @@ export function createRunJournal(params: {
  * run should resume:
  * - tool_call tail with no matching tool_result → in_flight_tool (the kill-9
  *   window: the tool may or may not have applied, so replay must consult
- *   `toolResultFor` before re-executing).
+ *   `toolResultFor` before re-executing). A tool_call tail with a null
+ *   correlation is also in_flight_tool: with no correlation no later
+ *   tool_result can ever match, so the call can never be proven complete.
  * - llm_request tail with no matching llm_response → in_flight_llm.
  * - anything else (tool_result/step_boundary tail, or empty) → clean.
+ *
+ * Only events AFTER the tail event's seq count as the match: a retry that
+ * reuses the same toolCallId/correlation must not let an EARLIER attempt's
+ * result classify a re-executed, still-in-flight call as clean.
  */
 export function classifyRunResume(
   reader: JournalReader,
@@ -198,27 +327,53 @@ export function classifyRunResume(
 
   if (last.eventType === 'tool_call') {
     const correlation = last.correlation
+    // Correlation reuse guard: only a tool_result recorded AFTER this
+    // tool_call's seq can complete it. An earlier attempt's result (same
+    // correlation, retried call) must not satisfy the check, or a genuinely
+    // in-flight re-executed tool call would be misclassified as clean and
+    // the resume path would skip the toolResultFor cross-check.
     const hasResult =
       correlation != null &&
       reader
         .events(runId)
         .some(
           (e) =>
-            e.eventType === 'tool_result' && e.correlation === correlation,
+            e.seq > last.seq &&
+            e.eventType === 'tool_result' &&
+            e.correlation === correlation,
         )
-    if (!hasResult && correlation != null) {
-      return { kind: 'in_flight_tool', toolCallId: correlation }
+    if (!hasResult) {
+      // A tool_call tail with no later matching tool_result is in-flight —
+      // including a null correlation: with no correlation no later tool_result
+      // can ever match, so the call can never be proven complete and must not
+      // be classified clean (that would skip the toolResultFor cross-check
+      // and could re-execute a side-effecting tool call). The empty toolCallId
+      // keeps the replay cross-check fail-closed: toolResultFor finds nothing
+      // for '', so the call is re-executed under live control instead of
+      // being silently skipped.
+      return { kind: 'in_flight_tool', toolCallId: correlation ?? '' }
     }
     return { kind: 'clean' }
   }
 
   if (last.eventType === 'llm_request') {
     const correlation = last.correlation
-    const hasResponse = reader
-      .events(runId)
-      .some(
+    // Same correlation-reuse guard as the tool_call branch above: only an
+    // llm_response recorded AFTER this llm_request's seq can complete it, and
+    // a null correlation can never match — with `null === null` any later
+    // null-correlation llm_response (e.g. from a different request) would
+    // otherwise satisfy the check and misclassify a genuinely in-flight
+    // request as clean, so the resume path would skip in_flight_llm handling
+    // and resume the loop with a response that never arrived.
+    const hasResponse =
+      correlation != null &&
+      reader
+        .events(runId)
+        .some(
         (e) =>
-          e.eventType === 'llm_response' && e.correlation === correlation,
+          e.seq > last.seq &&
+          e.eventType === 'llm_response' &&
+          e.correlation === correlation,
       )
     if (!hasResponse) return { kind: 'in_flight_llm' }
     return { kind: 'clean' }
@@ -235,15 +390,23 @@ export type ChildRunDisposition =
   | { kind: 'child_completed'; lastEventSeq: number }
   | { kind: 'child_in_flight_tool'; childRunId: string; toolCallId: string }
   | { kind: 'child_in_flight_llm'; childRunId: string }
+  | { kind: 'child_incomplete_tail'; childRunId: string }
   | { kind: 'child_unknown'; childRunId: string }
 
 /**
  * P2-T2-DESIGN §4d: classify a SINGLE child run by reading its own journal
  * (the child's runId = the parent journal's spawn `correlation` key).
- * - A clean classification (step_boundary/tool_result tail) counts as
- *   child_completed (lastEventSeq = that tail's seq).
+ * - A TERMINAL tail — a step_boundary — counts as child_completed
+ *   (lastEventSeq = that tail's seq).
  * - child_in_flight_tool / child_in_flight_llm mirror classifyRunResume but
  *   return the childRunId verbatim.
+ * - child_incomplete_tail: the child journaled progress but its tail is NOT a
+ *   terminal step_boundary (e.g. a tool_result tail: the child was killed in
+ *   the window between its last tool_result and the next llm_request).
+ *   classifyRunResume's 'clean' is a resume-SAFETY verdict (safe to resume
+ *   from the tail), not a run-COMPLETION verdict — equating the two would
+ *   replay the child as finished and silently drop its final output, so a
+ *   non-terminal tail must stay un-completed.
  * - child_unknown: the child journal has NO events at all for the childRunId
  *   (recording intent without any child progress).
  */
@@ -264,6 +427,13 @@ export function classifyChildRun(
   }
   const last = reader.lastEvent(childRunId)
   if (last === undefined) return { kind: 'child_unknown', childRunId }
+  // Only a terminal step_boundary tail proves the child run finished: a
+  // tool_result (or llm_response) tail means the child was killed mid-run —
+  // between its last tool_result and the next llm_request — and its final
+  // output was never produced.
+  if (last.eventType !== 'step_boundary') {
+    return { kind: 'child_incomplete_tail', childRunId }
+  }
   return { kind: 'child_completed', lastEventSeq: last.seq }
 }
 
@@ -378,6 +548,7 @@ export function executeChildReplay(
       }
     case 'child_in_flight_tool':
     case 'child_in_flight_llm':
+    case 'child_incomplete_tail':
       return { kind: 'live_execution_required', childRunId }
     case 'child_unknown':
       return { kind: 'child_unknown', childRunId }
@@ -421,6 +592,37 @@ export type BackgroundResumeDecision =
   | { kind: 'still_running'; jobId: string }
 
 /**
+ * Whether a journaled respawn marker is settled: the respawned child's own
+ * run reached a TERMINAL journal tail (classifyChildRun → child_completed).
+ * A parent `spawn` event carrying `respawnOf` proves only the INTENT to
+ * respawn — the child can die between the marker being journaled and its
+ * first journal append, or crash after journaling a single in-flight event
+ * (e.g. a lone llm_request with no matching response) — and since
+ * resume-from-own-journal for background agents is deferred, a marker settled
+ * on anything less would classify the intent already_respawned forever and
+ * silently drop the job on every subsequent resume. An in-flight (or
+ * event-free) child keeps the marker unsettled so the intent keeps
+ * re-planning (respawn / needs_confirmation) and the job is re-driven instead
+ * of lost; once the child's tail is terminal the marker settles and
+ * re-planning becomes idempotent. When the marker carries no child runId in
+ * its correlation, or no reader is wired to cross-check the child's run, the
+ * marker cannot be falsified and stays authoritative.
+ */
+function respawnMarkerIsSettled(
+  respawn: JournalEvent & { seq: number },
+  reader?: JournalReader,
+): boolean {
+  if (!reader) return true
+  const childRunId = respawn.correlation
+  if (typeof childRunId !== 'string' || childRunId.length === 0) return true
+  // Only a terminal child tail (a step_boundary) proves the respawned run
+  // finished. An in-flight, mid-run, or empty child journal must keep
+  // re-planning so an interrupted background job is never silently dropped
+  // across repeated resumes.
+  return classifyChildRun(reader, childRunId).kind === 'child_completed'
+}
+
+/**
  * P2-T2-DESIGN §4d / §9 slice 3: background-agent resume policy.
  *
  * Background agents are process-scoped, so a kill-9 destroys the coroutine.
@@ -429,7 +631,14 @@ export type BackgroundResumeDecision =
  * this planner never mutates state) is re-spawned when its agent type is known
  * to be idempotent, otherwise it needs confirmation. A caller that re-spawns
  * must journal a parent `spawn` event whose payload includes
- * `respawnOf: <original jobId>`; that marker makes re-planning idempotent.
+ * `respawnOf: <original jobId>` and whose correlation is the respawned
+ * child's runId; the marker makes re-planning idempotent once the respawned
+ * child's own run has reached a TERMINAL journal tail (see
+ * respawnMarkerIsSettled) — an in-flight child tail keeps the intent
+ * re-planning so an interrupted job is never silently dropped.
+ * EVERY matching marker is scanned, so an early unsettled marker cannot mask
+ * a later settled one: a settled marker permanently suppresses re-respawn,
+ * and while no marker is settled the intent keeps re-planning from itself.
  * Resume-from-own-journal for background agents is deferred until background
  * coroutines journal their own stream.
  */
@@ -463,21 +672,35 @@ export function planBackgroundAgentResume(params: {
           status: intent.status,
         }
       case 'interrupted': {
-        const respawn = parentSpawns.find((event) => {
+        // Scan EVERY respawn marker for this job, not just the first: the
+        // first marker must not mask a later settled one. An early marker
+        // whose respawned child never reached a terminal journal tail stays
+        // unsettled, but a later resume's marker whose child completed
+        // settles the intent — resolving only the first marker would
+        // re-classify the job as 'respawn' on every subsequent resume and
+        // duplicate a respawn that already happened, unbounded across
+        // resumes.
+        const settledRespawn = parentSpawns.find((event) => {
           const payload = event.payload
           return (
             typeof payload === 'object' &&
             payload !== null &&
-            (payload as Record<string, unknown>).respawnOf === intent.jobId
+            (payload as Record<string, unknown>).respawnOf === intent.jobId &&
+            respawnMarkerIsSettled(event, params.reader)
           )
         })
-        if (respawn) {
+        if (settledRespawn) {
           return {
             kind: 'already_respawned',
             jobId: intent.jobId,
-            respawnSpawnSeq: respawn.seq,
+            respawnSpawnSeq: settledRespawn.seq,
           }
         }
+        // No settled respawn marker: every matching marker is intent-only
+        // evidence (the respawned child never reached a terminal tail), so
+        // treating any of them as proof of completion would silently drop the
+        // job on every subsequent resume. Fall through and re-plan from the
+        // intent instead.
         if (isRerunnable(intent.agentType)) {
           return {
             kind: 'respawn',

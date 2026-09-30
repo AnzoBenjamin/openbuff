@@ -114,6 +114,42 @@ describe('harness enforcement services', () => {
     ).toBeDefined()
   })
 
+  test('consume rejects expired approvals, including a malformed expiresAt', () => {
+    const service = new HarnessApprovalService(setup())
+    const consumeGrant = (grant: ReturnType<
+      HarnessApprovalService['grant']
+    >) =>
+      service.consume({
+        repositoryId: scope.repositoryId,
+        workspaceId: scope.workspaceId,
+        runId: scope.runId,
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
+        snapshotId: scope.snapshotId,
+      })
+
+    // A well-formed past expiresAt must reject the consume.
+    const expired = service.grant(scope, {
+      action: 'push',
+      target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    })
+    expect(() => consumeGrant(expired)).toThrow('Approval has expired.')
+
+    // A malformed (non-ISO) expiresAt must fail closed the same way: it must
+    // never be treated as never-expiring.
+    const malformed = service.grant(scope, {
+      action: 'push',
+      target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
+      expiresAt: 'not-a-timestamp',
+    })
+    expect(() => consumeGrant(malformed)).toThrow('Approval has expired.')
+  })
+
   test('hashCommand is stable across whitespace normalization', () => {
     expect(hashCommand('git  push   origin feature')).toBe(
       hashCommand('git push origin feature'),
@@ -304,6 +340,46 @@ describe('harness enforcement services', () => {
     expect(classifyTerminalHarnessAction('git clean -fd')).toMatchObject({
       action: 'workspace-delete',
     })
+  })
+
+  test('classifies dangerous commands hidden behind harmless segments', () => {
+    expect(
+      classifyTerminalHarnessAction('cd x && git push origin main'),
+    ).toEqual({
+      action: 'push',
+      target: 'origin/main',
+      branch: 'main',
+      commandHash: hashCommand('cd x && git push origin main'),
+    })
+    expect(
+      classifyTerminalHarnessAction('true && sudo git commit -m x'),
+    ).toMatchObject({ action: 'commit' })
+    expect(classifyTerminalHarnessAction('echo ok; npm publish')).toMatchObject(
+      {
+        action: 'release',
+      },
+    )
+    expect(classifyTerminalHarnessAction('echo "$(git push)"')).toMatchObject({
+      action: 'push',
+    })
+    expect(
+      classifyTerminalHarnessAction('ls | xargs rm -rf build'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('FOO=1 git reset --hard'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(classifyTerminalHarnessAction('(git clean -fd)')).toMatchObject({
+      action: 'workspace-delete',
+    })
+    expect(classifyTerminalHarnessAction("echo 'git push'")).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('bun test && bun run typecheck'),
+    ).toBeUndefined()
+    expect(classifyTerminalHarnessAction('cd .. && bun test')).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('git log --oneline $(git rev-parse HEAD)'),
+    ).toBeUndefined()
+    expect(classifyTerminalHarnessAction('bun run dev &')).toBeUndefined()
   })
 
   test('consume observes a concurrent consumer through the kind lock', () => {

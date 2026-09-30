@@ -91,8 +91,14 @@ export class HarnessApprovalService {
       ) as ApprovalRecord | undefined
       if (!existing) throw new Error('Approval not found.')
       if (existing.consumedAt) throw new Error('Approval was already consumed.')
-      if (existing.expiresAt && Date.parse(existing.expiresAt) <= Date.now()) {
-        throw new Error('Approval has expired.')
+      if (existing.expiresAt) {
+        // Fail closed on a malformed expiresAt: `Date.parse` returns NaN for
+        // non-ISO garbage, and a bare `NaN <= Date.now()` comparison would be
+        // false, silently keeping the approval live forever.
+        const expiresAtMs = Date.parse(existing.expiresAt)
+        if (Number.isNaN(expiresAtMs) || expiresAtMs <= Date.now()) {
+          throw new Error('Approval has expired.')
+        }
       }
       if (
         existing.action !== params.action ||
@@ -158,20 +164,13 @@ export function hashCommand(command: string): string {
 }
 
 /**
- * Classifies only commands that cross trust boundaries or destroy data.
- * Ordinary pipelines, command substitution in project scripts, background
- * jobs, and staged-only `git restore --staged` are not high-impact.
- * This classifier never grants authority: the terminal permission profile is
- * evaluated first, then a matching snapshot-scoped approval must be consumed.
+ * Classifies one already-split command segment against the recognized
+ * high-impact shapes below.
  */
-export function classifyTerminalHarnessAction(
-  rawCommand: string,
-): ClassifiedHarnessAction | undefined {
-  const command = normalizeCommand(rawCommand)
-  const commandHash = hashCommand(rawCommand)
-  const classify = ():
-    | Omit<ClassifiedHarnessAction, 'commandHash'>
-    | undefined => {
+function classifySingleSegment(
+  segment: string,
+): Omit<ClassifiedHarnessAction, 'commandHash'> | undefined {
+  const command = segment
   const push = command.match(/^git\s+push(?:\s+(.+))?$/i)
   if (push) {
     const args =
@@ -287,6 +286,307 @@ export function classifyTerminalHarnessAction(
     return { action: 'workspace-delete', target: command }
   }
   return undefined
+}
+
+/**
+ * Option flags of transparent wrappers that consume a separate value token
+ * (e.g. `sudo -u root git push` strips `sudo -u root `).
+ */
+const WRAPPER_OPTION_VALUES: Record<string, ReadonlySet<string>> = {
+  env: new Set(['u']),
+  sudo: new Set([
+    'u',
+    'g',
+    'p',
+    'h',
+    'C',
+    'D',
+    'R',
+    'T',
+    't',
+    'U',
+    'a',
+    'B',
+    'K',
+  ]),
+  doas: new Set(['u', 'a']),
+  xargs: new Set(['n', 'I', 's', 'P', 'L', 'E', 'a']),
+}
+
+/**
+ * Normalizes one command segment (stripping grouping braces, env assignments,
+ * and transparent wrapper prefixes such as `sudo`/`env`) and classifies it.
+ * `nohup`/`setsid` are deliberately NOT stripped: they run arbitrary code.
+ */
+function classifySegment(
+  segment: string,
+): Omit<ClassifiedHarnessAction, 'commandHash'> | undefined {
+  let normalized = segment.trim()
+  while (normalized.startsWith('(') || normalized.startsWith('{')) {
+    normalized = normalized.slice(1).trim()
+  }
+  normalized = stripLeadingEnvAssignments(normalized)
+  for (;;) {
+    const wrapper = normalized.match(
+      /^(command|exec|time|env|sudo|doas|xargs)\s+/,
+    )
+    if (!wrapper) break
+    const word = wrapper[1]
+    normalized = normalized.slice(wrapper[0].length)
+    if (
+      word === 'sudo' ||
+      word === 'doas' ||
+      word === 'xargs' ||
+      word === 'env'
+    ) {
+      const valueFlags = WRAPPER_OPTION_VALUES[word] ?? new Set<string>()
+      for (;;) {
+        // Exact short flags may consume a separate value token (`-u root`).
+        const short = normalized.match(/^-([A-Za-z])\s+/)
+        if (short) {
+          normalized = normalized.slice(short[0].length)
+          if (valueFlags.has(short[1])) {
+            const value = normalized.match(/^[^\s]+\s+/)
+            if (value) normalized = normalized.slice(value[0].length)
+          }
+          continue
+        }
+        // Valueless or inline-valued option tokens (`-0`, `-I{}`, `--login`).
+        const option = normalized.match(/^(-[^\s]+)\s+/)
+        if (!option) break
+        normalized = normalized.slice(option[0].length)
+      }
+    }
+    if (word === 'env') {
+      normalized = stripLeadingEnvAssignments(normalized)
+    }
+  }
+  return classifySingleSegment(normalized)
+}
+
+function stripLeadingEnvAssignments(segment: string): string {
+  let stripped = segment
+  for (;;) {
+    const assignment = stripped.match(
+      /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+/,
+    )
+    if (!assignment) return stripped
+    stripped = stripped.slice(assignment[0].length)
+  }
+}
+
+/**
+ * Splits a command into executable segments at unquoted `;`, `&&`, `||`, `|`,
+ * single `&`, and newlines (leaving `2>&1`-style redirections intact), and
+ * also collects command-substitution bodies (`$(...)` and backticks) as
+ * additional segments after the main ones. Returns undefined for malformed
+ * input (unclosed quotes or parens) or a structurally empty main segment so
+ * the caller can fall back to classifying the whole command.
+ */
+function splitCommandSegments(command: string): string[] | undefined {
+  const scan = scanCommandSegments(command)
+  if (!scan.complete) return undefined
+  const segments = scan.segments.map((segment) => segment.trim())
+  if (segments.some((segment) => segment.length === 0)) return undefined
+  const substitutions = scan.substitutions
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+  return [...segments, ...substitutions]
+}
+
+type SegmentScanResult = {
+  segments: string[]
+  substitutions: string[]
+  complete: boolean
+}
+
+function readSubstitutionBody(
+  input: string,
+  start: number,
+): { body: string; end: number } | undefined {
+  let depth = 0
+  let quote: "'" | '"' | undefined
+  let index = start
+  while (index < input.length) {
+    const char = input[index]
+    if (char === '\\' && index + 1 < input.length) {
+      index += 2
+      continue
+    }
+    if (quote === "'") {
+      if (char === "'") quote = undefined
+      index += 1
+      continue
+    }
+    if (quote === '"') {
+      if (char === '"') quote = undefined
+      index += 1
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      index += 1
+      continue
+    }
+    if (char === '$' && input[index + 1] === '(') {
+      depth += 1
+      index += 2
+      continue
+    }
+    if (char === '(') {
+      depth += 1
+      index += 1
+      continue
+    }
+    if (char === ')') {
+      if (depth === 0) {
+        return { body: input.slice(start, index), end: index + 1 }
+      }
+      depth -= 1
+    }
+    index += 1
+  }
+  return undefined
+}
+
+function readBacktickBody(
+  input: string,
+  start: number,
+): { body: string; end: number } | undefined {
+  let index = start
+  while (index < input.length) {
+    const char = input[index]
+    if (char === '\\' && index + 1 < input.length) {
+      index += 2
+      continue
+    }
+    if (char === '`') {
+      return { body: input.slice(start, index), end: index + 1 }
+    }
+    index += 1
+  }
+  return undefined
+}
+
+function scanCommandSegments(input: string): SegmentScanResult {
+  const segments: string[] = []
+  const substitutions: string[] = []
+  let current = ''
+  let quote: "'" | '"' | undefined
+  const flush = () => {
+    segments.push(current)
+    current = ''
+  }
+  const incomplete = (): SegmentScanResult => ({
+    segments: [],
+    substitutions: [],
+    complete: false,
+  })
+  let index = 0
+  while (index < input.length) {
+    const char = input[index]
+    if (quote === "'") {
+      if (char === "'") quote = undefined
+      current += char
+      index += 1
+      continue
+    }
+    const inDoubleQuote = quote === '"'
+    if (inDoubleQuote && char === '"') quote = undefined
+    if (
+      char === '\\' &&
+      index + 1 < input.length &&
+      (!inDoubleQuote ||
+        input[index + 1] === '"' ||
+        input[index + 1] === '\\' ||
+        input[index + 1] === '$' ||
+        input[index + 1] === '`')
+    ) {
+      current += input.slice(index, index + 2)
+      index += 2
+      continue
+    }
+    if ((char === '$' && input[index + 1] === '(') || char === '`') {
+      const body =
+        char === '$'
+          ? readSubstitutionBody(input, index + 2)
+          : readBacktickBody(input, index + 1)
+      if (!body) return incomplete()
+      const inner = scanCommandSegments(body.body)
+      if (!inner.complete) return incomplete()
+      substitutions.push(...inner.segments, ...inner.substitutions)
+      index = body.end
+      continue
+    }
+    if (!inDoubleQuote) {
+      if (char === "'" || char === '"') {
+        quote = char
+        current += char
+        index += 1
+        continue
+      }
+      if (char === ';' || char === '\n') {
+        flush()
+        index += 1
+        continue
+      }
+      if (char === '|') {
+        flush()
+        index += input[index + 1] === '|' ? 2 : 1
+        continue
+      }
+      if (char === '&') {
+        if (input[index + 1] === '&') {
+          flush()
+          index += 2
+          continue
+        }
+        if (
+          index > 0 &&
+          input[index - 1] === '>' &&
+          input[index + 1] !== undefined &&
+          /\d/.test(input[index + 1])
+        ) {
+          // `2>&1`-style redirect: the `&` belongs to the redirect token.
+          current += char
+          index += 1
+          continue
+        }
+        flush()
+        index += 1
+        continue
+      }
+    }
+    current += char
+    index += 1
+  }
+  if (quote) return incomplete()
+  flush()
+  return { segments, substitutions, complete: true }
+}
+
+/**
+ * Classifies only commands that cross trust boundaries or destroy data.
+ * Ordinary pipelines, command substitution in project scripts, background
+ * jobs, and staged-only `git restore --staged` are not high-impact.
+ * This classifier never grants authority: the terminal permission profile is
+ * evaluated first, then a matching snapshot-scoped approval must be consumed.
+ */
+export function classifyTerminalHarnessAction(
+  rawCommand: string,
+): ClassifiedHarnessAction | undefined {
+  const command = normalizeCommand(rawCommand)
+  const commandHash = hashCommand(rawCommand)
+  const classify = ():
+    | Omit<ClassifiedHarnessAction, 'commandHash'>
+    | undefined => {
+    const segments = splitCommandSegments(command)
+    if (!segments) return classifySegment(command)
+    for (const segment of segments) {
+      const result = classifySegment(segment)
+      if (result) return result
+    }
+    return undefined
   }
   const result = classify()
   return result ? { ...result, commandHash } : undefined
