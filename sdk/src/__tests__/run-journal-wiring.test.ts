@@ -25,7 +25,17 @@ let capturedDeps:
   | undefined
 let callMainPromptCount = 0
 
+// mock.module is registry-wide for the whole test process and afterAll
+// (mock.restore) does NOT undo it, so capture the REAL main-prompt module
+// before registration (top-level await import, pre-bound to a const so the
+// factory never references the mocked namespace itself) and spread its
+// exports in the factory — real exports first, overrides after, so only
+// callMainPrompt is overridden while the remaining real exports keep working
+// for sibling test files in this process.
+const realMainPrompt = await import('@codebuff/agent-runtime/main-prompt')
+
 mock.module('@codebuff/agent-runtime/main-prompt', () => ({
+  ...realMainPrompt,
   callMainPrompt: (params: {
     journalWriter?: JournalWriter
     journalReader?: JournalReader

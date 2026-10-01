@@ -12,7 +12,17 @@ import type { JobOwner } from '@codebuff/common/util/job-registry'
 let capturedBrowserLogsOwner: Record<string, unknown> | undefined
 let browserLogsCallCount = 0
 
+// mock.module is registry-wide for the whole test process and afterAll
+// (mock.restore) does NOT undo it, so capture the REAL browser-logs module
+// before registration (top-level await import, pre-bound to a const so the
+// factory never references the mocked namespace itself) and spread its
+// exports in the factory — real exports first, overrides after, so only the
+// two seams below are overridden while the remaining real exports keep
+// working for sibling test files in this process.
+const realBrowserLogs = await import('../tools/browser-logs')
+
 mock.module('../tools/browser-logs', () => ({
+  ...realBrowserLogs,
   browserLogs: async (
     _input: unknown,
     owner: Record<string, unknown>,

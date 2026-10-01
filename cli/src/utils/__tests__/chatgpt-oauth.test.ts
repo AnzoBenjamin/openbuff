@@ -2,6 +2,7 @@ import net from 'net'
 
 import { CHATGPT_OAUTH_REDIRECT_URI } from '@codebuff/common/constants/chatgpt-oauth'
 import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { createRequire } from 'node:module'
 
 import {
   connectChatGptOAuth,
@@ -23,7 +24,20 @@ mock.module('../open-url', () => ({
 // result is discarded instead of persisted.
 let saveChatGptOAuthCredentialsCalls = 0
 
+// mock.module is registry-wide for the whole test process (bun does not
+// isolate registrations across test files, and afterAll(mock.restore) does
+// NOT undo it), so capture the REAL @openbuff/sdk exports BEFORE registration
+// and spread them in the factory; only the OAuth seams below are overridden.
+// require() of the ESM package may wrap the exports in a `default` key, so
+// spread both shapes — real exports first, overrides after, so overrides win.
+const requireReal = createRequire(import.meta.url)
+const realSdkModule = requireReal('@openbuff/sdk') as {
+  default?: typeof import('@openbuff/sdk')
+} & Partial<typeof import('@openbuff/sdk')>
+const realSdk = { ...realSdkModule, ...realSdkModule.default }
+
 mock.module('@openbuff/sdk', () => ({
+  ...realSdk,
   clearChatGptOAuthCredentials: () => {},
   getChatGptOAuthCredentials: () => null,
   isChatGptOAuthValid: () => false,

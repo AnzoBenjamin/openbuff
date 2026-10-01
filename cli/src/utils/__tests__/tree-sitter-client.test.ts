@@ -39,6 +39,13 @@ const fsMock = () => ({
       ? false
       : realExistsSync(candidate),
 })
+// mock.module is registry-wide for the whole test process (bun does not
+// isolate registrations across test files, and afterAll(mock.restore) does
+// NOT undo it). The fsMock factory already spreads the REAL fs exports and
+// only overrides existsSync, and the SAME factory state is registered for
+// both 'fs' and 'node:fs', so the real fs API keeps flowing identically
+// through either specifier — keeping sibling test files importing fs in this
+// process safe.
 mock.module('fs', fsMock)
 mock.module('node:fs', fsMock)
 

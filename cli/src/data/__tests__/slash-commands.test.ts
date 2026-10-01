@@ -156,6 +156,25 @@ describe('slash-commands module', () => {
         ),
       ).toEqual(['attach'])
     })
+
+    test('registers /undo-turn and /restore for autocomplete and the palette', () => {
+      const undoTurn = SLASH_COMMANDS.find((cmd) => cmd.id === 'undo-turn')
+      expect(undoTurn).toBeDefined()
+      expect(undoTurn!.label).toBe('undo-turn')
+      expect(undoTurn!.description).toContain('snapshot')
+
+      const restore = SLASH_COMMANDS.find((cmd) => cmd.id === 'restore')
+      expect(restore).toBeDefined()
+      expect(restore!.label).toBe('restore')
+      expect(restore!.description).toContain('snapshot')
+
+      // Stateful commands: must not fire without an explicit leading slash.
+      expect(undoTurn!.implicitCommand).toBeUndefined()
+      expect(restore!.implicitCommand).toBeUndefined()
+      // No aliases in this slice.
+      expect(undoTurn!.aliases).toBeUndefined()
+      expect(restore!.aliases).toBeUndefined()
+    })
   })
 
   describe('SLASHLESS_COMMAND_IDS', () => {

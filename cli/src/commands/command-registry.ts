@@ -62,6 +62,11 @@ import {
   detachOnExit,
   detachSession,
 } from '../utils/attach-session'
+import {
+  listTurnSnapshots,
+  restoreToTurn,
+  undoLastTurn,
+} from '../utils/turn-snapshots'
 import { getAttachTarget } from '../utils/codebuff-client'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
 import { withTimeout } from '../utils/terminal-color-detection'
@@ -670,6 +675,136 @@ const ALL_COMMANDS: CommandDefinition[] = [
             break
         }
       })
+    },
+  }),
+  defineCommandWithArgs({
+    name: 'undo-turn',
+    handler: (params) => {
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Between-turns only: the tracked working tree must never be mutated
+      // mid-stream, so gate on the same busy-check the /detach handler uses.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current
+      ) {
+        appendLocalMessage(
+          params,
+          '/undo-turn: a turn is in progress - wait for it to finish, then run /undo-turn again.',
+        )
+        return
+      }
+      // Fire-and-forget and fail-closed, like /detach: undoLastTurn never
+      // rejects (every failure is a structured outcome).
+      void undoLastTurn().then((outcome) => {
+        switch (outcome.status) {
+          case 'undone':
+            appendLocalMessage(
+              params,
+              `/undo-turn: restored tracked files to the previous turn snapshot (${outcome.toSha.slice(0, 12)}); the real index, HEAD, and untracked files are unchanged.`,
+            )
+            break
+          case 'nothing-to-undo':
+            appendLocalMessage(
+              params,
+              '/undo-turn: no earlier turn snapshot to undo to.',
+            )
+            break
+          case 'unavailable':
+            appendLocalMessage(
+              params,
+              '/undo-turn: turn snapshots are unavailable - this project is not a git repository with commits.',
+            )
+            break
+          case 'error':
+            appendLocalMessage(params, `/undo-turn: ${outcome.message}`)
+            break
+        }
+      })
+    },
+  }),
+  defineCommandWithArgs({
+    name: 'restore',
+    handler: (params, args) => {
+      const target = args.trim()
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Same busy-check as /detach and /undo-turn: never mutate the tracked
+      // working tree mid-stream.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current
+      ) {
+        appendLocalMessage(
+          params,
+          '/restore: a turn is in progress - wait for it to finish, then run /restore again.',
+        )
+        return
+      }
+      if (!target) {
+        appendLocalMessage(
+          params,
+          '/restore: provide a snapshot sha or a 1-based index from /restore list.',
+        )
+        return
+      }
+      // Fire-and-forget and fail-closed, like /detach: both helpers never
+      // reject (every failure is a structured outcome).
+      void (async () => {
+        // A bare number resolves as a 1-based index into the newest-first
+        // snapshot list; anything else is treated as a sha.
+        if (/^\d+$/.test(target)) {
+          const snapshots = await listTurnSnapshots()
+          const index = Number.parseInt(target, 10)
+          const entry = snapshots[index - 1]
+          if (!entry) {
+            appendLocalMessage(
+              params,
+              `/restore: no snapshot at index ${target} (${snapshots.length} snapshot${snapshots.length === 1 ? '' : 's'} available).`,
+            )
+            return undefined
+          }
+          return entry.sha
+        }
+        return target
+      })()
+        .then((sha) =>
+          sha === undefined
+            ? undefined
+            : restoreToTurn(sha).then((outcome) => {
+                switch (outcome.status) {
+                  case 'restored':
+                    appendLocalMessage(
+                      params,
+                      `/restore: restored tracked files to turn snapshot ${outcome.sha.slice(0, 12)}; the real index, HEAD, and untracked files are unchanged.`,
+                    )
+                    break
+                  case 'not-found':
+                    appendLocalMessage(
+                      params,
+                      `/restore: no turn snapshot found for ${target}.`,
+                    )
+                    break
+                  case 'unavailable':
+                    appendLocalMessage(
+                      params,
+                      '/restore: turn snapshots are unavailable - this project is not a git repository with commits.',
+                    )
+                    break
+                  case 'error':
+                    appendLocalMessage(params, `/restore: ${outcome.message}`)
+                    break
+                }
+              }),
+        )
+        .catch(() => {
+          appendLocalMessage(
+            params,
+            '/restore: failed to resolve the requested turn snapshot.',
+          )
+        })
     },
   }),
   defineCommandWithArgs({

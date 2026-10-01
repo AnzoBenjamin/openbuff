@@ -230,6 +230,18 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['attach'],
   },
   {
+    id: 'undo-turn',
+    label: 'undo-turn',
+    description:
+      'Restore tracked files to the previous turn snapshot (git-based)',
+  },
+  {
+    id: 'restore',
+    label: 'restore',
+    description:
+      'Restore tracked files to a specific turn snapshot (git-based)',
+  },
+  {
     id: 'exit',
     label: 'exit',
     description: 'Quit the CLI',
