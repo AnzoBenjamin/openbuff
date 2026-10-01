@@ -7,4 +7,8 @@ linkWorkspacePackages = true
 [test]
 # Exclude test repositories and integration tests from test execution by default
 exclude = ["evals/test-repos/**", "**/*.integration.test.*"]
-preload = ["./test/setup-scm-loader.ts", "./sdk/test/setup-env.ts"]
+# setup-scm-loader preload removed: tree-sitter queries are loaded via fs at
+# query-load time (packages/code-map/src/languages.ts resolveQueryPath), so the
+# .scm text-loader plugin is no longer required. Reintroduce it ONLY if a .scm
+# module import ever returns (it would crash test collection if unresolved).
+preload = ["./sdk/test/setup-env.ts"]
