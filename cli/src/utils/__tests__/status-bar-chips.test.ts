@@ -886,6 +886,77 @@ describe('selectStatusBarChips', () => {
     expect(byId(withoutNotice.chips).compaction).toBeUndefined()
   })
 
+  test('capabilities chip renders beside index at md and lg, hidden below', () => {
+    const capabilitiesChip = {
+      label: 'sandbox:lexical',
+      tone: 'secondary',
+    } as const
+    const idsAt = (widthSize: 'xs' | 'sm' | 'md' | 'lg') =>
+      selectStatusBarChips({
+        ...full,
+        widthSize,
+        terminalWidth: 400,
+        capabilitiesChip,
+      }).chips.map((chip) => chip.id)
+
+    expect(idsAt('lg')).toEqual([
+      'context',
+      'capabilities',
+      'git',
+      'model',
+      'cost',
+      'timer',
+    ])
+    expect(idsAt('md')).toEqual([
+      'context',
+      'capabilities',
+      'git',
+      'model',
+      'timer',
+    ])
+    expect(idsAt('sm')).not.toContain('capabilities')
+    expect(idsAt('xs')).not.toContain('capabilities')
+
+    const chipsById = byId(
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth: 400,
+        capabilitiesChip,
+      }).chips,
+    )
+    expect(chipsById.capabilities?.label).toBe('sandbox:lexical')
+    expect(chipsById.capabilities?.tone).toBe('secondary')
+  })
+
+  test('overflow drops the static capabilities chip before cost', () => {
+    const capabilitiesChip = {
+      label: 'sandbox:lexical',
+      tone: 'secondary',
+    } as const
+    const chipsAt = (terminalWidth: number) =>
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth,
+        capabilitiesChip,
+      }).chips
+    const idsAt = (terminalWidth: number) =>
+      chipsAt(terminalWidth).map((chip) => chip.id)
+
+    const allChips = chipsAt(widthForBudget(120, full.showStop))
+    const clusterWithout = (dropped: StatusBarChip['id'][]) =>
+      statusBarClusterWidth(
+        allChips.filter((chip) => !dropped.includes(chip.id)),
+      )
+
+    // One step tighter than the full cluster: the static advertisement goes
+    // while every live chip (cost included) survives.
+    expect(
+      idsAt(widthForBudget(clusterWithout(['capabilities']), full.showStop)),
+    ).toEqual(['context', 'git', 'model', 'cost', 'timer'])
+  })
+
   test('overflow drops the compaction chip after git but before context', () => {
     const compactionNotice = {
       count: 2,

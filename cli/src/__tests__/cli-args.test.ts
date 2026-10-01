@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { parseCliArgs } from '../cli-args'
+import { isRendererCommand, parseCliArgs } from '../cli-args'
 
 const parse = (args: string[]) =>
   parseCliArgs(['node', 'openbuff', ...args], {
@@ -64,6 +64,29 @@ describe('production CLI argument parser', () => {
       expect(() => parse([arg])).toThrow()
     },
   )
+})
+
+describe('isRendererCommand', () => {
+  test('returns true for the default (renderer/TUI) path', () => {
+    expect(isRendererCommand(parse([]))).toBe(true)
+    expect(isRendererCommand(parse(['hello']))).toBe(true)
+  })
+
+  test('returns false for the serve subcommand (ACP wire on stdio)', () => {
+    expect(isRendererCommand(parse(['serve']))).toBe(false)
+  })
+
+  test('returns false for the mcp subcommand (MCP wire on stdio)', () => {
+    expect(isRendererCommand(parse(['mcp']))).toBe(false)
+  })
+
+  test('returns false for the run subcommand (ndjson stream on stdout)', () => {
+    expect(isRendererCommand(parse(['run', 'hello']))).toBe(false)
+  })
+
+  test('returns false for the replay subcommand (ndjson stream on stdout)', () => {
+    expect(isRendererCommand(parse(['replay', 'run-1']))).toBe(false)
+  })
 })
 
 describe('serve subcommand parsing', () => {

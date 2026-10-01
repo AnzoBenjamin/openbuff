@@ -13,9 +13,11 @@ import type { EmbedFn, McpServerClient } from '@openbuff/sdk'
 
 /**
  * The parsed `openbuff mcp` selection (mirrors `ParsedArgs.mcp`). The server
- * is read-only by default; receipt-backed edits (`apply_edits`) and memory
- * search stay opt-in behind `--mutations`, which the parse layer surfaces
- * here and `runMcpCommand` forwards to `runMcp`.
+ * is read-only by default; receipt-backed edits (`apply_edits`) stay opt-in
+ * behind `--mutations`, which the parse layer surfaces here and
+ * `runMcpCommand` forwards to `runMcp`. (`memory_search` is read-only and
+ * always listed; it answers its honest disabled payload until the memory
+ * seam below is wired.)
  */
 export type McpCommandArgs = { mutations?: boolean }
 
@@ -74,6 +76,13 @@ export async function runMcpCommand(
       ')',
   )
 
+  // The `memory` session seam is deliberately left unwired here: the real
+  // Memory V2 repository lives behind the async, lease-managed
+  // ProjectMemoryV2Provider (acquire/release/retire plus its derived bound
+  // projectId), which is not a clean, already-available binding for this
+  // synchronous read-only command path. `memory_search` therefore answers
+  // its honest disabled payload; wire the seam when a provider acquisition
+  // can be tied to the MCP server's lifetime.
   return runMcpImpl({
     client,
     sessionData: { projectRoot, ...(index ? { index } : {}) },

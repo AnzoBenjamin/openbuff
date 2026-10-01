@@ -122,7 +122,18 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
       protocolVersion: PROTOCOL_VERSION,
     })
     expect(initialized.protocolVersion).toBe(PROTOCOL_VERSION)
-    expect(initialized.agentCapabilities).toEqual({ loadSession: true })
+    // The honest §3.3 advertisement: no sessionCapabilities (session/list
+    // and session/close are not implemented) and no `_meta` for a plain ACP
+    // client that sent no openbuff.dev ext negotiation.
+    expect(initialized.agentCapabilities).toEqual({
+      loadSession: true,
+      promptCapabilities: {
+        image: false,
+        audio: false,
+        embeddedContext: false,
+      },
+      mcpCapabilities: { http: true, sse: true },
+    })
   })
 
   test('e2e: a full prompt turn through the serve bridge carries only sanitized JSON-RPC on the wire', async () => {

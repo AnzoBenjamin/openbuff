@@ -35,6 +35,7 @@ import {
   resetEarlyReturnState,
   setupStreamingContext,
 } from './helpers/send-message'
+import { whenRegistriesReady } from '../services/deferred-registries'
 import { NETWORK_ERROR_ID } from '../utils/validation-error-helpers'
 import { yieldToEventLoop } from '../utils/yield-to-event-loop'
 
@@ -359,6 +360,12 @@ export const useSendMessage = ({
 
       // Validate before sending (e.g., agent config checks)
       try {
+        // P1-T9 gating: onBeforeMessageSend (agent validation) reads the
+        // agent registry via loadAgentDefinitions, so the deferred registry
+        // loads must have settled BEFORE it runs — otherwise mid-startup
+        // validation observes an empty/partial registry. This is the same
+        // gate the run below uses for its own loadAgentDefinitions read.
+        await whenRegistriesReady()
         const validationResult = await onBeforeMessageSend()
 
         if (!validationResult.success) {
@@ -488,6 +495,10 @@ export const useSendMessage = ({
 
       // Execute SDK run with streaming handlers
       try {
+        // P1-T9: agent/skill registries load post-first-frame; wait for them
+        // here so the first send never reads a not-yet-loaded registry. This
+        // resolves immediately once ready (or when no deferred load ran).
+        await whenRegistriesReady()
         const agentDefinitions = loadAgentDefinitions()
         const resolvedAgent = resolveAgent(agentMode, agentId, agentDefinitions)
         const providerReadiness = getOpenbuffProviderReadiness({

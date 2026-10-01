@@ -61,6 +61,18 @@ export type ParsedArgs = {
   attach?: { socketPath?: string; token?: string }
 }
 
+/**
+ * True when the parsed argv dispatches to the interactive OpenTUI renderer
+ * rather than a non-renderer command path. The serve/mcp/run/replay commands
+ * use stdin/stdout as the ACP/MCP/ndjson protocol wire and return from main()
+ * before a renderer is created, so anything that would read stdin or write to
+ * the TTY (e.g. the deferred OSC theme probe) must be suppressed on those
+ * paths to preserve protocol-wire exclusivity of stdin/stdout.
+ */
+export function isRendererCommand(args: ParsedArgs): boolean {
+  return !args.serve && !args.mcp && !args.run && !args.replay
+}
+
 export function parseCliArgs(
   argv: string[],
   options: { version: string; exitOverride?: boolean },

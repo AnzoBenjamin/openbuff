@@ -9,6 +9,8 @@ import {
 } from '@agentclientprotocol/sdk'
 import type {
   Agent,
+  AgentCapabilities,
+  AuthMethod,
   CancelNotification,
   CreateTerminalRequest,
   CreateTerminalResponse,
@@ -26,15 +28,25 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionNotification,
+  TerminalHandle,
   WriteTextFileRequest,
+  WriteTextFileResponse,
 } from '@agentclientprotocol/sdk'
 
-import { receiptEnvelopeV1Schema } from '@codebuff/common/protocol/acp-ext-v1'
+import {
+  OPENBUFF_ACP_EXT_VERSION,
+  OPENBUFF_ACP_NS,
+  receiptEnvelopeV1Schema,
+} from '@codebuff/common/protocol/acp-ext-v1'
+import type { CapabilityMapV1 } from '@codebuff/common/protocol/acp-ext-v1'
+import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 
+import { sanitizeOutbound } from '../../serve/outbound-filter'
 import { sanitizeOutboundStream } from '../../serve/outbound'
 import {
   OPENBUFF_EXT_METHOD_PREFIX,
   OPENBUFF_EXT_METHODS,
+  OPENBUFF_SUPPORTED_EXTENSIONS,
   defaultCapabilityMapV1,
   openbuffExtMethodSchemas,
 } from './ext-methods'
@@ -43,11 +55,32 @@ import { ACP_EXTENSION_METHODS, acpExtensionSchemas } from './extensions'
 import type { AcpExtensionMethod } from './extensions'
 import type { AcpSessionData } from './session-data'
 
+/** §12.6 limits, in bytes. */
+const MAX_INBOUND_FRAME_BYTES = 16 * 1024 * 1024
+const MAX_PROMPT_TOTAL_BYTES = 8 * 1024 * 1024
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_LIVE_SESSIONS = 16
+
+/**
+ * The resolved shape of one prompt turn: the handler reports its own terminal
+ * state so a cancelled turn (via the abort signal) and a naturally finished
+ * turn are both explicit.
+ */
+export type AcpPromptTurnResult = { stopReason: 'end_turn' | 'cancelled' }
+
 /**
  * The injectable seam P1-T2 binds to the real core run: the ACP skeleton owns
  * the protocol surface while the handler owns turn execution and streaming.
- * The handler reports its own terminal state so a cancelled turn (via the
- * abort signal) and a naturally finished turn are both explicit.
+ *
+ * The returned promise models BOTH §4.2 turn exits: it RESOLVES with
+ * {@link AcpPromptTurnResult} for a finished turn, and it may REJECT with a
+ * JSON-RPC `RequestError` when the turn ends in a terminal error — the serve
+ * bridge throws the -32603 `PrintModeRpcError` shape after the handler body
+ * completes (as a REAL `RequestError` instance, so the ACP wire layer maps it
+ * directly onto the `session/prompt` error response). Consumers must not
+ * assume the promise always resolves: type-asserting the resolved shape or
+ * wrapping the handler with a non-throwing default silently converts the
+ * terminal-error contract into a generic failure.
  */
 export type AcpPromptHandler = (input: {
   sessionId: string
@@ -66,7 +99,29 @@ export type AcpPromptHandler = (input: {
    * client's workspace, or create a terminal mid-prompt.
    */
   reverseRequests?: AcpReverseRequests
-}) => Promise<{ stopReason: 'end_turn' | 'cancelled' }>
+  /**
+   * §4.2: the client capabilities snapshot negotiated at initialize,
+   * projected onto the slice the serve bridge consults (`elicitation.form`
+   * gates the ask_user → elicitation/create mapping). Omitted when the
+   * client advertised no elicitation capability.
+   */
+  clientCapabilities?: { elicitation?: { form?: unknown } }
+  /**
+   * §3.2: whether the `events` Openbuff extension was negotiated. Omitted
+   * when it was not, so the bridge's ext-gated ask_user path stays closed.
+   */
+  eventsExtensionEnabled?: boolean
+  /**
+   * §4.2: the generic reverse-request channel bound to the owning
+   * connection, carrying `elicitation/create` and `_openbuff.dev/ask_user`.
+   */
+  onReverseRequest?: (method: string, params: unknown) => Promise<unknown>
+  /**
+   * §12.4: sends `$/cancel_request` for an outstanding reverse-request id on
+   * the owning connection, so the client can tear down pending UI on timeout.
+   */
+  onCancelRequest?: (requestId: string) => void | Promise<void>
+}) => Promise<AcpPromptTurnResult>
 
 /**
  * The slice of the ACP connection the agent needs: pushing `session/update`
@@ -76,6 +131,30 @@ export type AcpPromptHandler = (input: {
  */
 export type AcpSessionUpdateSink = {
   sessionUpdate(params: SessionNotification): Promise<void>
+}
+
+/**
+ * The per-connection surface the serve transports hand to
+ * {@link createAcpAgent}: at minimum the session-update sink; the real wire
+ * connections (the SDK's `AgentSideConnection`) additionally expose the
+ * client-method reverse-request surface, from which the agent derives the
+ * §5/§4.2 bridge seams when the host injected no explicit
+ * `reverseRequests`. Every extra is optional so test fakes only need
+ * `sessionUpdate`.
+ */
+export type AcpAgentConnection = AcpSessionUpdateSink & {
+  requestPermission?(
+    params: RequestPermissionRequest,
+  ): Promise<RequestPermissionResponse>
+  readTextFile?(params: ReadTextFileRequest): Promise<ReadTextFileResponse>
+  writeTextFile?(params: WriteTextFileRequest): Promise<WriteTextFileResponse>
+  /** The SDK returns a `TerminalHandle`; the agent adapts it onto the plain
+   * `CreateTerminalResponse` shape `AcpReverseRequests` models. */
+  createTerminal?(params: CreateTerminalRequest): Promise<TerminalHandle>
+  /** Generic client-method request channel (elicitation/create, ext methods). */
+  request?(method: string, params?: unknown): Promise<unknown>
+  /** Generic client-method notification channel (`$/cancel_request`). */
+  notify?(method: string, params?: unknown): Promise<void>
 }
 
 /**
@@ -96,11 +175,30 @@ export type AcpReverseRequests = {
   ): Promise<CreateTerminalResponse>
 }
 
+/**
+ * One already-persisted chat-history message replayed to the client on
+ * `session/load` (§4.1). The shape is deliberately minimal and structural so
+ * the CLI's chat-history store (and tests) can feed it without the protocol
+ * layer importing the CLI's concrete ChatMessage type. Reasoning content is
+ * dropped at projection time and the tool `rawInput`/`rawOutput` are never
+ * emitted (GV-26).
+ */
+export type AcpReplayMessage = {
+  variant: 'user' | 'agent' | 'tool'
+  text?: string
+  toolCallId?: string
+  toolName?: string
+  paths?: string[]
+}
+
 export type AcpAgentOptions = {
   /** Required by design: there is no default prompt handler to hide behind. */
   promptHandler: AcpPromptHandler
-  /** Where streamed agent message chunks are delivered (the client side). */
-  connection: AcpSessionUpdateSink
+  /** Where streamed agent message chunks are delivered (the client side).
+   * The real transports pass the SDK `AgentSideConnection`, whose extra
+   * client-method surface (see {@link AcpAgentConnection}) is what binds the
+   * §5 approval / §4.2 ask_user seams on the `openbuff serve` path. */
+  connection: AcpAgentConnection
   /** Human-readable name for P1-T2 logging; consumed by the serve bridge. */
   clientNameForLogging?: string
   /**
@@ -109,6 +207,18 @@ export type AcpAgentOptions = {
    * with a JSON-RPC method-not-found error.
    */
   loadHandler?: (input: { sessionId: string }) => Promise<void>
+  /**
+   * Optional chat-history replay seam for `session/load` (§4.1): returns the
+   * persisted conversation as ordered replay messages. The agent replays them
+   * as `user_message_chunk`/`agent_message_chunk`/`tool_call` (final status)
+   * session/update notifications BEFORE the `session/load` result. Absent
+   * means no history is replayed. The protocol layer sanitizes every replayed
+   * text and drops reasoning/tool raw IO, so no receipts, capabilities, or
+   * `cap.v3.` tokens cross the wire on replay (GV-26).
+   */
+  historyLoader?: (input: {
+    sessionId: string
+  }) => Promise<AcpReplayMessage[]>
   /**
    * Optional reverse-request seam forwarded into the prompt handler's input;
    * the P1-T2 bridge binds it to AgentSideConnection's requestPermission,
@@ -133,10 +243,28 @@ export type AcpAgentOptions = {
    * methods with no store fallback (askUser) still fail closed.
    */
   sessionData?: AcpSessionData
+  /**
+   * SEC-7 (§12.5) containment anchor: the serve process's project root. When
+   * set, `newSession`/`loadSession` validate that `cwd` is absolute and equal
+   * to or inside this root (after symlink dereference) and reject
+   * `additionalDirectories` entries that are not in
+   * `allowedAdditionalDirectories`. When unset, cwd validation is skipped
+   * entirely (preserving the pre-P1-T2 permissive behavior for in-process
+   * embeddings that have no fixed root).
+   */
+  projectRoot?: string
+  /**
+   * The directories a client may legitimately add via `additionalDirectories`
+   * — the union of `openbuff.json` `serve.additionalDirectories` and
+   * `--add-dir`, resolved to absolute form by the host. An entry not in this
+   * list is rejected (-32602), never silently admitted.
+   */
+  allowedAdditionalDirectories?: string[]
 }
 
 /** Per-session state kept for later phases (P1-T2 core-run wiring). */
 type AcpSessionState = {
+  /** The VALIDATED project-root cwd recorded at session/new or session/load. */
   cwd: string
   mcpServers: McpServer[]
   abortController: AbortController | null
@@ -156,6 +284,246 @@ export type AcpAgent = Agent & {
   ): Promise<Record<string, unknown>>
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** The negotiated Openbuff extension set for one connection (§3.2). */
+type NegotiatedExt = { extVersion: number; extensions: string[] }
+
+/**
+ * Reads `clientCapabilities._meta["openbuff.dev"]` and computes the negotiated
+ * extension set. Returns undefined for a plain ACP client (no `_meta`) so the
+ * no-ext-echo rule holds: the agent then emits pure ACP and never sends an
+ * extension notification. Unknown extensions are dropped (intersection with
+ * the supported set); `extVersion` is min(client, agent) — independent of the
+ * ACP protocolVersion.
+ */
+function negotiateOpenbuffExt(
+  params: InitializeRequest,
+): NegotiatedExt | undefined {
+  const meta = params.clientCapabilities?._meta
+  if (!isPlainRecord(meta)) return undefined
+  const openbuff = meta[OPENBUFF_ACP_NS]
+  if (!isPlainRecord(openbuff)) return undefined
+  const requested = Array.isArray(openbuff.extensions)
+    ? openbuff.extensions.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  const supported = new Set<string>(OPENBUFF_SUPPORTED_EXTENSIONS)
+  const extensions = requested.filter((entry) => supported.has(entry))
+  const clientVersion =
+    typeof openbuff.extVersion === 'number' ? openbuff.extVersion : 0
+  const extVersion = Math.min(clientVersion, OPENBUFF_ACP_EXT_VERSION)
+  return { extVersion, extensions }
+}
+
+/**
+ * SEC-7 (§12.5): percent-decodes a client-supplied path/URI exactly once and
+ * rejects the residual-encoding and authority escape shapes. Returns the
+ * decoded path, or null when the value is rejected (never silently
+ * normalized). `cwd`/`additionalDirectories` arrive as plain absolute paths;
+ * a `file://` URI is unwrapped to its path, rejecting any authority that is
+ * not empty or `localhost`.
+ */
+function decodeContainedPathInput(input: string): string | null {
+  let value = input
+  if (value.startsWith('file://')) {
+    const rest = value.slice('file://'.length)
+    const slashIndex = rest.indexOf('/')
+    const authority = slashIndex === -1 ? rest : rest.slice(0, slashIndex)
+    if (authority !== '' && authority !== 'localhost') {
+      return null
+    }
+    value = slashIndex === -1 ? '' : rest.slice(slashIndex)
+  }
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(value)
+  } catch {
+    // A malformed percent-escape is not a usable path: reject, never guess.
+    return null
+  }
+  // Residual encoded traversal/separator after ONE decode = double-encoding
+  // attack (the first decode yields `%2e`/`%2f`/`%5c`, which a second decode
+  // would turn into `.`/`/`/`\`). Reject rather than decode again.
+  if (/%2e|%2f|%5c/i.test(decoded)) {
+    return null
+  }
+  return decoded
+}
+
+/**
+ * Builds the §12.5 containment validator bound to one project root. Returns
+ * null when the input must be rejected (-32602): a path that fails
+ * percent-decode/authority, is not absolute, contains traversal segments, or
+ * escapes the root after symlink dereference. `resolveProjectPath` does the
+ * root-relative resolution, lexical root check, and realpath symlink check;
+ * this wrapper adds the SEC-7-specific absolute + reject (never normalize)
+ * rules on top.
+ */
+function resolveContainedProjectDir(
+  projectRoot: string,
+  input: string,
+): string | null {
+  const decoded = decodeContainedPathInput(input)
+  if (decoded === null) return null
+  // SEC-7 requires an absolute path; `resolveProjectPath` would resolve a
+  // relative input against the root and silently admit it, which is exactly
+  // the normalization the contract forbids.
+  if (isWindowsAbsolutePath(decoded) || decoded.startsWith('/')) {
+    const contained = resolveProjectPath(projectRoot, decoded)
+    if (contained === null || contained.scope !== 'project') return null
+    return contained.fullPath
+  }
+  return null
+}
+
+function isWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
+}
+
+/** Builds the -32602 `limit_exceeded` error body. */
+function makeLimitExceeded(message: string): RequestError {
+  return RequestError.invalidParams(
+    { [OPENBUFF_ACP_NS]: { code: 'limit_exceeded' } },
+    message,
+  )
+}
+
+/**
+ * §12.6: enforces the prompt-total (8 MiB) and per-decoded-image (5 MiB)
+ * limits over the already-parsed content blocks. `prompt` is text-only for
+ * the handler, but the byte accounting covers every block so a large image or
+ * embedded resource cannot smuggle an oversized turn past the wire limit.
+ * A breach throws -32602 `limit_exceeded` before any handler runs.
+ */
+function enforcePromptLimits(prompt: PromptRequest['prompt']): void {
+  let total = 0
+  for (const block of prompt) {
+    if (block.type === 'text') {
+      total += Buffer.byteLength(block.text, 'utf8')
+    } else if (block.type === 'image') {
+      // The wire carries base64; the limit is on the DECODED size (~3/4).
+      const decodedBytes = Math.floor(block.data.length * 0.75)
+      if (decodedBytes > MAX_IMAGE_BYTES) {
+        throw makeLimitExceeded(
+          `ACP prompt image exceeds the ${MAX_IMAGE_BYTES}-byte per-image limit.`,
+        )
+      }
+      total += decodedBytes
+    } else if (block.type === 'audio') {
+      total += Buffer.byteLength(block.data, 'utf8')
+    } else if (block.type === 'resource') {
+      const resource = block.resource
+      if ('text' in resource && typeof resource.text === 'string') {
+        total += Buffer.byteLength(resource.text, 'utf8')
+      } else if ('blob' in resource && typeof resource.blob === 'string') {
+        total += Math.floor(resource.blob.length * 0.75)
+      }
+    } else {
+      // resource_link and any future block: count a bounded proxy.
+      total += Buffer.byteLength(JSON.stringify(block), 'utf8')
+    }
+  }
+  if (total > MAX_PROMPT_TOTAL_BYTES) {
+    throw makeLimitExceeded(
+      `ACP prompt exceeds the ${MAX_PROMPT_TOTAL_BYTES}-byte total limit.`,
+    )
+  }
+}
+
+/**
+ * Builds the replay `session/update` notifications for one persisted history
+ * message (§4.1). Reasoning is dropped; tool calls are emitted with a final
+ * status and NO `rawInput`/`rawOutput`/receipts/capabilities (GV-26). Every
+ * replayed text passes through `sanitizeOutbound` so a stored `cap.v3.` token
+ * or credential can never reach the wire on replay.
+ */
+function replayMessagesToUpdates(
+  sessionId: string,
+  messages: AcpReplayMessage[],
+): SessionNotification[] {
+  const updates: SessionNotification[] = []
+  for (const message of messages) {
+    if (message.variant === 'user' || message.variant === 'agent') {
+      const text = message.text
+      if (typeof text !== 'string' || text.length === 0) continue
+      updates.push({
+        sessionId,
+        update: {
+          sessionUpdate:
+            message.variant === 'user'
+              ? 'user_message_chunk'
+              : 'agent_message_chunk',
+          content: { type: 'text', text: sanitizeOutbound(text) },
+        },
+      })
+      continue
+    }
+    if (message.variant === 'tool') {
+      const toolCallId = message.toolCallId
+      if (typeof toolCallId !== 'string' || toolCallId.length === 0) continue
+      const title =
+        typeof message.toolName === 'string' && message.toolName.length > 0
+          ? message.toolName
+          : 'tool'
+      const locations = (message.paths ?? [])
+        .filter((path): path is string => typeof path === 'string')
+        .map((path) => ({ path: sanitizeOutbound(path) }))
+      // Final status, and deliberately NO rawInput/rawOutput/_meta: replayed
+      // tool calls carry no receipts or capabilities (§4.1, GV-26).
+      updates.push({
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: sanitizeOutbound(toolCallId),
+          title: sanitizeOutbound(title),
+          status: 'completed',
+          ...(locations.length > 0 ? { locations } : {}),
+        },
+      })
+    }
+  }
+  return updates
+}
+
+/**
+ * Derives the §5 `AcpReverseRequests` seam from the per-connection surface
+ * when the host injected none. The SDK `AgentSideConnection` the serve
+ * transports pass implements the full client-method surface; `createTerminal`
+ * is adapted from the SDK's `TerminalHandle` onto the plain
+ * `CreateTerminalResponse` shape `AcpReverseRequests` models. Returns
+ * `undefined` for a bare session-update sink (test fakes, in-process
+ * embeddings) so the bridge's fail-closed behavior is unchanged there.
+ */
+function reverseRequestsFromConnection(
+  connection: AcpAgentConnection,
+): AcpReverseRequests | undefined {
+  const { requestPermission, readTextFile, writeTextFile, createTerminal } =
+    connection
+  if (
+    typeof requestPermission !== 'function' ||
+    typeof readTextFile !== 'function' ||
+    typeof writeTextFile !== 'function' ||
+    typeof createTerminal !== 'function'
+  ) {
+    return undefined
+  }
+  return {
+    requestPermission: (params) => requestPermission.call(connection, params),
+    readTextFile: (params) => readTextFile.call(connection, params),
+    writeTextFile: async (params) => {
+      await writeTextFile.call(connection, params)
+    },
+    createTerminal: async (params) => {
+      const handle = await createTerminal.call(connection, params)
+      return { terminalId: handle.id }
+    },
+  }
+}
+
 /**
  * Builds the agent-side ACP v1 skeleton:
  * initialize/newSession/loadSession/prompt/cancel over a private session
@@ -165,16 +533,128 @@ export type AcpAgent = Agent & {
  */
 export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
   const sessions = new Map<string, AcpSessionState>()
+  // §3.2: the negotiated extension set is per-connection, established at
+  // initialize and consulted to gate every extension notification.
+  let negotiatedExt: NegotiatedExt | undefined
+  // §4.2: the client capabilities snapshot projected for the serve bridge,
+  // captured at initialize (always before the first prompt of the session).
+  let clientCapabilities: { elicitation?: { form?: unknown } } | undefined
+  // §5/§4.2 production wiring: the per-connection reverse-request seams.
+  // An explicitly injected seam wins (back-compat); otherwise it is derived
+  // from the connection's own client-method surface when it has one.
+  const { connection } = options
+  const reverseRequests =
+    options.reverseRequests ?? reverseRequestsFromConnection(connection)
+  const { request: connectionRequest, notify: connectionNotify } = connection
+  const onReverseRequest =
+    typeof connectionRequest === 'function'
+      ? (method: string, params: unknown): Promise<unknown> =>
+          connectionRequest.call(connection, method, params)
+      : undefined
+  const onCancelRequest =
+    typeof connectionNotify === 'function'
+      ? (requestId: string): Promise<void> =>
+          connectionNotify.call(connection, '$/cancel_request', { requestId })
+      : undefined
+
+  /** SEC-7 containment helpers bound to the injected project root. */
+  const resolveSessionCwd = (input: string): string | null =>
+    options.projectRoot === undefined
+      ? input
+      : resolveContainedProjectDir(options.projectRoot, input)
+
+  const rejectUncontainedCwd = (cwd: string): string => {
+    const resolved = resolveSessionCwd(cwd)
+    if (resolved === null) {
+      throw RequestError.invalidParams(
+        { cwd },
+        `ACP session cwd must be absolute and inside the server project root.`,
+      )
+    }
+    return resolved
+  }
+
+  const rejectUnallowedAdditionalDirectories = (
+    additionalDirectories: string[] | undefined,
+  ): void => {
+    if (options.projectRoot === undefined) return
+    if (!additionalDirectories || additionalDirectories.length === 0) return
+    const allowed = new Set(options.allowedAdditionalDirectories ?? [])
+    for (const directory of additionalDirectories) {
+      const decoded = decodeContainedPathInput(directory)
+      // Allowlist membership is the whole gate (SEC-7): an additional
+      // directory legitimately lives OUTSIDE the project root (--add-dir), so
+      // project containment is not demanded here — only the one-shot
+      // percent-decode/authority check above plus membership in the
+      // host-resolved allowlist.
+      if (decoded === null || !allowed.has(decoded)) {
+        throw RequestError.invalidParams(
+          { additionalDirectories },
+          `ACP additionalDirectories entry '${directory}' is not in the server's allowed additional directories.`,
+        )
+      }
+    }
+  }
 
   return {
-    initialize(_params: InitializeRequest): InitializeResponse {
-      // Mirror the declared InitializeResponse exactly: the version comes from
-      // the SDK constant (never hardcoded), and loadSession is honestly true
-      // now that session/load is implemented below.
+    initialize(params: InitializeRequest): InitializeResponse {
+      negotiatedExt = negotiateOpenbuffExt(params)
+      // §4.2: project the negotiated client capabilities onto the slice the
+      // serve bridge consults. `form: null` means "not advertised" per the
+      // ACP schema, so it is treated exactly like an omitted form capability.
+      const elicitationForm = params.clientCapabilities?.elicitation?.form
+      clientCapabilities =
+        elicitationForm != null
+          ? { elicitation: { form: elicitationForm } }
+          : undefined
+      // §3.3: the honest P1 capability advertisement. `loadSession` is true
+      // (session/load is implemented below). `promptCapabilities` claims ONLY
+      // what the prompt path actually consumes: `prompt()` forwards just the
+      // `type === 'text'` blocks to the handler, so image and embedded-context
+      // (resource) blocks are silently dropped — advertising `image: true` or
+      // `embeddedContext: true` would promise input the wire path discards,
+      // and a compliant client sending that content would lose it without any
+      // error. `sessionCapabilities` is deliberately NOT advertised:
+      // this agent implements neither session/list nor session/close, and a
+      // compliant client that saw them advertised would call methods the wire
+      // layer rejects with -32601. The `chatgpt-oauth` auth method is
+      // advertised ONLY when the client can run a terminal
+      // (`clientCapabilities.auth.terminal`).
+      const agentCapabilities: AgentCapabilities = {
+        loadSession: true,
+        promptCapabilities: {
+          image: false,
+          audio: false,
+          embeddedContext: false,
+        },
+        mcpCapabilities: { http: true, sse: true },
+      }
+      if (negotiatedExt !== undefined) {
+        // §3.2: respond with the ext intersection and the live capability map.
+        const capabilities: CapabilityMapV1 = defaultCapabilityMapV1({
+          journalAvailable: options.sessionData?.hasJournal() ?? false,
+        })
+        agentCapabilities._meta = {
+          [OPENBUFF_ACP_NS]: {
+            extVersion: negotiatedExt.extVersion,
+            extensions: negotiatedExt.extensions,
+            capabilities,
+          },
+        }
+      }
+      const authMethods: AuthMethod[] = []
+      if (params.clientCapabilities?.auth?.terminal === true) {
+        authMethods.push({
+          id: 'chatgpt-oauth',
+          name: 'Sign in with ChatGPT',
+          type: 'terminal',
+          args: ['login', 'chatgpt'],
+        })
+      }
       return {
         protocolVersion: PROTOCOL_VERSION,
-        agentCapabilities: { loadSession: true },
-        authMethods: [],
+        agentCapabilities,
+        authMethods,
       }
     },
 
@@ -187,14 +667,41 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         // half-loading the session.
         throw RequestError.methodNotFound('session/load')
       }
+      if (sessions.size >= MAX_LIVE_SESSIONS && !sessions.has(params.sessionId)) {
+        throw makeLimitExceeded(
+          `ACP server holds at most ${MAX_LIVE_SESSIONS} live sessions.`,
+        )
+      }
+      // SEC-7 (§12.5 Reload): the client-supplied cwd must resolve inside the
+      // project root AND match the session's recorded project root — a loaded
+      // session must never silently re-point to a different root.
+      const resolvedCwd = rejectUncontainedCwd(params.cwd)
+      const existing = sessions.get(params.sessionId)
+      if (existing !== undefined && existing.cwd !== resolvedCwd) {
+        throw RequestError.invalidParams(
+          { cwd: params.cwd },
+          `ACP session/load cwd does not match the session's recorded project root.`,
+        )
+      }
       // Register in the same private map newSession uses so subsequent
       // prompt/cancel calls work against the loaded session id.
       sessions.set(params.sessionId, {
-        cwd: params.cwd,
+        cwd: resolvedCwd,
         mcpServers: params.mcpServers,
         abortController: null,
       })
       await options.loadHandler({ sessionId: params.sessionId })
+      // §4.1 (GV-26): replay the persisted chat history as sanitized
+      // user/agent message chunks and final-status tool calls — reasoning
+      // dropped, no receipts/capabilities — BEFORE the load result.
+      if (options.historyLoader) {
+        const history = await options.historyLoader({
+          sessionId: params.sessionId,
+        })
+        for (const update of replayMessagesToUpdates(params.sessionId, history)) {
+          await options.connection.sessionUpdate(update)
+        }
+      }
       // §6.1: a restored session also never answers capabilities/get with
       // -32601. Journal replay stores an honest re-derived map only when the
       // journal carried a capabilities line, so a restored session whose
@@ -217,10 +724,25 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       return {}
     },
 
-    newSession(params: NewSessionRequest): NewSessionResponse {
+    // Async so a containment/limit rejection is a rejected promise, never a
+    // synchronous throw: callers (and the wire layer) await this method and
+    // expect the JSON-RPC error to surface through the awaited result. The
+    // SDK's Agent interface allows MaybePromise<NewSessionResponse>.
+    async newSession(
+      params: NewSessionRequest,
+    ): Promise<NewSessionResponse> {
+      if (sessions.size >= MAX_LIVE_SESSIONS) {
+        throw makeLimitExceeded(
+          `ACP server holds at most ${MAX_LIVE_SESSIONS} live sessions.`,
+        )
+      }
+      // SEC-7 (§12.5): validate cwd containment and the additionalDirectories
+      // allowlist BEFORE any session record is created.
+      const resolvedCwd = rejectUncontainedCwd(params.cwd)
+      rejectUnallowedAdditionalDirectories(params.additionalDirectories)
       const sessionId = randomUUID()
       sessions.set(sessionId, {
-        cwd: params.cwd,
+        cwd: resolvedCwd,
         mcpServers: params.mcpServers,
         abortController: null,
       })
@@ -254,6 +776,9 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
           `Unknown ACP session id '${params.sessionId}'.`,
         )
       }
+      // §12.6: prompt-total and per-image limits, enforced before any handler
+      // runs so an oversized turn never reaches the core.
+      enforcePromptLimits(params.prompt)
       // One AbortController per prompt turn: `cancel` aborts the turn in
       // flight, and the next prompt replaces the controller.
       const abortController = new AbortController()
@@ -268,7 +793,13 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         sessionId: params.sessionId,
         promptText,
         mcpServers: session.mcpServers,
-        reverseRequests: options.reverseRequests,
+        reverseRequests,
+        clientCapabilities,
+        eventsExtensionEnabled: negotiatedExt?.extensions.includes('events')
+          ? true
+          : undefined,
+        onReverseRequest,
+        onCancelRequest,
         update: async (chunkText) => {
           await options.connection.sessionUpdate({
             sessionId: params.sessionId,
@@ -516,6 +1047,19 @@ export function resolveAcpServeOptions(
  * Serves the agent over line-delimited JSON on stdio. Only call from a real
  * CLI entry (P1-T2 owns `openbuff serve`); it stays importable so the wiring
  * remains reviewable while the Agent object above stays testable.
+ *
+ * §12.6 inbound limit: the installed `@agentclientprotocol/sdk` (1.5.0)
+ * `ndJsonStream` has NO `maxMessageBytes` option — its `LineBuffer` accumulates
+ * a single newline-delimited line without any byte cap (the design doc's 32
+ * MiB default describes a newer SDK). The 16 MiB cap is therefore enforced at
+ * the ONLY seam this layer owns: the input `ReadableStream` is byte-counted
+ * per NDJSON line and the connection's readable is errored (closing the
+ * connection) when a line exceeds 16 MiB, before the SDK ever parses it. This
+ * is the tighten-16-MiB behavior the contract requires, implemented at the
+ * correct layer; the installed SDK exposes no `maxMessageBytes` knob, so the
+ * guard is the only enforcement point. On a breach the outbound side is ended
+ * too (see `limitNdJsonLineBytes`), so a peer observes the connection close
+ * instead of hanging on a pending request.
  */
 export function serveAcpOverStdio(
   options: Omit<AcpAgentOptions, 'connection'>,
@@ -534,7 +1078,14 @@ export function serveAcpOverStdio(
     sanitizeOutboundStream(
       Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
     ),
-    Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
+    limitNdJsonLineBytes(
+      Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
+      MAX_INBOUND_FRAME_BYTES,
+      // §12.6: an oversized inbound frame closes the connection in BOTH
+      // directions — ending stdout makes the peer observe the close instead
+      // of hanging on a pending request forever.
+      () => process.stdout.end(),
+    ),
   )
   // AgentSideConnection is marked @deprecated in favor of the `agent()` app
   // builder, but it is the canonical direct wire surface and stable for this
@@ -544,4 +1095,66 @@ export function serveAcpOverStdio(
     (conn) => createAcpAgent({ ...resolvedOptions, connection: conn }),
     stream,
   )
+}
+
+/**
+ * §12.6 inbound guard: wraps the NDJSON byte stream so a single line longer
+ * than `maxBytes` errors the readable (which the SDK surfaces as a connection
+ * close) instead of letting the SDK's uncapped `LineBuffer` accumulate it.
+ * Newline bytes are not counted, matching the SDK's line semantics. On a
+ * breach the underlying input is cancelled (no further bytes are read) and
+ * `onLimitExceeded` fires BEFORE the readable errors, so the host can tear
+ * down the outbound direction too and a peer with a request in flight
+ * observes the connection close instead of hanging forever. Exported so the
+ * wire-limit test pins the exact guard `serveAcpOverStdio` installs.
+ */
+export function limitNdJsonLineBytes(
+  input: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  onLimitExceeded?: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = input.getReader()
+  let currentLineBytes = 0
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) {
+          controller.close()
+          return
+        }
+        if (!value) continue
+        let chunkCost = 0
+        for (const byte of value) {
+          if (byte !== 0x0a) chunkCost += 1
+        }
+        if (currentLineBytes + chunkCost > maxBytes) {
+          // Tear down BOTH directions: the readable error closes the agent
+          // side, and the callback lets the host end the outbound side.
+          onLimitExceeded?.()
+          void reader.cancel().catch(() => {})
+          controller.error(
+            new Error(
+              `ACP inbound NDJSON frame exceeds the ${maxBytes}-byte limit; closing connection.`,
+            ),
+          )
+          return
+        }
+        currentLineBytes += chunkCost
+        if (value.includes(0x0a)) {
+          // A chunk can hold several lines; reset per-line accounting on the
+          // last newline boundary. Counting whole chunks against one line is
+          // conservative and bounded (a chunk straddling two lines over-counts
+          // the second by at most the first line's tail), which is acceptable
+          // for a hard limit whose only purpose is to cap a runaway peer.
+          currentLineBytes = 0
+        }
+        controller.enqueue(value)
+        return
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  })
 }

@@ -8,6 +8,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { parseFileStructure } from '@codebuff/code-map'
+import { MemoryRetrievalRequestSchema } from '@codebuff/common/types/memory-v2'
 
 import { codeSearch } from '../tools/code-search'
 import { getFilesStructured } from '../tools/read-files'
@@ -15,6 +16,7 @@ import { createNodeFileSystem } from '../tools/node-filesystem'
 import { inspectCodebaseStructure } from '../services/audit-intelligence'
 import { getHarnessStateDir } from '../credentials'
 import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 import type { IndexManager } from '@codebuff/indexer'
@@ -22,20 +24,29 @@ import type { StructureDiagnostic } from '@codebuff/code-map'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { ProjectId } from '@codebuff/common/types/memory-v2'
+import type { MemoryRepositoryV2 } from '../services/memory-v2/types'
 
 /**
  * The `openbuff mcp` server (P1-T4): a fail-closed MCP projection of the
  * SDK's EXISTING in-process read/inspect surfaces. Every tool delegates to
  * the canonical implementation (the indexer `IndexManager`, the code-map
  * tree-sitter outline pass, the policy-guarded file/ripgrep read tools, and
- * the audit-intelligence inventory) — this layer validates input, adapts
- * call shapes, and formats bounded output; it never reimplements the logic.
+ * the audit-intelligence inventory, and the Memory V2 lexical query) —
+ * this layer validates input, adapts call shapes, and formats bounded
+ * output; it never reimplements the logic.
+ *
+ * Memory search IS exposed read-only: `memory_search` delegates to the
+ * Memory V2 LEXICAL query surface (`MemoryRepositoryV2.query`) through the
+ * `sessionData.memory` seam; semantic recall stays unwired (P8-T8 — the
+ * Bun SQLite kernel's `search()` returns `unsupported`). With no
+ * repository bound, the tool answers an honest disabled payload.
  *
  * NOT exposed by default (P1-T4 follow-up `openbuff mcp --mutations`):
  * receipt-backed edit tools (change-file/replace-range via the workspace
- * mutation broker) and memory search (Memory V2 store). Mutation tools must
- * stay opt-in; an `openbuff mcp` process opened by an MCP host config is
- * read-only unless the user explicitly arms edits.
+ * mutation broker). Mutation tools must stay opt-in; an `openbuff mcp`
+ * process opened by an MCP host config is read-only unless the user
+ * explicitly arms edits.
  */
 
 /** The CLI prints its own version; the default keeps the wire shape valid. */
@@ -65,6 +76,11 @@ const DEFAULT_SEARCH_TIMEOUT_SECONDS = 10
 const MAX_SEARCH_TIMEOUT_SECONDS = 60
 const DEFAULT_INDEX_WAIT_MS = 2_000
 const MAX_INDEX_WAIT_MS = 30_000
+/** memory_search: per-category result cap and bounded text projection. */
+const DEFAULT_MEMORY_LIMIT = 10
+const MAX_MEMORY_LIMIT = 25
+const MAX_MEMORY_ARTIFACT_KINDS = 16
+const MAX_MEMORY_FIELD_CHARS = 400
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -219,6 +235,32 @@ const CODEBASE_STRUCTURE_INPUT_SCHEMA = {
   additionalProperties: false,
 }
 
+const MEMORY_SEARCH_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    query: {
+      type: 'string',
+      maxLength: MAX_QUERY_CHARS,
+      description:
+        'Free-text lexical search query over the Memory V2 store (token-overlap retrieval only).',
+    },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_MEMORY_LIMIT,
+      description: `Maximum results per category (default ${DEFAULT_MEMORY_LIMIT}, capped at ${MAX_MEMORY_LIMIT}).`,
+    },
+    paths: stringList(
+      'Restrict to observations carrying evidence on these project-relative file paths.',
+    ),
+    kinds: stringList(
+      'Restrict to these artifact kinds: source, test, configuration, documentation, generated, dependency, data, binary, other.',
+    ),
+  },
+  required: ['query'],
+  additionalProperties: false,
+}
+
 const APPLY_EDITS_INPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -291,6 +333,13 @@ const MCP_TOOLS: Tool[] = [
     inputSchema: CODEBASE_STRUCTURE_INPUT_SCHEMA,
     annotations: { title: 'Codebase structure', ...READ_ONLY_ANNOTATIONS },
   },
+  {
+    name: 'memory_search',
+    description:
+      'Lexical search over the Memory V2 store (verified knowledge, reusable discoveries, matched tasks, historical context) via the repository query surface. Retrieval is lexical-only — semantic recall is not available (P8-T8).',
+    inputSchema: MEMORY_SEARCH_INPUT_SCHEMA,
+    annotations: { title: 'Memory search', ...READ_ONLY_ANNOTATIONS },
+  },
 ]
 
 /**
@@ -329,6 +378,26 @@ export type McpQueryIndexOptions = {
 /** Minimal structural seam over the real `IndexManager` (tests can stub it). */
 export type McpIndexManager = Pick<IndexManager, 'queryBlended' | 'waitUntilReady'>
 
+/**
+ * Minimal structural seam over the Memory V2 repository's LEXICAL query
+ * surface (tests can stub it). The semantic `search()` surface is
+ * deliberately excluded — the Bun SQLite kernel answers it with
+ * `unsupported` and it rides P8-T8.
+ */
+export type McpMemoryRepository = Pick<MemoryRepositoryV2, 'query'>
+
+export type McpMemorySession = {
+  /** The repository's lexical query surface. */
+  repository: McpMemoryRepository
+  /**
+   * The store's project scope. The wiring party supplies it (the CLI
+   * derives it from the project storage key); the SDK cannot reconstruct
+   * it from projectRoot alone, and a mismatched scope fails closed at the
+   * repository's bound-project check.
+   */
+  projectId: ProjectId
+}
+
 export type McpSessionData = {
   /** Project root all reads/queries/searches are scoped to. */
   projectRoot: string
@@ -337,6 +406,11 @@ export type McpSessionData = {
    * Omitted → query_index answers with an honest disabled payload.
    */
   index?: McpIndexManager
+  /**
+   * Memory V2 seam. Omitted → memory_search answers with an honest
+   * disabled payload.
+   */
+  memory?: McpMemorySession
 }
 
 /**
@@ -914,6 +988,209 @@ function callCodebaseStructure(
   return textResult(JSON.stringify(inventory, null, 2))
 }
 
+const MEMORY_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
+  'source',
+  'test',
+  'configuration',
+  'documentation',
+  'generated',
+  'dependency',
+  'data',
+  'binary',
+  'other',
+])
+
+/**
+ * Derives a schema-valid opaque memory id (`<scope>:<hex>`). A read-only
+ * MCP search has no persistent turn identity, but MemoryRetrievalRequest
+ * requires queryId/sessionId — both are derived deterministically from the
+ * project root and the validated input (identical queries share a queryId;
+ * the query path only echoes it back, never persists it).
+ */
+const scopedMemoryId = (scope: 'query' | 'session', seed: string): string =>
+  `${scope}:${createHash('sha256').update(seed).digest('hex').slice(0, 48)}`
+
+/** Bounds one free-text field in the memory_search projection. */
+const boundedMemoryText = (value: string): string =>
+  value.length > MAX_MEMORY_FIELD_CHARS
+    ? `${value.slice(0, MAX_MEMORY_FIELD_CHARS)}…[truncated]`
+    : value
+
+/** Projects ranking reasons to their compact, bounded form (code + weight). */
+const projectReasons = (
+  reasons: ReadonlyArray<{ code: string; contribution: number }>,
+) => reasons.map(({ code, contribution }) => ({ code, contribution }))
+
+function validateMemorySearchInput(
+  args: unknown,
+):
+  | {
+      ok: true
+      input: { query: string; limit: number; paths?: string[]; kinds?: string[] }
+    }
+  | { ok: false; message: string } {
+  if (!isRecord(args)) return { ok: false, message: 'arguments must be an object.' }
+  const query = optionalString(args.query, 'query', MAX_QUERY_CHARS)
+  if (!query.ok || query.value === undefined) {
+    return { ok: false, message: query.ok ? 'query is required.' : query.message }
+  }
+  const paths = optionalStringList(args.paths, 'paths', MAX_STRINGS, MAX_PATH_CHARS)
+  if (!paths.ok) return paths
+  const kinds = optionalStringList(
+    args.kinds,
+    'kinds',
+    MAX_MEMORY_ARTIFACT_KINDS,
+    32,
+  )
+  if (!kinds.ok) return kinds
+  if (kinds.value?.some((kind) => !MEMORY_ARTIFACT_KINDS.has(kind))) {
+    return {
+      ok: false,
+      message: `kinds entries must be one of: ${[...MEMORY_ARTIFACT_KINDS].join(', ')}.`,
+    }
+  }
+  const limit = optionalBoundedInt(
+    args.limit,
+    'limit',
+    1,
+    MAX_MEMORY_LIMIT,
+    DEFAULT_MEMORY_LIMIT,
+  )
+  if (!limit.ok) return limit
+  return {
+    ok: true,
+    input: {
+      query: query.value,
+      limit: limit.value ?? DEFAULT_MEMORY_LIMIT,
+      ...(paths.value ? { paths: paths.value } : {}),
+      ...(kinds.value ? { kinds: kinds.value } : {}),
+    },
+  }
+}
+
+async function callMemorySearch(
+  sessionData: McpSessionData,
+  args: unknown,
+): Promise<CallToolResult> {
+  const validated = validateMemorySearchInput(args)
+  if (!validated.ok) return invalid(validated.message)
+  const memory = sessionData.memory
+  if (!memory) {
+    return textResult(
+      JSON.stringify(
+        {
+          kind: 'memory_search_result',
+          schemaVersion: 1,
+          retrieval: 'lexical',
+          ready: false,
+          totalResults: 0,
+          results: [],
+          message:
+            'No Memory V2 repository was configured for this MCP server; memory search is disabled.',
+        },
+        null,
+        2,
+      ),
+    )
+  }
+  const sessionId = scopedMemoryId('session', sessionData.projectRoot)
+  // Build a minimal valid MemoryRetrievalRequest from the validated tool
+  // input; the repository re-validates with the same Zod schema before
+  // querying, and the `.parse` here fails closed on any residual drift.
+  const request = MemoryRetrievalRequestSchema.parse({
+    schemaVersion: 2,
+    queryId: scopedMemoryId(
+      'query',
+      `${sessionId} ${JSON.stringify(validated.input)}`,
+    ),
+    projectId: memory.projectId,
+    sessionId,
+    query: validated.input.query,
+    selectors: (validated.input.paths ?? []).map((path) => ({
+      kind: 'file',
+      path,
+    })),
+    artifactKinds: validated.input.kinds ?? [],
+    includeHistorical: true,
+    maxResultsPerCategory: validated.input.limit,
+  })
+  // LEXICAL query surface only — never the semantic search() (P8-T8).
+  const outcome = await memory.repository.query(request)
+  if (outcome.outcome !== 'result') {
+    return errorResult(
+      `Memory search ${outcome.outcome}: ${outcome.error.message}`,
+    )
+  }
+  const result = outcome.result
+  // Project the five retrieval categories to a bounded, honestly-labelled
+  // flat list; long free-text fields are truncated.
+  const results = [
+    ...result.matchedTasks.map((item) => ({
+      category: 'matched-task',
+      taskId: item.taskId,
+      title: boundedMemoryText(item.title),
+      status: item.status,
+      summary: boundedMemoryText(item.summary),
+      score: item.score,
+      reasons: projectReasons(item.reasons),
+    })),
+    ...result.verifiedKnowledge.map((item) => ({
+      category: 'verified-knowledge',
+      observationId: item.observation.observationId,
+      taskId: item.observation.taskId,
+      kind: item.observation.kind,
+      summary: boundedMemoryText(item.observation.summary),
+      detail: boundedMemoryText(item.observation.detail),
+      confidence: item.observation.confidence,
+      verifiedAt: item.verifiedAt,
+      score: item.score,
+      reasons: projectReasons(item.reasons),
+    })),
+    ...result.reusableDiscovery.map((item) => ({
+      category: 'reusable-discovery',
+      observationId: item.observation.observationId,
+      taskId: item.observation.taskId,
+      kind: item.observation.kind,
+      summary: boundedMemoryText(item.observation.summary),
+      reuseGuidance: boundedMemoryText(item.reuseGuidance),
+      score: item.score,
+      reasons: projectReasons(item.reasons),
+    })),
+    ...result.rereadRequired.map((item) => ({
+      category: 'reread-required',
+      observationId: item.observationId,
+      reason: item.reason,
+      detail: boundedMemoryText(item.detail),
+      score: item.score,
+      reasons: projectReasons(item.reasons),
+    })),
+    ...result.historicalContext.map((item) => ({
+      category: 'historical-context',
+      ...(item.taskId !== undefined ? { taskId: item.taskId } : {}),
+      summary: boundedMemoryText(item.summary),
+      score: item.score,
+      reasons: projectReasons(item.reasons),
+    })),
+  ]
+  return textResult(
+    JSON.stringify(
+      {
+        kind: 'memory_search_result',
+        schemaVersion: 1,
+        retrieval: 'lexical',
+        ready: true,
+        totalResults: results.length,
+        results,
+        degradation: result.degradation,
+        message:
+          'Results are lexical (token-overlap) retrieval only; semantic recall is not available from the Memory V2 store (P8-T8).',
+      },
+      null,
+      2,
+    ),
+  )
+}
+
 async function callApplyEdits(
   sessionData: McpSessionData,
   getBroker: () => Promise<WorkspaceMutationBroker>,
@@ -1071,6 +1348,8 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
             )
           case 'codebase_structure':
             return callCodebaseStructure(sessionData, args)
+          case 'memory_search':
+            return await callMemorySearch(sessionData, args)
           case 'apply_edits':
             return await callApplyEdits(sessionData, getMutationBroker, args)
           default:

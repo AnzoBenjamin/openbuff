@@ -23,6 +23,14 @@
  * `$/cancel_request` — passes through {@link sanitizeOutbound} before it
  * hits the wire. Handler-level sanitization is an optimization only, never
  * the guarantee (GV-28).
+ *
+ * §12.6 (outbound backpressure): {@link OutboundQueue} is a per-connection
+ * byte-capped (32 MiB) FIFO for serialized outbound frames. On overflow it
+ * first coalesces consecutive `agent_message_chunk`/`tool_call_update`
+ * frames that share an id (chunk text concatenates; a later update wins);
+ * when coalescing cannot bring the queue back under the cap it aborts the
+ * session's run with `stopReason: 'cancelled'` so memory stays bounded
+ * instead of letting a stalled reader grow the queue without limit.
  */
 
 import { loadProviderConfigSync } from '../provider-config'
@@ -508,5 +516,281 @@ async function abortThrough(
     // Best-effort: the target may already be errored/closed.
   } finally {
     writer.releaseLock()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// §12.6 outbound backpressure (per-connection byte-capped queue)
+// ---------------------------------------------------------------------------
+
+/** §12.6: a connection's outbound queue is capped at 32 MiB. */
+export const OUTBOUND_QUEUE_MAX_BYTES = 32 * 1024 * 1024
+
+/** `sessionUpdate` kinds whose frames coalesce by concatenating `content.text`. */
+const CHUNK_TEXT_KINDS = new Set(['agent_message_chunk', 'agent_thought_chunk'])
+
+function isPlainRecordFrame(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Returns the record actually holding the session/update payload fields. */
+function frameContainer(frame: Record<string, unknown>): Record<string, unknown> {
+  if (typeof frame.sessionUpdate === 'string') return frame
+  const params = frame.params
+  if (isPlainRecordFrame(params)) {
+    if (isPlainRecordFrame(params.update)) return params.update
+    return params
+  }
+  return frame
+}
+
+/** Replaces the payload-holding container of `frame` with `merged`. */
+function replaceContainer(
+  frame: Record<string, unknown>,
+  merged: Record<string, unknown>,
+): void {
+  if (typeof frame.sessionUpdate === 'string') {
+    for (const key of Object.keys(frame)) delete frame[key]
+    Object.assign(frame, merged)
+    return
+  }
+  const params = frame.params
+  if (isPlainRecordFrame(params)) {
+    if (isPlainRecordFrame(params.update)) {
+      params.update = merged
+    } else {
+      frame.params = merged
+    }
+    return
+  }
+  for (const key of Object.keys(frame)) delete frame[key]
+  Object.assign(frame, merged)
+}
+
+/**
+ * The stable identity tying consecutive coalesceable frames together:
+ * `messageId` for chunk frames, `toolCallId` for `tool_call_update`. Returns
+ * `undefined` for a non-coalesceable frame.
+ */
+function coalesceIdOf(frame: Record<string, unknown>): string | undefined {
+  const container = frameContainer(frame)
+  const kind = container.sessionUpdate
+  if (typeof kind === 'string' && CHUNK_TEXT_KINDS.has(kind)) {
+    const id = container.messageId
+    return typeof id === 'string' && id.length > 0 ? id : undefined
+  }
+  if (kind === 'tool_call_update') {
+    const id = container.toolCallId
+    return typeof id === 'string' && id.length > 0 ? id : undefined
+  }
+  return undefined
+}
+
+/**
+ * Merges `incoming` into the queued `existing` frame in place. Two chunk
+ * frames for the same `messageId` concatenate their `content.text`. Two
+ * `tool_call_update` frames for the same `toolCallId` keep the LATER frame's
+ * fields (a status transition supersedes the earlier one) while concatenating
+ * any `content` arrays so no emitted block is lost. Returns whether a merge
+ * happened; the two frames must share a `sessionUpdate` kind and an id.
+ */
+function coalesceFrames(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): boolean {
+  const existingId = coalesceIdOf(existing)
+  const incomingId = coalesceIdOf(incoming)
+  if (existingId === undefined || existingId !== incomingId) return false
+  const existingContainer = frameContainer(existing)
+  const incomingContainer = frameContainer(incoming)
+  const kind = existingContainer.sessionUpdate
+  if (kind !== incomingContainer.sessionUpdate) return false
+
+  if (typeof kind === 'string' && CHUNK_TEXT_KINDS.has(kind)) {
+    const existingContent = existingContainer.content
+    const incomingContent = incomingContainer.content
+    if (
+      isPlainRecordFrame(existingContent) &&
+      isPlainRecordFrame(incomingContent) &&
+      typeof existingContent.text === 'string' &&
+      typeof incomingContent.text === 'string'
+    ) {
+      existingContent.text =
+        (existingContent.text as string) + (incomingContent.text as string)
+      return true
+    }
+    return false
+  }
+
+  // tool_call_update: the later frame's scalar fields supersede the earlier
+  // one; content arrays concatenate so no emitted block is lost.
+  const merged: Record<string, unknown> = { ...existingContainer }
+  for (const [key, value] of Object.entries(incomingContainer)) {
+    if (key === 'content') continue
+    merged[key] = value
+  }
+  const existingContent = existingContainer.content
+  const incomingContent = incomingContainer.content
+  if (Array.isArray(existingContent) || Array.isArray(incomingContent)) {
+    merged.content = [
+      ...(Array.isArray(existingContent) ? existingContent : []),
+      ...(Array.isArray(incomingContent) ? incomingContent : []),
+    ]
+  }
+  replaceContainer(existing, merged)
+  return true
+}
+
+/** The run-abort decision returned by an overflow that coalescing cannot fix. */
+export type OutboundQueueAbort = {
+  stopReason: 'cancelled'
+  sessionId: string | undefined
+}
+
+export type OutboundEnqueueResult =
+  | { status: 'queued' }
+  | { status: 'coalesced' }
+  | { status: 'abort'; abort: OutboundQueueAbort }
+
+type QueueEntry = {
+  frame: Record<string, unknown>
+  bytes: number
+  sessionId: string | undefined
+}
+
+/**
+ * §12.6 outbound backpressure queue (per connection). Frames are enqueued as
+ * already-sanitized serializable objects; the queue tracks their serialized
+ * UTF-8 byte size against {@link OUTBOUND_QUEUE_MAX_BYTES}.
+ *
+ * Overflow handling is two-stage, in the order §12.6 prescribes:
+ * 1. Coalesce: walk the queue and merge consecutive
+ *    `agent_message_chunk`/`tool_call_update` frames that share an id. This
+ *    shrinks the queue without dropping any text or terminal status.
+ * 2. Abort: if the queue is STILL over the cap after coalescing, the run
+ *    producing the flood is aborted with `stopReason: 'cancelled'` and the
+ *    frame is dropped, so a stalled reader can never grow memory without
+ *    bound. The abort decision is returned for the host to act on (the queue
+ *    itself owns no run lifecycle).
+ */
+export class OutboundQueue {
+  private readonly maxBytes: number
+  private readonly entries: QueueEntry[] = []
+  private totalBytes = 0
+
+  constructor(maxBytes: number = OUTBOUND_QUEUE_MAX_BYTES) {
+    this.maxBytes = maxBytes
+  }
+
+  /** Current queued byte total (serialized UTF-8). */
+  get byteLength(): number {
+    return this.totalBytes
+  }
+
+  /** Number of queued frames. */
+  get size(): number {
+    return this.entries.length
+  }
+
+  /** Extracts the sessionId a frame belongs to, when one is present. */
+  private sessionIdOf(frame: Record<string, unknown>): string | undefined {
+    if (typeof frame.sessionId === 'string') return frame.sessionId
+    const params = frame.params
+    if (isPlainRecordFrame(params) && typeof params.sessionId === 'string') {
+      return params.sessionId
+    }
+    return undefined
+  }
+
+  private byteSizeOf(frame: Record<string, unknown>): number {
+    return new TextEncoder().encode(JSON.stringify(frame)).byteLength
+  }
+
+  /**
+   * Enqueues one frame. Coalesces into the immediately-preceding queued frame
+   * when both are coalesceable and share an id. On overflow, coalesces the
+   * whole queue; when that is not enough, returns the abort decision instead
+   * of queueing (the run is cancelled and the frame dropped — fail closed).
+   */
+  enqueue(frame: Record<string, unknown>): OutboundEnqueueResult {
+    const sessionId = this.sessionIdOf(frame)
+
+    // Fast path: merge into the tail when it is the same coalesceable stream.
+    const tail = this.entries[this.entries.length - 1]
+    if (tail !== undefined && coalesceFrames(tail.frame, frame)) {
+      const resized = this.byteSizeOf(tail.frame)
+      this.totalBytes += resized - tail.bytes
+      tail.bytes = resized
+      if (this.totalBytes <= this.maxBytes) return { status: 'coalesced' }
+    } else {
+      const bytes = this.byteSizeOf(frame)
+      this.entries.push({ frame, bytes, sessionId })
+      this.totalBytes += bytes
+      if (this.totalBytes <= this.maxBytes) return { status: 'queued' }
+    }
+
+    // Overflow: coalesce every consecutive mergeable run, then re-measure.
+    this.coalesceAll()
+    if (this.totalBytes <= this.maxBytes) {
+      return { status: 'coalesced' }
+    }
+
+    // Still over the cap: abort the run rather than grow without bound.
+    this.removeLast()
+    return {
+      status: 'abort',
+      abort: { stopReason: 'cancelled', sessionId },
+    }
+  }
+
+  /** Removes and returns the oldest queued frame, or `undefined` when empty. */
+  dequeue(): Record<string, unknown> | undefined {
+    const entry = this.entries.shift()
+    if (entry === undefined) return undefined
+    this.totalBytes -= entry.bytes
+    return entry.frame
+  }
+
+  /** Drains every queued frame in FIFO order. */
+  drain(): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = []
+    let frame = this.dequeue()
+    while (frame !== undefined) {
+      out.push(frame)
+      frame = this.dequeue()
+    }
+    return out
+  }
+
+  /** Clears the queue (teardown / after an abort). */
+  clear(): void {
+    this.entries.length = 0
+    this.totalBytes = 0
+  }
+
+  private removeLast(): void {
+    const entry = this.entries.pop()
+    if (entry !== undefined) this.totalBytes -= entry.bytes
+  }
+
+  /** Merges every run of consecutive coalesceable frames sharing an id. */
+  private coalesceAll(): void {
+    if (this.entries.length < 2) return
+    const merged: QueueEntry[] = []
+    let total = 0
+    for (const entry of this.entries) {
+      const tail = merged[merged.length - 1]
+      if (tail !== undefined && coalesceFrames(tail.frame, entry.frame)) {
+        const resized = this.byteSizeOf(tail.frame)
+        total += resized - tail.bytes
+        tail.bytes = resized
+        continue
+      }
+      merged.push(entry)
+      total += entry.bytes
+    }
+    this.entries.length = 0
+    this.entries.push(...merged)
+    this.totalBytes = total
   }
 }

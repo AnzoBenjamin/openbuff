@@ -2,6 +2,13 @@ import path from 'path'
 
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import type {
+  CommitReceiptV1,
+  FileMutationActionV1,
+  FileMutationResultV1,
+} from '@codebuff/common/tools/results/filesystem'
+import { toWireMutation } from '@codebuff/common/protocol/acp-ext-v1'
+import { getConfirmedAppliedActionsV1, isFileMutationResultV1 } from '@codebuff/common/tools/results/filesystem'
 
 /**
  * Pure, transport-free ACP event bridge (P1-T2b, NORMATIVE contract §4.2 of
@@ -30,6 +37,11 @@ export type EventBridgeContext = {
   eventsMode: 'acp' | 'full'
   /** Root `tool_call` locations are resolved against. */
   projectRoot: string
+  /**
+   * The active tool call id, stamped onto the receipt envelope's `toolCallId`
+   * (§6.2). Only meaningful while a `tool_result` is being mapped.
+   */
+  toolCallId?: string
   /**
    * §4.6 tool `kind` mapping, supplied by the host so this module stays
    * decoupled from the parallel stream's module layout.
@@ -246,8 +258,11 @@ type MutationResultSummary = {
 
 /**
  * Structurally narrows an output JSON value onto the slice of
- * `FileMutationResultV1` the mapping needs, without importing the runtime
- * result module into this transport-free layer.
+ * `FileMutationResultV1` the diff/`failed` mapping needs. Deliberately loose
+ * (it does NOT require the full result schema) so an existing tool_result
+ * that carries only outcome/path/afterContent still drives the tool card's
+ * status and diff content. Receipt attachment uses the strictly-validated
+ * {@link asConfirmedMutation} instead.
  */
 function asMutationResult(value: unknown): MutationResultSummary | undefined {
   if (!isRecord(value) || value.kind !== 'file_mutation_result') return undefined
@@ -273,6 +288,101 @@ function asMutationResult(value: unknown): MutationResultSummary | undefined {
     })
   }
   return { outcome: value.outcome, actions }
+}
+
+/**
+ * Strictly narrows an output JSON value onto a schema-clean
+ * `FileMutationResultV1`, or `undefined`. Only a fully-validated mutation is
+ * projected onto a §6.2 receipt envelope (cap.v3 authority is at stake).
+ */
+function asConfirmedMutation(value: unknown): FileMutationResultV1 | undefined {
+  return isFileMutationResultV1(value) ? value : undefined
+}
+
+/** NEW-6/GV-25: the literal substituted for every redacted hash (§12.1). */
+const REDACTED_HASH = 'sha256:redacted'
+
+/** The NEW-6 placeholder text block substituted for a sensitive-path diff. */
+function sensitiveDiffPlaceholder(path: string): Record<string, unknown> {
+  // The text is constant-shape (no file content), so it leaks nothing beyond
+  // the already-disclosed fact that this path changed.
+  return { type: 'text', text: `[sensitive file changed: ${path}]` }
+}
+
+/**
+ * NEW-6 (§12.1, GV-25): the content block for one mutation action. A
+ * non-sensitive action with after-text yields a `diff` block; a sensitive-path
+ * action yields the `[sensitive file changed]` text placeholder instead of any
+ * diff content (the post-edit content must never reach the wire for a
+ * sensitive path).
+ */
+function mutationActionBlock(
+  action: MutationActionSummary,
+): Record<string, unknown> | undefined {
+  if (isSensitivePath(action.path)) {
+    return sensitiveDiffPlaceholder(action.path)
+  }
+  if (action.afterContent !== undefined) {
+    return { type: 'diff', path: action.path, newText: action.afterContent }
+  }
+  return undefined
+}
+
+/**
+ * Builds the redacted §6.2 receipt envelope for a confirmed mutation, with
+ * NEW-6 hash redaction applied to the mutation projection and its kept-verbatim
+ * `authorityReceipt.finalHashes`. Mirrors `toWireReceipt` (the envelope
+ * `toWireMutation` projection already drops `afterContent`/`patch`/`editAnchor`
+ * and pins `freshCapabilities: []`), then rewrites the hashes of every
+ * sensitive-path action to `"sha256:redacted"`.
+ */
+function buildReceiptEnvelope(
+  mutation: FileMutationResultV1,
+  ctx: EventBridgeContext,
+): Record<string, unknown> {
+  const wire = toWireMutation(mutation)
+  const sensitivePaths = new Set(
+    mutation.actions
+      .filter((action: FileMutationActionV1) => isSensitivePath(action.path))
+      .map((action: FileMutationActionV1) => action.path),
+  )
+  if (sensitivePaths.size > 0) {
+    for (const action of wire.actions) {
+      if (!sensitivePaths.has(action.path)) continue
+      action.beforeHash = action.beforeHash === null ? null : REDACTED_HASH
+      action.afterHash = action.afterHash === null ? null : REDACTED_HASH
+    }
+    const receipt = wire.authorityReceipt
+    if (receipt !== undefined) {
+      wire.authorityReceipt = {
+        ...receipt,
+        actions: receipt.actions.map((action: CommitReceiptV1['actions'][number]) =>
+          sensitivePaths.has(action.path)
+            ? {
+                ...action,
+                beforeHash: action.beforeHash === null ? null : REDACTED_HASH,
+                afterHash: action.afterHash === null ? null : REDACTED_HASH,
+              }
+            : action,
+        ),
+        finalHashes: Object.fromEntries(
+          Object.entries(receipt.finalHashes).map(([path, hash]) => [
+            path,
+            sensitivePaths.has(path) && hash !== null ? REDACTED_HASH : hash,
+          ]),
+        ),
+      } satisfies CommitReceiptV1
+    }
+  }
+  const envelope: Record<string, unknown> = {
+    kind: 'openbuff.receipt_envelope',
+    version: 1,
+    sessionId: ctx.sessionId,
+    toolCallId: ctx.toolCallId,
+    laneId: 'main',
+    mutation: wire,
+  }
+  return envelope
 }
 
 /** The JSON values of a tool_result output (media parts are never emitted). */
@@ -428,6 +538,10 @@ export function printModeToSessionUpdates(
 
       let failed = false
       let mutation: MutationResultSummary | undefined
+      // The strictly-validated confirmed mutation that earns a §6.2 receipt
+      // envelope (undefined unless a schema-clean mutation has at least one
+      // confirmed applied action).
+      let confirmedMutation: FileMutationResultV1 | undefined
       for (const value of values) {
         if (!isRecord(value)) continue
         const errorMessage = value.errorMessage
@@ -443,6 +557,13 @@ export function printModeToSessionUpdates(
           if (parsed.outcome !== 'applied') failed = true
           mutation = parsed
         }
+        const confirmed = asConfirmedMutation(value)
+        if (
+          confirmed !== undefined &&
+          getConfirmedAppliedActionsV1(confirmed).length > 0
+        ) {
+          confirmedMutation = confirmed
+        }
       }
 
       const content: Array<unknown> = []
@@ -456,14 +577,11 @@ export function printModeToSessionUpdates(
           // Mutations add `diff` content when after-text is available
           // (`afterContent` present, §4.2). The tool_result variant carries
           // no before-text, so the block omits `oldText` rather than
-          // inventing it.
-          if (action.afterContent !== undefined) {
-            content.push({
-              type: 'diff',
-              path: action.path,
-              newText: action.afterContent,
-            })
-          }
+          // inventing it. NEW-6 (§12.1, GV-25): a sensitive-path action emits
+          // a `[sensitive file changed]` text placeholder instead of any
+          // `diff` content, and its hashes are redacted on the receipt.
+          const block = mutationActionBlock(action)
+          if (block !== undefined) content.push(block)
         }
       }
 
@@ -473,6 +591,20 @@ export function printModeToSessionUpdates(
         status: failed ? 'failed' : 'completed',
       }
       if (content.length > 0) payload.content = content
+      // §4.2/§6.2: a confirmed mutation attaches the redacted receipt
+      // envelope to `_meta["openbuff.dev"].receipt` (cap.v3 tokens never
+      // leave the core — toWireMutation drops afterContent/patch/editAnchor
+      // and pins freshCapabilities to []).
+      if (confirmedMutation !== undefined) {
+        payload._meta = {
+          'openbuff.dev': {
+            receipt: buildReceiptEnvelope(confirmedMutation, {
+              ...ctx,
+              toolCallId: event.toolCallId,
+            }),
+          },
+        }
+      }
       // `rawOutput` is deliberately never attached (§12.1).
       return [payload]
     }

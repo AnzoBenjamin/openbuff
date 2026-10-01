@@ -310,6 +310,8 @@ interface ScenarioBudget {
    */
   semanticBudget?: { triggerBudgetTokens: number; targetBudgetTokens: number }
   nextRequiredAction?: string
+  /** D25/CQ-T1: archive eviction pointers threaded into the pruner per pass. */
+  archivePointers?: string[]
 }
 
 function createMockAgentState(
@@ -348,6 +350,9 @@ const runHandleSteps = (messages: Message[], budget: ScenarioBudget): any[] => {
     params: {
       ...(budget.semanticBudget
         ? { semanticBudget: budget.semanticBudget }
+        : {}),
+      ...(budget.archivePointers
+        ? { archivePointers: budget.archivePointers }
         : {}),
     },
   })
@@ -1076,6 +1081,51 @@ describe('compaction retention scenario', () => {
     expect(
       finalMeasurement.retainedEntryCounts.blockers,
     ).toBeGreaterThanOrEqual(1)
+  })
+
+  test('S12 archive eviction pointers survive small-window passes verbatim', () => {
+    // D25/CQ-T1: one pinned eviction-pointer line per archived compaction
+    // segment is threaded into the pruner params and carried verbatim in the
+    // pinned <knowledge_memory> block. The runtime re-derives the pointer list
+    // from the archive before EVERY pass, so each pass budget re-threads it —
+    // and the pointer section is excluded from ceiling EVICTION_ORDER, so it
+    // survives the 8k-class small-window ceiling loop verbatim.
+    const ARCHIVE_POINTERS = [
+      '[action=semantic_compaction steps=0-214 msgs=215] pre-pass transcript archived before compaction.',
+      '[action=mechanical_trim steps=215-301 msgs=87] deterministic mechanical trim of oldest steps.',
+      '[action=tool_result_eviction steps=12-18 msgs=7] deterministic tool-result eviction (stale recency).',
+    ]
+    const budgetWithPointers = (base: ScenarioBudget): ScenarioBudget => ({
+      ...base,
+      archivePointers: ARCHIVE_POINTERS,
+    })
+
+    const finalMeasurement = measureMultiPassRetention({
+      id: 'S12-archive-pointers-small-window',
+      claim:
+        'pinned archive eviction pointers survive consecutive small-window passes verbatim',
+      messages: seedHistory({ includeReviewReceipt: true }),
+      budgets: [
+        budgetWithPointers(SMALL_WINDOW_BUDGET),
+        budgetWithPointers(SMALL_WINDOW_BUDGET),
+        budgetWithPointers(SMALL_WINDOW_BUDGET),
+      ],
+      mustSurvive: [...ARCHIVE_POINTERS],
+    })
+
+    expect(finalMeasurement.recallRate).toBe(1)
+    expect(finalMeasurement.block).toContain('Archive Pointers:')
+    // Backward-parseable placement: the pointer section leads the block so a
+    // legacy parser (a pre-archive-pointers SECTION_RE) never folds the
+    // pointer lines into the persisted nextAction field.
+    expect(
+      finalMeasurement.block.indexOf('Archive Pointers:'),
+    ).toBeLessThan(finalMeasurement.block.indexOf('Goal:'))
+    for (const pointer of ARCHIVE_POINTERS) {
+      expect(finalMeasurement.block).toContain(`  - ${pointer}`)
+    }
+    // Still bounded by the small-window hard ceiling.
+    expect(finalMeasurement.blockTokens).toBeLessThanOrEqual(1_500)
   })
 
   test('S11 multi-pass mixed window: the D25 floor survives window-size oscillation', () => {

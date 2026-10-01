@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import path from 'path'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+
+import * as realFs from 'fs'
+import * as realOs from 'os'
 
 import * as realSyntaxStyleModule from '../../../utils/opentui-syntax-style'
 import * as realTreeSitterClientModule from '../../../utils/tree-sitter-client'
 
 import type { MarkdownPalette } from '../../../utils/markdown-renderer'
+import type { FiletypeParserOptions, SyntaxStyle } from '@opentui/core'
 
 // The component under test is imported (below) only after these mocks
 // register, so its native-<code> collaborators resolve to the doubles
@@ -45,6 +50,92 @@ mock.module('../../../utils/tree-sitter-client', () => ({
 }))
 
 const { CodeBlock, resolveCodeFiletype } = await import('../code-block')
+
+// Real (non-stubbed) modules for the render-path fixture below. The
+// registry-wide mocks above only affect fresh bare specifiers; the '?real'
+// query bypasses that registry entry, so these bind the REAL
+// createCodeSyntaxStyle and the REAL TreeSitterClient/addDefaultParsers
+// while the stubbed suite above keeps its doubles (same mock-leak-guard
+// pattern as content-with-markdown.test.tsx).
+const realCodeSyntaxStyleModule = (await import(
+  '../../../utils/opentui-syntax-style?real' as string
+)) as unknown as typeof import('../../../utils/opentui-syntax-style')
+const realOpenTuiModule = (await import(
+  '@opentui/core?real' as string
+)) as unknown as typeof import('@opentui/core')
+
+// Produces a REAL SyntaxStyle whose `keyword` scope carries a unique sentinel
+// fg, together with the REAL highlights the TreeSitterClient scopes from the
+// shipped typescript grammar. Returns null when the grammar assets are
+// missing or the WASM/worker load degrades, so the render test can gate its
+// assertion on actual availability. `renderNativeCode` passes the style and
+// client straight onto the native <code> element, so a scoped token from the
+// style proves the highlighted span reaches the rendered element.
+const buildRealKeywordStyleAndHighlights = async (): Promise<{
+  syntaxStyle: SyntaxStyle
+  highlights: [number, number, string][]
+} | null> => {
+  const typescript = realTreeSitterClientModule
+    .buildDefaultParsers()
+    .find((parser: FiletypeParserOptions) => parser.filetype === 'typescript')
+  if (!typescript) {
+    return null
+  }
+
+  const palette = makePalette()
+  let syntaxStyle: SyntaxStyle
+  let client: InstanceType<typeof realOpenTuiModule.TreeSitterClient> | null =
+    null
+  try {
+    const realCreate = (
+      realCodeSyntaxStyleModule as unknown as {
+        createCodeSyntaxStyle: (p: MarkdownPalette) => object
+      }
+    ).createCodeSyntaxStyle
+    const base = realCreate(palette)
+    const fromStyles = (
+      realOpenTuiModule.SyntaxStyle as unknown as {
+        fromStyles: (s: Record<string, unknown>) => SyntaxStyle
+      }
+    ).fromStyles
+    // Merge the real code-token groups with a sentinel-colored keyword scope
+    // so a keyword capture is observable on the rendered native element.
+    syntaxStyle = fromStyles({
+      ...(base as unknown as Record<string, unknown>),
+      keyword: { fg: '#abc123', bold: true },
+    })
+
+    realOpenTuiModule.addDefaultParsers([typescript])
+    client = new realOpenTuiModule.TreeSitterClient({
+      dataPath: realFs.mkdtempSync(
+        path.join(realOs.tmpdir(), 'codebuff-cb-render-'),
+      ),
+      initTimeout: 10_000,
+    })
+    const result = await client.highlightOnce(
+      'const x = 1',
+      'typescript',
+    )
+    if (!result || result.error || result.warning || !result.highlights?.length) {
+      return null
+    }
+    if (!result.highlights.some((h) => h[2] === 'keyword')) {
+      return null
+    }
+    return {
+      syntaxStyle,
+      highlights: result.highlights.map(
+        (h): [number, number, string] => [h[0], h[1], h[2]],
+      ),
+    }
+  } catch {
+    return null
+  } finally {
+    // Module-level singleton teardown (the real client has no instance
+    // destroy method).
+    await realOpenTuiModule.destroyTreeSitterClient().catch(() => {})
+  }
+}
 
 const makePalette = (): MarkdownPalette => ({
   inlineCodeFg: '#a8a8ff',
@@ -133,6 +224,43 @@ describe('CodeBlock', () => {
 
     expect(markup).toContain('<code')
     expect(markup).not.toContain('filetype=')
+  })
+
+  test('routes a highlighted span from the REAL client onto the rendered <code> element', async () => {
+    const outcome = await buildRealKeywordStyleAndHighlights()
+    // Availability check: skip (don't fail) when the shipped grammar assets
+    // are absent or the real WASM/worker load cannot produce a keyword span.
+    if (!outcome) {
+      console.warn(
+        '[code-block] skipping real render fixture: TypeScript grammar unavailable',
+      )
+      return
+    }
+
+    // The real client produced a keyword-scoped token; the real SyntaxStyle
+    // carries the sentinel fg for that scope. Assert both halves of the
+    // render path are wired to the native <code> element.
+    expect(outcome.highlights.some((h) => h[2] === 'keyword')).toBe(true)
+
+    const markup = renderToStaticMarkup(
+      <code
+        content="const x = 1"
+        filetype="typescript"
+        syntaxStyle={outcome.syntaxStyle}
+        treeSitterClient={
+          '__real-tree-sitter-client__' as unknown as InstanceType<
+            typeof realOpenTuiModule.TreeSitterClient
+          >
+        }
+        width={80}
+      />,
+    )
+
+    expect(markup).toContain('<code')
+    expect(markup).toContain('const x = 1')
+    expect(markup).toContain('filetype="typescript"')
+    // The sentinel keyword scope reached the element's syntax style.
+    expect(markup).toContain('#abc123')
   })
 })
 

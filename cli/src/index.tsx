@@ -13,6 +13,7 @@ import os from 'os'
 import path from 'path'
 
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { CHATGPT_OAUTH_ENABLED } from '@codebuff/common/constants/chatgpt-oauth'
 import { getProjectFileTree } from '@codebuff/common/project-file-tree'
 import { createCliRenderer } from '@opentui/core'
 import { createTestRenderer } from '@opentui/core/testing'
@@ -26,9 +27,15 @@ import { red } from 'picocolors'
 import React from 'react'
 
 import { App } from './app'
-import { parseCliArgs } from './cli-args'
+import { applyOscDetectedThemeToStore } from './hooks/use-theme'
 import { initializeApp, switchProjectContext } from './init/init-app'
+import { getRgPath } from './native/ripgrep'
 import { getProjectRoot, startNewChat } from './project-files'
+import {
+  awaitRegistriesReady,
+  startDeferredRegistryLoads,
+} from './services/deferred-registries'
+import { connectChatGptOAuth } from './utils/chatgpt-oauth'
 import { trackEvent } from './utils/analytics'
 import {
   resetCodebuffClient,
@@ -50,10 +57,12 @@ import { setOscDetectedTheme } from './utils/theme-system'
 import { isTrustedProjectRoot, loadTrustedRoots } from './utils/trusted-roots'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
+import { publishWasmBinary } from './pre-init/tree-sitter-wasm'
 import { runAcpServeCommand } from './serve-command'
 import { runMcpCommand } from './commands/mcp-command'
 import { runReplayCommand } from './commands/replay-command'
 import { runHeadlessCommand } from './commands/run-command'
+import { isRendererCommand, parseCliArgs } from './cli-args'
 
 const require = createRequire(import.meta.url)
 
@@ -211,11 +220,17 @@ async function main(): Promise<void> {
 
     try {
       const { Parser } = await import('web-tree-sitter')
+      // P1-T9: the wasm byte read is deferred out of module import time, so
+      // this is the first actual use — read + publish the bytes now.
+      publishWasmBinary()
       // Pick the best wasm source available, falling back to the
       // sibling-of-execPath lookup if pre-init couldn't reach it. By
       // main() time process.execPath has stabilized to the disk path
       // even on Windows, where it was the bunfs path during pre-init.
-      let effectiveBinary = wasmBinary
+      let effectiveBinary =
+        wasmBinary ??
+        (globalThis as { __CODEBUFF_TREE_SITTER_WASM_BINARY__?: Uint8Array })
+          .__CODEBUFF_TREE_SITTER_WASM_BINARY__
       let effectivePath = wasmPath
       if (!effectiveBinary && !effectivePath) {
         try {
@@ -286,6 +301,37 @@ async function main(): Promise<void> {
   const smokeBootscreen = process.argv.includes('--smoke-bootscreen')
   const cliArgv = process.argv.filter((arg) => arg !== '--smoke-bootscreen')
 
+  // `openbuff login chatgpt` (ChatGPT subscription OAuth login). Handled
+  // here — BEFORE parseCliArgs — because the top-level commander program
+  // has no `login` subcommand: left unhandled, the tokens parse as an
+  // initial prompt and the TUI launches instead of logging in. The ACP
+  // initialize() auth method for terminal-capable clients advertises
+  // exactly this argv (`login chatgpt`), so the advertised method must
+  // resolve to a working command. ONLY that exact argv is intercepted: any
+  // other `login ...` invocation (e.g. the initial prompt `openbuff login
+  // to my account`) keeps the pre-existing CLI contract and launches the
+  // TUI with that prompt. Output goes to stdout/stderr only; the
+  // OAuth flow opens the browser itself and bounds its own wait (5-minute
+  // callback timeout), so nothing here can hang forever.
+  if (
+    CHATGPT_OAUTH_ENABLED &&
+    cliArgv[2] === 'login' &&
+    cliArgv[3]?.trim() === 'chatgpt'
+  ) {
+    try {
+      const { credentials } = connectChatGptOAuth()
+      await credentials
+      console.log('openbuff login: ChatGPT connected.')
+      process.exit(0)
+    } catch (error) {
+      console.error(
+        'openbuff login failed:',
+        error instanceof Error ? error.message : String(error),
+      )
+      process.exit(1)
+    }
+  }
+
   let smokeBootscreenTimer: ReturnType<typeof setTimeout> | null = null
   let smokeBootscreenEmitted = false
   if (smokeBootscreen && !process.stdout.isTTY) {
@@ -304,20 +350,7 @@ async function main(): Promise<void> {
     }, 1500)
   }
 
-  // Run OSC theme detection BEFORE anything else.
-  // This MUST happen before OpenTUI starts because OSC responses come through stdin,
-  // and OpenTUI also listens to stdin. Running detection here ensures stdin is clean.
-  if (process.stdin.isTTY && process.platform !== 'win32') {
-    try {
-      const oscTheme = await detectTerminalTheme()
-      if (oscTheme) {
-        setOscDetectedTheme(oscTheme)
-      }
-    } catch {
-      // Silently ignore OSC detection failures
-    }
-  }
-
+  const parsedArgs = parseCliArgs(cliArgv, { version: loadPackageVersion() })
   const {
     initialPrompt,
     agent,
@@ -332,7 +365,26 @@ async function main(): Promise<void> {
     run,
     replay,
     attach,
-  } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
+  } = parsedArgs
+
+  // Start OSC theme detection so it runs CONCURRENTLY with CLI init (P1-T9),
+  // but ONLY on paths that end in the OpenTUI renderer. The serve/mcp/run/replay
+  // commands return from main() before the renderer is created and use
+  // stdin/stdout as the ACP/MCP/ndjson protocol wire; the OSC probe puts stdin
+  // into raw mode with a 'data' listener and writes its query to the TTY, so
+  // starting it on those paths would interleave with protocol traffic and
+  // corrupt wire framing. parseCliArgs is pure and synchronous, so starting the
+  // probe here — immediately after arg parsing — still overlaps all of
+  // initializeApp and the rest of startup; the promise is only awaited
+  // immediately before the renderer is created, so the probe never shares stdin
+  // with OpenTUI. The resolved theme is fed to setOscDetectedTheme + the theme
+  // store exactly as before.
+  const oscThemePromise: Promise<'dark' | 'light' | null> =
+    isRendererCommand(parsedArgs) &&
+    process.stdin.isTTY &&
+    process.platform !== 'win32'
+      ? detectTerminalTheme().catch(() => null)
+      : Promise.resolve(null)
 
   // P1-T3: record the attach target BEFORE any client is created so
   // getCodebuffClient() (and the TUI's hook) builds the ACP-remote backend.
@@ -398,14 +450,15 @@ async function main(): Promise<void> {
     }
   }
 
-  // Initialize agent registry (loads user agents via SDK).
-  // When --agent is provided, skip local .agents to avoid overrides.
-  if (isPublishCommand || !hasAgentOverride) {
-    await initializeAgentRegistry({ trustProjectAgents: effectiveTrust })
-  }
-
-  // Initialize skill registry (loads skills from .agents/skills)
-  await initializeSkillRegistry({ trustProjectSkills: effectiveTrust })
+  // P1-T9: the agent/skill registries are NOT awaited here. They are started
+  // (not awaited) just before the renderer mounts below, so the .agents disk
+  // scan overlaps startup instead of serializing ahead of the first render.
+  // Consumers gate on whenRegistriesReady(); the serve/mcp/run/replay command
+  // paths keep their previous (command-managed) behavior by awaiting the
+  // deferred loads via awaitRegistriesReady() in their dispatch blocks below
+  // — before handing control to the command, so the registries are fully
+  // initialized exactly as they were before the deferral.
+  const shouldLoadAgents = isPublishCommand || !hasAgentOverride
 
   // Handle publish command before rendering the app
   if (isPublishCommand) {
@@ -417,6 +470,10 @@ async function main(): Promise<void> {
   // protocol wire, so we start the bridge and return from main() before the
   // renderer is created. The stdio/socket transport keeps the event loop alive.
   if (serve) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the bridge starts
+    // (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
     await runAcpServeCommand({ ...serve, trustProjectAgents: effectiveTrust })
     return
   }
@@ -425,6 +482,10 @@ async function main(): Promise<void> {
   // MCP protocol wire, so we start the server and return from main() before
   // the renderer is created. The stdio transport keeps the event loop alive.
   if (mcp) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the MCP server
+    // starts (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
     await runMcpCommand(mcp)
     return
   }
@@ -435,6 +496,10 @@ async function main(): Promise<void> {
   // `process.exitCode = code` over `process.exit(code)` so the event loop
   // drains cleanly (flushing the ndjson stream) before the process exits.
   if (run) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the headless run
+    // starts (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
     const code = await runHeadlessCommand(run)
     process.exitCode = code
     return
@@ -447,6 +512,10 @@ async function main(): Promise<void> {
   // so the event loop drains cleanly (flushing the ndjson stream) before the
   // process exits.
   if (replay) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the replay starts
+    // (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
     const code = await runReplayCommand(replay)
     process.exitCode = code
     return
@@ -455,6 +524,25 @@ async function main(): Promise<void> {
   if (clearLogs) {
     clearLogFile()
   }
+
+  // P1-T9: pre-warm ripgrep extraction. getRgPath() is memoized and otherwise
+  // only called lazily on the first code_search (codebuff-client.ts), so
+  // starting it here — fire-and-forget, in parallel with renderer creation —
+  // lets the extraction overlap startup instead of taxing the first search.
+  // Best-effort: never blocks the first frame, and a failure only logs (the
+  // lazy path re-runs later and reports the same way).
+  void getRgPath().catch((error) => {
+    logger.debug({ error }, 'ripgrep pre-warm failed')
+  })
+
+  // P1-T9: start the deferred agent/skill registry loads BEFORE the renderer
+  // mounts. The .agents / .agents/skills scans are async, so they overlap
+  // renderer creation instead of serializing ahead of the first frame — but
+  // starting them here (not in a mount effect) binds the whenRegistriesReady()
+  // promise before any consumer subscribes: React runs child effects before
+  // parent effects, so an effect-started load would race (and lose to) the
+  // mount-time registry reads in chat.tsx that gate on it.
+  startDeferredRegistryLoads({ shouldLoadAgents, effectiveTrust })
 
   const queryClient = createQueryClient()
 
@@ -572,6 +660,21 @@ async function main(): Promise<void> {
   }
   process.on('uncaughtException', earlyFatalHandler)
   process.on('unhandledRejection', earlyFatalHandler)
+
+  // Resolve the (already-started) OSC probe BEFORE creating the renderer: OSC
+  // responses arrive on stdin, which OpenTUI is about to take over, so the
+  // probe must finish first. This await is not the up-to-600ms serialized cost
+  // it used to be — the probe ran concurrently with all of the init above.
+  {
+    const oscTheme = await oscThemePromise
+    if (oscTheme) {
+      setOscDetectedTheme(oscTheme)
+      // The probe may have resolved after initializeApp() built the theme
+      // store from env/IDE detectors; apply the OSC result to the store so
+      // the rendered theme matches the resolved value exactly.
+      applyOscDetectedThemeToStore()
+    }
+  }
 
   const renderer = await createCliRenderer({
     backgroundColor: 'transparent',

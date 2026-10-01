@@ -187,4 +187,23 @@ describe('StatusBar through the real OpenTUI reconciler', () => {
       expect(frame).not.toContain(SCROLL_GLYPH)
     },
   )
+
+  renderTest(
+    'renders the capability-tier chip from the honest default capability map',
+    async () => {
+      // No model/cost/git props, so the low-priority static chip fits beside
+      // the context chip within the width budget.
+      const frame = await renderFrame(
+        <StatusBar
+          timerStartTime={null}
+          scrollToLatest={() => {}}
+          statusIndicatorState={STREAMING}
+          contextWindowUsage={{ used: 48_000, max: 100_000 }}
+          isAtBottom
+        />,
+      )
+
+      expectRendered(frame, [CONTEXT_PERCENT, 'sandbox:lexical'])
+    },
+  )
 })

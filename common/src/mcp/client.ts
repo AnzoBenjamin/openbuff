@@ -6,6 +6,13 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
+import {
+  allowedLoopbackMcpFromEnv,
+  createPinnedMcpFetch,
+  isAllowedLoopbackMcpAuthority,
+  resolvePinnedMcpAddress,
+} from './dns-pinning'
+
 import type { MCPConfig, MCPConfigOrigin } from '../types/mcp'
 import type { ToolResultOutput } from '../types/messages/content-part'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -593,11 +600,44 @@ export function getMCPClientCacheKey(
 
 export async function getMCPClient(
   config: MCPConfig,
-  options?: { origin?: MCPConfigOrigin },
+  options?: {
+    origin?: MCPConfigOrigin
+    /**
+     * `serve.allowedLoopbackMcp`: loopback `host:port` authorities a
+     * client-origin remote server may connect to. Threaded through to the
+     * NEW-7 DNS pinning so an explicitly allowlisted local server is
+     * permitted while every other blocked address still fails closed.
+     * When omitted, the OPENBUFF_ALLOWED_LOOPBACK_MCP environment variable
+     * is consulted (see {@link allowedLoopbackMcpFromEnv}) so the process
+     * env is the config surface an operator can actually set for a serve
+     * process without a code change.
+     *
+     * Fail closed (RF-3): an EMPTY array and an OMITTED option (with no
+     * OPENBUFF_ALLOWED_LOOPBACK_MCP set) both mean 'no allowlist' — every
+     * blocked address is refused for a client-origin server. The effective
+     * value is part of the getMCPClient cache identity, so a client
+     * connected under a permissive allowlist is never reused by a later
+     * caller passing none.
+     */
+    allowedLoopbackMcp?: readonly string[]
+  },
 ): Promise<string> {
   // Fail closed: an unmarked config is an untrusted 'client' origin.
   const origin = resolveMCPConfigOrigin(config, options)
+  // The effective allowlist: the explicit option wins, else the environment
+  // variable. Empty/undefined both mean 'no allowlist' (fail closed).
+  const allowedLoopbackMcp =
+    options?.allowedLoopbackMcp ?? allowedLoopbackMcpFromEnv()
   let key = getMCPClientCacheKey(config, { origin })
+  // The effective allowlist is part of the cache identity (NEW-7): without
+  // this, a client created under a permissive allowlist would be silently
+  // reused by a later caller that passes no allowlist (and vice versa),
+  // contradicting the fail-closed semantics documented above. An undefined
+  // allowlist adds no suffix, so the plain identity stays stable for the
+  // common no-allowlist case.
+  if (allowedLoopbackMcp !== undefined) {
+    key += `|${stableHash(allowedLoopbackMcp)}`
+  }
   if (key in runningClients) {
     return key
   }
@@ -619,7 +659,15 @@ export async function getMCPClient(
     // and are never restricted. This throws before any transport/socket is
     // constructed for a blocked host.
     const hostname = url.hostname.replace(/^\[|\]$/g, '')
-    if (origin === 'client' && isBlockedMcpAddress(hostname)) {
+    if (
+      origin === 'client' &&
+      isBlockedMcpAddress(hostname) &&
+      !isAllowedLoopbackMcpAuthority(
+        hostname,
+        url.port,
+        allowedLoopbackMcp,
+      )
+    ) {
       throw new Error(
         `MCP client-origin server "${resolved.url}" refused: host ` +
           `${hostname} is a private/loopback address`,
@@ -629,7 +677,38 @@ export async function getMCPClient(
       url.searchParams.set(key, value)
     }
     const headers = resolved.headers
-    if (resolved.type === 'http') {
+    if (origin === 'client') {
+      // NEW-7 DNS-rebinding pinning: resolve the hostname once, refuse when
+      // resolution fails or ANY resolved address is blocked (unless
+      // allowlisted via serve.allowedLoopbackMcp), and pin every request the
+      // transport makes to a validated address with redirects disabled. This
+      // closes the TOCTOU gap left by the synchronous literal-hostname check
+      // above: a hostname that re-resolves to a private IP between check and
+      // connect can no longer slip through. Awaited before any transport is
+      // constructed, so a refusal happens before any socket opens.
+      await resolvePinnedMcpAddress(url, {
+        allowedLoopbackMcp,
+      })
+      const pinnedFetch = createPinnedMcpFetch({
+        allowedLoopbackMcp,
+      })
+      if (resolved.type === 'http') {
+        transport = new StreamableHTTPClientTransport(url, {
+          requestInit: { headers },
+          fetch: pinnedFetch,
+        })
+      } else if (resolved.type === 'sse') {
+        transport = new SSEClientTransport(url, {
+          requestInit: { headers },
+          fetch: pinnedFetch,
+        })
+      } else {
+        resolved.type satisfies never
+        throw new Error(
+          `Internal error: invalid MCP config type ${resolved.type}`,
+        )
+      }
+    } else if (resolved.type === 'http') {
       transport = new StreamableHTTPClientTransport(url, {
         requestInit: {
           headers,

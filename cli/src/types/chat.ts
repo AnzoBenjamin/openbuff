@@ -510,6 +510,12 @@ export type DoctorContentBlock = {
   mcpCount: number
   diagnostics: Array<{ filePath?: string; agentId?: string; message: string }>
   providerStatus: string
+  /**
+   * Capability-tier rows for the doctor box's capability section (X-4), built
+   * from the CLI's honest default capability map. Optional so doctor blocks
+   * produced before the section existed keep rendering exactly as before.
+   */
+  capabilities?: import('../utils/capability-tiers').DoctorCapabilityRow[]
 }
 
 export type UpdateContentBlock = {

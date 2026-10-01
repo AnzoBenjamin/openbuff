@@ -61,6 +61,12 @@ const definition: AgentDefinition = {
             },
           },
         },
+        archivePointers: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
       },
       required: [],
     },
@@ -189,6 +195,8 @@ const definition: AgentDefinition = {
     const KNOWLEDGE_MEMORY_MAX_REVIEW_RECEIPTS = 12
     const KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS = 16
     const KNOWLEDGE_MEMORY_MAX_BLOCKERS = 12
+    /** D25/CQ-T1: pinned archive eviction-pointer index depth (one line per archived compaction segment). */
+    const KNOWLEDGE_MEMORY_MAX_ARCHIVE_POINTERS = 24
     const KNOWLEDGE_MEMORY_MAX_NEXT_ACTION_CHARS = 1_400
     const KNOWLEDGE_MEMORY_ENTRY_CHARS = 480
     const KNOWLEDGE_MEMORY_FILE_FINDING_CHARS = 160
@@ -881,6 +889,8 @@ const definition: AgentDefinition = {
       reviewReceipts: string[]
       postEditAnchors: string[]
       blockers: string[]
+      /** D25/CQ-T1: verbatim eviction pointers threaded in via params (one per archived compaction segment). */
+      archivePointers: string[]
       nextAction: string
     }
 
@@ -894,6 +904,7 @@ const definition: AgentDefinition = {
         reviewReceipts: [],
         postEditAnchors: [],
         blockers: [],
+        archivePointers: [],
         nextAction: '',
       }
     }
@@ -916,7 +927,7 @@ const definition: AgentDefinition = {
       const block = blockMatch[1]
 
       const goalMatch = block.match(
-        /Goal:\s*([\s\S]*?)(?=\nDecisions:|\nFiles Inspected:|\nEdits Made:|\nValidation Results:|\nReview Receipts:|\nPost-Edit Anchors:|\nBlockers:|\nNext Action:|$)/,
+        /Goal:\s*([\s\S]*?)(?=\nDecisions:|\nFiles Inspected:|\nEdits Made:|\nValidation Results:|\nReview Receipts:|\nPost-Edit Anchors:|\nBlockers:|\nNext Action:|\nArchive Pointers:|$)/,
       )
       if (goalMatch) km.goal = goalMatch[1].trim()
 
@@ -926,7 +937,7 @@ const definition: AgentDefinition = {
       // literal, `\s` becomes a literal `s`, which silently breaks parsing
       // and causes structured fields to be lost on re-compaction.
       const SECTION_RE =
-        /^(Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):\s*([\s\S]*?)(?=\n(?:Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):|(?![\s\S]))/gm
+        /^(Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action|Archive Pointers):\s*([\s\S]*?)(?=\n(?:Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action|Archive Pointers):|(?![\s\S]))/gm
       let sectionMatch: RegExpExecArray | null
       while ((sectionMatch = SECTION_RE.exec(block)) !== null) {
         const header = sectionMatch[1]
@@ -954,6 +965,9 @@ const definition: AgentDefinition = {
         } else if (header === 'Blockers') {
           km.blockers = items
         }
+        // 'Archive Pointers' has no case on purpose: the runtime re-threads
+        // the pointer list via params each pass, so it is not parsed back —
+        // but its section must still terminate the Next Action match above.
       }
 
       return km
@@ -1605,6 +1619,9 @@ const definition: AgentDefinition = {
         KNOWLEDGE_MEMORY_MAX_POST_EDIT_ANCHORS,
       )
       const maxBlockers = scaleBudget(KNOWLEDGE_MEMORY_MAX_BLOCKERS)
+      const maxArchivePointers = scaleBudget(
+        KNOWLEDGE_MEMORY_MAX_ARCHIVE_POINTERS,
+      )
 
       km.goal = capTextPreservingEnds(
         km.goal,
@@ -1635,6 +1652,12 @@ const definition: AgentDefinition = {
       if (km.blockers.length > maxBlockers) {
         km.blockers = km.blockers.slice(-maxBlockers)
       }
+      // D25/CQ-T1: archive eviction pointers are pinned (excluded from the
+      // ceiling EVICTION_ORDER below, exactly like blockers/reviewReceipts)
+      // but still bounded by this count cap and the per-line char cap.
+      if (km.archivePointers.length > maxArchivePointers) {
+        km.archivePointers = km.archivePointers.slice(-maxArchivePointers)
+      }
 
       const capEntry = (entry: string, max: number): string =>
         capTextPreservingEnds(entry, scaleBudget(max))
@@ -1657,6 +1680,9 @@ const definition: AgentDefinition = {
       km.blockers = km.blockers.map((e) =>
         capEntry(e, KNOWLEDGE_MEMORY_ENTRY_CHARS),
       )
+      km.archivePointers = km.archivePointers.map((e) =>
+        capEntry(e, KNOWLEDGE_MEMORY_ENTRY_CHARS),
+      )
 
       // Hard ceiling on the pinned block, computed from the post-compaction
       // history target (not the trigger). Evicted first -> last, oldest entries
@@ -1665,9 +1691,10 @@ const definition: AgentDefinition = {
         KNOWLEDGE_MEMORY_MIN_BUDGET_TOKENS,
         Math.floor(targetContextLength * KNOWLEDGE_MEMORY_MAX_BUDGET_FRACTION),
       )
-      // D25 (CQ-T1): blockers and reviewReceipts are deliberately excluded from
-      // ceiling eviction. Open reviewer blockers and reviewer attestation
-      // fingerprints are the run's key survival evidence, so the whole-block
+      // D25 (CQ-T1): blockers, reviewReceipts, and archivePointers are
+      // deliberately excluded from ceiling eviction. Open reviewer blockers,
+      // reviewer attestation fingerprints, and the archive eviction-pointer
+      // index are the run's key survival evidence, so the whole-block
       // ceiling loop never evicts them while any ordinary retention list still
       // has entries. Their per-field count caps (maxBlockers, maxReviewReceipts)
       // and per-entry text caps still bound them earlier in this function, and
@@ -1794,6 +1821,7 @@ const definition: AgentDefinition = {
               'toolFactsBudget',
               'cacheExpiryMs',
               'taskMemory',
+              'archivePointers',
             ]
             if (
               parsed !== null &&
@@ -2178,6 +2206,22 @@ const definition: AgentDefinition = {
     /** Build the final <knowledge_memory> block string. */
     function buildKnowledgeMemoryBlock(km: KnowledgeMemory): string {
       const sections: string[] = []
+      // D25/CQ-T1: the Archive Pointers section is emitted FIRST (before
+      // Goal:) so the block stays backward-parseable. An older parser of this
+      // block (a pre-archive-pointers SECTION_RE) does not recognize the new
+      // header: a trailing section after 'Next Action:' would be folded into
+      // the persisted nextAction field (capped at 1,400 chars), while a
+      // leading unknown section is simply skipped by a legacy reader and
+      // every lazy section body still terminates at the next recognized
+      // header. The runtime re-threads the pointer list via params each
+      // pass, so dropping it on legacy re-parse is the correct behavior.
+      if (km.archivePointers.length > 0) {
+        sections.push(
+          `Archive Pointers:\n${km.archivePointers
+            .map((pointer) => `  - ${pointer}`)
+            .join('\n')}`,
+        )
+      }
       if (km.goal) {
         sections.push(`Goal:\n  ${km.goal}`)
       }
@@ -2246,6 +2290,7 @@ const definition: AgentDefinition = {
         km.reviewReceipts.length > 0 ||
         km.postEditAnchors.length > 0 ||
         km.blockers.length > 0 ||
+        km.archivePointers.length > 0 ||
         km.nextAction.length > 0
       )
     }
@@ -2553,6 +2598,17 @@ const definition: AgentDefinition = {
         knowledgeMemory.nextAction = persistedTaskMemory.nextActions.at(-1)
       }
     }
+    // D25/CQ-T1: thread the pre-compaction archive eviction pointers through
+    // verbatim — the runtime derives one bounded line per compactionArchive
+    // snapshot before this pass runs. Params are untrusted, so non-string
+    // entries are dropped; the count/char caps run in
+    // enforceKnowledgeMemoryBudgets.
+    const archivePointersParam = params?.archivePointers
+    knowledgeMemory.archivePointers = Array.isArray(archivePointersParam)
+      ? archivePointersParam.filter(
+          (entry): entry is string => typeof entry === 'string',
+        )
+      : []
     knowledgeMemory.goal = extractGoalFromMessages() || knowledgeMemory.goal
     knowledgeMemory.nextAction = extractNextActionFromRuntimeState(
       pinnedActiveWorkLines,

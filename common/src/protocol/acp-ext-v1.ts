@@ -260,6 +260,40 @@ export type ReceiptEnvelopeV1 = z.infer<typeof receiptEnvelopeV1Schema>
 export type LaneV1 = z.infer<typeof laneV1Schema>
 export type GateStateV1 = z.infer<typeof gateStateV1Schema>
 
+/**
+ * The canonical default capability-map posture (§6.1): lexical sandboxing
+ * that is NOT enforced, no index, no LSP servers or sidecars, lanes
+ * unsupported, and the gate enabled. `journalAvailable` reflects whether the
+ * backing store actually mirrors to a durable journal — a purely in-memory
+ * store must not advertise `resume`/`replay` that `session/load` cannot
+ * honor. Every advertising surface (SDK serve mode and the CLI's status-bar
+ * chip / doctor rows) derives its map from this single builder, so a value
+ * change here updates every advertisement together and no surface can
+ * silently claim a stronger tier than the serve-mode map. The map is always
+ * derived locally from the serving process's real posture: a journal-replayed
+ * map is untrusted input (the journal lives under the project root) and is
+ * never served verbatim.
+ */
+export function defaultCapabilityMapV1(options: {
+  journalAvailable: boolean
+}): CapabilityMapV1 {
+  return {
+    kind: 'openbuff.capabilities',
+    version: 1,
+    generation: 1,
+    sandbox: { tier: 'lexical', enforced: false, network: 'unrestricted' },
+    index: { state: 'absent' },
+    lsp: [],
+    sidecars: [],
+    lanes: { supported: false },
+    journal: {
+      resume: options.journalAvailable,
+      replay: options.journalAvailable,
+    },
+    gate: { enabled: true },
+  }
+}
+
 /** ACP `tool_call.kind` values per §4.6. */
 export type AcpToolKindV1 =
   | 'read'

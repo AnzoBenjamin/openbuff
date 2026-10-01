@@ -22,6 +22,24 @@ import type {
  */
 export const OPENBUFF_EXT_METHOD_PREFIX = '_openbuff.dev/'
 
+/**
+ * The Openbuff extension names the agent can negotiate (§3.2). The agent
+ * responds to `initialize` with the INTERSECTION of the client's requested
+ * list and this set, and emits extension notifications only for enabled
+ * extensions. `lanes` is negotiable now (its shape is frozen) even though
+ * create/land stay refused until P6.
+ */
+export const OPENBUFF_SUPPORTED_EXTENSIONS = [
+  'capabilities',
+  'receipts',
+  'lanes',
+  'gate',
+  'events',
+] as const
+
+export type OpenbuffSupportedExtension =
+  (typeof OPENBUFF_SUPPORTED_EXTENSIONS)[number]
+
 export const OPENBUFF_EXT_METHODS = [
   '_openbuff.dev/capabilities/get',
   '_openbuff.dev/receipts/get',
@@ -104,34 +122,19 @@ export type LanesListResult = { lanes: [LaneV1] }
 export type GateStateGetResult = GateStateV1
 
 /**
- * The honest P1 serve-mode capability map (§6.1) seeded for a session with
- * none: no sandbox enforcement in serve mode, index absent, lanes unsupported
- * until P6, gate enabled. `journalAvailable` reflects whether the backing
- * store actually mirrors to a durable journal — a purely in-memory store must
- * not advertise `resume`/`replay` that `session/load` cannot honor. The map is
- * always derived locally from the serving process's real posture: a journal-
- * replayed map is untrusted input (the journal lives under the project root)
- * and is never served verbatim.
+ * The honest P1 serve-mode capability map (§6.1) now lives beside the schema
+ * it populates: `defaultCapabilityMapV1` in
+ * `@codebuff/common/protocol/acp-ext-v1` is the single canonical builder, so
+ * every advertising surface (SDK serve mode and the CLI's status-bar chip /
+ * doctor rows) derives from one source and can never drift on a value change
+ * (e.g. a sandbox-tier or gate-default update). Re-exported here for
+ * back-compat with existing internal imports; `journalAvailable` still
+ * reflects whether the backing store actually mirrors to a durable journal,
+ * and the map is always derived locally from the serving process's real
+ * posture — a journal-replayed map is untrusted input and is never served
+ * verbatim.
  */
-export function defaultCapabilityMapV1(options: {
-  journalAvailable: boolean
-}): CapabilityMapV1 {
-  return {
-    kind: 'openbuff.capabilities',
-    version: 1,
-    generation: 1,
-    sandbox: { tier: 'lexical', enforced: false, network: 'unrestricted' },
-    index: { state: 'absent' },
-    lsp: [],
-    sidecars: [],
-    lanes: { supported: false },
-    journal: {
-      resume: options.journalAvailable,
-      replay: options.journalAvailable,
-    },
-    gate: { enabled: true },
-  }
-}
+export { defaultCapabilityMapV1 } from '@codebuff/common/protocol/acp-ext-v1'
 
 /**
  * Compiles the JSON Schema artifact for every ext-v1 method, keyed by method

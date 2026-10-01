@@ -21,8 +21,8 @@ import {
   type ProviderPickerSelection,
 } from './components/provider-picker-screen'
 import { LoadPreviousButton } from './components/load-previous-button'
+import { MessageListWindow } from './components/message-list-window'
 import { ReviewScreen } from './components/review-screen'
-import { MessageWithAgents } from './components/message-with-agents'
 import { PendingBashMessage } from './components/pending-bash-message'
 import { StatusBar } from './components/status-bar'
 import { TopBanner } from './components/top-banner'
@@ -111,6 +111,7 @@ import {
   setQueuedPromptDrain,
 } from './hooks/use-exit-handler'
 import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
+import { whenRegistriesReady } from './services/deferred-registries'
 
 // Shared mention-selection helpers. The three mention-selection sites
 // (handleMentionItemClick, onMentionMenuSelect's trySelectAtIndex, and
@@ -291,13 +292,33 @@ export const Chat = ({
     markdownPalette,
   } = useChatUI({ messages, isUserCollapsing })
 
-  const localAgents = useMemo(() => loadLocalAgents(agentMode), [agentMode])
+  // P1-T9: the agent/skill registries load asynchronously after startup
+  // (services/deferred-registries). The reads below happen once at mount, so
+  // re-run them when the deferred loads settle — without this gate the
+  // slash-command skill suggestions and the local agent list would observe
+  // the (still-empty) registries and stay empty for the whole session.
+  const [registriesLoaded, setRegistriesLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void whenRegistriesReady().then(() => {
+      if (!cancelled) setRegistriesLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const localAgents = useMemo(
+    () => loadLocalAgents(agentMode),
+    [agentMode, registriesLoaded],
+  )
   const inputMode = useChatStore((state) => state.inputMode)
   const setInputMode = useChatStore((state) => state.setInputMode)
   const askUserState = useChatStore((state) => state.askUserState)
 
-  // Get loaded skills for slash commands
-  const loadedSkills = useMemo(() => getLoadedSkills(), [])
+  // Get loaded skills for slash commands (re-read once the deferred
+  // registry loads settle — see the registriesLoaded gate above).
+  const loadedSkills = useMemo(() => getLoadedSkills(), [registriesLoaded])
 
   // Merge skill commands and game-dev preset commands into the slash command list
   const filteredSlashCommands = useMemo(() => {
@@ -1845,18 +1866,20 @@ export const Chat = ({
             onLoadMore={handleLoadPreviousMessages}
           />
         )}
-        {visibleTopLevelMessages.map((message, idx) => {
-          const isLast = idx === visibleTopLevelMessages.length - 1
-          return (
-            <MessageWithAgents
-              key={message.id}
-              message={message}
-              depth={0}
-              isLastMessage={isLast}
-              availableWidth={messageAvailableWidth}
-            />
-          )
-        })}
+        {/* P1-T10: viewport-windowed message list. Only the messages
+            intersecting the current scroll viewport (plus a small overscan)
+            mount real MessageWithAgents components; off-screen messages
+            collapse into fixed spacer boxes that preserve total scroll height
+            and scroll position. Keys stay on the message ids so per-message
+            state survives the window moving as the user scrolls. The scroll
+            subscription is confined to MessageListWindow so scrolling does not
+            re-render the rest of the chat screen. */}
+        <MessageListWindow
+          messages={visibleTopLevelMessages}
+          scrollRef={scrollRef}
+          availableWidth={messageAvailableWidth}
+          hasLoadPrevious={hiddenMessageCount > 0}
+        />
         {/* Pending bash messages as ghost messages (only show those not already in history) */}
         {pendingBashMessages
           .filter((msg) => !msg.addedToHistory)

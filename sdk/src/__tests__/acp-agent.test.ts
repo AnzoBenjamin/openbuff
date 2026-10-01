@@ -12,6 +12,8 @@ import {
 import type {
   AnyMessage,
   Client,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
   SessionNotification,
   Stream,
 } from '@agentclientprotocol/sdk'
@@ -79,7 +81,22 @@ describe('acp agent skeleton', () => {
     })
 
     expect(response.protocolVersion).toBe(PROTOCOL_VERSION)
-    expect(response.agentCapabilities).toEqual({ loadSession: true })
+    // A plain ACP client (no clientCapabilities._meta["openbuff.dev"]) gets
+    // pure ACP: the §3.3 capabilities are advertised, but NO ext `_meta` is
+    // echoed and `authMethods` stays empty (no terminal auth was offered).
+    // Honest advertisement: nothing is listed that the agent does not
+    // implement, so sessionCapabilities (session/list, session/close) is
+    // absent entirely.
+    expect(response.agentCapabilities).toEqual({
+      loadSession: true,
+      promptCapabilities: {
+        image: false,
+        audio: false,
+        embeddedContext: false,
+      },
+      mcpCapabilities: { http: true, sse: true },
+    })
+    expect(response.agentCapabilities?._meta).toBeUndefined()
     expect(response.authMethods).toEqual([])
   })
 
@@ -246,7 +263,20 @@ describe('acp agent skeleton', () => {
       protocolVersion: PROTOCOL_VERSION,
     })
     expect(initialized.protocolVersion).toBe(PROTOCOL_VERSION)
-    expect(initialized.agentCapabilities).toEqual({ loadSession: true })
+    // The wire path exercises a plain ACP client: no ext `_meta` is echoed.
+    // sessionCapabilities is deliberately NOT advertised: this agent
+    // implements neither session/list nor session/close, and a compliant
+    // client that saw them advertised would call methods the wire layer
+    // rejects with -32601.
+    expect(initialized.agentCapabilities).toEqual({
+      loadSession: true,
+      promptCapabilities: {
+        image: false,
+        audio: false,
+        embeddedContext: false,
+      },
+      mcpCapabilities: { http: true, sse: true },
+    })
 
     const session = await client.newSession({
       cwd: '/tmp/openbuff-wire',
@@ -446,6 +476,163 @@ describe('acp agent skeleton', () => {
     })
 
     expect(seen).toEqual([reverseRequests])
+  })
+
+  test('§5 production wiring: the connection client-method surface is derived into the per-turn reverseRequests seam', async () => {
+    // Mirrors the real serve transports: the SDK AgentSideConnection passed
+    // as `connection` exposes requestPermission/readTextFile/writeTextFile/
+    // createTerminal, and createAcpAgent must derive the reverseRequests
+    // seam from it when no explicit seam was injected (the `openbuff serve`
+    // path — no host ever passes options.reverseRequests there).
+    const permissionParams: RequestPermissionRequest[] = []
+    const connection = {
+      sessionUpdate: async () => {},
+      requestPermission: async (params: RequestPermissionRequest) => {
+        permissionParams.push(params)
+        return {
+          outcome: { outcome: 'selected', optionId: 'allow_once' },
+        } as RequestPermissionResponse
+      },
+      readTextFile: async () => {
+        throw new Error('not exercised here')
+      },
+      writeTextFile: async () => {
+        throw new Error('not exercised here')
+      },
+      createTerminal: async () => {
+        throw new Error('not exercised here')
+      },
+      request: async () => {
+        throw new Error('not exercised here')
+      },
+      notify: async () => {},
+    }
+    const seen: Array<Parameters<AcpPromptHandler>[0]> = []
+    const promptHandler: AcpPromptHandler = async (input) => {
+      seen.push(input)
+      return { stopReason: 'end_turn' }
+    }
+    const agent = createAcpAgent({ promptHandler, connection })
+
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-derive',
+      mcpServers: [],
+    })
+    await agent.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'hi' }],
+    })
+
+    expect(seen).toHaveLength(1)
+    const derived = seen[0]?.reverseRequests
+    expect(derived).toBeDefined()
+    // The derived seam is usable: it forwards onto the owning connection.
+    const response = await derived!.requestPermission({
+      sessionId,
+      toolCall: { toolCallId: 't1', title: 'x', kind: 'execute' },
+      options: [],
+    })
+    expect(response.outcome).toEqual({
+      outcome: 'selected',
+      optionId: 'allow_once',
+    })
+    expect(permissionParams).toHaveLength(1)
+  })
+
+  test('§5 fail-closed: a bare session-update sink derives NO reverseRequests seam', async () => {
+    // The in-process/test-fake connection shape (no client-method surface)
+    // must keep the pre-existing fail-closed posture: no seam is fabricated.
+    const { connection } = makeRecordingConnection()
+    const seen: Array<Parameters<AcpPromptHandler>[0]> = []
+    const promptHandler: AcpPromptHandler = async (input) => {
+      seen.push(input)
+      return { stopReason: 'end_turn' }
+    }
+    const agent = createAcpAgent({ promptHandler, connection })
+
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-bare',
+      mcpServers: [],
+    })
+    await agent.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'hi' }],
+    })
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.reverseRequests).toBeUndefined()
+  })
+
+  test('§4.2: initialize captures the client elicitation.form capability and prompt forwards it', async () => {
+    const connection = {
+      sessionUpdate: async () => {},
+      request: async () => {
+        throw new Error('not exercised here')
+      },
+      notify: async () => {},
+    }
+    const seen: Array<Parameters<AcpPromptHandler>[0]> = []
+    const promptHandler: AcpPromptHandler = async (input) => {
+      seen.push(input)
+      return { stopReason: 'end_turn' }
+    }
+    const agent = createAcpAgent({ promptHandler, connection })
+
+    await agent.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        elicitation: { form: {} },
+        _meta: {
+          'openbuff.dev': {
+            extVersion: 1,
+            extensions: ['events'],
+          },
+        },
+      },
+    })
+
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-caps',
+      mcpServers: [],
+    })
+    await agent.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'hi' }],
+    })
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.clientCapabilities).toEqual({
+      elicitation: { form: {} },
+    })
+    // The negotiated `events` extension gates the _openbuff.dev/ask_user path.
+    expect(seen[0]?.eventsExtensionEnabled).toBe(true)
+  })
+
+  test('§4.2 fail-closed: no negotiated elicitation capability forwards no clientCapabilities', async () => {
+    const { connection } = makeRecordingConnection()
+    const seen: Array<Parameters<AcpPromptHandler>[0]> = []
+    const promptHandler: AcpPromptHandler = async (input) => {
+      seen.push(input)
+      return { stopReason: 'end_turn' }
+    }
+    const agent = createAcpAgent({ promptHandler, connection })
+
+    await agent.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+    })
+
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-nocaps',
+      mcpServers: [],
+    })
+    await agent.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'hi' }],
+    })
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.clientCapabilities).toBeUndefined()
+    expect(seen[0]?.eventsExtensionEnabled).toBeUndefined()
   })
 })
 

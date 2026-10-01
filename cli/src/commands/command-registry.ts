@@ -84,6 +84,7 @@ import type { QueuedMessage } from '../hooks/use-message-queue'
 import type { ChatMessage, ContentBlock } from '../types/chat'
 import type { SendMessageFn } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
+import { buildCliCapabilityMapV1, buildDoctorCapabilityRows } from '../utils/capability-tiers'
 
 export type RouterParams = {
   abortControllerRef: React.MutableRefObject<AbortController | null>
@@ -1074,6 +1075,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
           message: diagnostic.message,
         })),
         providerStatus,
+        capabilities: buildDoctorCapabilityRows(buildCliCapabilityMapV1()),
       }
       appendLocalBlocks(params, [block])
       params.saveToHistory(params.inputValue.trim())

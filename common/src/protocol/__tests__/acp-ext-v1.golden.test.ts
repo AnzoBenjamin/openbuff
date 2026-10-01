@@ -62,6 +62,22 @@ const FIXTURE_NAMES = [
   'GV-12',
   'GV-13',
   'GV-14',
+  'GV-15',
+  'GV-16',
+  'GV-17',
+  'GV-18',
+  'GV-19',
+  'GV-20',
+  'GV-21',
+  'GV-22',
+  'GV-23',
+  'GV-24',
+  'GV-25',
+  'GV-26',
+  'GV-27',
+  'GV-28',
+  'GV-29',
+  'GV-30',
 ] as const
 
 type Fixture = Record<string, unknown>
@@ -470,6 +486,209 @@ describe('envelope-only vectors', () => {
     expect(asRecord(error.data)[OPENBUFF_ACP_NS]).toEqual({
       code: 'prompt_in_flight',
     })
+  })
+})
+
+describe('§12.7/§12.8 security golden vectors (GV-15…GV-30)', () => {
+  it('GV-15: the emitted tool_call_update redacts the cap.v3 token and credential and has no rawOutput', () => {
+    const gv15 = loadFixture('GV-15')
+    const serialized = JSON.stringify(gv15.toolCallUpdate)
+    expect(serialized).not.toContain('cap.v3.')
+    expect(serialized).not.toContain('sk-or-v1-abc')
+    expect(serialized).not.toContain('rawOutput')
+    const update = asRecord(asRecord(asRecord(gv15.toolCallUpdate).params).update)
+    expect(update.sessionUpdate).toBe('tool_call_update')
+    expect(update.status).toBe('completed')
+  })
+
+  it('GV-16: an internal tool_result emits no frames under events=full', () => {
+    const gv16 = loadFixture('GV-16')
+    expect(gv16.negotiatedEvents).toBe('full')
+    expect(asRecord(gv16.internalEvent).type).toBe('tool_result')
+    expect(gv16.expectedFrames).toEqual([])
+  })
+
+  it('GV-17: a client-origin http MCP header is sent literally ($VAR is not expanded)', () => {
+    const gv17 = loadFixture('GV-17')
+    const server = asRecord(gv17.mcpServer)
+    expect(server.origin).toBe('client')
+    const headers = asRecord(asRecord(server.config).headers)
+    expect(headers.Authorization).toBe('Bearer $OPENROUTER_API_KEY')
+    expect(gv17.expectedCapturedHeaders).toEqual({
+      authorization: 'Bearer $OPENROUTER_API_KEY',
+    })
+    expect(JSON.stringify(gv17.expectedCapturedHeaders)).not.toContain(
+      'sk-or-v1-real-secret',
+    )
+  })
+
+  it('GV-18: a client stdio MCP server over --socket is refused client_mcp_disabled and spawns nothing', () => {
+    const gv18 = loadFixture('GV-18')
+    const error = asRecord(gv18.error).error as Fixture
+    expect(error.code).toBe(-32602)
+    expect(asRecord(error.data)[OPENBUFF_ACP_NS]).toEqual({
+      code: 'client_mcp_disabled',
+    })
+    expect(gv18.expectedSpawnedProcesses).toBe(0)
+  })
+
+  it('GV-19: project MCP wins the name clash; client db becomes client-db; db__x and Db:1 are rejected', () => {
+    const gv19 = loadFixture('GV-19')
+    expect(gv19.expectedModelTools).toEqual(['db__query', 'client-db__query'])
+    expect(gv19.rejectedNames).toEqual(['db__x', 'Db:1'])
+    expect(asRecord(gv19.rejection).code).toBe(-32602)
+  })
+
+  it('GV-20: a client MCP URL to the metadata address is refused before connecting', () => {
+    const gv20 = loadFixture('GV-20')
+    const server = asRecord(gv20.mcpServer)
+    expect(server.origin).toBe('client')
+    expect(asRecord(server.config).url).toBe('http://169.254.169.254/')
+    const error = asRecord(gv20.error).error as Fixture
+    expect(error.code).toBe(-32602)
+    expect(asRecord(error.data)[OPENBUFF_ACP_NS]).toEqual({
+      code: 'mcp_url_blocked',
+    })
+    expect(gv20.expectedConnectionAttempts).toBe(0)
+  })
+
+  it('GV-21: an approval branch with control/bidi chars is sanitized to U+FFFD in the emitted title', () => {
+    const gv21 = loadFixture('GV-21')
+    const update = asRecord(
+      asRecord(asRecord(gv21.request).params).toolCall,
+    )
+    const title = update.title as string
+    expect(title).toContain('\ufffd')
+    // No C0 control (incl. ESC U+001B and BEL U+0007) survives sanitization.
+    // eslint-disable-next-line no-control-regex
+    expect(title).not.toMatch(/[\u0000-\u001f\u007f]/)
+  })
+
+  it('GV-22: allow_always / proceed_always / reject_once permission responses each resolve false', () => {
+    const gv22 = loadFixture('GV-22')
+    for (const key of [
+      'allowAlwaysResponse',
+      'proceedAlwaysResponse',
+      'rejectOnceResponse',
+    ] as const) {
+      const outcome = asRecord(asRecord(gv22[key]).result).outcome as Fixture
+      expect(outcome.outcome).toBe('selected')
+      expect(outcome.optionId).not.toBe('allow_once')
+    }
+    expect(gv22.expectedResolution).toBe(false)
+  })
+
+  it('GV-23: a closing owner connection resolves the pending approval false and cancels the run', () => {
+    const gv23 = loadFixture('GV-23')
+    expect(gv23.expectedApprovalResolution).toBe(false)
+    expect(asRecord(asRecord(gv23.promptResult).result)).toEqual({
+      stopReason: 'cancelled',
+    })
+    expect(gv23.expectedCommandExecutions).toBe(0)
+  })
+
+  it('GV-24: a duplicate permission response is ignored and the first outcome stands', () => {
+    const gv24 = loadFixture('GV-24')
+    expect(asRecord(asRecord(gv24.firstResponse).result).outcome).toEqual(
+      gv24.expectedOutcome,
+    )
+    expect(asRecord(asRecord(gv24.duplicateResponse).result).outcome).toEqual({
+      outcome: 'selected',
+      optionId: 'reject_once',
+    })
+    expect(gv24.expectedOutcome).toEqual({
+      outcome: 'selected',
+      optionId: 'allow_once',
+    })
+  })
+
+  it('GV-25: a sensitive-path edit emits no diff and redacted hashes/rawInput', () => {
+    const gv25 = loadFixture('GV-25')
+    const serialized = JSON.stringify(gv25)
+    expect(serialized).not.toContain('sk-or-v1')
+    const update = asRecord(
+      asRecord(asRecord(gv25.toolCallUpdate).params).update,
+    )
+    const content = update.content as Array<Fixture>
+    expect(content.every((c) => c.type !== 'diff')).toBe(true)
+    const mutation = asRecord(
+      asRecord(asRecord(asRecord(update._meta)[OPENBUFF_ACP_NS]).receipt)
+        .mutation,
+    )
+    const actions = mutation.actions as Array<Fixture>
+    expect(actions[0].beforeHash).toBe('sha256:redacted')
+    expect(actions[0].afterHash).toBe('sha256:redacted')
+    expect(
+      asRecord(asRecord(mutation.authorityReceipt).finalHashes)['.env'],
+    ).toBe('sha256:redacted')
+    const rawInput = asRecord(
+      asRecord(asRecord(asRecord(gv25.toolCall).params).update).rawInput,
+    )
+    expect(rawInput.content).toBe('[sensitive]')
+  })
+
+  it('GV-26: a session/load replay of a cap.v3-bearing tool result emits no cap.v3 and no rawInput/rawOutput', () => {
+    const gv26 = loadFixture('GV-26')
+    const replayed = asRecord(
+      asRecord(asRecord(gv26.replayedToolCall).params).update,
+    )
+    expect(replayed.sessionUpdate).toBe('tool_call')
+    expect(replayed.rawInput).toBeUndefined()
+    expect(replayed.rawOutput).toBeUndefined()
+    expect(JSON.stringify(gv26.replayedToolCall)).not.toContain('cap.v3.')
+  })
+
+  it('GV-27: split credential / cap.v3 chunks are redacted across frames', () => {
+    const gv27 = loadFixture('GV-27')
+    const frames = gv27.emittedChunks as Array<Fixture>
+    const perMessage: Record<string, string> = {}
+    for (const frame of frames) {
+      const update = asRecord(asRecord(frame.params).update)
+      const messageId = update.messageId as string
+      const text = asRecord(update.content).text as string
+      expect(text).not.toContain(gv27.credential as string)
+      expect(text).not.toContain('cap.v3.')
+      perMessage[messageId] = (perMessage[messageId] ?? '') + text
+    }
+    for (const text of Object.values(perMessage)) {
+      expect(text).not.toContain(gv27.credential as string)
+      expect(text).not.toContain('cap.v3.')
+    }
+  })
+
+  it('GV-28: a handler-thrown error frame leaks neither the cap.v3 token nor the credential', () => {
+    const gv28 = loadFixture('GV-28')
+    const serialized = JSON.stringify(gv28.error)
+    expect(serialized).not.toContain('cap.v3.')
+    expect(serialized).not.toContain('sk-or-v1-abc')
+    expect(asRecord(gv28.error).error as Fixture).toMatchObject({ code: -32603 })
+  })
+
+  it('GV-29: serve --stdio without trust does not load project mcp.json and connects nothing', () => {
+    const gv29 = loadFixture('GV-29')
+    expect(gv29.trustProjectAgents).toBe(false)
+    expect(gv29.expectedLoadedProjectMcpServers).toEqual([])
+    expect(gv29.expectedConnectionAttempts).toBe(0)
+  })
+
+  it('GV-30: a database-template MCP header is sent literally ($VAR is not expanded)', () => {
+    const gv30 = loadFixture('GV-30')
+    const servers = asRecord(asRecord(gv30.databaseTemplate).mcpServers)
+    const peer = asRecord(servers.peer)
+    expect(asRecord(peer.headers).Authorization).toBe(
+      'Bearer $OPENROUTER_API_KEY',
+    )
+    expect(gv30.expectedCapturedHeaders).toEqual({
+      authorization: 'Bearer $OPENROUTER_API_KEY',
+    })
+    expect(JSON.stringify(gv30.expectedCapturedHeaders)).not.toContain(
+      'sk-or-v1-real-secret',
+    )
+    expect(Object.keys(asRecord(gv30.markingPoints))).toEqual([
+      'M-1',
+      'M-2',
+      'M-3',
+    ])
   })
 })
 
