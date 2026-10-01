@@ -5,10 +5,19 @@
 # - build-test: host build + host tests (the day-one gate).
 # - build-targets: the gated 5-target matrix, ACTIVE since the first real
 #   sidecar crate (`openbuff-native`) shipped. Every leg builds the whole
-#   workspace for its target and uploads the `openbuff-native` binary;
-#   tests run ONLY where the test binaries can execute on the runner
-#   (cross-compiled test binaries cannot, so non-host legs build-only), and
-#   the CLI smoke script runs on the host-runnable linux-gnu leg.
+#   workspace for its target and uploads the `openbuff-native` binary.
+#
+# Cross-compilation needs a target-appropriate LINKER even for a pure-Rust,
+# zero-external-crate binary (the final link step is still per-target): a
+# single ubuntu host with only `rustup target add` cannot link aarch64/musl/
+# darwin/msvc objects (generic-ELF relocation + unrecognized-flag link
+# errors). So each leg runs where its toolchain exists:
+#   - linux-gnu / linux-musl / aarch64-linux: ubuntu + the right cross linker
+#     (musl-tools / gcc-aarch64-linux-gnu),
+#   - windows-msvc: windows-latest (native MSVC),
+#   - apple-darwin: macos-13 (native Intel toolchain).
+# Tests run only where host == target can execute the test binaries; the CLI
+# smoke script runs on the host-runnable linux-gnu and darwin legs.
 name: rust-workspace
 
 on:
@@ -48,34 +57,40 @@ jobs:
       - run: cargo test --workspace
 
   # D49: `openbuff-native` is ONE multi-call binary shipped for all 5 targets.
-  # Zero external crate dependencies keeps every cross-compile trivial (no C
-  # toolchain matrix), so each leg needs only `rustup target add` for the
-  # target std. Tests run only on host-runnable legs; the smoke script runs on
-  # linux-gnu (the one guaranteed-runnable leg — no macos/arm runner is
-  # provisioned for this workflow, so darwin/musl/aarch64/msvc legs stop at
-  # build + artifact).
+  # Each leg runs on a host whose toolchain can link that target (native OS
+  # runner for windows/darwin; ubuntu + a cross linker for the linux cross
+  # targets). Tests run only on host==target legs; the smoke script runs on
+  # the host-runnable linux-gnu and darwin legs.
   build-targets:
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
             runs-tests: true
             runs-smoke: true
           - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            apt: musl-tools
             runs-tests: false
             runs-smoke: false
           - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
             runs-tests: false
             runs-smoke: false
           - target: x86_64-pc-windows-msvc
-            runs-tests: false
+            os: windows-latest
+            runs-tests: true
             runs-smoke: false
           - target: x86_64-apple-darwin
-            runs-tests: false
-            runs-smoke: false
+            os: macos-13
+            runs-tests: true
+            runs-smoke: true
     name: build-target-${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: rust
@@ -93,9 +108,18 @@ jobs:
           workspaces: rust
           key: ${{ matrix.target }}
 
-      - run: rustup target add ${{ matrix.target }}
+      # Cross linker for the linux cross targets (host cc cannot link them).
+      # Native runners (windows/darwin) and the host linux-gnu leg skip this.
+      - name: Install cross linker
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
 
+      # Point cargo at the aarch64 cross linker. The env var is target-scoped
+      # (CARGO_TARGET_<TARGET>_LINKER), so it is inert on every other leg even
+      # when empty.
       - run: cargo build --workspace --target ${{ matrix.target }} --release
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
 
       # Cross-compiled test binaries cannot execute without emulation, so
       # `cargo test` runs only where host == target.
@@ -103,9 +127,11 @@ jobs:
         if: matrix.runs-tests == 'true'
 
       # Charter rule 2: the leg that CAN run the binary must smoke-test it.
+      # Only the host-runnable legs set runs-smoke; the path is target-scoped
+      # so each runnable leg smoke-tests its own binary.
       - name: Smoke test openbuff-native
         if: matrix.runs-smoke == 'true'
-        run: ./scripts/smoke-test-sidecar.sh target/x86_64-unknown-linux-gnu/release/openbuff-native
+        run: ./scripts/smoke-test-sidecar.sh target/${{ matrix.target }}/release/openbuff-native
 
       # Per-target binary artifact (windows leg produces openbuff-native.exe;
       # the glob covers both spellings). Matches ci.yml's pinned upload-artifact
