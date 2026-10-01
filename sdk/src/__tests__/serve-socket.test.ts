@@ -195,22 +195,26 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
 
     expect(response.stopReason).toBe('end_turn')
 
-    // The two text events forward as chunks; the tool_call event is dropped.
-    await waitFor(() => chunks.length >= 2)
+    // NEW-3 (§12.8) OutboundHoldback: short back-to-back text events are
+    // HELD and coalesce into one window, released at turn end (the bridge's
+    // flush in `finally`) or by the idle flusher — so the client receives
+    // the two texts as one coalesced chunk (or, at the window boundary, as
+    // separate pieces). Assert on the JOINED stream, not a chunk count.
+    await waitFor(() => chunks.length >= 1)
+
+    const joinedChunks = chunks.join('\n')
 
     // (a) The plain assistant text reached the client verbatim.
-    expect(chunks).toContain('hello from agent')
+    expect(joinedChunks).toContain('hello from agent')
 
     // (b) The cap.v3 token arrived REDACTED: no chunk carries the raw token,
     // and the redaction marker proves sanitizeOutbound ran on the socket path.
-    expect(chunks.some((chunk) => chunk.includes('cap.v3.'))).toBe(false)
-    expect(chunks.some((chunk) => chunk.includes('[REDACTED_CAPABILITY]'))).toBe(
-      true,
-    )
+    expect(joinedChunks.includes('cap.v3.')).toBe(false)
+    expect(joinedChunks.includes('[REDACTED_CAPABILITY]')).toBe(true)
 
     // (c) The tool_call event was structurally dropped: no chunk carries its
     // payload marker.
-    expect(chunks.some((chunk) => chunk.includes(toolCallMarker))).toBe(false)
+    expect(joinedChunks.includes(toolCallMarker)).toBe(false)
   })
 
   test('bad token destroys the connection and reports onAuthFailure', async () => {

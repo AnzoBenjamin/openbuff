@@ -57,6 +57,10 @@ import {
   setupOpenbuffProviderFromArgs,
 } from '../utils/openbuff-provider'
 import { flushAnalytics } from '../utils/analytics'
+import {
+  attachSession,
+  detachSession,
+} from '../utils/attach-session'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
 import { withTimeout } from '../utils/terminal-color-detection'
 import { capturePendingAttachments } from '../utils/pending-attachments'
@@ -554,6 +558,90 @@ const ALL_COMMANDS: CommandDefinition[] = [
       exitWithAnalyticsFlush(params.abortControllerRef.current?.signal)
     },
   }),
+  defineCommand({
+    name: 'detach',
+    handler: (params) => {
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Between-turns only: an in-flight run must never be aborted by /detach.
+      // RouterParams has no single in-flight flag, so gate on the same
+      // busy-check the guarded-submit path (sendPromptCommand) uses.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current
+      ) {
+        appendLocalMessage(
+          params,
+          '/detach: a turn is in progress - wait for it to finish, then run /detach again.',
+        )
+        return
+      }
+      // Fire-and-forget and fail-closed: detachSession never rejects (every
+      // failure is a structured outcome), so nothing here can throw out of the
+      // handler and crash the TUI.
+      void detachSession().then((outcome) => {
+        switch (outcome.status) {
+          case 'detached':
+            appendLocalMessage(
+              params,
+              `/detach: detached session ${outcome.sessionId}. It keeps running; run /attach to reattach (the next message resumes the detached session).`,
+            )
+            break
+          case 'no-session':
+            appendLocalMessage(
+              params,
+              '/detach: no live session to detach from.',
+            )
+            break
+          case 'unavailable':
+            appendLocalMessage(
+              params,
+              '/detach: detach is unavailable - only sessions started in attach mode (--attach) can be detached.',
+            )
+            break
+          case 'error':
+            appendLocalMessage(params, `/detach: ${outcome.message}`)
+            break
+        }
+      })
+    },
+  }),
+  defineCommand({
+    name: 'attach',
+    handler: (params) => {
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Fire-and-forget and fail-closed, like /detach: attachSession never
+      // rejects. The NEXT run() auto-resumes the detached session, so /attach
+      // only re-establishes the connection/session binding.
+      void attachSession().then((outcome) => {
+        switch (outcome.status) {
+          case 'attached':
+            appendLocalMessage(
+              params,
+              `/attach: reattached to session ${outcome.sessionId}.`,
+            )
+            break
+          case 'no-session-id':
+            appendLocalMessage(
+              params,
+              '/attach: no detached session to attach to - run /detach first.',
+            )
+            break
+          case 'unavailable':
+            appendLocalMessage(
+              params,
+              '/attach: attach is unavailable - only sessions started in attach mode (--attach) can be reattached.',
+            )
+            break
+          case 'error':
+            appendLocalMessage(params, `/attach: ${outcome.message}`)
+            break
+        }
+      })
+    },
+  }),
   defineCommandWithArgs({
     name: 'new',
     aliases: ['n', 'clear', 'c', 'reset'],
@@ -880,7 +968,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'image',
-    aliases: ['img', 'attach'],
+    aliases: ['img'],
     handler: async (params, args) => {
       const trimmedArgs = args.trim()
 

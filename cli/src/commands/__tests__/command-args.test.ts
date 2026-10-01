@@ -10,9 +10,11 @@ import {
   COMMAND_REGISTRY,
   defineCommand,
   defineCommandWithArgs,
+  findCommand,
   formatPlanListReport,
   planListActiveState,
 } from '../command-registry'
+import { setLastDetachedSessionId } from '../../utils/attach-session'
 import {
   ACTIVE_SESSION_FILE_NAME,
   listPlanSessions,
@@ -1377,6 +1379,87 @@ describe('command factory pattern', () => {
 
       // Should still return openFeedbackMode
       expect(result).toEqual({ openFeedbackMode: true })
+    })
+  })
+
+  describe('detach and attach commands', () => {
+    /** Lets the fire-and-forget .then callbacks in the handlers run. */
+    const flushMicrotasks = () =>
+      new Promise((resolve) => setTimeout(resolve, 0))
+
+    /** The system message body from the single setMessages call. */
+    const systemMessageBody = (setMessagesCalls: unknown): string => {
+      const calls = setMessagesCalls as Array<
+        [(prev: unknown[]) => Array<{ content: string }>]
+      >
+      const next = calls[calls.length - 1][0]([])
+      return next[next.length - 1].content
+    }
+
+    beforeEach(() => {
+      setLastDetachedSessionId(undefined)
+    })
+
+    test('detach and attach are registered as no-arg commands', () => {
+      for (const name of ['detach', 'attach']) {
+        const cmd = COMMAND_REGISTRY.find((c) => c.name === name)
+        expect(cmd, `Command ${name} should exist`).toBeDefined()
+        expect(cmd?.acceptsArgs, `Command ${name} should not accept args`).toBe(
+          false,
+        )
+      }
+    })
+
+    test('/attach resolves to the attach command, not /image', () => {
+      // /image used to claim 'attach' as an alias, which would shadow /attach
+      // in findCommand's first-match scan.
+      expect(findCommand('attach')?.name).toBe('attach')
+      expect(findCommand('img')?.name).toBe('image')
+    })
+
+    test('/detach while streaming replies wait and does not attempt a detach', async () => {
+      const detachCmd = COMMAND_REGISTRY.find((c) => c.name === 'detach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({
+        inputValue: '/detach',
+        isStreaming: true,
+        setMessages,
+      })
+
+      detachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      const body = systemMessageBody(setMessages.mock.calls)
+      expect(body).toContain('wait')
+      // Between-turns only: the unavailable path is never reached mid-turn and
+      // the run is not aborted.
+      expect(body).not.toContain('unavailable')
+    })
+
+    test('/detach without attach mode replies that detach is unavailable', async () => {
+      // No attach target is set (module default), so the real detachSession
+      // short-circuits before any client is built — fully hermetic.
+      const detachCmd = COMMAND_REGISTRY.find((c) => c.name === 'detach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({ inputValue: '/detach', setMessages })
+
+      detachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      expect(systemMessageBody(setMessages.mock.calls)).toContain('unavailable')
+    })
+
+    test('/attach without a detached session replies with an error message', async () => {
+      const attachCmd = COMMAND_REGISTRY.find((c) => c.name === 'attach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({ inputValue: '/attach', setMessages })
+
+      attachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      const body = systemMessageBody(setMessages.mock.calls)
+      expect(body).toContain('/attach')
+      expect(body).toContain('no detached session')
     })
   })
 })

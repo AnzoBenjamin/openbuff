@@ -133,6 +133,29 @@ describe('slash-commands module', () => {
       expect(agent).toBeDefined()
       expect(agent!.insertText).toBe('@general-agent ')
     })
+
+    test('registers /detach and /attach for autocomplete and the palette', () => {
+      const detach = SLASH_COMMANDS.find((cmd) => cmd.id === 'detach')
+      expect(detach).toBeDefined()
+      expect(detach!.label).toBe('detach')
+      expect(detach!.description).toContain('/attach')
+
+      const attach = SLASH_COMMANDS.find((cmd) => cmd.id === 'attach')
+      expect(attach).toBeDefined()
+      expect(attach!.description).toContain('detached')
+
+      // Stateful commands: must not fire without an explicit leading slash.
+      expect(detach!.implicitCommand).toBeUndefined()
+      expect(attach!.implicitCommand).toBeUndefined()
+    })
+
+    test('/image gave up its attach alias so /attach reaches the new command', () => {
+      expect(
+        SLASH_COMMANDS.filter((cmd) => cmd.aliases?.includes('attach')).map(
+          (cmd) => cmd.id,
+        ),
+      ).toEqual(['attach'])
+    })
   })
 
   describe('SLASHLESS_COMMAND_IDS', () => {

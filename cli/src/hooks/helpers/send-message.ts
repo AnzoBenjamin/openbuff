@@ -22,6 +22,8 @@ import {
   type BatchedMessageUpdater,
 } from '../../utils/message-updater'
 import { createModeDividerMessage } from '../../utils/send-message-helpers'
+import { notifyTerminal } from '../../utils/terminal-notify'
+import { writeToTty } from '../../utils/terminal-title'
 import { yieldToEventLoop } from '../../utils/yield-to-event-loop'
 
 import type {
@@ -499,6 +501,16 @@ export const handleRunCompletion = (params: {
     finalizeAfterError()
     return
   }
+
+  // P1-T7: Successful turn — fire-and-forget terminal notification so the
+  // user knows the run finished. Aborts and errors return above, so this
+  // fires exactly once per successful turn.
+  notifyTerminal(
+    { body: 'Turn complete' },
+    { write: (sequence) => {
+        writeToTty(sequence)
+      } },
+  )
 
   finalizeQueueState({
     setStreamStatus,
