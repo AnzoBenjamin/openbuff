@@ -1,0 +1,18 @@
+[install]
+# Keep CLI installs consistent with root hoisted setup
+linker = "hoisted"
+linkWorkspacePackages = true
+
+[test]
+preload = ["../test/setup-scm-loader.ts"]
+# test/setup-scm-loader.ts registers the .scm text loader required by
+# @codebuff/code-map tree-sitter queries (packages/code-map/src/languages.ts
+# statically imports 14 .scm query files). Running `bun test` from this
+# package directory uses THIS bunfig (not the repo-root one), and bun resolves
+# [test] preload paths relative to the CWD — so without this file the root
+# preload (`./test/setup-scm-loader.ts`) points at the nonexistent
+# cli/test/setup-scm-loader.ts, the .scm plugin never registers, and any test
+# transitively importing code-map fails at import with tree-sitter query
+# parse errors (intermittent 0 pass / 1 fail / 1 error collection crash,
+# sometimes a SIGILL bun crash). Mirrors sdk/bunfig.toml and
+# packages/agent-runtime/bunfig.toml.

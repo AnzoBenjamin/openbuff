@@ -59,8 +59,10 @@ import {
 import { flushAnalytics } from '../utils/analytics'
 import {
   attachSession,
+  detachOnExit,
   detachSession,
 } from '../utils/attach-session'
+import { getAttachTarget } from '../utils/codebuff-client'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
 import { withTimeout } from '../utils/terminal-color-detection'
 import { capturePendingAttachments } from '../utils/pending-attachments'
@@ -211,19 +213,35 @@ const clearInput = (params: RouterParams) => {
 // leave async resources (in-flight tool subprocesses, open file handles,
 // timers) half torn down when that handler defers or swallows the signal.
 const EXIT_FLUSH_TIMEOUT_MS = 1000
-const exitWithAnalyticsFlush = (signal?: AbortSignal): void => {
+const exitWithAnalyticsFlush = (
+  signal?: AbortSignal,
+  beforeExit?: Promise<unknown>,
+): void => {
   // The flush window is bounded by withTimeout (reliability finding
   // exit-flush-not-tied-to-timeout): the /exit handler aborts the stream
   // controller before calling this, and withTimeout only honors aborts that
   // fire while the window is open — so this pre-aborted signal never
   // collapses the documented EXIT_FLUSH_TIMEOUT_MS flush bound (reliability
   // finding exit-flush-window-collapsed-by-pre-aborted-signal).
-  withTimeout(
+  const flush = withTimeout(
     flushAnalytics(),
     EXIT_FLUSH_TIMEOUT_MS,
     undefined,
     signal,
-  ).finally(() => {
+  )
+  // The optional beforeExit step (the attach-mode detach) runs alongside the
+  // flush and is awaited bounded inside the chain, so process.exit can never
+  // race the async detach; a detach rejection or timeout never blocks or
+  // delays the exit beyond the same EXIT_FLUSH_TIMEOUT_MS bound.
+  const boundedBeforeExit = beforeExit
+    ? withTimeout(beforeExit, EXIT_FLUSH_TIMEOUT_MS, undefined).catch(
+        () => undefined,
+      )
+    : undefined
+  const exitChain = boundedBeforeExit
+    ? Promise.all([flush, boundedBeforeExit])
+    : flush
+  exitChain.finally(() => {
     process.exit(0)
   })
 }
@@ -552,10 +570,22 @@ const ALL_COMMANDS: CommandDefinition[] = [
           // Skip the failed entry; keep draining the remaining prompts.
         }
       }
-      params.abortControllerRef.current?.abort()
+      // Attach mode: detach instead of aborting so the remote run KEEPS
+      // RUNNING after the CLI exits. The detach is kicked off here and
+      // awaited bounded inside the exit chain (never fire-and-forget:
+      // process.exit must not race it).
+      const attachTarget = getAttachTarget()
+      const beforeExit = attachTarget ? detachOnExit() : undefined
+      if (!attachTarget) {
+        // Non-attach mode keeps the existing abort behavior.
+        params.abortControllerRef.current?.abort()
+      }
       cancelAllBashCommands()
       params.stopStreaming()
-      exitWithAnalyticsFlush(params.abortControllerRef.current?.signal)
+      exitWithAnalyticsFlush(
+        params.abortControllerRef.current?.signal,
+        beforeExit,
+      )
     },
   }),
   defineCommand({

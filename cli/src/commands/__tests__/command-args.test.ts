@@ -14,7 +14,11 @@ import {
   formatPlanListReport,
   planListActiveState,
 } from '../command-registry'
-import { setLastDetachedSessionId } from '../../utils/attach-session'
+import {
+  getLastDetachedSessionId,
+  setLastDetachedSessionId,
+} from '../../utils/attach-session'
+import { setAttachTarget } from '../../utils/codebuff-client'
 import {
   ACTIVE_SESSION_FILE_NAME,
   listPlanSessions,
@@ -27,6 +31,44 @@ import type {
   PlanStatusContentBlock,
   TextContentBlock,
 } from '../../types/chat'
+import type { OpenbuffClient } from '@openbuff/sdk'
+
+/**
+ * Hermetic codebuff-client double for the attach-mode exit tests. The /exit
+ * handler calls detachOnExit() with no deps, so the client seam is mocked at
+ * the codebuff-client module boundary (mock.module applies retroactively to
+ * the already-imported live bindings in attach-session.ts and
+ * command-registry.ts). The detach becomes observable through
+ * getLastDetachedSessionId() without touching a real backend, and module
+ * state resets per test via setAttachTarget(undefined).
+ */
+type FakeBackend = {
+  detach?: () => Promise<string | undefined>
+  attach?: (sessionId: string) => Promise<void>
+}
+
+let fakeBackend: FakeBackend | undefined
+let fakeAttachTarget: { socketPath: string; token?: string } | undefined
+
+mock.module('../../utils/codebuff-client', () => ({
+  getAttachTarget: () => fakeAttachTarget,
+  setAttachTarget: (
+    target: { socketPath: string; token?: string } | undefined,
+  ) => {
+    fakeAttachTarget = target
+  },
+  getCodebuffClient: async (): Promise<OpenbuffClient> => {
+    if (!fakeAttachTarget) {
+      throw new Error('client must not be built outside attach mode')
+    }
+    return { backend: fakeBackend } as unknown as OpenbuffClient
+  },
+  // Remaining exports the real module provides, so transitive importers in
+  // this test's graph never observe an undefined binding.
+  resetCodebuffClient: async () => {},
+  memoryV2ClientConfigFromProvider: () => undefined,
+  ManagedOpenbuffClient: class ManagedOpenbuffClientStub {},
+}))
 
 /**
  * Tests for the command factory pattern.
@@ -1172,6 +1214,24 @@ describe('command factory pattern', () => {
       }
     }
 
+    // Attach-mode module state must reset per test so the fake client and
+    // detach bookkeeping never leak across cases (mirrors the 'detach and
+    // attach commands' block). The afterEach matters as much as the
+    // beforeEach: mock.module is file-wide, so a leaked fake attach target
+    // would flip the later detach/attach describe's no-attach-mode
+    // assumptions.
+    beforeEach(() => {
+      setAttachTarget(undefined)
+      setLastDetachedSessionId(undefined)
+      fakeBackend = undefined
+    })
+
+    afterEach(() => {
+      setAttachTarget(undefined)
+      setLastDetachedSessionId(undefined)
+      fakeBackend = undefined
+    })
+
     test('drains the guarded-submit queue into session history before exiting', async () => {
       const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
       expect(exitCmd).toBeDefined()
@@ -1325,6 +1385,67 @@ describe('command factory pattern', () => {
         // unwind before the exit, and the process never signals its own PID.
         expect(abortController.signal.aborted).toBe(true)
         expect(stubs.killSpy).not.toHaveBeenCalled()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('attach mode: exits without aborting the run and detaches first', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      fakeBackend = { detach: async () => 'sess-exit-1' }
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+        expect(abortController.signal.aborted).toBe(false)
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        // The remote run KEEPS RUNNING: the exit path detaches instead of
+        // aborting the attached run's controller.
+        expect(abortController.signal.aborted).toBe(false)
+        // The detach actually ran to completion before process.exit: the
+        // backend's session id was persisted for a later /attach.
+        expect(getLastDetachedSessionId()).toBe('sess-exit-1')
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('attach mode: a failing detach still exits without aborting', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      fakeBackend = {
+        detach: async () => {
+          throw new Error('socket closed')
+        },
+      }
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        // The detach failure is swallowed silently (no user-visible message
+        // at exit time) and must never block the exit.
+        expect(abortController.signal.aborted).toBe(false)
+        expect(getLastDetachedSessionId()).toBeUndefined()
         expect(stubs.exitSpy).toHaveBeenCalledWith(0)
       } finally {
         stubs.restore()

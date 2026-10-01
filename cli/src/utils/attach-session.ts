@@ -76,6 +76,27 @@ export async function detachSession(
 }
 
 /**
+ * Exit-time detach for /exit and Ctrl-C/SIGINT: same delegation as
+ * detachSession (the remote run KEEPS RUNNING; only the client transport is
+ * released) but framed for the shutdown path. Never rejects — every failure
+ * becomes a structured outcome — and never surfaces user-visible messages:
+ * it is a silent exit-time step whose promise is only awaited (bounded) by
+ * the exit chains in command-registry.ts and use-exit-handler.ts.
+ */
+export async function detachOnExit(
+  deps?: DetachAttachDeps,
+): Promise<DetachOutcome> {
+  try {
+    return await detachSession(deps)
+  } catch (error) {
+    return {
+      status: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/**
  * Reattach to the last detached session by calling the backend's optional
  * `attach(sessionId)`. The NEXT `run()` auto-resumes the detached session
  * (acp-client.ts run() sees the detached session id and calls

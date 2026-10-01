@@ -2,6 +2,7 @@ import { describe, test, expect, mock, afterEach } from 'bun:test'
 
 import {
   attachSession,
+  detachOnExit,
   detachSession,
   getLastDetachedSessionId,
   setLastDetachedSessionId,
@@ -153,6 +154,44 @@ describe('attach-session', () => {
         status: 'error',
         message: 'loadSession failed',
       })
+    })
+  })
+
+  describe('detachOnExit', () => {
+    test('resolves with the delegate outcome and persists the session id', async () => {
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      const detach = mock(async () => 'sess-exit')
+      const getClient = mock(async () => fakeClient({ detach }))
+
+      expect(await detachOnExit({ getClient })).toEqual({
+        status: 'detached',
+        sessionId: 'sess-exit',
+      })
+      expect(getLastDetachedSessionId()).toBe('sess-exit')
+    })
+
+    test('is unavailable outside attach mode (silent no-op at exit time)', async () => {
+      const getClient = mock(() => {
+        throw new Error('client must not be built outside attach mode')
+      })
+
+      expect(await detachOnExit({ getClient })).toEqual({
+        status: 'unavailable',
+      })
+      expect(getClient).not.toHaveBeenCalled()
+    })
+
+    test('never rejects — a failing delegate becomes an error outcome', async () => {
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      const getClient = mock(async () => {
+        throw new Error('transport gone')
+      })
+
+      expect(await detachOnExit({ getClient })).toEqual({
+        status: 'error',
+        message: 'transport gone',
+      })
+      expect(getLastDetachedSessionId()).toBeUndefined()
     })
   })
 })
