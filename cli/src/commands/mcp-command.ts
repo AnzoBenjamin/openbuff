@@ -12,12 +12,12 @@ import { logger } from '../utils/logger'
 import type { EmbedFn, McpServerClient } from '@openbuff/sdk'
 
 /**
- * The parsed `openbuff mcp` selection (mirrors `ParsedArgs.mcp`): no flags
- * this wave — the server is read-only by default, and receipt-backed edits
- * plus memory search stay opt-in/OFF until the follow-up named in
- * sdk/src/mcp/server.ts arms them behind explicit flags.
+ * The parsed `openbuff mcp` selection (mirrors `ParsedArgs.mcp`). The server
+ * is read-only by default; receipt-backed edits (`apply_edits`) and memory
+ * search stay opt-in behind `--mutations`, which the parse layer surfaces
+ * here and `runMcpCommand` forwards to `runMcp`.
  */
-export type McpCommandArgs = Record<string, never>
+export type McpCommandArgs = { mutations?: boolean }
 
 /**
  * Fully-injectable seams for `runMcpCommand`. Every dependency defaults to
@@ -46,7 +46,7 @@ export async function runMcpCommand(
   args: McpCommandArgs,
   deps?: RunMcpDeps,
 ): Promise<{ close: () => Promise<void> }> {
-  void args
+  const mutations = args.mutations === true
   // Resolve getProjectRoot() lazily here (after initializeApp has run in
   // index.tsx), never at module load; tests that inject projectRoot never call it.
   const projectRoot = deps?.projectRoot ?? getProjectRoot()
@@ -65,7 +65,9 @@ export async function runMcpCommand(
 
   // Human line to STDERR only — stdout is the MCP protocol wire.
   writeStderr(
-    'openbuff mcp: MCP server over stdio (read-only; ' +
+    'openbuff mcp: MCP server over stdio (' +
+      (mutations ? 'read+write (apply_edits armed)' : 'read-only') +
+      '; ' +
       (index
         ? 'query_index enabled'
         : 'query_index disabled by openbuff.json indexing.enabled=false') +
@@ -75,6 +77,7 @@ export async function runMcpCommand(
   return runMcpImpl({
     client,
     sessionData: { projectRoot, ...(index ? { index } : {}) },
+    mutations,
     signal: deps?.signal,
   })
 }

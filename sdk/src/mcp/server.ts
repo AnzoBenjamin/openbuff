@@ -13,6 +13,9 @@ import { codeSearch } from '../tools/code-search'
 import { getFilesStructured } from '../tools/read-files'
 import { createNodeFileSystem } from '../tools/node-filesystem'
 import { inspectCodebaseStructure } from '../services/audit-intelligence'
+import { getHarnessStateDir } from '../credentials'
+import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
+import path from 'node:path'
 
 import type { IndexManager } from '@codebuff/indexer'
 import type { StructureDiagnostic } from '@codebuff/code-map'
@@ -55,6 +58,9 @@ const MAX_OUTLINE_SYMBOLS = 500
 /** read_files item rendering is capped by path+content budget, not by count. */
 const MAX_READ_FILES = 16
 const MAX_READ_FILES_TEXT_CHARS = 250_000
+/** apply_edits: a bounded batch of full-file writes. */
+const MAX_APPLY_EDITS = 32
+const MAX_APPLY_EDIT_CONTENT_CHARS = 1_000_000
 const DEFAULT_SEARCH_TIMEOUT_SECONDS = 10
 const MAX_SEARCH_TIMEOUT_SECONDS = 60
 const DEFAULT_INDEX_WAIT_MS = 2_000
@@ -63,6 +69,12 @@ const MAX_INDEX_WAIT_MS = 30_000
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
+  openWorldHint: false,
+} as const
+
+const MUTATION_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
   openWorldHint: false,
 } as const
 
@@ -207,6 +219,37 @@ const CODEBASE_STRUCTURE_INPUT_SCHEMA = {
   additionalProperties: false,
 }
 
+const APPLY_EDITS_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    edits: {
+      type: 'array',
+      minItems: 1,
+      maxItems: MAX_APPLY_EDITS,
+      description: `A bounded batch of full-file writes (create or guarded overwrite), applied via the workspace mutation broker.`,
+      items: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            maxLength: MAX_PATH_CHARS,
+            description: 'Project-relative file path to write.',
+          },
+          content: {
+            type: 'string',
+            maxLength: MAX_APPLY_EDIT_CONTENT_CHARS,
+            description: 'The complete new file content.',
+          },
+        },
+        required: ['path', 'content'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['edits'],
+  additionalProperties: false,
+}
+
 /**
  * The single tool registry: the tools/list payload and the dispatch map are
  * built from these entries, so a tool can never be listed-but-unhandled or
@@ -252,6 +295,30 @@ const MCP_TOOLS: Tool[] = [
 
 const TOOL_NAMES = new Set(MCP_TOOLS.map((tool) => tool.name))
 
+/**
+ * The opt-in mutation tool, registered ONLY when the server is started with
+ * `mutations: true`. Kept as a single entry so the tools/list payload and the
+ * tools/call dispatch stay consistent from one source (the read-only path
+ * never sees it: `buildTools(false)` returns `MCP_TOOLS` untouched).
+ */
+const APPLY_EDITS_TOOL: Tool = {
+  name: 'apply_edits',
+  description:
+    'Apply a bounded batch of full-file writes (create or guarded overwrite) to the workspace via the receipt-backed mutation broker. Opt-in only (openbuff mcp --mutations).',
+  inputSchema: APPLY_EDITS_INPUT_SCHEMA,
+  annotations: { title: 'Apply edits', ...MUTATION_ANNOTATIONS },
+}
+
+/**
+ * Builds the listed-tool array from the single registry. With mutations off
+ * this is exactly `MCP_TOOLS`; with mutations on it appends the opt-in tool.
+ * The dispatch switch gates on the same source, so a tool is never
+ * listed-but-unhandled or handled-but-unlisted.
+ */
+function buildTools(mutations: boolean): Tool[] {
+  return mutations ? [...MCP_TOOLS, APPLY_EDITS_TOOL] : MCP_TOOLS
+}
+
 export type McpQueryIndexOptions = {
   limit?: number
   fileTypes?: string[]
@@ -293,6 +360,13 @@ export type CreateMcpServerOptions = {
   serverName?: string
   /** Advertised on the MCP initialize handshake. */
   serverVersion?: string
+  /**
+   * Opt-in arm for the receipt-backed `apply_edits` edit tool (default
+   * false). When true the tool is listed and handled; when absent the server
+   * is read-only and a `tools/call` for `apply_edits` hits the fail-closed
+   * unknown-tool gate.
+   */
+  mutations?: boolean
 }
 
 export type RunMcpOptions = CreateMcpServerOptions & {
@@ -807,6 +881,63 @@ function callCodebaseStructure(
   return textResult(JSON.stringify(inventory, null, 2))
 }
 
+async function callApplyEdits(
+  sessionData: McpSessionData,
+  getBroker: () => Promise<WorkspaceMutationBroker>,
+  args: unknown,
+): Promise<CallToolResult> {
+  if (!isRecord(args)) return invalid('arguments must be an object.')
+  const rawEdits = args.edits
+  if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
+    return invalid('edits must be a non-empty array.')
+  }
+  if (rawEdits.length > MAX_APPLY_EDITS) {
+    return invalid(`edits supports at most ${MAX_APPLY_EDITS} entries.`)
+  }
+  const edits: { path: string; content: string }[] = []
+  for (const entry of rawEdits) {
+    if (!isRecord(entry)) return invalid('edits entries must be objects.')
+    const pathArg = optionalString(entry.path, 'edits[].path', MAX_PATH_CHARS)
+    if (!pathArg.ok || pathArg.value === undefined) {
+      return invalid(pathArg.ok ? 'edits[].path is required.' : pathArg.message)
+    }
+    if (typeof entry.content !== 'string') {
+      return invalid('edits[].content must be a string.')
+    }
+    if (entry.content.length > MAX_APPLY_EDIT_CONTENT_CHARS) {
+      return invalid(
+        `edits[].content exceeds the ${MAX_APPLY_EDIT_CONTENT_CHARS}-character limit.`,
+      )
+    }
+    edits.push({ path: pathArg.value, content: entry.content })
+  }
+  // A broker-construction failure (lock/state-dir unavailable, identity
+  // unresolvable) surfaces as a tool error, never a crashed server.
+  let broker: WorkspaceMutationBroker
+  try {
+    broker = await getBroker()
+  } catch (error) {
+    return errorResult(
+      `Workspace mutation broker unavailable: ${errorMessage(error)}`,
+    )
+  }
+  const results: { path: string; applied: boolean; actualHash?: string }[] = []
+  for (const edit of edits) {
+    // v1 is a full-file write: `expectedHash: null` is a create/overwrite.
+    const commit = await broker.conditionalCommit(edit.path, edit.content, null)
+    results.push({
+      path: edit.path,
+      applied: commit.applied,
+      // `actualHash` exists only on the `applied: false` union variant (the
+      // hash that blocked the write); narrow before reading it.
+      ...(commit.applied === false && commit.actualHash != null
+        ? { actualHash: commit.actualHash }
+        : {}),
+    })
+  }
+  return textResult(JSON.stringify(results, null, 2))
+}
+
 /**
  * A zod-4-native `tools/call` request schema. The MCP SDK's bundled
  * `CallToolRequestSchema` is zod-v3-shaped: its `params.arguments` is a
@@ -839,7 +970,26 @@ const CALL_TOOL_REQUEST_SCHEMA_V4 = z.object({
 export function createMcpServer(options: CreateMcpServerOptions): Server {
   const { sessionData } = options
   const client: McpServerClient = options.client
+  const mutations = options.mutations === true
   const fs = client.fileSystem ?? createNodeFileSystem()
+  const tools = buildTools(mutations)
+  const toolNames = new Set(tools.map((tool) => tool.name))
+
+  // The broker is constructed once per server and memoized: a per-call
+  // `WorkspaceMutationBroker.create` would re-acquire the workspace lock for
+  // every edit. It is built LAZILY (on the first apply_edits call) so an
+  // armed server that never mutates never touches the broker state dir.
+  let brokerPromise: Promise<WorkspaceMutationBroker> | undefined
+  const getMutationBroker = (): Promise<WorkspaceMutationBroker> => {
+    brokerPromise ??= WorkspaceMutationBroker.create({
+      cwd: sessionData.projectRoot,
+      // The broker requires its state dir OUTSIDE the workspace (it rejects a
+      // state dir inside the project root), so it lives under the harness
+      // state dir rather than the project — the same convention run.ts uses.
+      stateDir: path.join(getHarnessStateDir(), 'mutation-broker'),
+    })
+    return brokerPromise
+  }
 
   const server = new Server(
     {
@@ -849,7 +999,7 @@ export function createMcpServer(options: CreateMcpServerOptions): Server {
     { capabilities: { tools: {} } },
   )
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }))
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }))
 
   server.setRequestHandler(
     // Cast: the SDK's parameter type is its bundled zod-v3-shaped schema;
@@ -859,8 +1009,9 @@ export function createMcpServer(options: CreateMcpServerOptions): Server {
     async (request) => {
       const { name, arguments: args } = request.params
       // Fail closed BEFORE any handler logic: unknown names get a structured
-      // MCP error, never a dispatched call.
-      if (!TOOL_NAMES.has(name)) {
+      // MCP error, never a dispatched call. The gate is built from the SAME
+      // tools array that tools/list served, so a listed tool is always handled.
+      if (!toolNames.has(name)) {
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`)
       }
       try {
@@ -883,6 +1034,8 @@ export function createMcpServer(options: CreateMcpServerOptions): Server {
             )
           case 'codebase_structure':
             return callCodebaseStructure(sessionData, args)
+          case 'apply_edits':
+            return await callApplyEdits(sessionData, getMutationBroker, args)
           default:
             // Unreachable given the TOOL_NAMES gate; kept so a registry edit
             // that forgets a case still fails closed.

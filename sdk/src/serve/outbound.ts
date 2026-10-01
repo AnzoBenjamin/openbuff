@@ -11,8 +11,8 @@
  *
  * The host flushes on the next tool_call, at turn end, and on cancel via
  * {@link OutboundHoldback.flush}/{@link OutboundHoldback.flushAll}, and
- * drives the 250 ms idle flush via {@link OutboundHoldback.flushIdle} (from
- * a timer it owns). Flushing emits everything held INCLUDING a tail-anchored
+ * drives the 250 ms idle flush via {@link OutboundHoldback.flushIdleSession}
+ * (from a timer it owns). Flushing emits everything held INCLUDING a tail-anchored
  * partial (documented trade-off: a message whose final characters are the
  * literal prefix of a secret — e.g. prose ending in `cap.v3.` — is emitted
  * at turn end; progressive pushes never emit such a prefix).

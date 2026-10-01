@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -96,7 +96,7 @@ describe('createMcpServer', () => {
           'codebase_structure',
         ])
         // No mutation tools are advertised by default (P1-T4: receipt-backed
-        // edits stay opt-in with the follow-up named in mcp/server.ts).
+        // edits stay opt-in behind `openbuff mcp --mutations`).
         expect(
           tools.some((tool: Tool) => /write|edit|mutat|memory/i.test(tool.name)),
         ).toBe(false)
@@ -269,6 +269,80 @@ describe('createMcpServer', () => {
         await close()
       }
       expect(typeof runMcp).toBe('function')
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('apply_edits is not listed and fails closed when mutations are off', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-server-mutations-off-'))
+    try {
+      const server = createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+      })
+      const { client, close } = await connectPair(server)
+      try {
+        const { tools } = await client.listTools()
+        expect(tools.some((tool: Tool) => tool.name === 'apply_edits')).toBe(
+          false,
+        )
+        let caught: unknown
+        try {
+          await client.callTool({
+            name: 'apply_edits',
+            arguments: { edits: [{ path: 'x.ts', content: 'export const x = 1\n' }] },
+          })
+        } catch (error) {
+          caught = error
+        }
+        expect(caught).toBeInstanceOf(McpError)
+        expect((caught as McpError).message).toContain('Unknown tool')
+      } finally {
+        await close()
+      }
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('apply_edits is listed and writes files when mutations are on', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-server-mutations-on-'))
+    try {
+      const server = createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+        mutations: true,
+      })
+      const { client, close } = await connectPair(server)
+      try {
+        const { tools } = await client.listTools()
+        const applyEdits = tools.find((tool: Tool) => tool.name === 'apply_edits')
+        expect(applyEdits).toBeDefined()
+        expect(applyEdits?.annotations?.readOnlyHint).toBe(false)
+        expect(applyEdits?.annotations?.destructiveHint).toBe(true)
+
+        const result = await client.callTool({
+          name: 'apply_edits',
+          arguments: {
+            edits: [{ path: 'note.txt', content: 'hello from apply_edits\n' }],
+          },
+        })
+        expect(result.isError).toBeUndefined()
+        const content = result.content as { type: string; text: string }[]
+        expect(content[0]?.type).toBe('text')
+        const results = JSON.parse(content[0]!.text) as {
+          path: string
+          applied: boolean
+        }[]
+        expect(results).toEqual([{ path: 'note.txt', applied: true }])
+        // The real WorkspaceMutationBroker committed the write to the project.
+        expect(readFileSync(join(projectRoot, 'note.txt'), 'utf8')).toBe(
+          'hello from apply_edits\n',
+        )
+      } finally {
+        await close()
+      }
     } finally {
       rmSync(projectRoot, { recursive: true, force: true })
     }

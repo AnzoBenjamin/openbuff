@@ -175,6 +175,51 @@ describe('serve subcommand parsing', () => {
   })
 })
 
+describe('run subcommand parsing', () => {
+  test('leaves run undefined when the subcommand is not used', () => {
+    expect(parse([]).run).toBeUndefined()
+    expect(parse(['hello']).run).toBeUndefined()
+    expect(parse(['serve']).run).toBeUndefined()
+    expect(parse(['mcp']).run).toBeUndefined()
+  })
+
+  test('joins positional prompt tokens with spaces', () => {
+    expect(parse(['run', 'hello', 'world']).run).toEqual({
+      prompt: 'hello world',
+      json: false,
+    })
+  })
+
+  test('parses --json', () => {
+    expect(parse(['run', '--json', 'fix the bug']).run).toEqual({
+      prompt: 'fix the bug',
+      json: true,
+    })
+  })
+
+  test('parses --agent into run.agentId', () => {
+    expect(parse(['run', '--agent', 'reviewer', 'do it']).run).toEqual({
+      prompt: 'do it',
+      json: false,
+      agentId: 'reviewer',
+    })
+  })
+
+  test('errors when the prompt is empty', () => {
+    expect(() => parse(['run'])).toThrow()
+  })
+
+  test('keeps the run subcommand out of the top-level result', () => {
+    const result = parse(['run', 'hello'])
+    expect(result.initialPrompt).toBeNull()
+    expect(result.serve).toBeUndefined()
+    expect(result.mcp).toBeUndefined()
+    expect(result.trustProjectAgents).toBe(false)
+    expect(result.continue).toBe(false)
+    expect(result.clearLogs).toBe(false)
+  })
+})
+
 describe('mcp subcommand parsing', () => {
   test('leaves mcp undefined when the subcommand is not used', () => {
     expect(parse([]).mcp).toBeUndefined()
@@ -183,11 +228,16 @@ describe('mcp subcommand parsing', () => {
   })
 
   test('parses bare `mcp` into ParsedArgs.mcp', () => {
-    expect(parse(['mcp']).mcp).toEqual({})
+    expect(parse(['mcp']).mcp).toEqual({ mutations: false })
+  })
+
+  test('parses --mutations into mcp.mutations', () => {
+    expect(parse(['mcp', '--mutations']).mcp).toEqual({ mutations: true })
+    expect(parse(['mcp', '--mutations']).mcp?.mutations).toBe(true)
   })
 
   test('tolerates excess arguments (allowExcessArguments)', () => {
-    expect(parse(['mcp', '--future-flag']).mcp).toEqual({})
+    expect(parse(['mcp', '--future-flag']).mcp).toEqual({ mutations: false })
   })
 
   test('keeps the mcp subcommand out of the top-level result', () => {

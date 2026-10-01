@@ -49,6 +49,7 @@ import { isTrustedProjectRoot, loadTrustedRoots } from './utils/trusted-roots'
 import type { FileTreeNode } from '@codebuff/common/util/file'
 import { runAcpServeCommand } from './serve-command'
 import { runMcpCommand } from './commands/mcp-command'
+import { runHeadlessCommand } from './commands/run-command'
 
 const require = createRequire(import.meta.url)
 
@@ -324,6 +325,7 @@ async function main(): Promise<void> {
     trustProjectAgents,
     serve,
     mcp,
+    run,
   } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
 
   const isPublishCommand = cliArgv[2] === 'publish'
@@ -403,6 +405,17 @@ async function main(): Promise<void> {
   // the renderer is created. The stdio transport keeps the event loop alive.
   if (mcp) {
     await runMcpCommand(mcp)
+    return
+  }
+
+  // `openbuff run` (P1-T5) never launches the OpenTUI renderer either: stdout
+  // is the machine-readable stream in --json mode, so we run the agent
+  // headlessly and set the process exit code from the run outcome. Prefer
+  // `process.exitCode = code` over `process.exit(code)` so the event loop
+  // drains cleanly (flushing the ndjson stream) before the process exits.
+  if (run) {
+    const code = await runHeadlessCommand(run)
+    process.exitCode = code
     return
   }
 

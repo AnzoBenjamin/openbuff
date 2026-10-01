@@ -29,10 +29,18 @@ export type ParsedArgs = {
   /**
    * Populated ONLY when the `mcp` subcommand ran (undefined otherwise).
    * P1-T4: an MCP server over stdio exposing the SDK's read-only in-process
-   * surfaces; receipt-backed edits and memory search stay opt-in/OFF (see
-   * sdk/src/mcp/server.ts), so there are no mcp-level flags this wave.
+   * surfaces. `--mutations` arms the opt-in receipt-backed edit tooling
+   * (`apply_edits`); the server stays read-only unless it is passed.
    */
-  mcp?: Record<string, never>
+  mcp?: { mutations?: boolean }
+  /**
+   * Populated ONLY when the `run` subcommand ran (undefined otherwise).
+   * P1-T5: headless/CI mode — run the agent non-interactively on a prompt.
+   * `json` selects the machine-readable ndjson event stream on stdout
+   * (otherwise only `text` events stream); `agentId` overrides the default
+   * 'base' agent. The process exit code reflects the run outcome.
+   */
+  run?: { prompt: string; json: boolean; agentId?: string }
 }
 
 export function parseCliArgs(
@@ -133,6 +141,10 @@ export function parseCliArgs(
     mcpProgram
       .name('openbuff mcp')
       .description('Run the Openbuff MCP server over stdio')
+      .option(
+        '--mutations',
+        'Arm receipt-backed edit tooling (apply_edits) on the MCP server',
+      )
       .allowExcessArguments(true)
       // Tolerate unknown options too: an MCP host config may pass flags a
       // future CLI understands; failing hard on them would break the host.
@@ -141,7 +153,7 @@ export function parseCliArgs(
       mcpProgram.exitOverride()
     }
     // Re-attach the node/script prefix and drop the leading `mcp` token so
-    // commander parses only the mcp-specific options (none yet).
+    // commander parses only the mcp-specific options (currently --mutations).
     mcpProgram.parse([argv[0], argv[1], ...userArgs.slice(1)])
     return {
       initialPrompt: null,
@@ -149,7 +161,51 @@ export function parseCliArgs(
       continue: false,
       continueId: null,
       trustProjectAgents: false,
-      mcp: {},
+      mcp: { mutations: mcpProgram.opts().mutations === true },
+    }
+  }
+
+  if (userArgs[0] === 'run') {
+    // `openbuff run` subcommand (P1-T5): headless/CI mode. Kept off the
+    // top-level program for exactly the reason the comment above names for
+    // `serve`: registering `.command('run')` there would break positional
+    // prompts. stdout carries ONLY the machine-readable stream in --json mode.
+    const runProgram = new Command()
+    runProgram
+      .name('openbuff run')
+      .description(
+        'Run an agent non-interactively on a prompt and exit (headless/CI mode)',
+      )
+      .option(
+        '--json',
+        'Emit machine-readable events (one JSON object per line) on stdout',
+      )
+      .option('--agent <id>', 'Run a specific agent id (default: base)')
+      .argument('<prompt...>', 'Prompt to send to the agent')
+      .allowExcessArguments(true)
+    if (options.exitOverride) {
+      runProgram.exitOverride()
+    }
+    // Re-attach the node/script prefix and drop the leading `run` token so
+    // commander parses only the run-specific options. `.argument('<prompt...>')
+    // is required, so a run with no prompt errors via commander's error path
+    // (exitOverride in tests, process exit in production) and never launches.
+    runProgram.parse([argv[0], argv[1], ...userArgs.slice(1)])
+    const runOpts = runProgram.opts()
+    const prompt = runProgram.args.join(' ')
+    const runAgentId =
+      typeof runOpts.agent === 'string' ? runOpts.agent : undefined
+    return {
+      initialPrompt: null,
+      clearLogs: false,
+      continue: false,
+      continueId: null,
+      trustProjectAgents: false,
+      run: {
+        prompt,
+        json: runOpts.json === true,
+        ...(runAgentId ? { agentId: runAgentId } : {}),
+      },
     }
   }
 
