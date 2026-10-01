@@ -145,6 +145,10 @@ export function isSensitivePath(p: string): boolean {
   if (
     lower === '.git-credentials' ||
     lower === '.netrc' ||
+    // Package-registry auth files carry tokens; a card touching one must not
+    // leak the registry credentials it writes.
+    lower === '.npmrc' ||
+    lower === '.pypirc' ||
     lower === 'credentials'
   ) {
     return true

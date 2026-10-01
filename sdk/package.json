@@ -60,6 +60,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.5.0",
     "@ai-sdk/anthropic": "2.0.50",
+    "@modelcontextprotocol/sdk": "^1.18.2",
     "@jitl/quickjs-wasmfile-release-sync": "0.31.0",
     "@types/ws": "8.18.1",
     "@vscode/tree-sitter-wasm": "0.1.4",

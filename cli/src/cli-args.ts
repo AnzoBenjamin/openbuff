@@ -26,6 +26,13 @@ export type ParsedArgs = {
         agentId?: string
         trustProjectAgents: boolean
       }
+  /**
+   * Populated ONLY when the `mcp` subcommand ran (undefined otherwise).
+   * P1-T4: an MCP server over stdio exposing the SDK's read-only in-process
+   * surfaces; receipt-backed edits and memory search stay opt-in/OFF (see
+   * sdk/src/mcp/server.ts), so there are no mcp-level flags this wave.
+   */
+  mcp?: Record<string, never>
 }
 
 export function parseCliArgs(
@@ -34,7 +41,8 @@ export function parseCliArgs(
 ): ParsedArgs {
   // The tests (and cli/src/index.tsx) pass a full argv with the node+script
   // prefix, i.e. ['node', 'openbuff', ...userArgs]. Detect an explicit leading
-  // `serve` token in the user args BEFORE constructing the top-level program.
+  // subcommand token (`serve`, `mcp`) in the user args BEFORE constructing the
+  // top-level program.
   // Registering `.command('serve')` on the same program that parses prompts
   // makes commander treat the first positional prompt as an unknown command,
   // so the two paths are kept fully separate.
@@ -79,6 +87,18 @@ export function parseCliArgs(
       typeof serveOpts.agent === 'string' ? serveOpts.agent : undefined
     // Serve-level trust flag (NEW-2): defaults to false when absent.
     const serveTrustProjectAgents = serveOpts.trustProjectAgents === true
+    // SEC-4: an explicitly EMPTY --socket-token ("" or whitespace) is an
+    // auth bypass — any client satisfies an empty expected token — so it is
+    // rejected, never carried. Omitting the flag stays the documented path
+    // (the CLI generates a 256-bit CSPRNG token).
+    if (
+      typeof serveOpts.socketToken === 'string' &&
+      serveOpts.socketToken.trim().length === 0
+    ) {
+      serveProgram.error(
+        '--socket-token must not be empty (omit it to generate one)',
+      )
+    }
     const serve: ParsedArgs['serve'] =
       typeof serveOpts.socket === 'string'
         ? {
@@ -102,6 +122,34 @@ export function parseCliArgs(
       continueId: null,
       trustProjectAgents: false,
       serve,
+    }
+  }
+
+  if (userArgs[0] === 'mcp') {
+    // `openbuff mcp` subcommand (P1-T4). Kept off the top-level program for
+    // exactly the reason the comment above names for `serve`: registering
+    // `.command('mcp')` there would break positional prompts.
+    const mcpProgram = new Command()
+    mcpProgram
+      .name('openbuff mcp')
+      .description('Run the Openbuff MCP server over stdio')
+      .allowExcessArguments(true)
+      // Tolerate unknown options too: an MCP host config may pass flags a
+      // future CLI understands; failing hard on them would break the host.
+      .allowUnknownOption(true)
+    if (options.exitOverride) {
+      mcpProgram.exitOverride()
+    }
+    // Re-attach the node/script prefix and drop the leading `mcp` token so
+    // commander parses only the mcp-specific options (none yet).
+    mcpProgram.parse([argv[0], argv[1], ...userArgs.slice(1)])
+    return {
+      initialPrompt: null,
+      clearLogs: false,
+      continue: false,
+      continueId: null,
+      trustProjectAgents: false,
+      mcp: {},
     }
   }
 
@@ -157,5 +205,6 @@ export function parseCliArgs(
     initialMode: parsed.plan ? 'PLAN' : undefined,
     trustProjectAgents: parsed.trustProjectAgents === true,
     serve: undefined,
+    mcp: undefined,
   }
 }

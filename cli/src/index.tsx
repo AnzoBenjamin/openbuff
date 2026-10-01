@@ -48,6 +48,7 @@ import { isTrustedProjectRoot, loadTrustedRoots } from './utils/trusted-roots'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
 import { runAcpServeCommand } from './serve-command'
+import { runMcpCommand } from './commands/mcp-command'
 
 const require = createRequire(import.meta.url)
 
@@ -322,6 +323,7 @@ async function main(): Promise<void> {
     initialMode,
     trustProjectAgents,
     serve,
+    mcp,
   } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
 
   const isPublishCommand = cliArgv[2] === 'publish'
@@ -393,6 +395,14 @@ async function main(): Promise<void> {
   // renderer is created. The stdio/socket transport keeps the event loop alive.
   if (serve) {
     await runAcpServeCommand({ ...serve, trustProjectAgents: effectiveTrust })
+    return
+  }
+
+  // `openbuff mcp` never launches the OpenTUI renderer either: stdout is the
+  // MCP protocol wire, so we start the server and return from main() before
+  // the renderer is created. The stdio transport keeps the event loop alive.
+  if (mcp) {
+    await runMcpCommand(mcp)
     return
   }
 

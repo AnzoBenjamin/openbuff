@@ -147,6 +147,14 @@ export { serveAcpOverSocket } from './serve/socket-listener'
 export type { ServeAcpOverSocketOptions } from './serve/socket-listener'
 export { runServe } from './serve/serve'
 export type { RunServeOptions } from './serve/serve'
+export { createMcpServer, runMcp } from './mcp/server'
+export type {
+  CreateMcpServerOptions,
+  McpIndexManager,
+  McpServerClient,
+  McpSessionData,
+  RunMcpOptions,
+} from './mcp/server'
 export { AcpSessionData } from './services/acp/session-data'
 export type { AcpSessionDataOptions } from './services/acp/session-data'
 export * from './custom-tool'

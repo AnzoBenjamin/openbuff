@@ -456,7 +456,14 @@ export function sanitizeOutboundStream(
       }
       await writeThrough(target, encoder.encode(sanitized))
     },
-    close() {
+    async close() {
+      // Flush the streaming decoder's tail before closing: a frame whose final
+      // bytes are an incomplete UTF-8 sequence is held by `stream: true`
+      // decoding and must still be sanitized and written before the wire ends.
+      const tail = decoder.decode()
+      if (tail.length > 0) {
+        await writeThrough(target, encoder.encode(sanitizeOutbound(tail)))
+      }
       return closeThrough(target)
     },
     abort(reason) {

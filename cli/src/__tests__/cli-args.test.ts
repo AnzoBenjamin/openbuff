@@ -174,3 +174,28 @@ describe('serve subcommand parsing', () => {
     )
   })
 })
+
+describe('mcp subcommand parsing', () => {
+  test('leaves mcp undefined when the subcommand is not used', () => {
+    expect(parse([]).mcp).toBeUndefined()
+    expect(parse(['hello']).mcp).toBeUndefined()
+    expect(parse(['serve']).mcp).toBeUndefined()
+  })
+
+  test('parses bare `mcp` into ParsedArgs.mcp', () => {
+    expect(parse(['mcp']).mcp).toEqual({})
+  })
+
+  test('tolerates excess arguments (allowExcessArguments)', () => {
+    expect(parse(['mcp', '--future-flag']).mcp).toEqual({})
+  })
+
+  test('keeps the mcp subcommand out of the top-level result', () => {
+    const result = parse(['mcp'])
+    expect(result.initialPrompt).toBeNull()
+    expect(result.serve).toBeUndefined()
+    expect(result.trustProjectAgents).toBe(false)
+    expect(result.continue).toBe(false)
+    expect(result.clearLogs).toBe(false)
+  })
+})
