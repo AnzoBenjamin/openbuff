@@ -42,6 +42,16 @@ export type ParsedArgs = {
    */
   run?: { prompt: string; json: boolean; agentId?: string }
   /**
+   * Populated ONLY when the `replay` subcommand ran (undefined otherwise).
+   * P2-T3: deterministic replay/fork of a P2-T2 run journal. `runId` names
+   * the run to replay (required positional); `fromStep` replays from a step
+   * boundary; `model` overrides the replayed run's model; `json` selects the
+   * machine-readable ndjson event stream on stdout (otherwise a
+   * human-readable replay trace). The process exit code reflects the replay
+   * outcome.
+   */
+  replay?: { runId: string; fromStep?: number; model?: string; json: boolean }
+  /**
    * P1-T3 TUI attach mode. Populated ONLY when `--attach` (optionally with
    * `--serve-socket`/`--serve-token`) is passed; `undefined` keeps the
    * default in-process backend. When set, the CLI's client runs prompts
@@ -213,6 +223,68 @@ export function parseCliArgs(
         prompt,
         json: runOpts.json === true,
         ...(runAgentId ? { agentId: runAgentId } : {}),
+      },
+    }
+  }
+
+  if (userArgs[0] === 'replay') {
+    // `openbuff replay` subcommand (P2-T3): deterministic replay/fork of a
+    // P2-T2 run journal. Kept off the top-level program for exactly the
+    // reason the comment above names for `serve`: registering
+    // `.command('replay')` there would break positional prompts. stdout
+    // carries ONLY the machine-readable stream in --json mode.
+    const replayProgram = new Command()
+    replayProgram
+      .name('openbuff replay')
+      .description(
+        'Replay a journaled run deterministically (optionally from a step boundary / with a model override)',
+      )
+      .argument('<runId>', 'Run id to replay')
+      .option('--from-step <n>', 'Replay from a step boundary')
+      .option('--model <id>', 'Override the model for the replayed run')
+      .option(
+        '--json',
+        'Emit machine-readable events (one JSON object per line) on stdout',
+      )
+      .allowExcessArguments(true)
+    if (options.exitOverride) {
+      replayProgram.exitOverride()
+    }
+    // Re-attach the node/script prefix and drop the leading `replay` token so
+    // commander parses only the replay-specific options. `.argument('<runId>')
+    // is required, so a replay with no runId errors via commander's error path
+    // (exitOverride in tests, process exit in production) and never runs.
+    replayProgram.parse([argv[0], argv[1], ...userArgs.slice(1)])
+    const replayOpts = replayProgram.opts()
+    const runId = replayProgram.args[0]
+    // Validate --from-step: commander passes the raw string through, so the
+    // documented fail-closed contract requires a strict DECIMAL integer.
+    // Plain `Number()` parsing is too lax: '' / '   ' parse to 0 (silently
+    // replaying from step 0) and '0x10' / '1e2' parse as integers, so an
+    // explicit decimal-digit check runs first and any other shape errors.
+    let fromStep: number | undefined
+    if (typeof replayOpts.fromStep === 'string') {
+      const rawFromStep = replayOpts.fromStep.trim()
+      if (!/^\d+$/.test(rawFromStep)) {
+        replayProgram.error(
+          `--from-step must be a non-negative integer, got ${JSON.stringify(replayOpts.fromStep)}`,
+        )
+      }
+      fromStep = Number(rawFromStep)
+    }
+    const replayModel =
+      typeof replayOpts.model === 'string' ? replayOpts.model : undefined
+    return {
+      initialPrompt: null,
+      clearLogs: false,
+      continue: false,
+      continueId: null,
+      trustProjectAgents: false,
+      replay: {
+        runId,
+        ...(fromStep !== undefined ? { fromStep } : {}),
+        ...(replayModel ? { model: replayModel } : {}),
+        json: replayOpts.json === true,
       },
     }
   }

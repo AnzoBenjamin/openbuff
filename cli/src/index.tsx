@@ -52,6 +52,7 @@ import { isTrustedProjectRoot, loadTrustedRoots } from './utils/trusted-roots'
 import type { FileTreeNode } from '@codebuff/common/util/file'
 import { runAcpServeCommand } from './serve-command'
 import { runMcpCommand } from './commands/mcp-command'
+import { runReplayCommand } from './commands/replay-command'
 import { runHeadlessCommand } from './commands/run-command'
 
 const require = createRequire(import.meta.url)
@@ -329,6 +330,7 @@ async function main(): Promise<void> {
     serve,
     mcp,
     run,
+    replay,
     attach,
   } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
 
@@ -434,6 +436,18 @@ async function main(): Promise<void> {
   // drains cleanly (flushing the ndjson stream) before the process exits.
   if (run) {
     const code = await runHeadlessCommand(run)
+    process.exitCode = code
+    return
+  }
+
+  // `openbuff replay` (P2-T3) never launches the OpenTUI renderer either:
+  // stdout is the machine-readable stream in --json mode, so we replay the
+  // journaled run deterministically and set the process exit code from the
+  // replay outcome. Prefer `process.exitCode = code` over `process.exit(code)`
+  // so the event loop drains cleanly (flushing the ndjson stream) before the
+  // process exits.
+  if (replay) {
+    const code = await runReplayCommand(replay)
     process.exitCode = code
     return
   }

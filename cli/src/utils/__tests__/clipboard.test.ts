@@ -721,6 +721,87 @@ describe('clipboard', () => {
     })
   })
 
+  describe('copyTextToClipboard - Wayland wl-copy (P1-T7)', () => {
+    // The wl-copy branch in tryCopyViaPlatformTool only fires on Linux with a
+    // Wayland session; these tests stub execSync to observe the tool order
+    // without touching a real clipboard.
+    let originalPlatform: PropertyDescriptor | undefined
+    let originalWayland: string | undefined
+    let originalSessionType: string | undefined
+
+    beforeEach(() => {
+      originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+      originalWayland = process.env.WAYLAND_DISPLAY
+      originalSessionType = process.env.XDG_SESSION_TYPE
+      Object.defineProperty(process, 'platform', {
+        value: 'linux',
+        configurable: true,
+      })
+      clearClipboardMessage()
+    })
+
+    afterEach(() => {
+      if (originalPlatform) {
+        Object.defineProperty(process, 'platform', originalPlatform)
+      }
+      if (originalWayland !== undefined)
+        process.env.WAYLAND_DISPLAY = originalWayland
+      else delete process.env.WAYLAND_DISPLAY
+      if (originalSessionType !== undefined)
+        process.env.XDG_SESSION_TYPE = originalSessionType
+      else delete process.env.XDG_SESSION_TYPE
+      clearClipboardMessage()
+    })
+
+    test('on Wayland, wl-copy is attempted before xclip/xsel', async () => {
+      process.env.WAYLAND_DISPLAY = 'wayland-0'
+      // Spy on the child_process module the module under test resolves through
+      // createRequire, and record the tool order it attempts.
+      const calls: string[] = []
+      const execSpy = spyOn(
+        require('child_process') as typeof import('child_process'),
+        'execSync',
+      ).mockImplementation(((cmd: string) => {
+        calls.push(cmd)
+        if (cmd.startsWith('wl-copy')) {
+          throw new Error('wl-copy not installed')
+        }
+        return Buffer.from('')
+      }) as typeof import('child_process').execSync)
+      try {
+        await copyTextToClipboard('test text', { suppressGlobalMessage: true })
+      } catch {
+        // The copy may still fail in CI if no tool is present; the order is what
+        // matters.
+      } finally {
+        execSpy.mockRestore()
+      }
+      // wl-copy must be the FIRST tool attempted on a Wayland session.
+      expect(calls[0]).toBe('wl-copy')
+    })
+
+    test('off Wayland, the wl-copy branch is skipped', async () => {
+      delete process.env.WAYLAND_DISPLAY
+      delete process.env.XDG_SESSION_TYPE
+      const calls: string[] = []
+      const execSpy = spyOn(
+        require('child_process') as typeof import('child_process'),
+        'execSync',
+      ).mockImplementation(((cmd: string) => {
+        calls.push(cmd)
+        return Buffer.from('')
+      }) as typeof import('child_process').execSync)
+      try {
+        await copyTextToClipboard('test text', { suppressGlobalMessage: true })
+      } catch {
+        // The copy may fail in CI; the assertion is about wl-copy not running.
+      } finally {
+        execSpy.mockRestore()
+      }
+      expect(calls.some((c) => c.startsWith('wl-copy'))).toBe(false)
+    })
+  })
+
   describe('copyTextToClipboard - OSC52 behavior', () => {
     // Tests for OSC52 escape sequence behavior.
     // OSC52 is used for clipboard access over SSH and in terminal multiplexers.

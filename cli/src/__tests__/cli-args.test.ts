@@ -220,6 +220,100 @@ describe('run subcommand parsing', () => {
   })
 })
 
+describe('replay subcommand parsing (P2-T3)', () => {
+  test('leaves replay undefined when the subcommand is not used', () => {
+    expect(parse([]).replay).toBeUndefined()
+    expect(parse(['hello']).replay).toBeUndefined()
+    expect(parse(['serve']).replay).toBeUndefined()
+    expect(parse(['mcp']).replay).toBeUndefined()
+    expect(parse(['run', 'hello']).replay).toBeUndefined()
+  })
+
+  test('parses a bare runId with json off and no overrides', () => {
+    expect(parse(['replay', 'run-123']).replay).toEqual({
+      runId: 'run-123',
+      json: false,
+    })
+  })
+
+  test('errors when the runId is missing', () => {
+    expect(() => parse(['replay'])).toThrow()
+  })
+
+  test('parses --json', () => {
+    expect(parse(['replay', 'run-123', '--json']).replay).toEqual({
+      runId: 'run-123',
+      json: true,
+    })
+  })
+
+  test('parses --from-step into replay.fromStep', () => {
+    expect(parse(['replay', 'run-123', '--from-step', '4']).replay).toEqual({
+      runId: 'run-123',
+      fromStep: 4,
+      json: false,
+    })
+  })
+
+  test('rejects a non-integer --from-step', () => {
+    expect(() => parse(['replay', 'run-123', '--from-step', 'nope'])).toThrow()
+  })
+
+  test('rejects an empty/whitespace --from-step instead of silently replaying from step 0', () => {
+    // Fail-closed contract: Number('') is 0, which used to be silently
+    // treated as 'no fromStep' (a full replay from the beginning).
+    expect(() => parse(['replay', 'run-123', '--from-step', ''])).toThrow()
+    expect(() => parse(['replay', 'run-123', '--from-step', '   '])).toThrow()
+  })
+
+  test('rejects non-decimal numeric forms of --from-step', () => {
+    // Number('0x10') is 16 and Number('1e2') is 100; neither is a decimal
+    // integer literal, so both must error rather than parse.
+    expect(() => parse(['replay', 'run-123', '--from-step', '0x10'])).toThrow()
+    expect(() => parse(['replay', 'run-123', '--from-step', '1e2'])).toThrow()
+  })
+
+  test('parses --model into replay.model', () => {
+    expect(
+      parse(['replay', 'run-123', '--model', 'anthropic/claude-opus-4']).replay,
+    ).toEqual({
+      runId: 'run-123',
+      model: 'anthropic/claude-opus-4',
+      json: false,
+    })
+  })
+
+  test('parses --from-step, --model and --json together', () => {
+    expect(
+      parse([
+        'replay',
+        'run-123',
+        '--from-step',
+        '2',
+        '--model',
+        'openai/gpt-5.1',
+        '--json',
+      ]).replay,
+    ).toEqual({
+      runId: 'run-123',
+      fromStep: 2,
+      model: 'openai/gpt-5.1',
+      json: true,
+    })
+  })
+
+  test('keeps the replay subcommand out of the top-level result', () => {
+    const result = parse(['replay', 'run-123', '--json'])
+    expect(result.initialPrompt).toBeNull()
+    expect(result.serve).toBeUndefined()
+    expect(result.mcp).toBeUndefined()
+    expect(result.run).toBeUndefined()
+    expect(result.trustProjectAgents).toBe(false)
+    expect(result.continue).toBe(false)
+    expect(result.clearLogs).toBe(false)
+  })
+})
+
 describe('attach flag parsing (P1-T3)', () => {
   test('leaves attach undefined by default', () => {
     expect(parse([]).attach).toBeUndefined()

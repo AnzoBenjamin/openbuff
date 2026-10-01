@@ -293,8 +293,6 @@ const MCP_TOOLS: Tool[] = [
   },
 ]
 
-const TOOL_NAMES = new Set(MCP_TOOLS.map((tool) => tool.name))
-
 /**
  * The opt-in mutation tool, registered ONLY when the server is started with
  * `mutations: true`. Kept as a single entry so the tools/list payload and the
@@ -351,6 +349,41 @@ export type McpServerClient = {
   fileSystem?: CodebuffFileSystem
   fileFilter?: (filePath: string) => { status: 'blocked' | 'allow-example' | 'allow' }
   logger?: Logger
+}
+
+/**
+ * The public handle to a created MCP server. This is a STRUCTURAL interface
+ * covering only what the SDK's public surface and its callers use
+ * (`connect`/`close`/`setRequestHandler`) — NOT the concrete
+ * `@modelcontextprotocol/sdk` `Server` class.
+ *
+ * Why: that class's bundled `.d.ts` references zod-v3-only symbols
+ * (`objectOutputType`, `objectInputType`, …) that do not exist under this
+ * workspace's hoisted zod 4.x, so re-exporting the concrete `Server` type from
+ * the SDK's public declaration surface makes `dts-bundle-generator` fail the CI
+ * `cd sdk && bun run build` step with `Cannot find symbol for node
+ * "objectOutputType"` (P1-T4 follow-up). Returning this structural type keeps
+ * the MCP SDK's zod-typed internals OUT of the public `.d.ts`.
+ *
+ * MIGRATION NOTE (type-level breaking change for @openbuff/sdk consumers):
+ * `createMcpServer` previously returned the concrete MCP SDK `Server`; it now
+ * returns ONLY this structural surface (`connect`/`close`). Code that used
+ * the concrete surface on the returned object — `setRequestHandler(...)`,
+ * the `transport` property, or additional `on*` registrations — will no
+ * longer typecheck. Migrate by constructing and wiring your own
+ * `@modelcontextprotocol/sdk` `Server` for those handlers (the
+ * `setRequestHandler` registrations inside `createMcpServer` show the
+ * pattern) and keep using this handle for `connect`/`close` only. The
+ * runtime object is unchanged: this is a type-level narrowing only.
+ */
+export interface McpServer {
+  // The transport is typed `unknown` (not the MCP SDK's `Transport`): the SDK
+  // only ever passes a transport it just constructed (runMcp) or a linked test
+  // transport, and referencing the SDK's `Transport` would re-introduce its
+  // zod-typed .d.ts into our public declaration surface. `unknown` keeps the
+  // concrete `Server` assignable (connect(transport: Transport) accepts it).
+  connect(transport: unknown): Promise<void>
+  close(): Promise<void>
 }
 
 export type CreateMcpServerOptions = {
@@ -966,8 +999,12 @@ const CALL_TOOL_REQUEST_SCHEMA_V4 = z.object({
  * Fail-closed posture: an unknown tool name throws `McpError(MethodNotFound)`
  * (a structured JSON-RPC error, never a process crash), and every handler
  * exception is converted to a tool-level `{ isError: true }` result.
+ *
+ * Public return type: the structural `McpServer` (connect/close only), NOT
+ * the concrete MCP SDK `Server` — see the migration note on that interface
+ * before relying on the concrete Server surface.
  */
-export function createMcpServer(options: CreateMcpServerOptions): Server {
+export function createMcpServer(options: CreateMcpServerOptions): McpServer {
   const { sessionData } = options
   const client: McpServerClient = options.client
   const mutations = options.mutations === true
@@ -1037,7 +1074,7 @@ export function createMcpServer(options: CreateMcpServerOptions): Server {
           case 'apply_edits':
             return await callApplyEdits(sessionData, getMutationBroker, args)
           default:
-            // Unreachable given the TOOL_NAMES gate; kept so a registry edit
+            // Unreachable given the toolNames gate; kept so a registry edit
             // that forgets a case still fails closed.
             throw new McpError(
               ErrorCode.MethodNotFound,

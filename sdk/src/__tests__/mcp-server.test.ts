@@ -10,7 +10,7 @@ import { McpError, type Tool } from '@modelcontextprotocol/sdk/types.js'
 
 import { createMcpServer, runMcp } from '../mcp/server'
 
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import type { McpServer } from '../mcp/server'
 import type { QueryIndexResult } from '@codebuff/indexer'
 
 /**
@@ -19,7 +19,7 @@ import type { QueryIndexResult } from '@codebuff/indexer'
  * `InMemoryTransport.createLinkedPair()`, so tools/list and tools/call ride
  * the actual JSON-RPC wire in-process.
  */
-async function connectPair(server: Server): Promise<{
+async function connectPair(server: McpServer): Promise<{
   client: Client
   close: () => Promise<void>
 }> {
@@ -343,6 +343,23 @@ describe('createMcpServer', () => {
       } finally {
         await close()
       }
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('createMcpServer returns the structural McpServer handle (connect/close public surface)', () => {
+    // Pins the deliberate type-level narrowing: the public SDK handle is the
+    // structural `McpServer` (connect/close only), NOT the concrete MCP SDK
+    // `Server`. See the migration note on the `McpServer` interface.
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-server-surface-'))
+    try {
+      const server: McpServer = createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+      })
+      expect(typeof server.connect).toBe('function')
+      expect(typeof server.close).toBe('function')
     } finally {
       rmSync(projectRoot, { recursive: true, force: true })
     }
