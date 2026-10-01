@@ -125,7 +125,20 @@ describe('languages module', () => {
     it('should keep every language entry paired with a query and declared wasm file', () => {
       for (const config of languageTable) {
         expect(Object.values(WASM_FILES)).toContain(config.wasmFile)
-        expect(config.queryPathOrContent.trim().length).toBeGreaterThan(0)
+        // queryPathOrContent now carries the bare .scm file name (resolved
+        // to an absolute path and read from disk at query-load time).
+        expect(config.queryPathOrContent.endsWith('.scm')).toBe(true)
+        const queryPath = path.join(
+          __dirname,
+          '..',
+          'src',
+          'tree-sitter-queries',
+          config.queryPathOrContent,
+        )
+        expect(fs.existsSync(queryPath)).toBe(true)
+        expect(
+          fs.readFileSync(queryPath, 'utf8').trim().length,
+        ).toBeGreaterThan(0)
       }
     })
   })
