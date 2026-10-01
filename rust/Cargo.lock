@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "openbuff-native"
+version = "0.1.0"
+dependencies = [
+ "openbuff-workspace-harness",
+]
+
+[[package]]
 name = "openbuff-workspace-harness"
 version = "0.1.0"

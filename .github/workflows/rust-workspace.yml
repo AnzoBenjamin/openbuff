@@ -1,7 +1,14 @@
 # X-3b: fresh Rust workspace CI (charter rule 2: CI runs the native path from
-# day one — build AND test, never a build-only path). One single-purpose job;
-# the target matrix stays commented out until the first real sidecar crate
-# ships (charter rule 2: gate matrix legs behind the first real crate).
+# day one — build AND test, never a build-only path).
+#
+# Two jobs:
+# - build-test: host build + host tests (the day-one gate).
+# - build-targets: the gated 5-target matrix, ACTIVE since the first real
+#   sidecar crate (`openbuff-native`) shipped. Every leg builds the whole
+#   workspace for its target and uploads the `openbuff-native` binary;
+#   tests run ONLY where the test binaries can execute on the runner
+#   (cross-compiled test binaries cannot, so non-host legs build-only), and
+#   the CLI smoke script runs on the host-runnable linux-gnu leg.
 name: rust-workspace
 
 on:
@@ -14,6 +21,9 @@ on:
       - "rust/**"
       - ".github/workflows/rust-workspace.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build-test:
@@ -37,24 +47,74 @@ jobs:
       - run: cargo build --workspace
       - run: cargo test --workspace
 
-      # Nothing is uploaded yet — artifacts come with the first real sidecar
-      # (charter rule 4: no built-but-unpublished CI spend).
+  # D49: `openbuff-native` is ONE multi-call binary shipped for all 5 targets.
+  # Zero external crate dependencies keeps every cross-compile trivial (no C
+  # toolchain matrix), so each leg needs only `rustup target add` for the
+  # target std. Tests run only on host-runnable legs; the smoke script runs on
+  # linux-gnu (the one guaranteed-runnable leg — no macos/arm runner is
+  # provisioned for this workflow, so darwin/musl/aarch64/msvc legs stop at
+  # build + artifact).
+  build-targets:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runs-tests: true
+            runs-smoke: true
+          - target: x86_64-unknown-linux-musl
+            runs-tests: false
+            runs-smoke: false
+          - target: aarch64-unknown-linux-gnu
+            runs-tests: false
+            runs-smoke: false
+          - target: x86_64-pc-windows-msvc
+            runs-tests: false
+            runs-smoke: false
+          - target: x86_64-apple-darwin
+            runs-tests: false
+            runs-smoke: false
+    name: build-target-${{ matrix.target }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
 
-      # Target matrix goes here once the first real sidecar crate ships
-      # (charter rule 2). Each leg must build AND smoke-test its binary —
-      # reuse the cli-release-build.yml cross-compile patterns (explicit
-      # `rustup target add` + static musl linking). Sketch:
-      #
-      # strategy:
-      #   matrix:
-      #     target:
-      #       - x86_64-unknown-linux-gnu
-      #       - x86_64-unknown-linux-musl
-      #       - aarch64-unknown-linux-gnu
-      #       - x86_64-pc-windows-msvc
-      #       - x86_64-apple-darwin
-      # steps:
-      #   - run: rustup target add ${{ matrix.target }}
-      #   - run: cargo build --workspace --target ${{ matrix.target }} --release
-      #   - run: cargo test --workspace --target ${{ matrix.target }}
-      #   - run: ./scripts/smoke-test-sidecar.sh ${{ matrix.target }}
+      # Same explicit 1.87.0 pin as build-test; `targets:` installs the target
+      # std in one rustup pass.
+      - uses: dtolnay/rust-toolchain@1.87.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.target }}
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - run: cargo build --workspace --target ${{ matrix.target }} --release
+
+      # Cross-compiled test binaries cannot execute without emulation, so
+      # `cargo test` runs only where host == target.
+      - run: cargo test --workspace
+        if: matrix.runs-tests == 'true'
+
+      # Charter rule 2: the leg that CAN run the binary must smoke-test it.
+      - name: Smoke test openbuff-native
+        if: matrix.runs-smoke == 'true'
+        run: ./scripts/smoke-test-sidecar.sh target/x86_64-unknown-linux-gnu/release/openbuff-native
+
+      # Per-target binary artifact (windows leg produces openbuff-native.exe;
+      # the glob covers both spellings). Matches ci.yml's pinned upload-artifact
+      # v4 usage; `if: always()` so a failed test/smoke step still preserves the
+      # built binary for debugging.
+      - name: Upload openbuff-native binary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openbuff-native-${{ matrix.target }}
+          path: rust/target/${{ matrix.target }}/release/openbuff-native*
+          if-no-files-found: error
