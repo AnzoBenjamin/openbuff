@@ -17,7 +17,8 @@ napi bindings; napi kernels exist only where X-2 evidence justifies them.
   workspace builds and tests green from day one (PC-6).
 - **`openbuff-native`** — the ONE multi-call sidecar binary (D49):
   `openbuff-native <exec|daemon|infer|plugin-host|a11y|version>`. Role
-  dispatch is pure functions in `src/lib.rs` with unit tests; every known
+  dispatch is pure functions in `crates/openbuff-native/src/lib.rs` with unit
+  tests; every known
   role is an explicit fail-loud `not_implemented` (exit 2) until P5-T1+
   lands the real implementations. Smoke-tested by
   `rust/scripts/smoke-test-sidecar.sh` (exit codes + stdout contract), which
