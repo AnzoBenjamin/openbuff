@@ -139,6 +139,10 @@ import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
 import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
 import { getSystemProcessEnv } from './env'
 import { spawn as nodeSpawn } from 'node:child_process'
+import type {
+  JournalReader,
+  JournalWriter,
+} from '@codebuff/common/types/contracts/agent-runtime'
 
 /**
  * Stable trusted background-job ownership seed for THIS client session.
@@ -314,6 +318,29 @@ export type OpenbuffClientOptions = {
    *  unref'd so it won't keep a host process alive on its own; it still fires
    *  while the event loop is busy with the active run. */
   runTimeoutMs?: number
+
+  /**
+   * P1-T3 backend seam. Optional pluggable execution backend for
+   * `OpenbuffClient.run()`. When omitted, the in-process backend (today's
+   * `run()`) is used and behavior is byte-identical to before. Supplying a
+   * backend (e.g. `AcpRemoteBackend`) routes the run through it instead, so a
+   * host can attach to a live `openbuff serve` session. Additive-optional.
+   */
+  backend?: import('./client/backend').ClientBackend
+
+  /** P2-T2: append-only run-journal writer (see createRunJournal in
+   *  @codebuff/agent-runtime/util/run-journal). Threaded into the agent
+   *  runtime deps so the run loop journals tool_call/tool_result/step
+   *  boundaries for crash-safe resume. Additive-optional: a run without it
+   *  is byte-identical to today (no journaling occurs). */
+  journalWriter?: JournalWriter
+
+  /** P2-T2: run-journal reader threaded into the agent runtime deps so the
+   *  existing guarded block in runAgentStep classifies/replays interrupted
+   *  prior work, and so the §4c replay short-circuit reuses journaled tool
+   *  results (keyed deterministically by toolName+input per P2-T2-DESIGN §5,
+   *  never by the freshly-minted toolCallId). Additive-optional. */
+  journalReader?: JournalReader
 }
 
 export type FilesystemMutationEvent = {
@@ -630,6 +657,8 @@ async function runOnce({
   spawnSource,
   logger,
   memoryV2,
+  journalWriter,
+  journalReader,
 
   agent,
   prompt,
@@ -1106,6 +1135,8 @@ async function runOnce({
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
     apiKey,
+    journalWriter,
+    journalReader,
     handleStepsLogChunk: () => {
       // Does nothing for now
     },

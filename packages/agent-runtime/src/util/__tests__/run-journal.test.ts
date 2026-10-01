@@ -242,6 +242,177 @@ describe('createRunJournal (JournalWriter/JournalReader)', () => {
       journal.close()
     }
   })
+
+  // P2-T2-DESIGN §5 (replay requires reproducible ids): the deterministic
+  // short-circuit keys on the journaled tool_call PAYLOAD (toolName + input),
+  // NOT the freshly-minted toolCallId, so it reproduces across a restart.
+  it('toolResultForInput matches a journaled call by toolName+input regardless of its correlation', () => {
+    const journal = makeJournal()
+    try {
+      // The pre-crash toolCallId ('random-uuid-1') is NOT reproduced on resume:
+      // the lookup must still find the journaled result via toolName+input.
+      journal.append('run-1', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'random-uuid-1',
+        payload: { toolName: 'write_file', input: { path: 'a.ts' } },
+      })
+      journal.append('run-1', {
+        eventType: 'tool_result',
+        stepNumber: 0,
+        correlation: 'random-uuid-1',
+        payload: { toolName: 'write_file', result: [{ type: 'json', value: 1 }] },
+      })
+      expect(
+        journal.toolResultForInput('run-1', 'write_file', { path: 'a.ts' }, 0),
+      ).toEqual({
+        toolName: 'write_file',
+        result: [{ type: 'json', value: 1 }],
+      })
+      // A different input or toolName does not match.
+      expect(
+        journal.toolResultForInput('run-1', 'write_file', { path: 'b.ts' }, 0),
+      ).toBeUndefined()
+      expect(
+        journal.toolResultForInput('run-1', 'read_files', { path: 'a.ts' }, 0),
+      ).toBeUndefined()
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('toolResultForInput matches input structurally (key order does not matter)', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-1', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'c-order',
+        payload: { toolName: 'read_files', input: { a: 1, b: 2 } },
+      })
+      journal.append('run-1', {
+        eventType: 'tool_result',
+        stepNumber: 0,
+        correlation: 'c-order',
+        payload: { result: 'ok' },
+      })
+      // The same input with keys enumerated in a different order must match:
+      // on resume the input is re-derived, not the key order.
+      expect(
+        journal.toolResultForInput('run-1', 'read_files', { b: 2, a: 1 }, 0),
+      ).toEqual({ result: 'ok' })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('toolResultForInput consumes duplicate identical calls in seq order (occurrence)', () => {
+    const journal = makeJournal()
+    try {
+      // The SAME tool called TWICE with an identical input in one run: each
+      // journaled tool_call has a distinct correlation and result. Consuming
+      // occurrences 0 then 1 resolves them deterministically in seq order.
+      journal.append('run-1', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'dup-1',
+        payload: { toolName: 'run_terminal_command', input: { command: 'ls' } },
+      })
+      journal.append('run-1', {
+        eventType: 'tool_result',
+        stepNumber: 0,
+        correlation: 'dup-1',
+        payload: { result: 'first' },
+      })
+      journal.append('run-1', {
+        eventType: 'tool_call',
+        stepNumber: 1,
+        correlation: 'dup-2',
+        payload: { toolName: 'run_terminal_command', input: { command: 'ls' } },
+      })
+      journal.append('run-1', {
+        eventType: 'tool_result',
+        stepNumber: 1,
+        correlation: 'dup-2',
+        payload: { result: 'second' },
+      })
+      const input = { command: 'ls' }
+      expect(
+        journal.toolResultForInput('run-1', 'run_terminal_command', input, 0),
+      ).toEqual({ result: 'first' })
+      expect(
+        journal.toolResultForInput('run-1', 'run_terminal_command', input, 1),
+      ).toEqual({ result: 'second' })
+      // A third occurrence has no journaled match.
+      expect(
+        journal.toolResultForInput('run-1', 'run_terminal_command', input, 2),
+      ).toBeUndefined()
+
+      // A FRESH occurrence counter (a resumed process whose in-memory replay
+      // consumption state was lost to kill-9) reads the same journaled results
+      // in the same seq order — the cross-restart determinism §5 requires.
+      const resumeCounter = new Map<string, number>()
+      const nextOccurrence = () => {
+        const key = `run_terminal_command\u0000${JSON.stringify(input)}`
+        const n = resumeCounter.get(key) ?? 0
+        resumeCounter.set(key, n + 1)
+        return n
+      }
+      const resumedResults = [
+        journal.toolResultForInput(
+          'run-1',
+          'run_terminal_command',
+          input,
+          nextOccurrence(),
+        ),
+        journal.toolResultForInput(
+          'run-1',
+          'run_terminal_command',
+          input,
+          nextOccurrence(),
+        ),
+      ]
+      expect(resumedResults).toEqual([{ result: 'first' }, { result: 'second' }])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('toolResultForInput resolves undefined for a matched in-flight call (no later tool_result)', () => {
+    const journal = makeJournal()
+    try {
+      // Matched tool_call but NO later tool_result: the call is in-flight, so
+      // the caller must re-execute live rather than skip a side-effecting call.
+      journal.append('run-1', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'inflight-1',
+        payload: { toolName: 'write_file', input: { path: 'x.ts' } },
+      })
+      expect(
+        journal.toolResultForInput('run-1', 'write_file', { path: 'x.ts' }, 0),
+      ).toBeUndefined()
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('toolResultForInput fails closed for a matched call with a null correlation', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-1', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: null,
+        payload: { toolName: 'write_file', input: { path: 'y.ts' } },
+      })
+      expect(
+        journal.toolResultForInput('run-1', 'write_file', { path: 'y.ts' }, 0),
+      ).toBeUndefined()
+    } finally {
+      journal.close()
+    }
+  })
 })
 
 describe('classifyRunResume', () => {
@@ -379,14 +550,21 @@ describe('kill-9 mid-tool-call resume (P2-T2-DESIGN §6)', () => {
       let sideEffectCount = 0
       const scripted = [
         {
-          id: 'A',
+          // The pre-crash correlation is a random id (realIdGen.uuid()), which
+          // is NEVER reproduced on resume — the deterministic short-circuit
+          // must match on toolName+input instead (P2-T2-DESIGN §5).
+          id: 'uuid-pre-crash-A',
+          toolName: 'toolA',
+          input: { op: 'write', path: 'a.ts' },
           execute: () => {
             sideEffectCount++
             return { result: 'A-done' }
           },
         },
         {
-          id: 'B',
+          id: 'uuid-pre-crash-B',
+          toolName: 'toolB',
+          input: { op: 'write', path: 'b.ts' },
           execute: () => {
             sideEffectCount++
             return { result: 'B-done' }
@@ -398,14 +576,14 @@ describe('kill-9 mid-tool-call resume (P2-T2-DESIGN §6)', () => {
       journal.append(runId, {
         eventType: 'tool_call',
         stepNumber: 0,
-        correlation: 'A',
-        payload: { toolName: 'toolA' },
+        correlation: scripted[0].id,
+        payload: { toolName: scripted[0].toolName, input: scripted[0].input },
       })
       const aResult = scripted[0].execute()
       journal.append(runId, {
         eventType: 'tool_result',
         stepNumber: 0,
-        correlation: 'A',
+        correlation: scripted[0].id,
         payload: aResult,
       })
       expect(sideEffectCount).toBe(1)
@@ -415,34 +593,58 @@ describe('kill-9 mid-tool-call resume (P2-T2-DESIGN §6)', () => {
       journal.append(runId, {
         eventType: 'tool_call',
         stepNumber: 1,
-        correlation: 'B',
-        payload: { toolName: 'toolB' },
+        correlation: scripted[1].id,
+        payload: { toolName: scripted[1].toolName, input: scripted[1].input },
       })
 
       // Classification sees B as in-flight.
       expect(classifyRunResume(journal, runId)).toEqual({
         kind: 'in_flight_tool',
-        toolCallId: 'B',
+        toolCallId: scripted[1].id,
       })
 
       // --- Phase 2: resume via an inline replay driver ---
+      // Mirrors the fixed executeSingleToolCall §4c short-circuit: mint a
+      // FRESH id per call (the pre-crash correlation is never reproduced), then
+      // short-circuit on the journaled toolName+input, consuming occurrences in
+      // order so duplicate identical inputs resolve deterministically.
       const replayDriver = (
         reader: JournalReader,
         id: string,
         script: typeof scripted,
       ) => {
+        const consumedByKey = new Map<string, number>()
         for (const call of script) {
-          const recorded = reader.toolResultFor(id, call.id)
+          const freshId = `uuid-resumed-${call.toolName}` // new random id on resume
+          const key = `${call.toolName}\u0000${JSON.stringify(call.input)}`
+          const occurrence = consumedByKey.get(key) ?? 0
+          consumedByKey.set(key, occurrence + 1)
+          const recorded = reader.toolResultForInput(
+            id,
+            call.toolName,
+            call.input,
+            occurrence,
+          )
           if (recorded !== undefined) {
             // Idempotency short-circuit: reuse the recorded result, do NOT
             // re-run the live executor.
             continue
           }
+          // Canonical attempt shape: journal the fresh tool_call boundary
+          // BEFORE executing (this append is the crash window if the resumed
+          // process is itself kill-9'd mid-tool), then the tool_result under
+          // the same fresh correlation.
+          journal.append(id, {
+            eventType: 'tool_call',
+            stepNumber: 1,
+            correlation: freshId,
+            payload: { toolName: call.toolName, input: call.input },
+          })
           const live = call.execute()
           journal.append(id, {
             eventType: 'tool_result',
             stepNumber: 1,
-            correlation: call.id,
+            correlation: freshId,
             payload: live,
           })
         }
@@ -454,9 +656,14 @@ describe('kill-9 mid-tool-call resume (P2-T2-DESIGN §6)', () => {
       // Final count is 2: A(pre-crash) + B(resume).
       expect(sideEffectCount).toBe(2)
 
-      // The run reaches completion with both tool_results now journaled.
-      expect(journal.toolResultFor(runId, 'A')).toEqual({ result: 'A-done' })
-      expect(journal.toolResultFor(runId, 'B')).toEqual({ result: 'B-done' })
+      // The run reaches completion with both tool_results now journaled,
+      // resolvable by the deterministic toolName+input key.
+      expect(
+        journal.toolResultForInput(runId, 'toolA', { op: 'write', path: 'a.ts' }, 0),
+      ).toEqual({ result: 'A-done' })
+      expect(
+        journal.toolResultForInput(runId, 'toolB', { op: 'write', path: 'b.ts' }, 0),
+      ).toEqual({ result: 'B-done' })
       expect(classifyRunResume(journal, runId)).toEqual({ kind: 'clean' })
     } finally {
       journal.close()

@@ -41,6 +41,14 @@ export type ParsedArgs = {
    * 'base' agent. The process exit code reflects the run outcome.
    */
   run?: { prompt: string; json: boolean; agentId?: string }
+  /**
+   * P1-T3 TUI attach mode. Populated ONLY when `--attach` (optionally with
+   * `--serve-socket`/`--serve-token`) is passed; `undefined` keeps the
+   * default in-process backend. When set, the CLI's client runs prompts
+   * against a live `openbuff serve` over ACP instead of in-process, and
+   * supports detach/reattach to the live session.
+   */
+  attach?: { socketPath?: string; token?: string }
 }
 
 export function parseCliArgs(
@@ -233,6 +241,18 @@ export function parseCliArgs(
       '--trust-project-agents',
       'Allow executable agents and MCP config from this project or its parent directory',
     )
+    .option(
+      '--attach',
+      'Attach to a running `openbuff serve` over ACP instead of running in-process',
+    )
+    .option(
+      '--serve-socket <path>',
+      'Unix socket of a running `openbuff serve` (used with --attach; or OPENBUFF_SERVE_SOCKET)',
+    )
+    .option(
+      '--serve-token <token>',
+      'Auth token for --serve-socket (or OPENBUFF_SERVE_TOKEN)',
+    )
     .addHelpText(
       'after',
       '\nCommands:\n  init                           Create local project context',
@@ -248,6 +268,28 @@ export function parseCliArgs(
 
   const parsed = program.opts()
   const continueFlag = parsed.continue
+  // P1-T3: --attach is OFF by default. The parser is pure (flags only); the
+  // OPENBUFF_SERVE_SOCKET/TOKEN env fallback is applied by cli/src/index.tsx.
+  const attachSocketPath =
+    typeof parsed.serveSocket === 'string' && parsed.serveSocket.length > 0
+      ? parsed.serveSocket
+      : undefined
+  const attachToken =
+    typeof parsed.serveToken === 'string' && parsed.serveToken.length > 0
+      ? parsed.serveToken
+      : undefined
+  const attach =
+    parsed.attach === true
+      ? {
+          ...(attachSocketPath ? { socketPath: attachSocketPath } : {}),
+          ...(attachToken ? { token: attachToken } : {}),
+        }
+      : undefined
+  if (parsed.attach === true && !attachSocketPath) {
+    program.error(
+      '--attach requires a serve socket: pass --serve-socket <path> or set OPENBUFF_SERVE_SOCKET',
+    )
+  }
   return {
     initialPrompt: program.args.length > 0 ? program.args.join(' ') : null,
     agent: parsed.agent,
@@ -262,5 +304,6 @@ export function parseCliArgs(
     trustProjectAgents: parsed.trustProjectAgents === true,
     serve: undefined,
     mcp: undefined,
+    ...(attach ? { attach } : {}),
   }
 }

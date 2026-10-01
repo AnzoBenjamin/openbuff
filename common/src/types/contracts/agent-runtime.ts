@@ -66,6 +66,26 @@ export interface JournalReader {
   events(runId: string): Array<JournalEvent & { seq: number }>
   /** tool_result payload for a toolCallId, if journaled (replay short-circuit). */
   toolResultFor(runId: string, toolCallId: string): unknown | undefined
+  /**
+   * Deterministic replay short-circuit key (P2-T2-DESIGN §5: replay requires
+   * reproducible ids). Matches the Nth (zero-based `occurrence`) journaled
+   * `tool_call` whose payload carries this `toolName` and a structurally-equal
+   * `input`, in gap-free `seq` order, and returns that attempt's completing
+   * `tool_result` payload (or undefined when the call is journaled but its
+   * result is not — an in-flight attempt the caller must re-execute under live
+   * control). A fresh `toolCallId` minted by `idGen.uuid()` is NOT
+   * reproducible across a process restart, so the short-circuit keys on the
+   * journaled payload (toolName + input) instead: the programmatic loop
+   * re-derives the same toolName/input on resume, and the caller consumes
+   * occurrences in order (0, 1, ...) so the same tool called twice with an
+   * identical input in one run resolves deterministically to distinct results.
+   */
+  toolResultForInput(
+    runId: string,
+    toolName: string,
+    input: unknown,
+    occurrence: number,
+  ): unknown | undefined
 }
 
 /** Shared dependencies */

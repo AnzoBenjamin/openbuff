@@ -30,6 +30,7 @@ import type {
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import { stableHash } from '@codebuff/common/util/stable-hash'
 
 /**
  * Narrow structural subset of the bun:sqlite `Database` API this module uses,
@@ -121,6 +122,73 @@ function isNoActiveTransactionError(error: unknown): boolean {
     error instanceof Error &&
     /no transaction is active|cannot rollback/i.test(error.message)
   )
+}
+
+/**
+ * P2-T2-DESIGN §5 (replay requires reproducible ids): canonicalize a tool
+ * input to a deterministic string for the toolResultForInput key. Recurses
+ * with object keys SORTED, so the live dispatch input and the journaled
+ * payload — both plain JSON values — produce the same key across a process
+ * restart even when the input's keys were enumerated in a different order.
+ * Never relies on bare JSON.stringify key order, which is not guaranteed.
+ * Non-JSON values (undefined/functions/symbols) are elided (object values) or
+ * rendered null (array items), matching JSON semantics; cyclic inputs fall
+ * back to a constant marker so a pathological input cannot throw on the
+ * synchronous hot path.
+ */
+function canonicalizeJournalJson(value: unknown): string {
+  const seen = new Set<object>()
+  const encode = (v: unknown): string => {
+    if (v === null || typeof v === 'number' || typeof v === 'boolean') {
+      return JSON.stringify(v)
+    }
+    if (typeof v === 'string') {
+      return JSON.stringify(v)
+    }
+    if (typeof v === 'bigint') {
+      return JSON.stringify(v.toString())
+    }
+    if (Array.isArray(v)) {
+      if (seen.has(v)) return 'null'
+      seen.add(v)
+      const out = `[${v.map((item) => encode(item ?? null)).join(',')}]`
+      seen.delete(v)
+      return out
+    }
+    if (typeof v === 'object' && v !== null) {
+      if (seen.has(v)) return '{}'
+      seen.add(v as object)
+      const keys = Object.keys(v as Record<string, unknown>).sort()
+      const parts = keys
+        .filter((key) => {
+          const item = (v as Record<string, unknown>)[key]
+          return (
+            item !== undefined &&
+            typeof item !== 'function' &&
+            typeof item !== 'symbol'
+          )
+        })
+        .map(
+          (key) =>
+            `${JSON.stringify(key)}:${encode((v as Record<string, unknown>)[key])}`,
+        )
+      seen.delete(v as object)
+      return `{${parts.join(',')}}`
+    }
+    // undefined / function / symbol at the top level.
+    return 'null'
+  }
+  return encode(value)
+}
+
+/**
+ * Deterministic key for a journaled tool_call's (toolName, input) pair, used
+ * by toolResultForInput (P2-T2-DESIGN §5). NUL separates the toolName from the
+ * canonicalized input; tool names never contain NUL. Hashed with the canonical
+ * FNV-1a stableHash so the key is a compact, collision-bounded string.
+ */
+function journalToolInputKey(toolName: string, input: unknown): string {
+  return stableHash(`${toolName}\u0000${canonicalizeJournalJson(input)}`)
 }
 
 /**
@@ -296,6 +364,74 @@ export function createRunJournal(params: {
         )
         .get(runId, toolCallId, callRow.seq) as { payload: string } | undefined
       return row ? JSON.parse(row.payload) : undefined
+    },
+
+    toolResultForInput(
+      runId: string,
+      toolName: string,
+      input: unknown,
+      occurrence: number,
+    ): unknown | undefined {
+      // P2-T2-DESIGN §5 (replay requires reproducible ids): unlike
+      // toolResultFor, which keys on the caller-minted toolCallId, this lookup
+      // keys on the journaled tool_call PAYLOAD (toolName + structurally-equal
+      // input), so it reproduces across a process restart where
+      // idGen.uuid() mints a fresh, never-matching id. The caller consumes
+      // occurrences in order (0, 1, ...), so the same tool called twice with
+      // an identical input in one run resolves deterministically to distinct
+      // results: the Nth journaled COMPLETED match answers the Nth live
+      // dispatch.
+      //
+      // Only an attempt that COMPLETED — a matched tool_call with a non-null
+      // correlation and a later tool_result carrying that correlation (the
+      // same seq-bounded, per-correlation guard toolResultFor applies) —
+      // counts toward `occurrence` and can answer a dispatch. A matched
+      // tool_call that is still in-flight (no completing tool_result), or
+      // whose correlation is null, is SKIPPED rather than counted: it has no
+      // result to replay, and counting it would let a kill-9'd attempt
+      // permanently shadow the completed re-execution journaled after it
+      // under a fresh correlation — a resumed process restarts its occurrence
+      // counter at 0, so the shadowed result would never be reached and every
+      // resume would re-run the side-effecting tool. When no completed match
+      // answers the requested occurrence the lookup resolves undefined, so
+      // the caller re-executes live rather than reusing a stale result or
+      // skipping a side-effecting call.
+      const rows = db
+        .query(
+          "SELECT seq, correlation, payload FROM run_events WHERE run_id = ? AND event_type = 'tool_call' ORDER BY seq ASC",
+        )
+        .all(runId) as Array<{
+        seq: number
+        correlation: string | null
+        payload: string
+      }>
+      const wantedKey = journalToolInputKey(toolName, input)
+      let completed = 0
+      for (const row of rows) {
+        const payload = JSON.parse(row.payload) as {
+          toolName?: unknown
+          input?: unknown
+        }
+        if (payload.toolName !== toolName) continue
+        if (journalToolInputKey(toolName, payload.input) !== wantedKey) continue
+        // Fail closed like toolResultFor: only a tool_result recorded AFTER
+        // this tool_call under its OWN correlation proves this attempt
+        // completed; an in-flight or null-correlation match is skipped.
+        const correlation = row.correlation
+        if (correlation == null) continue
+        const resultRow = db
+          .query(
+            "SELECT payload FROM run_events WHERE run_id = ? AND event_type = 'tool_result' AND correlation = ? AND seq > ? ORDER BY seq DESC LIMIT 1",
+          )
+          .get(runId, correlation, row.seq) as { payload: string } | undefined
+        if (!resultRow) continue
+        if (completed !== occurrence) {
+          completed += 1
+          continue
+        }
+        return JSON.parse(resultRow.payload)
+      }
+      return undefined
     },
 
     close(): void {

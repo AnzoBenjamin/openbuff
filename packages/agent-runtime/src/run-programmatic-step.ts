@@ -68,6 +68,13 @@ class AgentRunContextRegistry {
   // distinct agent runs (which would otherwise silently resume each other's
   // generator).
   private readonly runIdToOwnerAgentId = new Map<string, string>()
+  // P2-T2-DESIGN §5 (replay requires reproducible ids): per-run ordered
+  // consumption counts for the replay short-circuit. Keyed by
+  // `${toolName}\u0000${occurrenceScopeInput}`-style strings built in
+  // executeSingleToolCall; the value is the number of journaled tool_call
+  // matches already consumed for that key, so the same tool called twice with
+  // an identical input in one run resolves deterministically in seq order.
+  private readonly runIdToReplayConsumed = new Map<string, Map<string, number>>()
   // Latch for the "base2 run has no projectRoot" warning (a missing root makes
   // the gate-telemetry sink a silent no-op), keyed by template id so a second,
   // differently-misconfigured base2 variant stays diagnosable. Registry-owned
@@ -114,11 +121,28 @@ class AgentRunContextRegistry {
     return this.missingBase2ProjectRootWarnLatch.shouldWarn(templateId)
   }
 
+  /**
+   * Ordered replay consumption for one (runId, toolName+input) key: returns
+   * the occurrence index this dispatch should consume, then increments it.
+   * Registry-owned so clearRun/clearAll cannot leak replay state across runs.
+   */
+  nextReplayOccurrence(runId: string, key: string): number {
+    let counters = this.runIdToReplayConsumed.get(runId)
+    if (!counters) {
+      counters = new Map()
+      this.runIdToReplayConsumed.set(runId, counters)
+    }
+    const occurrence = counters.get(key) ?? 0
+    counters.set(key, occurrence + 1)
+    return occurrence
+  }
+
   /** Per-run teardown: drop the generator, STEP_ALL latch, and owner mapping. */
   clearRun(runId: string): void {
     delete this.runIdToGenerator[runId]
     this.runIdToStepAll.delete(runId)
     this.runIdToOwnerAgentId.delete(runId)
+    this.runIdToReplayConsumed.delete(runId)
   }
 
   /** Process-wide teardown: drop every run's state. */
@@ -128,6 +152,7 @@ class AgentRunContextRegistry {
     }
     this.runIdToStepAll.clear()
     this.runIdToOwnerAgentId.clear()
+    this.runIdToReplayConsumed.clear()
     this.missingBase2ProjectRootWarnLatch.clear()
   }
 }
@@ -922,13 +947,30 @@ async function executeSingleToolCall(
 
   // P2-T2 slice 1: replay idempotency short-circuit (P2-T2-DESIGN §4c).
   // A journaled tool_result is never re-executed on replay: if this exact
-  // toolCallId already completed before a crash, reuse the recorded result
+  // tool call already completed before a crash, reuse the recorded result
   // verbatim in the same shape the normal path produces (latestToolResult =
   // toolResults[last]?.content) instead of re-running a side-effecting tool.
+  //
+  // P2-T2-DESIGN §5 (replay requires reproducible ids): the short-circuit must
+  // NOT key on `toolCallId` — it is minted fresh by idGen.uuid() (realIdGen
+  // produces a NEW random id on a resumed run), so a uuid-keyed lookup NEVER
+  // matches the journaled tool_result after a restart and a completed
+  // side-effecting tool would re-execute. Instead key on the journaled
+  // tool_call PAYLOAD (toolName + structurally-equal input), which the
+  // programmatic loop re-derives identically on resume, and consume matches in
+  // order via `nextReplayOccurrence` so the same tool called twice with an
+  // identical input in one run resolves deterministically to distinct results.
   if (agentState.runId && params.journalReader) {
-    const replayed = params.journalReader.toolResultFor(
+    const replayKey = `${toolCallToExecute.toolName}\u0000${JSON.stringify(toolCallToExecute.input) ?? ''}`
+    const occurrence = agentRunContextRegistry.nextReplayOccurrence(
       agentState.runId,
-      toolCallId,
+      replayKey,
+    )
+    const replayed = params.journalReader.toolResultForInput(
+      agentState.runId,
+      toolCallToExecute.toolName,
+      toolCallToExecute.input,
+      occurrence,
     )
     if (replayed !== undefined) {
       const recordedResult = (

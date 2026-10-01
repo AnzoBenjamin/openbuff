@@ -30,7 +30,10 @@ import { parseCliArgs } from './cli-args'
 import { initializeApp, switchProjectContext } from './init/init-app'
 import { getProjectRoot, startNewChat } from './project-files'
 import { trackEvent } from './utils/analytics'
-import { resetCodebuffClient } from './utils/codebuff-client'
+import {
+  resetCodebuffClient,
+  setAttachTarget,
+} from './utils/codebuff-client'
 import { getCliEnv } from './utils/env'
 import { initializeAgentRegistry } from './utils/local-agent-registry'
 import { clearLogFile, logger } from './utils/logger'
@@ -326,7 +329,23 @@ async function main(): Promise<void> {
     serve,
     mcp,
     run,
+    attach,
   } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
+
+  // P1-T3: record the attach target BEFORE any client is created so
+  // getCodebuffClient() (and the TUI's hook) builds the ACP-remote backend.
+  // The socket path and auth token come from --serve-socket/--serve-token,
+  // falling back to OPENBUFF_SERVE_SOCKET/OPENBUFF_SERVE_TOKEN (the parser is
+  // pure and reads no env; the env fallback lives here in the entry).
+  if (attach) {
+    const socketPath = attach.socketPath ?? getCliEnv().OPENBUFF_SERVE_SOCKET
+    if (socketPath) {
+      setAttachTarget({
+        socketPath,
+        token: attach.token ?? getCliEnv().OPENBUFF_SERVE_TOKEN,
+      })
+    }
+  }
 
   const isPublishCommand = cliArgv[2] === 'publish'
   const hasAgentOverride = Boolean(agent?.trim())

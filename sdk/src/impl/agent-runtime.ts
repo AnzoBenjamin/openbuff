@@ -35,22 +35,28 @@ export function getAgentRuntimeImpl(
     apiKey: string
     clientEnv?: ClientEnv
   } & Pick<
-    AgentRuntimeScopedDeps,
-    | 'handleStepsLogChunk'
-    | 'requestToolCall'
-    | 'requestMcpToolData'
-    | 'requestFiles'
-    | 'requestOptionalFile'
-    | 'fileSystem'
-    | 'fileFilter'
-    | 'sendAction'
-    | 'sendSubagentChunk'
-  >,
+    AgentRuntimeDeps,
+    'journalWriter' | 'journalReader'
+  > &
+    Pick<
+      AgentRuntimeScopedDeps,
+      | 'handleStepsLogChunk'
+      | 'requestToolCall'
+      | 'requestMcpToolData'
+      | 'requestFiles'
+      | 'requestOptionalFile'
+      | 'fileSystem'
+      | 'fileFilter'
+      | 'sendAction'
+      | 'sendSubagentChunk'
+    >,
 ): AgentRuntimeDeps & AgentRuntimeScopedDeps {
   const {
     logger,
     apiKey,
     clientEnv = clientEnvDefault,
+    journalWriter,
+    journalReader,
     handleStepsLogChunk,
     requestToolCall,
     requestMcpToolData,
@@ -99,6 +105,13 @@ export function getAgentRuntimeImpl(
     // Other
     logger: logger ?? noopLogger,
     fetch: globalThis.fetch,
+
+    // Durable run journal (P2-T2). Additive-optional: the keys are present
+    // ONLY when a journal is actually wired (conditional spreads), so a run
+    // without a journal carries no journal fields at all and stays
+    // byte-identical to today.
+    ...(journalWriter ? { journalWriter } : {}),
+    ...(journalReader ? { journalReader } : {}),
 
     // Client (WebSocket)
     handleStepsLogChunk,

@@ -140,6 +140,13 @@ export type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 export * from './client'
+// P1-T3 backend seam + ACP-remote backend.
+export type { ClientBackend } from './client/backend'
+export { InProcessBackend, resolveClientBackend } from './client/backend'
+export {
+  AcpRemoteBackend,
+  acpSessionUpdateToPrintModeEvents,
+} from './client/acp-client'
 export { createServeBridge } from './serve/bridge'
 export type { ServeBridgeClient, ServeBridgeOptions } from './serve/bridge'
 export { sanitizeOutbound } from './serve/outbound-filter'

@@ -220,6 +220,42 @@ describe('run subcommand parsing', () => {
   })
 })
 
+describe('attach flag parsing (P1-T3)', () => {
+  test('leaves attach undefined by default', () => {
+    expect(parse([]).attach).toBeUndefined()
+    expect(parse(['hello']).attach).toBeUndefined()
+  })
+
+  test('rejects --attach with no socket path', () => {
+    expect(() => parse(['--attach'])).toThrow()
+  })
+
+  test('parses --attach with --serve-socket', () => {
+    expect(parse(['--attach', '--serve-socket', '/tmp/x.sock']).attach).toEqual(
+      { socketPath: '/tmp/x.sock' },
+    )
+  })
+
+  test('parses --attach with --serve-socket and --serve-token', () => {
+    expect(
+      parse([
+        '--attach',
+        '--serve-socket',
+        '/tmp/x.sock',
+        '--serve-token',
+        'abc',
+      ]).attach,
+    ).toEqual({ socketPath: '/tmp/x.sock', token: 'abc' })
+  })
+
+  test('attach does not poison the top-level prompt/serve/mcp fields', () => {
+    const result = parse(['--attach', '--serve-socket', '/tmp/x.sock'])
+    expect(result.serve).toBeUndefined()
+    expect(result.mcp).toBeUndefined()
+    expect(result.attach).toEqual({ socketPath: '/tmp/x.sock' })
+  })
+})
+
 describe('mcp subcommand parsing', () => {
   test('leaves mcp undefined when the subcommand is not used', () => {
     expect(parse([]).mcp).toBeUndefined()
