@@ -1,8 +1,30 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { createRequire } from 'node:module'
 
 import { useChatStore } from '../../state/chat-store'
 
 import type { RouterParams } from '../command-registry'
+
+// bun's mock.module is registry-wide for the whole test process (afterAll
+// mock.restore does not undo it), so capture the REAL modules before any
+// mock.module registration and spread their exports in the factories below.
+const requireReal = createRequire(import.meta.url)
+const realChatGptOauth = requireReal(
+  '@codebuff/common/constants/chatgpt-oauth',
+) as typeof import('@codebuff/common/constants/chatgpt-oauth') & {
+  default?: typeof import('@codebuff/common/constants/chatgpt-oauth')
+}
+// ESM/CJS interop: spread .default first, then the namespace, so real keys win.
+const realChatGptOauthModule = {
+  ...realChatGptOauth.default,
+  ...realChatGptOauth,
+}
+
+// TSX component module: capture via the query-busted dynamic import so a
+// previously leaked mock registration cannot shadow the real module.
+const realBannerModule = (await import(
+  '../../components/chatgpt-connect-banner?real' as string
+)) as unknown as typeof import('../../components/chatgpt-connect-banner')
 
 const saveToHistory = mock(() => {})
 const setInputValue = mock(() => {})
@@ -13,10 +35,16 @@ const handleChatGptAuthCode = mock(async () => ({
 }))
 
 mock.module('../../components/chatgpt-connect-banner', () => ({
+  // Real exports first so nothing the component module ships is dropped for
+  // later files in this process; the override below must keep winning.
+  ...realBannerModule,
   handleChatGptAuthCode,
 }))
 
 mock.module('@codebuff/common/constants/chatgpt-oauth', () => ({
+  // Real constants first (registry-wide mock leak guard); the hardcoded
+  // CHATGPT_OAUTH_ENABLED override below must keep winning.
+  ...realChatGptOauthModule,
   CHATGPT_OAUTH_ENABLED: true,
   CHATGPT_OAUTH_CLIENT_ID: 'test-client-id',
   CHATGPT_OAUTH_AUTHORIZE_URL: 'https://auth.openai.com/oauth/authorize',

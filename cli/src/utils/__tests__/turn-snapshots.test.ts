@@ -145,6 +145,13 @@ describe('turn-snapshots', () => {
       })
       expect(outcome.status).toBe('unavailable')
     })
+
+    test('accepts a custom label such as shell', async () => {
+      await createTurnSnapshot({ projectRoot: repoRoot, label: 'shell' })
+
+      const listed = await listTurnSnapshots({ projectRoot: repoRoot })
+      expect(listed[0]?.label).toBe('shell')
+    })
   })
 
   describe('listTurnSnapshots', () => {

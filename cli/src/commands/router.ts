@@ -35,6 +35,7 @@ import {
   finishBashCommand,
   registerBashCommand,
 } from '../utils/bash-command-controller'
+import * as turnSnapshots from '../utils/turn-snapshots'
 const INTERACTIVE_BASH_TIMEOUT_SECONDS = 10 * 60
 
 /**
@@ -78,6 +79,13 @@ export function runBashCommand(command: string) {
     })
     setMessages((prev) => [...prev, assistantMessage])
   }
+
+  // Fire-and-forget pre-command snapshot: captures the tracked tree
+  // immediately before arbitrary user shell mutation without delaying
+  // dispatch (single choke point covering both ghost and direct modes).
+  // runBashCommand has no async completion seam, so the after-state is
+  // covered by the next turn's snapshot.
+  void turnSnapshots.createTurnSnapshot({ label: 'shell' }).catch(() => undefined)
 
   runTerminalCommand({
     command,

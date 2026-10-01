@@ -12,7 +12,19 @@ import type { ImageContentBlock } from '../../../types/chat'
 // is read during render, so per-test mutation is enough.
 let inlineImageSupported = true
 
+// bun's mock.module is registry-wide for the whole test process (afterAll
+// mock.restore does not undo it), so capture the REAL terminal-images module
+// first. The `?real` query bypasses the registry so a previously leaked mock
+// cannot shadow the real module. Spreading keeps parseDa1ImageCapability and
+// every other export alive for terminal-images.test.ts later in this process.
+const realTerminalImagesModule = (await import(
+  '../../../utils/terminal-images?real' as string
+)) as unknown as typeof import('../../../utils/terminal-images')
+
 mock.module('../../../utils/terminal-images', () => ({
+  // Real exports first (registry-wide leak guard); the two overrides below
+  // must keep winning.
+  ...realTerminalImagesModule,
   supportsInlineImages: () => inlineImageSupported,
   getImageSupportDescription: () =>
     inlineImageSupported ? 'stub inline images' : 'No inline image support',

@@ -70,8 +70,10 @@ export type RestoreOutcome =
  * TRACKED tree, one per successful turn, chained on the private ref
  * `refs/openbuff/turns`.
  *
- * Scope notes (NOT in this slice, per plan): snapshotting per shell command
- * and bisecting failures by turn are left for a later slice.
+ * Scope notes: per-shell-command snapshots are now wired for user-invoked
+ * commands via runBashCommand (label 'shell'). Bisecting failures by turn
+ * (walk snapshot pairs, run the test suite at each) is NOT implemented and
+ * remains a later slice.
  *
  * Safety model:
  * - Only git plumbing is used. The user's real index and HEAD are never

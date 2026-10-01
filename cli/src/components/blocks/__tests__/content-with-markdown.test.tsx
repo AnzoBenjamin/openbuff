@@ -8,12 +8,28 @@ import type { MarkdownPalette } from '../../../utils/markdown-renderer'
 // register, so its native-markdown collaborators resolve to the doubles
 // configured per test. The legacy remark renderer no longer exists after D47
 // Stage 2, so only the two live collaborators are mocked.
+// bun's mock.module is registry-wide for the whole test process (afterAll
+// mock.restore does not undo it), so capture the REAL modules first and
+// spread their exports so nothing is dropped for later files. The `?real`
+// query bypasses the registry so a previously leaked mock cannot shadow
+// the real module.
+const realSyntaxStyleModule = (await import(
+  '../../../utils/opentui-syntax-style?real' as string
+)) as unknown as typeof import('../../../utils/opentui-syntax-style')
+
+const realTreeSitterModule = (await import(
+  '../../../utils/tree-sitter-client?real' as string
+)) as unknown as typeof import('../../../utils/tree-sitter-client')
+
 const createMarkdownSyntaxStyleCalls: MarkdownPalette[] = []
 let getSharedTreeSitterClientCalls = 0
 let syntaxStyleSetupError: Error | null = null
 let treeSitterClientSetupError: Error | null = null
 
 mock.module('../../../utils/opentui-syntax-style', () => ({
+  // Real exports first (registry-wide leak guard); the counting stub below
+  // must keep winning.
+  ...realSyntaxStyleModule,
   createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
     createMarkdownSyntaxStyleCalls.push(palette)
     if (syntaxStyleSetupError) {
@@ -26,6 +42,9 @@ mock.module('../../../utils/opentui-syntax-style', () => ({
 }))
 
 mock.module('../../../utils/tree-sitter-client', () => ({
+  // Real exports first (registry-wide leak guard); the counting stub below
+  // must keep winning.
+  ...realTreeSitterModule,
   getSharedTreeSitterClient: () => {
     getSharedTreeSitterClientCalls += 1
     if (treeSitterClientSetupError) {

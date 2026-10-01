@@ -1,8 +1,18 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test'
 
 import { useChatStore } from '../../state/chat-store'
 import { INPUT_MODE_CONFIGS, getInputModeConfig } from '../../utils/input-modes'
+import * as turnSnapshots from '../../utils/turn-snapshots'
 import { findCommand } from '../command-registry'
+import { runBashCommand } from '../router'
 
 import type { RouterParams } from '../command-registry'
 
@@ -18,6 +28,23 @@ describe('bash command', () => {
   // Reset store state before each test
   beforeEach(() => {
     useChatStore.getState().reset()
+  })
+
+  // runBashCommand calls through the turn-snapshots module namespace, so a
+  // spyOn keeps the suite hermetic (no real git snapshots from dispatch
+  // tests) and mock.restore() in afterEach undoes it — no mock.module, so
+  // nothing leaks to sibling test files in the same process.
+  beforeEach(() => {
+    spyOn(turnSnapshots, 'createTurnSnapshot').mockImplementation(() =>
+      Promise.resolve({
+        status: 'skipped',
+        reason: 'test',
+      }),
+    )
+  })
+
+  afterEach(() => {
+    mock.restore()
   })
 
   describe('/bash slash command handler', () => {
@@ -166,6 +193,21 @@ describe('bash command', () => {
       const state = useChatStore.getState()
       const isBusy = state.streamingAgents.size > 0 || state.isChainInProgress
       expect(isBusy).toBe(true)
+    })
+  })
+
+  describe('runBashCommand turn snapshots', () => {
+    test('fires a fire-and-forget createTurnSnapshot with label shell', async () => {
+      runBashCommand('echo openbuff-snapshot-test')
+
+      // The snapshot is fire-and-forget: one macrotask turn is enough for
+      // the call to have been made, and dispatch never awaits it.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(turnSnapshots.createTurnSnapshot).toHaveBeenCalledTimes(1)
+      expect(turnSnapshots.createTurnSnapshot).toHaveBeenCalledWith({
+        label: 'shell',
+      })
     })
   })
 

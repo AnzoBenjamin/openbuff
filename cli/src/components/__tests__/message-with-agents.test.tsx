@@ -1,21 +1,57 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from 'bun:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { enableMapSet } from 'immer'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
-import { computeTerminalLayout } from '../../hooks/use-terminal-layout'
 import { useChatStore } from '../../state/chat-store'
 import { useMessageBlockStore } from '../../state/message-block-store'
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 
 import type { ChatMessage } from '../../types/chat'
+import type { TerminalLayout } from '../../hooks/use-terminal-layout'
 import type { MarkdownPalette } from '../../utils/markdown-renderer'
 
 type CapturedButton = {
   text: string
   onClick?: (event?: unknown) => void | Promise<unknown>
 }
+
+// bun's mock.module is registry-wide for the whole test process (afterAll
+// mock.restore does not undo it), so capture the REAL modules before any
+// mock.module registration. The `?real` query bypasses the registry so a
+// previously leaked mock cannot shadow the real module.
+const realLayoutModule = (await import(
+  '../../hooks/use-terminal-layout?real' as string
+)) as unknown as typeof import('../../hooks/use-terminal-layout')
+
+const realButtonModule = (await import(
+  '../button?real' as string
+)) as unknown as typeof import('../button')
+
+const realSyntaxStyleModule = (await import(
+  '../../utils/opentui-syntax-style?real' as string
+)) as unknown as typeof import('../../utils/opentui-syntax-style')
+
+const realTreeSitterModule = (await import(
+  '../../utils/tree-sitter-client?real' as string
+)) as unknown as typeof import('../../utils/tree-sitter-client')
+
+const { computeTerminalLayout } = realLayoutModule
+
+// Allow per-test override of the terminal layout; when unset, fall through to
+// the fixed 80x24 layout this suite's assertions were written against. The
+// mock is registry-wide, so resetting mockLayout keeps a stale layout from
+// leaking to later files in the same process.
+let mockLayout: TerminalLayout | undefined
 
 const capturedButtons: CapturedButton[] = []
 
@@ -36,6 +72,9 @@ const textFromReactNode = (node: React.ReactNode): string => {
 }
 
 mock.module('../button', () => ({
+  // Real exports first: the registry-wide mock must not drop real exports
+  // for later files importing this module in the same process.
+  ...realButtonModule,
   Button: ({
     children,
     onClick,
@@ -52,8 +91,10 @@ mock.module('../button', () => ({
 }))
 
 mock.module('../../hooks/use-terminal-layout', () => ({
-  computeTerminalLayout,
-  useTerminalLayout: () => computeTerminalLayout(80, 24),
+  // Real exports first (registry-wide leak guard); the fixed 80x24 override
+  // below must keep winning for this suite's assertions.
+  ...realLayoutModule,
+  useTerminalLayout: () => mockLayout ?? computeTerminalLayout(80, 24),
 }))
 
 // Native-markdown collaborators are mocked so agent-message tests can force
@@ -62,6 +103,9 @@ mock.module('../../hooks/use-terminal-layout', () => ({
 let syntaxStyleSetupError: Error | null = null
 
 mock.module('../../utils/opentui-syntax-style', () => ({
+  // Real exports first so createCodeSyntaxStyle and friends survive for
+  // later files; the throwing stub below must keep winning.
+  ...realSyntaxStyleModule,
   createMarkdownSyntaxStyle: () => {
     if (syntaxStyleSetupError) {
       throw syntaxStyleSetupError
@@ -73,6 +117,9 @@ mock.module('../../utils/opentui-syntax-style', () => ({
 }))
 
 mock.module('../../utils/tree-sitter-client', () => ({
+  // Real exports first so buildDefaultParsers and friends survive for later
+  // files; the stub below must keep winning.
+  ...realTreeSitterModule,
   getSharedTreeSitterClient: () => '__stub-tree-sitter-client__',
 }))
 
@@ -190,6 +237,12 @@ beforeEach(() => {
   syntaxStyleSetupError = null
   initializeStore()
   useChatStore.setState({ streamingAgents: new Set<string>() })
+})
+
+// Fall through to the real hook: the registry-wide mock survives this
+// file, so a stale layout must never leak to sibling files.
+afterAll(() => {
+  mockLayout = undefined
 })
 
 afterEach(() => {
