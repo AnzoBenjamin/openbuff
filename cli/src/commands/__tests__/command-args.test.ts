@@ -32,6 +32,7 @@ import type {
   TextContentBlock,
 } from '../../types/chat'
 import type { OpenbuffClient } from '@openbuff/sdk'
+import { createRequire } from 'node:module'
 
 /**
  * Hermetic codebuff-client double for the attach-mode exit tests. The /exit
@@ -41,7 +42,18 @@ import type { OpenbuffClient } from '@openbuff/sdk'
  * command-registry.ts). The detach becomes observable through
  * getLastDetachedSessionId() without touching a real backend, and module
  * state resets per test via setAttachTarget(undefined).
+ *
+ * The factory spreads the REAL module's exports: mock.module is registry-wide
+ * for the whole test process, and CI's bun 1.3.5 does not isolate mock.module
+ * registrations across test files. Spreading keeps working implementations —
+ * e.g. the real ManagedOpenbuffClient, which codebuff-client.test.ts
+ * exercises — flowing through the mock; only the three attach-mode seams are
+ * overridden here.
  */
+const requireReal = createRequire(import.meta.url)
+const realCodebuffClient = requireReal('../../utils/codebuff-client') as
+  typeof import('../../utils/codebuff-client')
+
 type FakeBackend = {
   detach?: () => Promise<string | undefined>
   attach?: (sessionId: string) => Promise<void>
@@ -51,6 +63,11 @@ let fakeBackend: FakeBackend | undefined
 let fakeAttachTarget: { socketPath: string; token?: string } | undefined
 
 mock.module('../../utils/codebuff-client', () => ({
+  // Spread the REAL exports so the registry-wide mock (bun does not isolate
+  // mock.module across test files on CI's bun 1.3.5) still serves working
+  // implementations — e.g. the real ManagedOpenbuffClient — to any other
+  // test file importing this module in the same process.
+  ...realCodebuffClient,
   getAttachTarget: () => fakeAttachTarget,
   setAttachTarget: (
     target: { socketPath: string; token?: string } | undefined,
@@ -63,11 +80,6 @@ mock.module('../../utils/codebuff-client', () => ({
     }
     return { backend: fakeBackend } as unknown as OpenbuffClient
   },
-  // Remaining exports the real module provides, so transitive importers in
-  // this test's graph never observe an undefined binding.
-  resetCodebuffClient: async () => {},
-  memoryV2ClientConfigFromProvider: () => undefined,
-  ManagedOpenbuffClient: class ManagedOpenbuffClientStub {},
 }))
 
 /**
