@@ -1089,16 +1089,36 @@ ${guideSections}
       // per iteration (eviction ledger, security/specialist freshness,
       // buildGateSnapshotDetails per fingerprint), re-opening and sha256-
       // hashing every file each time. Liveness without a filesystem watcher:
-      // a cached marker is reused ONLY while a fresh fstat of the same size +
-      // mtime matches the values captured when it was hashed, so any content
-      // change still re-hashes the live bytes. The marker string itself stays
-      // the per-path sha256 marker, so the cache can never serve a different
-      // file's bytes and every other failure marker (unreadable:*/missing)
-      // stays byte-identical. Bounded (250 entries), reset every turn.
+      // a cached marker is reused ONLY while a fresh stat taken AFTER the
+      // mtime-granularity grace window (GATE_MARKER_CACHE_GRACE_MS below)
+      // still matches the size + mtime (+ ctime, defense in depth) captured
+      // when it was hashed, so any content change still re-hashes the live
+      // bytes. The marker string itself stays the per-path sha256 marker, so
+      // the cache can never serve a different file's bytes and every other
+      // failure marker (unreadable:*/missing) stays byte-identical. Bounded
+      // (250 entries), reset every turn.
       const GATE_MARKER_CACHE_MAX = 250
+      // mtime-granularity grace window for the marker-cache fast path. A
+      // same-size rewrite landing in the SAME mtime tick (coarse-granularity
+      // filesystems, e.g. some CI runners: HFS+ 1s, FAT32 2s) would otherwise
+      // pass the size+mtime match and serve a STALE marker, collapsing the
+      // gate fingerprint sequence. Any real filesystem's mtime granularity is
+      // < 3s (ext4/apfs ~ns, HFS+ 1s, FAT32 2s), so a fresh stat taken MORE
+      // than 3s after the stamp with a matching mtime genuinely proves the
+      // file was not rewritten; within the window the cache always recomputes
+      // (fail-open toward correctness). This is the fix for the CI-only flake
+      // where the reviewer-repair A->B->A cycle guard fired early and ended
+      // the generator before the expected yield.
+      const GATE_MARKER_CACHE_GRACE_MS = 3000
       const gateMarkerCache = new Map<
         string,
-        { size: number; mtimeMs: number; marker: string }
+        {
+          size: number
+          mtimeMs: number
+          ctimeMs: number
+          stampedAt: number
+          marker: string
+        }
       >()
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
@@ -11864,11 +11884,17 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
        * `unreadable:<code>` marker so stale credit fails closed.
        */
       // M3-T2 cached wrapper (see gateMarkerCache above): fast path returns
-      // the previously computed marker when a fresh stat proves the file is
-      // still the same size and mtime it was hashed with; the uncached body
-      // below re-hashes otherwise. Error/sentinel markers (unreadable:*,
-      // missing) are NOT cached: they are cheap to recompute and a transient
-      // failure state must not pin stale credit.
+      // the previously computed marker only when a fresh stat taken AFTER the
+      // mtime-granularity grace window (GATE_MARKER_CACHE_GRACE_MS) still
+      // matches the size + mtime (+ ctime, defense in depth) captured when it
+      // was hashed; the uncached body below re-hashes otherwise. Entries
+      // stamped within the grace window always recompute (a same-tick
+      // same-size rewrite on a coarse-granularity filesystem is otherwise
+      // invisible to size+mtime) and are NOT deleted here: the recompute
+      // re-stamps a fresh entry. Only a genuine post-window mismatch (or a
+      // stat failure) evicts. Error/sentinel markers (unreadable:*, missing)
+      // are NOT cached: they are cheap to recompute and a transient failure
+      // state must not pin stale credit.
       function readGateFileContentMarker(normalizedPath: string): string {
         if (!normalizedPath) return 'unreadable:empty-path'
         const cached = gateMarkerCache.get(normalizedPath)
@@ -11884,19 +11910,33 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
                   requirePath().resolve(cwd, normalizedPath),
                 ),
               )
+              const withinGraceWindow =
+                Date.now() - cached.stampedAt < GATE_MARKER_CACHE_GRACE_MS
               if (
+                !withinGraceWindow &&
                 stat.isFile() &&
                 stat.size === cached.size &&
-                stat.mtimeMs === cached.mtimeMs
+                stat.mtimeMs === cached.mtimeMs &&
+                stat.ctimeMs === cached.ctimeMs
               ) {
                 return cached.marker
               }
+              if (!withinGraceWindow) {
+                // Past the grace window the fresh stat genuinely compared the
+                // live file against its stamped identity, so reaching here is
+                // a real mismatch: drop the entry (the recompute re-stamps).
+                gateMarkerCache.delete(normalizedPath)
+              }
+              // Within the grace window: skip the fast path WITHOUT deleting
+              // — the recompute below re-stamps a fresh entry.
             } catch {
               // Any stat/realpath failure falls through to a full recompute,
               // which re-derives the same fail-closed sentinels as before.
+              gateMarkerCache.delete(normalizedPath)
             }
+          } else {
+            gateMarkerCache.delete(normalizedPath)
           }
-          gateMarkerCache.delete(normalizedPath)
         }
         const marker = readGateFileContentMarkerUncached(normalizedPath)
         // Cache only present-file sha256 markers, keyed with the stat the
@@ -12100,6 +12140,8 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             gateMarkerCache.set(normalizedPath, {
               size: openedStat.size,
               mtimeMs: openedStat.mtimeMs,
+              ctimeMs: openedStat.ctimeMs,
+              stampedAt: Date.now(),
               marker,
             })
             while (gateMarkerCache.size > GATE_MARKER_CACHE_MAX) {

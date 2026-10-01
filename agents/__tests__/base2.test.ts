@@ -5136,8 +5136,12 @@ describe('base2 verification and reviewer gates', () => {
     try {
       const tmpFile = join(tmpDir, 'a.ts')
       const gateFile = normalizeGateFilePath(tmpFile)
+      // Different LENGTHS on purpose so the consecutive snapshots can never
+      // collide on size+mtime (even with a fully broken marker cache) while
+      // keeping the oscillation semantics: the finding sequence is unchanged,
+      // only the byte lengths differ.
       const contentA = 'export const value = 1\n'
-      const contentB = 'export const value = 2\n'
+      const contentB = 'export const value = 22\n'
       writeFileSync(tmpFile, contentA)
       const base2 = createBase2('default')
       const agentState = { agentId: 'base2' }
