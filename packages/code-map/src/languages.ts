@@ -251,7 +251,10 @@ function tryResolveFromPackage(wasmFileName: string): string | null {
  * Mirrors `resolveWasmPath`: get the module directory (with a process.cwd()
  * fallback for ESM builds where `__dirname` is unavailable). Works for both
  * ESM and CJS builds of the SDK, including npm consumers where the module
- * directory is inside node_modules.
+ * directory is inside node_modules. The module directory may be either the
+ * src/ dir that directly contains `tree-sitter-queries` (dev/monorepo and
+ * Bun-resolved layouts) or a package-entry/dist dir that does not (npm
+ * layouts where the entry is `dist/index.js`), so both layouts are probed.
  *
  * Fail-closed-simple: return the first candidate whose file exists, else the
  * primary candidate — the readFileSync in `createLanguageConfig` then throws
@@ -273,6 +276,20 @@ function resolveQueryPath(queryFileName: string): string {
   const primary = path.join(moduleDir, 'tree-sitter-queries', queryFileName)
   if (fs.existsSync(primary)) {
     return primary
+  }
+
+  // Candidate for npm/bundled layouts where the module directory is the
+  // package entry (e.g. `dist/index.js`) and does not directly contain
+  // `tree-sitter-queries`; the src/ tree with the queries sits one level
+  // below the entry directory.
+  const srcCandidate = path.join(
+    moduleDir,
+    'src',
+    'tree-sitter-queries',
+    queryFileName,
+  )
+  if (fs.existsSync(srcCandidate)) {
+    return srcCandidate
   }
 
   // Fallback for development/monorepo layouts where the module directory
@@ -384,12 +401,19 @@ export async function createLanguageConfig(
       // text is read from disk here, and a read failure propagates to the
       // fail-open catch in `getLanguageConfig`. This removes the hard
       // dependency on bundler/test-preload `.scm` import plugins.
-      if (!path.isAbsolute(cfg.queryPathOrContent)) {
-        cfg.queryPathOrContent = resolveQueryPath(cfg.queryPathOrContent)
+      // Resolve LOCALLY: do NOT mutate the shared languageTable entry.
+      // Table configs are module-level singletons; rewriting
+      // queryPathOrContent from the bare .scm filename to an absolute path
+      // made repeated loads and any consumer holding a config (including
+      // the table-consistency test, which joins the name onto the queries
+      // dir) order-dependent on which grammar loaded first.
+      let querySource = cfg.queryPathOrContent
+      if (!path.isAbsolute(querySource)) {
+        querySource = resolveQueryPath(querySource)
       }
-      const queryContent = path.isAbsolute(cfg.queryPathOrContent)
-        ? fs.readFileSync(cfg.queryPathOrContent, 'utf8')
-        : cfg.queryPathOrContent
+      const queryContent = path.isAbsolute(querySource)
+        ? fs.readFileSync(querySource, 'utf8')
+        : querySource
 
       cfg.language = lang
       cfg.parser = parser

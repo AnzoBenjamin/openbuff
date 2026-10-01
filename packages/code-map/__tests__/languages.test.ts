@@ -14,6 +14,7 @@ import {
   type LanguageConfig,
   type RuntimeLanguageLoader,
 } from '../src/languages'
+import { getDirnameDynamically } from '../src/utils'
 
 describe('languages module', () => {
   describe('languageTable', () => {
@@ -464,6 +465,21 @@ describe('languages module', () => {
       expect(initParser).toHaveBeenCalledTimes(1)
       // loadLanguage receives the wasm filename
       expect(loadLanguage).toHaveBeenCalledWith('tree-sitter-gdscript.wasm')
+    }, 15_000)
+  })
+
+  describe('query loading works from any cwd (regression pin for a62135c5d)', () => {
+    it('getDirnameDynamically resolves to an existing directory', () => {
+      const dir = getDirnameDynamically()
+      expect(typeof dir).toBe('string')
+      expect(fs.existsSync(dir!)).toBe(true)
+      expect(fs.statSync(dir!).isDirectory()).toBe(true)
+    })
+
+    it('getLanguageConfig(.ts) returns a defined config (undefined is the fail-open symptom of a broken query read)', async () => {
+      const cfg = await getLanguageConfig('sample.ts')
+      expect(cfg).toBeDefined()
+      expect(cfg?.parser).toBeDefined()
     }, 15_000)
   })
 })
