@@ -53,8 +53,12 @@ const CREDENTIAL_ENV_KEYS = [
 /** Floor on the holdback window (§12.8 NEW-3). */
 const MIN_HOLDBACK_CHARS = 256
 
-/** Absolute cap on a single held window so memory stays bounded. */
-const MAX_HELD_WINDOW_CHARS = 64 * 1024
+/**
+ * Absolute cap on a single held window so memory stays bounded. Exported so
+ * the bounded-overflow regression test can size its fixtures; production
+ * callers never read it.
+ */
+export const MAX_HELD_WINDOW_CHARS = 64 * 1024
 
 /**
  * Collects the credential env keys the provider configuration surface
@@ -206,14 +210,19 @@ export class OutboundHoldback {
     // progressive push, so a configured credential or cap.v3 token straddling
     // the overflow cut is never split across two frames (GV-27 no-split
     // invariant holds on the overflow path too). If no safe cut exists the
-    // overflow stays held (bounded growth is accepted over a split secret;
-    // the next flush triggers then release it whole).
+    // blocked run is discarded (see below) so the window stays bounded.
     if (window.held.length > MAX_HELD_WINDOW_CHARS) {
       const overflowCut = window.held.length - window.holdback
       const safe = this.pullCutBack(window, overflowCut)
       if (safe === undefined) {
-        // Everything stays held: memory growth is bounded by the window cap
-        // and no protected value is ever split.
+        // Fail closed AND bounded: `undefined` means a protected value
+        // anchored at index 0 blocks every cut (e.g. a cap.v3 token run or a
+        // credential spanning the whole window). Keeping the bytes would let
+        // `held` grow without bound as later chunks append — and make every
+        // push rescan the whole window — so the blocked run is DISCARDED
+        // instead. Nothing of it ever crossed the wire, so no protected value
+        // is split across frames (GV-27) and no partial is emitted.
+        window.held = ''
         return []
       }
       const overflow = window.held.slice(0, safe)

@@ -70,10 +70,10 @@ export type RestoreOutcome =
  * TRACKED tree, one per successful turn, chained on the private ref
  * `refs/openbuff/turns`.
  *
- * Scope notes: per-shell-command snapshots are now wired for user-invoked
- * commands via runBashCommand (label 'shell'). Bisecting failures by turn
- * (walk snapshot pairs, run the test suite at each) is NOT implemented and
- * remains a later slice.
+ * Scope notes: per-shell-command snapshots are wired for user-invoked
+ * commands via runBashCommand (label 'shell'). Bisect-by-turn is implemented
+ * via runTurnBisection (binary search over the chain) and exposed as
+ * /bisect-turn (`list` shows snapshots, `stop` cancels a running bisection).
  *
  * Safety model:
  * - Only git plumbing is used. The user's real index and HEAD are never
@@ -188,6 +188,18 @@ export async function createTurnSnapshot(
   const root = resolveProjectRoot(opts)
   if (!root) {
     return { status: 'unavailable' }
+  }
+  // A running bisection is rewriting the tracked working tree and walking the
+  // snapshot chain. A concurrent snapshot would chain onto a temporarily
+  // rolled-back probed tree (or the in-flight final restore) instead of the
+  // newest state, corrupting the chain the search is walking. Fail closed:
+  // snapshots are paused until the bisection finishes.
+  if (bisectRunning) {
+    return {
+      status: 'skipped',
+      reason:
+        'a turn bisection is in flight; snapshots are paused until it finishes',
+    }
   }
   const label = opts?.label ?? 'turn'
   let tempDir: string | undefined
@@ -376,5 +388,366 @@ export async function restoreToTurn(
     return { status: 'restored', sha: resolved }
   } catch (error) {
     return { status: 'error', message: toErrorMessage(error) }
+  }
+}
+
+/**
+ * Turn bisection (P2-T4): binary-search the snapshot chain to find the FIRST
+ * turn whose tracked tree breaks a test command.
+ *
+ * - `bisectTurnsPure` is the pure search core (no git, no subprocess): it
+ *   probes at most 1 + ceil(log2(n)) indices and assumes the OLDEST snapshot
+ *   passes (a failing oldest snapshot is reported as an inconclusive
+ *   baseline instead of a bogus "first failing turn").
+ * - `runTurnBisection` materializes each probed snapshot with the SAME
+ *   private mechanics as /restore (temp GIT_INDEX_FILE + checkout-index), so
+ *   HEAD, the user's real index, and untracked files are never touched, and
+ *   always restores the NEWEST snapshot's tree when the run ends (cancel,
+ *   failure, or success). Leaving the tree at the last known-good snapshot
+ *   is opt-in via `keepBestState`.
+ * - The test command runs through argv arrays only (never a shell), with a
+ *   10-minute bound per probe; a non-zero exit or timeout counts as "suite
+ *   failed at this turn". A command that cannot even start (ENOENT,
+ *   permission denied) is a command-level error instead of a failing probe.
+ * - An in-flight guard rejects a second concurrent run: only one bisection
+ *   may rewrite the tracked working tree at a time, so the ALWAYS-restores
+ *   contract above cannot be broken by interleaved checkouts.
+ */
+
+let bisectCancelled = false
+
+/**
+ * In-flight guard: only one bisection may rewrite the tracked working tree
+ * at a time. Concurrent runs (or a bisection overlapping an agent turn)
+ * would interleave checkoutSnapshotTree rewrites and break the
+ * "ALWAYS restores the newest snapshot's tree when the run ends" contract.
+ */
+let bisectRunning = false
+
+/** Whether a turn bisection is currently rewriting the tracked working tree. */
+export function isTurnBisectionRunning(): boolean {
+  return bisectRunning
+}
+
+/** Request cancellation of a running turn bisection (/bisect-turn stop). */
+export function cancelTurnBisection(): void {
+  bisectCancelled = true
+}
+
+class BisectCancelledError extends Error {}
+
+/**
+ * The test command itself could not run (ENOENT, permission denied, empty
+ * argv). Distinct from "the suite failed at this snapshot": a mistyped
+ * command must never be reported as a failing baseline.
+ */
+class BisectCommandError extends Error {}
+
+export type BisectProgress = {
+  phase: 'start' | 'probe'
+  index?: number
+  count?: number
+  sha?: string
+  label?: string
+}
+
+export type BisectOutcome =
+  | {
+      status: 'found'
+      failingSha: string
+      failingLabel: string
+      probesRun: number
+      bestSha?: string
+    }
+  | {
+      status: 'inconclusive'
+      reason: 'baseline-fails' | 'no-failure-reproduced'
+      probesRun: number
+    }
+  | { status: 'no-snapshots' }
+  | { status: 'too-few-snapshots'; count: number }
+  | { status: 'cancelled' }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string }
+
+/**
+ * Pure bisection core over `count` snapshots ordered oldest (index 0) to
+ * newest (index count-1). `probeFn` returns true when the suite FAILS at the
+ * probed index. Returns the smallest failing index, or null when nothing
+ * fails; a failing index 0 breaks the "oldest passes" invariant and is
+ * reported via `baselineFailed` without searching. Each index is probed at
+ * most once and at most 1 + ceil(log2(count)) probes run.
+ */
+export async function bisectTurnsPure(
+  count: number,
+  probeFn: (index: number) => Promise<boolean>,
+): Promise<{
+  firstFailingIndex: number | null
+  probesRun: number
+  baselineFailed: boolean
+}> {
+  if (count <= 0) {
+    return { firstFailingIndex: null, probesRun: 0, baselineFailed: false }
+  }
+  let probesRun = 0
+  const probe = async (index: number): Promise<boolean> => {
+    probesRun += 1
+    return await probeFn(index)
+  }
+  if (await probe(0)) {
+    return { firstFailingIndex: null, probesRun, baselineFailed: true }
+  }
+  let lo = 1
+  let hi = count - 1
+  let firstFailingIndex: number | null = null
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (await probe(mid)) {
+      firstFailingIndex = mid
+      hi = mid - 1
+    } else {
+      lo = mid + 1
+    }
+  }
+  return { firstFailingIndex, probesRun, baselineFailed: false }
+}
+
+/**
+ * Split a user test command into argv WITHOUT any shell: whitespace splits
+ * tokens outside single/double quotes, and quoted sections keep their inner
+ * whitespace. The output is only ever passed to execFile as an argv array,
+ * so user input can never inject into a shell.
+ */
+function splitCommandArgv(command: string): string[] {
+  const argv: string[] = []
+  let current = ''
+  let quote: string | null = null
+  for (const ch of command) {
+    if (quote !== null) {
+      if (ch === quote) {
+        quote = null
+      } else {
+        current += ch
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch
+    } else if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        argv.push(current)
+        current = ''
+      }
+    } else {
+      current += ch
+    }
+  }
+  if (current.length > 0) {
+    argv.push(current)
+  }
+  return argv
+}
+
+/** Per-probe bound: a hung suite must never stall the bisection forever. */
+const BISECT_PROBE_TIMEOUT_MS = 10 * 60 * 1000
+
+/**
+ * Default probe runner: execute the test command once from the project root
+ * and resolve true only when it FAILS (non-zero exit or timeout). A
+ * command-level failure - the process never started (ENOENT, EACCES, ...) or
+ * the command is empty - throws BisectCommandError instead, so a mistyped
+ * command is reported as an error, never as "the suite fails at the OLDEST
+ * snapshot".
+ */
+async function defaultRunTestSuite(
+  command: string,
+  root: string,
+): Promise<boolean> {
+  const argv = splitCommandArgv(command)
+  if (argv.length === 0) {
+    throw new BisectCommandError('the test command is empty')
+  }
+  try {
+    await execFileAsync(argv[0]!, argv.slice(1), {
+      cwd: root,
+      env: getSystemProcessEnv(),
+      timeout: BISECT_PROBE_TIMEOUT_MS,
+    })
+    return false
+  } catch (error) {
+    const err = error as (Error & { code?: unknown; killed?: boolean }) | null
+    // execFile sets a NUMERIC exit code when the process ran and exited
+    // non-zero; a string code means the process never started (ENOENT,
+    // EACCES, ...). Timeouts (ETIMEDOUT / killed) still count as probe
+    // failures per the documented contract.
+    if (
+      err !== null &&
+      typeof err.code === 'string' &&
+      err.code !== 'ETIMEDOUT' &&
+      err.killed !== true
+    ) {
+      throw new BisectCommandError(
+        `test command '${argv[0]}' could not be run: ${err.code}`,
+      )
+    }
+    return true
+  }
+}
+
+export async function runTurnBisection(
+  opts?: {
+    projectRoot?: string
+    command?: string
+    keepBestState?: boolean
+    onProgress?: (progress: BisectProgress) => void
+  },
+  deps?: TurnSnapshotDeps & {
+    runTestSuite?: (
+      entry: TurnSnapshotEntry,
+      next: TurnSnapshotEntry | undefined,
+    ) => Promise<boolean>
+  },
+): Promise<BisectOutcome> {
+  // Fail closed against concurrent runs: two bisections would interleave
+  // checkoutSnapshotTree rewrites of the same tracked working tree and
+  // clobber each other's probes. Checked and set in the same synchronous
+  // slice, so the guard is race-free within a process.
+  if (bisectRunning) {
+    return {
+      status: 'error',
+      message:
+        'a turn bisection is already in flight - wait for it to finish or cancel it with /bisect-turn stop before starting another.',
+    }
+  }
+  // A previous cancelled run must never poison the next one.
+  bisectCancelled = false
+  const root = resolveProjectRoot(opts)
+  if (!root) {
+    return { status: 'unavailable' }
+  }
+  const command = opts?.command ?? 'bun test'
+  const runSuite =
+    deps?.runTestSuite ??
+    (async (
+      entry: TurnSnapshotEntry,
+      next: TurnSnapshotEntry | undefined,
+    ) => await defaultRunTestSuite(command, root))
+  const safeProgress = (progress: BisectProgress): void => {
+    try {
+      opts?.onProgress?.(progress)
+    } catch {
+      // A throwing progress callback must never break the bisection.
+    }
+  }
+  bisectRunning = true
+  try {
+    const newestFirst = await listTurnSnapshots(opts, deps)
+    if (newestFirst.length === 0) {
+      return { status: 'no-snapshots' }
+    }
+    if (newestFirst.length < 3) {
+      // A before/after pair plus the failing candidate is the minimum needed
+      // to localize anything; 2 snapshots cannot.
+      return { status: 'too-few-snapshots', count: newestFirst.length }
+    }
+    // Oldest → newest probe order (listTurnSnapshots is newest-first).
+    const entries = [...newestFirst].reverse()
+    safeProgress({ phase: 'start', count: entries.length })
+
+    const probeFn = async (index: number): Promise<boolean> => {
+      if (bisectCancelled) {
+        throw new BisectCancelledError()
+      }
+      const entry = entries[index]!
+      safeProgress({
+        phase: 'probe',
+        index,
+        sha: entry.sha,
+        label: entry.label,
+      })
+      // Same private mechanics as /restore: HEAD, the user's real index, and
+      // untracked files are never touched.
+      await checkoutSnapshotTree(deps, entry.sha, root)
+      const failed = await runSuite(entry, entries[index + 1])
+      if (bisectCancelled) {
+        throw new BisectCancelledError()
+      }
+      return failed
+    }
+
+    const result = await bisectTurnsPure(entries.length, probeFn)
+
+    // Mandatory cleanup: the tracked working tree goes back to the newest
+    // snapshot's state (the pre-bisect view) no matter how the search ended.
+    try {
+      await checkoutSnapshotTree(deps, entries[entries.length - 1]!.sha, root)
+    } catch (error) {
+      return {
+        status: 'error',
+        message: `bisection finished but restoring the newest tracked state failed: ${toErrorMessage(error)}`,
+      }
+    }
+    if (result.baselineFailed) {
+      return {
+        status: 'inconclusive',
+        reason: 'baseline-fails',
+        probesRun: result.probesRun,
+      }
+    }
+    if (result.firstFailingIndex === null) {
+      return {
+        status: 'inconclusive',
+        reason: 'no-failure-reproduced',
+        probesRun: result.probesRun,
+      }
+    }
+    const failing = entries[result.firstFailingIndex]!
+    const bestSha =
+      result.firstFailingIndex > 0
+        ? entries[result.firstFailingIndex - 1]!.sha
+        : undefined
+    // Opt-in: leave the tracked tree at the last known-good snapshot.
+    if (opts?.keepBestState === true && bestSha !== undefined) {
+      try {
+        await checkoutSnapshotTree(deps, bestSha, root)
+      } catch (error) {
+        return {
+          status: 'error',
+          message: `found the failing turn but restoring the best state failed: ${toErrorMessage(error)}`,
+        }
+      }
+    }
+    return {
+      status: 'found',
+      failingSha: failing.sha,
+      failingLabel: failing.label,
+      probesRun: result.probesRun,
+      bestSha,
+    }
+  } catch (error) {
+    if (error instanceof BisectCancelledError) {
+      // Best-effort restore of the newest tree so a cancelled run never
+      // leaves the working tree at a probed snapshot.
+      try {
+        const listed = await listTurnSnapshots(opts, deps)
+        if (listed.length > 0) {
+          await checkoutSnapshotTree(deps, listed[0]!.sha, root)
+        }
+      } catch {
+        // The cancelled outcome is still reported even if this fails.
+      }
+      return { status: 'cancelled' }
+    }
+    // A thrown probe failure (e.g. a mistyped test command) must still
+    // restore the newest snapshot's tree before the error is reported.
+    try {
+      const listed = await listTurnSnapshots(opts, deps)
+      if (listed.length > 0) {
+        await checkoutSnapshotTree(deps, listed[0]!.sha, root)
+      }
+    } catch {
+      // The error outcome is still reported even if this restore fails.
+    }
+    return { status: 'error', message: toErrorMessage(error) }
+  } finally {
+    bisectRunning = false
   }
 }

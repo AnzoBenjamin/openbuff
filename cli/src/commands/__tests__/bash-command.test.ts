@@ -12,9 +12,10 @@ import { useChatStore } from '../../state/chat-store'
 import { INPUT_MODE_CONFIGS, getInputModeConfig } from '../../utils/input-modes'
 import * as turnSnapshots from '../../utils/turn-snapshots'
 import { findCommand } from '../command-registry'
-import { runBashCommand } from '../router'
+import { routeUserPrompt, runBashCommand } from '../router'
 
 import type { RouterParams } from '../command-registry'
+import type { ChatMessage } from '../../types/chat'
 
 /**
  * Tests for bash command execution logic.
@@ -208,6 +209,165 @@ describe('bash command', () => {
       expect(turnSnapshots.createTurnSnapshot).toHaveBeenCalledWith({
         label: 'shell',
       })
+    })
+  })
+
+  describe('bash dispatch during a bisection', () => {
+    const createRouteParams = (
+      overrides: Partial<RouterParams> = {},
+    ): RouterParams => ({
+      abortControllerRef: { current: null },
+      agentMode: 'DEFAULT',
+      inputRef: { current: null },
+      inputValue: 'ls',
+      isChainInProgressRef: { current: false },
+      isStreaming: false,
+      streamMessageIdRef: { current: null },
+      addToQueue: mock(() => {}),
+      clearMessages: mock(() => {}),
+      saveToHistory: mock(() => {}),
+      scrollToLatest: mock(() => {}),
+      sendMessage: mock(async () => {}),
+      setCanProcessQueue: mock(() => {}),
+      setInputFocused: mock(() => {}),
+      setInputValue: mock(() => {}),
+      setMessages: mock(() => {}),
+      stopStreaming: mock(() => {}),
+      ...overrides,
+    })
+
+    test('a bang-prefixed command is blocked while a bisection is running', async () => {
+      // The updater arg is typed so bun's mock.calls tuples carry an element
+      // (a bare mock(() => {}) infers a zero-length tuple and
+      // calls[0]?.[0] does not typecheck).
+      const setMessages = mock((_updater: unknown) => {})
+      spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+
+      await routeUserPrompt(
+        createRouteParams({ inputValue: '!rm -rf build', setMessages }),
+      )
+
+      // The command was never dispatched: no pre-command shell snapshot ran.
+      expect(turnSnapshots.createTurnSnapshot).not.toHaveBeenCalled()
+
+      // The block is surfaced in chat history as a system message.
+      expect(setMessages).toHaveBeenCalledTimes(1)
+      const updater = setMessages.mock.calls[0]?.[0] as
+        | ((prev: ChatMessage[]) => ChatMessage[])
+        | undefined
+      expect(typeof updater).toBe('function')
+      const blocked = updater ? updater([]) : []
+      expect(
+        blocked.some(
+          (message) =>
+            typeof message.content === 'string' &&
+            message.content.includes('/bisect-turn'),
+        ),
+      ).toBe(true)
+    })
+
+    test('bash mode input is blocked while a bisection is running, and the mode resets', async () => {
+      const setMessages = mock(() => {})
+      useChatStore.getState().setInputMode('bash')
+      spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+
+      await routeUserPrompt(
+        createRouteParams({ inputValue: 'git reset --hard', setMessages }),
+      )
+
+      // The command was never dispatched: no pre-command shell snapshot ran.
+      expect(turnSnapshots.createTurnSnapshot).not.toHaveBeenCalled()
+      // Bash mode did not stay stuck on the blocked command.
+      expect(useChatStore.getState().inputMode).toBe('default')
+      expect(setMessages).toHaveBeenCalledTimes(1)
+    })
+
+    test('runBashCommand fails closed while a bisection is running', () => {
+      spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+
+      runBashCommand('echo blocked-during-bisect')
+
+      expect(turnSnapshots.createTurnSnapshot).not.toHaveBeenCalled()
+      const messages = useChatStore.getState().messages
+      expect(
+        messages.some(
+          (message) =>
+            typeof message.content === 'string' &&
+            message.content.includes('/bisect-turn'),
+        ),
+      ).toBe(true)
+    })
+
+    test('bash dispatch still proceeds when no bisection is running', async () => {
+      await routeUserPrompt(createRouteParams({ inputValue: '!echo hello' }))
+
+      // The fire-and-forget pre-command snapshot is the dispatch marker.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(turnSnapshots.createTurnSnapshot).toHaveBeenCalledWith({
+        label: 'shell',
+      })
+    })
+
+    test('/bisect-turn stop stays reachable while a bisection is running', () => {
+      // `stop` is the escape hatch: it must work EXACTLY when a bisection is
+      // in flight, so the spy keeps the flag state hermetic.
+      const cancelSpy = spyOn(turnSnapshots, 'cancelTurnBisection')
+      spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+
+      findCommand('bisect-turn')?.handler(
+        createRouteParams({ inputValue: '/bisect-turn stop' }),
+        'stop',
+      )
+
+      expect(cancelSpy).toHaveBeenCalledTimes(1)
+    })
+
+    test('/bisect-turn list stays reachable while a bisection is running', async () => {
+      // `list` is read-only: it must work during a run so the user can see
+      // what is being probed.
+      const listSpy = spyOn(
+        turnSnapshots,
+        'listTurnSnapshots',
+      ).mockResolvedValue([])
+      spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+
+      findCommand('bisect-turn')?.handler(
+        createRouteParams({ inputValue: '/bisect-turn list' }),
+        'list',
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(listSpy).toHaveBeenCalled()
+    })
+
+    test('/bisect-turn without a subcommand reports the live stop escape hatch while a bisection runs', () => {
+      // appendLocalMessage routes through the setMessages updater, so capture
+      // it (typed arg keeps bun's mock.calls tuple non-empty).
+      const setMessages = mock((_updater: unknown) => {})
+      spyOn(turnSnapshots, 'isTurnBisectionRunning').mockReturnValue(true)
+      const startSpy = spyOn(turnSnapshots, 'runTurnBisection').mockResolvedValue(
+        { status: 'no-snapshots' },
+      )
+
+      findCommand('bisect-turn')?.handler(
+        createRouteParams({ inputValue: '/bisect-turn', setMessages }),
+        '',
+      )
+
+      // No new bisection started while one is in flight...
+      expect(startSpy).not.toHaveBeenCalled()
+      // ...and the in-flight message names the now-LIVE stop escape hatch.
+      const updater = setMessages.mock.calls[0]?.[0] as
+        | ((prev: ChatMessage[]) => ChatMessage[])
+        | undefined
+      const blocked = updater ? updater([]) : []
+      expect(
+        blocked.some(
+          (message) =>
+            typeof message.content === 'string' &&
+            message.content.includes('/bisect-turn stop'),
+        ),
+      ).toBe(true)
     })
   })
 

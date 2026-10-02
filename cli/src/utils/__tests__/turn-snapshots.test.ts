@@ -7,9 +7,13 @@ import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
+  bisectTurnsPure,
+  cancelTurnBisection,
   createTurnSnapshot,
+  isTurnBisectionRunning,
   listTurnSnapshots,
   restoreToTurn,
+  runTurnBisection,
   undoLastTurn,
   TURN_SNAPSHOT_REF,
 } from '../turn-snapshots'
@@ -146,6 +150,50 @@ describe('turn-snapshots', () => {
       expect(outcome.status).toBe('unavailable')
     })
 
+    test('is skipped while a turn bisection is running (snapshot chain guard)', async () => {
+      for (let i = 1; i <= 3; i++) {
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+        await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+      }
+
+      let releaseProbe: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        releaseProbe = resolve
+      })
+
+      // A real in-flight bisection holds the guard while its baseline probe
+      // blocks on the gate.
+      const bisection = runTurnBisection(
+        { projectRoot: repoRoot },
+        {
+          runTestSuite: async () => {
+            await gate
+            return false
+          },
+        },
+      )
+      expect(isTurnBisectionRunning()).toBe(true)
+
+      const outcome = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 'mid-bisect',
+      })
+      expect(outcome.status).toBe('skipped')
+      if (outcome.status !== 'skipped') return
+      expect(outcome.reason).toMatch(/bisection/)
+
+      releaseProbe()
+      const bisectionOutcome = await bisection
+      expect(bisectionOutcome.status).toBe('inconclusive')
+      expect(isTurnBisectionRunning()).toBe(false)
+
+      // The declined snapshot never touched the private ref: only the three
+      // pre-bisect snapshots exist.
+      expect(
+        (await listTurnSnapshots({ projectRoot: repoRoot })).length,
+      ).toBe(3)
+    })
+
     test('accepts a custom label such as shell', async () => {
       await createTurnSnapshot({ projectRoot: repoRoot, label: 'shell' })
 
@@ -262,6 +310,247 @@ describe('turn-snapshots', () => {
         projectRoot: plainDir,
       })
       expect(outcome.status).toBe('unavailable')
+    })
+  })
+
+  describe('turn bisection', () => {
+    describe('bisectTurnsPure', () => {
+      test('finds the first failing index with bounded, non-repeating probes', async () => {
+        const probed: number[] = []
+        const result = await bisectTurnsPure(4, async (index) => {
+          probed.push(index)
+          return index >= 2
+        })
+        expect(result).toEqual({
+          firstFailingIndex: 2,
+          probesRun: 3,
+          baselineFailed: false,
+        })
+        // The oldest snapshot is always probed first (baseline check).
+        expect(probed[0]).toBe(0)
+        // Each index is probed at most once.
+        expect(new Set(probed).size).toBe(probed.length)
+      })
+
+      test('reports a failing oldest snapshot as an inconclusive baseline', async () => {
+        const result = await bisectTurnsPure(4, async () => true)
+        expect(result).toEqual({
+          firstFailingIndex: null,
+          probesRun: 1,
+          baselineFailed: true,
+        })
+      })
+
+      test('reports no failure when every snapshot passes', async () => {
+        const result = await bisectTurnsPure(4, async () => false)
+        expect(result.firstFailingIndex).toBeNull()
+        expect(result.baselineFailed).toBe(false)
+        expect(result.probesRun).toBeLessThanOrEqual(4)
+      })
+    })
+
+    describe('runTurnBisection', () => {
+      test('finds the first failing turn and restores the newest tree', async () => {
+        const shas: string[] = []
+        for (let i = 1; i <= 4; i++) {
+          writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+          const outcome = await createTurnSnapshot({
+            projectRoot: repoRoot,
+            label: `v${i}`,
+          })
+          expect(outcome.status).toBe('created')
+          if (outcome.status === 'created') {
+            shas.push(outcome.sha)
+          }
+        }
+
+        const outcome = await runTurnBisection(
+          { projectRoot: repoRoot },
+          {
+            runTestSuite: async (entry) =>
+              entry.label === 'v3' || entry.label === 'v4',
+          },
+        )
+
+        expect(outcome.status).toBe('found')
+        if (outcome.status !== 'found') return
+        expect(outcome.failingLabel).toBe('v3')
+        expect(outcome.failingSha).toBe(shas[2])
+        expect(outcome.bestSha).toBe(shas[1])
+        expect(outcome.probesRun).toBeLessThanOrEqual(4)
+
+        // The tracked tree is back at the newest (pre-bisect) state.
+        expect(
+          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
+        ).toBe('v4\n')
+      })
+
+      test('keepBestState leaves the tracked tree at the last passing snapshot', async () => {
+        for (let i = 1; i <= 4; i++) {
+          writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+          await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+        }
+
+        const outcome = await runTurnBisection(
+          { projectRoot: repoRoot, keepBestState: true },
+          {
+            runTestSuite: async (entry) =>
+              entry.label === 'v3' || entry.label === 'v4',
+          },
+        )
+
+        expect(outcome.status).toBe('found')
+        expect(
+          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
+        ).toBe('v2\n')
+      })
+
+      test('is inconclusive when the suite passes at every snapshot', async () => {
+        for (let i = 1; i <= 4; i++) {
+          writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+          await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+        }
+
+        const outcome = await runTurnBisection(
+          { projectRoot: repoRoot },
+          { runTestSuite: async () => false },
+        )
+
+        expect(outcome.status).toBe('inconclusive')
+        if (outcome.status !== 'inconclusive') return
+        expect(outcome.reason).toBe('no-failure-reproduced')
+        // The newest (pre-bisect) state is restored.
+        expect(
+          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
+        ).toBe('v4\n')
+      })
+
+      test('needs at least three snapshots to bisect', async () => {
+        await createTurnSnapshot({ projectRoot: repoRoot, label: 't1' })
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), 'v2\n')
+        await createTurnSnapshot({ projectRoot: repoRoot, label: 't2' })
+
+        const outcome = await runTurnBisection(
+          { projectRoot: repoRoot },
+          { runTestSuite: async () => true },
+        )
+        expect(outcome).toEqual({ status: 'too-few-snapshots', count: 2 })
+      })
+
+      test('reports no-snapshots on a fresh repo', async () => {
+        const outcome = await runTurnBisection({ projectRoot: repoRoot })
+        expect(outcome).toEqual({ status: 'no-snapshots' })
+      })
+
+      test('can be cancelled mid-run and still restores the newest tree', async () => {
+        for (let i = 1; i <= 4; i++) {
+          writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+          await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+        }
+
+        const outcome = await runTurnBisection(
+          { projectRoot: repoRoot },
+          {
+            runTestSuite: async () => {
+              cancelTurnBisection()
+              return false
+            },
+          },
+        )
+        expect(outcome.status).toBe('cancelled')
+        expect(
+          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
+        ).toBe('v4\n')
+
+        // The cancel flag resets: a fresh run is not immediately cancelled.
+        const rerun = await runTurnBisection(
+          { projectRoot: repoRoot },
+          { runTestSuite: async () => false },
+        )
+        expect(rerun.status).not.toBe('cancelled')
+      })
+
+      test('rejects a second concurrent bisection and clears the in-flight flag', async () => {
+        for (let i = 1; i <= 4; i++) {
+          writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+          await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+        }
+
+        let releaseProbe: () => void = () => {}
+        const gate = new Promise<void>((resolve) => {
+          releaseProbe = resolve
+        })
+
+        // The first run claims the in-flight guard synchronously before its
+        // probe blocks on the gate.
+        const first = runTurnBisection(
+          { projectRoot: repoRoot },
+          {
+            runTestSuite: async () => {
+              await gate
+              return false
+            },
+          },
+        )
+        expect(isTurnBisectionRunning()).toBe(true)
+
+        // The second run is rejected instead of interleaving checkouts.
+        const second = await runTurnBisection({ projectRoot: repoRoot })
+        expect(second.status).toBe('error')
+        if (second.status !== 'error') return
+        expect(second.message).toMatch(/already in flight/)
+        expect(isTurnBisectionRunning()).toBe(true)
+
+        releaseProbe()
+        const firstOutcome = await first
+        expect(firstOutcome.status).toBe('inconclusive')
+
+        // The guard is released when the run ends.
+        expect(isTurnBisectionRunning()).toBe(false)
+        expect(
+          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
+        ).toBe('v4\n')
+      })
+
+      test('reports a mistyped test command as an error, not a failing baseline', async () => {
+        for (let i = 1; i <= 4; i++) {
+          writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+          await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+        }
+
+        // The default runTestSuite spawns a command that cannot start
+        // (ENOENT): this is a command-level error, never "suite fails at the
+        // OLDEST snapshot".
+        const outcome = await runTurnBisection({
+          projectRoot: repoRoot,
+          command: 'definitely-not-a-real-command-12345',
+        })
+
+        expect(outcome.status).toBe('error')
+        if (outcome.status !== 'error') return
+        expect(outcome.message).toMatch(/could not be run/)
+
+        // The newest snapshot's tree is still restored before the error is
+        // reported.
+        expect(
+          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
+        ).toBe('v4\n')
+      })
+
+      test('an empty test command is a command-level error', async () => {
+        for (let i = 1; i <= 3; i++) {
+          writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+          await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+        }
+
+        const outcome = await runTurnBisection({
+          projectRoot: repoRoot,
+          command: '   ',
+        })
+        expect(outcome.status).toBe('error')
+        if (outcome.status !== 'error') return
+        expect(outcome.message).toMatch(/empty/)
+      })
     })
   })
 })

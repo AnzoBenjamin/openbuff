@@ -1,5 +1,6 @@
 import { RequestError } from '@agentclientprotocol/sdk'
 import { markAllMCPConfigOrigins } from '@codebuff/common/mcp/client'
+import { toolKind } from '@codebuff/common/protocol/acp-ext-v1'
 
 import {
   OPENBUFF_CAPABILITIES_CHANGED_NOTIFICATION,
@@ -420,7 +421,7 @@ export function createServeBridge(options: ServeBridgeOptions): {
         runId: undefined,
         eventsMode,
         projectRoot,
-        toolKind: acpToolKind,
+        toolKind,
       })
       for (const payload of payloads) {
         if (!isPlainRecord(payload)) {
@@ -803,61 +804,6 @@ function extractThoughtText(
     return undefined
   }
   return content.text
-}
-
-/**
- * The §4.6 tool `kind` mapping — the single table in code, pinned by the
- * design contract. Tool names reach this table from model-controlled tool
- * calls, so the record has a null prototype: a name like `'__proto__'` must
- * never hit an inherited setter.
- */
-const TOOL_KINDS: Record<string, string> = Object.assign(Object.create(null), {
-  read_files: 'read',
-  read_outline: 'read',
-  read_subtree: 'read',
-  read_image: 'read',
-  read_logs: 'read',
-  list_directory: 'read',
-  git_status: 'read',
-  code_search: 'search',
-  glob: 'search',
-  query_index: 'search',
-  find_files: 'search',
-  find_files_matching_content: 'search',
-  str_replace: 'edit',
-  write_file: 'edit',
-  edit_transaction: 'edit',
-  replace_range: 'edit',
-  rewrite_symbol: 'edit',
-  create_plan: 'edit',
-  update_plan_status: 'edit',
-  run_terminal_command: 'execute',
-  run_file_change_hooks: 'execute',
-  run_targeted_validation: 'execute',
-  kill_job: 'execute',
-  web_search: 'fetch',
-  read_docs: 'fetch',
-  browser_logs: 'fetch',
-  think_deeply: 'think',
-})
-
-/**
- * Resolves the §4.6 `kind` for a tool call. A mutation whose only action is
- * `delete` → `'delete'`; whose only action is `move` → `'move'`. The
- * `inspect_*` prefix family maps to `'read'`; everything else — including
- * `spawn_agents` and MCP/custom tools — is `'other'`.
- */
-function acpToolKind(
-  toolName: string,
-  mutation?: { actions: Array<{ action: string }> },
-): string {
-  if (mutation !== undefined && mutation.actions.length > 0) {
-    const actions = new Set(mutation.actions.map((entry) => entry.action))
-    if (actions.size === 1 && actions.has('delete')) return 'delete'
-    if (actions.size === 1 && actions.has('move')) return 'move'
-  }
-  if (toolName.startsWith('inspect_')) return 'read'
-  return TOOL_KINDS[toolName] ?? 'other'
 }
 
 /**

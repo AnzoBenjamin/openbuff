@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createProviderPresetConfig } from '../../provider-config'
 
 import {
+  MAX_HELD_WINDOW_CHARS,
   OutboundHoldback,
   collectCredentialValues,
   getConfiguredCredentialEnvKeys,
@@ -77,6 +78,27 @@ describe('OutboundHoldback no-split invariant (GV-27 / RF-11)', () => {
     const rest = hb.flush('s', 'm', 1).join('')
     expect(rest).not.toContain(CREDENTIAL)
     expect(all + rest).toContain(tail)
+  })
+
+  test('the no-safe-cut overflow path discards the blocked run so held stays bounded', () => {
+    const hb = new OutboundHoldback()
+    // A cap.v3 token run that never closes spans the whole window: every cut
+    // is blocked, so the overflow branch cannot emit. Successive pushes must
+    // NOT grow the held window without bound (the old behavior kept every
+    // byte and rescanned the whole window on every push) — the blocked run is
+    // discarded instead, so nothing of it ever crosses the wire.
+    expect(
+      hb.push('s', 'm', 'cap.v3.' + 'B'.repeat(MAX_HELD_WINDOW_CHARS), [], 0),
+    ).toEqual([])
+    // The window reset: a following ordinary chunk streams again instead of
+    // piling onto an unbounded held backlog.
+    const resumed = hb.push('s', 'm', 'x'.repeat(1000), [], 1)
+    expect(resumed.length).toBeGreaterThan(0)
+    // The remainder is the ordinary holdback tail, not the runaway run.
+    const rest = hb.flush('s', 'm', 2).join('')
+    expect(rest.length).toBeLessThanOrEqual(1000)
+    // The unterminated anchor never crossed any frame.
+    expect(resumed.join('') + rest).not.toContain('cap.v3.')
   })
 
   test('a cap.v3 token straddling the cut is held whole and redacted in one frame', () => {

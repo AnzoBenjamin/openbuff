@@ -56,7 +56,10 @@ export type ParsedArgs = {
    * `--serve-socket`/`--serve-token`) is passed; `undefined` keeps the
    * default in-process backend. When set, the CLI's client runs prompts
    * against a live `openbuff serve` over ACP instead of in-process, and
-   * supports detach/reattach to the live session.
+   * supports detach/reattach to the live session. `socketPath`/`token` carry
+   * the explicit flag values only; when omitted, cli/src/index.tsx falls back
+   * to OPENBUFF_SERVE_SOCKET/OPENBUFF_SERVE_TOKEN (parse-time completeness is
+   * validated against the injected `options.env`).
    */
   attach?: { socketPath?: string; token?: string }
 }
@@ -75,7 +78,19 @@ export function isRendererCommand(args: ParsedArgs): boolean {
 
 export function parseCliArgs(
   argv: string[],
-  options: { version: string; exitOverride?: boolean },
+  options: {
+    version: string
+    exitOverride?: boolean
+    /**
+     * Env fallback source for the `--attach` socket (OPENBUFF_SERVE_SOCKET).
+     * The parser reads no ambient process.env — cli/src/index.tsx injects
+     * getCliEnv() here so the documented "pass --serve-socket <path> or set
+     * OPENBUFF_SERVE_SOCKET" contract can be validated up front. Only the
+     * socket is checked (the token is optional); the fallback VALUES are
+     * applied by cli/src/index.tsx where the attach target is recorded.
+     */
+    env?: { OPENBUFF_SERVE_SOCKET?: string }
+  },
 ): ParsedArgs {
   // The tests (and cli/src/index.tsx) pass a full argv with the node+script
   // prefix, i.e. ['node', 'openbuff', ...userArgs]. Detect an explicit leading
@@ -352,8 +367,17 @@ export function parseCliArgs(
 
   const parsed = program.opts()
   const continueFlag = parsed.continue
-  // P1-T3: --attach is OFF by default. The parser is pure (flags only); the
-  // OPENBUFF_SERVE_SOCKET/TOKEN env fallback is applied by cli/src/index.tsx.
+  // P1-T3: --attach is OFF by default. The parser resolves flags only — the
+  // OPENBUFF_SERVE_SOCKET/TOKEN fallback VALUES are applied by
+  // cli/src/index.tsx — but the injected `options.env` (never ambient
+  // process.env) is consulted here so the documented fallback satisfies the
+  // completeness check below instead of hard-erroring before the entry can
+  // apply it (the error's own remedy must be reachable).
+  const envSocketRaw = options.env?.OPENBUFF_SERVE_SOCKET
+  const envSocketPath =
+    typeof envSocketRaw === 'string' && envSocketRaw.length > 0
+      ? envSocketRaw
+      : undefined
   const attachSocketPath =
     typeof parsed.serveSocket === 'string' && parsed.serveSocket.length > 0
       ? parsed.serveSocket
@@ -369,7 +393,7 @@ export function parseCliArgs(
           ...(attachToken ? { token: attachToken } : {}),
         }
       : undefined
-  if (parsed.attach === true && !attachSocketPath) {
+  if (parsed.attach === true && !attachSocketPath && !envSocketPath) {
     program.error(
       '--attach requires a serve socket: pass --serve-socket <path> or set OPENBUFF_SERVE_SOCKET',
     )

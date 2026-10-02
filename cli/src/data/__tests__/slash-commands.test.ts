@@ -174,6 +174,13 @@ describe('slash-commands module', () => {
       // No aliases in this slice.
       expect(undoTurn!.aliases).toBeUndefined()
       expect(restore!.aliases).toBeUndefined()
+
+      const bisectTurn = SLASH_COMMANDS.find((cmd) => cmd.id === 'bisect-turn')
+      expect(bisectTurn).toBeDefined()
+      expect(bisectTurn!.label).toBe('bisect-turn')
+      expect(bisectTurn!.description).toContain('snapshot')
+      expect(bisectTurn!.implicitCommand).toBeUndefined()
+      expect(bisectTurn!.aliases).toBeUndefined()
     })
   })
 

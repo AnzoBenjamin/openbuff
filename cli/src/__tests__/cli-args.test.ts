@@ -2,10 +2,11 @@ import { describe, expect, test } from 'bun:test'
 
 import { isRendererCommand, parseCliArgs } from '../cli-args'
 
-const parse = (args: string[]) =>
+const parse = (args: string[], env?: { OPENBUFF_SERVE_SOCKET?: string }) =>
   parseCliArgs(['node', 'openbuff', ...args], {
     version: '1.2.3',
     exitOverride: true,
+    env,
   })
 
 describe('production CLI argument parser', () => {
@@ -345,6 +346,35 @@ describe('attach flag parsing (P1-T3)', () => {
 
   test('rejects --attach with no socket path', () => {
     expect(() => parse(['--attach'])).toThrow()
+  })
+
+  test('rejects --attach when neither the flag nor OPENBUFF_SERVE_SOCKET provides a socket', () => {
+    // Fail closed: the error's prescribed remedy must be exhaustive — an
+    // empty env value is not a socket, so a bare `--attach` still dies with
+    // the OPENBUFF_SERVE_SOCKET hint.
+    expect(() => parse(['--attach'], {})).toThrow(/OPENBUFF_SERVE_SOCKET/)
+    expect(() => parse(['--attach'], { OPENBUFF_SERVE_SOCKET: '' })).toThrow(
+      /OPENBUFF_SERVE_SOCKET/,
+    )
+  })
+
+  test('accepts --attach with only OPENBUFF_SERVE_SOCKET (documented env fallback)', () => {
+    // Regression: parseCliArgs used to program.error here before
+    // cli/src/index.tsx could apply the documented OPENBUFF_SERVE_SOCKET
+    // fallback, so setting the env var produced the identical error. The
+    // completeness check now consults the injected env; the fallback VALUE is
+    // applied by cli/src/index.tsx, so the parser carries only explicit flags.
+    const result = parse(['--attach'], {
+      OPENBUFF_SERVE_SOCKET: '/tmp/env.sock',
+    })
+    expect(result.attach).toEqual({})
+  })
+
+  test('the env socket unblocks --attach carrying only --serve-token', () => {
+    const result = parse(['--attach', '--serve-token', 'abc'], {
+      OPENBUFF_SERVE_SOCKET: '/tmp/env.sock',
+    })
+    expect(result.attach).toEqual({ token: 'abc' })
   })
 
   test('parses --attach with --serve-socket', () => {

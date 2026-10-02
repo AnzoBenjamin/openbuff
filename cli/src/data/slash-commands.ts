@@ -242,6 +242,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
       'Restore tracked files to a specific turn snapshot (git-based)',
   },
   {
+    id: 'bisect-turn',
+    label: 'bisect-turn',
+    description:
+      'Find the first turn snapshot that breaks the test suite (git-based)',
+  },
+  {
     id: 'exit',
     label: 'exit',
     description: 'Quit the CLI',

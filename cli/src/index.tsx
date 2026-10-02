@@ -350,7 +350,13 @@ async function main(): Promise<void> {
     }, 1500)
   }
 
-  const parsedArgs = parseCliArgs(cliArgv, { version: loadPackageVersion() })
+  const parsedArgs = parseCliArgs(cliArgv, {
+    version: loadPackageVersion(),
+    // Inject the attach env fallback (OPENBUFF_SERVE_SOCKET) so parseCliArgs
+    // can validate the documented `--attach` completeness contract without
+    // reading ambient process.env itself.
+    env: getCliEnv(),
+  })
   const {
     initialPrompt,
     agent,
@@ -389,8 +395,9 @@ async function main(): Promise<void> {
   // P1-T3: record the attach target BEFORE any client is created so
   // getCodebuffClient() (and the TUI's hook) builds the ACP-remote backend.
   // The socket path and auth token come from --serve-socket/--serve-token,
-  // falling back to OPENBUFF_SERVE_SOCKET/OPENBUFF_SERVE_TOKEN (the parser is
-  // pure and reads no env; the env fallback lives here in the entry).
+  // falling back to OPENBUFF_SERVE_SOCKET/OPENBUFF_SERVE_TOKEN. The parser
+  // reads no ambient env: it validates completeness against the injected
+  // getCliEnv() above, and the fallback VALUES are applied here in the entry.
   if (attach) {
     const socketPath = attach.socketPath ?? getCliEnv().OPENBUFF_SERVE_SOCKET
     if (socketPath) {

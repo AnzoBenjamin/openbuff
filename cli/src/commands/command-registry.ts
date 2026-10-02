@@ -63,8 +63,11 @@ import {
   detachSession,
 } from '../utils/attach-session'
 import {
+  cancelTurnBisection,
+  isTurnBisectionRunning,
   listTurnSnapshots,
   restoreToTurn,
+  runTurnBisection,
   undoLastTurn,
 } from '../utils/turn-snapshots'
 import { getAttachTarget } from '../utils/codebuff-client'
@@ -688,7 +691,8 @@ const ALL_COMMANDS: CommandDefinition[] = [
       if (
         params.isStreaming ||
         params.streamMessageIdRef.current ||
-        params.isChainInProgressRef.current
+        params.isChainInProgressRef.current ||
+        isTurnBisectionRunning()
       ) {
         appendLocalMessage(
           params,
@@ -736,7 +740,8 @@ const ALL_COMMANDS: CommandDefinition[] = [
       if (
         params.isStreaming ||
         params.streamMessageIdRef.current ||
-        params.isChainInProgressRef.current
+        params.isChainInProgressRef.current ||
+        isTurnBisectionRunning()
       ) {
         appendLocalMessage(
           params,
@@ -804,6 +809,137 @@ const ALL_COMMANDS: CommandDefinition[] = [
           appendLocalMessage(
             params,
             '/restore: failed to resolve the requested turn snapshot.',
+          )
+        })
+    },
+  }),
+  defineCommandWithArgs({
+    name: 'bisect-turn',
+    handler: (params, args) => {
+      const target = args.trim()
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // `stop` and `list` MUST stay reachable while a bisection is running:
+      // `stop` is the only escape hatch from a run that can hold the tracked
+      // tree for many 10-minute-bounded probes, and `list` is read-only.
+      // Both therefore precede the busy-check by contract.
+      if (target === 'stop') {
+        cancelTurnBisection()
+        appendLocalMessage(
+          params,
+          '/bisect-turn: cancellation requested - the running bisection stops after its current probe and restores the newest snapshot.',
+        )
+        return
+      }
+      if (target === 'list') {
+        void listTurnSnapshots().then((snapshots) => {
+          if (snapshots.length === 0) {
+            appendLocalMessage(
+              params,
+              '/bisect-turn: no turn snapshots yet - snapshots are taken after each successful turn.',
+            )
+            return
+          }
+          const lines = snapshots
+            .slice(0, 20)
+            .map(
+              (entry, i) =>
+                `${i + 1}. ${entry.sha.slice(0, 12)} ${entry.label || '(unlabeled)'}`,
+            )
+          appendLocalMessage(
+            params,
+            `/bisect-turn: ${snapshots.length} snapshots, newest first:\n${lines.join('\n')}`,
+          )
+        })
+        return
+      }
+      // The bisection RUN is the only mutating path: same busy-check as
+      // /undo-turn and /restore, plus isTurnBisectionRunning so a second
+      // bisection can never interleave checkout rewrites.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current
+      ) {
+        appendLocalMessage(
+          params,
+          '/bisect-turn: a turn is in progress - wait for it to finish, then run /bisect-turn again.',
+        )
+        return
+      }
+      if (isTurnBisectionRunning()) {
+        appendLocalMessage(
+          params,
+          '/bisect-turn: a bisection is already in flight - run /bisect-turn stop to cancel it before starting another.',
+        )
+        return
+      }
+      // Anything else is the test command (empty => the default suite).
+      const command = target || 'bun test'
+      void (async () => {
+        const snapshots = await listTurnSnapshots()
+        appendLocalMessage(
+          params,
+          `/bisect-turn: bisecting ${snapshots.length} snapshots with '${command}' - the tracked working tree is temporarily rewritten during each probe (HEAD, the real index, and untracked files are untouched) and restored to the newest snapshot afterward.`,
+        )
+        return runTurnBisection({ command })
+      })()
+        .then((outcome) => {
+          switch (outcome.status) {
+            case 'found': {
+              const failingName =
+                outcome.failingLabel || '(unlabeled snapshot)'
+              const tail =
+                outcome.bestSha !== undefined
+                  ? `; the last passing snapshot is ${outcome.bestSha.slice(0, 12)} - run /restore ${outcome.bestSha.slice(0, 12)} to go back to it.`
+                  : '.'
+              appendLocalMessage(
+                params,
+                `/bisect-turn: first failing turn is ${failingName} (${outcome.failingSha.slice(0, 12)}) after ${outcome.probesRun} probes${tail}`,
+              )
+              break
+            }
+            case 'inconclusive':
+              appendLocalMessage(
+                params,
+                outcome.reason === 'baseline-fails'
+                  ? '/bisect-turn: inconclusive - the test suite already fails at the OLDEST snapshot, so bisection cannot localize the breakage.'
+                  : '/bisect-turn: inconclusive - the test suite passed at every snapshot, so no failing turn was found.',
+              )
+              break
+            case 'no-snapshots':
+              appendLocalMessage(
+                params,
+                '/bisect-turn: no turn snapshots yet - snapshots are taken after each successful turn.',
+              )
+              break
+            case 'too-few-snapshots':
+              appendLocalMessage(
+                params,
+                `/bisect-turn: only ${outcome.count} snapshot${outcome.count === 1 ? '' : 's'} - at least 3 are needed to bisect.`,
+              )
+              break
+            case 'cancelled':
+              appendLocalMessage(
+                params,
+                '/bisect-turn: cancelled - the newest snapshot was restored.',
+              )
+              break
+            case 'unavailable':
+              appendLocalMessage(
+                params,
+                '/bisect-turn: turn snapshots are unavailable - this project is not a git repository with commits.',
+              )
+              break
+            case 'error':
+              appendLocalMessage(params, `/bisect-turn: ${outcome.message}`)
+              break
+          }
+        })
+        .catch(() => {
+          appendLocalMessage(
+            params,
+            '/bisect-turn: bisection failed unexpectedly.',
           )
         })
     },

@@ -51,6 +51,21 @@ export function runBashCommand(command: string) {
     updatePendingBashMessage,
   } = useChatStore.getState()
 
+  // Fail closed at the single execution choke point so every dispatch path
+  // (routeUserPrompt bash mode, '!'-prefixed input, and the /bash <args>
+  // slash command) is covered: a running bisection is rewriting the tracked
+  // working tree, and a shell command mutating tracked files mid-probe would
+  // be silently clobbered by the bisection's final restore.
+  if (turnSnapshots.isTurnBisectionRunning()) {
+    setMessages((prev) => [
+      ...prev,
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before running a shell command.',
+      ),
+    ])
+    return
+  }
+
   const ghost = streamingAgents.size > 0 || isChainInProgress
   const id = crypto.randomUUID()
   const abortController = registerBashCommand(id)
@@ -313,6 +328,35 @@ export async function routeUserPrompt(
     mentionCount: mentionMatches.length,
   })
 
+  // A running bisection is rewriting the tracked working tree. A user shell
+  // command dispatched now would mutate tracked files mid-probe that the
+  // bisection's final restore silently clobbers (and its own 'shell'
+  // snapshot would chain onto a probed tree mid-run), so bash dispatch
+  // fails closed exactly like agent dispatch. This must sit BEFORE the
+  // bash-mode and '!' dispatch paths below so both are covered.
+  if (
+    (inputMode === 'bash' || trimmed.startsWith('!')) &&
+    turnSnapshots.isTurnBisectionRunning()
+  ) {
+    if (inputMode === 'bash') {
+      saveToHistory('!' + trimmed)
+      setInputMode('default')
+      setInputFocused(true)
+      inputRef.current?.focus()
+    } else {
+      saveToHistory(trimmed)
+    }
+    setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
+    setMessages((prev) => [
+      ...prev,
+      getUserMessage(trimmed),
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before running a shell command.',
+      ),
+    ])
+    return
+  }
+
   // Handle bash mode commands
   if (inputMode === 'bash') {
     const commandWithBang = '!' + trimmed
@@ -487,6 +531,20 @@ export async function routeUserPrompt(
     showClipboardMessage('processing attachments...', {
       durationMs: 2000,
     })
+    return
+  }
+
+  // A running bisection is rewriting the tracked working tree; starting an
+  // agent turn now would clobber its probes (and the bisection's final
+  // restore would clobber the agent's edits). Fail closed instead.
+  if (turnSnapshots.isTurnBisectionRunning()) {
+    setMessages((prev) => [
+      ...prev,
+      getUserMessage(trimmed),
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before sending a new message.',
+      ),
+    ])
     return
   }
 
