@@ -875,23 +875,32 @@ const ALL_COMMANDS: CommandDefinition[] = [
         return
       }
       // Anything else is the test command (empty => the default suite).
-      const command = target || 'bun test'
+      // `--keep-best` (anywhere in the args) opts into leaving the tracked
+      // tree at the last passing snapshot after a 'found' outcome, instead
+      // of restoring the newest. The flag is stripped before the remainder
+      // becomes the test command.
+      const keepBestState = target.includes('--keep-best')
+      const command =
+        target.replace(/(^|\s)--keep-best(\s|$)/g, ' ').trim() || 'bun test'
       void (async () => {
         const snapshots = await listTurnSnapshots()
         appendLocalMessage(
           params,
-          `/bisect-turn: bisecting ${snapshots.length} snapshots with '${command}' - the tracked working tree is temporarily rewritten during each probe (HEAD, the real index, and untracked files are untouched) and restored to the newest snapshot afterward.`,
+          `/bisect-turn: bisecting ${snapshots.length} snapshots with '${command}'${keepBestState ? ' (--keep-best: stays at the last passing snapshot on success)' : ''} - the tracked working tree is temporarily rewritten during each probe (HEAD, the real index, and untracked files are untouched) and restored to the newest snapshot afterward.`,
         )
-        return runTurnBisection({ command })
+        return runTurnBisection({ command, keepBestState })
       })()
         .then((outcome) => {
           switch (outcome.status) {
             case 'found': {
               const failingName =
                 outcome.failingLabel || '(unlabeled snapshot)'
+              const bestSha12 = outcome.bestSha?.slice(0, 12)
               const tail =
                 outcome.bestSha !== undefined
-                  ? `; the last passing snapshot is ${outcome.bestSha.slice(0, 12)} - run /restore ${outcome.bestSha.slice(0, 12)} to go back to it.`
+                  ? keepBestState
+                    ? `; the tracked tree is now at the last passing snapshot ${bestSha12}.`
+                    : `; the last passing snapshot is ${bestSha12} - run /restore ${bestSha12} to go back to it.`
                   : '.'
               appendLocalMessage(
                 params,

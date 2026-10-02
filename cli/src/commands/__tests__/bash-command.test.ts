@@ -369,6 +369,45 @@ describe('bash command', () => {
         ),
       ).toBe(true)
     })
+
+    test('parse: --keep-best is stripped from the command and passed to runTurnBisection', async () => {
+      spyOn(turnSnapshots, 'listTurnSnapshots').mockResolvedValue([])
+      const startSpy = spyOn(
+        turnSnapshots,
+        'runTurnBisection',
+      ).mockResolvedValue({ status: 'no-snapshots' })
+
+      findCommand('bisect-turn')?.handler(
+        createRouteParams({
+          inputValue: '/bisect-turn --keep-best bun test --filter foo',
+        }),
+        '--keep-best bun test --filter foo',
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(startSpy).toHaveBeenCalledWith({
+        command: 'bun test --filter foo',
+        keepBestState: true,
+      })
+    })
+
+    test('parse: bare /bisect-turn passes keepBestState false with the default command', async () => {
+      const startSpy = spyOn(
+        turnSnapshots,
+        'runTurnBisection',
+      ).mockResolvedValue({ status: 'no-snapshots' })
+
+      findCommand('bisect-turn')?.handler(
+        createRouteParams({ inputValue: '/bisect-turn' }),
+        '',
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(startSpy).toHaveBeenCalledWith({
+        command: 'bun test',
+        keepBestState: false,
+      })
+    })
   })
 
   describe('pending bash messages', () => {
