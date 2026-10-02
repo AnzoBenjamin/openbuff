@@ -2,9 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
+import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
 import { describe, expect, it } from 'bun:test'
 
-import { openRunJournalForRun } from '../run-journal-path'
+import {
+  RUN_JOURNAL_DEFAULT_RETENTION,
+  openRunJournalForRun,
+} from '../run-journal-path'
 
 describe('openRunJournalForRun (P2-T7 live-run journal opener)', () => {
   it('opens a real journal at an injected path and journals + closes it', async () => {
@@ -48,5 +52,44 @@ describe('openRunJournalForRun (P2-T7 live-run journal opener)', () => {
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('run journal unavailable')
     expect(warnings[0]).toContain('continuing without journaling')
+  })
+
+  it('passes RUN_JOURNAL_DEFAULT_RETENTION to createRunJournal (write-side cap)', async () => {
+    const seen: Parameters<typeof createRunJournal>[0][] = []
+
+    // Injectable factory seam: record the params, then delegate to the real
+    // createRunJournal so the wiring is exercised end-to-end (:memory:
+    // keeps it hermetic).
+    const journal = openRunJournalForRun({
+      path: ':memory:',
+      warn: () => {},
+      createRunJournal: (params) => {
+        seen.push(params)
+        return createRunJournal(params)
+      },
+    })
+    expect(journal).toBeDefined()
+    expect(seen).toEqual([
+      { path: ':memory:', retention: RUN_JOURNAL_DEFAULT_RETENTION },
+    ])
+    await journal!.close()
+  })
+
+  it('forwards an explicit retention override to createRunJournal', async () => {
+    const seen: Parameters<typeof createRunJournal>[0][] = []
+    const retention = { maxEvents: 5 }
+
+    const journal = openRunJournalForRun({
+      path: ':memory:',
+      warn: () => {},
+      retention,
+      createRunJournal: (params) => {
+        seen.push(params)
+        return createRunJournal(params)
+      },
+    })
+    expect(journal).toBeDefined()
+    expect(seen).toEqual([{ path: ':memory:', retention }])
+    await journal!.close()
   })
 })

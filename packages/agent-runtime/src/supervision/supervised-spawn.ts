@@ -20,10 +20,11 @@
  * DEFAULTS: `timeoutMs` defaults to the supervisor's 10-minute deadline
  * (SETTLE_DEFAULT_TIMEOUT_MS) — supervised spawns gain a wall-clock deadline
  * in-process spawns do not have; callers override via the request's
- * `timeoutMs`. NOTE: a supervised child that spawns shell grandchildren
- * leaves them running when the supervisor kills the direct child
- * (SIGTERM/SIGKILL target the direct pid only) — process-group teardown
- * rides a later slice.
+ * `timeoutMs`. NOTE: on timeout the supervisor tears down the child's WHOLE
+ * process group (the default seam spawns the child as a group leader via
+ * `detached: true`, and SIGTERM/SIGKILL go to the group by negative-pid
+ * kill), so shell grandchildren die too; only custom seams without a
+ * `killGroup` fall back to the direct-pid kill.
  *
  * LIMITED AGENT CLASS (this slice): the parent→child RPC bridge for the
  * non-serializable callback deps (promptAiSdkStream, sendAction,
@@ -31,18 +32,20 @@
  * the structured 'unsupported-deps' failed receipt (see child-entry.ts)
  * instead of half-running. The flag gate still routes and settles honestly.
  *
- * The supervisor module itself is loaded LAZILY (dynamic import inside the
- * returned seam) so the flag-off hot path never touches it.
+ * The supervisor module itself is loaded LAZILY: the static import above is
+ * TYPE-ONLY (erased at compile time, so it never evaluates the module), and
+ * the only runtime load path is the dynamic import inside the returned seam
+ * — the flag-off hot path never touches the supervisor module (nor the
+ * common schema imports it pulls in).
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import {
-  buildSupervisedChildEnv,
-  type SettledSubagentResult,
-  type SupervisedChildEnvSeed,
-  type SupervisedSpawnRequest,
+import type {
+  SettledSubagentResult,
+  SupervisedChildEnvSeed,
+  SupervisedSpawnRequest,
 } from './process-supervisor'
 
 /** The seam `SubagentContextParams.spawnSupervised` expects. */
@@ -59,9 +62,13 @@ export function buildDefaultSpawnSupervised(
   seed: SupervisedChildEnvSeed = {},
 ): SpawnSupervisedFn {
   return async (request) => {
-    // Lazy on purpose: the supervisor (and Bun.spawn) is only pulled in when
-    // the flag is actually on.
-    const { spawnSettledSubagent } = await import('./process-supervisor')
+    // Lazy on purpose: the supervisor module (Bun.spawn, the receipt schema
+    // imports it pulls, and the env allowlist builder included) is evaluated
+    // only when the flag is actually on — this dynamic import is the
+    // module's ONLY runtime load path from here.
+    const { spawnSettledSubagent, buildSupervisedChildEnv } = await import(
+      './process-supervisor'
+    )
     // Empty sandbox cwd: the child runtime auto-loads `.env` from its cwd,
     // which would leak repo env keys past the spawn allowlist.
     const sandboxCwd = mkdtempSync(join(tmpdir(), 'openbuff-supervised-cwd-'))

@@ -21,12 +21,64 @@ import {
   SETTLE_STDOUT_CAP_BYTES,
   SUPERVISED_CHILD_ENV_ALLOWLIST,
   spawnSettledSubagent,
+  type SettleChildProcess,
   type SettleSpawnSeam,
 } from '../process-supervisor'
 
 const canSpawn =
   typeof Bun !== 'undefined' && typeof Bun.spawn === 'function'
 const fixturePath = join(import.meta.dir, '../__fixtures__/settle-child.ts')
+
+/**
+ * A fake child that survives every kill until the SIGKILL step (recording
+ * each call), then EOFs its streams and exits by signal — mimicking a real
+ * child that ignores SIGTERM. Direct `kill` and optional `killGroup` calls
+ * are recorded in SEPARATE arrays; `group` absent ⇒ the seam exposes no
+ * killGroup (the direct-kill fallback path).
+ */
+function recordingChildSeam(sinks: {
+  direct: Array<'SIGTERM' | 'SIGKILL'>
+  group?: Array<'SIGTERM' | 'SIGKILL'>
+}): SettleSpawnSeam {
+  return () => {
+    let closeStdout: (() => void) | undefined
+    let closeStderr: (() => void) | undefined
+    let resolveExit: (code: number | null) => void = () => {}
+    const record = (
+      sink: Array<'SIGTERM' | 'SIGKILL'>,
+      signal?: 'SIGTERM' | 'SIGKILL',
+    ): void => {
+      const resolved = signal ?? 'SIGTERM'
+      sink.push(resolved)
+      if (resolved === 'SIGKILL') {
+        closeStdout?.()
+        closeStderr?.()
+        resolveExit(null)
+      }
+    }
+    const child: SettleChildProcess = {
+      stdout: new ReadableStream<Uint8Array>({
+        start(controller) {
+          closeStdout = () => controller.close()
+        },
+      }),
+      stderr: new ReadableStream<Uint8Array>({
+        start(controller) {
+          closeStderr = () => controller.close()
+        },
+      }),
+      exited: new Promise<number | null>((resolve) => {
+        resolveExit = resolve
+      }),
+      kill: (signal) => record(sinks.direct, signal),
+    }
+    const group = sinks.group
+    if (group !== undefined) {
+      child.killGroup = (signal) => record(group, signal)
+    }
+    return child
+  }
+}
 
 describe('spawnSettledSubagent', () => {
   it.skipIf(!canSpawn)(
@@ -134,6 +186,44 @@ describe('spawnSettledSubagent', () => {
       // SIGTERM→SIGKILL grace window instead of waiting out the 5s sleep.
       expect(result.durationMs).toBeLessThan(timeoutMs + SETTLE_KILL_GRACE_MS)
       expect(result.durationMs).toBeGreaterThanOrEqual(200)
+    },
+  )
+
+  it(
+    'timeout: kills the WHOLE process group (SIGTERM → SIGKILL) when the seam provides killGroup',
+    async () => {
+      const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+      const groupKills: Array<'SIGTERM' | 'SIGKILL'> = []
+      const result = await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        timeoutMs: 50,
+        spawn: recordingChildSeam({ direct: directKills, group: groupKills }),
+      })
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toBe('timeout')
+      expect(result.killed).toBe(true)
+      // Group kill first so shell grandchildren die too: SIGTERM, then the
+      // escalation SIGKILL, both to the group — and NEVER the direct kill.
+      expect(groupKills).toEqual(['SIGTERM', 'SIGKILL'])
+      expect(directKills).toEqual([])
+    },
+  )
+
+  it(
+    'timeout: falls back to the direct-pid kill (SIGTERM → SIGKILL) when the seam has no killGroup',
+    async () => {
+      const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+      const result = await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        timeoutMs: 50,
+        spawn: recordingChildSeam({ direct: directKills }),
+      })
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toBe('timeout')
+      expect(result.killed).toBe(true)
+      // Injected seams without killGroup keep the pre-existing behavior:
+      // SIGTERM then SIGKILL against the direct child pid.
+      expect(directKills).toEqual(['SIGTERM', 'SIGKILL'])
     },
   )
 

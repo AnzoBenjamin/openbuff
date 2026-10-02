@@ -21,9 +21,11 @@
  *    never deadlock on a full pipe) with bounded capture. On timeout the
  *    child is SIGTERMed, then SIGKILLed after a grace window, and the settle
  *    outcome is crashed 'timeout'. On spawn failure the outcome is crashed
- *    'spawn_failed'. SIGTERM/SIGKILL target the direct child pid; full
- *    process-group teardown rides the flag-gated adoption slice (the fixture
- *    children have no grandchildren).
+ *    'spawn_failed'. Process-group teardown SHIPS: the default seam spawns
+ *    the child as a group leader (Bun.spawn `detached: true`) and the
+ *    timeout path SIGTERMs then SIGKILLs the WHOLE group (negative-pid
+ *    kill) so shell grandchildren die too; injected seams without a
+ *    `killGroup` fall back to the direct-pid kill.
  *  - Caps: stdout capture 8 MiB (bytes beyond the cap are counted and
  *    discarded → outcome 'truncated'); stderr capture 64 KiB, bounded-log
  *    diagnostics ONLY — stderr is NEVER parsed into the receipt.
@@ -92,6 +94,12 @@ export type SettleChildProcess = {
   /** Resolves with the exit code, or null when the child died by signal. */
   exited: Promise<number | null>
   kill: (signal?: 'SIGTERM' | 'SIGKILL') => void
+  /**
+   * Kill the child's WHOLE process group (negative-pid kill). Present only
+   * when the child was spawned as a group leader (`detached: true`); seams
+   * without it fall back to the direct `kill` above.
+   */
+  killGroup?: (signal?: 'SIGTERM' | 'SIGKILL') => void
 }
 
 export type SettleSpawnSeam = (request: SettleSpawnRequest) => SettleChildProcess
@@ -151,6 +159,10 @@ function defaultSpawnSeam(request: SettleSpawnRequest): SettleChildProcess {
     stdin: request.stdin,
     stdout: request.stdout,
     stderr: request.stderr,
+    // Group leader: makes the child a process-group leader so the timeout
+    // path can kill the WHOLE group (shell grandchildren included) via a
+    // negative-pid kill.
+    detached: true,
   })
   return {
     stdout: proc.stdout,
@@ -162,6 +174,15 @@ function defaultSpawnSeam(request: SettleSpawnRequest): SettleChildProcess {
       // process.kill is used instead of proc.kill so the signal type is
       // portable across Bun versions; ESRCH after exit is swallowed upstream.
       process.kill(proc.pid, signal ?? 'SIGTERM')
+    },
+    killGroup: (signal) => {
+      // Negative pid targets the child's process group; ESRCH after the
+      // group is gone is swallowed like the direct kill above.
+      try {
+        process.kill(-proc.pid, signal ?? 'SIGTERM')
+      } catch {
+        // Group already gone.
+      }
     },
   }
 }
@@ -265,17 +286,30 @@ export async function spawnSettledSubagent(
     if (killTimer !== undefined) clearTimeout(killTimer)
   }
 
+  // Process-group teardown when the seam provides killGroup (the default
+  // seam does): both the SIGTERM and the escalation SIGKILL target the
+  // WHOLE group so shell grandchildren die too; seams without killGroup
+  // fall back to the direct-pid kill.
+  const killChild = (signal: 'SIGTERM' | 'SIGKILL'): void => {
+    const groupKill = proc.killGroup
+    if (groupKill !== undefined) {
+      groupKill(signal)
+    } else {
+      proc.kill(signal)
+    }
+  }
+
   termTimer = setTimeout(() => {
     timedOut = true
     killed = true
     try {
-      proc.kill('SIGTERM')
+      killChild('SIGTERM')
     } catch {
       // Child already exited between timer fire and kill.
     }
     killTimer = setTimeout(() => {
       try {
-        proc.kill('SIGKILL')
+        killChild('SIGKILL')
       } catch {
         // Child already gone.
       }
