@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import React from 'react'
@@ -36,10 +35,17 @@ const openRunJournalCalls: unknown[] = []
 // while armed, so sibling suites always observe real behavior.
 let journalHooksArmed = false
 
-const requireReal = createRequire(import.meta.url)
-const realRunJournalPath = requireReal(
-  '../../utils/run-journal-path',
-) as typeof import('../../utils/run-journal-path')
+// Capture the REAL modules through the ESM registry (top-level await import),
+// NOT createRequire — a createRequire capture loads a second, distinct CJS
+// module instance, and a delegating override that closes over that copy
+// bridges the mock registry to the CJS instance and busy-spins a sibling
+// suite's real call at ~98% CPU (the test-cli hang). Top-level await import
+// resolves the SAME ESM instance the SUT and sibling suites use.
+// SNAPSHOT the real exports into a plain object BEFORE mock.module: an ESM
+// namespace is a live binding that bun's mock.module patches in place, so a
+// delegating stub reading `ns.fn` after registration would call ITSELF
+// (the sibling-suite spin). `{ ...ns }` freezes the original references.
+const realRunJournalPath = { ...(await import('../../utils/run-journal-path')) }
 mock.module('../../utils/run-journal-path', () => ({
   ...realRunJournalPath,
   openRunJournalForRun: (
@@ -80,9 +86,9 @@ let readinessResult: { ok: boolean; message?: string } = {
 // run-journal-path block above): unless the journal suite armed the flag, it
 // delegates to the real getOpenbuffProviderReadiness so sibling suites never
 // see the fixture.
-const realOpenbuffProvider = requireReal(
-  '../../utils/openbuff-provider',
-) as typeof import('../../utils/openbuff-provider')
+const realOpenbuffProvider = {
+  ...(await import('../../utils/openbuff-provider')),
+}
 mock.module('../../utils/openbuff-provider', () => ({
   ...realOpenbuffProvider,
   getOpenbuffProviderReadiness: (
@@ -101,9 +107,9 @@ mock.module('../../utils/openbuff-provider', () => ({
 // leak class). Every overriding export is also armed/delegating (see the
 // run-journal-path block above): the registry-wide override is replaced by
 // delegate-unless-armed, so sibling suites always see real behavior.
-const realCodebuffClient = requireReal(
-  '../../utils/codebuff-client',
-) as typeof import('../../utils/codebuff-client')
+const realCodebuffClient = {
+  ...(await import('../../utils/codebuff-client')),
+}
 mock.module('../../utils/codebuff-client', () => ({
   ...realCodebuffClient,
   getCodebuffClient: async (
@@ -120,9 +126,9 @@ mock.module('../../utils/codebuff-client', () => ({
   },
 }))
 
-const realLocalAgentRegistry = requireReal(
-  '../../utils/local-agent-registry',
-) as typeof import('../../utils/local-agent-registry')
+const realLocalAgentRegistry = {
+  ...(await import('../../utils/local-agent-registry')),
+}
 mock.module('../../utils/local-agent-registry', () => ({
   ...realLocalAgentRegistry,
   loadAgentDefinitions: (
@@ -133,9 +139,9 @@ mock.module('../../utils/local-agent-registry', () => ({
       : realLocalAgentRegistry.loadAgentDefinitions(...args),
 }))
 
-const realDeferredRegistries = requireReal(
-  '../../services/deferred-registries',
-) as typeof import('../../services/deferred-registries')
+const realDeferredRegistries = {
+  ...(await import('../../services/deferred-registries')),
+}
 mock.module('../../services/deferred-registries', () => ({
   ...realDeferredRegistries,
   whenRegistriesReady: (
@@ -146,9 +152,9 @@ mock.module('../../services/deferred-registries', () => ({
       : realDeferredRegistries.whenRegistriesReady(...args),
 }))
 
-const realCreateRunConfig = requireReal(
-  '../../utils/create-run-config',
-) as typeof import('../../utils/create-run-config')
+const realCreateRunConfig = {
+  ...(await import('../../utils/create-run-config')),
+}
 mock.module('../../utils/create-run-config', () => ({
   ...realCreateRunConfig,
   createRunConfig: (
