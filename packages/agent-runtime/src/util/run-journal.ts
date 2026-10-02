@@ -1,5 +1,5 @@
 /**
- * P2-T2 slice 1: append-only run journal on bun:sqlite (WAL).
+ * P2-T2 slices 1-4: append-only run journal on bun:sqlite (WAL).
  *
  * WHY: durable, append-only record of a run's LLM requests/responses, tool
  * calls/results, spawns, and step boundaries so a run killed mid-flight (e.g.
@@ -18,6 +18,15 @@
  * The bun:sqlite acquisition + structural `SqliteDb` narrowing + injectable
  * `createDatabase` seam mirror `archive-recall-index.ts`; bun-types is not
  * added to tsconfig.
+ *
+ * Slice 4 (additive): OPTIONAL per-run retention (bounded event count /
+ * payload bytes; the OLDEST rows are deleted and surviving seq numbers are
+ * never rewritten — gaps are expected, which is why classifyRunResume orders
+ * by seq, not row count) and OPTIONAL hot-path batching (appends buffer in
+ * memory and drain on a count/delay schedule via an unref'd timer;
+ * flush()/close() drain). Both are opt-in via createRunJournal params: a
+ * journal created without them behaves byte-identically to slices 1-3
+ * (flush-per-append, unbounded).
  */
 
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
@@ -25,6 +34,7 @@ import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import type {
   Clock,
   JournalEvent,
+  JournalEventRow,
   JournalReader,
   JournalWriter,
 } from '@codebuff/common/types/contracts/agent-runtime'
@@ -50,9 +60,49 @@ type BunSqliteModule = {
   Database: new (path: string) => SqliteDb
 }
 
-/** Combined writer+reader over a project-scoped or in-memory db. */
+/**
+ * Combined writer+reader over a project-scoped or in-memory db. The slice-4
+ * members (flush/close/pruneRuns) are OPTIONAL, mirroring the
+ * deliberately-optional treatment JournalWriter got in the contracts file:
+ * an existing implementor of this exported interface must never be broken by
+ * an added required member. A per-append writer flushes eagerly (flush() is
+ * a no-op for it) and a writer that closes synchronously simply omits
+ * close(); `createRunJournal` returns the `CreatedRunJournal` superset whose
+ * slice-4 members are required because the built-in implementation always
+ * provides them.
+ */
 export interface RunJournal extends JournalWriter, JournalReader {
-  close(): void
+  /**
+   * Optional (slice 4): drain any hot-path-batched events so every event
+   * appended so far is durably committed. Optional so an existing implementor
+   * that flushes per append is unaffected (its flush() is a no-op).
+   */
+  flush?(): Promise<void>
+  /**
+   * Optional (slice 4): flush any batched events, then close the underlying
+   * storage. Optional, mirroring JournalWriter.close, so an implementor
+   * without a close keeps satisfying this interface.
+   */
+  close?(): Promise<void>
+  /**
+   * Optional (slice 4 rotation): deletes rows for every runId NOT in
+   * keepRunIds (see createRunJournal).
+   */
+  pruneRuns?(keepRunIds: string[]): void
+}
+
+/**
+ * The concrete journal `createRunJournal` builds: the implementor-friendly
+ * `RunJournal` contract with the slice-4 members required, because the
+ * built-in implementation always provides them and its callers rely on that
+ * (close() flushes any batched events — a no-op without batching — and
+ * returns a promise so a batched writer can be awaited before process exit,
+ * while callers that ignore the return value keep working unchanged).
+ */
+export type CreatedRunJournal = RunJournal & {
+  flush(): Promise<void>
+  close(): Promise<void>
+  pruneRuns(keepRunIds: string[]): void
 }
 
 export type RunResumeClassification =
@@ -67,6 +117,7 @@ type RunEventRow = {
   event_type: JournalEvent['eventType']
   correlation: string | null
   payload: string
+  created_at: number
 }
 
 const SCHEMA_SQL = `
@@ -212,20 +263,96 @@ function rollbackTransaction(db: SqliteDb, attempts = 3): boolean {
   return false
 }
 
+/** Default hot-path batching caps (P2-T2 slice 4). */
+const DEFAULT_MAX_BATCH_EVENTS = 32
+const DEFAULT_MAX_BATCH_DELAY_MS = 50
+
+/**
+ * Optional per-run retention bounds (P2-T2 slice 4). Both caps are opt-in;
+ * when set, the OLDEST rows beyond the cap are deleted on every append (or
+ * batch flush). Surviving seq numbers are never rewritten — deletion leaves
+ * gaps at the low end and appends keep minting MAX(seq) + 1, which is why
+ * classifyRunResume orders by seq (not row count) and stays correct.
+ */
+export type RunJournalRetention = {
+  /** Keep at most this many NEWEST events per runId (must be >= 1). */
+  maxEvents?: number
+  /**
+   * Keep at most this many serialized-payload bytes per runId (must be >= 1).
+   * Counted as UTF-8 BYTES (SQLite LENGTH over a BLOB cast), not characters:
+   * LENGTH on a TEXT column counts characters, which under-counts multibyte
+   * payloads and would let the retained tail exceed this byte budget.
+   * Payload bytes are the dominant per-row term; fixed column overhead is
+   * not counted. The newest row is always retained, even when it alone
+   * exceeds this cap, so a kill-9'd tail event is never deleted out from
+   * under the resume classifier.
+   */
+  maxBytes?: number
+}
+
+/**
+ * Optional hot-path batching (P2-T2 slice 4). When set, `append` buffers
+ * events in memory and drains the buffer once `maxBatchEvents` (default 32)
+ * events have buffered or `maxBatchDelayMs` (default 50, an unref'd timer
+ * that never holds the process open) elapse; `flush()`/`close()` (close
+ * flushes) drain explicitly. WITHOUT this option every append commits
+ * synchronously — byte-identical to slices 1-3.
+ */
+export type RunJournalBatching = {
+  /** Drain the buffer once this many events are buffered (default 32). */
+  maxBatchEvents?: number
+  /** Drain the buffer after this many ms (default 50; 0 flushes ASAP). */
+  maxBatchDelayMs?: number
+}
+
 /**
  * Build/open a journal. `path` ':memory:' for tests; `opts.createDatabase` is
  * the injectable seam. Constructs the schema idempotently and injects the
- * Clock for created_at (default realClock).
+ * Clock for created_at (default realClock). `retention` bounds each run's
+ * table (oldest rows deleted; seq gaps are expected); `batching` buffers
+ * appends and drains them on a count/delay schedule (default: flush per
+ * append).
  */
 export function createRunJournal(params: {
   path: string
   clock?: Clock
   createDatabase?: (path: string) => unknown
-}): RunJournal {
+  retention?: RunJournalRetention
+  batching?: RunJournalBatching
+}): CreatedRunJournal {
   const { path } = params
   const clock = params.clock ?? realClock
   const create = params.createDatabase ?? defaultCreateDatabase
   const db = create(path) as SqliteDb
+
+  // Retention caps: absent or non-positive values disable that dimension
+  // rather than bounding the journal to empty.
+  const retention = params.retention
+  const maxEventsCap =
+    retention?.maxEvents != null && retention.maxEvents >= 1
+      ? Math.floor(retention.maxEvents)
+      : undefined
+  const maxBytesCap =
+    retention?.maxBytes != null && retention.maxBytes >= 1
+      ? Math.floor(retention.maxBytes)
+      : undefined
+
+  // Batching config: clamped to safe minimums so a misconfigured cap cannot
+  // disable flushing entirely.
+  const batching = params.batching
+    ? {
+        maxBatchEvents: Math.max(
+          1,
+          Math.floor(params.batching.maxBatchEvents ?? DEFAULT_MAX_BATCH_EVENTS),
+        ),
+        maxBatchDelayMs: Math.max(
+          0,
+          Math.floor(
+            params.batching.maxBatchDelayMs ?? DEFAULT_MAX_BATCH_DELAY_MS,
+          ),
+        ),
+      }
+    : undefined
 
   // Bound how long a write waits on a lock held by a concurrent writer (e.g.
   // another process reading/resuming the same project journal) instead of
@@ -240,14 +367,16 @@ export function createRunJournal(params: {
   }
   db.run(SCHEMA_SQL)
 
-  const parseRow = (
-    row: RunEventRow,
-  ): JournalEvent & { seq: number } => ({
+  const parseRow = (row: RunEventRow): JournalEventRow => ({
     eventType: row.event_type,
     stepNumber: row.step_number,
     correlation: row.correlation,
     payload: JSON.parse(row.payload),
     seq: row.seq,
+    // Surface the persisted wall-clock timestamp so consumers (the dash
+    // provider) can show a REAL timestamp instead of a synthetic ordering
+    // label; epoch ms per the schema (created_at INTEGER NOT NULL).
+    createdAt: row.created_at,
   })
 
   // Connection-level state, NOT per-call state: when an append attempt
@@ -261,81 +390,274 @@ export function createRunJournal(params: {
   let strandedTransaction = false
   let lastError: unknown
 
-  return {
-    append(runId: string, event: JournalEvent): void {
-      // Next seq is monotonic gap-free per runId. The read-then-insert is
-      // wrapped in a BEGIN IMMEDIATE transaction so two appends cannot mint
-      // the same seq (a PK violation on (run_id, seq)) or interleave rows.
-      // BEGIN IMMEDIATE takes the write lock up front, so the MAX read is
-      // guaranteed to see the transaction's own writes under SQLite's
-      // serialized write model; WAL + NORMAL durability stays unchanged.
-      // A concurrent writer holding the write lock surfaces as SQLITE_BUSY:
-      // the connection's busy_timeout makes BEGIN IMMEDIATE wait instead of
-      // throwing, and this small bounded retry absorbs any residual busy
-      // error instead of aborting the journal append mid-run.
-      const maxAttempts = 3
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        if (strandedTransaction) {
-          if (!rollbackTransaction(db)) {
-            // The transaction could not be unwound after bounded retries:
-            // surface the original busy error — matching this loop's retry
-            // contract — instead of letting BEGIN IMMEDIATE throw a
-            // non-busy "cannot start a transaction within a transaction"
-            // error that would poison the connection.
-            throw lastError
-          }
-          strandedTransaction = false
-        }
-        try {
-          db.run('BEGIN IMMEDIATE;')
-          try {
-            const maxRow = db
-              .query(
-                'SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ?',
-              )
-              .get(runId) as { max_seq: number | null } | undefined
-            const nextSeq = (maxRow?.max_seq ?? -1) + 1
-            db.run(
-              'INSERT INTO run_events (run_id, seq, step_number, event_type, correlation, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-              runId,
-              nextSeq,
-              event.stepNumber,
-              event.eventType,
-              event.correlation ?? null,
-              JSON.stringify(event.payload),
-              clock.now(),
-            )
-            db.run('COMMIT;')
-            return
-          } catch (error) {
-            // A failed INSERT/COMMIT leaves the transaction open, and the
-            // rollback below can itself fail with SQLITE_BUSY while a
-            // concurrent writer holds the write lock — which would strand
-            // the open transaction (see strandedTransaction above).
-            strandedTransaction = !rollbackTransaction(db)
-            throw error
-          }
-        } catch (error) {
-          lastError = error
-          if (!isSqliteBusyError(error)) throw error
+  /**
+   * Slice 4: enforce the per-run retention bounds by deleting the OLDEST
+   * rows beyond the cap. Surviving seq numbers are NEVER rewritten: deletion
+   * leaves gaps at the low end and the next append still mints MAX(seq) + 1,
+   * which is why classifyRunResume (and every reader here) orders by seq —
+   * lastEvent is ORDER BY seq DESC LIMIT 1, not a row count — and keeps
+   * classifying the retained tail correctly. The NEWEST row is always
+   * retained even when it alone exceeds maxBytes, so a kill-9'd tail event
+   * (e.g. an in-flight tool_call) is never deleted out from under the resume
+   * classifier.
+   */
+  const enforceRetention = (runId: string): void => {
+    if (maxEventsCap === undefined && maxBytesCap === undefined) return
+    // Best-effort by design: the append (or flush) that triggered retention
+    // has already committed durably, so a retention failure (e.g. transient
+    // SQLITE_BUSY on the DELETE) must not surface as a failed append. The
+    // next append re-runs enforcement, so a skipped pass only delays the
+    // bound by one event.
+    try {
+      if (maxEventsCap !== undefined) {
+        // The (maxEvents)-th newest row bounds the kept window; delete
+        // everything strictly older (one indexed scan + one range DELETE).
+        const boundary = db
+          .query(
+            'SELECT seq FROM run_events WHERE run_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ?',
+          )
+          .get(runId, maxEventsCap - 1) as { seq: number } | undefined
+        if (boundary) {
+          db.run(
+            'DELETE FROM run_events WHERE run_id = ? AND seq < ?',
+            runId,
+            boundary.seq,
+          )
         }
       }
-      throw lastError
+      if (maxBytesCap !== undefined) {
+        // Byte budget over serialized payload sizes (the dominant per-row
+        // term; fixed column overhead is not counted). LENGTH(CAST(payload
+        // AS BLOB)) counts UTF-8 BYTES, not characters: bare LENGTH on a
+        // TEXT column counts characters, so multibyte payloads would be
+        // under-counted and the retained tail could exceed the byte budget.
+        // Delete the oldest rows greedily until the remaining payload bytes
+        // fit the cap, keeping as many NEWEST rows as possible and never
+        // deleting the newest row.
+        const rows = db
+          .query(
+            'SELECT seq, LENGTH(CAST(payload AS BLOB)) AS len FROM run_events WHERE run_id = ? ORDER BY seq ASC',
+          )
+          .all(runId) as Array<{ seq: number; len: number }>
+        let total = 0
+        for (const row of rows) total += row.len
+        let deletedBytes = 0
+        let cutSeq = -1
+        for (let i = 0; i < rows.length; i++) {
+          if (total - deletedBytes <= maxBytesCap) break
+          if (i === rows.length - 1) break // never delete the newest row
+          deletedBytes += rows[i].len
+          cutSeq = rows[i].seq
+        }
+        if (cutSeq >= 0) {
+          db.run(
+            'DELETE FROM run_events WHERE run_id = ? AND seq <= ?',
+            runId,
+            cutSeq,
+          )
+        }
+      }
+    } catch {
+      // Skip this enforcement pass; the next append retries.
+    }
+  }
+
+  /**
+   * One durable append: mints the next gap-free seq for runId inside a
+   * BEGIN IMMEDIATE transaction and commits it before returning. Extracted
+   * verbatim from `append` so the batching drain can replay buffered events
+   * through the identical path (slices 1-3 behavior, unchanged).
+   */
+  const insertEvent = (runId: string, event: JournalEvent): void => {
+    // Next seq is monotonic gap-free per runId. The read-then-insert is
+    // wrapped in a BEGIN IMMEDIATE transaction so two appends cannot mint
+    // the same seq (a PK violation on (run_id, seq)) or interleave rows.
+    // BEGIN IMMEDIATE takes the write lock up front, so the MAX read is
+    // guaranteed to see the transaction's own writes under SQLite's
+    // serialized write model; WAL + NORMAL durability stays unchanged.
+    // A concurrent writer holding the write lock surfaces as SQLITE_BUSY:
+    // the connection's busy_timeout makes BEGIN IMMEDIATE wait instead of
+    // throwing, and this small bounded retry absorbs any residual busy
+    // error instead of aborting the journal append mid-run.
+    const maxAttempts = 3
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (strandedTransaction) {
+        if (!rollbackTransaction(db)) {
+          // The transaction could not be unwound after bounded retries:
+          // surface the original busy error — matching this loop's retry
+          // contract — instead of letting BEGIN IMMEDIATE throw a
+          // non-busy "cannot start a transaction within a transaction"
+          // error that would poison the connection.
+          throw lastError
+        }
+        strandedTransaction = false
+      }
+      try {
+        db.run('BEGIN IMMEDIATE;')
+        try {
+          const maxRow = db
+            .query(
+              'SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ?',
+            )
+            .get(runId) as { max_seq: number | null } | undefined
+          const nextSeq = (maxRow?.max_seq ?? -1) + 1
+          db.run(
+            'INSERT INTO run_events (run_id, seq, step_number, event_type, correlation, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            runId,
+            nextSeq,
+            event.stepNumber,
+            event.eventType,
+            event.correlation ?? null,
+            JSON.stringify(event.payload),
+            clock.now(),
+          )
+          db.run('COMMIT;')
+          return
+        } catch (error) {
+          // A failed INSERT/COMMIT leaves the transaction open, and the
+          // rollback below can itself fail with SQLITE_BUSY while a
+          // concurrent writer holds the write lock — which would strand
+          // the open transaction (see strandedTransaction above).
+          strandedTransaction = !rollbackTransaction(db)
+          throw error
+        }
+      } catch (error) {
+        lastError = error
+        if (!isSqliteBusyError(error)) throw error
+      }
+    }
+    throw lastError
+  }
+
+  // --- Slice 4: hot-path batching -------------------------------------
+  // Buffered events are drained SYNCHRONOUSLY (the underlying bun:sqlite
+  // writes are synchronous), so a drain is atomic with respect to the event
+  // loop: two flushes can never interleave or double-flush, and a reader
+  // never observes a partially-applied batch.
+  let pending: Array<{ runId: string; event: JournalEvent }> = []
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+  const clearFlushTimer = (): void => {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+  }
+
+  const drainPending = (): void => {
+    if (pending.length === 0) {
+      clearFlushTimer()
+      return
+    }
+    const batch = pending
+    // Clear the buffer BEFORE inserting: a failed insert propagates to the
+    // caller (or is dropped by the timer path below) without re-inserting
+    // already-committed events on a retry.
+    pending = []
+    clearFlushTimer()
+    const affectedRunIds = new Set<string>()
+    for (const { runId, event } of batch) {
+      insertEvent(runId, event)
+      affectedRunIds.add(runId)
+    }
+    // Retention runs BETWEEN appends, never during a reader iteration: the
+    // deletes happen synchronously here, after the whole batch is committed
+    // and before control returns to any reader.
+    for (const runId of affectedRunIds) enforceRetention(runId)
+  }
+
+  const scheduleFlushTimer = (delayMs: number): void => {
+    if (flushTimer !== null) return
+    const timer = setTimeout(() => {
+      flushTimer = null
+      // A timer-driven drain cannot surface a throw to a caller: propagating
+      // one out of a timer callback would crash the process on a transient
+      // SQLITE_BUSY. Bounded busy-retries inside insertEvent already absorb
+      // transient lock contention; a residual failure drops this batch
+      // rather than crashing. Explicit flush()/append-triggered drains still
+      // propagate errors to their caller.
+      try {
+        drainPending()
+      } catch {
+        // Best-effort flush; nothing further to do this tick.
+      }
+    }, delayMs)
+    // Never hold the process open for a pending batch: an unref'd timer must
+    // not keep an otherwise-idle process alive (kill-9 semantics).
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    flushTimer = timer
+  }
+
+  return {
+    append(runId: string, event: JournalEvent): void {
+      if (batching) {
+        pending.push({ runId, event })
+        if (pending.length >= batching.maxBatchEvents) {
+          // Batch full: drain synchronously so the events become durable
+          // before this append returns (the durability contract at the batch
+          // boundary matches a flush-per-append writer).
+          drainPending()
+        } else {
+          scheduleFlushTimer(batching.maxBatchDelayMs)
+        }
+        return
+      }
+      // Default (no batching option): flush-per-append, byte-identical to
+      // slices 1-3 — the event is durably committed when append returns.
+      insertEvent(runId, event)
+      enforceRetention(runId)
     },
 
-    lastEvent(runId: string): (JournalEvent & { seq: number }) | undefined {
+    /**
+     * Slice 4: drain any buffered events (a no-op without batching) and
+     * resolve once every event appended so far is durably committed. The
+     * drain is fully synchronous over this journal's single connection, so
+     * there is always at most one drain in flight and concurrent flushes
+     * can never interleave or double-flush.
+     */
+    flush(): Promise<void> {
+      drainPending()
+      return Promise.resolve()
+    },
+
+    /**
+     * Slice 4 rotation: the injected `createDatabase` seam means production
+     * wiring creates one journal file per runId, so per-run retention bounds
+     * the whole file. But nothing structural stops ONE RunJournal (and its
+     * database) from serving MULTIPLE runIds — the tests do exactly that for
+     * a parent run and its children — and in that shared-db case per-run
+     * retention alone cannot bound the file. pruneRuns completes the
+     * rotation story: it deletes every row whose run_id is NOT in
+     * keepRunIds (enumerating the distinct runIds actually present, so no
+     * unbounded NOT IN (...) host-parameter list), and drops still-buffered
+     * events for pruned runs so a later flush cannot resurrect them.
+     */
+    pruneRuns(keepRunIds: string[]): void {
+      const keep = new Set(keepRunIds)
+      const runIds = db
+        .query('SELECT DISTINCT run_id FROM run_events')
+        .all() as Array<{ run_id: string }>
+      for (const { run_id: existingRunId } of runIds) {
+        if (!keep.has(existingRunId)) {
+          db.run('DELETE FROM run_events WHERE run_id = ?', existingRunId)
+        }
+      }
+      pending = pending.filter((item) => keep.has(item.runId))
+    },
+
+    lastEvent(runId: string): JournalEventRow | undefined {
       const row = db
         .query(
-          'SELECT seq, step_number, event_type, correlation, payload FROM run_events WHERE run_id = ? ORDER BY seq DESC LIMIT 1',
+          'SELECT seq, step_number, event_type, correlation, payload, created_at FROM run_events WHERE run_id = ? ORDER BY seq DESC LIMIT 1',
         )
         .get(runId) as RunEventRow | undefined
       return row ? parseRow(row) : undefined
     },
 
-    events(runId: string): Array<JournalEvent & { seq: number }> {
+    events(runId: string): JournalEventRow[] {
       const rows = db
         .query(
-          'SELECT seq, step_number, event_type, correlation, payload FROM run_events WHERE run_id = ? ORDER BY seq ASC',
+          'SELECT seq, step_number, event_type, correlation, payload, created_at FROM run_events WHERE run_id = ? ORDER BY seq ASC',
         )
         .all(runId) as RunEventRow[]
       return rows.map(parseRow)
@@ -434,8 +756,17 @@ export function createRunJournal(params: {
       return undefined
     },
 
-    close(): void {
+    /**
+     * Slice 4: flush any buffered events, cancel the pending delay timer,
+     * and close the database. Returns a promise so a batched writer can be
+     * awaited before process exit; existing callers that ignore the return
+     * value keep working unchanged.
+     */
+    close(): Promise<void> {
+      drainPending()
+      clearFlushTimer()
       db.close()
+      return Promise.resolve()
     },
   }
 }

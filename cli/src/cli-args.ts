@@ -52,6 +52,19 @@ export type ParsedArgs = {
    */
   replay?: { runId: string; fromStep?: number; model?: string; json: boolean }
   /**
+   * Populated ONLY when the `dash` subcommand ran (undefined otherwise).
+   * P2-T7: localhost+token HTTP dashboard over the run journals, receipts,
+   * and gate timelines. Exactly ONE mode is active: `exportDir` selects the
+   * static HTML export (no server); otherwise the dashboard serves.
+   * `port` is the explicit `--port` value only (undefined = 0 = random free
+   * port); `token` is the explicit `--token` value only (undefined = the
+   * OPENBUFF_DASH_TOKEN env fallback, else a generated token printed to
+   * stderr — never stdout, which may be piped); `open` mirrors `--no-open`
+   * (true by default: the URL is printed; no browser is auto-opened in this
+   * slice).
+   */
+  dash?: { port?: number; token?: string; exportDir?: string; open: boolean }
+  /**
    * P1-T3 TUI attach mode. Populated ONLY when `--attach` (optionally with
    * `--serve-socket`/`--serve-token`) is passed; `undefined` keeps the
    * default in-process backend. When set, the CLI's client runs prompts
@@ -73,7 +86,7 @@ export type ParsedArgs = {
  * paths to preserve protocol-wire exclusivity of stdin/stdout.
  */
 export function isRendererCommand(args: ParsedArgs): boolean {
-  return !args.serve && !args.mcp && !args.run && !args.replay
+  return !args.serve && !args.mcp && !args.run && !args.replay && !args.dash
 }
 
 export function parseCliArgs(
@@ -312,6 +325,104 @@ export function parseCliArgs(
         ...(fromStep !== undefined ? { fromStep } : {}),
         ...(replayModel ? { model: replayModel } : {}),
         json: replayOpts.json === true,
+      },
+    }
+  }
+
+  if (userArgs[0] === 'dash') {
+    // `openbuff dash` subcommand (P2-T7): localhost+token dashboard over the
+    // run journals, receipts, and gate timelines, or a static HTML export
+    // with --export. Kept off the top-level program for exactly the reason
+    // the comment above names for `serve`: registering `.command('dash')`
+    // there would break positional prompts. The dashboard serves on
+    // 127.0.0.1 ONLY and prints its URL to stdout; the token (when the CLI
+    // generates one) is printed to stderr because stdout may be piped.
+    const dashProgram = new Command()
+    dashProgram
+      .name('openbuff dash')
+      .description(
+        'Serve the local run/receipt/gate dashboard on 127.0.0.1 (or export it as static HTML with --export)',
+      )
+      .option(
+        '--port <n>',
+        'TCP port to bind on 127.0.0.1 (default: 0 = random free port)',
+      )
+      .option(
+        '--token <t>',
+        'Dashboard auth token (generated and printed to stderr when omitted)',
+      )
+      .option(
+        '--export <dir>',
+        'Export the dashboard as static HTML + JSON into <dir> instead of serving (mutually exclusive with serving)',
+      )
+      .option(
+        '--no-open',
+        'Do not print the dashboard URL on startup (no browser is auto-opened either way)',
+      )
+      .allowExcessArguments(true)
+    if (options.exitOverride) {
+      dashProgram.exitOverride()
+    }
+    // Re-attach the node/script prefix and drop the leading `dash` token so
+    // commander parses only the dash-specific options.
+    dashProgram.parse([argv[0], argv[1], ...userArgs.slice(1)])
+    const dashOpts = dashProgram.opts()
+    // Fail-closed --port validation, mirroring the --from-step contract:
+    // commander passes the raw string through, so a strict DECIMAL integer
+    // check runs first ('' / '0x10' / '1e2' must never silently parse).
+    let port: number | undefined
+    if (typeof dashOpts.port === 'string') {
+      const rawPort = dashOpts.port.trim()
+      if (!/^\d+$/.test(rawPort)) {
+        dashProgram.error(
+          `--port must be a non-negative integer, got ${JSON.stringify(dashOpts.port)}`,
+        )
+      }
+      port = Number(rawPort)
+      if (port > 65535) {
+        dashProgram.error(`--port must be at most 65535, got ${port}`)
+      }
+    }
+    // SEC: an explicitly EMPTY --token ("" or whitespace) is an auth bypass
+    // — any client satisfies an empty expected token — so it is rejected,
+    // never carried. Omitting the flag stays the documented path (the CLI
+    // honors OPENBUFF_DASH_TOKEN, else generates a 256-bit CSPRNG token and
+    // prints it to stderr).
+    if (
+      typeof dashOpts.token === 'string' &&
+      dashOpts.token.trim().length === 0
+    ) {
+      dashProgram.error('--token must not be empty (omit it to generate one)')
+    }
+    // An explicitly EMPTY --export ("" or whitespace) must fail closed too:
+    // silently dropping it below would degrade the invocation to SERVE mode,
+    // so a user asking for a static export would get a token-generating
+    // server instead of files. Same empty-value danger contract as --token.
+    if (
+      typeof dashOpts.export === 'string' &&
+      dashOpts.export.trim().length === 0
+    ) {
+      dashProgram.error('--export must not be empty (pass a directory path)')
+    }
+    const dashTokenArg =
+      typeof dashOpts.token === 'string' && dashOpts.token.length > 0
+        ? dashOpts.token
+        : undefined
+    const dashExportDir =
+      typeof dashOpts.export === 'string' && dashOpts.export.length > 0
+        ? dashOpts.export
+        : undefined
+    return {
+      initialPrompt: null,
+      clearLogs: false,
+      continue: false,
+      continueId: null,
+      trustProjectAgents: false,
+      dash: {
+        ...(port !== undefined ? { port } : {}),
+        ...(dashTokenArg ? { token: dashTokenArg } : {}),
+        ...(dashExportDir ? { exportDir: dashExportDir } : {}),
+        open: dashOpts.open !== false,
       },
     }
   }

@@ -39,6 +39,7 @@ import {
   isRunResumeReportClean,
   planReplayActions,
 } from './util/run-journal'
+import type { RunResumeReport } from './util/run-journal'
 import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
@@ -1346,6 +1347,14 @@ export async function loopAgentSteps(
       agentId?: string
       model?: string
     }) => number | undefined
+    // P2-T2 replay-driver slice: when wired, ACTS on the resume report built
+    // at loop entry (re-drive children whose journals require live execution,
+    // respawn interrupted background intents). Typically
+    // `(report) => executeRunResumeReport({ report, ... })` from
+    // ./util/run-replay-driver. Additive-optional: undefined (the default)
+    // leaves this path byte-identical; the driver never throws, so a failing
+    // handler is reported in its outcome rather than aborting the loop.
+    resumeDriver?: (report: RunResumeReport) => Promise<unknown>
   } & ParamsExcluding<typeof additionalToolDefinitions, 'agentTemplate'> &
     ParamsExcluding<
       typeof runProgrammaticStep,
@@ -1539,6 +1548,15 @@ export async function loopAgentSteps(
           },
           'Journal replay actions executed',
         )
+      }
+      // P2-T2 replay-driver slice: when a resumeDriver is wired, ACT on the
+      // report — re-drive children and respawn background intents — before
+      // the loop continues. Additive-optional: undefined (the default) keeps
+      // this path byte-identical; executeRunResumeReport never throws, so a
+      // failing handler is reported in its outcome rather than aborting the
+      // loop.
+      if (params.resumeDriver) {
+        await params.resumeDriver(resumeReport)
       }
     }
   }

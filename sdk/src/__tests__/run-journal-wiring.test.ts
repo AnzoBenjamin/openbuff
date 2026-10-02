@@ -1,7 +1,8 @@
-import { describe, expect, it, mock } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
 import { Database } from 'bun:sqlite'
 
+import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
 import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
 import type {
   JournalReader,
@@ -12,9 +13,7 @@ import type {
 // assert OpenbuffClient.run() threaded journalWriter/journalReader from
 // OpenbuffClientOptions into the agent-runtime deps (the dormant-journal fix).
 // The capture is deliberately NOT awaited (run() awaits it, which would
-// deadlock); an interval in the test polls the captured value. The module mock
-// is registered BEFORE run.ts loads (via the dynamic imports below) so run.ts
-// binds the intercepted callMainPrompt.
+// deadlock); an interval in the test polls the captured value.
 let capturedDeps:
   | {
       journalWriter?: JournalWriter
@@ -25,35 +24,33 @@ let capturedDeps:
   | undefined
 let callMainPromptCount = 0
 
-// mock.module is registry-wide for the whole test process and afterAll
-// (mock.restore) does NOT undo it, so capture the REAL main-prompt module
-// before registration (top-level await import, pre-bound to a const so the
-// factory never references the mocked namespace itself) and spread its
-// exports in the factory — real exports first, overrides after, so only
-// callMainPrompt is overridden while the remaining real exports keep working
-// for sibling test files in this process.
-const realMainPrompt = await import('@codebuff/agent-runtime/main-prompt')
-
-mock.module('@codebuff/agent-runtime/main-prompt', () => ({
-  ...realMainPrompt,
-  callMainPrompt: (params: {
-    journalWriter?: JournalWriter
-    journalReader?: JournalReader
-    action: { sessionState: unknown }
-  }) => {
-    callMainPromptCount += 1
-    capturedDeps = {
-      journalWriter: params.journalWriter,
-      journalReader: params.journalReader,
-      hasJournalWriter: 'journalWriter' in params,
-      hasJournalReader: 'journalReader' in params,
-    }
-    return Promise.resolve({
-      sessionState: params.action.sessionState,
-      output: { type: 'lastMessage', value: [] },
-    })
-  },
-}))
+// spyOn the module NAMESPACE — never mock.module. bun's mock.module is
+// registry-wide for the whole test process and CANNOT be unregistered, so a
+// stubbed callMainPrompt leaks into sibling files sharing the process and
+// poisoned the sdk e2e suites that run later in the full `bun run test`
+// ordering (empty output -> batch failures). A namespace spy restored via
+// afterEach(mock.restore) is fully hermetic with zero registry-wide state.
+const installCallMainPromptSpy = () =>
+  spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
+    async (
+      params: Parameters<typeof mainPromptModule.callMainPrompt>[0] & {
+        journalWriter?: JournalWriter
+        journalReader?: JournalReader
+      },
+    ) => {
+      callMainPromptCount += 1
+      capturedDeps = {
+        journalWriter: params.journalWriter,
+        journalReader: params.journalReader,
+        hasJournalWriter: 'journalWriter' in params,
+        hasJournalReader: 'journalReader' in params,
+      }
+      return {
+        sessionState: params.action.sessionState,
+        output: { type: 'lastMessage' as const, value: [] },
+      }
+    },
+  )
 
 const { OpenbuffClient } = await import('../client')
 
@@ -65,6 +62,14 @@ const waitForCapture = async () => {
 }
 
 describe('run-journal wiring (P2-T2)', () => {
+  beforeEach(() => {
+    installCallMainPromptSpy()
+  })
+
+  afterEach(() => {
+    mock.restore()
+  })
+
   it('OpenbuffClient.run() accepts and threads journalWriter/journalReader into the agent-runtime deps', async () => {
     const journal = createRunJournal({
       path: ':memory:',

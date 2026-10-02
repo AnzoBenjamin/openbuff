@@ -63,6 +63,7 @@ import { runMcpCommand } from './commands/mcp-command'
 import { runReplayCommand } from './commands/replay-command'
 import { runHeadlessCommand } from './commands/run-command'
 import { isRendererCommand, parseCliArgs } from './cli-args'
+import { runDashCommand } from './commands/dash-command'
 
 const require = createRequire(import.meta.url)
 
@@ -370,6 +371,7 @@ async function main(): Promise<void> {
     mcp,
     run,
     replay,
+    dash,
     attach,
   } = parsedArgs
 
@@ -524,6 +526,20 @@ async function main(): Promise<void> {
     // (previously they were awaited synchronously in main()).
     await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
     const code = await runReplayCommand(replay)
+    process.exitCode = code
+    return
+  }
+
+  // `openbuff dash` (P2-T7) never launches the OpenTUI renderer either: in
+  // serve mode stdout carries the dashboard URL (a generated token goes to
+  // stderr — stdout may be piped) and in --export mode it carries the written
+  // file paths, so we run the command and set the process exit code from the
+  // outcome. The dashboard provider currently starts with EMPTY run data:
+  // wiring a live run's journal reader (plus receipts/gate seams) into this
+  // CLI process is the documented follow-up — the server + export + CLI
+  // contract is the P2-T7 deliverable.
+  if (dash) {
+    const code = await runDashCommand(dash)
     process.exitCode = code
     return
   }

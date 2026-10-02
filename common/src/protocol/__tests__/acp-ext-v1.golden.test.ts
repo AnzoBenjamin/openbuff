@@ -760,7 +760,7 @@ describe('§4.6 tool kind table', () => {
  * order. Pins the emitted fixture against an independently written literal
  * (not just parse-of-itself) and serves as the clean GV-07 baseline.
  */
-const GV06_WIRE_MUTATION: WireFileMutationResultV1 = {
+const GV06_WIRE_MUTATION = {
   kind: 'file_mutation_result',
   version: 1,
   operationId: 'op_1',
@@ -808,7 +808,7 @@ const GV06_WIRE_MUTATION: WireFileMutationResultV1 = {
   },
   errors: [],
   freshCapabilities: [],
-}
+} satisfies WireFileMutationResultV1
 
 it('GV-06 wire mutation equals the independently written literal and parses', () => {
   const gv06 = loadFixture('GV-06')
@@ -818,6 +818,27 @@ it('GV-06 wire mutation equals the independently written literal and parses', ()
   )
 
   expect(envelope.mutation).toEqual(GV06_WIRE_MUTATION)
+  expect(wireFileMutationResultV1Schema.parse(GV06_WIRE_MUTATION)).toEqual(
+    GV06_WIRE_MUTATION,
+  )
+})
+
+it('an authority receipt with the optional transactionId stays wire-consistent (P2-T5 additive)', () => {
+  // The wire schema reuses commitReceiptV1Schema verbatim for
+  // authorityReceipt, so a transactionId stamped on an internal receipt
+  // round-trips through the projection without any wire-side change.
+  const wireMutation = toWireMutation({
+    ...({ ...GV06_WIRE_MUTATION } as Parameters<typeof toWireMutation>[0]),
+    authorityReceipt: {
+      ...GV06_WIRE_MUTATION.authorityReceipt,
+      transactionId: 'tx-1',
+    },
+  })
+  expect(wireMutation.authorityReceipt?.transactionId).toBe('tx-1')
+  expect(wireFileMutationResultV1Schema.parse(wireMutation)).toEqual(
+    wireMutation,
+  )
+  // Receipts WITHOUT the field keep parsing byte-identically (fixtures).
   expect(wireFileMutationResultV1Schema.parse(GV06_WIRE_MUTATION)).toEqual(
     GV06_WIRE_MUTATION,
   )

@@ -58,12 +58,39 @@ export interface JournalEvent {
 /** Append-only journal writer (P2-T2). Mints `seq` monotonically per runId. */
 export interface JournalWriter {
   append(runId: string, event: JournalEvent): void
+  /**
+   * P2-T2 slice 4 (optional): drain any hot-path-batched events so every
+   * event appended so far is durably committed. Optional so existing
+   * implementors that flush per append are unaffected (a per-append writer
+   * flushes eagerly and flush() is a no-op).
+   */
+  flush?(): Promise<void>
+  /**
+   * P2-T2 slice 4 (optional): flush any batched events, then close the
+   * underlying storage. Optional so existing implementors that close
+   * synchronously are unaffected (a sync writer closes eagerly and close()
+   * is a no-op).
+   */
+  close?(): Promise<void>
+}
+
+/**
+ * A journaled event row as a reader surfaces it: the event plus its gap-free
+ * per-run sequence number, and OPTIONALLY the wall-clock timestamp (epoch
+ * milliseconds) its storage recorded for it (the built-in sqlite journal
+ * persists `created_at`). Optional so existing implementors that carry no
+ * timestamp are never broken by an added member; consumers must treat an
+ * absent createdAt as unknown, never as a synthetic ordering label.
+ */
+export type JournalEventRow = JournalEvent & {
+  seq: number
+  createdAt?: number
 }
 
 /** Journal reader used for crash classification and replay (P2-T2). */
 export interface JournalReader {
-  lastEvent(runId: string): (JournalEvent & { seq: number }) | undefined
-  events(runId: string): Array<JournalEvent & { seq: number }>
+  lastEvent(runId: string): JournalEventRow | undefined
+  events(runId: string): JournalEventRow[]
   /** tool_result payload for a toolCallId, if journaled (replay short-circuit). */
   toolResultFor(runId: string, toolCallId: string): unknown | undefined
   /**

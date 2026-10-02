@@ -452,6 +452,8 @@ export class FilesystemAuthority {
   async issueCommittedReceipt(input: {
     operationId: string
     callId: string
+    /** P2-T5: durable transaction-intent id stamped on the receipt when set. */
+    transactionId?: string
     authorityTier: CommitReceiptV1['authorityTier']
     actions: readonly Omit<CommitActionReceiptV1, 'status' | 'afterHash'>[]
     expectedFinalHashes: Readonly<Record<string, string | null>>
@@ -486,6 +488,9 @@ export class FilesystemAuthority {
       receiptId: crypto.randomUUID(),
       operationId: input.operationId,
       callId: input.callId,
+      ...(input.transactionId !== undefined
+        ? { transactionId: input.transactionId }
+        : {}),
       authorityTier: input.authorityTier,
       status: 'committed',
       actions: input.actions.map((action) => ({
@@ -507,6 +512,8 @@ export class FilesystemAuthority {
   issueNotStartedReceipt(input: {
     operationId: string
     callId: string
+    /** P2-T5: durable transaction-intent id stamped on the receipt when set. */
+    transactionId?: string
     authorityTier: CommitReceiptV1['authorityTier']
     actions: readonly Omit<CommitActionReceiptV1, 'status' | 'afterHash'>[]
   }): CommitReceiptV1 {
@@ -516,6 +523,9 @@ export class FilesystemAuthority {
       receiptId: crypto.randomUUID(),
       operationId: input.operationId,
       callId: input.callId,
+      ...(input.transactionId !== undefined
+        ? { transactionId: input.transactionId }
+        : {}),
       authorityTier: input.authorityTier,
       status: 'not_started',
       actions: input.actions.map((action) => ({
@@ -532,6 +542,8 @@ export class FilesystemAuthority {
   async issueObservedFailureReceipt(input: {
     operationId: string
     callId: string
+    /** P2-T5: durable transaction-intent id stamped on the receipt when set. */
+    transactionId?: string
     authorityTier: CommitReceiptV1['authorityTier']
     status: 'rolled_back' | 'rollback_incomplete' | 'failed'
     actions: readonly Omit<CommitActionReceiptV1, 'afterHash'>[]
@@ -552,6 +564,9 @@ export class FilesystemAuthority {
       receiptId: crypto.randomUUID(),
       operationId: input.operationId,
       callId: input.callId,
+      ...(input.transactionId !== undefined
+        ? { transactionId: input.transactionId }
+        : {}),
       authorityTier: input.authorityTier,
       status: input.status,
       actions: input.actions.map((action) => ({

@@ -11,6 +11,7 @@ import {
 import { useChatStore } from '../../state/chat-store'
 import { INPUT_MODE_CONFIGS, getInputModeConfig } from '../../utils/input-modes'
 import * as turnSnapshots from '../../utils/turn-snapshots'
+import { runDashCommand } from '../dash-command'
 import { findCommand } from '../command-registry'
 import { routeUserPrompt, runBashCommand } from '../router'
 
@@ -392,6 +393,11 @@ describe('bash command', () => {
     })
 
     test('parse: bare /bisect-turn passes keepBestState false with the default command', async () => {
+      // Stub the listing too: the handler awaits the real listTurnSnapshots
+      // (a git subprocess) before calling runTurnBisection, and one
+      // macrotask tick is not enough for a real git spawn under full-suite
+      // load.
+      spyOn(turnSnapshots, 'listTurnSnapshots').mockResolvedValue([])
       const startSpy = spyOn(
         turnSnapshots,
         'runTurnBisection',
@@ -680,5 +686,57 @@ describe('bash command', () => {
     test('bash mode config exists in INPUT_MODE_CONFIGS', () => {
       expect(INPUT_MODE_CONFIGS.bash).toBeDefined()
     })
+  })
+})
+
+describe('openbuff dash command (--no-open URL contract)', () => {
+  // The real URL embeds the auth token as ?token=..., which is exactly what
+  // the --no-open contract forbids printing on any channel.
+  const URL_WITH_TOKEN = 'http://127.0.0.1:4567/?token=sekrit-token'
+
+  // A zero-arg stub is assignable to `typeof startDashServer`; the real one
+  // binds a TCP port, so tests inject this hermetic seam instead.
+  const startServerStub = () =>
+    Promise.resolve({
+      url: URL_WITH_TOKEN,
+      close: () => Promise.resolve(),
+    })
+
+  const runServingDash = async (args: { open: boolean }) => {
+    const stdout: string[] = []
+    const stderr: string[] = []
+    // Serve mode never resolves (it awaits "forever" until Ctrl+C), so the
+    // promise is intentionally not awaited; one macrotask tick is enough for
+    // the stubbed startup to have produced its output.
+    void runDashCommand(
+      { open: args.open, token: 'explicit-token' },
+      {
+        startServer: startServerStub,
+        writeStdout: (chunk) => {
+          stdout.push(chunk)
+        },
+        writeStderr: (line) => {
+          stderr.push(line)
+        },
+      },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return { stdout: stdout.join(''), stderr: stderr.join('') }
+  }
+
+  test('default mode prints the token-bearing URL to stdout only', async () => {
+    const { stdout, stderr } = await runServingDash({ open: true })
+    expect(stdout).toBe(`${URL_WITH_TOKEN}\n`)
+    expect(stderr).not.toContain(URL_WITH_TOKEN)
+  })
+
+  test('--no-open prints the token-bearing URL nowhere (stderr included)', async () => {
+    const { stdout, stderr } = await runServingDash({ open: false })
+    expect(stdout).toBe('')
+    // The URL embeds the auth token (?token=...): with --no-open it must not
+    // ride ANY channel, stderr included (the old behavior leaked it there).
+    expect(stderr).not.toContain(URL_WITH_TOKEN)
+    expect(stderr).not.toContain('serving at')
+    expect(stderr).toContain('press Ctrl+C to stop')
   })
 })

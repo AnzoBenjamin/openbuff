@@ -403,13 +403,115 @@ describe('attach flag parsing (P1-T3)', () => {
   })
 })
 
+describe('dash subcommand parsing (P2-T7)', () => {
+  test('leaves dash undefined when the subcommand is not used', () => {
+    expect(parse([]).dash).toBeUndefined()
+    expect(parse(['hello']).dash).toBeUndefined()
+    expect(parse(['serve']).dash).toBeUndefined()
+    expect(parse(['mcp']).dash).toBeUndefined()
+    expect(parse(['run', 'hello']).dash).toBeUndefined()
+    expect(parse(['replay', 'run-1']).dash).toBeUndefined()
+  })
+
+  test('parses bare `dash` into serve mode with default open and no port/token', () => {
+    expect(parse(['dash']).dash).toEqual({ open: true })
+    expect(parse(['dash']).dash?.port).toBeUndefined()
+    expect(parse(['dash']).dash?.token).toBeUndefined()
+    expect(parse(['dash']).dash?.exportDir).toBeUndefined()
+  })
+
+  test('parses --port into dash.port', () => {
+    expect(parse(['dash', '--port', '4321']).dash).toEqual({
+      port: 4321,
+      open: true,
+    })
+  })
+
+  test('rejects a non-integer --port', () => {
+    expect(() => parse(['dash', '--port', 'nope'])).toThrow()
+  })
+
+  test('rejects non-decimal numeric forms of --port', () => {
+    // Number('0x10') is 16 and Number('1e2') is 100; neither is a decimal
+    // integer literal, so both must error rather than parse.
+    expect(() => parse(['dash', '--port', '0x10'])).toThrow()
+    expect(() => parse(['dash', '--port', '1e2'])).toThrow()
+    expect(() => parse(['dash', '--port', ''])).toThrow()
+  })
+
+  test('rejects --port above 65535', () => {
+    expect(() => parse(['dash', '--port', '65536'])).toThrow()
+  })
+
+  test('parses --token into dash.token', () => {
+    expect(parse(['dash', '--token', 'abc123']).dash).toEqual({
+      token: 'abc123',
+      open: true,
+    })
+  })
+
+  test('rejects an empty --token (an empty expected token is an auth bypass)', () => {
+    expect(() => parse(['dash', '--token', ''])).toThrow()
+    expect(() => parse(['dash', '--token', '   '])).toThrow()
+  })
+
+  test('parses --export into dash.exportDir', () => {
+    expect(parse(['dash', '--export', '/tmp/site']).dash).toEqual({
+      exportDir: '/tmp/site',
+      open: true,
+    })
+  })
+
+  test('rejects an empty --export instead of silently degrading to serve mode', () => {
+    // Fail-closed contract mirroring the empty --token rejection: dropping an
+    // empty --export used to leave dash.exportDir undefined, so `openbuff
+    // dash --export ''` started a token-generating server instead of writing
+    // the static export the user asked for.
+    expect(() => parse(['dash', '--export', ''])).toThrow(/--export/)
+    expect(() => parse(['dash', '--export', '   '])).toThrow(/--export/)
+  })
+
+  test('errors when --export is given without a value', () => {
+    expect(() => parse(['dash', '--export'])).toThrow()
+  })
+
+  test('parses --no-open into dash.open=false', () => {
+    expect(parse(['dash', '--no-open']).dash).toEqual({ open: false })
+    expect(
+      parse(['dash', '--no-open', '--port', '8080']).dash,
+    ).toEqual({ port: 8080, open: false })
+  })
+
+  test('parses --port, --token and --no-open together', () => {
+    expect(
+      parse(['dash', '--port', '9000', '--token', 't', '--no-open']).dash,
+    ).toEqual({ port: 9000, token: 't', open: false })
+  })
+
+  test('keeps the dash subcommand out of the top-level result', () => {
+    const result = parse(['dash', '--port', '1'])
+    expect(result.initialPrompt).toBeNull()
+    expect(result.serve).toBeUndefined()
+    expect(result.mcp).toBeUndefined()
+    expect(result.run).toBeUndefined()
+    expect(result.replay).toBeUndefined()
+    expect(result.trustProjectAgents).toBe(false)
+    expect(result.continue).toBe(false)
+    expect(result.clearLogs).toBe(false)
+  })
+
+  test('isRendererCommand returns false for the dash subcommand', () => {
+    expect(isRendererCommand(parse(['dash']))).toBe(false)
+    expect(isRendererCommand(parse(['dash', '--export', '/tmp/x']))).toBe(false)
+  })
+})
+
 describe('mcp subcommand parsing', () => {
   test('leaves mcp undefined when the subcommand is not used', () => {
     expect(parse([]).mcp).toBeUndefined()
     expect(parse(['hello']).mcp).toBeUndefined()
     expect(parse(['serve']).mcp).toBeUndefined()
   })
-
   test('parses bare `mcp` into ParsedArgs.mcp', () => {
     expect(parse(['mcp']).mcp).toEqual({ mutations: false })
   })

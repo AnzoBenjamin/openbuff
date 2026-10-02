@@ -13,6 +13,27 @@ export type {
 export { collectWorkspaceMoves, run } from './run'
 export { getFilesStructured } from './tools/read-files'
 export { changeFile, changeFiles } from './tools/change-file'
+// The `changeFiles` `intentLog` parameter above is typed with
+// TransactionIntentLog, so the type closure and its factory/recovery helpers
+// are published beside it: external consumers must be able to name the
+// parameter type (and construct/recover a log) without reaching into
+// unpublished internals.
+export {
+  createTransactionIntentLog,
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  revertPathToPreImage,
+  transactionIntentLogFileName,
+} from './tools/transaction-intent-log'
+export type {
+  BeginTransactionParams,
+  IntentOutcome,
+  RecoveredInterruptedTransaction,
+  RecoveryOutcome,
+  RevertTransactionOutcome,
+  TransactionIntentEntry,
+  TransactionIntentLog,
+} from './tools/transaction-intent-log'
 export { replaceRange } from './tools/replace-range'
 export { readImages } from './tools/read-image'
 export { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'
@@ -154,6 +175,35 @@ export { serveAcpOverSocket } from './serve/socket-listener'
 export type { ServeAcpOverSocketOptions } from './serve/socket-listener'
 export { runServe } from './serve/serve'
 export type { RunServeOptions } from './serve/serve'
+// P2-T7: local dashboard over run journals, receipts, and gate timelines —
+// a localhost+token HTTP server (127.0.0.1 ONLY, constant-time bearer/query
+// token auth) plus a static HTML export that inlines the data (never the
+// token). The provider is injectable; createDashProviderFromJournal adapts
+// a P2-T2 JournalReader (plus optional receipt/gate seams).
+export {
+  startDashServer,
+  generateDashToken,
+  renderDashHtml,
+  DASH_MAX_EVENTS,
+} from './dash/server'
+export type {
+  DashDataProvider,
+  DashRunEvent,
+  DashRunSummary,
+  DashServerHandle,
+  DashSnapshot,
+  StartDashServerParams,
+} from './dash/server'
+export {
+  createDashProviderFromJournal,
+  summarizePayload,
+} from './dash/provider'
+export type { CreateDashProviderFromJournalParams } from './dash/provider'
+export { exportDashStatic } from './dash/export'
+export type {
+  ExportDashStaticParams,
+  ExportDashStaticResult,
+} from './dash/export'
 export { createMcpServer, runMcp } from './mcp/server'
 export type {
   CreateMcpServerOptions,

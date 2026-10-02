@@ -1,5 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, it } from 'bun:test'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { reconcileInterruptedBackgroundAgentIntents } from '../background-agent-jobs'
 import {
@@ -18,10 +20,14 @@ import {
 import type {
   BackgroundResumeDecision,
   ReplayAction,
+  RunJournal,
   RunResumeReport,
 } from '../run-journal'
 
-import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
+import type {
+  JournalEvent,
+  JournalReader,
+} from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
 
@@ -34,6 +40,35 @@ const makeJournal = () =>
     clock: fixedClock,
     createDatabase: (path) => new Database(path),
   })
+
+/** Unique on-disk path so a closed file-based journal can be re-opened. */
+const tmpDbPath = () =>
+  join(
+    tmpdir(),
+    `run-journal-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
+  )
+
+/** makeJournal with slice-4 option overrides (retention/batching) + path. */
+const makeJournalWith = (
+  overrides: Partial<Parameters<typeof createRunJournal>[0]> = {},
+  path = ':memory:',
+) =>
+  createRunJournal({
+    path,
+    clock: fixedClock,
+    createDatabase: (p) => new Database(p),
+    ...overrides,
+  })
+
+const stepEvent = (
+  stepNumber: number,
+  payload: unknown = { status: 'ok' },
+): JournalEvent => ({
+  eventType: 'step_boundary',
+  stepNumber,
+  correlation: `s${stepNumber}`,
+  payload,
+})
 
 describe('createRunJournal (JournalWriter/JournalReader)', () => {
   it('mints monotonic gap-free seq per runId', () => {
@@ -61,6 +96,22 @@ describe('createRunJournal (JournalWriter/JournalReader)', () => {
     } finally {
       journal.close()
     }
+  })
+
+  it('an implementor without the optional slice-4 members still satisfies RunJournal', () => {
+    // Slice 4 added flush/close/pruneRuns; they stay OPTIONAL on the exported
+    // RunJournal interface (mirroring JournalWriter in the contracts file) so
+    // a pre-slice-4 implementor of the exported interface is never broken by
+    // an added required member. createRunJournal returns the required-member
+    // superset (CreatedRunJournal) for its own callers.
+    const minimal: RunJournal = {
+      append: () => undefined,
+      lastEvent: () => undefined,
+      events: () => [],
+      toolResultFor: () => undefined,
+      toolResultForInput: () => undefined,
+    }
+    expect(minimal.append).toBeDefined()
   })
 
   it('lastEvent returns the highest-seq row', () => {
@@ -2003,6 +2054,216 @@ describe('replay driver integration (report → plan → execute)', () => {
       expect(plan.actions).toEqual([])
       expect(seamCalls).toBe(0)
       expect(result).toEqual({ attempted: 0, succeeded: 0, failed: [] })
+    } finally {
+      journal.close()
+    }
+  })
+})
+
+describe('P2-T2 slice 4: retention/rotation', () => {
+  it('maxEvents: deletes the oldest rows beyond the cap and keeps the newest', () => {
+    const journal = makeJournalWith({ retention: { maxEvents: 5 } })
+    try {
+      for (let i = 0; i < 15; i++) {
+        journal.append('run-ret', stepEvent(i))
+      }
+      const events = journal.events('run-ret')
+      expect(events.length).toBeLessThanOrEqual(5)
+      expect(events.map((e) => e.seq)).toEqual([10, 11, 12, 13, 14])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('maxEvents: classifyRunResume still classifies the retained tail (ordering by seq, not row count)', () => {
+    const journal = makeJournalWith({ retention: { maxEvents: 4 } })
+    try {
+      for (let i = 0; i < 10; i++) journal.append('run-gap', stepEvent(i))
+      journal.append('run-gap', {
+        eventType: 'tool_call',
+        stepNumber: 10,
+        correlation: 'tool-1',
+        payload: { toolName: 'write_file' },
+      })
+      // Only the newest maxEvents rows survive; the in-flight tool_call tail
+      // is still classified correctly because readers order by seq.
+      expect(journal.events('run-gap')).toHaveLength(4)
+      expect(classifyRunResume(journal, 'run-gap')).toEqual({
+        kind: 'in_flight_tool',
+        toolCallId: 'tool-1',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('maxBytes: deletes the oldest rows until payload bytes fit the cap, never dropping the newest', () => {
+    // stepEvent's default payload serializes to 15 bytes.
+    const journal = makeJournalWith({ retention: { maxBytes: 100 } })
+    try {
+      for (let i = 0; i < 20; i++) journal.append('run-bytes', stepEvent(i))
+      const events = journal.events('run-bytes')
+      const totalBytes = events.reduce(
+        (sum, e) => sum + JSON.stringify(e.payload).length,
+        0,
+      )
+      expect(totalBytes).toBeLessThanOrEqual(100)
+      expect(events.length).toBeGreaterThan(0)
+      expect(events[events.length - 1].seq).toBe(19)
+      expect(events[0].seq).toBeGreaterThan(0)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('maxBytes: the newest row is retained even when it alone exceeds the cap', () => {
+    const journal = makeJournalWith({ retention: { maxBytes: 5 } })
+    try {
+      journal.append('run-big', stepEvent(0))
+      expect(journal.events('run-big')).toHaveLength(1)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('maxBytes counts UTF-8 bytes, not characters (multibyte payloads)', () => {
+    // Each payload serializes to ~39 CHARACTERS but ~69 UTF-8 BYTES, so a
+    // character-based LENGTH(payload) count would under-count by nearly
+    // half and retain a tail whose true byte size exceeds the cap.
+    const journal = makeJournalWith({ retention: { maxBytes: 100 } })
+    try {
+      const payload = { note: 'é'.repeat(30) }
+      for (let i = 0; i < 4; i++) {
+        journal.append('run-utf8', stepEvent(i, payload))
+      }
+      const events = journal.events('run-utf8')
+      const totalBytes = events.reduce(
+        (sum, e) =>
+          sum + Buffer.byteLength(JSON.stringify(e.payload), 'utf8'),
+        0,
+      )
+      expect(totalBytes).toBeLessThanOrEqual(100)
+      expect(events.length).toBeGreaterThan(0)
+      // The newest row is never dropped.
+      expect(events[events.length - 1].seq).toBe(3)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('pruneRuns deletes rows for other runIds and drops their buffered events', async () => {
+    const journal = makeJournalWith({
+      batching: { maxBatchEvents: 32, maxBatchDelayMs: 60_000 },
+    })
+    try {
+      for (let i = 0; i < 3; i++) journal.append('keep-a', stepEvent(i))
+      for (let i = 0; i < 3; i++) journal.append('drop-b', stepEvent(i))
+      await journal.flush()
+      journal.append('drop-b', stepEvent(3)) // buffered only
+      journal.pruneRuns(['keep-a'])
+      expect(journal.events('keep-a')).toHaveLength(3)
+      expect(journal.events('drop-b')).toHaveLength(0)
+      await journal.flush()
+      expect(journal.events('drop-b')).toHaveLength(0)
+    } finally {
+      journal.close()
+    }
+  })
+})
+
+describe('P2-T2 slice 4: hot-path batching', () => {
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+  it('without batching, appends are durable immediately (flush-per-append default)', async () => {
+    const journal = makeJournalWith()
+    try {
+      journal.append('run-sync', stepEvent(0))
+      journal.append('run-sync', stepEvent(1))
+      expect(journal.events('run-sync').map((e) => e.seq)).toEqual([0, 1])
+      await journal.flush()
+      expect(journal.events('run-sync')).toHaveLength(2)
+    } finally {
+      await journal.close()
+    }
+  })
+
+  it('buffers appends and drains when maxBatchEvents is reached', () => {
+    const journal = makeJournalWith({ batching: { maxBatchEvents: 4 } })
+    try {
+      for (let i = 0; i < 3; i++) journal.append('run-batch', stepEvent(i))
+      expect(journal.events('run-batch')).toHaveLength(0)
+      journal.append('run-batch', stepEvent(3))
+      expect(journal.events('run-batch').map((e) => e.seq)).toEqual([
+        0, 1, 2, 3,
+      ])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('flush() drains buffered events before the delay timer elapses', async () => {
+    const journal = makeJournalWith({
+      batching: { maxBatchEvents: 32, maxBatchDelayMs: 60_000 },
+    })
+    try {
+      for (let i = 0; i < 5; i++) journal.append('run-flush', stepEvent(i))
+      expect(journal.events('run-flush')).toHaveLength(0)
+      await journal.flush()
+      expect(journal.events('run-flush').map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4,
+      ])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('flushes buffered events after maxBatchDelayMs elapses', async () => {
+    const journal = makeJournalWith({
+      batching: { maxBatchEvents: 32, maxBatchDelayMs: 10 },
+    })
+    try {
+      for (let i = 0; i < 5; i++) journal.append('run-delay', stepEvent(i))
+      expect(journal.events('run-delay')).toHaveLength(0)
+      await sleep(50)
+      expect(journal.events('run-delay')).toHaveLength(5)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('close() flushes buffered events so a reopened journal sees them', async () => {
+    const path = tmpDbPath()
+    const journal = makeJournalWith(
+      { batching: { maxBatchEvents: 32, maxBatchDelayMs: 60_000 } },
+      path,
+    )
+    for (let i = 0; i < 3; i++) journal.append('run-close', stepEvent(i))
+    await journal.close()
+    const reopened = makeJournalWith({}, path)
+    try {
+      expect(reopened.events('run-close').map((e) => e.seq)).toEqual([0, 1, 2])
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it('kill-9 classification still sees a flushed tool_call tail on a batched journal', async () => {
+    const journal = makeJournalWith({ batching: { maxBatchEvents: 32 } })
+    try {
+      journal.append('run-kill', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'k-tool',
+        payload: { toolName: 'write_file' },
+      })
+      // Not durable until flushed.
+      expect(journal.events('run-kill')).toHaveLength(0)
+      await journal.flush()
+      expect(classifyRunResume(journal, 'run-kill')).toEqual({
+        kind: 'in_flight_tool',
+        toolCallId: 'k-tool',
+      })
     } finally {
       journal.close()
     }

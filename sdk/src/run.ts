@@ -104,6 +104,11 @@ import {
   writeAuditFindings,
 } from './tools/write-audit-findings'
 import { createNodeFileSystem } from './tools/node-filesystem'
+import {
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  type TransactionIntentLog,
+} from './tools/transaction-intent-log'
 import type { FilesystemAuthorityPolicy } from './tools/filesystem-authority'
 
 import type { CustomToolDefinition } from './custom-tool'
@@ -607,6 +612,13 @@ type RunExecutionOptions = RunOptions &
   }
 type RunReturnType = RunState
 
+/**
+ * P2-T5: guards the once-per-process startup recovery of interrupted
+ * multi-file transactions, keyed by state dir + intent-log file so two
+ * concurrent projects in one process each recover exactly once.
+ */
+const transactionRecoveryPerformed = new Set<string>()
+
 export async function run(options: RunExecutionOptions): Promise<RunState> {
   const { signal } = options
 
@@ -796,6 +808,35 @@ async function runOnce({
     }
   } else {
     fs = createNodeFileSystem()
+  }
+
+  // P2-T5: startup recovery of interrupted multi-file transactions. The
+  // intent log is colocated with the harness state dir (outside the project
+  // tree it guards) and scoped to this workspace. Best-effort and
+  // once-per-process: failures are logged and never crash startup.
+  let intentLog: TransactionIntentLog | undefined
+  if (cwd) {
+    intentLog = createTransactionIntentLogForWorkspace({
+      stateDir: resolvedHarnessStateDir,
+      cwd,
+    })
+    const recoveryKey = `${resolvedHarnessStateDir}\u0000${intentLog.filePath}`
+    if (!transactionRecoveryPerformed.has(recoveryKey)) {
+      transactionRecoveryPerformed.add(recoveryKey)
+      try {
+        await recoverAndRevertInterruptedTransactions({
+          intentLog,
+          cwd,
+          fs,
+          logger,
+        })
+      } catch (error) {
+        logger?.warn(
+          { error },
+          'Transaction intent recovery failed; startup continues',
+        )
+      }
+    }
   }
   let spawn: CodebuffSpawn
   if (spawnSource) {
@@ -1183,6 +1224,7 @@ async function runOnce({
         fs,
         fileFilter,
         filesystemPolicy,
+        intentLog,
         trustedJobOwner,
         logger,
         capabilityIssuer: cwd
@@ -1820,6 +1862,7 @@ export async function handleToolCall({
   fs,
   fileFilter,
   filesystemPolicy,
+  intentLog,
   trustedJobOwner,
   capabilityIssuer,
   logger,
@@ -1846,6 +1889,8 @@ export async function handleToolCall({
   fs: CodebuffFileSystem
   fileFilter?: FileFilter
   filesystemPolicy?: FilesystemAuthorityPolicy
+  /** P2-T5: durable transaction-intent log for multi-file commit loops. */
+  intentLog?: TransactionIntentLog
   /** Trusted owner injected into every process-job op; never model-derived. */
   trustedJobOwner: JobOwner
   capabilityIssuer?: ReadCapabilityIssuer
@@ -2167,6 +2212,7 @@ export async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
+        intentLog,
         capabilityIssuer,
         callId: action.requestId,
         logger,
