@@ -48,6 +48,33 @@ import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
 import { formatValidationIssues } from '../util/format-validation-issues'
 
+// The SDK declaration build (sdk/tsconfig.build.json) transitively
+// typechecks this file under `types: ["node"]` — WITHOUT bun-types — so the
+// Bun-global `Bun.spawn` below would fail TS2868 there. The Bun runtime
+// supplies the global at runtime; this module-scope `declare const` (never
+// exported) gives the build only the narrow structural surface this module
+// actually uses, mirroring the same pattern in
+// util/preflight-syntax-validation.ts and process-str-replace.ts.
+declare const Bun: {
+  spawn: (
+    cmd: string[],
+    options: {
+      env: Record<string, string>
+      cwd?: string
+      stdin: 'ignore'
+      stdout: 'pipe'
+      stderr: 'pipe'
+      /** Group leader: enables the negative-pid group kill on timeout. */
+      detached?: boolean
+    },
+  ) => {
+    pid: number
+    stdout: ReadableStream<Uint8Array>
+    stderr: ReadableStream<Uint8Array>
+    exited: Promise<number>
+  }
+}
+
 /** Bounded stdout capture: 8 MiB. */
 export const SETTLE_STDOUT_CAP_BYTES = 8 * 1024 * 1024
 

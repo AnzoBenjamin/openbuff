@@ -23,6 +23,25 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
+// The SDK declaration build (sdk/tsconfig.build.json) typechecks this file
+// under `types: ["node"]` — WITHOUT bun-types — so the Bun-global `Bun.serve`
+// below would fail TS2868 there. The dash server runs only under the Bun
+// runtime, which supplies the global at runtime; this module-scope `declare
+// const` (never exported) gives the build only the narrow structural surface
+// this module actually uses, keeping the declaration build green without
+// adding bun-types (which breaks dts-bundle-generator).
+declare const Bun: {
+  serve: (options: {
+    hostname: string
+    port: number
+    fetch: (req: Request) => Response | Promise<Response>
+    error?: (error: unknown) => Response | Promise<Response>
+  }) => {
+    port: number
+    stop: (closeActiveConnections?: boolean) => void
+  }
+}
+
 /** Summary row for GET /api/runs. */
 export type DashRunSummary = {
   runId: string

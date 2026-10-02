@@ -41,6 +41,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type {
   SettledSubagentResult,
@@ -80,7 +82,10 @@ export function buildDefaultSpawnSupervised(
     try {
       writeFileSync(requestPath, JSON.stringify(request), { mode: 0o600 })
       return await spawnSettledSubagent({
-        childModulePath: join(import.meta.dir, 'child-entry.ts'),
+        childModulePath: join(
+          dirname(fileURLToPath(import.meta.url)),
+          'child-entry.ts',
+        ),
         args: [requestPath],
         env: buildSupervisedChildEnv(seed),
         cwd: sandboxCwd,
