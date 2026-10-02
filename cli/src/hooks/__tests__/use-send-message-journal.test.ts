@@ -26,9 +26,29 @@ process.env.NEXT_PUBLIC_POSTHOG_HOST_URL =
 
 const openRunJournalCalls: unknown[] = []
 
+// bun's mock.module is registry-wide for the whole test process and cannot be
+// unregistered, so every override below is an ARMED/DELEGATING stub: when
+// `journalHooksArmed` is false — i.e. for every sibling suite sharing this
+// process — the override delegates verbatim to the real captured module
+// function (all args in, real result out, promises included), and only the
+// journal suite's beforeEach/afterEach arms/disarms the flag to install the
+// test-controlled behavior. Recording into openRunJournalCalls happens only
+// while armed, so sibling suites always observe real behavior.
+let journalHooksArmed = false
+
+const requireReal = createRequire(import.meta.url)
+const realRunJournalPath = requireReal(
+  '../../utils/run-journal-path',
+) as typeof import('../../utils/run-journal-path')
 mock.module('../../utils/run-journal-path', () => ({
-  openRunJournalForRun: (params: unknown) => {
-    openRunJournalCalls.push(params)
+  ...realRunJournalPath,
+  openRunJournalForRun: (
+    ...args: Parameters<typeof realRunJournalPath.openRunJournalForRun>
+  ) => {
+    if (!journalHooksArmed) {
+      return realRunJournalPath.openRunJournalForRun(...args)
+    }
+    openRunJournalCalls.push(args[0])
     return {
       append: () => {},
       events: () => [],
@@ -39,8 +59,12 @@ mock.module('../../utils/run-journal-path', () => ({
       close: () => Promise.resolve(),
     }
   },
-  resolveRunJournalPath: () =>
-    path.join(tmpdir(), 'use-send-message-journal-test.db'),
+  resolveRunJournalPath: (
+    ...args: Parameters<typeof realRunJournalPath.resolveRunJournalPath>
+  ) =>
+    journalHooksArmed
+      ? path.join(tmpdir(), 'use-send-message-journal-test.db')
+      : realRunJournalPath.resolveRunJournalPath(...args),
 }))
 
 let readinessResult: { ok: boolean; message?: string } = {
@@ -52,14 +76,21 @@ let readinessResult: { ok: boolean; message?: string } = {
 // its exports (real keys first, the readiness override wins) — a stub with
 // only one export would otherwise drop every other export of the module
 // (e.g. setupOpenbuffProviderFromArgs) for sibling suites running in the
-// same batched process.
-const requireReal = createRequire(import.meta.url)
+// same batched process. The override itself is armed/delegating (see the
+// run-journal-path block above): unless the journal suite armed the flag, it
+// delegates to the real getOpenbuffProviderReadiness so sibling suites never
+// see the fixture.
 const realOpenbuffProvider = requireReal(
   '../../utils/openbuff-provider',
 ) as typeof import('../../utils/openbuff-provider')
 mock.module('../../utils/openbuff-provider', () => ({
   ...realOpenbuffProvider,
-  getOpenbuffProviderReadiness: () => readinessResult,
+  getOpenbuffProviderReadiness: (
+    ...args: Parameters<typeof realOpenbuffProvider.getOpenbuffProviderReadiness>
+  ) =>
+    journalHooksArmed
+      ? readinessResult
+      : realOpenbuffProvider.getOpenbuffProviderReadiness(...args),
 }))
 
 // Every mock.module here spreads the REAL module's exports first (captured
@@ -67,17 +98,26 @@ mock.module('../../utils/openbuff-provider', () => ({
 // test process and cannot be unregistered, so a stub with only one export
 // drops every other export of that module for sibling suites running in the
 // same batched process (the setupOpenbuffProviderFromArgs/getLoadedMCPServers
-// leak class).
+// leak class). Every overriding export is also armed/delegating (see the
+// run-journal-path block above): the registry-wide override is replaced by
+// delegate-unless-armed, so sibling suites always see real behavior.
 const realCodebuffClient = requireReal(
   '../../utils/codebuff-client',
 ) as typeof import('../../utils/codebuff-client')
 mock.module('../../utils/codebuff-client', () => ({
   ...realCodebuffClient,
-  getCodebuffClient: async () => ({
-    run: () => {
-      throw new Error('client.run must not be reached in this test')
-    },
-  }),
+  getCodebuffClient: async (
+    ...args: Parameters<typeof realCodebuffClient.getCodebuffClient>
+  ) => {
+    if (journalHooksArmed) {
+      return {
+        run: () => {
+          throw new Error('client.run must not be reached in this test')
+        },
+      }
+    }
+    return realCodebuffClient.getCodebuffClient(...args)
+  },
 }))
 
 const realLocalAgentRegistry = requireReal(
@@ -85,7 +125,12 @@ const realLocalAgentRegistry = requireReal(
 ) as typeof import('../../utils/local-agent-registry')
 mock.module('../../utils/local-agent-registry', () => ({
   ...realLocalAgentRegistry,
-  loadAgentDefinitions: () => [],
+  loadAgentDefinitions: (
+    ...args: Parameters<typeof realLocalAgentRegistry.loadAgentDefinitions>
+  ) =>
+    journalHooksArmed
+      ? []
+      : realLocalAgentRegistry.loadAgentDefinitions(...args),
 }))
 
 const realDeferredRegistries = requireReal(
@@ -93,7 +138,12 @@ const realDeferredRegistries = requireReal(
 ) as typeof import('../../services/deferred-registries')
 mock.module('../../services/deferred-registries', () => ({
   ...realDeferredRegistries,
-  whenRegistriesReady: () => Promise.resolve(),
+  whenRegistriesReady: (
+    ...args: Parameters<typeof realDeferredRegistries.whenRegistriesReady>
+  ) =>
+    journalHooksArmed
+      ? Promise.resolve()
+      : realDeferredRegistries.whenRegistriesReady(...args),
 }))
 
 const realCreateRunConfig = requireReal(
@@ -101,8 +151,13 @@ const realCreateRunConfig = requireReal(
 ) as typeof import('../../utils/create-run-config')
 mock.module('../../utils/create-run-config', () => ({
   ...realCreateRunConfig,
-  createRunConfig: () => {
-    throw new Error('createRunConfig must not be reached in this test')
+  createRunConfig: (
+    ...args: Parameters<typeof realCreateRunConfig.createRunConfig>
+  ) => {
+    if (journalHooksArmed) {
+      throw new Error('createRunConfig must not be reached in this test')
+    }
+    return realCreateRunConfig.createRunConfig(...args)
   },
 }))
 
@@ -163,10 +218,12 @@ describe('useSendMessage journal lazy-open ordering', () => {
     }
     openRunJournalCalls.length = 0
     setProjectRoot(tmpdir())
+    journalHooksArmed = true
   })
 
   afterEach(() => {
     reactInternals.H = originalDispatcher!
+    journalHooksArmed = false
   })
 
   it('a providerReadiness failure early-return never opens the run journal', async () => {
