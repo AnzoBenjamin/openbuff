@@ -15,7 +15,9 @@
 #   - linux-gnu / linux-musl / aarch64-linux: ubuntu + the right cross linker
 #     (musl-tools / gcc-aarch64-linux-gnu),
 #   - windows-msvc: windows-latest (native MSVC),
-#   - apple-darwin: macos-13 (native Intel toolchain).
+#   - apple-darwin: macos-15-intel (native Intel toolchain). macos-13 is
+#     RETIRED — a job labeled with it queues forever with no runner. The
+#     current hosted Intel label (macos-15-intel) matches cli-release-build.yml.
 # Tests run only where host == target can execute the test binaries; the CLI
 # smoke script runs on the host-runnable linux-gnu and darwin legs.
 name: rust-workspace
@@ -86,7 +88,7 @@ jobs:
             runs-tests: true
             runs-smoke: false
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             runs-tests: true
             runs-smoke: true
     name: build-target-${{ matrix.target }}
