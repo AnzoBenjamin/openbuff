@@ -534,10 +534,13 @@ async function main(): Promise<void> {
   // serve mode stdout carries the dashboard URL (a generated token goes to
   // stderr — stdout may be piped) and in --export mode it carries the written
   // file paths, so we run the command and set the process exit code from the
-  // outcome. The dashboard provider currently starts with EMPTY run data:
-  // wiring a live run's journal reader (plus receipts/gate seams) into this
-  // CLI process is the documented follow-up — the server + export + CLI
-  // contract is the P2-T7 deliverable.
+  // outcome. P2-T7 follow-up LANDED: the dash now reads the LIVE run journal
+  // at the shared cli/src/utils/run-journal-path.ts location (opened
+  // read-only, only after the file exists — never created from the dash
+  // side; absent/unopenable falls back to empty data with a stderr
+  // warning), so runs journaled by the TUI (`use-send-message.ts`) and
+  // headless (`run-command.ts`) processes surface in the dashboard.
+  // Explicit journalReader/receipts/gateState seams still win for tests.
   if (dash) {
     const code = await runDashCommand(dash)
     process.exitCode = code

@@ -62,7 +62,7 @@ All session data is saved to `debug/tmux-sessions/{session}/` in YAML format:
 
 ### Viewing Session Data
 
-Use the **tmux-viewer** to inspect sessions:
+Use the **tmux-viewer** to inspect sessions (tmux-viewer is the capture-harness viewer for tmux sessions; the user-facing viewer for agent RUNS is `openbuff dash`, which reads the live run journal — keep the two roles distinct):
 
 ```bash
 # Interactive TUI (for humans)

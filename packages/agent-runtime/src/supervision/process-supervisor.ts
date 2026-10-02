@@ -6,9 +6,11 @@
  * outcome enum are REUSED verbatim from `agentReceiptSchema`
  * (common/src/types/agent-handoff.ts) — no second schema is introduced here.
  *
- * SCOPE / NON-GOAL: this slice builds the supervisor + settle contract only.
- * Production spawn paths (spawn-agent-utils.ts / tool-executor.ts) are NOT
- * rewired; adoption rides a later flag-gated slice.
+ * ADOPTION (P2-T8): production spawns reach this supervisor through the
+ * flag-gated `spawnSupervised` seam on `SubagentContextParams`
+ * (spawn-agent-utils.ts), seeded from `OPENBUFF_PROCESS_SUPERVISION` at the
+ * SDK impl entry seam. Flag off (the default) keeps the in-process spawn
+ * path byte-identical.
  *
  * Contract:
  *  - Child contract: exactly ONE newline-terminated JSON line on stdout — an
@@ -35,9 +37,13 @@
  *    limit.
  *  - Returns a structured outcome; never throws.
  */
+import { BYOK_OPENROUTER_ENV_VAR } from '@codebuff/common/constants/byok'
+import {
+  CHATGPT_OAUTH_TOKEN_ENV_VAR,
+  OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
+} from '@codebuff/common/constants/chatgpt-oauth'
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
-
 import { formatValidationIssues } from '../util/format-validation-issues'
 
 /** Bounded stdout capture: 8 MiB. */
@@ -54,6 +60,13 @@ export const SETTLE_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 
 /** The PR-T1 receipt outcome enum, reused verbatim — never redefined. */
 export type ReceiptOutcome = NonNullable<AgentReceipt['outcome']>
+
+// P2-T8 adoption slice: the seam REQUEST contract lives in common (so the
+// contract never depends on this package) and is re-exported here as the
+// canonical agent-runtime surface. The concrete `SettledSubagentResult`
+// below is declared structurally identical to common's, so the two stay
+// assignable without a nominal link.
+export type { SupervisedSpawnRequest } from '@codebuff/common/types/contracts/agent-runtime'
 
 /** Request the supervisor hands to the injected spawn seam. */
 export type SettleSpawnRequest = {
@@ -109,6 +122,9 @@ export type SpawnSettledSubagentParams = {
   now?: () => number
 }
 
+// Structurally identical to the seam contract in common
+// (`@codebuff/common/types/contracts/agent-runtime`); the concrete `receipt`
+// field is the narrowed `AgentReceipt` this module validates.
 export type SettledSubagentResult = {
   /** Process-level settle outcome (transport truth). When a valid envelope
    * arrived, the child's self-declared `receipt.outcome` is preserved on
@@ -306,7 +322,21 @@ export async function spawnSettledSubagent(
 
     const baseWithStdout = { ...base, stdoutBytes: stdoutCapture.totalBytes }
     if (lastLine === undefined) {
-      return { outcome: 'missing_output', ...baseWithStdout }
+      // ONLY a truly EMPTY stdout settles as missing_output. Stdout bytes
+      // with no complete newline-terminated line mean the child wrote
+      // something that never formed the contracted single JSON envelope:
+      // garbage output is never ok and never missing_output (security
+      // contract — garbage stdout settles crashed/truncated/schema_invalid,
+      // never ok).
+      if (stdoutCapture.totalBytes === 0) {
+        return { outcome: 'missing_output', ...baseWithStdout }
+      }
+      return {
+        outcome: 'schema_invalid',
+        schemaError:
+          'child stdout had bytes but no newline-terminated JSON line',
+        ...baseWithStdout,
+      }
     }
 
     let parsed:
@@ -344,3 +374,79 @@ export async function spawnSettledSubagent(
     return crashResult('internal_error', null, { killed })
   }
 }
+
+// ── P2-T8 adoption slice: supervised spawn request + env allowlist ────────
+// Additive only: the settle contract above is unchanged. These types and the
+// env allowlist builder serve the flag-gated branch in spawn-agent-utils and
+// the default seam in supervision/supervised-spawn.ts.
+
+/**
+ * Env allowlist seed for a supervised child (P2-T8). Values are supplied
+ * EXPLICITLY by the caller — sourced at the SDK seam, the only place ambient
+ * `process.env` may be read for this feature (agent-runtime production files
+ * never read ambient env) — never scraped wholesale from the environment.
+ */
+export type SupervisedChildEnvSeed = {
+  /** Resolved Openbuff API key; `codebuffApiKey` is the legacy fallback. */
+  openbuffApiKey?: string
+  codebuffApiKey?: string
+  /** BYOK OpenRouter key (forwarded under `CODEBUFF_BYOK_OPENROUTER`). */
+  byokOpenrouterApiKey?: string
+  /** ChatGPT OAuth token, canonical + openbuff spellings. */
+  chatGptOauthToken?: string
+  openbuffChatGptOauthToken?: string
+  nodeEnv?: string
+  /**
+   * PATH/HOME are forwarded ONLY when the caller explicitly seeds them, and
+   * the caller must do so ONLY when the child may run native tools (bundled
+   * ripgrep, tree-sitter WASM): the default seam invokes the child through
+   * the absolute `process.execPath`, so no PATH inheritance is required for
+   * the Bun runtime itself. Every other ambient key stays excluded — ambient
+   * keys are never forwarded wholesale.
+   */
+  path?: string
+  home?: string
+}
+
+/** Exact env allowlist for a supervised child; asserted by tests. */
+export const SUPERVISED_CHILD_ENV_ALLOWLIST = [
+  'OPENBUFF_API_KEY',
+  BYOK_OPENROUTER_ENV_VAR,
+  CHATGPT_OAUTH_TOKEN_ENV_VAR,
+  OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
+  'NODE_ENV',
+  'PATH',
+  'HOME',
+] as const
+
+/**
+ * Builds the child env from the explicit seed: EXACTLY the allowlisted keys
+ * that carry a seeded value, nothing else. The child sees no ambient key.
+ */
+export function buildSupervisedChildEnv(
+  seed: SupervisedChildEnvSeed,
+): Record<string, string> {
+  const apiKey = seed.openbuffApiKey ?? seed.codebuffApiKey
+  const env: Record<string, string> = {}
+  if (apiKey) env['OPENBUFF_API_KEY'] = apiKey
+  if (seed.byokOpenrouterApiKey) {
+    env[BYOK_OPENROUTER_ENV_VAR] = seed.byokOpenrouterApiKey
+  }
+  if (seed.chatGptOauthToken) {
+    env[CHATGPT_OAUTH_TOKEN_ENV_VAR] = seed.chatGptOauthToken
+  }
+  if (seed.openbuffChatGptOauthToken) {
+    env[OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR] = seed.openbuffChatGptOauthToken
+  }
+  if (seed.nodeEnv) env['NODE_ENV'] = seed.nodeEnv
+  if (seed.path) env['PATH'] = seed.path
+  if (seed.home) env['HOME'] = seed.home
+  return env
+}
+
+// P2-T8: `SupervisedSpawnRequest` is the seam contract from common,
+// re-exported above. Scope note: the flag applies at the `executeSubagent`
+// choke point, so it covers spawn-agents background + foreground,
+// spawn-agent-inline, AND the two programmatic call sites
+// (util/context-consolidation-runner.ts, util/runtime-semantic-compaction.ts)
+// — one gate, no second flag.

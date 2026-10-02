@@ -5,14 +5,21 @@
  * the supervisor itself (SIGTERM → SIGKILL grace). Cases that need a real
  * Bun.spawn skip gracefully when Bun.spawn is unavailable.
  */
+import { BYOK_OPENROUTER_ENV_VAR } from '@codebuff/common/constants/byok'
+import {
+  CHATGPT_OAUTH_TOKEN_ENV_VAR,
+  OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
+} from '@codebuff/common/constants/chatgpt-oauth'
 import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  buildSupervisedChildEnv,
   SETTLE_KILL_GRACE_MS,
   SETTLE_STDOUT_CAP_BYTES,
+  SUPERVISED_CHILD_ENV_ALLOWLIST,
   spawnSettledSubagent,
   type SettleSpawnSeam,
 } from '../process-supervisor'
@@ -144,6 +151,43 @@ describe('spawnSettledSubagent', () => {
     expect(result.receipt).toBeUndefined()
   })
 
+  it(
+    'stdout bytes with NO newline-terminated line settle as schema_invalid — never ok, never missing_output',
+    async () => {
+      // Security contract: only EMPTY stdout maps to missing_output. A child
+      // that wrote bytes that never form the contracted single
+      // newline-terminated JSON envelope produced garbage, and garbage
+      // stdout must never settle ok (or masquerade as a silent child).
+      const spawn: SettleSpawnSeam = () => ({
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'child-entry: not json garbage without a trailing newline',
+              ),
+            )
+            controller.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        exited: Promise.resolve(0),
+        kill: () => {},
+      })
+      const result = await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        spawn,
+      })
+      expect(result.outcome).toBe('schema_invalid')
+      expect(result.receipt).toBeUndefined()
+      expect(result.exitCode).toBe(0)
+      expect(result.stdoutBytes).toBeGreaterThan(0)
+    },
+  )
+
   it.skipIf(!canSpawn)(
     'env allowlist: the child sees ONLY the injected keys, never ambient env',
     async () => {
@@ -193,4 +237,81 @@ describe('spawnSettledSubagent', () => {
       expect(crashResult.exitCode).toBe(1)
     },
   )
+})
+
+// P2-T8 adoption slice: buildSupervisedChildEnv — the child env allowlist
+// builder. Asserts the EXACT key set: seeded credential keys present under
+// their canonical env names, every unseeded key absent, and NO ambient keys
+// ever forwarded (PATH/HOME appear only when explicitly seeded).
+describe('buildSupervisedChildEnv env allowlist (P2-T8)', () => {
+  it('emits exactly the allowlisted keys that carry a seeded value', () => {
+    const env = buildSupervisedChildEnv({
+      openbuffApiKey: 'sk-openbuff-test',
+      byokOpenrouterApiKey: 'sk-or-v1-test',
+      chatGptOauthToken: 'chatgpt-token-test',
+      nodeEnv: 'test',
+      path: '/usr/bin:/bin',
+      home: '/home/test',
+    })
+    expect(Object.keys(env).sort()).toEqual([
+      BYOK_OPENROUTER_ENV_VAR,
+      CHATGPT_OAUTH_TOKEN_ENV_VAR,
+      'HOME',
+      'NODE_ENV',
+      'OPENBUFF_API_KEY',
+      'PATH',
+    ])
+    expect(env['OPENBUFF_API_KEY']).toBe('sk-openbuff-test')
+    expect(env[BYOK_OPENROUTER_ENV_VAR]).toBe('sk-or-v1-test')
+    expect(env[CHATGPT_OAUTH_TOKEN_ENV_VAR]).toBe('chatgpt-token-test')
+    expect(env['NODE_ENV']).toBe('test')
+  })
+
+  it('falls back OPENBUFF_API_KEY → CODEBUFF_API_KEY for the legacy key', () => {
+    const env = buildSupervisedChildEnv({ codebuffApiKey: 'sk-legacy' })
+    expect(Object.keys(env)).toEqual(['OPENBUFF_API_KEY'])
+    expect(env['OPENBUFF_API_KEY']).toBe('sk-legacy')
+  })
+
+  it('forwards the openbuff ChatGPT OAuth spelling under its own key', () => {
+    const env = buildSupervisedChildEnv({
+      openbuffChatGptOauthToken: 'token-openbuff',
+    })
+    expect(env[OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR]).toBe('token-openbuff')
+  })
+
+  it('omits every key that has no seed and forwards NO ambient keys', () => {
+    const env = buildSupervisedChildEnv({})
+    expect(env).toEqual({})
+    expect('PATH' in env).toBe(false)
+    expect('HOME' in env).toBe(false)
+    expect('NODE_ENV' in env).toBe(false)
+  })
+
+  it('PATH/HOME are forwarded ONLY when explicitly seeded (native-tool opt-in)', () => {
+    const without = buildSupervisedChildEnv({ openbuffApiKey: 'k' })
+    expect('PATH' in without).toBe(false)
+    expect('HOME' in without).toBe(false)
+    const withNative = buildSupervisedChildEnv({
+      openbuffApiKey: 'k',
+      path: '/usr/bin',
+      home: '/home/test',
+    })
+    expect(withNative['PATH']).toBe('/usr/bin')
+    expect(withNative['HOME']).toBe('/home/test')
+  })
+
+  it('SUPERVISED_CHILD_ENV_ALLOWLIST is the closed key universe', () => {
+    // Default JS sort (UTF-16 code units): 'OPENBUFF_CHATGPT_OAUTH_TOKEN'
+    // sorts BEFORE 'PATH' ('O' < 'P').
+    expect([...SUPERVISED_CHILD_ENV_ALLOWLIST].sort()).toEqual([
+      BYOK_OPENROUTER_ENV_VAR,
+      CHATGPT_OAUTH_TOKEN_ENV_VAR,
+      'HOME',
+      'NODE_ENV',
+      'OPENBUFF_API_KEY',
+      OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
+      'PATH',
+    ])
+  })
 })

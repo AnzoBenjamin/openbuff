@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+
 import {
   afterEach,
   beforeEach,
@@ -15,6 +19,11 @@ import { runDashCommand } from '../dash-command'
 import { findCommand } from '../command-registry'
 import { routeUserPrompt, runBashCommand } from '../router'
 
+import type { RunDashDeps } from '../dash-command'
+import type {
+  JournalEventRow,
+  JournalReader,
+} from '@codebuff/common/types/contracts/agent-runtime'
 import type { RouterParams } from '../command-registry'
 import type { ChatMessage } from '../../types/chat'
 
@@ -712,6 +721,10 @@ describe('openbuff dash command (--no-open URL contract)', () => {
       { open: args.open, token: 'explicit-token' },
       {
         startServer: startServerStub,
+        // Hermetic: a journal path that never exists, so the live-wiring
+        // fallback (absent file → empty data) is exercised deterministically
+        // and the real harness journal is never opened from a test.
+        journalPath: '/nonexistent-root-for-openbuff-tests/run-journal.db',
         writeStdout: (chunk) => {
           stdout.push(chunk)
         },
@@ -738,5 +751,260 @@ describe('openbuff dash command (--no-open URL contract)', () => {
     expect(stderr).not.toContain(URL_WITH_TOKEN)
     expect(stderr).not.toContain('serving at')
     expect(stderr).toContain('press Ctrl+C to stop')
+  })
+})
+
+describe('openbuff dash live journal wiring (P2-T7)', () => {
+  /**
+   * A real (empty) file so the dash-side existence check passes and the
+   * injected opener is actually invoked; the fake opener never touches it.
+   */
+  const makeExistingJournalFile = async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'dash-journal-'))
+    const journalPath = path.join(parent, 'run-journal.db')
+    await writeFile(journalPath, '')
+    return { parent, journalPath }
+  }
+
+  const makeFakeReader = (
+    overrides: {
+      runIds?: () => string[]
+      events?: () => JournalEventRow[]
+    } = {},
+  ) => ({
+    runIds: overrides.runIds ?? (() => []),
+    lastEvent: () => undefined,
+    events: overrides.events ?? (() => []),
+    toolResultFor: () => undefined,
+    toolResultForInput: () => undefined,
+  })
+
+  /**
+   * Hermetic serving harness: the injected startServer captures the served
+   * provider, and the returned `fireShutdown` invokes the SIGINT handler the
+   * real command registered (exactly what the OS does on Ctrl+C), so the
+   * serve promise resolves instead of awaiting forever.
+   */
+  const serveWithStub = async (deps: RunDashDeps) => {
+    const stdout: string[] = []
+    const stderr: string[] = []
+    let servedData: unknown
+    let shutdownHandler: (() => void) | undefined
+
+    const signalHandlers = new Map<string, () => void>()
+    const originalOnce = process.once.bind(process)
+    const originalOff = process.off.bind(process)
+    spyOn(process, 'once').mockImplementation(
+      ((event: string, listener: () => void) => {
+        if (event === 'SIGINT' || event === 'SIGTERM') {
+          signalHandlers.set(event, listener)
+          return process
+        }
+        return originalOnce(event as never, listener as never)
+      }) as unknown as typeof process.once,
+    )
+    spyOn(process, 'off').mockImplementation(
+      ((event: string, listener: () => void) => {
+        if (event === 'SIGINT' || event === 'SIGTERM') {
+          signalHandlers.delete(event)
+          return process
+        }
+        return originalOff(event as never, listener as never)
+      }) as unknown as typeof process.off,
+    )
+
+    try {
+      const servePromise = runDashCommand(
+        { open: true, token: 'explicit-token' },
+        {
+          ...deps,
+          writeStdout: (chunk) => stdout.push(chunk),
+          writeStderr: (line) => stderr.push(line),
+          startServer: async ({ data }) => {
+            servedData = data
+            return {
+              url: 'http://127.0.0.1:0/?token=x',
+              close: async () => {},
+            }
+          },
+        } as RunDashDeps,
+      )
+
+      // The promise must stay pending (the server is alive) until the signal:
+      // it must never exit early on empty event data.
+      let settled = false
+      void servePromise.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(settled).toBe(false)
+
+      // Fire SIGINT the way the OS would.
+      shutdownHandler = signalHandlers.get('SIGINT')
+      expect(shutdownHandler).toBeDefined()
+      shutdownHandler!()
+      const code = await servePromise
+
+      return { code, servedData, stdout: stdout.join(''), stderr: stderr.join('') }
+    } finally {
+      mock.restore()
+    }
+  }
+
+  test('an injected openJournal reader feeds the dash provider (listRuns sees its runs)', async () => {
+    const { parent, journalPath } = await makeExistingJournalFile()
+    try {
+      const journalRuns = ['run-live-1', 'run-live-2']
+      const events: JournalEventRow[] = [
+        {
+          seq: 0,
+          stepNumber: 0,
+          eventType: 'llm_request',
+          correlation: 'c0',
+          createdAt: 1704067200000,
+          payload: { model: 'm' },
+        },
+      ]
+      let closeCount = 0
+      const { code, servedData, stderr } = await serveWithStub({
+        openJournal: () => ({
+          reader: makeFakeReader({
+            runIds: () => journalRuns,
+            events: () => events,
+          }) as unknown as JournalReader,
+          close: () => {
+            closeCount += 1
+          },
+        }),
+        journalPath,
+      })
+
+      // The server was started with the OPENED reader's data; on shutdown the
+      // journal is closed exactly once.
+      expect(code).toBe(0)
+      expect(closeCount).toBe(1)
+      const provider = servedData as {
+        listRuns(): Promise<Array<{ runId: string; eventCount: number }>>
+        getRunEvents(runId: string): Promise<Array<{ eventType: string }>>
+      }
+      const runs = await provider.listRuns()
+      expect(runs.map((r) => r.runId)).toEqual(journalRuns)
+      expect(runs[0].eventCount).toBe(1)
+      const runEvents = await provider.getRunEvents('run-live-1')
+      expect(runEvents[0].eventType).toBe('llm_request')
+      // The dash never writes: the opener was the ONLY journal touch.
+      expect(stderr).not.toContain('run journal unavailable')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  test('an absent journal file falls back to empty data with a one-line warning, never creating the db', async () => {
+    let openCalled = 0
+    const { code, servedData, stderr } = await serveWithStub({
+      openJournal: () => {
+        openCalled += 1
+        throw new Error('should not be called when the file is absent')
+      },
+      journalPath: '/nonexistent-root-for-openbuff-tests/run-journal.db',
+    })
+
+    // Fail-closed: no crash, no db creation, one stderr warning, and the
+    // provider serves EMPTY run data (never guessed ids).
+    expect(openCalled).toBe(0)
+    expect(code).toBe(0)
+    expect(stderr).toContain('run journal unavailable')
+    expect(stderr.match(/run journal unavailable/g)).toHaveLength(1)
+    const provider = servedData as {
+      listRuns(): Promise<unknown[]>
+      getRunEvents(runId: string): Promise<unknown[]>
+    }
+    expect(await provider.listRuns()).toEqual([])
+    expect(await provider.getRunEvents('anything')).toEqual([])
+  })
+
+  test('an unopenable existing journal file warns once and still serves empty data', async () => {
+    const { parent, journalPath } = await makeExistingJournalFile()
+    try {
+      const { code, servedData, stderr } = await serveWithStub({
+        openJournal: () => {
+          throw new Error('sqlite unavailable')
+        },
+        journalPath,
+      })
+
+      expect(code).toBe(0)
+      expect(stderr).toContain('run journal unavailable')
+      expect(stderr).toContain('sqlite unavailable')
+      expect(
+        await (servedData as { listRuns(): Promise<unknown[]> }).listRuns(),
+      ).toEqual([])
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  test('the journal is closed exactly once on shutdown, never written from the dash side', async () => {
+    const { parent, journalPath } = await makeExistingJournalFile()
+    try {
+      let closeCount = 0
+      const { code } = await serveWithStub({
+        openJournal: () => ({
+          reader: makeFakeReader(),
+          close: () => {
+            closeCount += 1
+          },
+        }),
+        journalPath,
+      })
+      expect(code).toBe(0)
+      expect(closeCount).toBe(1)
+      // The file was never created/expanded by the dash side: it is still the
+      // empty file we wrote (no append, no pruneRuns, no schema DDL from the
+      // fake opener).
+      const stats = await import('node:fs/promises').then((fs) =>
+        fs.stat(journalPath),
+      )
+      expect(stats.size).toBe(0)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  test('--export opens the journal, exports, and closes it in a finally', async () => {
+    const { parent, journalPath } = await makeExistingJournalFile()
+    try {
+      let closeCount = 0
+      const stdout: string[] = []
+      const code = await runDashCommand(
+        {
+          open: true,
+          token: 'explicit-token',
+          exportDir: path.join(parent, 'site'),
+        },
+        {
+          openJournal: () => ({
+            reader: makeFakeReader({ runIds: () => ['run-export-1'] }),
+            close: () => {
+              closeCount += 1
+            },
+          }),
+          journalPath,
+          writeStdout: (chunk) => stdout.push(chunk),
+        } as RunDashDeps,
+      )
+
+      expect(code).toBe(0)
+      expect(stdout.join('')).toContain('index.html')
+      // The journal was closed exactly once, even on the success path.
+      expect(closeCount).toBe(1)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
   })
 })

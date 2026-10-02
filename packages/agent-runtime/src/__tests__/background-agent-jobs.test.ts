@@ -1,8 +1,11 @@
+import { Database } from 'bun:sqlite'
+
 import { checkBackgroundAgentParams } from '@codebuff/common/tools/params/tool/check-background-agent'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/fixtures/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
+import { promptSuccess } from '@codebuff/common/util/error'
 import { assistantMessage } from '@codebuff/common/util/messages'
 import {
   afterAll,
@@ -15,7 +18,7 @@ import {
   test,
 } from 'bun:test'
 
-import { mockFileContext } from './test-utils'
+import { createToolCallChunk, mockFileContext } from './test-utils'
 import * as runAgentStep from '../run-agent-step'
 import {
   DEFAULT_CHECK_BACKGROUND_AGENT_FOLLOW_TIMEOUT_MS,
@@ -48,6 +51,7 @@ import {
   waitForBackgroundAgentJob,
   __clearBackgroundAgentJobsForTest,
 } from '../util/background-agent-jobs'
+import { classifyChildRun, createRunJournal } from '../util/run-journal'
 
 import type {
   BackgroundAgentJob,
@@ -1442,5 +1446,208 @@ describe('spawn_agents background intent reconciliation', () => {
         (lease) => lease.status === 'active',
       ) ?? [],
     ).toHaveLength(0)
+  })
+})
+
+describe('background agent journaling (P2-T2)', () => {
+  let baseParams: Record<string, unknown>
+  let childRunCounter = 0
+
+  const createMockAgent = (
+    id: string,
+    spawnableAgents: string[] = [],
+  ): AgentTemplate => ({
+    id,
+    displayName: `Mock ${id}`,
+    outputMode: 'last_message' as const,
+    inputSchema: {
+      prompt: {
+        safeParse: () => ({ success: true }),
+      } as unknown as AgentTemplate['inputSchema']['prompt'],
+    },
+    spawnerPrompt: '',
+    model: 'claude-3-5-sonnet-20241022',
+    includeMessageHistory: true,
+    inheritParentSystemPrompt: false,
+    mcpServers: {},
+    toolNames: ['read_files', 'end_turn'],
+    spawnableAgents,
+    systemPrompt: '',
+    instructionsPrompt: '',
+    stepPrompt: '',
+    ...(id === 'thinker'
+      ? {
+          // One real programmatic tool call so the child's own journal
+          // carries the tool_call/tool_result boundary pair, then STEP so
+          // the loop journals a terminal step_boundary when the turn ends.
+          handleSteps: function* () {
+            yield { toolName: 'read_files', input: { paths: ['file1.txt'] } }
+            yield 'STEP'
+          } as unknown as AgentTemplate['handleSteps'],
+        }
+      : {}),
+  })
+
+  beforeEach(() => {
+    __clearBackgroundAgentJobsForTest()
+    baseParams = {
+      ...TEST_AGENT_RUNTIME_IMPL,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session-journal',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      previousToolCallFinished: Promise.resolve(),
+      repoId: undefined,
+      repoUrl: undefined,
+      sendSubagentChunk: mock(() => {}),
+      signal: new AbortController().signal,
+      system: 'Test system prompt',
+      userId: TEST_USER_ID,
+      userInputId: 'test-input',
+      writeToClient: () => {},
+      // The child coroutine runs the REAL loopAgentSteps here (no spy), so
+      // every dep the loop touches must be non-throwing.
+      handleStepsLogChunk: () => {},
+      requestToolCall: async () => ({ success: true, result: 'mock result' }),
+      consumeCreditsWithFallback: async () => {},
+      // Unique child runIds per test: run-programmatic-step caches
+      // generators by runId, so a shared id across tests would resume a
+      // stale generator.
+      startAgentRun: async () => `journal-child-run-${++childRunCounter}`,
+      promptAiSdkStream: mock(async function* () {
+        yield { type: 'text' as const, text: 'Thinking...' }
+        yield createToolCallChunk('end_turn', {})
+        return promptSuccess('journal-mock-message')
+      }),
+    }
+  })
+
+  afterAll(() => {
+    __clearBackgroundAgentJobsForTest()
+  })
+
+  afterEach(() => {
+    mock.restore()
+  })
+
+  test('a background child journals its own stream under its own runId in the shared parent journal DB', async () => {
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: { now: () => 1_000 },
+      createDatabase: (path) => new Database(path),
+    })
+    try {
+      const { mainAgentState } = getInitialSessionState(mockFileContext)
+      mainAgentState.runId = 'parent-run-journal'
+
+      const { output } = await handleSpawnAgents({
+        ...baseParams,
+        agentState: mainAgentState,
+        agentTemplate: createMockAgent('parent', ['thinker']),
+        localAgentTemplates: { thinker: createMockAgent('thinker') },
+        journalWriter: journal,
+        journalReader: journal,
+        toolCall: {
+          toolName: 'spawn_agents',
+          toolCallId: 'spawn-background-journal',
+          input: {
+            agents: [
+              { agent_type: 'thinker', prompt: 'background', background: true },
+            ],
+          },
+        },
+      } as unknown as Parameters<typeof handleSpawnAgents>[0])
+
+      const intent = (mainAgentState.backgroundAgentJobs ?? [])[0]!
+      // The parent's durable spawn intent landed in the shared journal DB at
+      // LAUNCH time, correlated on the allocated jobId (the child's runId is
+      // only minted later, inside the child's own loopAgentSteps call).
+      const parentEvents = journal.events('parent-run-journal')
+      const spawnIntents = parentEvents.filter(
+        (event) => event.eventType === 'spawn',
+      )
+      expect(spawnIntents).toHaveLength(1)
+      expect(spawnIntents[0]).toMatchObject({
+        eventType: 'spawn',
+        correlation: intent.jobId,
+        payload: {
+          agentType: 'thinker',
+          background: true,
+          jobId: intent.jobId,
+        },
+      })
+
+      // Wait (bounded) for the detached coroutine to settle.
+      const deadline = Date.now() + 10_000
+      while (intent.status === 'running' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      expect(intent.status).toBe('completed')
+
+      // The child journaled its OWN stream under its OWN runId in the SAME
+      // journal DB — none of the child's events leaked under the parent runId.
+      const childRunId = intent.childRunId
+      expect(typeof childRunId).toBe('string')
+      const childEventTypes = new Set(
+        journal.events(childRunId!).map((event) => event.eventType),
+      )
+      for (const eventType of [
+        'llm_request',
+        'llm_response',
+        'tool_call',
+        'tool_result',
+        'step_boundary',
+      ] as const) {
+        expect(childEventTypes.has(eventType)).toBe(true)
+      }
+      expect(
+        parentEvents.some((event) => event.eventType === 'llm_request'),
+      ).toBe(false)
+
+      // The settled child tail classifies as completed for resume planning.
+      expect(classifyChildRun(journal, childRunId!).kind).toBe(
+        'child_completed',
+      )
+      expect(output[0]?.type).toBe('json')
+    } finally {
+      await journal.close()
+    }
+  })
+
+  test('a failing journal writer never fails the background job (fail-open intent append)', async () => {
+    const { mainAgentState } = getInitialSessionState(mockFileContext)
+    mainAgentState.runId = 'parent-run-fail-open'
+    const boomWriter = {
+      append: () => {
+        throw new Error('SQLITE_BUSY: busy-retry exhausted')
+      },
+    }
+
+    const { output } = await handleSpawnAgents({
+      ...baseParams,
+      agentState: mainAgentState,
+      agentTemplate: createMockAgent('parent', ['thinker']),
+      localAgentTemplates: { thinker: createMockAgent('thinker') },
+      journalWriter: boomWriter,
+      toolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-background-journal-fail-open',
+        input: {
+          agents: [
+            { agent_type: 'thinker', prompt: 'background', background: true },
+          ],
+        },
+      },
+    } as unknown as Parameters<typeof handleSpawnAgents>[0])
+
+    // The handler still resolved and the job still launched: the journaled
+    // intent is best-effort, so a busy-retry-exhausted append only logs.
+    const intent = (mainAgentState.backgroundAgentJobs ?? [])[0]!
+    expect(intent.jobId).toMatch(/^bg-agent-/)
+    expect(output[0]?.type).toBe('json')
+    expect(JSON.stringify(output)).toContain(intent.jobId)
+    // Let the detached child (whose every append also throws against the
+    // failing writer) settle inside the test instead of after it.
+    await new Promise((resolve) => setTimeout(resolve, 50))
   })
 })

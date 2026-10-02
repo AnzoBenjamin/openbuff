@@ -89,6 +89,17 @@ export interface RunJournal extends JournalWriter, JournalReader {
    * keepRunIds (see createRunJournal).
    */
   pruneRuns?(keepRunIds: string[]): void
+  /**
+   * Optional (P2-T7 dash) extension: enumerate the DISTINCT runIds present
+   * in the journal, NEWEST FIRST (each run's FIRST event — MIN(created_at) —
+   * descending), so consumers that must list runs (the `openbuff dash`
+   * provider) need no out-of-band id list. MIN (not MAX) is the contract: a
+   * later append to an OLD run must not promote it above runs whose first
+   * events are newer. Optional so an existing implementor of this
+   * interface is never broken by an added member; consumers must probe for
+   * it structurally and surface no runs when it is absent.
+   */
+  runIds?(): string[]
 }
 
 /**
@@ -103,6 +114,8 @@ export type CreatedRunJournal = RunJournal & {
   flush(): Promise<void>
   close(): Promise<void>
   pruneRuns(keepRunIds: string[]): void
+  /** P2-T7 dash extension: always provided by the built-in journal. */
+  runIds(): string[]
 }
 
 export type RunResumeClassification =
@@ -536,6 +549,12 @@ export function createRunJournal(params: {
   // never observes a partially-applied batch.
   let pending: Array<{ runId: string; event: JournalEvent }> = []
   let flushTimer: ReturnType<typeof setTimeout> | null = null
+  // Connection-lifetime flag (P2-T7 background-children close race): once
+  // close() has run, the sqlite connection is gone. A detached background
+  // subagent launched during the closed turn can outlive it and still
+  // journal under its own runId — every post-close write must be a
+  // fail-open no-op, never a throw on the closed connection.
+  let closed = false
 
   const clearFlushTimer = (): void => {
     if (flushTimer !== null) {
@@ -590,6 +609,13 @@ export function createRunJournal(params: {
 
   return {
     append(runId: string, event: JournalEvent): void {
+      // Fail-open after close: a detached background child that outlives the
+      // turn whose promise chain closed the journal still appends under its
+      // own runId. Dropping the event (instead of throwing on the closed
+      // connection) keeps journaling fail-open — the same contract as the
+      // unopenable-journal path — so a journaling outage can never fail the
+      // background job itself.
+      if (closed) return
       if (batching) {
         pending.push({ runId, event })
         if (pending.length >= batching.maxBatchEvents) {
@@ -616,6 +642,9 @@ export function createRunJournal(params: {
      * can never interleave or double-flush.
      */
     flush(): Promise<void> {
+      // Post-close no-op: nothing can be pending after close drained it, and
+      // touching the closed connection must never throw.
+      if (closed) return Promise.resolve()
       drainPending()
       return Promise.resolve()
     },
@@ -643,6 +672,23 @@ export function createRunJournal(params: {
         }
       }
       pending = pending.filter((item) => keep.has(item.runId))
+    },
+
+    /**
+     * P2-T7 dash extension: the DISTINCT runIds present in the journal,
+     * NEWEST FIRST — ordered by each run's FIRST event (MIN(created_at)),
+     * descending (`GROUP BY run_id ORDER BY MIN(created_at) DESC`). MIN (not
+     * MAX) is the dash contract: a later append to an OLD run (e.g. a
+     * late-arriving child event) must not promote it above runs whose first
+     * events are newer. Read-only: it never writes or prunes.
+     */
+    runIds(): string[] {
+      const rows = db
+        .query(
+          'SELECT run_id FROM run_events GROUP BY run_id ORDER BY MIN(created_at) DESC',
+        )
+        .all() as Array<{ run_id: string }>
+      return rows.map((row) => row.run_id)
     },
 
     lastEvent(runId: string): JournalEventRow | undefined {
@@ -761,11 +807,19 @@ export function createRunJournal(params: {
      * and close the database. Returns a promise so a batched writer can be
      * awaited before process exit; existing callers that ignore the return
      * value keep working unchanged.
+     *
+     * Idempotent: a second close() resolves without touching the database.
+     * After close, writes are fail-open no-ops (append drops the event,
+     * flush resolves) so a detached background child that outlives the turn
+     * which closed the journal keeps running — it just stops journaling,
+     * exactly like the unopenable-journal fail-open path.
      */
     close(): Promise<void> {
+      if (closed) return Promise.resolve()
       drainPending()
       clearFlushTimer()
       db.close()
+      closed = true
       return Promise.resolve()
     },
   }

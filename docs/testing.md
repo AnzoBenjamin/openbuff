@@ -36,7 +36,7 @@ Retrieval runs can append local-only JSONL metrics under
 
 ## CLI tmux Testing
 
-For testing CLI behavior via tmux, use the helper scripts in `scripts/tmux/`. These handle bracketed paste mode and session logging automatically. Session data is saved to `debug/tmux-sessions/` in YAML format and can be viewed with `bun scripts/tmux/tmux-viewer/index.tsx`. See `scripts/tmux/README.md` for details.
+For testing CLI behavior via tmux, use the helper scripts in `scripts/tmux/`. These handle bracketed paste mode and session logging automatically. Session data is saved to `debug/tmux-sessions/` in YAML format and can be viewed with `bun scripts/tmux/tmux-viewer/index.tsx` (the @cli-tester capture harness — not the user-facing run viewer). To inspect an agent RUN's journaled steps, use `openbuff dash` (`cli/src/commands/dash-command.ts`), which reads the live P2-T2 run journal; tmux-viewer remains the capture-tooling viewer only. See `scripts/tmux/README.md` for details.
 
 Useful workflow for agents:
 

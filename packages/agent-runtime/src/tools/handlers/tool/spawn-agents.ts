@@ -558,6 +558,31 @@ export const handleSpawnAgents = (async (
         startedAt: job.startedAt,
       })
 
+      // P2-T2: durable parent spawn intent for the background child, appended
+      // AT LAUNCH TIME. The loop-level spawn append (run-programmatic-step)
+      // only fires at the parent's NEXT step_boundary from childRunIds, which
+      // the detached settle chain fills asynchronously — so a parent turn
+      // that ends first left NO durable intent in the journal. childRunId is
+      // not yet known while the coroutine is detached (it is minted inside
+      // the child's own loopAgentSteps call), so correlate on the allocated
+      // jobId and keep the payload minimal. Fail-open: a journal failure
+      // must never fail the background job.
+      if (parentAgentState.runId && params.journalWriter) {
+        try {
+          params.journalWriter.append(parentAgentState.runId, {
+            eventType: 'spawn',
+            stepNumber: 0,
+            correlation: job.jobId,
+            payload: { agentType, background: true, jobId: job.jobId },
+          })
+        } catch (error) {
+          logger.warn(
+            { jobId: job.jobId, agentType, error: String(error) },
+            'Background spawn journal append failed; continuing without the journaled intent',
+          )
+        }
+      }
+
       // Detached coroutine: do NOT await. The unified job-registry core (via
       // the background-agent adapter) is the source of truth for lifecycle
       // and the buffered chunk stream that check_background_agent polls; the
@@ -629,19 +654,29 @@ export const handleSpawnAgents = (async (
               // listeners from the long-lived parent signal (idempotent, and a
               // no-op when there was no parent signal to combine).
               combinedSignal?.cleanup?.()
-              const receipt = buildRuntimeAgentReceipt({
-                agentType,
-                agentId: result.agentState.agentId,
-                handoff: validated.handoff,
-                spawnParams: validated.runtimeSpawnParams,
-                output: result.output,
-                agentState: result.agentState,
-              })
+              // P2-T8: a supervised spawn carries its own validated receipt
+              // from the supervisor settle; it is used verbatim so
+              // reconcileAgentReceiptIntoParent and the lease/ledger chain
+              // run unchanged. The in-process path keeps building the
+              // receipt here exactly as before.
+              const receipt =
+                result.supervisedReceipt ??
+                buildRuntimeAgentReceipt({
+                  agentType,
+                  agentId: result.agentState.agentId,
+                  handoff: validated.handoff,
+                  spawnParams: validated.runtimeSpawnParams,
+                  output: result.output,
+                  agentState: result.agentState,
+                })
               reconcileAgentReceiptIntoParent({
                 parentAgentState,
                 receipt,
                 agentType,
                 objective: validated.handoff?.objective,
+                // Ledger pairing keys on the parent-side spawn id (see
+                // reconcileAgentReceiptIntoParent's spawnId doc).
+                spawnId: subAgentState.agentId,
               })
               const intent = parentAgentState.backgroundAgentJobs?.find(
                 (entry) => entry.jobId === job.jobId,
@@ -725,6 +760,9 @@ export const handleSpawnAgents = (async (
                 receipt,
                 agentType,
                 objective: validated.handoff?.objective,
+                // Ledger pairing keys on the parent-side spawn id (see
+                // reconcileAgentReceiptIntoParent's spawnId doc).
+                spawnId: subAgentState.agentId,
               })
               const intent = parentAgentState.backgroundAgentJobs?.find(
                 (entry) => entry.jobId === job.jobId,
@@ -927,19 +965,27 @@ export const handleSpawnAgents = (async (
         if (result.status === 'fulfilled') {
           const { output, agentType, agentName, agentState } = result.value
           const handoff = validated.handoff
-          const receipt = buildRuntimeAgentReceipt({
-            agentType,
-            agentId: agentState.agentId,
-            handoff,
-            spawnParams: validated.runtimeSpawnParams,
-            output,
-            agentState,
-          })
+          // P2-T8: prefer a supervised spawn's own validated receipt
+          // verbatim (see the background settle comment); the in-process
+          // path keeps building the receipt here exactly as before.
+          const receipt =
+            result.value.supervisedReceipt ??
+            buildRuntimeAgentReceipt({
+              agentType,
+              agentId: agentState.agentId,
+              handoff,
+              spawnParams: validated.runtimeSpawnParams,
+              output,
+              agentState,
+            })
           reconcileAgentReceiptIntoParent({
             parentAgentState,
             receipt,
             agentType,
             objective: handoff?.objective,
+            // Ledger pairing keys on the parent-side spawn id (see
+            // reconcileAgentReceiptIntoParent's spawnId doc).
+            spawnId: agentState.agentId,
           })
           receiptReconciled = true
           reports[spawnIndex] = {
@@ -967,6 +1013,9 @@ export const handleSpawnAgents = (async (
             receipt,
             agentType: agentTypeStr,
             objective: handoff?.objective,
+            // Ledger pairing keys on the parent-side spawn id (see
+            // reconcileAgentReceiptIntoParent's spawnId doc).
+            spawnId: validated.subAgentState.agentId,
           })
           receiptReconciled = true
           reports[spawnIndex] = {

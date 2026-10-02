@@ -294,6 +294,76 @@ describe('createRunJournal (JournalWriter/JournalReader)', () => {
     }
   })
 
+  it('runIds enumerates the distinct runIds newest-first (P2-T7 dash extension)', () => {
+    let now = 1_000
+    const journal = makeJournalWith({ clock: { now: () => now } })
+    try {
+      journal.append('run-old', stepEvent(0))
+      now = 2_000
+      journal.append('run-mid', stepEvent(0))
+      now = 3_000
+      journal.append('run-new', stepEvent(0))
+      // A later append to an OLD run must not promote it: the order keys on
+      // each run's FIRST event (MIN(created_at)), not on the most recent
+      // append.
+      now = 2_500
+      journal.append('run-old', stepEvent(1))
+      expect(journal.runIds()).toEqual(['run-new', 'run-mid', 'run-old'])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('runIds on an empty journal returns an empty array', () => {
+    const journal = makeJournal()
+    try {
+      expect(journal.runIds()).toEqual([])
+    } finally {
+      journal.close()
+    }
+  })
+
+  // P2-T7 background-children close race: a detached background subagent
+  // launched during a turn outlives the turn's promise chain, which closes
+  // the journal. The post-close append (the child's llm_request/llm_response
+  // under its own runId) must be a fail-open no-op on the closed connection
+  // — never a throw that would fail the background job itself.
+  it('append after close is a fail-open no-op, never a throw on the closed connection', () => {
+    const journal = makeJournal()
+    journal.append('run-1', stepEvent(0))
+    journal.close()
+    expect(() =>
+      journal.append('run-2', {
+        eventType: 'llm_request',
+        stepNumber: 0,
+        correlation: 'late-background-child',
+        payload: { model: 'm', messages: [] },
+      }),
+    ).not.toThrow()
+    // A second post-close append (e.g. the paired llm_response) is equally
+    // inert.
+    expect(() =>
+      journal.append('run-2', {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'late-background-child',
+        payload: { messageId: null, fullResponse: '' },
+      }),
+    ).not.toThrow()
+  })
+
+  it('flush and close after close are no-ops (close is idempotent)', async () => {
+    const journal = makeJournalWith({
+      batching: { maxBatchEvents: 8, maxBatchDelayMs: 0 },
+    })
+    journal.append('run-1', stepEvent(0))
+    await journal.close()
+    // The post-close flush must resolve (draining nothing) and a second
+    // close must resolve without touching the closed database.
+    await expect(journal.flush()).resolves.toBeUndefined()
+    await expect(journal.close()).resolves.toBeUndefined()
+  })
+
   // P2-T2-DESIGN §5 (replay requires reproducible ids): the deterministic
   // short-circuit keys on the journaled tool_call PAYLOAD (toolName + input),
   // NOT the freshly-minted toolCallId, so it reproduces across a restart.

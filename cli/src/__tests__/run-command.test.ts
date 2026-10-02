@@ -133,4 +133,88 @@ describe('runHeadlessCommand', () => {
     await runHeadlessCommand(def.args, def.deps)
     expect(def.runCalls[0].agent).toBe('base')
   })
+
+  describe('P2-T7 live run journal wiring', () => {
+    /** A minimal fake journal with the P2-T7 runIds dash extension. */
+    const fakeJournal = () => ({
+      append: () => undefined,
+      lastEvent: () => undefined,
+      events: () => [],
+      toolResultFor: () => undefined,
+      toolResultForInput: () => undefined,
+      flush: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      pruneRuns: () => undefined,
+      runIds: () => [],
+    })
+
+    test('the opened journal is threaded as BOTH journalWriter and journalReader, then closed', async () => {
+      const journal = fakeJournal()
+      const openedPaths: string[] = []
+      let closeCount = 0
+      const h = makeHarness({
+        deps: {
+          openRunJournal: (journalPath) => {
+            openedPaths.push(journalPath)
+            return journal as unknown as ReturnType<typeof fakeJournal>
+          },
+          journalPath: '/injected/run-journal.db',
+        },
+      })
+      // Track close via the object the opener returned.
+      const originalClose = (journal as { close: () => Promise<void> }).close
+      ;(journal as { close: () => Promise<void> }).close = () => {
+        closeCount += 1
+        return originalClose()
+      }
+
+      const code = await runHeadlessCommand(h.args, h.deps)
+
+      expect(code).toBe(0)
+      expect(openedPaths).toEqual(['/injected/run-journal.db'])
+      // The SAME object identity serves both sides of the SDK journal seam.
+      expect(h.runCalls[0].journalWriter).toBe(journal)
+      expect(h.runCalls[0].journalReader).toBe(journal)
+      // The run's promise-chain end is the cleanup seam.
+      expect(closeCount).toBe(1)
+    })
+
+    test('a fail-open opener (undefined) runs WITHOUT journaling and never throws', async () => {
+      const h = makeHarness({
+        deps: {
+          openRunJournal: () => undefined,
+          journalPath: '/unopenable/run-journal.db',
+        },
+      })
+
+      const code = await runHeadlessCommand(h.args, h.deps)
+
+      // Fail-open: the run still completes 0 and carries NO journal fields.
+      expect(code).toBe(0)
+      expect('journalWriter' in h.runCalls[0]).toBe(false)
+      expect('journalReader' in h.runCalls[0]).toBe(false)
+      expect(h.stderrLines.join('')).toContain(
+        'continuing without journaling',
+      )
+    })
+
+    test('an opener that throws is contained: fail-open, never crash the run', async () => {
+      // Even a throwing opener (a custom seam) must never crash the run:
+      // the command catches, warns once, and proceeds WITHOUT journaling.
+      const h = makeHarness({
+        deps: {
+          openRunJournal: () => {
+            throw new Error('boom')
+          },
+          journalPath: '/x/run-journal.db',
+        },
+      })
+      const code = await runHeadlessCommand(h.args, h.deps)
+      expect(code).toBe(0)
+      expect('journalWriter' in h.runCalls[0]).toBe(false)
+      expect('journalReader' in h.runCalls[0]).toBe(false)
+      expect(h.stderrLines.join('')).toContain('continuing without journaling')
+      expect(h.stderrLines.join('')).toContain('boom')
+    })
+  })
 })

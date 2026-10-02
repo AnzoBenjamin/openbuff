@@ -87,7 +87,21 @@ export type JournalEventRow = JournalEvent & {
   createdAt?: number
 }
 
-/** Journal reader used for crash classification and replay (P2-T2). */
+/**
+ * Journal reader used for crash classification and replay (P2-T2).
+ *
+ * Optional non-contract extension (P2-T7 dash): an implementor MAY also
+ * expose `runIds(): string[]` enumerating the DISTINCT runIds present in
+ * the journal, NEWEST FIRST — ordered by each run's FIRST event
+ * (MIN(created_at)), descending. MIN (not MAX) is the dash contract, the
+ * same one the built-in sqlite journal (agent-runtime RunJournal /
+ * CreatedRunJournal) documents and implements: a later append to an OLD
+ * run must not promote it above runs whose first events are newer.
+ * Consumers that must list runs (the `openbuff dash` provider) probe for it
+ * structurally (`typeof reader.runIds === 'function'`) and surface no runs
+ * when it is absent; it is deliberately NOT a required interface member so
+ * existing implementors are never broken by an added one.
+ */
 export interface JournalReader {
   lastEvent(runId: string): JournalEventRow | undefined
   events(runId: string): JournalEventRow[]
@@ -113,6 +127,73 @@ export interface JournalReader {
     input: unknown,
     occurrence: number,
   ): unknown | undefined
+}
+
+/**
+ * P2-T8: the request the parent hands to the supervised-spawn seam when the
+ * `processSupervision` flag is on. JSON-serializable by design — the default
+ * seam (packages/agent-runtime supervision/supervised-spawn.ts) persists it
+ * to a temp file the child entrypoint reads from argv.
+ */
+export type SupervisedSpawnRequest = {
+  agentType: string
+  prompt: string | undefined
+  spawnParams: Record<string, unknown> | undefined
+  /**
+   * Wall-clock deadline for the supervised child. Supervised spawns gain a
+   * deadline in-process spawns do not have; the supervisor's 10-minute
+   * default is preserved when omitted.
+   */
+  timeoutMs?: number
+  /** Serializable slice of the pre-allocated child AgentState. */
+  child?: {
+    agentId: string
+    messageHistory?: unknown
+    systemPrompt?: string
+    taskMemory?: unknown
+    workspaceState?: unknown
+    contextTokenCount?: number
+  }
+  fileContext?: unknown
+  localAgentTemplates?: unknown
+  userId?: string | undefined
+  clientSessionId?: string
+  userInputId?: string
+  fingerprintId?: string
+  ancestorRunIds?: string[]
+  parentSystemPrompt?: string
+  // NOTE (P2-T8 follow-up slice): the parent→child bridge for the
+  // non-serializable callback deps (promptAiSdkStream, sendAction,
+  // requestToolCall, ...) is deliberately NOT a field here — a request with
+  // live function values could never cross the temp-file transport the
+  // default seam uses. Until that bridge lands, the child entrypoint returns
+  // the structured 'unsupported-deps' failed receipt for every request
+  // instead of half-running.
+}
+
+/**
+ * P2-T8: the settled result the supervised-spawn seam resolves with — the
+ * structurally-identical transport outcome the supervisor's
+ * `spawnSettledSubagent` produces. Declared structurally here so common (and
+ * the seam contract) never depends on the agent-runtime package; the
+ * supervisor module keeps its full concrete type and re-exports this one.
+ */
+export type SettledSubagentResult = {
+  outcome:
+    | 'ok'
+    | 'missing_output'
+    | 'schema_invalid'
+    | 'truncated'
+    | 'crashed'
+  crashReason?: string
+  /** A validated `AgentReceipt` envelope; present for ok/truncated. */
+  receipt?: unknown
+  schemaError?: string
+  exitCode: number | null
+  durationMs: number
+  stdoutBytes: number
+  killed: boolean
+  stderrTail: string
 }
 
 /** Shared dependencies */
@@ -163,6 +244,32 @@ export type AgentRuntimeDeps = {
   journalWriter?: JournalWriter
   /** Run-journal reader for crash classification + replay short-circuit. */
   journalReader?: JournalReader
+
+  // Process supervision (P2-T8)
+  /**
+   * Flag-gated adoption of the process supervisor for subagent spawns
+   * (P2-T8). Resolved from the `OPENBUFF_PROCESS_SUPERVISION` env var at the
+   * SDK impl entry seam (`sdk/src/impl/agent-runtime.ts`, via
+   * `getSystemProcessEnv`) — agent-runtime production files never read
+   * ambient `process.env`. Truthiness matches the
+   * `OPENBUFF_COLLECT_FULL_FILE_CONTEXT` convention: `1`/`true`/`yes`/`on`
+   * (case-insensitive). Default undefined ⇒ off ⇒ the in-process spawn path
+   * stays byte-identical. When on, `executeSubagent` delegates to the
+   * supervised-spawn seam instead of `loopAgentSteps`; the seam itself is
+   * `spawnSupervised` below (and its env allowlist seed is built alongside
+   * it at the same seam).
+   */
+  processSupervision?: boolean
+  /**
+   * P2-T8: injectable supervised-spawn seam, consulted only when
+   * `processSupervision` is on. Seeded at the SDK impl entry seam alongside
+   * the flag (backed by supervision/process-supervisor.ts +
+   * supervision/child-entry.ts); tests inject a stub returning fixture
+   * envelopes.
+   */
+  spawnSupervised?: (
+    request: SupervisedSpawnRequest,
+  ) => Promise<SettledSubagentResult>
 }
 
 /** Per-run dependencies */

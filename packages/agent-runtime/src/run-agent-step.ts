@@ -936,17 +936,29 @@ export const runAgentStep = async (
   // payload per §8 ('the journal stores FULL payloads ... bound via retention,
   // not truncation') since replay re-issues recorded requests.
   if (agentState.runId && params.journalWriter) {
-    params.journalWriter.append(agentState.runId, {
-      eventType: 'llm_request',
-      stepNumber: params.stepNumber ?? 0,
-      correlation: agentStepId,
-      payload: {
-        model: agentTemplate?.model,
-        system,
-        n: params.n ?? null,
-        messages: agentState.messageHistory,
-      },
-    })
+    // Fail-open like every other journal write point (the step_boundary and
+    // spawn appends are guarded the same way): a journaling outage — e.g. a
+    // closed connection raced by a detached background child that outlived
+    // the turn which closed the journal — must never fail the agent step
+    // itself. The event is simply not journaled.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_request',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: {
+          model: agentTemplate?.model,
+          system,
+          n: params.n ?? null,
+          messages: agentState.messageHistory,
+        },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_request to run journal (non-fatal)',
+      )
+    }
   }
 
   // Raw stream from AI SDK
@@ -1006,12 +1018,22 @@ export const runAgentStep = async (
   // request from the prior agentState checkpoint — messageId is for telemetry
   // correlation for body-bearing providers.
   if (agentState.runId && params.journalWriter) {
-    params.journalWriter.append(agentState.runId, {
-      eventType: 'llm_response',
-      stepNumber: params.stepNumber ?? 0,
-      correlation: agentStepId,
-      payload: { messageId: messageId ?? null, fullResponse },
-    })
+    // Fail-open like every other journal write point: a journaling outage
+    // (e.g. the closed-connection race with a detached background child)
+    // must never fail the agent step itself.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_response',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: { messageId: messageId ?? null, fullResponse },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_response to run journal (non-fatal)',
+      )
+    }
   }
 
   // Credit broker/owned mutations for concurrent-instance gate isolation.
@@ -3015,6 +3037,32 @@ export async function loopAgentSteps(
           currentAgentState.messageHistory,
           'userPrompt',
         )
+      }
+
+      // P2-T2-DESIGN §4d: journal ONE terminal step_boundary on NORMAL exit
+      // so the tail of a completed run proves completion. Without it the tail
+      // is the final step's llm_response and classifyChildRun reports
+      // child_incomplete_tail for a child that actually finished. Error/abort
+      // exits return through the catch blocks below and deliberately do NOT
+      // append this marker: a non-terminal tail is what keeps an interrupted
+      // run classifying as resumable/incomplete rather than falsely complete.
+      // Fail-open like every other write point: a journal append failure must
+      // never fail the completed run (and run-journal.test.ts proves a
+      // step_boundary tail classifies as clean/child_completed).
+      if (currentAgentState.runId && params.journalWriter) {
+        try {
+          params.journalWriter.append(currentAgentState.runId, {
+            eventType: 'step_boundary',
+            stepNumber: totalSteps,
+            correlation: runId,
+            payload: { status: 'completed', terminal: true },
+          })
+        } catch (journalError) {
+          logger.debug(
+            { error: journalError, runId },
+            'Failed to append terminal step_boundary to run journal (non-fatal)',
+          )
+        }
       }
 
       try {

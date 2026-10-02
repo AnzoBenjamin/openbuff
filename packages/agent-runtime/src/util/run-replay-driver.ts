@@ -34,8 +34,25 @@
  * pass would double-respawn), mirroring executeReplayActions' contract.
  *
  * Known remaining gap (documented for a later slice, intentionally NOT
- * implemented here): background coroutines do not journal their own streams,
- * so resume-from-own-journal for background agents stays deferred.
+ * implemented here): resume-from-own-journal for background agents stays
+ * deferred. Background coroutines DO now journal their own streams —
+ * extractSubagentContextParams propagates journalWriter/journalReader into
+ * the detached executeSubagent call (spawn-agent-utils), and the background
+ * launch path in spawn-agents.ts appends the parent's durable `spawn` intent
+ * at launch time — but the reDriveChild/respawnBackground seams still do not
+ * replay a background child from its own journal.
+ *
+ * Respawn marker parity (P2-T2 follow-up): the only production wiring point
+ * for re-launching a background intent is the caller-injected
+ * `respawnBackground` seam below — the driver itself never re-launches, and
+ * no in-repo production re-launch path exists outside tests. Per that seam's
+ * documented contract, the CALLER that re-launches journals the parent
+ * `spawn` marker itself: payload `respawnOf: <original jobId>`, correlation
+ * = the respawned child's runId. The driver deliberately does not journal:
+ * it holds neither the parent runId nor a journalWriter, and a marker
+ * journaled WITHOUT the respawned child's runId in its correlation would be
+ * treated as settled by respawnMarkerIsSettled (run-journal), permanently
+ * suppressing re-planning for a respawned child that never ran.
  */
 
 import type {

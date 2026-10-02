@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs'
+import path from 'node:path'
+
+import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
 import {
   createDashProviderFromJournal,
   exportDashStatic,
@@ -6,7 +10,9 @@ import {
 } from '@openbuff/sdk'
 
 import { getCliEnv } from '../utils/env'
-import path from 'node:path'
+import { resolveRunJournalPath } from '../utils/run-journal-path'
+
+import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
 
 /**
  * The parsed `openbuff dash` invocation (mirrors `ParsedArgs.dash`): an
@@ -24,14 +30,30 @@ export type DashCommandArgs = {
 }
 
 /**
+ * P2-T7 live wiring: how `openbuff dash` opens the run journal FOR READING.
+ * The opener owns its own connection (createRunJournal-based) and must never
+ * write: the dash side never appends and never prunes — the journal is
+ * append-only for the RUN side, read-only for the DASH side.
+ */
+export type DashJournalOpener = (path: string) => {
+  reader: JournalReader
+  close?: () => void
+}
+
+/**
  * Injectable seams for `runDashCommand`. Every dependency defaults to the
  * real implementation, so production callers pass nothing and tests inject
  * hermetic stubs (never touching a real journal or a real port).
- * `journalReader`/`receipts`/`gateState` are the same seams
- * `createDashProviderFromJournal` takes: the wiring of a LIVE run's journal
- * reader is the documented follow-up, so by default the dashboard serves
- * empty run/event data (the server + export + CLI contract is the
- * deliverable).
+ *
+ * P2-T7 live wiring: when no explicit `journalReader` is injected, the dash
+ * opens the LIVE run journal at `journalPath` (default: the shared
+ * resolveRunJournalPath) through `openJournal` (default: the real
+ * createRunJournal-based read-only opener) and serves it via
+ * createDashProviderFromJournal — listRuns enumerates the journal's
+ * `runIds()` extension. If the journal db file is ABSENT or cannot be
+ * opened, the dashboard falls back to the empty-data provider with a
+ * one-line stderr warning (fail-closed, never crash, never create the db
+ * from the dash side).
  */
 export type RunDashDeps = {
   journalReader?: NonNullable<
@@ -46,6 +68,31 @@ export type RunDashDeps = {
    * embeds the auth token as ?token=...).
    */
   startServer?: typeof startDashServer
+  /**
+   * P2-T7: how the dash opens the run journal for reading. Defaults to the
+   * real createRunJournal-based opener (read-only contract).
+   */
+  openJournal?: DashJournalOpener
+  /** Journal db location; defaults to the shared resolveRunJournalPath(). */
+  journalPath?: string
+}
+
+/**
+ * The real dash-side journal opener: one createRunJournal connection owned
+ * by the dash process, closed best-effort when the command ends. The dash
+ * side NEVER writes (no append, no pruneRuns) — the journal is append-only
+ * for the run side and read-only here.
+ */
+const defaultOpenJournal: DashJournalOpener = (journalFile) => {
+  const journal = createRunJournal({ path: journalFile })
+  return {
+    reader: journal,
+    close: () => {
+      void journal.close().catch(() => {
+        // Best-effort close; nothing further to do.
+      })
+    },
+  }
 }
 
 /**
@@ -58,6 +105,13 @@ export type RunDashDeps = {
  * stdout, which may be piped); an explicitly provided one is never echoed
  * back. An empty/whitespace --token is already rejected at parse time
  * (cli/src/cli-args.ts), because an empty expected token is an auth bypass.
+ *
+ * Journal contract (P2-T7 live wiring): the dash opens the run journal ONLY
+ * after an existence check — an absent file is a fallback to the
+ * empty-data provider (one stderr warning), never a db creation — and the
+ * dash side is strictly read-only (no append, no pruneRuns). In serve mode
+ * SIGINT/SIGTERM close the server AND the journal via a resolvable shutdown
+ * promise; in --export mode the journal is closed in a finally.
  *
  * stdout contract: in serve mode stdout carries the dashboard URL (nothing
  * else); with --no-open the URL — which embeds the auth token as ?token=... —
@@ -79,27 +133,78 @@ export async function runDashCommand(
   const writeStderr =
     deps.writeStderr ?? ((line: string) => process.stderr.write(line + '\n'))
 
+  const journalPath = deps.journalPath ?? resolveRunJournalPath()
+  const openJournal = deps.openJournal ?? defaultOpenJournal
+
+  /**
+   * Open the live run journal for reading, fail-closed to undefined:
+   * - the file must ALREADY exist (the dash never creates the db — an absent
+   *   journal means no runs have been journaled yet, so empty data is the
+   *   honest answer), and
+   * - an open failure (e.g. sqlite cannot be acquired, a hostile db) falls
+   *   back to empty data with a one-line stderr warning instead of crashing.
+   * A dash that exists alongside a live WAL writer is safe to read from its
+   * own connection (createRunJournal opens WAL + schema idempotently).
+   */
+  const openJournalIfPresent = ():
+    | { reader: JournalReader; close?: () => void }
+    | undefined => {
+    if (!existsSync(journalPath)) {
+      // Fail-closed: an ABSENT journal means no runs have been journaled yet,
+      // so empty data is the honest answer — and the dash NEVER creates the
+      // db (that would race a live WAL writer and fabricate state).
+      writeStderr(
+        'openbuff dash: run journal unavailable (no journal file yet), serving empty run data',
+      )
+      return undefined
+    }
+    try {
+      return openJournal(journalPath)
+    } catch (error) {
+      writeStderr(
+        `openbuff dash: run journal unavailable, serving empty run data (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+      return undefined
+    }
+  }
+
+  // The explicit journalReader seam wins (hermetic tests inject it); the
+  // live journal is opened only when it will actually be used, so an
+  // injected reader never leaks an unused connection. Exactly ONE warning
+  // line fires on either fallback path.
+  const journal = deps.journalReader ? undefined : openJournalIfPresent()
+
   const data = createDashProviderFromJournal({
-    journalReader: deps.journalReader,
+    journalReader: deps.journalReader ?? journal?.reader,
     receipts: deps.receipts,
     gateState: deps.gateState,
   })
 
   // --export is mutually exclusive with serving by construction: the export
-  // mode never starts a server.
+  // mode never starts a server. The journal is closed in a finally.
   if (args.exportDir) {
-    const result = await exportDashStatic({
-      outDir: path.resolve(args.exportDir),
-      data,
-    })
-    if (!result.ok) {
-      writeStderr(`openbuff dash: export failed: ${result.error}`)
-      return 1
+    try {
+      const result = await exportDashStatic({
+        outDir: path.resolve(args.exportDir),
+        data,
+      })
+      if (!result.ok) {
+        writeStderr(`openbuff dash: export failed: ${result.error}`)
+        return 1
+      }
+      for (const file of result.files) {
+        writeStdout(`${file}\n`)
+      }
+      return 0
+    } finally {
+      try {
+        journal?.close?.()
+      } catch {
+        // Best-effort close; the export outcome is already decided.
+      }
     }
-    for (const file of result.files) {
-      writeStdout(`${file}\n`)
-    }
-    return 0
   }
 
   const envToken = getCliEnv().OPENBUFF_DASH_TOKEN
@@ -134,14 +239,33 @@ export async function runDashCommand(
     // --no-open contract: the URL embeds the auth token (?token=...), so with
     // --no-open it is printed NOWHERE — stderr included.
     writeStderr('openbuff dash: press Ctrl+C to stop')
-    // Keep the process alive until the dashboard is stopped: the returned
-    // promise resolves only when close() is invoked (or the process dies).
-    await new Promise<void>(() => {})
+    // P2-T7: keep the process alive until SIGINT/SIGTERM — the promise
+    // resolves ONLY through the shutdown handler (never on empty event data).
+    // The handler closes the server; the journal is closed once in the
+    // finally below (single-owner cleanup, no double close).
+    await new Promise<void>((resolveShutdown) => {
+      const shutdown = (): void => {
+        process.off('SIGINT', shutdown)
+        process.off('SIGTERM', shutdown)
+        void server.close().catch(() => {
+          // Best-effort server close; the shutdown still resolves.
+        })
+        resolveShutdown()
+      }
+      process.once('SIGINT', shutdown)
+      process.once('SIGTERM', shutdown)
+    })
     return 0
   } catch (error) {
     writeStderr(
       `openbuff dash: ${error instanceof Error ? error.message : String(error)}`,
     )
     return 1
+  } finally {
+    try {
+      journal?.close?.()
+    } catch {
+      // Best-effort close; the dash outcome is already decided.
+    }
   }
 }

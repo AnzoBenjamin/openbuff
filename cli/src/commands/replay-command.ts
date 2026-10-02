@@ -1,7 +1,6 @@
-import path from 'node:path'
-
 import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
-import { getHarnessStateDir } from '@openbuff/sdk'
+
+import { resolveRunJournalPath } from '../utils/run-journal-path'
 
 import type {
   JournalEvent,
@@ -39,13 +38,13 @@ export type RunReplayDeps = {
 }
 
 /**
- * Default on-disk location of the P2-T2 run journal (WAL sqlite). Resolved
- * lazily inside the command (never at module load) so tests that inject
- * `journalPath` never touch the real config directory.
+ * The default on-disk location of the P2-T2 run journal (WAL sqlite).
+ * Resolved lazily (never at module load) so tests that inject `journalPath`
+ * never touch the real config directory. Now SHARED with the live-run and
+ * dash wiring (cli/src/utils/run-journal-path.ts); re-exported here so the
+ * replay command's public surface is unchanged.
  */
-export function resolveRunJournalPath(): string {
-  return path.join(getHarnessStateDir(), 'run-journal.db')
-}
+export { resolveRunJournalPath }
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

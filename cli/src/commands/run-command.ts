@@ -1,6 +1,11 @@
 import { getProjectRoot } from '../project-files'
 import { getCodebuffClient } from '../utils/codebuff-client'
+import {
+  openRunJournalForRun,
+  resolveRunJournalPath,
+} from '../utils/run-journal-path'
 
+import type { CreatedRunJournal } from '@codebuff/agent-runtime/util/run-journal'
 import type { OpenbuffClient, PrintModeEvent } from '@openbuff/sdk'
 
 /**
@@ -26,6 +31,15 @@ export type RunHeadlessDeps = {
   writeStderr?: (line: string) => void
   projectRoot?: string
   signal?: AbortSignal
+  /**
+   * P2-T7: how to open the run journal for this run. Fail-open by contract:
+   * returning undefined runs WITHOUT journaling instead of failing the run.
+   * Defaults to the real fail-open opener at the shared journal path; tests
+   * inject a stub.
+   */
+  openRunJournal?: (path: string) => CreatedRunJournal | undefined
+  /** Journal db location; defaults to the shared resolveRunJournalPath(). */
+  journalPath?: string
 }
 
 /**
@@ -57,6 +71,41 @@ export async function runHeadlessCommand(
   // index.tsx), never at module load; tests that inject projectRoot never call it.
   const projectRoot = deps?.projectRoot ?? getProjectRoot()
 
+  // P2-T7: open the run journal lazily (only when a run actually starts, so
+  // `--help`-style invocations never create an empty db) and wire it into
+  // the SDK run for crash-safe resume + `openbuff dash`/replay. Fail-open by
+  // contract: an unopenable journal means the run proceeds WITHOUT
+  // journaling, never a failed run (the default opener warns via writeStderr
+  // and returns undefined; a throwing opener is caught here too).
+  let journal: CreatedRunJournal | undefined
+  try {
+    const openJournalPath = deps?.journalPath ?? resolveRunJournalPath()
+    if (deps?.openRunJournal) {
+      journal = deps.openRunJournal(openJournalPath)
+      if (!journal) {
+        // Fail-open contract covers the INJECTED opener too: returning no
+        // journal means the run proceeds WITHOUT journaling — warn once to
+        // stderr, never throw. (A throwing opener is handled by the catch
+        // below; the default opener warns through its own callback, so
+        // neither path double-warns.)
+        writeStderr(
+          'openbuff run: run journal unavailable, continuing without journaling (the opener returned no journal)',
+        )
+      }
+    } else {
+      journal = openRunJournalForRun({
+        path: openJournalPath,
+        warn: (message) => writeStderr(`openbuff run: ${message}`),
+      })
+    }
+  } catch (error) {
+    writeStderr(
+      `openbuff run: run journal unavailable, continuing without journaling (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    )
+  }
+
   const handleEvent = (event: PrintModeEvent): void => {
     if (args.json) {
       writeStdout(JSON.stringify(event) + '\n')
@@ -78,6 +127,9 @@ export async function runHeadlessCommand(
       prompt: args.prompt,
       cwd: projectRoot,
       handleEvent,
+      // P2-T7: the live run journals into the shared run journal. The SAME
+      // object serves writer and reader (one connection, one file).
+      ...(journal ? { journalWriter: journal, journalReader: journal } : {}),
       ...(deps?.signal ? { signal: deps.signal } : {}),
     })
     return 0
@@ -89,5 +141,18 @@ export async function runHeadlessCommand(
     }
     writeStderr(`openbuff run: ${message}`)
     return 1
+  } finally {
+    if (journal) {
+      // P2-T7: the run's promise-chain end is the journal's cleanup seam.
+      // Best-effort (the exit code is already decided): a close failure is
+      // logged, never thrown.
+      void journal.close().catch((closeError) => {
+        writeStderr(
+          `openbuff run: run journal close failed: ${
+            closeError instanceof Error ? closeError.message : String(closeError)
+          }`,
+        )
+      })
+    }
   }
 }

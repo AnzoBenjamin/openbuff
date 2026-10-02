@@ -109,6 +109,48 @@ describe('run-journal wiring (P2-T2)', () => {
     }
   })
 
+  it('journalWriter/journalReader passed PER RUN (the CLI shape) thread into the agent-runtime deps', async () => {
+    // The CLI wires the live journal lazily per run (use-send-message.ts /
+    // run-command.ts pass { journalWriter, journalReader } into client.run),
+    // so the per-call RunOptions surface must thread them too.
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: { now: () => 1_000 },
+      createDatabase: (path) => new Database(path),
+    })
+    try {
+      capturedDeps = undefined
+      callMainPromptCount = 0
+      const client = new OpenbuffClient({
+        apiKey: 'test-key',
+        agentDefinitions: [
+          {
+            id: 'journal-test-agent',
+            displayName: 'Journal Test Agent',
+            model: 'openai/gpt-5.1',
+            outputMode: 'last_message',
+          },
+        ],
+      })
+
+      await client.run({
+        agent: 'journal-test-agent',
+        prompt: 'hi',
+        journalWriter: journal,
+        journalReader: journal,
+      })
+
+      const captured = await waitForCapture()
+      expect(callMainPromptCount).toBe(1)
+      expect(captured.journalWriter).toBe(journal)
+      expect(captured.journalReader).toBe(journal)
+      expect(captured.hasJournalWriter).toBe(true)
+      expect(captured.hasJournalReader).toBe(true)
+    } finally {
+      journal.close()
+    }
+  })
+
   it('a run with no journal wired stays byte-identical (no journal fields on the deps)', async () => {
     capturedDeps = undefined
     callMainPromptCount = 0

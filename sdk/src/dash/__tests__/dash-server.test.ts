@@ -2,7 +2,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
+import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
+
+import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
 
 import { exportDashStatic, isInsideOutDir } from '../export'
 import { createDashProviderFromJournal } from '../provider'
@@ -306,6 +309,86 @@ describe('createDashProviderFromJournal', () => {
     expect(await provider.getRunEvents('anything')).toEqual([])
     expect(await provider.getReceipts()).toEqual([{ id: 'r' }])
     expect(await provider.getGateState()).toEqual({ open: false })
+  })
+
+  test('a REAL createRunJournal journal surfaces its runs via the runIds() extension (P2-T7 dash wiring)', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'dash-real-journal-'))
+    try {
+      const journal = createRunJournal({
+        path: path.join(parent, 'run-journal.db'),
+        clock: { now: () => 1_700_000_000_000 },
+        createDatabase: (p) => new Database(p),
+      })
+      try {
+        // Two runs with journaled events, plus a spawn record under the
+        // parent (the shared-db child-run shape the tests below exercise).
+        journal.append('run-real-a', {
+          eventType: 'llm_request',
+          stepNumber: 0,
+          correlation: 'ca0',
+          payload: { model: 'm', messageCount: 1 },
+        })
+        journal.append('run-real-a', {
+          eventType: 'step_boundary',
+          stepNumber: 0,
+          correlation: 'ca1',
+          payload: { status: 'completed' },
+        })
+        journal.append('run-real-b', {
+          eventType: 'tool_call',
+          stepNumber: 0,
+          correlation: 'cb0',
+          payload: { toolName: 'write_file', input: { path: 'a.ts' } },
+        })
+        journal.append('run-real-b', {
+          eventType: 'tool_result',
+          stepNumber: 0,
+          correlation: 'cb0',
+          payload: { toolName: 'write_file', result: [{ type: 'json', value: 1 }] },
+        })
+
+        // The production journal (CreatedRunJournal) carries the runIds()
+        // extension; the provider probes it structurally like the dash
+        // wiring does — NO explicit runIds injection.
+        const provider = createDashProviderFromJournal({ journalReader: journal })
+
+        const runs = await provider.listRuns()
+        expect(runs.map((r) => r.runId).sort()).toEqual([
+          'run-real-a',
+          'run-real-b',
+        ])
+        const runA = runs.find((r) => r.runId === 'run-real-a')!
+        expect(runA.eventCount).toBe(2)
+        // startedAt is the REAL journaled timestamp (created_at from the
+        // sqlite journal), not a synthetic label.
+        expect(runA.startedAt).toBe(new Date(1_700_000_000_000).toISOString())
+
+        const eventsB = await provider.getRunEvents('run-real-b')
+        expect(eventsB).toHaveLength(2)
+        expect(eventsB[0].eventType).toBe('tool_call')
+        expect(eventsB[0].seq).toBe(0)
+        expect(eventsB[0].payloadSummary).toBe(
+          '{"toolName":"write_file","input":{"path":"a.ts"}}',
+        )
+        expect(eventsB[1].eventType).toBe('tool_result')
+      } finally {
+        await journal.close()
+      }
+
+      // listRuns never wrote: reopening the journal sees the same rows.
+      const reopened = createRunJournal({
+        path: path.join(parent, 'run-journal.db'),
+        clock: { now: () => 1_700_000_000_000 },
+        createDatabase: (p) => new Database(p),
+      })
+      try {
+        expect(reopened.runIds().sort()).toEqual(['run-real-a', 'run-real-b'])
+      } finally {
+        await reopened.close()
+      }
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
   })
 
   test('runs without journal timestamps omit startedAt/createdAt (never a synthetic seq label)', async () => {
