@@ -16,6 +16,7 @@ import {
   supportedDiagnosticFiles,
   type DiagnosticDeltaPreflightResult,
 } from '../services/diagnostic-delta'
+import { getSystemProcessEnv } from '../env'
 
 export type FileChangeHook = {
   name?: string
@@ -704,7 +705,7 @@ type RunCommand = typeof runTerminalCommand
 export const DIAGNOSTIC_PREFLIGHT_FLAG = 'OPENBUFF_DIAGNOSTIC_PREFLIGHT'
 
 export function isDiagnosticPreflightEnabled(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = getSystemProcessEnv(),
 ): boolean {
   const raw = env[DIAGNOSTIC_PREFLIGHT_FLAG]
   if (raw === undefined) return false
