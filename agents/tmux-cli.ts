@@ -762,7 +762,7 @@ esac
             sessionName +
             "' >/dev/null 2>&1; rm -f '" +
             helperPath +
-            "'>",
+            "'",
           timeout_seconds: 15,
         },
         includeToolCall: false,

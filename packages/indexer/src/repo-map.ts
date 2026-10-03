@@ -1,6 +1,12 @@
 import { queryIndex, type QueryOptions } from './query'
+import { getPageRankAdjacency, personalizedPageRank } from './pagerank'
 
-import type { IndexedFile, MetadataIndex, QueryIndexResult } from './types'
+import type {
+  IndexedFile,
+  MetadataIndex,
+  PageRankOptions,
+  QueryIndexResult,
+} from './types'
 
 export interface RepoMapOptions {
   maxFiles?: number
@@ -22,6 +28,13 @@ export interface RepoMapEntry {
 export interface RepoMapResult {
   map: string
   entries: RepoMapEntry[]
+}
+
+/** A file ranked by personalized PageRank over the code graph (P3-T9). */
+export interface RankedRepoMapEntry {
+  path: string
+  /** Personalized-PageRank score; scores across a run sum to at most 1. */
+  score: number
 }
 
 export interface RetrievalComparisonCase {
@@ -72,6 +85,48 @@ export function buildRepoMap(
 
   const map = entries.map(formatRepoMapEntry).join('\n')
   return { map, entries }
+}
+
+/**
+ * P3-T9 ranked repo map: runs personalized PageRank over the code graph and
+ * returns the top-N files for the seed set (sorted by score desc, path asc
+ * for determinism). An empty/unresolvable seed set falls back to a global
+ * importance ranking (uniform personalization). Files with no graph edges
+ * never appear. Work is bounded by the PageRank iteration cap and the
+ * adjacency is cached per index revision.
+ */
+export function rankedRepoMap(
+  index: MetadataIndex,
+  seeds: string[],
+  options: RepoMapOptions & PageRankOptions = {},
+): { entries: RankedRepoMapEntry[] } {
+  const limit = Math.max(
+    0,
+    options.maxFiles ?? DEFAULT_REPO_MAP_OPTIONS.maxFiles,
+  )
+  const adjacency = getPageRankAdjacency(index)
+  const seedVector = new Map<string, number>()
+  for (const path of seeds) {
+    const nodeId = `file:${path}`
+    if (adjacency.has(nodeId)) seedVector.set(nodeId, 1)
+  }
+  const scores = personalizedPageRank({
+    adjacency,
+    seeds: seedVector,
+    damping: options.damping,
+    maxIterations: options.maxIterations,
+    epsilon: options.epsilon,
+  })
+
+  const entries: RankedRepoMapEntry[] = []
+  for (const [nodeId, score] of scores) {
+    if (!nodeId.startsWith('file:') || score <= 0) continue
+    const path = nodeId.slice('file:'.length)
+    if (!matchesFileType(index.files[path], options.fileTypes)) continue
+    entries.push({ path, score: round(score) })
+  }
+  entries.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+  return { entries: entries.slice(0, limit) }
 }
 
 export function compareRetrievalStrategies(

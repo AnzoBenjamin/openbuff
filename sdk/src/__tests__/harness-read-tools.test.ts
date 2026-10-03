@@ -31,8 +31,32 @@ describe('harness intelligence read tools', () => {
         tools: { blender: { available: expect.any(Boolean) } },
       },
     })
-    expect(getAffectedTests(root, ['app.ts'])[0]).toMatchObject({
+    const affected = getAffectedTests(root, ['app.ts'])[0]
+    // The pre-existing `targets` field is byte-identical, with the tiered
+    // `impact` analysis added alongside it.
+    expect(affected).toMatchObject({
+      type: 'json',
       value: { targets: [{ candidates: ['app.test.ts'] }] },
+    })
+    expect(affected).toMatchObject({
+      value: {
+        impact: [
+          {
+            source: 'app.ts',
+            packageRoot: '.',
+            tiers: {
+              convention: ['app.test.ts'],
+              graph: [],
+              buildTool: ['npm run test'],
+              coverage: [],
+            },
+            candidates: [
+              { path: 'app.test.ts', tier: 'convention', confidence: 'high' },
+              { path: 'npm run test', tier: 'build-tool', confidence: 'low' },
+            ],
+          },
+        ],
+      },
     })
     expect(getBuildTargets(root, ['app.ts'])[0]).toMatchObject({
       value: { targets: [{ scripts: ['test', 'build'] }] },

@@ -21,8 +21,8 @@ import {
   type ProviderPickerSelection,
 } from './components/provider-picker-screen'
 import { LoadPreviousButton } from './components/load-previous-button'
+import { MessageListWindow } from './components/message-list-window'
 import { ReviewScreen } from './components/review-screen'
-import { MessageWithAgents } from './components/message-with-agents'
 import { PendingBashMessage } from './components/pending-bash-message'
 import { StatusBar } from './components/status-bar'
 import { TopBanner } from './components/top-banner'
@@ -67,7 +67,7 @@ import {
   resolveModelNameForAgent,
   setupOpenbuffProviderFromArgs,
 } from './utils/openbuff-provider'
-import { getDiffStats, type DiffStats } from './utils/git'
+import { getDiffStatsAsync, type DiffStats } from './utils/git'
 import {
   peekIndexStatus,
   shouldForceStatusLineForIndex,
@@ -111,6 +111,73 @@ import {
   setQueuedPromptDrain,
 } from './hooks/use-exit-handler'
 import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
+import { whenRegistriesReady } from './services/deferred-registries'
+
+// Shared mention-selection helpers. The three mention-selection sites
+// (handleMentionItemClick, onMentionMenuSelect's trySelectAtIndex, and
+// onMentionMenuComplete) resolve the same replacement string from the same
+// match lists and apply the same input splice; these pure module-scope
+// helpers keep that logic in one place. setInputValue/setAgentSelectedIndex
+// stay at the call sites so each hook closure keeps its own dependencies.
+type MentionAgentMatch = { id: string }
+type MentionFileMatch = { filePath: string; isDirectory: boolean }
+
+type MentionReplacement = {
+  replacement: string
+  selectedFile?: MentionFileMatch
+}
+
+/**
+ * Resolve the mention replacement for `index` against the agent/file match
+ * lists. With `useFallback` false (click and Enter-select), an out-of-range
+ * or missing entry yields null and the caller aborts. With `useFallback` true
+ * (tab-complete), a missing entry falls back to the first entry of the same
+ * list; null is returned only when that list is empty. `selectedFile` is set
+ * for file matches so the caller can run the addPendingFileMention side
+ * effect.
+ */
+const resolveMentionReplacement = (
+  index: number,
+  agentMatches: readonly MentionAgentMatch[],
+  fileMatches: readonly MentionFileMatch[],
+  useFallback: boolean,
+): MentionReplacement | null => {
+  if (index < agentMatches.length) {
+    const selected = useFallback
+      ? agentMatches[index] || agentMatches[0]
+      : agentMatches[index]
+    if (!selected) return null
+    return { replacement: `@${selected.id} ` }
+  }
+  const fileIndex = index - agentMatches.length
+  const selectedFile = useFallback
+    ? fileMatches[fileIndex] || fileMatches[0]
+    : fileMatches[fileIndex]
+  if (!selectedFile) return null
+  return {
+    selectedFile,
+    replacement: `@${selectedFile.filePath} `,
+  }
+}
+
+/**
+ * Splice a mention replacement into the input at the active mention token
+ * (the `@` at `startIndex` followed by `query`), returning the new text and
+ * the cursor position just after the inserted replacement.
+ */
+const buildMentionReplacement = (
+  inputValue: string,
+  startIndex: number,
+  query: string,
+  replacement: string,
+): { text: string; cursorPosition: number } => {
+  const before = inputValue.slice(0, startIndex)
+  const after = inputValue.slice(startIndex + 1 + query.length)
+  return {
+    text: before + replacement + after,
+    cursorPosition: before.length + replacement.length,
+  }
+}
 
 export const Chat = ({
   headerContent,
@@ -225,13 +292,33 @@ export const Chat = ({
     markdownPalette,
   } = useChatUI({ messages, isUserCollapsing })
 
-  const localAgents = useMemo(() => loadLocalAgents(agentMode), [agentMode])
+  // P1-T9: the agent/skill registries load asynchronously after startup
+  // (services/deferred-registries). The reads below happen once at mount, so
+  // re-run them when the deferred loads settle — without this gate the
+  // slash-command skill suggestions and the local agent list would observe
+  // the (still-empty) registries and stay empty for the whole session.
+  const [registriesLoaded, setRegistriesLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void whenRegistriesReady().then(() => {
+      if (!cancelled) setRegistriesLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const localAgents = useMemo(
+    () => loadLocalAgents(agentMode),
+    [agentMode, registriesLoaded],
+  )
   const inputMode = useChatStore((state) => state.inputMode)
   const setInputMode = useChatStore((state) => state.setInputMode)
   const askUserState = useChatStore((state) => state.askUserState)
 
-  // Get loaded skills for slash commands
-  const loadedSkills = useMemo(() => getLoadedSkills(), [])
+  // Get loaded skills for slash commands (re-read once the deferred
+  // registry loads settle — see the registriesLoaded gate above).
+  const loadedSkills = useMemo(() => getLoadedSkills(), [registriesLoaded])
 
   // Merge skill commands and game-dev preset commands into the slash command list
   const filteredSlashCommands = useMemo(() => {
@@ -442,20 +529,43 @@ export const Chat = ({
     return agentId ? resolveModelNameForAgent(agentId) : null
   }, [agentMode])
 
-  // Poll git diff stats: on mount, after streaming ends, and periodically
-  // while idle (cheap `git status --short` call).
+  // Poll git diff stats: on mount and periodically while idle. The git call
+  // runs off the render thread (getDiffStatsAsync). A per-effect AbortController
+  // + cancelled flag ensures a late-resolving result after unmount does not
+  // call setState, and only the latest in-flight refresh wins.
   useEffect(() => {
     const cwd = getProjectRoot() ?? process.cwd()
-    const refresh = () => setDiffStats(getDiffStats({ cwd }))
+    let cancelled = false
+    const controller = new AbortController()
+    const refresh = () => {
+      getDiffStatsAsync({ cwd, signal: controller.signal })
+        .then((stats) => {
+          if (!cancelled) setDiffStats(stats)
+        })
+        .catch(() => {})
+    }
     refresh()
     const interval = setInterval(refresh, 10_000)
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(interval)
+    }
   }, [])
   // Refresh diff stats when streaming completes (files may have changed).
   useEffect(() => {
-    if (!isStreaming) {
-      const cwd = getProjectRoot() ?? process.cwd()
-      setDiffStats(getDiffStats({ cwd }))
+    if (isStreaming) return
+    const cwd = getProjectRoot() ?? process.cwd()
+    let cancelled = false
+    const controller = new AbortController()
+    getDiffStatsAsync({ cwd, signal: controller.signal })
+      .then((stats) => {
+        if (!cancelled) setDiffStats(stats)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+      controller.abort()
     }
   }, [isStreaming])
 
@@ -703,31 +813,27 @@ export const Chat = ({
     (index: number) => {
       if (mentionContext.startIndex < 0) return
 
-      let replacement: string
-      if (index < agentMatches.length) {
-        const selected = agentMatches[index]
-        if (!selected) return
-        replacement = `@${selected.id} `
-      } else {
-        const fileIndex = index - agentMatches.length
-        const selectedFile = fileMatches[fileIndex]
-        if (!selectedFile) return
+      const resolved = resolveMentionReplacement(
+        index,
+        agentMatches,
+        fileMatches,
+        false,
+      )
+      if (!resolved) return
+      if (resolved.selectedFile) {
         addPendingFileMention(
-          selectedFile.filePath,
-          selectedFile.isDirectory,
+          resolved.selectedFile.filePath,
+          resolved.selectedFile.isDirectory,
           getProjectRoot(),
         )
-        replacement = `@${selectedFile.filePath} `
       }
-      const before = inputValue.slice(0, mentionContext.startIndex)
-      const after = inputValue.slice(
-        mentionContext.startIndex + 1 + mentionContext.query.length,
+      const { text, cursorPosition } = buildMentionReplacement(
+        inputValue,
+        mentionContext.startIndex,
+        mentionContext.query,
+        resolved.replacement,
       )
-      setInputValue({
-        text: before + replacement + after,
-        cursorPosition: before.length + replacement.length,
-        lastEditDueToNav: false,
-      })
+      setInputValue({ text, cursorPosition, lastEditDueToNav: false })
       setAgentSelectedIndex(0)
     },
     [
@@ -1218,31 +1324,27 @@ export const Chat = ({
         if (mentionContext.startIndex < 0) return
 
         const trySelectAtIndex = (index: number): boolean => {
-          let replacement: string
-          if (index < agentMatches.length) {
-            const selected = agentMatches[index]
-            if (!selected) return false
-            replacement = `@${selected.id} `
-          } else {
-            const fileIndex = index - agentMatches.length
-            const selectedFile = fileMatches[fileIndex]
-            if (!selectedFile) return false
+          const resolved = resolveMentionReplacement(
+            index,
+            agentMatches,
+            fileMatches,
+            false,
+          )
+          if (!resolved) return false
+          if (resolved.selectedFile) {
             addPendingFileMention(
-              selectedFile.filePath,
-              selectedFile.isDirectory,
+              resolved.selectedFile.filePath,
+              resolved.selectedFile.isDirectory,
               getProjectRoot(),
             )
-            replacement = `@${selectedFile.filePath} `
           }
-          const before = inputValue.slice(0, mentionContext.startIndex)
-          const after = inputValue.slice(
-            mentionContext.startIndex + 1 + mentionContext.query.length,
+          const { text, cursorPosition } = buildMentionReplacement(
+            inputValue,
+            mentionContext.startIndex,
+            mentionContext.query,
+            resolved.replacement,
           )
-          setInputValue({
-            text: before + replacement + after,
-            cursorPosition: before.length + replacement.length,
-            lastEditDueToNav: false,
-          })
+          setInputValue({ text, cursorPosition, lastEditDueToNav: false })
           setAgentSelectedIndex(0)
           return true
         }
@@ -1254,38 +1356,27 @@ export const Chat = ({
         // Complete the word without executing - same as select for mentions
         if (mentionContext.startIndex < 0) return
 
-        let replacement: string
-        const index = agentSelectedIndex
-        if (index < agentMatches.length) {
-          const selected =
-            agentMatches.length > 0
-              ? agentMatches[index] || agentMatches[0]
-              : undefined
-          if (!selected) return
-          replacement = `@${selected.id} `
-        } else {
-          const fileIndex = index - agentMatches.length
-          const selectedFile =
-            fileMatches.length > 0
-              ? fileMatches[fileIndex] || fileMatches[0]
-              : undefined
-          if (!selectedFile) return
+        const resolved = resolveMentionReplacement(
+          agentSelectedIndex,
+          agentMatches,
+          fileMatches,
+          true,
+        )
+        if (!resolved) return
+        if (resolved.selectedFile) {
           addPendingFileMention(
-            selectedFile.filePath,
-            selectedFile.isDirectory,
+            resolved.selectedFile.filePath,
+            resolved.selectedFile.isDirectory,
             getProjectRoot(),
           )
-          replacement = `@${selectedFile.filePath} `
         }
-        const before = inputValue.slice(0, mentionContext.startIndex)
-        const after = inputValue.slice(
-          mentionContext.startIndex + 1 + mentionContext.query.length,
+        const { text, cursorPosition } = buildMentionReplacement(
+          inputValue,
+          mentionContext.startIndex,
+          mentionContext.query,
+          resolved.replacement,
         )
-        setInputValue({
-          text: before + replacement + after,
-          cursorPosition: before.length + replacement.length,
-          lastEditDueToNav: false,
-        })
+        setInputValue({ text, cursorPosition, lastEditDueToNav: false })
         setAgentSelectedIndex(0)
       },
       onOpenFileMenuWithTab: () => {
@@ -1714,10 +1805,23 @@ export const Chat = ({
         flexGrow: 1,
       }}
     >
+      {/* D47 Stage 1: OpenTUI 0.5's native stickyScroll/stickyStart is
+          deliberately NOT enabled here. With stickyScroll live, OpenTUI's
+          native code re-pins scrollTop to the bottom on every content
+          growth, so it would be a SECOND independent writer of scrollTop on
+          this scrollbox alongside use-scroll-management's auto-scroll
+          effect — two writers with no evidence they cooperate (e.g. a user
+          scrolling up during streaming: native stickyScroll re-pins on the
+          next content growth while the JS effect may also force
+          scrollTop = maxScroll, fighting the user's scroll intent or
+          resurrecting auto-follow after they deliberately scrolled away).
+          use-scroll-management remains the single validated scrollTop
+          writer: its auto-scroll effect follows new content only while the
+          user is at/near the bottom (autoScrollEnabledRef), and
+          scrollUp/scrollDown/scrollToLatest stay available for keyboard
+          paging and the jump-to-latest control. */}
       <scrollbox
         ref={scrollRef as React.Ref<ScrollBoxRenderable>}
-        stickyScroll
-        stickyStart="bottom"
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
@@ -1762,18 +1866,20 @@ export const Chat = ({
             onLoadMore={handleLoadPreviousMessages}
           />
         )}
-        {visibleTopLevelMessages.map((message, idx) => {
-          const isLast = idx === visibleTopLevelMessages.length - 1
-          return (
-            <MessageWithAgents
-              key={message.id}
-              message={message}
-              depth={0}
-              isLastMessage={isLast}
-              availableWidth={messageAvailableWidth}
-            />
-          )
-        })}
+        {/* P1-T10: viewport-windowed message list. Only the messages
+            intersecting the current scroll viewport (plus a small overscan)
+            mount real MessageWithAgents components; off-screen messages
+            collapse into fixed spacer boxes that preserve total scroll height
+            and scroll position. Keys stay on the message ids so per-message
+            state survives the window moving as the user scrolls. The scroll
+            subscription is confined to MessageListWindow so scrolling does not
+            re-render the rest of the chat screen. */}
+        <MessageListWindow
+          messages={visibleTopLevelMessages}
+          scrollRef={scrollRef}
+          availableWidth={messageAvailableWidth}
+          hasLoadPrevious={hiddenMessageCount > 0}
+        />
         {/* Pending bash messages as ghost messages (only show those not already in history) */}
         {pendingBashMessages
           .filter((msg) => !msg.addedToHistory)

@@ -1,0 +1,394 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import { afterEach, describe, expect, test } from 'bun:test'
+
+import {
+  clearBuildGraphCache,
+  resolveOwningTargets,
+} from '../services/build-graph'
+
+import type { BuildGraphRunner } from '../services/build-graph'
+
+const roots: string[] = []
+const FILESYSTEM_DISCOVERY_TIMEOUT_MS = 15_000
+afterEach(() => {
+  clearBuildGraphCache()
+  for (const root of roots.splice(0))
+    fs.rmSync(root, { recursive: true, force: true })
+})
+
+function tempRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-build-graph-'))
+  roots.push(root)
+  return root
+}
+
+function writeFixture(root: string, relative: string, contents: string) {
+  const absolute = path.join(root, ...relative.split('/'))
+  fs.mkdirSync(path.dirname(absolute), { recursive: true })
+  fs.writeFileSync(absolute, contents)
+}
+
+const failingRunner: BuildGraphRunner = () => ({
+  exitCode: 1,
+  stdout: '',
+  stderr: 'tool not available',
+})
+
+describe('build graph service', () => {
+  test('resolves rust crate ownership and commands from cargo metadata', () => {
+    const root = tempRoot()
+    const runner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'cargo') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            packages: [
+              {
+                name: 'core',
+                manifest_path: path.join(
+                  root,
+                  'crates',
+                  'core',
+                  'Cargo.toml',
+                ),
+                targets: [{ name: 'core', kind: ['lib'] }],
+              },
+              {
+                name: 'cli',
+                manifest_path: path.join(root, 'crates', 'cli', 'Cargo.toml'),
+                targets: [{ name: 'cli', kind: ['bin'] }],
+              },
+            ],
+          }),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    expect(
+      resolveOwningTargets({
+        cwd: root,
+        files: ['crates/core/src/lib.rs', 'crates/cli/src/main.rs'],
+        runner,
+      }),
+    ).toEqual([
+      {
+        file: 'crates/core/src/lib.rs',
+        ecosystem: 'rust',
+        targets: [
+          {
+            name: 'core',
+            kind: 'crate',
+            root: 'crates/core',
+            testCommand: 'cargo test -p core',
+            buildCommand: 'cargo build -p core',
+          },
+        ],
+        confidence: 'confirmed',
+      },
+      {
+        file: 'crates/cli/src/main.rs',
+        ecosystem: 'rust',
+        targets: [
+          {
+            name: 'cli',
+            kind: 'crate',
+            root: 'crates/cli',
+            testCommand: 'cargo test -p cli',
+            buildCommand: 'cargo build -p cli',
+          },
+        ],
+        confidence: 'confirmed',
+      },
+    ])
+  })
+
+  test('resolves go package ownership and commands from go list', () => {
+    const root = tempRoot()
+    const runner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'go') {
+        const packages = [
+          { ImportPath: 'example.com/mymod', Dir: root },
+          {
+            ImportPath: 'example.com/mymod/api',
+            Dir: path.join(root, 'api'),
+          },
+        ]
+        return {
+          exitCode: 0,
+          stdout: packages.map((pkg) => JSON.stringify(pkg)).join('\n'),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    // The root package also owns api/server.go by prefix; the longer `api`
+    // prefix must win.
+    expect(
+      resolveOwningTargets({ cwd: root, files: ['api/server.go'], runner }),
+    ).toEqual([
+      {
+        file: 'api/server.go',
+        ecosystem: 'go',
+        targets: [
+          {
+            name: 'example.com/mymod/api',
+            kind: 'package',
+            root: 'api',
+            testCommand: 'go test example.com/mymod/api',
+            buildCommand: 'go build example.com/mymod/api',
+          },
+        ],
+        confidence: 'confirmed',
+      },
+    ])
+  })
+
+  test(
+    'resolves javascript workspace package ownership from manifests and scripts',
+    () => {
+      const root = tempRoot()
+      writeFixture(
+        root,
+        'package.json',
+        JSON.stringify({ private: true, workspaces: ['packages/*'] }),
+      )
+      writeFixture(root, 'pnpm-lock.yaml', '')
+      writeFixture(
+        root,
+        'packages/api/package.json',
+        JSON.stringify({
+          name: '@app/api',
+          scripts: { test: 'vitest run', build: 'tsc -b' },
+        }),
+      )
+      expect(
+        resolveOwningTargets({
+          cwd: root,
+          files: ['packages/api/src/index.ts'],
+          runner: failingRunner,
+        }),
+      ).toEqual([
+        {
+          file: 'packages/api/src/index.ts',
+          ecosystem: 'javascript',
+          targets: [
+            {
+              name: '@app/api',
+              kind: 'package',
+              root: 'packages/api',
+              testCommand: 'pnpm run test',
+              buildCommand: 'pnpm run build',
+            },
+          ],
+          confidence: 'confirmed',
+        },
+      ])
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
+  test('reports unknown for files with no owning target', () => {
+    const root = tempRoot()
+    expect(
+      resolveOwningTargets({
+        cwd: root,
+        files: ['docs/guide.md'],
+        runner: failingRunner,
+      }),
+    ).toEqual([
+      {
+        file: 'docs/guide.md',
+        ecosystem: 'unknown',
+        targets: [],
+        confidence: 'unknown',
+      },
+    ])
+  })
+
+  test(
+    'treats absent ecosystem tools as honest skips without breaking other ecosystems',
+    () => {
+      const root = tempRoot()
+      writeFixture(
+        root,
+        'web/package.json',
+        JSON.stringify({
+          name: 'web',
+          packageManager: 'bun@1.0.0',
+          scripts: { test: 'bun test' },
+        }),
+      )
+      const enoentRunner: BuildGraphRunner = () => {
+        throw new Error('spawnSync cargo ENOENT')
+      }
+      // A rust file in a tool-less repo resolves to nothing rather than a
+      // guessed crate.
+      expect(
+        resolveOwningTargets({
+          cwd: root,
+          files: ['src/main.rs'],
+          runner: enoentRunner,
+        }),
+      ).toEqual([
+        {
+          file: 'src/main.rs',
+          ecosystem: 'unknown',
+          targets: [],
+          confidence: 'unknown',
+        },
+      ])
+      // The same throwing runner must not break filesystem-discovered
+      // ecosystems.
+      const [resolution] = resolveOwningTargets({
+        cwd: root,
+        files: ['web/src/app.ts'],
+        runner: enoentRunner,
+      })
+      expect(resolution).toMatchObject({
+        ecosystem: 'javascript',
+        confidence: 'confirmed',
+        targets: [{ name: 'web', testCommand: 'bun run test' }],
+      })
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
+  test('caches per-cwd ecosystem detection until cleared', () => {
+    const root = tempRoot()
+    let cargoCalls = 0
+    const runner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'cargo') {
+        cargoCalls++
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            // No `targets` field: missing fields must be tolerated.
+            packages: [
+              { name: 'core', manifest_path: path.join(root, 'Cargo.toml') },
+            ],
+          }),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    const files = ['src/lib.rs']
+    resolveOwningTargets({ cwd: root, files, runner })
+    expect(cargoCalls).toBe(1)
+    resolveOwningTargets({ cwd: root, files, runner })
+    expect(cargoCalls).toBe(1)
+    clearBuildGraphCache()
+    const [resolution] = resolveOwningTargets({ cwd: root, files, runner })
+    expect(cargoCalls).toBe(2)
+    expect(resolution).toMatchObject({
+      ecosystem: 'rust',
+      confidence: 'confirmed',
+      targets: [{ name: 'core', root: '.' }],
+    })
+  })
+
+  test(
+    'resolves jvm, dotnet, cmake, and python module ownership from manifest dirs',
+    () => {
+      const root = tempRoot()
+      writeFixture(root, 'services/api/pom.xml', '<project/>')
+      writeFixture(root, 'libs/ui/build.gradle.kts', '')
+      writeFixture(root, 'app/App.csproj', '<Project/>')
+      writeFixture(
+        root,
+        'native/CMakeLists.txt',
+        'cmake_minimum_required(VERSION 3.20)',
+      )
+      writeFixture(root, 'pkg/pyproject.toml', '[project]\nname="pkg"')
+
+      expect(
+        resolveOwningTargets({
+          cwd: root,
+          files: [
+            'services/api/src/Main.java',
+            'libs/ui/src/Main.kt',
+            'app/Program.cs',
+            'native/main.c',
+            'pkg/mod.py',
+          ],
+          runner: failingRunner,
+        }),
+      ).toEqual([
+        {
+          file: 'services/api/src/Main.java',
+          ecosystem: 'java',
+          targets: [
+            {
+              name: 'api',
+              kind: 'module',
+              root: 'services/api',
+              testCommand: 'mvn -pl services/api test',
+              buildCommand: 'mvn -pl services/api package',
+            },
+          ],
+          confidence: 'inferred',
+        },
+        {
+          file: 'libs/ui/src/Main.kt',
+          ecosystem: 'jvm',
+          targets: [
+            {
+              name: ':libs:ui',
+              kind: 'module',
+              root: 'libs/ui',
+              testCommand: 'gradle :libs:ui:test',
+              buildCommand: 'gradle :libs:ui:build',
+            },
+          ],
+          confidence: 'inferred',
+        },
+        {
+          file: 'app/Program.cs',
+          ecosystem: 'dotnet',
+          targets: [
+            {
+              name: 'App.csproj',
+              kind: 'project',
+              root: 'app',
+              testCommand: 'dotnet test app/App.csproj',
+              buildCommand: 'dotnet build app/App.csproj',
+            },
+          ],
+          confidence: 'inferred',
+        },
+        {
+          file: 'native/main.c',
+          ecosystem: 'c-cpp',
+          targets: [{ name: 'native', kind: 'project', root: 'native' }],
+          confidence: 'inferred',
+        },
+        {
+          file: 'pkg/mod.py',
+          ecosystem: 'python',
+          targets: [
+            {
+              name: 'pkg',
+              kind: 'package',
+              root: 'pkg',
+              testCommand: 'python -m pytest pkg',
+            },
+          ],
+          confidence: 'inferred',
+        },
+      ])
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
+  test('caps the number of files resolved per call', () => {
+    const root = tempRoot()
+    const files = Array.from({ length: 501 }, (_, index) => `f-${index}.ts`)
+    expect(
+      resolveOwningTargets({ cwd: root, files, runner: failingRunner }),
+    ).toHaveLength(500)
+  })
+})

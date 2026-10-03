@@ -22,6 +22,9 @@ import {
   type BatchedMessageUpdater,
 } from '../../utils/message-updater'
 import { createModeDividerMessage } from '../../utils/send-message-helpers'
+import { notifyTerminal } from '../../utils/terminal-notify'
+import { createTurnSnapshot } from '../../utils/turn-snapshots'
+import { writeToTty } from '../../utils/terminal-title'
 import { yieldToEventLoop } from '../../utils/yield-to-event-loop'
 
 import type {
@@ -499,6 +502,23 @@ export const handleRunCompletion = (params: {
     finalizeAfterError()
     return
   }
+
+  // P1-T7: Successful turn — fire-and-forget terminal notification so the
+  // user knows the run finished. Aborts and errors return above, so this
+  // fires exactly once per successful turn.
+  notifyTerminal(
+    { body: 'Turn complete' },
+    { write: (sequence) => {
+        writeToTty(sequence)
+      } },
+  )
+
+  // P2-T4: Successful turn — fire-and-forget git-plumbing snapshot of the
+  // tracked tree on refs/openbuff/turns. Aborts and errors return above, so
+  // this fires exactly once per successful turn. createTurnSnapshot never
+  // rejects; the catch is belt-and-suspenders so a snapshot failure can
+  // never break the turn path.
+  void createTurnSnapshot({ label: 'turn' }).catch(() => undefined)
 
   finalizeQueueState({
     setStreamStatus,

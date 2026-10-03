@@ -1,0 +1,148 @@
+# X-3b: fresh Rust workspace CI (charter rule 2: CI runs the native path from
+# day one — build AND test, never a build-only path).
+#
+# Two jobs:
+# - build-test: host build + host tests (the day-one gate).
+# - build-targets: the gated 5-target matrix, ACTIVE since the first real
+#   sidecar crate (`openbuff-native`) shipped. Every leg builds the whole
+#   workspace for its target and uploads the `openbuff-native` binary.
+#
+# Cross-compilation needs a target-appropriate LINKER even for a pure-Rust,
+# zero-external-crate binary (the final link step is still per-target): a
+# single ubuntu host with only `rustup target add` cannot link aarch64/musl/
+# darwin/msvc objects (generic-ELF relocation + unrecognized-flag link
+# errors). So each leg runs where its toolchain exists:
+#   - linux-gnu / linux-musl / aarch64-linux: ubuntu + the right cross linker
+#     (musl-tools / gcc-aarch64-linux-gnu),
+#   - windows-msvc: windows-latest (native MSVC),
+#   - apple-darwin: macos-15-intel (native Intel toolchain). macos-13 is
+#     RETIRED — a job labeled with it queues forever with no runner. The
+#     current hosted Intel label (macos-15-intel) matches cli-release-build.yml.
+# Tests run only where host == target can execute the test binaries; the CLI
+# smoke script runs on the host-runnable linux-gnu and darwin legs.
+name: rust-workspace
+
+on:
+  push:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-workspace.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-workspace.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      # Explicit pin matches rust/rust-toolchain.toml; rustup installs it on
+      # uncached runners, so the job never depends on a preinstalled toolchain.
+      - uses: dtolnay/rust-toolchain@1.87.0
+
+      # Charter rule 3: toolchain cost stays O(1) — one reusable job with
+      # caching, not per-package setup steps.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+
+  # D49: `openbuff-native` is ONE multi-call binary shipped for all 5 targets.
+  # Each leg runs on a host whose toolchain can link that target (native OS
+  # runner for windows/darwin; ubuntu + a cross linker for the linux cross
+  # targets). Tests run only on host==target legs; the smoke script runs on
+  # the host-runnable linux-gnu and darwin legs.
+  build-targets:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            runs-tests: true
+            runs-smoke: true
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            apt: musl-tools
+            runs-tests: false
+            runs-smoke: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+            runs-tests: false
+            runs-smoke: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            runs-tests: true
+            runs-smoke: false
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            runs-tests: true
+            runs-smoke: true
+    name: build-target-${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same explicit 1.87.0 pin as build-test; `targets:` installs the target
+      # std in one rustup pass.
+      - uses: dtolnay/rust-toolchain@1.87.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.target }}
+
+      # Cross linker for the linux cross targets (host cc cannot link them).
+      # Native runners (windows/darwin) and the host linux-gnu leg skip this.
+      - name: Install cross linker
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      # Point cargo at the aarch64 cross linker. The env var is target-scoped
+      # (CARGO_TARGET_<TARGET>_LINKER), so it is inert on every other leg even
+      # when empty.
+      - run: cargo build --workspace --target ${{ matrix.target }} --release
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+
+      # Cross-compiled test binaries cannot execute without emulation, so
+      # `cargo test` runs only where host == target.
+      - run: cargo test --workspace
+        if: matrix.runs-tests == 'true'
+
+      # Charter rule 2: the leg that CAN run the binary must smoke-test it.
+      # Only the host-runnable legs set runs-smoke; the path is target-scoped
+      # so each runnable leg smoke-tests its own binary.
+      - name: Smoke test openbuff-native
+        if: matrix.runs-smoke == 'true'
+        run: ./scripts/smoke-test-sidecar.sh target/${{ matrix.target }}/release/openbuff-native
+
+      # Per-target binary artifact (windows leg produces openbuff-native.exe;
+      # the glob covers both spellings). Matches ci.yml's pinned upload-artifact
+      # v4 usage; `if: always()` so a failed test/smoke step still preserves the
+      # built binary for debugging.
+      - name: Upload openbuff-native binary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openbuff-native-${{ matrix.target }}
+          path: rust/target/${{ matrix.target }}/release/openbuff-native*
+          if-no-files-found: error

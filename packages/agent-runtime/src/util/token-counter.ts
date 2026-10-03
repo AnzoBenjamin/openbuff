@@ -114,6 +114,211 @@ function fudgeFactorForModel(model: string | undefined): number {
   return 1.0
 }
 
+/**
+ * P3-T10: seam for EXACT per-provider tokenizers. Concrete providers
+ * (tiktoken/HuggingFace) land behind this interface in a later slice — a new
+ * tokenizer dependency needs separate approval — so this change adds only
+ * the seam, the env gate, and the model-family cache; the estimator below
+ * stays the default. A provider declares the model family it counts for and
+ * is keyed to models by its matcher (see exactFamilyMatcher for the common
+ * family-keyed registration).
+ */
+export interface ExactTokenCounter {
+  readonly family: string
+  count(text: string): number
+}
+
+/** P3-T10: the model families exact-tokenizer dispatch resolves to. */
+export type TokenizerFamily = 'openai' | 'anthropic' | 'gemini' | 'unknown'
+
+interface RegisteredExactTokenCounter {
+  matcher: (model: string) => boolean
+  counter: ExactTokenCounter
+  /**
+   * Per-provider result cache: counts are memoized per (provider, text)
+   * with the SAME LRU discipline as TOKEN_COUNT_CACHE — 1000 entries, and
+   * only inputs in the (100, MAX_CACHEABLE_INPUT_CHARS] band are cached, so
+   * an exact provider inherits the estimator's whole-transcript memory
+   * bound (M3-T2). Exact counts carry no fudge factor, so unlike the BPE
+   * cache no raw/factored split is needed (contrast SEC-TC-CACHE-KEY-1).
+   */
+  cache: LRUCache<string, number>
+}
+
+const EXACT_TOKEN_COUNTERS: RegisteredExactTokenCounter[] = []
+
+/**
+ * P3-T10: bounded model-string -> family cache. Model strings are short and
+ * few in practice; the 1000-entry LRU (same discipline as TOKEN_COUNT_CACHE)
+ * keeps a caller cycling unique model names from growing the map unboundedly.
+ */
+const TOKENIZER_FAMILY_CACHE = new LRUCache<string, TokenizerFamily>(1000)
+
+function resolveTokenizerFamily(model: string): TokenizerFamily {
+  const normalized = model.toLowerCase()
+  if (normalized.includes('claude') || normalized.includes('anthropic')) {
+    return 'anthropic'
+  }
+  if (normalized.includes('gemini') || normalized.includes('google')) {
+    return 'gemini'
+  }
+  if (normalized.includes('gpt-') || normalized.includes('openai')) {
+    return 'openai'
+  }
+  return 'unknown'
+}
+
+/**
+ * P3-T10: resolves a model string to its tokenizer family, memoized in the
+ * bounded LRU above. The substring rules mirror fudgeFactorForModel so the
+ * exact path and the estimator always agree on a model's family. The
+ * matcher dispatch reuses this via exactFamilyMatcher.
+ */
+export function getTokenizerForModel(
+  model: string | undefined,
+): TokenizerFamily {
+  if (typeof model !== 'string' || model.length === 0) {
+    return 'unknown'
+  }
+  const cached = TOKENIZER_FAMILY_CACHE.get(model)
+  if (cached !== undefined) {
+    return cached
+  }
+  const family = resolveTokenizerFamily(model)
+  TOKENIZER_FAMILY_CACHE.set(model, family)
+  return family
+}
+
+/**
+ * P3-T10: exported-for-test view of the family cache so tests can assert it
+ * stays bounded under model-name churn.
+ */
+export function tokenizerFamilyCacheSizeForTest(): number {
+  return TOKENIZER_FAMILY_CACHE.size
+}
+
+/**
+ * P3-T10: matcher factory for the common family-keyed registration;
+ * dispatching through it hits the bounded family cache instead of
+ * re-deriving substring matches on every count call.
+ */
+export function exactFamilyMatcher(
+  family: TokenizerFamily,
+): (model: string) => boolean {
+  return (model: string) => getTokenizerForModel(model) === family
+}
+
+/**
+ * P3-T10: registers an exact tokenizer for the models `matcher` accepts;
+ * first registered match wins. Registrations only take effect while the
+ * OPENBUFF_EXACT_TOKENS gate is on (see exactTokenCountingEnabled).
+ */
+export function registerExactTokenCounter(
+  matcher: (model: string) => boolean,
+  counter: ExactTokenCounter,
+): void {
+  EXACT_TOKEN_COUNTERS.push({
+    matcher,
+    counter,
+    cache: new LRUCache<string, number>(1000),
+  })
+}
+
+/** P3-T10: drops every registration (and its cache) between tests. */
+export function clearExactTokenCountersForTest(): void {
+  EXACT_TOKEN_COUNTERS.length = 0
+}
+
+/**
+ * P3-T10: first registered matcher wins. Matchers built by
+ * exactFamilyMatcher resolve through the bounded family cache, so dispatch
+ * reuses getTokenizerForModel rather than re-deriving substrings per call.
+ */
+function exactTokenCounterForModel(
+  model: string,
+): RegisteredExactTokenCounter | undefined {
+  for (const registered of EXACT_TOKEN_COUNTERS) {
+    if (registered.matcher(model)) {
+      return registered
+    }
+  }
+  return undefined
+}
+
+/**
+ * P3-T10: env gate for exact counting, read through the same truthy-set
+ * pattern as find-files' OPENBUFF_COLLECT_FULL_FILE_CONTEXT check
+ * ("1"/"true"/"yes"/"on", case-insensitive). Resolved once per count call
+ * and deliberately NOT module-cached, so tests and embedders can toggle it;
+ * unset/off keeps the gpt-tokenizer + fudge estimator byte-identical.
+ */
+function exactTokenCountingEnabled(): boolean {
+  const envValue = process.env.OPENBUFF_EXACT_TOKENS
+  return envValue !== undefined && /^(1|true|yes|on)$/i.test(envValue.trim())
+}
+
+/**
+ * P3-T10: the exact path bypasses MAX_BPE_ENCODE_CHARS — that cap exists for
+ * gpt-tokenizer's pathological separator-free slowdown, which a real
+ * per-provider tokenizer does not share — so inputs in the 100k..1M band are
+ * counted IN FULL by the provider. The bound is raised, not removed: above
+ * MAX_EXACT_ENCODE_CHARS a bounded PREFIX is counted exactly and
+ * extrapolated by length ratio (the BPE oversized path minus the fudge
+ * factor), so a pathological multi-MB input can never trigger an unbounded
+ * exact encode.
+ */
+const MAX_EXACT_ENCODE_CHARS = 1_000_000
+const EXACT_SAMPLE_CHARS = 100_000
+
+/**
+ * P3-T10: exact counting for one serialized input. No fudge factor (the
+ * provider IS the routed model's tokenizer, so its raw count is final) and
+ * no special-token escape (that escape is a gpt-tokenizer workaround; an
+ * exact provider owns its special-token policy). Cacheable-band inputs are
+ * memoized per (provider, text); a throwing provider degrades to the
+ * estimator with a type-only TC_EXACT_ENCODE_FAIL diagnostic (the
+ * SEC-TC-LOG-1 convention) instead of aborting the agent step.
+ */
+function countTokensExactly(
+  serialized: string,
+  registered: RegisteredExactTokenCounter,
+  model: string,
+): number {
+  const { counter, cache } = registered
+  try {
+    if (serialized.length > MAX_EXACT_ENCODE_CHARS) {
+      // Oversized: exact-count a bounded prefix and extrapolate (see
+      // MAX_EXACT_ENCODE_CHARS). Never cached, same as the BPE oversized
+      // path.
+      const sampleLength = Math.min(EXACT_SAMPLE_CHARS, serialized.length)
+      const sampleTokens = counter.count(serialized.slice(0, sampleLength))
+      return Math.floor((sampleTokens / sampleLength) * serialized.length)
+    }
+    const cached = cache.get(serialized)
+    if (cached !== undefined) {
+      return cached
+    }
+    const count = counter.count(serialized)
+    if (
+      serialized.length > 100 &&
+      serialized.length <= MAX_CACHEABLE_INPUT_CHARS
+    ) {
+      cache.set(serialized, count)
+    }
+    return count
+  } catch (e) {
+    // SEC-TC-LOG-1 / SEC-TC-LOG-ECHO-1 convention: type-only diagnostic with
+    // a stable error code — provider errors can echo model-controlled text.
+    console.error(
+      'Error counting tokens with exact provider:',
+      e instanceof Error ? `${e.name} (TC_EXACT_ENCODE_FAIL)` : typeof e,
+    )
+    // Honest neutral default: a failing exact provider falls back to the
+    // same estimator the gate-off path would have used.
+    return estimateTokensForSerialized(serialized, model)
+  }
+}
+
 function omitMediaPayloadsForTokenCount(
   this: Record<string, unknown>,
   key: string,
@@ -225,8 +430,24 @@ export function tokenFudgeFactorForModel(model: string | undefined): number {
  * the audit's correctness finding; when a model is supplied it now selects a
  * per-family factor. Callers that pass no model keep the legacy Anthropic
  * default exactly as before, so pre-existing countTokens sites are unchanged.
+ *
+ * P3-T10: when OPENBUFF_EXACT_TOKENS is truthy and an ExactTokenCounter is
+ * registered for the supplied model, the provider's exact count is returned
+ * instead (no fudge factor, no BPE cap). The gate defaults off and every
+ * miss falls back to this estimator, so flag-off results are unchanged.
  */
 export function countTokens(text: string, model?: string): number {
+  // P3-T10: exact path — only when the env gate is on, a real model was
+  // supplied, and a registered provider matches it. The legacy no-model
+  // sentinel below is deliberately NOT routed to providers, so unannotated
+  // callers keep the estimator even with the gate on. Every miss falls
+  // through to the unchanged gpt-tokenizer + fudge estimator.
+  if (model !== undefined && exactTokenCountingEnabled()) {
+    const registered = exactTokenCounterForModel(model)
+    if (registered !== undefined) {
+      return countTokensExactly(text, registered, model)
+    }
+  }
   return estimateTokensForSerialized(
     text,
     model ?? ANTHROPIC_TOKEN_FUDGE_FACTOR_MARKED_MODEL,

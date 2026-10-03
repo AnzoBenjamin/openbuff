@@ -172,6 +172,22 @@ function tryCopyViaPlatformTool(text: string): boolean {
     if (process.platform === 'darwin') {
       execSync('pbcopy', opts)
     } else if (process.platform === 'linux') {
+      // P1-T7: on Wayland prefer wl-copy over the X11 tools. wl-copy only
+      // exists/composes under a Wayland session, so gate on WAYLAND_DISPLAY or
+      // XDG_SESSION_TYPE=wayland and fall through to xclip/xsel otherwise (and
+      // when wl-copy is absent). Every branch stays fail-closed.
+      const env = getCliEnv()
+      const isWayland =
+        env.WAYLAND_DISPLAY !== undefined ||
+        env.XDG_SESSION_TYPE === 'wayland'
+      if (isWayland) {
+        try {
+          execSync('wl-copy', opts)
+          return true
+        } catch {
+          // wl-copy absent/failed — fall through to the X11 tools below.
+        }
+      }
       try {
         execSync('xclip -selection clipboard', opts)
       } catch {

@@ -449,6 +449,12 @@ export const commitReceiptV1Schema = z
     receiptId: z.string().min(1),
     operationId: z.string().min(1),
     callId: z.string().min(1),
+    /**
+     * P2-T5 versioned addition: the durable transaction-intent id stamped on
+     * every receipt issued under a multi-file transaction. Optional so v1
+     * receipts (and every byte-identical golden fixture) keep parsing.
+     */
+    transactionId: z.string().min(1).optional(),
     authorityTier: authorityCapabilityTierSchema,
     status: commitReceiptStatusV1Schema,
     actions: commitActionReceiptV1Schema

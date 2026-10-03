@@ -12,6 +12,11 @@ import { runTerminalCommand } from './run-terminal-command'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import {
+  supportedDiagnosticFiles,
+  type DiagnosticDeltaPreflightResult,
+} from '../services/diagnostic-delta'
+import { getSystemProcessEnv } from '../env'
 
 export type FileChangeHook = {
   name?: string
@@ -692,6 +697,42 @@ function toPosixPath(value: string): string {
 type RunCommand = typeof runTerminalCommand
 
 /**
+ * Opt-in diagnostic-delta preflight flag. Unset/empty/'0'/'false'/'no'/'off'
+ * means OFF; any other value enables it. When OFF the delta block inside
+ * runFileChangeHooks is skipped entirely, leaving the default hook behavior
+ * byte-identical. Truthy-set semantics match the repo's other OPENBUFF_* flags.
+ */
+export const DIAGNOSTIC_PREFLIGHT_FLAG = 'OPENBUFF_DIAGNOSTIC_PREFLIGHT'
+
+export function isDiagnosticPreflightEnabled(
+  env: Record<string, string | undefined> = getSystemProcessEnv(),
+): boolean {
+  const raw = env[DIAGNOSTIC_PREFLIGHT_FLAG]
+  if (raw === undefined) return false
+  const normalized = raw.trim().toLowerCase()
+  return (
+    normalized !== '' &&
+    normalized !== '0' &&
+    normalized !== 'false' &&
+    normalized !== 'no' &&
+    normalized !== 'off'
+  )
+}
+
+/**
+ * Injected delta-preflight seam. Hooks observe already-changed files, so they
+ * cannot reconstruct the pre-edit baseline themselves; the caller that owns
+ * before/after (the mutation-broker path) supplies this. Kept injected so the
+ * default hook path stays byte-identical and the broker is never touched here.
+ */
+export type DiagnosticDeltaHook = (params: {
+  files: string[]
+  cwd: string
+  env?: Record<string, string | undefined>
+  signal?: AbortSignal
+}) => Promise<DiagnosticDeltaPreflightResult | undefined>
+
+/**
  * Run the configured file-change hooks (typecheck/lint/test) for a set of
  * changed files — the verification gate's executor. Returns one result per
  * hook (the terminal output plus a hookName), matching run_file_change_hooks'
@@ -705,6 +746,11 @@ export async function runFileChangeHooks(params: {
   runCommand?: RunCommand
   signal?: AbortSignal
   fileSystem?: CodebuffFileSystem
+  /**
+   * Opt-in diagnostic-delta preflight (requires OPENBUFF_DIAGNOSTIC_PREFLIGHT).
+   * Injected so the caller owns the pre/post-edit baseline; omitted by default.
+   */
+  diagnosticDelta?: DiagnosticDeltaHook
 }): Promise<CodebuffToolOutput<'run_file_change_hooks'>> {
   const { files, cwd, env } = params
   const hooks =
@@ -821,6 +867,36 @@ export async function runFileChangeHooks(params: {
           }`,
         },
   )
+
+  // Opt-in diagnostic-delta preflight. When the flag is unset/empty this block
+  // is skipped entirely, and when no injector is supplied it is also a no-op,
+  // so the default hook behavior is byte-identical. Hooks observe
+  // already-changed files, so the injected `diagnosticDelta` owns the
+  // before/after baseline (the mutation-broker path); the broker is untouched.
+  if (isDiagnosticPreflightEnabled(env) && params.diagnosticDelta) {
+    const supportedFiles = supportedDiagnosticFiles(files)
+    if (supportedFiles.length > 0) {
+      const preflight = await params.diagnosticDelta({
+        files: supportedFiles,
+        cwd,
+        env,
+        signal: params.signal,
+      })
+      if (preflight?.rejected) {
+        results.push({
+          hookName: 'diagnostic-delta',
+          validationStatus: 'diagnostic_delta_rejected',
+          newDiagnostics: preflight.newDiagnostics,
+          fixIts: preflight.fixIts,
+        })
+      } else if (preflight) {
+        results.push({
+          hookName: 'diagnostic-delta',
+          validationStatus: 'diagnostic_delta_passed',
+        })
+      }
+    }
+  }
 
   return [
     { type: 'json', value: results },

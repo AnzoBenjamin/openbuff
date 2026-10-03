@@ -107,6 +107,11 @@ describe('handleRecordDecision', () => {
     expect(value.errorMessage).toBeUndefined()
     expect(value.supersedes).toEqual(['observation:dup-2', 'observation:dup-1'])
     expect(agentState.taskMemory?.decisions.length).toBe(1)
+    // The normalized supersedes ids must be PERSISTED on the evidence record
+    // (not only echoed) so normalizeEvidence can mark the targets stale.
+    const evidence = agentState.taskMemory?.evidence ?? []
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]?.supersedes).toEqual(['observation:dup-2', 'observation:dup-1'])
   })
   test('omits supersedes from the output when not provided', async () => {
     const agentState = buildAgentState()

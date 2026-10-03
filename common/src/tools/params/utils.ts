@@ -7,6 +7,8 @@ import {
   toolNameParam,
 } from '../constants'
 
+import { areEditBlocksEnabled, parseEditBlocks } from './edit-blocks'
+
 import type { JSONValue } from '../../types/json'
 import type { ToolResultOutput } from '../../types/messages/content-part'
 
@@ -757,7 +759,34 @@ function canonicalizeTransactionEditType(rawType: unknown): string | undefined {
  * untouched because they could be create or write_file operations.
  */
 export function normalizeTransactionEditList(val: unknown): unknown {
-  const decoded = parseJsonBounded(val)
+  // PR-T4 wave 1: plain-text SEARCH/REPLACE edit blocks behind the
+  // default-off OPENBUFF_EDIT_BLOCKS flag. The cheap marker guard keeps
+  // every payload without that substring (including all plain JSON strings)
+  // on the existing path below with zero behavior change. On any parse
+  // error the original input is kept unchanged so the existing JSON
+  // pipeline produces its structured diagnostic — a block-parse failure
+  // only means the payload was not valid blocks, and the JSON repair
+  // paths remain authoritative for everything else.
+  let editsInput = val
+  if (
+    typeof val === 'string' &&
+    areEditBlocksEnabled() &&
+    val.includes('<<<<<<< SEARCH')
+  ) {
+    const parsedBlocks = parseEditBlocks(val)
+    if ('edits' in parsedBlocks) {
+      // Parsed blocks map onto the same shape the per-entry pipeline below
+      // produces, so type inference, canonicalization, and bounds apply
+      // unchanged. The input string itself is never mutated.
+      editsInput = parsedBlocks.edits.map((edit) => ({
+        type: 'str_replace' as const,
+        path: edit.path,
+        replacements: edit.replacements,
+      }))
+    }
+  }
+
+  const decoded = parseJsonBounded(editsInput)
   // A malformed/truncated serialized array must fail at `edits` itself. Do
   // not wrap it as a one-element array, which produces the misleading
   // `edits[0] expected object, received string` diagnostic and encourages the

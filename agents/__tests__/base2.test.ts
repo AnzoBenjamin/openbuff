@@ -5136,8 +5136,12 @@ describe('base2 verification and reviewer gates', () => {
     try {
       const tmpFile = join(tmpDir, 'a.ts')
       const gateFile = normalizeGateFilePath(tmpFile)
+      // Different LENGTHS on purpose so the consecutive snapshots can never
+      // collide on size+mtime (even with a fully broken marker cache) while
+      // keeping the oscillation semantics: the finding sequence is unchanged,
+      // only the byte lengths differ.
       const contentA = 'export const value = 1\n'
-      const contentB = 'export const value = 2\n'
+      const contentB = 'export const value = 22\n'
       writeFileSync(tmpFile, contentA)
       const base2 = createBase2('default')
       const agentState = { agentId: 'base2' }
@@ -8039,6 +8043,82 @@ describe('base2 verification and reviewer gates', () => {
       requirementCoverageCount: 100,
       receiptTruncated: true,
     })
+  })
+
+  // PR-T5 (D23) Slice 1: the receipt binds per-file content hashes captured
+  // through the gate's own readGateFileContentMarker, so a downstream consumer
+  // can verify the exact reviewed bytes.
+  test('recordSuccessfulReviewReceipt binds reviewedFileHashes to the reviewed file markers', () => {
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      expect(
+        gen.next(attestedReviewerResult(reviewCall) as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const receipt = (agentState as any).base2ActiveWork.reviewReceipts[0]
+      // The hash equals the content marker of the live bytes: raw sha256 +
+      // byte length, exactly what readGateFileContentMarker computes.
+      expect(receipt.reviewedFileHashes).toEqual([
+        { path: gateFile, hash: buildContentMarker(tmpFile) },
+      ])
+      expect(receipt.reviewedFileHashes[0].hash).toMatch(
+        /^sha256:[a-f0-9]{64}:\d+$/,
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // PR-T5 (D23) Slice 1: hash entries are exact content markers, so
+  // fitReceiptToStorageBound bounds only their COUNT (slice to 4) and keeps
+  // the values verbatim through receipt truncation.
+  test('fitReceiptToStorageBound keeps reviewedFileHashes through truncation', () => {
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const longText = 'receipt detail '.repeat(300)
+      const bigReview = attestedReviewerResult(reviewCall) as any
+      bigReview.toolResult[0].value[0].findings = Array.from(
+        { length: 20 },
+        (_unused, index) => ({
+          id: `code-reviewer:correctness:finding-${index}`,
+          summary: longText,
+          severity: 'low',
+          dimension: 'correctness',
+          evidence: Array.from({ length: 8 }, () => longText),
+          correction: longText,
+        }),
+      )
+      bigReview.toolResult[0].value[0].requirementCoverage = Array.from(
+        { length: 100 },
+        (_unused, index) => ({
+          requirement: `Requirement ${index}: ${longText}`,
+          status: 'satisfied',
+          evidence: Array.from({ length: 8 }, () => longText),
+        }),
+      )
+      expect(gen.next(bigReview).value).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
+      const receipt = (agentState as any).base2ActiveWork.reviewReceipts[0]
+      expect(receipt.receiptTruncated).toBe(true)
+      expect(JSON.stringify(receipt).length).toBeLessThanOrEqual(4_000)
+      // The single hash entry survives the compaction byte-for-byte.
+      expect(receipt.reviewedFileHashes).toEqual([
+        { path: gateFile, hash: buildContentMarker(tmpFile) },
+      ])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   test('execute-plan prompts use injected artifacts without repeated unchanged reads', () => {
@@ -11546,6 +11626,170 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       )
     } finally {
       console.info = originalInfo
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // PR-T5 (D23) Slice 2: a dirty NON-reviewable file in the gate scope after
+  // a matching review skip is docs-only bookkeeping and gets its own skip
+  // reason instead of the generic unchanged-set one.
+  test('dirty docs-only files after a matching review skip with the docs-only reason', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-docs-dirty-',
+    )
+    try {
+      const { decision } = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          touchedFiles: [gateFile, 'notes.md'],
+          changedFiles: [gateFile, 'notes.md'],
+          pendingGateFiles: [gateFile, 'notes.md'],
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'code-reviewer',
+              snapshotFingerprint: reviewableFingerprint,
+              reviewedFiles: [gateFile],
+            }),
+          ],
+        }),
+      )
+
+      expect(decision.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (decision.value as any).input.content as string
+      expect(content).toContain(
+        'reviewer skip: docs-only edits after last review',
+      )
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({ gate: 'reviewer', status: 'skipped' })
+      expect(gateState!.details).toContain(
+        'reviewer-skip-docs-only-after-review',
+      )
+      expect(gateState!.details).toContain('notes.md')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // PR-T5 (D23) Slice 2: a docs-only edit DURING the turn (after a prior
+  // reviewer pass whose receipt still matches) must not re-run the reviewer;
+  // it skips with the dedicated docs-only reason. The docs file enters the
+  // pending set through the edit receipt but is not reviewable, so the
+  // reviewable set is unchanged since the last review.
+  test('a docs-only edit after a matching review skips instead of re-running the reviewer', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-docs-edit-',
+    )
+    try {
+      const activeWork = reviewerSkipSeedState(gateFile, {
+        reviewReceipts: [
+          reviewReceiptFor({
+            reviewer: 'code-reviewer',
+            snapshotFingerprint: reviewableFingerprint,
+            reviewedFiles: [gateFile],
+          }),
+        ],
+      })
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2-custom', base2ActiveWork: activeWork }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Update the docs notes only.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      // Docs-only edit this turn: touches no reviewable file.
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt('docs/notes.md'))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const decision = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      expect(decision.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (decision.value as any).input.content as string
+      expect(content).toContain(
+        'reviewer skip: docs-only edits after last review',
+      )
+      expect(parseGateStateBlock(content)!.details).toContain(
+        'reviewer-skip-docs-only-after-review',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // PR-T5 (D23) Slice 2 guard: the docs-only skip must NOT weaken the gate —
+  // a reviewable file whose bytes change after the review still re-arms the
+  // reviewer (existing behavior unchanged).
+  test('a reviewable-file edit after a matching review still re-arms the reviewer', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-reviewable-edit-',
+    )
+    try {
+      const activeWork = reviewerSkipSeedState(gateFile, {
+        reviewReceipts: [
+          reviewReceiptFor({
+            reviewer: 'code-reviewer',
+            snapshotFingerprint: reviewableFingerprint,
+            reviewedFiles: [gateFile],
+          }),
+        ],
+      })
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2-custom', base2ActiveWork: activeWork }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Change the source file.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      // The reviewable file's bytes change this turn: the receipt no longer
+      // attests the current snapshot, so the reviewer must run.
+      writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 2\n')
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt(gateFile))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const decision = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      expect(decision.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+    } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
   })

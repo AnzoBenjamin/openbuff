@@ -76,6 +76,12 @@ export const getCliEnv = (): CliEnv => ({
   CODEBUFF_PERF_TEST: process.env.CODEBUFF_PERF_TEST,
   OPENBUFF_CONFIG_DIR: process.env.OPENBUFF_CONFIG_DIR,
   OPENBUFF_MEMORY_AUTHORITY: process.env.OPENBUFF_MEMORY_AUTHORITY,
+  // P1-T3 attach mode: target of a running `openbuff serve` to attach to.
+  OPENBUFF_SERVE_SOCKET: process.env.OPENBUFF_SERVE_SOCKET,
+  OPENBUFF_SERVE_TOKEN: process.env.OPENBUFF_SERVE_TOKEN,
+  // P2-T7 dash mode: fallback auth token for `openbuff dash` when --token is
+  // omitted (the CLI otherwise generates one and prints it to stderr).
+  OPENBUFF_DASH_TOKEN: process.env.OPENBUFF_DASH_TOKEN,
 })
 
 export type MemoryAuthoritySelection = {

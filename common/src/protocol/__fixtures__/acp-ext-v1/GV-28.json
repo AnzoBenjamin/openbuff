@@ -1,0 +1,17 @@
+{
+  "_note": "Semantic vector (§12.7 GV-28, NEW-4 chokepoint): a handler throws Error(\"cap.v3.1.1.AAA.BBB.CCC sk-or-v1-abc\"). The SDK-built JSON-RPC error frame is sanitized at the outbound chokepoint and contains neither the cap.v3 token nor the credential.",
+  "handlerError": "cap.v3.1.1.AAA.BBB.CCC sk-or-v1-abc",
+  "error": {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "error": {
+      "code": -32603,
+      "message": "Internal error",
+      "data": {
+        "openbuff.dev": {
+          "message": "[REDACTED:cap] [REDACTED]"
+        }
+      }
+    }
+  }
+}

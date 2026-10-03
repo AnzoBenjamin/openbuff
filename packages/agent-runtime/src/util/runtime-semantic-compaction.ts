@@ -8,6 +8,7 @@ import {
 
 import type { executeSubagent } from '../tools/handlers/tool/spawn-agent-utils'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { AgentState } from '@codebuff/common/types/session-state'
@@ -31,6 +32,46 @@ import type { ToolSet } from 'ai'
  * helper deliberately does not re-check suppression and must not be called
  * from an un-gated site.
  */
+
+/** D25/CQ-T1: bounded eviction-pointer line length threaded to the pruner. */
+const ARCHIVE_POINTER_LINE_CHARS = 240
+/** D25/CQ-T1: keep the pointer index shallow; the archive itself is the deep store. */
+const ARCHIVE_POINTER_MAX_SNAPSHOTS = 24
+
+/**
+ * D25/CQ-T1: build one bounded eviction-pointer line per archived compaction
+ * segment (action + step provenance + message count + reason/digest). The
+ * pruner carries these verbatim in the pinned <knowledge_memory> block so a
+ * compacted conversation keeps a recallable index of what was evicted. The
+ * archive itself is bounded, but the extra slice keeps this helper safe even
+ * if that cap ever grows. Returns undefined when the archive is absent/empty
+ * so no empty pointer field is threaded into the pruner.
+ */
+function buildCompactionArchivePointers(
+  archive: ContextArchiveSnapshot[] | undefined,
+): string[] | undefined {
+  if (!archive || archive.length === 0) return undefined
+  const pointers = archive
+    .slice(-ARCHIVE_POINTER_MAX_SNAPSHOTS)
+    .map((snapshot) => {
+      const stepRange =
+        Array.isArray(snapshot.steps) && snapshot.steps.length > 0
+          ? `steps=${snapshot.steps[0]}-${snapshot.steps[snapshot.steps.length - 1]}`
+          : `steps=${snapshot.stepBase ?? 0}-${(snapshot.stepBase ?? 0) + Math.max(snapshot.messages.length - 1, 0)}`
+      const digest = (
+        snapshot.reason ?? `${snapshot.messages.length} archived messages`
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80)
+      return `[action=${snapshot.action} ${stepRange} msgs=${snapshot.messages.length}] ${digest}`.slice(
+        0,
+        ARCHIVE_POINTER_LINE_CHARS,
+      )
+    })
+  return pointers.length > 0 ? pointers : undefined
+}
+
 export async function runRuntimeSemanticCompaction(
   params: {
     /** Parent state to compact. Its `messageHistory` is replaced in place. */
@@ -181,7 +222,14 @@ export async function runRuntimeSemanticCompaction(
       ancestorRunIds: parentAgentState.ancestorRunIds,
       userInputId: `${userInputId}-inline-${prunerAgentId}${childAgentState.agentId}`,
       prompt: '',
-      spawnParams: undefined,
+      spawnParams: (() => {
+        // D25/CQ-T1: thread the archive eviction-pointer index into the pruner
+        // (the archive was written before this pass), omitted when empty.
+        const archivePointers = buildCompactionArchivePointers(
+          parentAgentState.compactionArchive,
+        )
+        return archivePointers ? { archivePointers } : undefined
+      })(),
       agentTemplate: prunerChildTemplate,
       parentAgentState,
       agentState: childAgentState,

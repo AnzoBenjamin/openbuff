@@ -1,4 +1,5 @@
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { MAX_SPAWN_BATCH_SIZE } from '@codebuff/common/constants/agents'
 
 import {
@@ -50,6 +51,7 @@ import type {
 } from '@codebuff/common/tools/list'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { AgentHandoff } from '@codebuff/common/types/agent-handoff'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { JSONObject, JSONValue } from '@codebuff/common/types/json'
@@ -149,6 +151,7 @@ export const handleSpawnAgents = (async (
     userInputId: string
     sendSubagentChunk: SendSubagentChunk
     writeToClient: (chunk: string | PrintModeEvent) => void
+    clock?: Clock
   } & ParamsExcluding<
     typeof validateAndGetAgentTemplate,
     'agentTypeStr' | 'parentAgentTemplate'
@@ -198,7 +201,10 @@ export const handleSpawnAgents = (async (
   // that vanished mid-turn keeps a 'running' intent for the rest of the turn
   // and can reject a later legitimate background spawn. Same field writes as
   // the turn-entry pass and idempotent, so a retried spawn behaves identically.
-  reconcileInterruptedBackgroundAgentIntents(parentAgentState)
+  reconcileInterruptedBackgroundAgentIntents(
+    parentAgentState,
+    (params.clock ?? realClock).now(),
+  )
 
   // Validate the complete batch before launching any detached work. Without
   // this preflight, an invalid later entry could throw after earlier
@@ -552,6 +558,31 @@ export const handleSpawnAgents = (async (
         startedAt: job.startedAt,
       })
 
+      // P2-T2: durable parent spawn intent for the background child, appended
+      // AT LAUNCH TIME. The loop-level spawn append (run-programmatic-step)
+      // only fires at the parent's NEXT step_boundary from childRunIds, which
+      // the detached settle chain fills asynchronously — so a parent turn
+      // that ends first left NO durable intent in the journal. childRunId is
+      // not yet known while the coroutine is detached (it is minted inside
+      // the child's own loopAgentSteps call), so correlate on the allocated
+      // jobId and keep the payload minimal. Fail-open: a journal failure
+      // must never fail the background job.
+      if (parentAgentState.runId && params.journalWriter) {
+        try {
+          params.journalWriter.append(parentAgentState.runId, {
+            eventType: 'spawn',
+            stepNumber: 0,
+            correlation: job.jobId,
+            payload: { agentType, background: true, jobId: job.jobId },
+          })
+        } catch (error) {
+          logger.warn(
+            { jobId: job.jobId, agentType, error: String(error) },
+            'Background spawn journal append failed; continuing without the journaled intent',
+          )
+        }
+      }
+
       // Detached coroutine: do NOT await. The unified job-registry core (via
       // the background-agent adapter) is the source of truth for lifecycle
       // and the buffered chunk stream that check_background_agent polls; the
@@ -623,26 +654,36 @@ export const handleSpawnAgents = (async (
               // listeners from the long-lived parent signal (idempotent, and a
               // no-op when there was no parent signal to combine).
               combinedSignal?.cleanup?.()
-              const receipt = buildRuntimeAgentReceipt({
-                agentType,
-                agentId: result.agentState.agentId,
-                handoff: validated.handoff,
-                spawnParams: validated.runtimeSpawnParams,
-                output: result.output,
-                agentState: result.agentState,
-              })
+              // P2-T8: a supervised spawn carries its own validated receipt
+              // from the supervisor settle; it is used verbatim so
+              // reconcileAgentReceiptIntoParent and the lease/ledger chain
+              // run unchanged. The in-process path keeps building the
+              // receipt here exactly as before.
+              const receipt =
+                result.supervisedReceipt ??
+                buildRuntimeAgentReceipt({
+                  agentType,
+                  agentId: result.agentState.agentId,
+                  handoff: validated.handoff,
+                  spawnParams: validated.runtimeSpawnParams,
+                  output: result.output,
+                  agentState: result.agentState,
+                })
               reconcileAgentReceiptIntoParent({
                 parentAgentState,
                 receipt,
                 agentType,
                 objective: validated.handoff?.objective,
+                // Ledger pairing keys on the parent-side spawn id (see
+                // reconcileAgentReceiptIntoParent's spawnId doc).
+                spawnId: subAgentState.agentId,
               })
               const intent = parentAgentState.backgroundAgentJobs?.find(
                 (entry) => entry.jobId === job.jobId,
               )
               if (intent) {
                 intent.status = 'completed'
-                intent.completedAt = Date.now()
+                intent.completedAt = (params.clock ?? realClock).now()
                 intent.childRunId = result.agentState.runId
                 intent.receipt = receipt
               }
@@ -660,6 +701,12 @@ export const handleSpawnAgents = (async (
                 workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
                 verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
               })
+              // Fold the background child's cost into the parent exactly
+              // like the foreground settle path aggregates subagent cost.
+              const backgroundCredits = result.agentState.creditsUsed || 0
+              if (backgroundCredits > 0) {
+                parentAgentState.creditsUsed += backgroundCredits
+              }
               settleSucceeded = true
               return {
                 agentId: result.agentState.agentId,
@@ -713,13 +760,16 @@ export const handleSpawnAgents = (async (
                 receipt,
                 agentType,
                 objective: validated.handoff?.objective,
+                // Ledger pairing keys on the parent-side spawn id (see
+                // reconcileAgentReceiptIntoParent's spawnId doc).
+                spawnId: subAgentState.agentId,
               })
               const intent = parentAgentState.backgroundAgentJobs?.find(
                 (entry) => entry.jobId === job.jobId,
               )
               if (intent) {
                 intent.status = cancelled ? 'cancelled' : 'error'
-                intent.completedAt = Date.now()
+                intent.completedAt = (params.clock ?? realClock).now()
                 // Keep the cancellation reason check_background_agent already
                 // recorded; fall back to the adapter's canonical reason.
                 intent.error = cancelled
@@ -728,6 +778,13 @@ export const handleSpawnAgents = (async (
                     ? error.message
                     : String(error)
                 intent.receipt = receipt
+              }
+              // A failed/cancelled background child may still have incurred
+              // partial cost: fold it into the parent exactly like the
+              // foreground failed-agent path does.
+              const failedBackgroundCredits = subAgentState.creditsUsed || 0
+              if (failedBackgroundCredits > 0) {
+                parentAgentState.creditsUsed += failedBackgroundCredits
               }
             } finally {
               releaseWorkspacePathLease(parentAgentState, validated.leaseId)
@@ -762,9 +819,10 @@ export const handleSpawnAgents = (async (
   } catch (error) {
     const abandonReason =
       'Background agent spawn failed before its coroutine was launched.'
+    const abandonedAt = (params.clock ?? realClock).now()
     for (const job of backgroundJobs) {
       if (wiredBackgroundJobIds.has(job.jobId)) continue
-      abandonPreLaunchBackgroundAgentJob(job, abandonReason)
+      abandonPreLaunchBackgroundAgentJob(job, abandonReason, abandonedAt)
       // The durable intent doubles as the per-root background budget, so an
       // abandoned job's intent must settle here too instead of counting as
       // 'running' for the rest of the turn. Jobs whose coroutine WAS launched
@@ -774,7 +832,7 @@ export const handleSpawnAgents = (async (
       )
       if (intent && intent.status === 'running') {
         intent.status = 'error'
-        intent.completedAt = Date.now()
+        intent.completedAt = abandonedAt
         intent.error = abandonReason
       }
     }
@@ -907,19 +965,27 @@ export const handleSpawnAgents = (async (
         if (result.status === 'fulfilled') {
           const { output, agentType, agentName, agentState } = result.value
           const handoff = validated.handoff
-          const receipt = buildRuntimeAgentReceipt({
-            agentType,
-            agentId: agentState.agentId,
-            handoff,
-            spawnParams: validated.runtimeSpawnParams,
-            output,
-            agentState,
-          })
+          // P2-T8: prefer a supervised spawn's own validated receipt
+          // verbatim (see the background settle comment); the in-process
+          // path keeps building the receipt here exactly as before.
+          const receipt =
+            result.value.supervisedReceipt ??
+            buildRuntimeAgentReceipt({
+              agentType,
+              agentId: agentState.agentId,
+              handoff,
+              spawnParams: validated.runtimeSpawnParams,
+              output,
+              agentState,
+            })
           reconcileAgentReceiptIntoParent({
             parentAgentState,
             receipt,
             agentType,
             objective: handoff?.objective,
+            // Ledger pairing keys on the parent-side spawn id (see
+            // reconcileAgentReceiptIntoParent's spawnId doc).
+            spawnId: agentState.agentId,
           })
           receiptReconciled = true
           reports[spawnIndex] = {
@@ -947,6 +1013,9 @@ export const handleSpawnAgents = (async (
             receipt,
             agentType: agentTypeStr,
             objective: handoff?.objective,
+            // Ledger pairing keys on the parent-side spawn id (see
+            // reconcileAgentReceiptIntoParent's spawnId doc).
+            spawnId: validated.subAgentState.agentId,
           })
           receiptReconciled = true
           reports[spawnIndex] = {

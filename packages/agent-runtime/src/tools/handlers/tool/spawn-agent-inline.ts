@@ -382,19 +382,29 @@ export const handleSpawnAgentInline = (async (
     if (editsParentMessageHistory) {
       parentAgentState.messageHistory = result.agentState.messageHistory
     }
-    const receipt = buildRuntimeAgentReceipt({
-      agentType,
-      agentId: result.agentState.agentId,
-      handoff,
-      spawnParams: runtimeSpawnParams,
-      output: result.output,
-      agentState: result.agentState,
-    })
+    // P2-T8: prefer a supervised spawn's own validated receipt verbatim;
+    // the in-process path keeps building the receipt here exactly as before.
+    const receipt =
+      result.supervisedReceipt ??
+      buildRuntimeAgentReceipt({
+        agentType,
+        agentId: result.agentState.agentId,
+        handoff,
+        spawnParams: runtimeSpawnParams,
+        output: result.output,
+        agentState: result.agentState,
+      })
     reconcileAgentReceiptIntoParent({
       parentAgentState,
       receipt,
       agentType,
       objective: handoff?.objective,
+      // The ledger pairing keys on the PARENT-side spawn id recorded by the
+      // `spawn_started` event. A supervised receipt carries the child's own
+      // self-declared agentId, so pass the parent-side id explicitly (the
+      // in-process path's receipt.agentId is this same value, so the flag-off
+      // path is unchanged).
+      spawnId: childAgentState.agentId,
     })
     receiptReconciled = true
 

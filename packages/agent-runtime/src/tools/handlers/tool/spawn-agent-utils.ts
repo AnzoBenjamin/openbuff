@@ -14,7 +14,11 @@ import {
   agentReceiptSchema,
   agentRoleSchema,
 } from '@codebuff/common/types/agent-handoff'
+import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { loopAgentSteps } from '../../../run-agent-step'
 import { getAgentTemplate } from '../../../templates/agent-registry'
@@ -40,6 +44,11 @@ import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { ReceiptOutcome } from '../../../supervision/process-supervisor'
+import type {
+  SettledSubagentResult,
+  SupervisedSpawnRequest,
+} from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type {
   ParamsExcluding,
@@ -48,6 +57,7 @@ import type {
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type {
+  AgentOutput,
   AgentState,
   AgentTemplateType,
   Subgoal,
@@ -91,6 +101,17 @@ export type SubagentContextParams = AgentRuntimeDeps &
     repoUrl: string | undefined
     signal: AbortSignal
     userId: string | undefined
+    /**
+     * P2-T8: injectable supervised-spawn seam. When
+     * `AgentRuntimeDeps.processSupervision` is on, `executeSubagent`
+     * delegates to this seam (backed by supervision/process-supervisor.ts)
+     * instead of calling `loopAgentSteps` in-process. The seam is seeded at
+     * the SDK impl entry seam; tests inject a stub here. Default undefined
+     * ⇒ off ⇒ the in-process path is byte-identical.
+     */
+    spawnSupervised?: (
+      request: SupervisedSpawnRequest,
+    ) => Promise<SettledSubagentResult>
   }
 
 /**
@@ -125,6 +146,16 @@ export function extractSubagentContextParams(
     // AgentRuntimeDeps - Other
     logger: params.logger,
     fetch: params.fetch,
+    // AgentRuntimeDeps - Durable run journal (P2-T2): children journal their
+    // own streams under their own runId through the shared guarded write
+    // points in run-agent-step.ts / run-programmatic-step.ts.
+    journalWriter: params.journalWriter,
+    journalReader: params.journalReader,
+    // AgentRuntimeDeps - Process supervision (P2-T8): the flag plus the
+    // injectable supervised-spawn seam ride the context params into
+    // executeSubagent; the flag-off path is unchanged.
+    processSupervision: params.processSupervision,
+    spawnSupervised: params.spawnSupervised,
 
     // AgentRuntimeScopedDeps - Client (WebSocket)
     handleStepsLogChunk: params.handleStepsLogChunk,
@@ -586,6 +617,11 @@ const HIGH_FIDELITY_STRING_FIELDS = new Set([
   'fullLogPath',
   'logFile',
   'jobId',
+  // PR-T2 (D20): oversize-fallback artifact pointer — a short verbatim scratch
+  // path the parent reads back via read_files. Same contract as
+  // fullLogPath/logFile: never truncated, so compaction cannot clip the
+  // pointer out of the receipt.
+  'artifactPath',
 ])
 const PARENT_AGENT_OUTPUT_ARRAY_ITEMS = 48
 // extractedLines is control-plane: the basher 80-line extract must survive
@@ -599,6 +635,8 @@ const CONTROL_PLANE_ARRAY_FIELDS = new Set([
   'requirementsAddressed',
   'acceptanceCriteriaAddressed',
   'findingsAddressed',
+  'mutationReceipts',
+  'recovery',
   'errors',
   'unresolved',
   'requestedValidation',
@@ -840,6 +878,35 @@ function summarizeNestedAgentOutput(value: unknown): unknown {
   }
 }
 
+/**
+ * PR-T2 (D20) Part B: best-effort persistence of the FULL untruncated child
+ * output when the parent-visible shape must fall back to a truncated receipt.
+ * Content-addressed by the sha256 of the serialized payload, so the same
+ * content always maps to the same scratch path (idempotent overwrite).
+ * `tmpdir()` is resolved at call time so TMPDIR overrides in tests are
+ * respected. Returns the artifact path, or undefined on ANY error — the
+ * oversize fallback must stay lossless-of-receipt even when tmp is unwritable.
+ */
+let oversizeArtifactDirEnsured = false
+
+function persistOversizeArtifact(serialized: string): string | undefined {
+  try {
+    const dir = join(tmpdir(), 'openbuff-spawn-output')
+    if (!oversizeArtifactDirEnsured) {
+      mkdirSync(dir, { recursive: true })
+      oversizeArtifactDirEnsured = true
+    }
+    const artifactPath = join(
+      dir,
+      `${createHash('sha256').update(serialized).digest('hex')}.json`,
+    )
+    writeFileSync(artifactPath, serialized)
+    return artifactPath
+  } catch {
+    return undefined
+  }
+}
+
 function boundAgentOutputForParent(
   value: unknown,
   agentType?: string,
@@ -877,6 +944,18 @@ function boundAgentOutputForParent(
   }
   if (serialized === undefined) return compacted
   if (serialized.length <= PARENT_AGENT_OUTPUT_MAX_CHARS) return compacted
+  // PR-T2 (D20) Part B: persist the FULL serialized payload so the truncated
+  // parent-visible shape below stays recoverable via read_files. On any
+  // persistence error the three artifact fields are omitted entirely and the
+  // fallback shapes stay byte-identical.
+  const artifactPath = persistOversizeArtifact(serialized)
+  const artifactFields = artifactPath
+    ? {
+        artifactPath,
+        artifactBytes: serialized.length,
+        artifact: 'Full untruncated output persisted; read with read_files.',
+      }
+    : {}
   if (compacted && typeof compacted === 'object' && !Array.isArray(compacted)) {
     const record = compacted as Record<string, unknown>
     const valueRecord =
@@ -892,6 +971,7 @@ function boundAgentOutputForParent(
     ) {
       return {
         ...(record.type ? { type: record.type } : {}),
+        ...artifactFields,
         value: {
           schemaVersion: valueRecord.schemaVersion,
           verdict: valueRecord.verdict,
@@ -921,7 +1001,68 @@ function boundAgentOutputForParent(
     // parks the run on "did not return the required structured snapshot
     // attestation" despite a complete review.
     ...(attestationCore ?? {}),
+    ...artifactFields,
     summary: `${serialized.slice(0, 48_000)}...[truncated child output]...${serialized.slice(-8_000)}`,
+  }
+}
+
+/**
+ * PR-T2 (D20) Part A: providers often split one logical assistant answer into
+ * dozens of token-sized assistant messages under `lastMessage` mode; naive
+ * compaction then reports 100+ omittedItems and clips the answer mid-sentence.
+ * Conservatively collapse ONLY an unambiguous shape: a `lastMessage` wrapper
+ * whose value is 2+ assistant messages, each carrying exclusively
+ * `{ type: 'text', text: string }` content parts. The texts are concatenated
+ * in order with blank-line separators into a single assistant message. Extra
+ * message fields (e.g. `tags`) are ignored, and the first message's role is
+ * carried over. Any other shape — single message, mixed roles, non-text
+ * parts, wrong envelope — is returned UNCHANGED. Never mutates the input.
+ */
+function mergeLastMessageFragments(output: unknown): unknown {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return output
+  }
+  const record = output as Record<string, unknown>
+  if (record.type !== 'lastMessage' || !Array.isArray(record.value)) {
+    return output
+  }
+  const messages = record.value
+  if (messages.length <= 1) return output
+  const isTextOnlyAssistantMessage = (
+    message: unknown,
+  ): message is {
+    role: string
+    content: Array<{ type: 'text'; text: string }>
+  } => {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return false
+    }
+    const entry = message as Record<string, unknown>
+    if (entry.role !== 'assistant' || !Array.isArray(entry.content)) {
+      return false
+    }
+    return entry.content.every(
+      (part) =>
+        !!part &&
+        typeof part === 'object' &&
+        (part as Record<string, unknown>).type === 'text' &&
+        typeof (part as Record<string, unknown>).text === 'string',
+    )
+  }
+  const texts: string[] = []
+  for (const message of messages) {
+    if (!isTextOnlyAssistantMessage(message)) return output
+    for (const part of message.content) texts.push(part.text)
+  }
+  const firstMessage = messages[0] as { role: string }
+  return {
+    type: 'lastMessage',
+    value: [
+      {
+        role: firstMessage.role,
+        content: [{ type: 'text', text: texts.join('\n\n') }],
+      },
+    ],
   }
 }
 
@@ -929,6 +1070,11 @@ export function normalizeSpawnedAgentOutput(
   output: any,
   agentType?: string,
 ): any {
+  // PR-T2 (D20) Part A: collapse fragmented lastMessage assistant runs FIRST,
+  // before the undefined/error/structured branches, so the merged single
+  // message flows through the normal compaction path. A no-op for every other
+  // shape (the helper returns its input unchanged).
+  output = mergeLastMessageFragments(output)
   // M0-T3 output durability: a child that never called set_output must never
   // surface as an undefined/null/empty value that the parent cannot
   // distinguish from real (possibly compact) output. Emit an explicit partial
@@ -1639,19 +1785,114 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   const foundOutputStatus = findReceiptStatus(params.output)
   const mutationsComplete =
     mutationAgent && hasMutationProgress && errors.length === 0
+  // D19/PR-T1: derive the typed handoff outcome from runtime evidence.
+  // crashed/missing_output/schema_invalid read the RAW params.output (and the
+  // set_output rejection recorded on agent state); truncated reads the
+  // NORMALIZED output. One normalization pass total, reused below as the
+  // receipt's `normalizedOutput`. Precedence when multiple apply:
+  // crashed > missing_output > schema_invalid > truncated > ok.
+  const rawOutputRecord =
+    params.output &&
+    typeof params.output === 'object' &&
+    !Array.isArray(params.output)
+      ? (params.output as Record<string, unknown>)
+      : undefined
+  const crashEnvelopeMessage =
+    rawOutputRecord &&
+    rawOutputRecord.type === 'error' &&
+    typeof rawOutputRecord.message === 'string' &&
+    rawOutputRecord.message.startsWith('Subagent ') &&
+    rawOutputRecord.message.includes(' crashed: ')
+      ? rawOutputRecord.message
+      : undefined
+  const rawOutputMissing =
+    params.output === undefined ||
+    params.output === null ||
+    (typeof params.output === 'string' && !params.output.trim())
+  const lastSetOutputError = params.agentState?.lastSetOutputError
+  const lastSetOutputErrorText =
+    typeof lastSetOutputError === 'string' && lastSetOutputError.trim()
+      ? lastSetOutputError.trim()
+      : undefined
+  const normalizedOutput = normalizeSpawnedAgentOutput(
+    params.output,
+    params.agentType,
+  )
+  const normalizedOutputRecord =
+    normalizedOutput &&
+    typeof normalizedOutput === 'object' &&
+    !Array.isArray(normalizedOutput)
+      ? (normalizedOutput as Record<string, unknown>)
+      : undefined
+  const normalizedTruncationRecord =
+    normalizedOutputRecord?.truncation &&
+    typeof normalizedOutputRecord.truncation === 'object'
+      ? (normalizedOutputRecord.truncation as Record<string, unknown>)
+      : undefined
+  const normalizedOutputTruncated =
+    normalizedOutputRecord?.truncated === true ||
+    (typeof normalizedTruncationRecord?.omittedItems === 'number' &&
+      normalizedTruncationRecord.omittedItems > 0) ||
+    (typeof normalizedTruncationRecord?.omittedChars === 'number' &&
+      normalizedTruncationRecord.omittedChars > 0)
+  const outcome:
+    | 'ok'
+    | 'missing_output'
+    | 'schema_invalid'
+    | 'truncated'
+    | 'crashed' =
+    params.error || crashEnvelopeMessage
+      ? 'crashed'
+      : rawOutputMissing
+        ? 'missing_output'
+        : lastSetOutputErrorText
+          ? 'schema_invalid'
+          : normalizedOutputTruncated
+            ? 'truncated'
+            : 'ok'
+  // D24 fail-closed: a runtime-derived non-ok outcome must never yield a
+  // completed receipt unless runtime-attested mutations are the completion
+  // authority (RF-2). `truncated` stays visible via the outcome field without
+  // downgrading — reviewer receipts legitimately complete while truncated in
+  // transit, and the attestation-core rescue already preserves their verdict.
+  const envelopeUnderminesCompletion =
+    outcome !== 'ok' &&
+    outcome !== 'truncated' &&
+    !mutationsComplete &&
+    params.status === undefined
   const resolvedStatus = completionContractFailed
     ? 'partial'
     : errors.length > 0
       ? 'failed'
       : mutationsComplete
         ? 'completed'
-        : (params.status ??
-          foundOutputStatus ??
-          (mutationAgent ? 'blocked' : 'completed'))
-  const normalizedOutput = normalizeSpawnedAgentOutput(
-    params.output,
-    params.agentType,
-  )
+        : envelopeUnderminesCompletion
+          ? 'partial'
+          : (params.status ??
+            foundOutputStatus ??
+            (mutationAgent ? 'blocked' : 'completed'))
+  if (envelopeUnderminesCompletion) {
+    if (outcome === 'crashed') {
+      // Dedupe: params.error already contributed an equivalent crash error
+      // entry above; only the degrade-envelope crash needs its own diagnostic.
+      if (!params.error) {
+        errors.push({
+          message: `${params.agentType} receipt outcome 'crashed': ${crashEnvelopeMessage}`,
+          retryable: false,
+        })
+      }
+    } else if (outcome === 'missing_output') {
+      errors.push({
+        message: `${params.agentType} receipt outcome 'missing_output': ${params.agentType} ended without calling set_output`,
+        retryable: true,
+      })
+    } else if (outcome === 'schema_invalid') {
+      errors.push({
+        message: `${params.agentType} receipt outcome 'schema_invalid': ${lastSetOutputErrorText}`,
+        retryable: true,
+      })
+    }
+  }
   // mutationsComplete requires errors.length === 0, so a mutationAgent blocked due to
   // missing permission (which surfaces as a receipt error) cannot be coerced to completed
   // here; this only reconciles stale blocked/null child output when runtime-attested mutations exist.
@@ -1719,6 +1960,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     role: inferredRole,
     agentId: params.agentId,
     status: resolvedStatus,
+    outcome,
     workspaceRevision:
       latestMutation?.workspaceRevision ??
       params.agentState?.workspaceState?.revision ??
@@ -1820,6 +2062,16 @@ export function reconcileAgentReceiptIntoParent(params: {
   receipt: AgentReceipt
   agentType: string
   objective?: string
+  /**
+   * Parent-side spawn id the ledger pairing keys on (the `spawn_started`
+   * event's spawnId). Defaults to `receipt.agentId` — identical on the
+   * in-process path, where the runtime builds the receipt from the child
+   * state it created. A SUPERVISED spawn's receipt carries the child's own
+   * self-declared agentId instead, so the caller must pass the parent-side
+   * id explicitly or the `spawn_finished` event never pairs with its
+   * `spawn_started` and the spawn dangles in the ledger.
+   */
+  spawnId?: string
 }): void {
   params.parentAgentState.taskMemory = mergeAgentReceiptIntoTaskMemory({
     current: params.parentAgentState.taskMemory,
@@ -1844,7 +2096,7 @@ export function reconcileAgentReceiptIntoParent(params: {
     event: {
       type: 'spawn_finished',
       runId: params.parentAgentState.runId ?? params.parentAgentState.agentId,
-      spawnId: params.receipt.agentId,
+      spawnId: params.spawnId ?? params.receipt.agentId,
       agentType: params.agentType,
       status: params.receipt.status,
       receiptId: params.receipt.receiptId,
@@ -2261,6 +2513,253 @@ export function logAgentSpawn(params: {
   )
 }
 
+// ── Process-supervised spawn (P2-T8 adoption slice) ─────────────────────
+// Flag-gated: reached ONLY when `processSupervision` is on AND an injectable
+// `spawnSupervised` seam is present (see the branch in executeSubagent). The
+// default flag-off path never touches these helpers, so it stays
+// byte-identical. The supervisor module itself is loaded lazily by the seam
+// (never a top-level import in this hot path).
+
+/**
+ * Maps a transport-level settle failure (crashed / missing_output /
+ * schema_invalid / truncated) to the structured error output the in-process
+ * catch path produces, with the bounded stderr tail folded into the message
+ * for diagnosability. The settle chain's buildRuntimeAgentReceipt then
+ * classifies the receipt outcome from this envelope (crashed >
+ * missing_output > schema_invalid > truncated > ok) exactly like an
+ * in-process failure, and the stderrTail rides errors[] via the
+ * crash-envelope path — so the orchestration ledger pairing and lease
+ * release run unchanged.
+ */
+function mapSettledOutcomeToAgentOutput(params: {
+  agentType: string
+  outcome: ReceiptOutcome
+  stderrTail: string
+}): AgentOutput {
+  const detail = params.stderrTail.trim().slice(0, 2_000)
+  const detailSuffix = detail.length > 0 ? `: ${detail}` : ''
+  // The message deliberately reuses the in-process crash envelope shape
+  // (`Subagent <type> crashed: ...`), which buildRuntimeAgentReceiptOrThrow
+  // classifies as outcome 'crashed' → errors[] → status 'failed'. That is
+  // how the bounded stderrTail ends up folded into the synthesized failed
+  // receipt's errors[] without any settle-chain change.
+  switch (params.outcome) {
+    case 'crashed':
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised child exited before emitting a valid receipt${detailSuffix}`,
+      }
+    case 'missing_output':
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised child produced no receipt (missing_output)${detailSuffix}`,
+      }
+    case 'schema_invalid':
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised receipt failed agentReceiptSchema (schema_invalid)${detailSuffix}`,
+      }
+    case 'truncated':
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised receipt exceeded the supervisor's 8 MiB stdout capture cap (truncated)${detailSuffix}`,
+      }
+    case 'ok':
+      // Unreachable through the callers below; kept total for the enum.
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised child settled as 'ok' without a receipt${detailSuffix}`,
+      }
+  }
+}
+
+/**
+ * Runs one subagent through the injectable supervised-spawn seam and maps
+ * the settled result into the SAME `{ agentState, output }` shape (plus the
+ * additive `supervisedReceipt` carry) the in-process `loopAgentSteps` path
+ * returns, so the existing settle chains (buildRuntimeAgentReceipt →
+ * reconcileAgentReceiptIntoParent, lease release, ledger pairing) run
+ * unchanged.
+ *
+ * Receipt mapping contract (P2-T8):
+ *  - settle outcome 'ok' (or 'truncated', which still carries the validated
+ *    envelope) → `supervisedReceipt` is the child's own validated receipt;
+ *    the settle chains prefer it over a rebuilt one.
+ *  - crashed / missing_output / schema_invalid / truncated-without-envelope →
+ *    a structured error output; the settle chain synthesizes the
+ *    field-complete failed receipt via buildRuntimeAgentReceipt with the
+ *    stderr tail folded into errors[].
+ *  - a child-declared failure (its receipt says failed/crashed, e.g. the
+ *    honest 'unsupported-deps' degradation) still settles as 'ok' at the
+ *    transport level; its failed receipt is carried through verbatim and the
+ *    parent-visible output becomes the failure message.
+ */
+async function runSupervisedSubagent(params: {
+  spawnSupervised: (
+    request: SupervisedSpawnRequest,
+  ) => Promise<SettledSubagentResult>
+  agentState: AgentState
+  logger: Logger
+  onResponseChunk: (chunk: string | PrintModeEvent) => void
+  agentTemplate: AgentTemplate
+  parentAgentState: AgentState
+  ancestorRunIds: string[]
+  prompt: string | undefined
+  spawnParams: Record<string, unknown> | undefined
+  userInputId: string
+  fingerprintId: string
+  clientSessionId: string
+  userId: string | undefined
+  parentSystemPrompt: string | undefined
+  fileContext: ProjectFileContext
+  localAgentTemplates: Record<string, AgentTemplate>
+}): Promise<{
+  agentState: AgentState
+  output: AgentOutput
+  supervisedReceipt?: AgentReceipt
+}> {
+  const {
+    spawnSupervised,
+    agentState,
+    logger,
+    agentTemplate,
+    parentAgentState,
+    prompt,
+    spawnParams,
+  } = params
+
+  const request: SupervisedSpawnRequest = {
+    agentType: agentTemplate.id,
+    prompt,
+    spawnParams,
+    // Supervised spawns gain a wall-clock deadline in-process spawns do not
+    // have; no caller override is threaded in this slice, so the supervisor
+    // default (SETTLE_DEFAULT_TIMEOUT_MS) applies.
+    child: {
+      agentId: agentState.agentId,
+      ...(agentState.messageHistory
+        ? { messageHistory: agentState.messageHistory }
+        : {}),
+      ...(agentState.systemPrompt
+        ? { systemPrompt: agentState.systemPrompt }
+        : {}),
+      ...(agentState.taskMemory !== undefined
+        ? { taskMemory: agentState.taskMemory }
+        : {}),
+      ...(agentState.workspaceState !== undefined
+        ? { workspaceState: agentState.workspaceState }
+        : {}),
+      ...(agentState.contextTokenCount !== undefined
+        ? { contextTokenCount: agentState.contextTokenCount }
+        : {}),
+    },
+    fileContext: params.fileContext,
+    localAgentTemplates: params.localAgentTemplates,
+    userId: params.userId,
+    clientSessionId: params.clientSessionId,
+    userInputId: params.userInputId,
+    fingerprintId: params.fingerprintId,
+    // parentAgentState.runId may be unset (top-level orchestrators, tests,
+    // some programmatic runs). An empty string is not a valid runId and would
+    // persist as such into the serialized SupervisedSpawnRequest's
+    // ancestorRunIds, so fall back to the parent's stable agentId — the same
+    // convention createAgentState (parentAgentState.runId ?? 'NULL') and
+    // reconcileAgentReceiptIntoParent (parentAgentState.runId ??
+    // parentAgentState.agentId) already use.
+    ancestorRunIds: [
+      ...params.ancestorRunIds,
+      parentAgentState.runId ?? parentAgentState.agentId,
+    ],
+    parentSystemPrompt: params.parentSystemPrompt,
+  }
+
+  let settled: SettledSubagentResult
+  try {
+    settled = await spawnSupervised(request)
+  } catch (error) {
+    // A seam that throws is a supervisor-transport failure, not a child
+    // crash: degrade to the same structured error output the in-process
+    // catch path produces instead of failing the whole parent turn.
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    logger.warn(
+      { agentType: agentTemplate.id, error: errorMessage },
+      'Supervised spawn seam threw; degrading to structured error output',
+    )
+    return {
+      agentState,
+      // Same crash-envelope shape the in-process catch path emits, so
+      // buildRuntimeAgentReceiptOrThrow classifies it as outcome 'crashed'
+      // and the settle chain synthesizes a failed receipt.
+      output: {
+        type: 'error',
+        message: `Subagent ${agentTemplate.id} crashed: supervised spawn seam threw: ${errorMessage}`,
+      },
+    }
+  }
+
+  if (settled.outcome !== 'ok' && settled.outcome !== 'truncated') {
+    return {
+      agentState,
+      output: mapSettledOutcomeToAgentOutput({
+        agentType: agentTemplate.id,
+        outcome: settled.outcome,
+        stderrTail: settled.stderrTail,
+      }),
+    }
+  }
+
+  // Validate the settled envelope through the canonical receipt schema so an
+  // ok/truncated outcome can never carry a malformed receipt into the settle
+  // chains (an injected or buggy seam degrades to the crashed mapping
+  // instead).
+  const parsedEnvelope = agentReceiptSchema.safeParse(settled.receipt)
+  if (!parsedEnvelope.success) {
+    return {
+      agentState,
+      output: mapSettledOutcomeToAgentOutput({
+        agentType: agentTemplate.id,
+        outcome: 'crashed',
+        stderrTail: settled.stderrTail,
+      }),
+    }
+  }
+  const receipt = parsedEnvelope.data
+
+  const childReportsFailure =
+    receipt.status === 'failed' ||
+    receipt.outcome === 'crashed' ||
+    receipt.outcome === 'missing_output' ||
+    receipt.outcome === 'schema_invalid'
+  // The parent-visible crash envelope carries the child's first error CODE
+  // (e.g. 'unsupported-deps') alongside its message so the structured
+  // degradation reason survives into the settle chain's errors[] diagnostic
+  // instead of living only on the receipt's code field.
+  const firstChildError = receipt.errors[0]
+  const childFailureDetail = firstChildError
+    ? `${firstChildError.code ? `${firstChildError.code}: ` : ''}${firstChildError.message}`
+    : `child receipt status '${receipt.status}'`
+  const output: AgentOutput = childReportsFailure
+    ? {
+        type: 'error',
+        message: `Subagent ${agentTemplate.id} crashed: supervised child reported failure: ${childFailureDetail}`,
+      }
+    : {
+        type: 'structuredOutput',
+        value:
+          receipt.output &&
+          typeof receipt.output === 'object' &&
+          !Array.isArray(receipt.output)
+            ? (receipt.output as Record<string, unknown>)
+            : {
+                message:
+                  typeof receipt.output === 'string'
+                    ? receipt.output
+                    : `Supervised subagent ${agentTemplate.id} completed.`,
+              },
+      }
+  return { agentState, output, supervisedReceipt: receipt }
+}
+
 /**
  * Executes a subagent using loopAgentSteps
  */
@@ -2275,6 +2774,11 @@ export async function executeSubagent(
       ancestorRunIds: string[]
       spawnToolCallId?: string
       spawnIndex?: number
+      // P2-T8 flag-gated process supervision (see SubagentContextParams).
+      processSupervision?: boolean
+      spawnSupervised?: (
+        request: SupervisedSpawnRequest,
+      ) => Promise<SettledSubagentResult>
     } & ParamsExcluding<typeof loopAgentSteps, 'agentType' | 'ancestorRunIds'>,
     'isOnlyChild' | 'clearUserPromptMessagesAfterResponse'
   >,
@@ -2329,8 +2833,74 @@ export async function executeSubagent(
   // user/parent cancellation still propagates. There is no wall-clock deadline:
   // productive subagents are bounded only by cancellation, the repeated-step
   // watchdog, spawn depth, and cost/token budgets.
-  let result
+  // `output` is `unknown` (not AgentOutput) on purpose: the post-loop spread
+  // through finalizeOwnedLibrarianClone widens it, and the un-annotated let
+  // previously relied on TS's evolving-let union — freezing AgentOutput here
+  // would reject that reassignment.
+  let result: {
+    agentState: AgentState
+    output: unknown
+    supervisedReceipt?: AgentReceipt
+  }
   let failed = false
+  // P2-T8: flag-gated process supervision. With `processSupervision` AND an
+  // injectable `spawnSupervised` seam present, the child runs in a supervised
+  // Bun subprocess (supervision/child-entry.ts through
+  // supervision/process-supervisor.ts) and its settled receipt rides
+  // `result.supervisedReceipt` into the existing settle chains
+  // (reconcileAgentReceiptIntoParent unchanged). Otherwise — the DEFAULT —
+  // loopAgentSteps runs in-process exactly as before (byte-identical
+  // flag-off path). The flag is seeded at the SDK impl entry seam; no ambient
+  // process.env is read in this module.
+  //
+  // Slice limitations (documented, non-goals for this slice):
+  //  - the supervised child does NOT observe the parent AbortSignal (the
+  //    request is JSON-serialized; signal bridging rides the RPC-bridge
+  //    slice) — it is bounded by the supervisor's wall-clock deadline
+  //    (default SETTLE_DEFAULT_TIMEOUT_MS) instead;
+  //  - a supervised child that spawns shell grandchildren leaves them
+  //    running when the supervisor kills the direct child (process-group
+  //    teardown rides a later slice);
+  //  - the parent→child RPC bridge for the non-serializable callback deps
+  //    has not landed, so the child degrades honestly with a structured
+  //    'unsupported-deps' failed receipt (child-entry.ts) rather than
+  //    half-running.
+  const spawnSupervised =
+    withDefaults.processSupervision === true
+      ? withDefaults.spawnSupervised
+      : undefined
+  if (
+    spawnSupervised === undefined &&
+    withDefaults.processSupervision === true
+  ) {
+    // Flag on without a wired seam (tests, or a host that disabled the seam):
+    // fail open to the in-process path rather than crashing the spawn, with a
+    // warn so the misconfiguration is visible.
+    withDefaults.logger.warn(
+      { agentType: agentTemplate.id },
+      'processSupervision is enabled but no spawnSupervised seam is wired; running the subagent in-process',
+    )
+  }
+  if (spawnSupervised !== undefined) {
+    result = await runSupervisedSubagent({
+      spawnSupervised,
+      agentState: withDefaults.agentState,
+      logger: withDefaults.logger,
+      onResponseChunk,
+      agentTemplate,
+      parentAgentState,
+      ancestorRunIds,
+      prompt,
+      spawnParams,
+      userInputId: withDefaults.userInputId,
+      fingerprintId: withDefaults.fingerprintId,
+      clientSessionId: withDefaults.clientSessionId,
+      userId: withDefaults.userId,
+      parentSystemPrompt: withDefaults.parentSystemPrompt,
+      fileContext: withDefaults.fileContext,
+      localAgentTemplates: withDefaults.localAgentTemplates,
+    })
+  } else {
   try {
     result = await loopAgentSteps({
       ...withDefaults,
@@ -2339,7 +2909,13 @@ export async function executeSubagent(
       // If subagents need to see images, they get them through includeMessageHistory,
       // not by creating new image-containing messages for their prompts.
       content: undefined,
-      ancestorRunIds: [...ancestorRunIds, parentAgentState.runId ?? ''],
+      // Same fallback contract as the supervised branch above: an unset
+      // parentAgentState.runId must not leak an empty string (not a valid
+      // runId) into the child's ancestorRunIds.
+      ancestorRunIds: [
+        ...ancestorRunIds,
+        parentAgentState.runId ?? parentAgentState.agentId,
+      ],
       agentType: agentTemplate.id,
     })
   } catch (error) {
@@ -2397,6 +2973,7 @@ export async function executeSubagent(
       },
     }
   }
+  } // end flag-off in-process branch (P2-T8 supervised alternative above)
 
   if (!failed) {
     onResponseChunk({

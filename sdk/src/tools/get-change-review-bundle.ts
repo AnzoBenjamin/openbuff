@@ -4,10 +4,13 @@ import path from 'node:path'
 
 import { LocalHarnessStore } from '../services/local-harness-store'
 import { resolveWorkspaceIdentity } from '../services/repository-identity'
+import { runSemgrepBaseline } from '../services/semgrep-baseline'
 import { gitStatus, runGit } from './git-status'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
+import type { LanguageDiagnostic } from './language-diagnostics'
+import type { SemgrepRunner } from '../services/semgrep-baseline'
 
 const normalizeFile = (file: string) =>
   file.replace(/\\/g, '/').replace(/^\.\//, '')
@@ -15,6 +18,147 @@ const normalizeFile = (file: string) =>
 const isSessionArtifactPath = (file: string): boolean => {
   const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
   return normalized.startsWith('.agents/sessions/')
+}
+
+// P3-T11 (LI-10): optional Semgrep --baseline-commit security layer. Semgrep
+// is a user-installed sidecar; every failure mode (absent binary, missing
+// merge-base, nonzero exit, timeout) degrades to a soft securityScan.status
+// and never breaks the bundle.
+const SEMGREP_SCANNABLE_EXTENSIONS = new Set([
+  '.c',
+  '.cc',
+  '.cpp',
+  '.cxx',
+  '.cs',
+  '.go',
+  '.java',
+  '.kt',
+  '.kts',
+  '.scala',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+  '.php',
+  '.py',
+  '.rb',
+  '.rs',
+  '.swift',
+])
+
+const isSemgrepScannableFile = (file: string): boolean =>
+  SEMGREP_SCANNABLE_EXTENSIONS.has(
+    path.posix.extname(file.replace(/\\/g, '/')).toLowerCase(),
+  )
+
+type SecurityScanResult = {
+  status: 'ok' | 'unavailable' | 'error' | 'skipped'
+  findings: LanguageDiagnostic[]
+  reason?: string
+  toolVersion?: string
+}
+
+const isSafeRefName = (ref: string): boolean =>
+  /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref)
+
+const isHexCommit = (ref: string): boolean => /^[0-9a-f]{4,40}$/.test(ref)
+
+/**
+ * Baseline for the new-code-only scan: the merge-base with the default branch
+ * (origin/HEAD), falling back to HEAD~1 for repos without a remote. Returns
+ * null when no ancestor exists (e.g. a single-commit repository), which the
+ * caller surfaces as 'skipped'.
+ */
+async function resolveSecurityScanBaseline(params: {
+  cwd: string
+  headCommit: string
+  signal?: AbortSignal
+}): Promise<string | null> {
+  const defaultRef = await runGit(
+    ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+    params.cwd,
+    params.signal,
+  )
+  if (defaultRef.exitCode === 0) {
+    const ref = defaultRef.stdout.trim()
+    if (isSafeRefName(ref)) {
+      const mergeBase = await runGit(
+        ['merge-base', 'HEAD', ref],
+        params.cwd,
+        params.signal,
+      )
+      const candidate = mergeBase.stdout.trim()
+      if (
+        mergeBase.exitCode === 0 &&
+        isHexCommit(candidate) &&
+        candidate !== params.headCommit
+      ) {
+        return candidate
+      }
+    }
+  }
+  const parent = await runGit(
+    ['rev-parse', '--verify', 'HEAD~1'],
+    params.cwd,
+    params.signal,
+  )
+  const fallback = parent.stdout.trim()
+  if (
+    parent.exitCode === 0 &&
+    isHexCommit(fallback) &&
+    fallback !== params.headCommit
+  ) {
+    return fallback
+  }
+  return null
+}
+
+async function resolveSecurityScan(params: {
+  cwd: string
+  files: string[]
+  headCommit: string
+  runner?: SemgrepRunner
+  signal?: AbortSignal
+}): Promise<SecurityScanResult> {
+  const scannable = params.files.filter(isSemgrepScannableFile)
+  if (scannable.length === 0) {
+    return { status: 'skipped', reason: 'no-source-files', findings: [] }
+  }
+  const baselineCommit = await resolveSecurityScanBaseline(params)
+  if (!baselineCommit) {
+    return { status: 'skipped', reason: 'no-baseline-commit', findings: [] }
+  }
+  try {
+    const result = runSemgrepBaseline({
+      cwd: params.cwd,
+      baselineCommit,
+      files: scannable,
+      runner: params.runner,
+    })
+    if (result.status === 'ok') {
+      return {
+        status: 'ok',
+        findings: result.findings,
+        ...(result.toolVersion ? { toolVersion: result.toolVersion } : {}),
+      }
+    }
+    return {
+      status: result.status,
+      reason: result.reason,
+      findings: result.findings,
+    }
+  } catch (error) {
+    // Fail-open: the optional security layer must never break the bundle.
+    return {
+      status: 'error',
+      reason: error instanceof Error ? error.message : String(error),
+      findings: [],
+    }
+  }
 }
 
 /**
@@ -66,6 +210,7 @@ export async function getChangeReviewBundle(params: {
   max_chars?: number
   workspaceState?: WorkspaceStateV1
   signal?: AbortSignal
+  securityScanRunner?: SemgrepRunner
 }): Promise<CodebuffToolOutput<'get_change_review_bundle'>> {
   const [git, head, workspace] = await Promise.all([
     gitStatus({
@@ -249,6 +394,13 @@ export async function getChangeReviewBundle(params: {
         ),
       )
   }
+  const securityScan = await resolveSecurityScan({
+    cwd: params.cwd,
+    files,
+    headCommit,
+    runner: params.securityScanRunner,
+    signal: params.signal,
+  })
   return [
     {
       type: 'json',
@@ -266,6 +418,7 @@ export async function getChangeReviewBundle(params: {
         ownership,
         validation,
         findings,
+        securityScan,
       },
     },
   ]

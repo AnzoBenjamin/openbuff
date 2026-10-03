@@ -43,7 +43,7 @@ import type {
   HtmlContentBlock,
   ToolContentBlock,
 } from '../../types/chat'
-import type { MarkdownPalette } from '../../utils/markdown-renderer'
+import { hasMarkdown, type MarkdownPalette } from '../../utils/markdown-renderer'
 
 /**
  * Compute preview text for collapsed agent display.
@@ -257,6 +257,27 @@ const AgentBody = memo(
             const markdownOptionsForLevel = p.getAgentMarkdownOptions(0)
             const explicitColor = textBlock.color
             const nestedTextColor = explicitColor ?? p.theme.foreground
+
+            // D47 Stage 2: a renderable cannot nest inside a text element.
+            // When the content contains markdown, ContentWithMarkdown returns
+            // a native <markdown> renderable, so render it at box level
+            // (native wrapMode handles wrapping). Plain content degrades to a
+            // plain string and keeps its <text> wrapper for the fg color path.
+            if (hasMarkdown(filteredNestedContent)) {
+              return (
+                <box
+                  key={`${p.keyPrefix}-text-${index}`}
+                  style={{ width: '100%' }}
+                >
+                  <ContentWithMarkdown
+                    content={filteredNestedContent}
+                    isStreaming={isNestedStreamingText}
+                    codeBlockWidth={markdownOptionsForLevel.codeBlockWidth}
+                    palette={markdownOptionsForLevel.palette}
+                  />
+                </box>
+              )
+            }
 
             return (
               <text

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { getCurrentChatId } from '../project-files'
 import { flushAnalytics } from '../utils/analytics'
+import { detachOnExit } from '../utils/attach-session'
+import { getAttachTarget } from '../utils/codebuff-client'
 import { withTimeout } from '../utils/terminal-color-detection'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
 
@@ -85,12 +87,27 @@ function exitCli(): void {
   } catch {
     // Ignore — exit proceeds.
   }
-  withTimeout(
+  // Attach mode: kick off the detach inside the guarded section (so double
+  // Ctrl-C cannot double-detach) — the remote run keeps running. The detach
+  // promise is awaited bounded in the flush chain below, never
+  // fire-and-forget: process.exit must not race it, and a detach rejection
+  // or timeout must never block the exit.
+  const beforeExit = getAttachTarget() ? detachOnExit() : undefined
+  const flush = withTimeout(
     flushAnalytics(),
     EXIT_FLUSH_TIMEOUT_MS,
     undefined,
     getExitStreamSignal?.(),
-  ).finally(() => {
+  )
+  const boundedDetach = beforeExit
+    ? withTimeout(beforeExit, EXIT_FLUSH_TIMEOUT_MS, undefined).catch(
+        () => undefined,
+      )
+    : undefined
+  const exitChain = boundedDetach
+    ? Promise.all([flush, boundedDetach])
+    : flush
+  exitChain.finally(() => {
     process.exit(0)
   })
 }

@@ -1,0 +1,12 @@
+{
+  "_note": "Semantic vector (§12.7 GV-23, §12.4 disconnect): when the owning connection closes while an approval is pending, the approval resolves false and the session's active run is aborted with stopReason 'cancelled'; the approved command never executes.",
+  "expectedApprovalResolution": false,
+  "promptResult": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "stopReason": "cancelled"
+    }
+  },
+  "expectedCommandExecutions": 0
+}

@@ -1,0 +1,5 @@
+# Build artifacts stay out of git; Cargo.lock is tracked on purpose — the
+# workspace ships binaries and sidecars, so consumers resolve against a
+# committed, reproducible lockfile (not the transient one a fresh `cargo
+# build` would mint).
+/target

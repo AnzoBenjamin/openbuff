@@ -37,6 +37,7 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ResolvedOperationPath } from './path-utils'
 import type { FileFilter } from './read-files'
 import type { FilesystemAuthorityPolicy } from './filesystem-authority'
+import type { TransactionIntentLog } from './transaction-intent-log'
 
 type ApplyChangeResult =
   | {
@@ -262,6 +263,14 @@ export async function changeFiles(params: {
   callId?: string
   filesystemPolicy?: FilesystemAuthorityPolicy
   capabilityIssuer?: ReadCapabilityIssuer
+  /**
+   * P2-T5: optional durable transaction-intent log. When provided (and the
+   * transaction touches more than one file), the pre-image of every staged
+   * path is recorded durably before the first commit, and tx_commit/tx_abort
+   * markers bracket the commit loop so a crash mid-loop is recoverable at
+   * startup. Absent: behavior is byte-identical to before.
+   */
+  intentLog?: TransactionIntentLog
   logger?: Logger
 }): Promise<CodebuffToolOutput<'edit_transaction'>> {
   const {
@@ -273,6 +282,7 @@ export async function changeFiles(params: {
     callId,
     filesystemPolicy,
     capabilityIssuer,
+    intentLog,
     logger,
   } = params
   const parsedChanges = CHANGES.safeParse(parameters)
@@ -298,6 +308,10 @@ export async function changeFiles(params: {
     filesystemPolicy,
   )
   const operationId = crypto.randomUUID()
+  // P2-T5: the SAME transactionId is stamped on every receipt this operation
+  // issues and recorded in the durable intent log, so a receipt can always be
+  // correlated back to its intent record.
+  const transactionId = transactionIdForOperation(operationId)
   const hasGuardedMutation = changes.some(
     (change) =>
       change.type === 'delete' ||
@@ -571,6 +585,84 @@ export async function changeFiles(params: {
       })
     }
 
+    // P2-T5: BEFORE the first file commit of a multi-file operation, record
+    // the durable pre-image of every staged path (the same bytes the
+    // in-memory rollback already holds, now crash-safe). Fail-open on
+    // logging: a failed tx_begin is logged and the commit proceeds — the
+    // existing in-memory rollback stays the fail-closed safety net.
+    //
+    // Receipts stamp transactionId ONLY when a durable intent record
+    // actually exists (beginTransaction ok:true): the CommitReceiptV1 field
+    // documents the durable transaction-intent id, so a not_started receipt,
+    // a single-file commit, or a commit whose tx_begin failed must not carry
+    // a dangling id no intent record can answer for.
+    const durableIntentLog =
+      intentLog !== undefined && prepared.length > 1 ? intentLog : undefined
+    let durableTransactionId: string | undefined
+    if (durableIntentLog) {
+      const begunIntent = await durableIntentLog.beginTransaction({
+        transactionId,
+        operationId,
+        callId: callId ?? operationId,
+        entries: prepared.flatMap((change) =>
+          change.action === 'move'
+            ? [
+                {
+                  path: change.path,
+                  beforeHash:
+                    change.beforeContent === null
+                      ? null
+                      : hashFileContent(change.beforeContent),
+                  ...(change.beforeContent !== null
+                    ? {
+                        beforeBytes: change.beforeContent,
+                        // MODE IS PART OF THE PRE-IMAGE: without it, startup
+                        // recovery restores the bytes with default permissions
+                        // while the in-memory rollback preserves beforeMode —
+                        // an executable restored after a crash would lose its
+                        // +x bit.
+                        ...(change.beforeMode !== undefined
+                          ? { beforeMode: change.beforeMode }
+                          : {}),
+                      }
+                    : {}),
+                },
+                // A move destination did not exist before the transaction:
+                // beforeHash null (no beforeBytes) means revert deletes it.
+                {
+                  path: change.destinationPath!,
+                  beforeHash: null,
+                },
+              ]
+            : [
+                {
+                  path: change.path,
+                  beforeHash:
+                    change.beforeContent === null
+                      ? null
+                      : hashFileContent(change.beforeContent),
+                  ...(change.beforeContent !== null
+                    ? {
+                        beforeBytes: change.beforeContent,
+                        ...(change.beforeMode !== undefined
+                          ? { beforeMode: change.beforeMode }
+                          : {}),
+                      }
+                    : {}),
+                },
+              ],
+        ),
+      })
+      if (begunIntent.ok) {
+        durableTransactionId = transactionId
+      } else {
+        logger?.warn(
+          { operationId, transactionId, error: begunIntent.error },
+          'Transaction intent log tx_begin failed; proceeding without a durable pre-image (in-memory rollback still active)',
+        )
+      }
+    }
+
     const committed: PreparedTransactionChange[] = []
     try {
       for (const change of prepared) {
@@ -623,6 +715,7 @@ export async function changeFiles(params: {
       const receipt = await authority.issueCommittedReceipt({
         operationId,
         callId: callId ?? operationId,
+        transactionId: durableTransactionId,
         authorityTier: tier,
         actions: prepared.map((change) => ({
           actionId: change.actionId,
@@ -640,6 +733,18 @@ export async function changeFiles(params: {
         expectedFinalHashes,
       })
       authority.finishCommit(begun.lease, { succeeded: true })
+      // P2-T5: the durable transaction committed — mark it so startup
+      // recovery never reverts it. Fail-open on logging.
+      if (durableIntentLog && durableTransactionId) {
+        const committedIntent =
+          await durableIntentLog.commitTransaction(transactionId)
+        if (!committedIntent.ok) {
+          logger?.warn(
+            { operationId, transactionId, error: committedIntent.error },
+            'Transaction intent log tx_commit failed; the commit itself already succeeded',
+          )
+        }
+      }
       const postEditAuthorities = new Map(
         prepared.flatMap((change) => {
           if (change.afterContent === null) return []
@@ -718,6 +823,7 @@ export async function changeFiles(params: {
       const receipt = await authority.issueObservedFailureReceipt({
         operationId,
         callId: callId ?? operationId,
+        transactionId: durableTransactionId,
         authorityTier: tier,
         status:
           rollbackFailures.size > 0
@@ -751,6 +857,23 @@ export async function changeFiles(params: {
             : {}),
         })),
       })
+      // P2-T5: AFTER the existing in-memory rollback ran, record the abort
+      // so startup recovery never re-reverts this transaction. Fail-open on
+      // logging: a missing abort marker at worst causes an extra (idempotent)
+      // revert pass at startup.
+      if (durableIntentLog && durableTransactionId) {
+        const abortedIntent =
+          await durableIntentLog.abortTransaction(
+            transactionId,
+            `commit failed: ${commitError.code}`,
+          )
+        if (!abortedIntent.ok) {
+          logger?.warn(
+            { operationId, transactionId, error: abortedIntent.error },
+            'Transaction intent log tx_abort failed; startup recovery may re-attempt an already-rolled-back transaction',
+          )
+        }
+      }
       logger?.error(
         {
           operationId,
@@ -1192,6 +1315,19 @@ function standaloneTransactionFailureResult(
   ]
 }
 
+/**
+ * P2-T5: the durable transaction-intent id is derived deterministically from
+ * the operation id so the intent log and every receipt issued while a durable
+ * record exists stamp the SAME id without threading it through every call
+ * site. Receipts issued with NO durable record behind them (not_started
+ * receipts, single-file commits, commits whose tx_begin failed) stamp no
+ * transactionId: the CommitReceiptV1 field documents a durable
+ * transaction-intent id, not an operation-scoped alias.
+ */
+function transactionIdForOperation(operationId: string): string {
+  return `tx-${operationId}`
+}
+
 function transactionFailureResult(params: {
   authority: ReturnType<typeof getDefaultFilesystemAuthority>
   callId: string
@@ -1201,6 +1337,10 @@ function transactionFailureResult(params: {
   failedIndex: number
   error: FilesystemError
 }): CodebuffToolOutput<'edit_transaction'> {
+  // No transactionId: every transactionFailureResult path runs BEFORE the
+  // durable intent record exists, and the CommitReceiptV1 transactionId
+  // documents a durable transaction-intent id — a not_started receipt must
+  // not carry a dangling id no intent record can answer for.
   const receipt = params.authority.issueNotStartedReceipt({
     operationId: params.operationId,
     callId: params.callId,

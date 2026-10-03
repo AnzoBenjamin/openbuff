@@ -75,6 +75,19 @@ export const JudgingResultSchema = z.object({
     .array(z.string())
     .optional()
     .describe('Concrete non-idiomatic patterns observed in the implementation'),
+  perJudgeScores: z
+    .array(
+      z.object({
+        judgeId: z.string(),
+        completionScore: z.number(),
+        codeQualityScore: z.number(),
+        overallScore: z.number(),
+      }),
+    )
+    .optional()
+    .describe(
+      'Per-judge raw scores (before averaging) so downstream variance is recoverable. On an individual judge result this holds that one judge; on an averaged result it holds every valid judge. Optional for back-compat.',
+    ),
   scoringStatus: ScoringStatusSchema.optional().describe(
     'Whether the scores were actually measured by the judges, or are synthetic (all judges failed). Absent => scored for back-compat.',
   ),
@@ -303,7 +316,19 @@ async function runSingleJudge(
       return null
     }
 
-    return parsed.data
+    // Self-identify this judge's raw scores so downstream variance is
+    // recoverable after averaging.
+    return {
+      ...parsed.data,
+      perJudgeScores: [
+        {
+          judgeId: judgeAgentId,
+          completionScore: parsed.data.completionScore,
+          codeQualityScore: parsed.data.codeQualityScore,
+          overallScore: parsed.data.overallScore,
+        },
+      ],
+    }
   } catch (error) {
     console.warn(`Judge ${judgeAgentId} failed:`, error)
     return null
@@ -444,6 +469,20 @@ ${finalCheckOutputs ? `\n## Final Check Command Outputs\n${finalCheckOutputs}` :
       nonIdiomaticPatternsDetected.length > 0
         ? nonIdiomaticPatternsDetected
         : undefined,
+    // Preserve every valid judge's raw completion/quality/overall so
+    // downstream consumers can recover per-judge variance. Older judge
+    // results that predate perJudgeScores are reconstructed as 'unknown'.
+    perJudgeScores: validResults.flatMap(
+      (r) =>
+        r.perJudgeScores ?? [
+          {
+            judgeId: 'unknown',
+            completionScore: r.completionScore,
+            codeQualityScore: r.codeQualityScore,
+            overallScore: r.overallScore,
+          },
+        ],
+    ),
     // 'scored' when all judges succeeded; 'partial_judge_failure' when some
     // dropped out (see the computation above). clampScoresByDeterministicSignals
     // preserves this field unchanged via object spread.

@@ -35,6 +35,7 @@ import {
   resetEarlyReturnState,
   setupStreamingContext,
 } from './helpers/send-message'
+import { whenRegistriesReady } from '../services/deferred-registries'
 import { NETWORK_ERROR_ID } from '../utils/validation-error-helpers'
 import { yieldToEventLoop } from '../utils/yield-to-event-loop'
 
@@ -50,6 +51,11 @@ import type {
   SetContextWindowUsageFn,
 } from '../utils/sdk-event-handlers'
 import type { AgentDefinition, MessageContent, RunState } from '@openbuff/sdk'
+import {
+  openRunJournalForRun,
+  resolveRunJournalPath,
+} from '../utils/run-journal-path'
+
 interface UseSendMessageOptions {
   inputRef: React.MutableRefObject<any>
   activeSubagentsRef: React.MutableRefObject<Set<string>>
@@ -359,6 +365,12 @@ export const useSendMessage = ({
 
       // Validate before sending (e.g., agent config checks)
       try {
+        // P1-T9 gating: onBeforeMessageSend (agent validation) reads the
+        // agent registry via loadAgentDefinitions, so the deferred registry
+        // loads must have settled BEFORE it runs — otherwise mid-startup
+        // validation observes an empty/partial registry. This is the same
+        // gate the run below uses for its own loadAgentDefinitions read.
+        await whenRegistriesReady()
         const validationResult = await onBeforeMessageSend()
 
         if (!validationResult.success) {
@@ -486,8 +498,22 @@ export const useSendMessage = ({
       // before any async work, so the router can correctly detect busy state.
       let actualCredits: number | undefined
 
+      // P2-T7: opened LAZILY below — only after the provider-readiness gate
+      // inside the run try-block, so a send that never starts a run (a
+      // validation failure, a providerReadiness failure early-return) never
+      // creates the journal db. The SAME object serves writer and reader (one
+      // connection, one file), and it is closed in the finally below (the
+      // run's promise-chain end).
+      // Fail-open: an unopenable journal warns once and the turn proceeds
+      // WITHOUT journaling — a journaling outage can never break a user turn.
+      let runJournal: ReturnType<typeof openRunJournalForRun> = undefined
+
       // Execute SDK run with streaming handlers
       try {
+        // P1-T9: agent/skill registries load post-first-frame; wait for them
+        // here so the first send never reads a not-yet-loaded registry. This
+        // resolves immediately once ready (or when no deferred load ran).
+        await whenRegistriesReady()
         const agentDefinitions = loadAgentDefinitions()
         const resolvedAgent = resolveAgent(agentMode, agentId, agentDefinitions)
         const providerReadiness = getOpenbuffProviderReadiness({
@@ -508,6 +534,16 @@ export const useSendMessage = ({
           })
           return
         }
+
+        // P2-T7: open the run journal ONLY now that the run is actually
+        // starting (never at TUI startup, never on a validation failure, and
+        // never on a providerReadiness failure early-return above).
+        runJournal = openRunJournalForRun({
+          path: resolveRunJournalPath(),
+          warn: (message) => {
+            logger.warn({ message }, '[send-message] Run journal unavailable')
+          },
+        })
 
         const promptWithBashContext = bashContextForPrompt
           ? bashContextForPrompt + finalContent
@@ -596,7 +632,17 @@ export const useSendMessage = ({
           { runConfig },
           '[send-message] Sending message with sdk run config',
         )
-        const runState = await client.run(runConfig)
+        const runState = await client.run({
+          ...runConfig,
+          // P2-T7: thread the live run journal into the SDK run so tool
+          // calls/results, spawns, and step boundaries are journaled for
+          // crash-safe resume + `openbuff dash`/replay. Conditional spread:
+          // an unjournalable run carries no journal fields at all (the
+          // additive-optional contract).
+          ...(runJournal
+            ? { journalWriter: runJournal, journalReader: runJournal }
+            : {}),
+        })
 
         // Accept an aborted run's preserved state while it still owns the send.
         // This serializes cancel-A/send-B and prevents continuation from forking
@@ -684,6 +730,17 @@ export const useSendMessage = ({
         }
         releaseRunOwner()
         updater.dispose()
+        if (runJournal) {
+          // P2-T7: the run's promise-chain end is the journal's cleanup seam.
+          // Best-effort (the turn's outcome is already decided): a close
+          // failure logs and must never break the TUI.
+          void runJournal.close().catch((closeError) => {
+            logger.warn(
+              { error: closeError },
+              '[send-message] Run journal close failed',
+            )
+          })
+        }
       }
     },
     [

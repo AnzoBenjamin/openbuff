@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { get3dAssetFormat } from '@codebuff/common/util/file'
 
-import { getSystemProcessEnv } from '../env'
+import { getChildProcessEnv } from '../env'
 import { resolveFilePathForFileSystemOperation } from './path-utils'
 import { readImages } from './read-image'
 import { isReadPathBlocked } from './read-policy'
@@ -296,7 +296,7 @@ async function runBlender(
     const child = spawn('blender', ['--disable-autoexec', ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: { ...getSystemProcessEnv(), ...environment },
+      env: { ...getChildProcessEnv(), ...environment },
     })
     const maxOutputBytes = 8 * 1024 * 1024
     let output = ''

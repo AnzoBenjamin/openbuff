@@ -6,12 +6,68 @@ const DEBUG_LOG_MAX_OBJECT_KEYS = 160
 // Keys whose string values are credentials (OAuth tokens, API keys, bearer
 // auth headers). When sanitizing an object, any value under a matching key is
 // replaced with '[REDACTED]' so tokens never reach the debug log
-// (debug/cli.jsonl) or persisted chat state. Matching is case-insensitive and
-// catches common casing variants (accessToken, access_token, ACCESS_TOKEN).
-const SENSITIVE_KEY_PATTERN =
-  /^(.*(?:token|access_token|refresh_token|id_token|authorization|api[_-]?key|apikey|secret|bearer|password|passwd|credential).*)$/i
+// (debug/cli.jsonl) or persisted chat state. Redaction is keyed on the field
+// NAME, not the value content, and is case-insensitive.
+//
+// Matching uses a word-boundary rule instead of a substring test so metadata
+// keys that merely CONTAIN a credential substring (refreshTokenCount,
+// maxTokens, tokenizer, secretSantaName) are kept. The key is tokenized into
+// words across camelCase, PascalCase, snake_case, kebab-case, and
+// SCREAMING_CASE, then classified SENSITIVE only when a credential word is
+// either the terminal word (accessToken, apiKey) or immediately followed by a
+// carrier-suffix word that still holds the secret (tokenUrl, tokenValue). A
+// credential word followed by any other (descriptor) word is metadata (kept).
 
-const isSensitiveKey = (key: string): boolean => SENSITIVE_KEY_PATTERN.test(key)
+// Words that denote a credential itself.
+const CREDENTIAL_WORDS = new Set([
+  'token', 'secret', 'password', 'passwd', 'credential', 'credentials',
+  'authorization', 'bearer', 'apikey', 'jwt', 'oauth', 'privatekey',
+])
+// When one of these immediately FOLLOWS a credential word, the key still
+// carries the secret value (tokenUrl, tokenValue, tokenString, ...). Anything
+// else following a credential word (count, name, id, type, santa, ...) makes
+// the key metadata about the credential, not the credential, so it is kept.
+const CREDENTIAL_CARRIER_SUFFIXES = new Set([
+  'url', 'uri', 'value', 'string', 'header', 'headers', 'secret', 'token',
+  'key', 'hash', 'jwt', 'digest',
+])
+
+const splitKeyWords = (key: string): string[] =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2') // camelCase boundary
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2') // ACRONYMWord boundary
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 0)
+
+const mergeApiKeyWords = (words: string[]): string[] => {
+  const merged: string[] = []
+  for (let i = 0; i < words.length; i += 1) {
+    if (words[i] === 'api' && words[i + 1] === 'key') {
+      merged.push('apikey')
+      i += 1
+    } else {
+      merged.push(words[i])
+    }
+  }
+  return merged
+}
+
+const isSensitiveKey = (key: string): boolean => {
+  const words = mergeApiKeyWords(splitKeyWords(key))
+  for (let i = 0; i < words.length; i += 1) {
+    if (!CREDENTIAL_WORDS.has(words[i])) continue
+    const next = words[i + 1]
+    // Terminal credential word, or a credential word whose following word is a
+    // carrier suffix, means this key holds the secret itself.
+    if (next === undefined || CREDENTIAL_CARRIER_SUFFIXES.has(next)) {
+      return true
+    }
+    // Otherwise this occurrence is a descriptor (e.g. tokenCount); keep scanning
+    // for another credential word before deciding the key is safe.
+  }
+  return false
+}
 
 type SanitizeOptions = {
   maxStringLength: number

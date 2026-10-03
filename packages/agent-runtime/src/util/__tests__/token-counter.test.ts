@@ -1,11 +1,19 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
+  clearExactTokenCountersForTest,
+  countTokens,
   countTokensJson,
+  exactFamilyMatcher,
+  getTokenizerForModel,
   IncrementalTokenCounter,
+  registerExactTokenCounter,
   tokenCountCacheSizeForTest,
   tokenFudgeFactorForModel,
+  tokenizerFamilyCacheSizeForTest,
 } from '../token-counter'
+
+import type { ExactTokenCounter } from '../token-counter'
 
 describe('countTokensJson', () => {
   test('counts model-controlled special-token text as ordinary text (SEC-TC-SPECIAL-1)', () => {
@@ -152,5 +160,207 @@ describe('IncrementalTokenCounter (M3-T2)', () => {
     counter.reset()
     // After reset, the count is recomputed (identical value, fresh memo).
     expect(counter.messagesTokens([a])).toBe(counter.messageTokens(a))
+  })
+})
+
+describe('exact token counter seam (P3-T10)', () => {
+  // Save/restore the gate around every test so the per-call env read never
+  // leaks state across cases (or into other suites in this process).
+  const ORIGINAL_EXACT_TOKENS_ENV = process.env.OPENBUFF_EXACT_TOKENS
+
+  afterEach(() => {
+    if (ORIGINAL_EXACT_TOKENS_ENV === undefined) {
+      delete process.env.OPENBUFF_EXACT_TOKENS
+    } else {
+      process.env.OPENBUFF_EXACT_TOKENS = ORIGINAL_EXACT_TOKENS_ENV
+    }
+    clearExactTokenCountersForTest()
+  })
+
+  /** Deterministic fake provider: 1 token per char, records every input. */
+  const lengthCounter = (
+    family: string,
+    calls: string[],
+  ): ExactTokenCounter => ({
+    family,
+    count: (text: string) => {
+      calls.push(text)
+      return text.length
+    },
+  })
+
+  test('flag OFF keeps the estimator even when a provider matches', () => {
+    delete process.env.OPENBUFF_EXACT_TOKENS
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    const text = 'exact seam flag-off coverage text'
+    const counted = countTokens(text, 'anthropic/claude-opus-4.7')
+    // The provider was never consulted and the result is the legacy fudged
+    // estimate (identical to the unannotated Anthropic-default call).
+    expect(calls).toHaveLength(0)
+    expect(counted).not.toBe(text.length)
+    expect(counted).toBe(countTokens(text))
+  })
+
+  test('flag ON + matching provider returns the exact count, no fudge', () => {
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    const text = 'exact seam flag-on coverage text'
+    // The estimator would have applied the Anthropic 1.35 factor to the BPE
+    // count; the exact path returns the provider count verbatim instead.
+    expect(countTokens(text, 'anthropic/claude-opus-4.7')).toBe(text.length)
+    expect(calls).toEqual([text])
+  })
+
+  test('flag ON bypasses the 100k BPE cap (full exact count, no fudge)', () => {
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('openai'),
+      lengthCounter('openai', calls),
+    )
+    // Above MAX_BPE_ENCODE_CHARS: the estimator would encode a 20k prefix
+    // sample and extrapolate; the exact path counts the whole input once.
+    const text = 'w'.repeat(200_000)
+    expect(countTokens(text, 'openai/gpt-4o')).toBe(200_000)
+    expect(calls).toEqual([text])
+  })
+
+  test('flag ON with no matching provider falls back to the estimator', () => {
+    const model = 'openai/gpt-4o'
+    const text = 'provider-miss fallback coverage text'
+    delete process.env.OPENBUFF_EXACT_TOKENS
+    const expected = countTokens(text, model)
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    // No registrations at all -> estimator.
+    expect(countTokens(text, model)).toBe(expected)
+    // A registered provider whose matcher rejects the model -> estimator.
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    expect(countTokens(text, model)).toBe(expected)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('exact path still bounds pathological oversized input', () => {
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    // 2M chars > MAX_EXACT_ENCODE_CHARS: the provider must receive only a
+    // bounded prefix, with the total extrapolated by length ratio — never an
+    // unbounded exact encode.
+    const text = 'x'.repeat(2_000_000)
+    const counted = countTokens(text, 'anthropic/claude-opus-4.7')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].length).toBeLessThan(text.length)
+    // Density-1 fake: sampleTokens/sampleLength == 1, so the extrapolated
+    // total is exactly the input length.
+    expect(counted).toBe(text.length)
+  })
+
+  test('provider cache honors MAX_CACHEABLE_INPUT_CHARS', () => {
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    const model = 'anthropic/claude-opus-4.7'
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    // Cacheable band (>100 chars, <=8k): counted once, then cache-served.
+    const small = 'y'.repeat(5_000)
+    expect(countTokens(small, model)).toBe(5_000)
+    expect(countTokens(small, model)).toBe(5_000)
+    expect(calls).toHaveLength(1)
+    // Above the 8k cacheability bound: re-counted every call, never cached.
+    const large = 'z'.repeat(64_000)
+    expect(countTokens(large, model)).toBe(64_000)
+    expect(countTokens(large, model)).toBe(64_000)
+    expect(calls).toHaveLength(3)
+    // <=100 chars: also never cached (the BPE LRU's same lower edge).
+    const tiny = 'q'.repeat(50)
+    countTokens(tiny, model)
+    countTokens(tiny, model)
+    expect(calls).toHaveLength(5)
+  })
+
+  test('register/clear lifecycle: clearing restores the estimator', () => {
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    const model = 'anthropic/claude-opus-4.7'
+    const text = 'register-clear lifecycle coverage text'
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    expect(countTokens(text, model)).toBe(text.length)
+    expect(calls).toHaveLength(1)
+    clearExactTokenCountersForTest()
+    delete process.env.OPENBUFF_EXACT_TOKENS
+    const expected = countTokens(text, model)
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    expect(countTokens(text, model)).toBe(expected)
+    expect(calls).toHaveLength(1)
+  })
+
+  test('unannotated no-model callers keep the estimator even with the gate on', () => {
+    const text = 'unannotated caller gate coverage text'
+    delete process.env.OPENBUFF_EXACT_TOKENS
+    const expected = countTokens(text)
+    process.env.OPENBUFF_EXACT_TOKENS = '1'
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    // The legacy Anthropic sentinel must NOT route to the provider.
+    expect(countTokens(text)).toBe(expected)
+    expect(countTokensJson(text)).toBe(expected)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('env gate follows the shared truthy-set pattern', () => {
+    const model = 'anthropic/claude-opus-4.7'
+    const text = 'truthy-set gate coverage text'
+    const calls: string[] = []
+    registerExactTokenCounter(
+      exactFamilyMatcher('anthropic'),
+      lengthCounter('anthropic', calls),
+    )
+    for (const offValue of ['0', 'false', 'no', 'off', '']) {
+      process.env.OPENBUFF_EXACT_TOKENS = offValue
+      countTokens(text, model)
+    }
+    expect(calls).toHaveLength(0)
+    for (const onValue of ['1', 'true', 'YES', 'On']) {
+      process.env.OPENBUFF_EXACT_TOKENS = onValue
+      expect(countTokens(text, model)).toBe(text.length)
+    }
+    expect(calls.length).toBeGreaterThan(0)
+  })
+
+  test('getTokenizerForModel resolves families and stays bounded', () => {
+    expect(getTokenizerForModel('anthropic/claude-opus-4.7')).toBe('anthropic')
+    expect(getTokenizerForModel('openai/gpt-4o')).toBe('openai')
+    expect(getTokenizerForModel('google/gemini-2.5-pro')).toBe('gemini')
+    expect(getTokenizerForModel('some-unknown-model')).toBe('unknown')
+    expect(getTokenizerForModel(undefined)).toBe('unknown')
+    // Bounded: cycling far past the 1000-entry capacity cannot grow the map.
+    for (let i = 0; i < 1_500; i++) {
+      getTokenizerForModel(`cycle-model-${i}`)
+    }
+    expect(tokenizerFamilyCacheSizeForTest()).toBeLessThanOrEqual(1_000)
+    expect(getTokenizerForModel('anthropic/claude-opus-4.7')).toBe('anthropic')
   })
 })

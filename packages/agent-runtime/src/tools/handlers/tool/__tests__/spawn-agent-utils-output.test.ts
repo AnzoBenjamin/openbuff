@@ -1,4 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir as osTmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 
@@ -133,6 +141,229 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     expect(collapsed.verdict).toBe('LOOKS_GOOD')
     expect(collapsed.snapshotFingerprint).toBe('v3:' + 'a'.repeat(64))
     expect(collapsed.reviewedFiles).toEqual(['src/a.ts'])
+  })
+})
+
+/**
+ * PR-T2 (D20) Part A: `lastMessage`-mode children often return one logical
+ * answer split into dozens of token-sized assistant messages; the fragment
+ * merge collapses unambiguous text-only assistant runs into one message so
+ * compaction stops reporting 100+ omittedItems and clipping the answer.
+ */
+describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
+  const fragments = (...texts: string[]) => ({
+    type: 'lastMessage',
+    value: texts.map((text) => ({
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+    })),
+  })
+
+  test('merges multiple text-only assistant fragments into one message', () => {
+    const normalized = normalizeSpawnedAgentOutput(
+      fragments('Part one.', 'Part two.', 'Part three.'),
+      'researcher-web',
+    )
+    expect(normalized).toEqual({
+      type: 'lastMessage',
+      value: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Part one.\n\nPart two.\n\nPart three.' },
+          ],
+        },
+      ],
+    })
+  })
+
+  test('ignores extra message fields such as tags when merging', () => {
+    const normalized = normalizeSpawnedAgentOutput(
+      {
+        type: 'lastMessage',
+        value: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'First' }],
+            tags: ['SUBAGENT'],
+          },
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Second' }],
+            tags: ['SUBAGENT'],
+          },
+        ],
+      },
+      'researcher-web',
+    )
+    expect(normalized).toEqual({
+      type: 'lastMessage',
+      value: [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'First\n\nSecond' }],
+        },
+      ],
+    })
+  })
+
+  test('leaves a single-message lastMessage unchanged (no merge)', () => {
+    const normalized = normalizeSpawnedAgentOutput(
+      fragments('only fragment'),
+      'researcher-web',
+    ) as any
+    expect(Array.isArray(normalized.value)).toBe(true)
+    expect(normalized.value).toHaveLength(1)
+    expect(normalized.value[0].content).toEqual([
+      { type: 'text', text: 'only fragment' },
+    ])
+  })
+
+  test('returns a mixed-role fragment list unchanged', () => {
+    const input = {
+      type: 'lastMessage',
+      value: [
+        { role: 'user', content: [{ type: 'text', text: 'question' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
+      ],
+    }
+    expect(normalizeSpawnedAgentOutput(input, 'researcher-web')).toEqual(input)
+  })
+
+  test('returns a fragment list with non-text content parts unchanged', () => {
+    const input = {
+      type: 'lastMessage',
+      value: [
+        { role: 'assistant', content: [{ type: 'text', text: 'a' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'b' },
+            { type: 'image', image: 'x' },
+          ],
+        },
+      ],
+    }
+    expect(normalizeSpawnedAgentOutput(input, 'researcher-web')).toEqual(input)
+  })
+
+  test('returns a lastMessage with a non-array value unchanged', () => {
+    const input = { type: 'lastMessage', value: 'plain text' }
+    expect(normalizeSpawnedAgentOutput(input, 'researcher-web')).toEqual(input)
+  })
+
+  test('never mutates the input', () => {
+    const input = fragments('one', 'two') as Record<string, unknown>
+    const snapshot = JSON.parse(JSON.stringify(input))
+    normalizeSpawnedAgentOutput(input, 'researcher-web')
+    expect(input).toEqual(snapshot)
+  })
+})
+
+/**
+ * PR-T2 (D20) Part B: when the parent-visible shape must fall back to a
+ * truncated receipt, the FULL serialized child output is additionally
+ * persisted to a content-addressed scratch file and referenced via additive
+ * artifactPath/artifactBytes/artifact fields. Best-effort: when the tmp
+ * directory is unwritable the fields are omitted entirely and the receipt
+ * shape stays unchanged.
+ */
+describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
+  const oversizeFindings = (count: number) =>
+    Array.from({ length: count }, () => 'f'.repeat(4_000))
+
+  test('persists the full oversize output to a content-addressed artifact file', () => {
+    const findings = oversizeFindings(100)
+    const normalized = normalizeSpawnedAgentOutput(
+      { findings },
+      'security-reviewer',
+    ) as any
+    expect(normalized.type).toBe('agentReceipt')
+    expect(normalized.truncated).toBe(true)
+    expect(typeof normalized.artifactPath).toBe('string')
+    expect(normalized.artifact).toBe(
+      'Full untruncated output persisted; read with read_files.',
+    )
+    expect(normalized.artifactBytes).toBeGreaterThan(256_000)
+    // The persisted artifact round-trips: for this payload compaction is
+    // lossless (control-plane arrays are preserved and each 4000-char string
+    // sits exactly at the per-string cap), so the file holds the full output.
+    const persisted = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
+    expect(persisted).toEqual({ findings })
+  })
+
+  test('content-addresses the artifact deterministically', () => {
+    const findings = oversizeFindings(100)
+    const first = normalizeSpawnedAgentOutput(
+      { findings },
+      'security-reviewer',
+    ) as any
+    const second = normalizeSpawnedAgentOutput(
+      { findings },
+      'security-reviewer',
+    ) as any
+    expect(first.artifactPath).toBe(second.artifactPath)
+  })
+
+  test('adds artifact fields to the reviewer verdict-shaped fast path when it truncates', () => {
+    const findings = oversizeFindings(70)
+    const normalized = normalizeSpawnedAgentOutput(
+      {
+        schemaVersion: 1,
+        verdict: 'LOOKS_GOOD',
+        snapshotFingerprint: 'v3:' + 'e'.repeat(64),
+        coverage: 'covered',
+        reviewedFiles: ['src/a.ts'],
+        findings,
+      },
+      'security-reviewer',
+    ) as any
+    // The verdict-shaped fast path replaced the bulky payload with the trimmed
+    // shape; the artifact pointer still travels at the top level.
+    expect(normalized.value.verdict).toBe('LOOKS_GOOD')
+    expect(typeof normalized.artifactPath).toBe('string')
+    expect(normalized.artifact).toBe(
+      'Full untruncated output persisted; read with read_files.',
+    )
+    expect(normalized.artifactBytes).toBeGreaterThan(256_000)
+  })
+
+  test('leaves the non-oversize path free of artifact fields', () => {
+    const normalized = normalizeSpawnedAgentOutput(
+      { status: 'completed', summary: 'done' },
+      'researcher-web',
+    ) as any
+    expect('artifactPath' in normalized).toBe(false)
+    expect('artifactBytes' in normalized).toBe(false)
+    expect('artifact' in normalized).toBe(false)
+  })
+
+  test('omits the artifact fields entirely when tmp persistence fails', () => {
+    // Point TMPDIR at a regular FILE: mkdirSync under it fails with ENOTDIR on
+    // every POSIX runner (root included), exercising the never-throw path.
+    const scratchDir = mkdtempSync(join(osTmpdir(), 'openbuff-artifact-probe-'))
+    const blockerFile = join(scratchDir, 'blocker')
+    writeFileSync(blockerFile, 'regular file, not a directory')
+    const previousTmpdir = process.env.TMPDIR
+    process.env.TMPDIR = blockerFile
+    try {
+      const normalized = normalizeSpawnedAgentOutput(
+        { findings: oversizeFindings(100) },
+        'security-reviewer',
+      ) as any
+      expect(normalized.type).toBe('agentReceipt')
+      expect(normalized.truncated).toBe(true)
+      expect(normalized.artifactPath).toBeUndefined()
+      expect(normalized.artifactBytes).toBeUndefined()
+      expect(normalized.artifact).toBeUndefined()
+    } finally {
+      if (previousTmpdir === undefined) {
+        delete process.env.TMPDIR
+      } else {
+        process.env.TMPDIR = previousTmpdir
+      }
+      rmSync(scratchDir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -449,5 +680,249 @@ describe('buildRuntimeAgentReceipt output durability', () => {
       reviewedFiles: ['packages/agent-runtime/src/util/token-counter.ts'],
       coverage: 'covered',
     })
+  })
+})
+
+/**
+ * D19/PR-T1: typed handoff `outcome` on the runtime spawn receipt, derived
+ * inside `buildRuntimeAgentReceiptOrThrow` from runtime evidence with
+ * precedence crashed > missing_output > schema_invalid > truncated > ok, plus
+ * the fail-closed D24 downgrade: a non-ok outcome (except `truncated`) must
+ * never resolve to `completed` unless runtime-attested mutations are the
+ * completion authority (RF-2), with exactly one diagnostic error appended.
+ */
+describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
+  const appliedMutationResult = (path: string, callId: string) => {
+    const receiptId = `receipt-${callId}`
+    const action = {
+      actionId: `action-${callId}`,
+      index: 0,
+      action: 'update' as const,
+      path,
+      beforeHash: `before-${callId}`,
+      afterHash: `after-${callId}`,
+    }
+    return {
+      kind: 'file_mutation_result' as const,
+      version: 1 as const,
+      operationId: `operation-${callId}`,
+      outcome: 'applied' as const,
+      actions: [{ ...action, outcome: 'applied' as const }],
+      authorityTier: 'conditional_commit' as const,
+      receiptId,
+      authorityReceipt: {
+        kind: 'commit_receipt' as const,
+        version: 1 as const,
+        receiptId,
+        operationId: `operation-${callId}`,
+        callId,
+        authorityTier: 'conditional_commit' as const,
+        status: 'committed' as const,
+        actions: [{ ...action, status: 'committed' as const }],
+        finalHashes: { [path]: action.afterHash },
+      },
+      errors: [],
+      freshCapabilities: [],
+    }
+  }
+
+  test('downgrades a missing child output to partial with outcome missing_output (D24 regression)', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a1',
+      output: undefined,
+    })
+    // Previously this resolved to 'completed' with zero errors — the D24
+    // fail-open this test pins shut.
+    expect(receipt.status).toBe('partial')
+    expect(receipt.outcome).toBe('missing_output')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "researcher-web receipt outcome 'missing_output': researcher-web ended without calling set_output",
+        retryable: true,
+      },
+    ])
+    expect(receipt.output).toEqual({
+      summary: '',
+      partial: true,
+      errorMessage: 'researcher-web ended without calling set_output',
+    })
+  })
+
+  test('records schema_invalid from a stale lastSetOutputError and downgrades to partial', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-schema-invalid',
+      output: { type: 'structuredOutput', value: { answer: 'x' } },
+      agentState: {
+        messageHistory: [],
+        lastSetOutputError: 'Missing required fields: status',
+      } as any,
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "researcher-web receipt outcome 'schema_invalid': Missing required fields: status",
+        retryable: true,
+      },
+    ])
+  })
+
+  test('keeps a truncated reviewer receipt at its resolved status (no downgrade)', () => {
+    const fingerprint = 'v3:' + 'd'.repeat(64)
+    const big = 'x'.repeat(33_000)
+    const payload: Record<string, string> = {}
+    for (const field of [
+      'text',
+      'message',
+      'summary',
+      'answer',
+      'report',
+      'digest',
+      'stdout',
+      'stderr',
+    ]) {
+      payload[field] = big
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'security-reviewer',
+      agentId: 'a-truncated',
+      output: {
+        nested: {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          status: 'completed',
+          snapshotFingerprint: fingerprint,
+          coverage: 'covered',
+          reviewedFiles: ['src/a.ts'],
+          ...payload,
+        },
+      },
+    })
+    // `truncated` records the outcome without downgrading: a completing
+    // reviewer receipt keeps its resolved status.
+    expect(receipt.outcome).toBe('truncated')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+  })
+
+  test('marks a degrade-envelope crash as crashed and partial with a non-retryable error', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'thinker',
+      agentId: 'a-crash-envelope',
+      output: { type: 'error', message: 'Subagent thinker crashed: boom' },
+    })
+    expect(receipt.outcome).toBe('crashed')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message: "thinker receipt outcome 'crashed': Subagent thinker crashed: boom",
+        retryable: false,
+      },
+    ])
+  })
+
+  test('records crashed for a params.error run without duplicating the crash error', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'thinker',
+      agentId: 'a-crash-error',
+      output: undefined,
+      error: new Error('boom'),
+    })
+    expect(receipt.outcome).toBe('crashed')
+    expect(receipt.status).toBe('failed')
+    // Exactly one crash error: the params.error entry, no duplicate downgrade
+    // diagnostic appended on top of it.
+    expect(receipt.errors).toEqual([{ message: 'boom', retryable: false }])
+  })
+
+  test('keeps outcome ok with completed status for a normal structured output', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-ok',
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'completed', summary: 'done' },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+  })
+
+  test('mutation authority keeps a mutation agent completed despite missing_output', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'editor',
+      agentId: 'a-editor-missing-output',
+      output: undefined,
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            toolCallId: 'call-applied',
+            content: [
+              {
+                type: 'json',
+                value: appliedMutationResult('src/edited.ts', 'call-applied'),
+              },
+            ],
+          },
+        ],
+      } as any,
+    })
+    // RF-2: runtime-attested mutations stay the completion authority, so the
+    // receipt is completed while still recording the missing child output.
+    expect(receipt.status).toBe('completed')
+    expect(receipt.outcome).toBe('missing_output')
+    expect(receipt.errors).toEqual([])
+    expect(receipt.changedFiles.map((file) => file.path)).toEqual([
+      'src/edited.ts',
+    ])
+  })
+
+  test('a child self-declared completed status does not rescue a schema_invalid run', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-self-declared',
+      output: { nested: { status: 'completed' } },
+      agentState: {
+        messageHistory: [],
+        lastSetOutputError: 'Missing required fields: answer',
+      } as any,
+    })
+    // findReceiptStatus would credit the nested self-declared 'completed'; the
+    // outcome-derived downgrade must override it.
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "researcher-web receipt outcome 'schema_invalid': Missing required fields: answer",
+        retryable: true,
+      },
+    ])
+  })
+
+  test('agentReceiptSchema accepts outcome and legacy receipts without it', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-schema-field',
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'completed', summary: 'done' },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(agentReceiptSchema.parse({ ...receipt, outcome: 'ok' }).outcome).toBe(
+      'ok',
+    )
+    // Legacy receipts without the additive field keep parsing under .strict().
+    const legacy: Record<string, unknown> = { ...receipt }
+    delete legacy.outcome
+    expect(agentReceiptSchema.parse(legacy).outcome).toBeUndefined()
   })
 })

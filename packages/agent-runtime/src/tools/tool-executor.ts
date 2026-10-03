@@ -63,6 +63,7 @@ import {
   bufferToolEvidenceForStep,
   recordToolEvidenceInTaskMemory,
 } from '../util/task-memory'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { ensureZodSchema } from './prompts'
 
 import type { AgentTemplate } from '../templates/types'
@@ -864,6 +865,17 @@ function coerceIntString(value: unknown, min?: number): number | undefined {
 // nothing changed. Mirrors the narrow, fail-closed, early-return style of the
 // per-tool repairs above.
 //
+// D21 slice 1 additionally unserializes a JSON-stringified value when the
+// DECLARED schema type of the field is array/object (e.g. `ranges`, `edits`,
+// per-entry objects), so a provider that stringifies a container is repaired
+// the same way as stringified scalars. The declared type is the only key — no
+// tool-name special-casing — so string-typed fields (oldString/newString/
+// content/path/diff/command) can never reach the unserialize branch. Fail
+// closed: an unparseable string, or one that parses to the wrong container
+// shape, is returned unchanged so the strict schema still rejects it. Every
+// successful unserialize is counted in toolArgNormalizationStats and logged
+// (never silent).
+//
 // Known intentional gaps: `allOf` compositions are not traversed (no native
 // tool schema relies on allOf for a coercible scalar), and negative integer
 // strings (e.g. "-1") are not coerced here — those are handled by the
@@ -902,7 +914,47 @@ function toolInputJsonSchema(toolName: string): Record<string, unknown> | undefi
   return jsonSchema
 }
 
-function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
+// D21 slice 1 (PR-T3): module-level observability for schema-driven
+// stringified array/object argument unserialize at the dispatch boundary.
+// Every SUCCESSFUL unserialize increments `total` and the per-tool map and
+// emits a diagnostic via the nearest available logger — a normalization
+// repair must never be silent. Exported (plus a test-only reset) so tests can
+// read and isolate counts without leaking state across files.
+export const toolArgNormalizationStats: {
+  total: number
+  byTool: Record<string, number>
+} = { total: 0, byTool: {} }
+
+export function getToolArgNormalizationStats(): {
+  total: number
+  byTool: Record<string, number>
+} {
+  return toolArgNormalizationStats
+}
+
+export function __resetToolArgNormalizationStatsForTest(): void {
+  toolArgNormalizationStats.total = 0
+  toolArgNormalizationStats.byTool = {}
+}
+
+// Fail-closed unserialize of a JSON-stringified array/object FIELD value.
+// Parses the trimmed string as JSON; any parse failure returns undefined so
+// the caller leaves the original string untouched. Never throws and never
+// repairs a truncated payload: partial JSON is never guessed into container
+// structure, matching the fail-closed truncation policy in the parse pipeline.
+function unserializeStringifiedJsonFieldValue(value: string): unknown {
+  try {
+    return JSON.parse(value.trim())
+  } catch {
+    return undefined
+  }
+}
+
+function coerceInputScalarsBySchema(
+  toolName: string,
+  input: unknown,
+  logger?: Logger,
+): unknown {
   if (
     !(toolName in toolParams) ||
     input === null ||
@@ -933,6 +985,20 @@ function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
       return resolved as Record<string, unknown>
     }
     return schema
+  }
+
+  // Count + log one successful schema-driven unserialize. The counter is the
+  // always-on observability floor; the diagnostic rides the nearest available
+  // logger (debug-level, matching the existing mis-braced-spawn repair seam).
+  // Only metadata is logged — never payload values.
+  const recordUnserialize = (kind: 'array' | 'object'): void => {
+    toolArgNormalizationStats.total += 1
+    toolArgNormalizationStats.byTool[toolName] =
+      (toolArgNormalizationStats.byTool[toolName] ?? 0) + 1
+    logger?.debug(
+      { toolName, kind },
+      'schema-driven tool-arg normalization: unserialized a stringified JSON array/object field before validation',
+    )
   }
 
   const coerceNode = (
@@ -972,6 +1038,37 @@ function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
         Number.isFinite(Number(trimmed))
       ) {
         return Number(trimmed)
+      }
+    }
+
+    // D21 slice 1: schema-driven unserialize of stringified containers. When
+    // the DECLARED type is array/object and the provider sent a string, parse
+    // the trimmed string as JSON and flow the parsed container into the normal
+    // traversal branches below, so items/properties keep being visited against
+    // the schema and nested object-strings unserialize too. The declared type
+    // is the only key: string-typed fields (oldString/newString/content/path/
+    // diff/command) never reach here and no tool name is special-cased. Fail
+    // closed: a string that does not parse, or parses to the wrong container
+    // shape, is left unchanged so the strict schema still rejects it — never
+    // thrown, never guessed, and never silent (a success is counted and
+    // logged via recordUnserialize).
+    if (typeof value === 'string') {
+      if (type === 'array') {
+        const parsed = unserializeStringifiedJsonFieldValue(value)
+        if (Array.isArray(parsed)) {
+          recordUnserialize('array')
+          value = parsed
+        }
+      } else if (type === 'object') {
+        const parsed = unserializeStringifiedJsonFieldValue(value)
+        if (
+          parsed !== null &&
+          typeof parsed === 'object' &&
+          !Array.isArray(parsed)
+        ) {
+          recordUnserialize('object')
+          value = parsed
+        }
       }
     }
 
@@ -2014,6 +2111,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
         repairSetOutputData(toolName, processedParameters.input),
       ),
     ),
+    logger,
   )
   if (toolName === 'spawn_agents') {
     const misbraced = detectMisbracedSpawnPayload({
@@ -3218,6 +3316,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
         // Identity result means the derived evidence is byte-identical to what
         // is already stored, so the commit was skipped: assigning would be a
@@ -3232,6 +3331,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
       }
     } catch (error) {

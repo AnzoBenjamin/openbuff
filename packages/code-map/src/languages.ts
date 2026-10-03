@@ -10,22 +10,6 @@ import { initTreeSitterForNode } from './init-node'
 import { repairGrammarWasm } from './grammar-wasm-repair'
 import { DEBUG_PARSING } from './parse'
 
-/* ------------------------------------------------------------------ */
-/* 1. Query imports (these work in all bundled environments)         */
-/* ------------------------------------------------------------------ */
-import csharpQuery from './tree-sitter-queries/tree-sitter-c_sharp-tags.scm'
-import cppQuery from './tree-sitter-queries/tree-sitter-cpp-tags.scm'
-import goQuery from './tree-sitter-queries/tree-sitter-go-tags.scm'
-import javaQuery from './tree-sitter-queries/tree-sitter-java-tags.scm'
-import javascriptQuery from './tree-sitter-queries/tree-sitter-javascript-tags.scm'
-import pythonQuery from './tree-sitter-queries/tree-sitter-python-tags.scm'
-import rubyQuery from './tree-sitter-queries/tree-sitter-ruby-tags.scm'
-import rustQuery from './tree-sitter-queries/tree-sitter-rust-tags.scm'
-import typescriptQuery from './tree-sitter-queries/tree-sitter-typescript-tags.scm'
-import kotlinQuery from './tree-sitter-queries/tree-sitter-kotlin-tags.scm'
-import phpQuery from './tree-sitter-queries/tree-sitter-php-tags.scm'
-import swiftQuery from './tree-sitter-queries/tree-sitter-swift-tags.scm'
-import gdscriptQuery from './tree-sitter-queries/tree-sitter-gdscript-tags.scm'
 import { getDirnameDynamically } from './utils'
 import { WASM_FILES } from './wasm-files'
 
@@ -56,76 +40,106 @@ export interface RuntimeLanguageLoader {
 /* ------------------------------------------------------------------ */
 /* 4. Language table                                                 */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Tag-query file names per language. These are bare file names resolved to
+ * absolute paths at query-load time by `resolveQueryPath` (called from
+ * `createLanguageConfig`) — never imported at module-load time, so loading
+ * this module requires no bundler `.scm` import plugin and performs no fs
+ * reads.
+ */
+const QUERY_FILES = {
+  typescript: 'tree-sitter-typescript-tags.scm',
+  javascript: 'tree-sitter-javascript-tags.scm',
+  python: 'tree-sitter-python-tags.scm',
+  java: 'tree-sitter-java-tags.scm',
+  csharp: 'tree-sitter-c_sharp-tags.scm',
+  c: 'tree-sitter-c-tags.scm',
+  cpp: 'tree-sitter-cpp-tags.scm',
+  rust: 'tree-sitter-rust-tags.scm',
+  ruby: 'tree-sitter-ruby-tags.scm',
+  go: 'tree-sitter-go-tags.scm',
+  php: 'tree-sitter-php-tags.scm',
+  swift: 'tree-sitter-swift-tags.scm',
+  kotlin: 'tree-sitter-kotlin-tags.scm',
+  gdscript: 'tree-sitter-gdscript-tags.scm',
+} as const
+
 export const languageTable: LanguageConfig[] = [
   {
     extensions: ['.ts', '.mts', '.cts'],
     wasmFile: WASM_FILES['tree-sitter-typescript.wasm'],
-    queryPathOrContent: typescriptQuery,
+    queryPathOrContent: QUERY_FILES.typescript,
   },
   {
     extensions: ['.tsx'],
     wasmFile: WASM_FILES['tree-sitter-tsx.wasm'],
-    queryPathOrContent: typescriptQuery,
+    queryPathOrContent: QUERY_FILES.typescript,
   },
   {
     extensions: ['.js', '.jsx', '.mjs', '.cjs'],
     wasmFile: WASM_FILES['tree-sitter-javascript.wasm'],
-    queryPathOrContent: javascriptQuery,
+    queryPathOrContent: QUERY_FILES.javascript,
   },
   {
     extensions: ['.py', '.pyi'],
     wasmFile: WASM_FILES['tree-sitter-python.wasm'],
-    queryPathOrContent: pythonQuery,
+    queryPathOrContent: QUERY_FILES.python,
   },
   {
     extensions: ['.java'],
     wasmFile: WASM_FILES['tree-sitter-java.wasm'],
-    queryPathOrContent: javaQuery,
+    queryPathOrContent: QUERY_FILES.java,
   },
   {
     extensions: ['.cs'],
     wasmFile: WASM_FILES['tree-sitter-c-sharp.wasm'],
-    queryPathOrContent: csharpQuery,
+    queryPathOrContent: QUERY_FILES.csharp,
   },
   {
-    extensions: ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'],
+    extensions: ['.c', '.h'],
+    wasmFile: WASM_FILES['tree-sitter-c.wasm'],
+    queryPathOrContent: QUERY_FILES.c,
+  },
+  {
+    extensions: ['.cc', '.cpp', '.cxx', '.hh', '.hpp', '.hxx'],
     wasmFile: WASM_FILES['tree-sitter-cpp.wasm'],
-    queryPathOrContent: cppQuery,
+    queryPathOrContent: QUERY_FILES.cpp,
   },
   {
     extensions: ['.rs'],
     wasmFile: WASM_FILES['tree-sitter-rust.wasm'],
-    queryPathOrContent: rustQuery,
+    queryPathOrContent: QUERY_FILES.rust,
   },
   {
     extensions: ['.rb'],
     wasmFile: WASM_FILES['tree-sitter-ruby.wasm'],
-    queryPathOrContent: rubyQuery,
+    queryPathOrContent: QUERY_FILES.ruby,
   },
   {
     extensions: ['.go'],
     wasmFile: WASM_FILES['tree-sitter-go.wasm'],
-    queryPathOrContent: goQuery,
+    queryPathOrContent: QUERY_FILES.go,
   },
   {
     extensions: ['.php'],
     wasmFile: WASM_FILES['tree-sitter-php.wasm'],
-    queryPathOrContent: phpQuery,
+    queryPathOrContent: QUERY_FILES.php,
   },
   {
     extensions: ['.swift'],
     wasmFile: WASM_FILES['tree-sitter-swift.wasm'],
-    queryPathOrContent: swiftQuery,
+    queryPathOrContent: QUERY_FILES.swift,
   },
   {
     extensions: ['.kt', '.kts'],
     wasmFile: WASM_FILES['tree-sitter-kotlin.wasm'],
-    queryPathOrContent: kotlinQuery,
+    queryPathOrContent: QUERY_FILES.kotlin,
   },
   {
     extensions: ['.gd'],
     wasmFile: WASM_FILES['tree-sitter-gdscript.wasm'],
-    queryPathOrContent: gdscriptQuery,
+    queryPathOrContent: QUERY_FILES.gdscript,
   },
 ]
 
@@ -178,7 +192,7 @@ function validateWasmDir(dir: string): string | null {
 }
 
 /* ------------------------------------------------------------------ */
-/* 6. WASM path resolver                                             */
+/* 6. WASM & query path resolvers                                   */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -230,6 +244,62 @@ function tryResolveFromPackage(wasmFileName: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Resolve the absolute path to a tree-sitter tag-query (.scm) file.
+ * Mirrors `resolveWasmPath`: get the module directory (with a process.cwd()
+ * fallback for ESM builds where `__dirname` is unavailable). Works for both
+ * ESM and CJS builds of the SDK, including npm consumers where the module
+ * directory is inside node_modules. The module directory may be either the
+ * src/ dir that directly contains `tree-sitter-queries` (dev/monorepo and
+ * Bun-resolved layouts) or a package-entry/dist dir that does not (npm
+ * layouts where the entry is `dist/index.js`), so both layouts are probed.
+ *
+ * Fail-closed-simple: return the first candidate whose file exists, else the
+ * primary candidate — the readFileSync in `createLanguageConfig` then throws
+ * and the fail-open `getLanguageConfig` catch handles it, exactly as for
+ * missing WASM files.
+ */
+function resolveQueryPath(queryFileName: string): string {
+  // Get the directory of this module
+  const moduleDir = (() => {
+    const dirname = getDirnameDynamically()
+    if (typeof dirname !== 'undefined') {
+      return dirname
+    }
+    // For ESM builds, we can't reliably get the module directory in all environments
+    // So we fall back to process.cwd() which works for our use case
+    return process.cwd()
+  })()
+
+  const primary = path.join(moduleDir, 'tree-sitter-queries', queryFileName)
+  if (fs.existsSync(primary)) {
+    return primary
+  }
+
+  // Candidate for npm/bundled layouts where the module directory is the
+  // package entry (e.g. `dist/index.js`) and does not directly contain
+  // `tree-sitter-queries`; the src/ tree with the queries sits one level
+  // below the entry directory.
+  const srcCandidate = path.join(
+    moduleDir,
+    'src',
+    'tree-sitter-queries',
+    queryFileName,
+  )
+  if (fs.existsSync(srcCandidate)) {
+    return srcCandidate
+  }
+
+  // Fallback for development/monorepo layouts where the module directory
+  // doesn't contain the queries directly.
+  const cwdCandidate = path.join(
+    process.cwd(),
+    'tree-sitter-queries',
+    queryFileName,
+  )
+  return fs.existsSync(cwdCandidate) ? cwdCandidate : primary
 }
 
 /* ------------------------------------------------------------------ */
@@ -325,10 +395,25 @@ export async function createLanguageConfig(
       const parser = new Parser()
       parser.setLanguage(lang)
 
-      // When loaded with bun, the queryText is a path to the file, not the content of the file.
-      const queryContent = path.isAbsolute(cfg.queryPathOrContent)
-        ? fs.readFileSync(cfg.queryPathOrContent, 'utf8')
-        : cfg.queryPathOrContent
+      // The language table stores bare .scm file names. Normalize them to
+      // absolute paths at query-load time (module load performs no fs
+      // reads), so the branch below is now always the path case: the query
+      // text is read from disk here, and a read failure propagates to the
+      // fail-open catch in `getLanguageConfig`. This removes the hard
+      // dependency on bundler/test-preload `.scm` import plugins.
+      // Resolve LOCALLY: do NOT mutate the shared languageTable entry.
+      // Table configs are module-level singletons; rewriting
+      // queryPathOrContent from the bare .scm filename to an absolute path
+      // made repeated loads and any consumer holding a config (including
+      // the table-consistency test, which joins the name onto the queries
+      // dir) order-dependent on which grammar loaded first.
+      let querySource = cfg.queryPathOrContent
+      if (!path.isAbsolute(querySource)) {
+        querySource = resolveQueryPath(querySource)
+      }
+      const queryContent = path.isAbsolute(querySource)
+        ? fs.readFileSync(querySource, 'utf8')
+        : querySource
 
       cfg.language = lang
       cfg.parser = parser
@@ -362,4 +447,46 @@ export async function getLanguageConfig(
 
 export function hasLanguageConfiguration(filePath: string): boolean {
   return findLanguageConfigByExtension(filePath) !== undefined
+}
+
+/**
+ * Advisory, fail-open tree-sitter syntax check for a candidate file content.
+ *
+ * Returns `{ available, hasError }`:
+ * - `available: false` when the file extension has no tree-sitter language, the
+ *   grammar cannot be loaded locally, `getLanguageConfig` returns undefined /
+ *   has no parser, or ANY error is thrown. Callers must treat this as "skip".
+ * - `available: true` with `hasError` reflecting `tree.rootNode.hasError`.
+ *
+ * This never throws and never opts into a network fetch: it relies solely on
+ * the already-shipped local grammar loader (which only fetches when
+ * CODEBUFF_IS_BINARY/CODEBUFF_WASM_DIR are set) and does not set those itself.
+ */
+export async function detectSyntaxErrorViaTreeSitter(
+  filePath: string,
+  content: string,
+): Promise<{ available: boolean; hasError: boolean }> {
+  try {
+    if (!hasLanguageConfiguration(filePath)) {
+      return { available: false, hasError: false }
+    }
+    const cfg = await getLanguageConfig(filePath)
+    if (!cfg || !cfg.parser) {
+      return { available: false, hasError: false }
+    }
+    const tree = cfg.parser.parse(content)
+    if (!tree) {
+      return { available: false, hasError: false }
+    }
+    const hasError = tree.rootNode.hasError
+    try {
+      tree.delete?.()
+    } catch {
+      // Some tree-sitter builds do not expose delete(); freeing is best-effort.
+    }
+    return { available: true, hasError }
+  } catch {
+    // Fail-open on any error (grammar unavailable, init failure, parse throw).
+    return { available: false, hasError: false }
+  }
 }

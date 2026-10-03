@@ -197,4 +197,10 @@ export interface AgentEvalResults {
   averageIdiomScore?: number
   averageCost: number
   averageDuration: number
+  /** Standard error of the measured-run overall scores. Optional for back-compat. */
+  scoreStandardError?: number
+  /** averageScore / averageCost, using the same cost unit as averageCost. Optional. */
+  scorePerDollar?: number
+  /** Number of measured (non-synthetic) runs contributing to averageScore. Optional. */
+  measuredRunCount?: number
 }

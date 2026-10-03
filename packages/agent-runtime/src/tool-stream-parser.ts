@@ -213,6 +213,7 @@ export async function* processStreamWithTools(params: {
         // 8-hex-char truncation left a 32-bit id space, so long sessions or
         // eval sweeps could collide tool_call ids and pair a tool_result with
         // the wrong call. There is no size constraint on synthetic ids.
+        // TODO(P2-T1 sub-slice 2): route through injected idGen once deps are threaded here
         const toolCallId = `xml-${crypto.randomUUID()}`
 
         // Execute the tool immediately if callback provided, pausing the stream

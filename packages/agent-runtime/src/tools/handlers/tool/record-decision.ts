@@ -7,6 +7,8 @@ import type { CodebuffToolCall, CodebuffToolOutput } from '@codebuff/common/tool
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import { hasDecisionRationale } from '@codebuff/common/util/decision-rationale'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 
 type ToolName = 'record_decision'
 
@@ -22,9 +24,12 @@ export const handleRecordDecision = (async (params: {
   toolCall: CodebuffToolCall<ToolName>
   agentState: AgentState
   logger?: Logger
+  clock?: Clock
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
   const { previousToolCallFinished, toolCall, agentState, logger } = params
   await previousToolCallFinished
+  // P2-T1b: timestamps use the injected clock (realClock default).
+  const evidenceTimestamp = (params.clock ?? realClock).now()
   try {
     const input = toolCall.input as {
       text?: unknown
@@ -105,7 +110,7 @@ export const handleRecordDecision = (async (params: {
         historicalSummary: '',
         evidence: [],
         revision: 0,
-        updatedAt: Date.now(),
+        updatedAt: evidenceTimestamp,
         checksum: 'record-decision-init',
       }
     }
@@ -121,7 +126,22 @@ export const handleRecordDecision = (async (params: {
     while (memory.decisions.length > TASK_MEMORY_LIST_CAPS.decisions) {
       memory.decisions.shift()
     }
-    const evidenceId = ('decision:' + Date.now().toString() + ':' + String(memory.decisions.length)).slice(0, 160)
+    // Evidence ids must be unique even when several decisions land in the same
+    // millisecond after an eviction: `decisions.length` resets once the list cap
+    // shifts entries out, so two same-millisecond records after a shift would
+    // collide and `normalizeEvidence`'s newest-wins dedupe would silently drop
+    // one. Sequence numbers are instead continued from the highest suffix
+    // already stored for this timestamp, so they only ever increase.
+    const idPrefix = 'decision:' + evidenceTimestamp.toString() + ':'
+    let idSequence = 0
+    for (const item of memory.evidence) {
+      if (!item.id.startsWith(idPrefix)) continue
+      const suffix = Number.parseInt(item.id.slice(idPrefix.length), 10)
+      if (Number.isInteger(suffix) && suffix >= idSequence) {
+        idSequence = suffix + 1
+      }
+    }
+    const evidenceId = (idPrefix + String(idSequence)).slice(0, 160)
     const lines = ['[' + kind + '] ' + rawText, 'Evidence: ' + normalizedPaths.join(', ')]
     if (excerpt !== undefined) {
       lines.push('Excerpt: ' + excerpt)
@@ -134,6 +154,12 @@ export const handleRecordDecision = (async (params: {
       summary,
       source: normalizedPaths[0],
       path: normalizedPaths[0],
+      // P2-T1b: verifiedAt uses the injected clock (matches realClock default),
+      // keeping this record on the same ordering basis as derived evidence.
+      verifiedAt: evidenceTimestamp,
+      // Persisting `supersedes` lets `normalizeEvidence` mark the superseded
+      // observations stale; echoing it in the output alone was never persisted.
+      ...(supersedes !== undefined ? { supersedes } : {}),
     })
     while (memory.evidence.length > TASK_MEMORY_LIST_CAPS.evidence) {
       memory.evidence.shift()

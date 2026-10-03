@@ -209,3 +209,91 @@ describe('payload-sanitizer token redaction', () => {
     expect(JSON.stringify(sanitized)).not.toContain(secret)
   })
 })
+
+describe('payload-sanitizer word-boundary key redaction', () => {
+  const secret = 'sk-planted-secret-credential-value-should-never-leak'
+
+  const REDACT_KEYS = [
+    'accessToken',
+    'refresh_token',
+    'id_token',
+    'Authorization',
+    'apiKey',
+    'api_key',
+    'APIKEY',
+    'token',
+    'refreshToken',
+    'access_token',
+    'secret',
+    'clientSecret',
+    'x-api-key',
+    'password',
+    'oldPassword',
+    'credentials',
+    'tokenUrl',
+    'tokenValue',
+  ]
+
+  const KEEP_KEYS = [
+    'normalUrl',
+    'refreshTokenCount',
+    'tokenCount',
+    'maxTokens',
+    'tokenizer',
+    'tokenizerName',
+    'secretSantaName',
+    'secretSantaAssignment',
+    'description',
+    'normal',
+    'safe',
+    'value',
+  ]
+
+  test('redacts every real credential key in debug logs', () => {
+    for (const key of REDACT_KEYS) {
+      const sanitized = sanitizeForDebugLog({ [key]: secret }) as any
+      expect(sanitized[key]).toBe('[REDACTED]')
+      expect(JSON.stringify(sanitized)).not.toContain(secret)
+    }
+  })
+
+  test('keeps metadata keys verbatim in debug logs', () => {
+    for (const key of KEEP_KEYS) {
+      const sanitized = sanitizeForDebugLog({ [key]: secret }) as any
+      expect(sanitized[key]).toBe(secret)
+      expect(JSON.stringify(sanitized)).toContain(secret)
+    }
+  })
+
+  test('redacts every real credential key in persisted chat state', () => {
+    for (const key of REDACT_KEYS) {
+      const sanitized = sanitizeForChatPersistence({ [key]: secret }) as any
+      expect(sanitized[key]).toBe('[REDACTED]')
+      expect(JSON.stringify(sanitized)).not.toContain(secret)
+    }
+  })
+
+  test('keeps metadata keys verbatim in persisted chat state', () => {
+    for (const key of KEEP_KEYS) {
+      const sanitized = sanitizeForChatPersistence({ [key]: secret }) as any
+      expect(sanitized[key]).toBe(secret)
+      expect(JSON.stringify(sanitized)).toContain(secret)
+    }
+  })
+
+  test('classifies a mixed payload of redacted and kept keys in one pass', () => {
+    const payload: Record<string, string> = {}
+    for (const key of REDACT_KEYS) payload[key] = secret
+    for (const key of KEEP_KEYS) payload[key] = `kept-${key}`
+
+    const sanitized = sanitizeForDebugLog(payload) as any
+
+    for (const key of REDACT_KEYS) {
+      expect(sanitized[key]).toBe('[REDACTED]')
+    }
+    for (const key of KEEP_KEYS) {
+      expect(sanitized[key]).toBe(`kept-${key}`)
+    }
+    expect(JSON.stringify(sanitized)).not.toContain(secret)
+  })
+})

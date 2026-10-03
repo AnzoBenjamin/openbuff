@@ -1,0 +1,29 @@
+{
+  "_note": "Semantic vector (§12.7 GV-15): a read_files tool_result whose output carries a cap.v3 authority token and a configured credential value. The emitted tool_call_update contains neither string and has no rawOutput key (§12.1 steps 2-3 redact, rawOutput is never emitted).",
+  "toolResult": {
+    "toolCallId": "call_11",
+    "toolName": "read_files",
+    "output": "-----\npath: .env\nOPENROUTER_API_KEY=sk-or-v1-abc\ntoken=cap.v3.1.1.AAA.BBB.CCC\n"
+  },
+  "toolCallUpdate": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_11",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "-----\npath: .env\nOPENROUTER_API_KEY=[REDACTED]\ntoken=[REDACTED:cap]\n"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

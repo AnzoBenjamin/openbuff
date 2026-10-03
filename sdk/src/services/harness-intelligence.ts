@@ -383,6 +383,186 @@ export function getAffectedTestTargets(
   })
 }
 
+export type TestImpactTier =
+  | 'convention'
+  | 'graph'
+  | 'build-tool'
+  | 'coverage'
+
+export type TestImpactConfidence = 'high' | 'medium' | 'low'
+
+export type TestImpactCandidate = {
+  path: string
+  tier: TestImpactTier
+  confidence: TestImpactConfidence
+}
+
+export type TestImpactAnalysis = {
+  source: string
+  packageRoot: string
+  tiers: {
+    convention: string[]
+    graph: string[]
+    buildTool: string[]
+    coverage: string[]
+  }
+  /** Flattened `tiers`, deduped by path keeping the highest-confidence tier. */
+  candidates: TestImpactCandidate[]
+}
+
+export type TestImpactOptions = {
+  /**
+   * Reverse-dependency seam for the graph tier: given a project-relative
+   * source path, return project-relative paths of files that import it. The
+   * sdk has no direct accessor for the indexer reference graph
+   * (packages/indexer's `queryReferences` is internal to its query engine),
+   * so the default is a hermetic no-op and callers that can reach a live
+   * index inject the seam here.
+   */
+  reverseDeps?: (file: string) => string[]
+}
+
+const testImpactConfidenceRank: Record<TestImpactConfidence, number> = {
+  high: 3,
+  medium: 2,
+  low: 1,
+}
+
+function isTestLikePath(file: string): boolean {
+  const name = path.posix.basename(file)
+  return (
+    /[._-](test|spec)\.[^.]+$/.test(name) ||
+    file.split('/').includes('__tests__')
+  )
+}
+
+/** Package-relative test scripts for a javascript workspace manifest. */
+function packageTestScripts(manifestPath: string): string[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+      scripts?: Record<string, string>
+    }
+    return Object.keys(parsed.scripts ?? {}).filter((name) =>
+      /(^|:)test(:|$)/.test(name),
+    )
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Test commands for the package owning a source file, derived from workspace
+ * manifests already discovered by `discoverWorkspaces`. When the owning
+ * workspace is nested (root !== '.'), the package is confirmed: it declared
+ * its own manifest under the file. When only the repo-root workspace matches,
+ * ownership is implicit and the command is reported with low confidence.
+ */
+function buildToolTestCommands(
+  cwd: string,
+  workspace: ReturnType<typeof inferWorkspace> | undefined,
+  directory: string,
+): { commands: string[]; confirmed: boolean } {
+  if (!workspace) return { commands: [], confirmed: false }
+  if (workspace.manager === 'cargo')
+    return {
+      commands: [`cargo test -p ${path.posix.basename(workspace.root)}`],
+      confirmed: true,
+    }
+  if (workspace.manager === 'go')
+    return {
+      commands: [`go test ./${directory === '.' ? '...' : directory}`],
+      confirmed: true,
+    }
+  if (workspace.ecosystem === 'javascript') {
+    const scripts = packageTestScripts(path.join(cwd, workspace.manifest))
+    return {
+      commands: scripts.map((script) => `${workspace.manager} run ${script}`),
+      confirmed: workspace.root !== '.',
+    }
+  }
+  return { commands: [], confirmed: false }
+}
+
+/**
+ * Tiered test impact analysis for `files`:
+ *  - tier 1 `convention`: the existing `<stem>.test.<ext>` / `__tests__`/ naming
+ *    candidates, confidence 'high' (they exist on disk).
+ *  - tier 2 `graph`: test-like files that import the changed file, discovered
+ *    through the injected `reverseDeps` seam; confidence 'medium'.
+ *  - tier 3 `build-tool`: test commands of the owning workspace package;
+ *    confidence 'medium' when the owning package is confirmed (nested
+ *    workspace or a compiled-ecosystem manifest), else 'low'.
+ *  - tier 4 `coverage`: honest placeholder, always []. Historical-coverage
+ *    impact maps land in a later task; nothing is fabricated here.
+ */
+export function analyzeTestImpact(
+  cwd: string,
+  files: string[],
+  options: TestImpactOptions = {},
+): TestImpactAnalysis[] {
+  const reverseDeps = options.reverseDeps ?? (() => [])
+  const { workspaces } = discoverWorkspaces(cwd)
+  return toProjectRelativeFiles(cwd, files).map((normalized) => {
+    const extension = path.extname(normalized)
+    const stem = normalized.slice(0, -extension.length)
+    const directory = path.posix.dirname(normalized)
+    const basename = path.posix.basename(stem)
+    const convention = [
+      `${stem}.test${extension}`,
+      `${stem}.spec${extension}`,
+      `${directory}/__tests__/${basename}.test${extension}`,
+      `${directory}/__tests__/${basename}.spec${extension}`,
+    ].filter((candidate) => fs.existsSync(path.join(cwd, candidate)))
+    const graph = [
+      ...new Set(
+        reverseDeps(normalized)
+          .map((dependent) => dependent.replace(/\\/g, '/'))
+          .filter((dependent) => isTestLikePath(dependent)),
+      ),
+    ].sort()
+    const owning = workspaces
+      .filter(
+        (workspace) =>
+          workspace.root === '.' ||
+          normalized === workspace.root ||
+          normalized.startsWith(`${workspace.root}/`),
+      )
+      .sort((left, right) => right.root.length - left.root.length)[0]
+    const { commands: buildToolCommands, confirmed } = buildToolTestCommands(
+      cwd,
+      owning,
+      directory,
+    )
+    const tiers = { convention, graph, buildTool: buildToolCommands, coverage: [] }
+    const byPath = new Map<string, TestImpactCandidate>()
+    const offer = (
+      paths: string[],
+      tier: TestImpactTier,
+      confidence: TestImpactConfidence,
+    ): void => {
+      for (const candidatePath of paths) {
+        const existing = byPath.get(candidatePath)
+        if (
+          !existing ||
+          testImpactConfidenceRank[confidence] >
+            testImpactConfidenceRank[existing.confidence]
+        ) {
+          byPath.set(candidatePath, { path: candidatePath, tier, confidence })
+        }
+      }
+    }
+    offer(tiers.convention, 'convention', 'high')
+    offer(tiers.graph, 'graph', 'medium')
+    offer(tiers.buildTool, 'build-tool', confirmed ? 'medium' : 'low')
+    return {
+      source: normalized,
+      packageRoot: owning?.root ?? '.',
+      tiers,
+      candidates: [...byPath.values()],
+    }
+  })
+}
+
 export type BuildTarget = {
   packageRoot: string
   scripts: string[]

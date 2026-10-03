@@ -1,6 +1,7 @@
 import { getLanguageConfig } from './languages'
 
 import type { Node } from 'web-tree-sitter'
+import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
 
 /**
  * A single structural definition (function, class, method, type, …) extracted
@@ -298,11 +299,13 @@ function nodeEndIndex(node: Node): number | undefined {
 export function getLanguageTag(filePath: string): string {
   const dot = filePath.lastIndexOf('.')
   const ext = dot >= 0 ? filePath.slice(dot).toLowerCase() : ''
-  if (['.ts', '.tsx', '.mts', '.cts'].includes(ext)) return 'typescript'
-  if (['.js', '.jsx', '.mjs', '.cjs'].includes(ext)) return 'javascript'
-  if (['.c', '.h'].includes(ext)) return 'c'
-  if (['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'].includes(ext)) return 'cpp'
-  if (['.kt', '.kts'].includes(ext)) return 'kotlin'
+  // Reuse the shared ts/js/c/cpp/kotlin family map; ext already carries a
+  // leading dot so getLanguageFamily uses it verbatim (no path.extname). This
+  // fn keeps its own distinct superset mappings and fallback below.
+  const family = getLanguageFamily(ext)
+  if (['typescript', 'javascript', 'c', 'cpp', 'kotlin'].includes(family)) {
+    return family
+  }
   if (['.py', '.pyi'].includes(ext)) return 'python'
   if (['.rs'].includes(ext)) return 'rust'
   if (['.go'].includes(ext)) return 'go'
@@ -349,23 +352,88 @@ export function buildQualifiedName(
   return [...containers.map((c) => c.name), sym.name].join('/')
 }
 
-function assignDepths(symbols: SymbolRange[]): SymbolRange[] {
+export function assignDepths(symbols: SymbolRange[]): SymbolRange[] {
   const sorted = [...symbols].sort(
     (a, b) => a.startLine - b.startLine || b.endLine - a.endLine,
   )
+  // X-2a: interval-stack sweep (O(n log n)) replacing the per-symbol O(n²)
+  // containment filter. The sort above is a valid DFS preorder (startLine
+  // asc, endLine desc), so every not-yet-closed stack frame whose range
+  // differs from `sym` strictly contains it: frames were pushed before sym
+  // in sorted order (startLine <= sym.startLine), the pop loop guarantees
+  // endLine >= sym.endLine, and isStrictContainer's strict < / > OR only
+  // fails for the equal-range tie case handled below.
+  //
+  // Duplicate-range fidelity: isStrictContainer treats two symbols with an
+  // identical span as NOT containers of each other (the strict OR fails),
+  // yet both still strictly contain any deeper symbol. Equal-range
+  // duplicates are therefore merged into a single counted stack frame:
+  // deeper symbols count every copy in their depth, while the duplicate
+  // itself excludes the frame from its own depth and from the
+  // nearest-container relabel lookup. Merging (instead of scanning a
+  // duplicate run per symbol) keeps minified single-line files — where
+  // every symbol has range (1,1) — O(n log n) rather than O(n²).
+  interface StackFrame {
+    startLine: number
+    endLine: number
+    /** Number of equal-range symbols merged into this frame. */
+    copies: number
+    /** First-pushed symbol of the run, used for method relabeling. */
+    representative: SymbolRange
+  }
+  const stack: StackFrame[] = []
+  // Running sum of `copies` across the stack, so depth stays O(1) per symbol.
+  let openCount = 0
   for (const sym of sorted) {
-    const containers = sorted.filter(
-      (other) => other !== sym && isStrictContainer(other, sym),
-    )
-    sym.depth = containers.length
+    // Copies of an equal-range frame merged while processing sym (0 if the
+    // top frame is not an equal-range duplicate). Such a frame, when it
+    // exists, is always the top of the stack after popping: any symbol that
+    // sorts after sym has startLine > sym.startLine and is not yet pushed.
+    let equalCopies = 0
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1]
+      if (!top) break
+      if (top.endLine < sym.endLine) {
+        openCount -= top.copies
+        stack.pop()
+        continue
+      }
+      if (top.startLine === sym.startLine && top.endLine === sym.endLine) {
+        // Equal-range sibling: not a container of sym, but counted for
+        // deeper symbols. Merge into the frame instead of pushing.
+        equalCopies = top.copies
+        top.copies += 1
+        openCount += 1
+      }
+      break
+    }
+    // openCount already includes sym's own copy when it was merged into the
+    // equal-range frame; subtract it plus the equal-range siblings (which are
+    // not strict containers) to match the previous filter exactly.
+    sym.depth =
+      equalCopies > 0 ? openCount - 1 - equalCopies : openCount
     // Languages without a distinct method node (Python, Rust impl fns, Ruby)
     // model methods as plain functions. Relabel a function whose nearest
-    // enclosing definition is a type/impl container so outlines read uniformly.
-    if (sym.kind === 'function' && containers.length > 0) {
-      const nearest = containers.reduce((a, b) =>
-        b.endLine - b.startLine < a.endLine - a.startLine ? b : a,
-      )
-      if (METHOD_CONTAINER_KINDS.has(nearest.kind)) sym.kind = 'method'
+    // (smallest-span) enclosing definition is a type/impl container so
+    // outlines read uniformly. The nearest strict container is the topmost
+    // non-duplicate stack frame; its representative is the first-pushed
+    // symbol of that range, matching the previous reduce's sorted-first
+    // tie-break for equal spans.
+    if (sym.kind === 'function' && sym.depth > 0) {
+      const nearestIndex = equalCopies > 0 ? stack.length - 2 : stack.length - 1
+      const nearest = stack[nearestIndex]?.representative
+      if (nearest && METHOD_CONTAINER_KINDS.has(nearest.kind)) {
+        sym.kind = 'method'
+      }
+    }
+    if (equalCopies === 0) {
+      stack.push({
+        startLine: sym.startLine,
+        endLine: sym.endLine,
+        copies: 1,
+        representative: sym,
+      })
+      openCount += 1
     }
   }
   return sorted

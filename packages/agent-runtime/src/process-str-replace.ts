@@ -1,5 +1,9 @@
 import { createPatch, diffLines } from 'diff'
 
+// EV-3: namespace import so tests can spyOn(codeMap, 'detectSyntaxErrorViaTreeSitter')
+// on the exact symbol this module calls for the near-match syntax gate.
+import * as codeMap from '@codebuff/code-map'
+
 import { tryToDoStringReplacementWithExtraIndentation } from './generate-diffs-prompt'
 import {
   findLiteralOccurrences,
@@ -394,7 +398,6 @@ export async function processStrReplace(params: {
   // hard-failing. This prevents the failure loop where a model re-reads, then
   // resubmits the SAME bogus anchor (e.g. basedOnRead: "/placeholder") after
   // every recovery instruction, burning attempts without ever progressing.
-  let autoStrippedBogusAnchor = false
   for (let i = 0; i < replacements.length; i++) {
     const bogus = describeBogusReadCapability(
       replacements[i].basedOnRead,
@@ -411,7 +414,6 @@ export async function processStrReplace(params: {
 
     if (uniquelyMatchable && !requireFreshReadCapability) {
       normalizedReplacements[i].basedOnRead = undefined
-      autoStrippedBogusAnchor = true
       messages.push(
         [
           `Note: an invalid basedOnRead anchor was ignored for ${path} because the oldString was uniquely matchable, so the edit applied as a naked edit.`,
@@ -711,7 +713,8 @@ export async function processStrReplace(params: {
     }
 
     if (hasStaleBasedOnRead && !requireFreshReadCapability) {
-      // Loop-breaker for small files only (mirrors autoStrippedBogusAnchor):
+      // Loop-breaker for small files only (mirrors the bogus-anchor strip
+      // loop above):
       // when basedOnRead is stale but oldString uniquely identifies a spot,
       // drop the anchor and continue as a naked unique literal edit. Large
       // files keep hard-fail so scoped authority is never silently discarded.
@@ -848,7 +851,7 @@ export async function processStrReplace(params: {
       recordFailure(scopeFailure, 'anchor_scope_mismatch')
       continue
     }
-    const match = tryMatchOldStr({
+    const match = await tryMatchOldStr({
       path,
       initialContent: matchContent,
       oldStr: normalizedOldStr,
@@ -860,6 +863,7 @@ export async function processStrReplace(params: {
           startLine: validatedReadRange.startLine,
           endLine: validatedReadRange.endLine,
         },
+        fullContent: normalizedCurrentContent,
       }),
     })
     let updatedOldStr: string | null
@@ -1724,6 +1728,11 @@ const NEAR_MATCH_MIN_OLD_STR_LENGTH = 10
  * and backtick balance is language-dependent and noisy. Returns true when
  * balanced (or when the replacement does not touch any brackets), false when
  * the delta is non-zero.
+ *
+ * Since EV-3 this is ONLY the fail-open fallback for environments without
+ * tree-sitter grammars (Node runtime, missing grammar, init error); where
+ * grammars are available, the tree-sitter ERROR-node check in
+ * tryNearMatchAutoCorrect is the primary gate.
  */
 function isResultDelimiterBalanced(
   matchedBlock: string,
@@ -1863,24 +1872,46 @@ function getSymbolIdentityBoost(params: {
  *    and Node (no Bun.Transpiler) behaves exactly as before.
  *  - not a strict subset of a wider high-similarity region
  *  - location-unique (occurs exactly once)
- *  - resulting content (after applying newStr at the match) has balanced
- *    brackets ()[]{} — rejects edits that would orphan a brace / split a
- *    block (Fix B, defense-in-depth against the exact transcript corruption).
+ *  - the FULL candidate content (after applying newStr at the match) passes
+ *    the tree-sitter ERROR-node check (EV-3). When the grammar is unavailable
+ *    (Node runtime, no grammar for the language, init error) this fails open
+ *    to the cheap bracket-balance check (Fix B), which is now the fallback
+ *    only — never the primary gate where grammars are available.
  */
-function tryNearMatchAutoCorrect(params: {
+async function tryNearMatchAutoCorrect(params: {
   initialContent: string
   oldStr: string
   newStr: string
   allowMultiple: boolean
   path: string
-}): {
+  /**
+   * Full current file content when `initialContent` is a window-scoped
+   * anchored slice. The EV-3 syntax gate must always parse the FULL candidate
+   * content — a fragment parse would produce spurious ERROR nodes at slice
+   * boundaries. Absent when initialContent is already the whole file.
+   */
+  fullContent?: string
+  /**
+   * Absolute position of the anchored window inside `fullContent`; required to
+   * splice the edited window back into the full candidate content.
+   */
+  anchoredRange?: { startLine: number; endLine: number }
+}): Promise<{
   oldStr: string
   startLine: number
   endLine: number
   similarity: number
   corroboratedBySymbolIdentity: boolean
-} | null {
-  const { initialContent, oldStr, newStr, allowMultiple, path } = params
+} | null> {
+  const {
+    initialContent,
+    oldStr,
+    newStr,
+    allowMultiple,
+    path,
+    fullContent,
+    anchoredRange,
+  } = params
   // Fix E: require a substantive oldString before any auto-correction. The
   // diagnostic path (rich error with candidate ranges) still uses the lower
   // NEAR_MATCH_MIN_OLD_STR_LENGTH, but auto-correcting a very short oldString
@@ -1978,13 +2009,41 @@ function tryNearMatchAutoCorrect(params: {
   const occurrences = initialContent.split(best.closestBlock).length - 1
   if (occurrences !== 1) return null
 
-  // Fix B: defense-in-depth delimiter-balance check. Apply newStr at the
-  // matched block and verify the resulting content does not gain or lose
-  // structural brackets. This catches the transcript's failure mode (an
-  // auto-correct landing inside the wrong `case` orphaned an `if` body and
-  // split a sibling component) even if every other gate passed. Intentionally
-  // bracket-only — quote/backtick balance is language-dependent and noisy.
-  if (!isResultDelimiterBalanced(best.closestBlock, newStr)) {
+  // EV-3: real syntax gate. Apply newStr at the matched block into the FULL
+  // candidate content (never a fragment parse — a fragment parse would
+  // produce spurious ERROR nodes at slice boundaries) and run the
+  // tree-sitter ERROR-node check. best.closestBlock occurs exactly once in
+  // initialContent (verified above), so the replacement targets the intended
+  // spot.
+  const candidateWindow = initialContent.replace(
+    best.closestBlock,
+    () => newStr,
+  )
+  let candidateContent = candidateWindow
+  if (fullContent !== undefined && anchoredRange) {
+    // Anchored edit: initialContent is a window slice, so splice the edited
+    // window back into the full file before parsing.
+    const fullLines = fullContent.split('\n')
+    candidateContent = [
+      ...fullLines.slice(0, anchoredRange.startLine - 1),
+      ...candidateWindow.split('\n'),
+      ...fullLines.slice(anchoredRange.endLine),
+    ].join('\n')
+  }
+  const syntax = await codeMap.detectSyntaxErrorViaTreeSitter(
+    path,
+    candidateContent,
+  )
+  if (syntax.available) {
+    // Grammar available: the tree-sitter ERROR-node check is the gate. It
+    // catches real syntax errors the naive bracket count misses (balanced
+    // counts, broken AST) and stops false-positiving on brackets inside
+    // strings/comments.
+    if (syntax.hasError) return null
+  } else if (!isResultDelimiterBalanced(best.closestBlock, newStr)) {
+    // Fail open (EV-3): without grammars, keep the cheap Fix B bracket check
+    // as the fallback so environments without grammars (Node runtime)
+    // behave exactly as before.
     return null
   }
 
@@ -2166,7 +2225,7 @@ function findElidedOldStringMatches(params: {
   }
 }
 
-const tryMatchOldStr = (params: {
+const tryMatchOldStr = async (params: {
   path: string
   initialContent: string
   oldStr: string
@@ -2179,14 +2238,21 @@ const tryMatchOldStr = (params: {
    * diagnostics stay byte-identical.
    */
   anchoredRange?: { startLine: number; endLine: number }
-}):
+  /**
+   * Full current file content when initialContent is a window-scoped anchored
+   * slice; threaded to tryNearMatchAutoCorrect so the EV-3 syntax gate always
+   * parses the FULL candidate content instead of a fragment.
+   */
+  fullContent?: string
+}): Promise<
   | {
       success: true
       oldStr: string
       message?: string
       hadAutoCorrect?: boolean
     }
-  | { success: false; error: string } => {
+  | { success: false; error: string }
+> => {
   const {
     path,
     initialContent,
@@ -2195,6 +2261,7 @@ const tryMatchOldStr = (params: {
     allowMultiple,
     logger,
     anchoredRange,
+    fullContent,
   } = params
   // count the number of occurrences of oldStr in initialContent
   const count = initialContent.split(oldStr).length - 1
@@ -2291,12 +2358,13 @@ const tryMatchOldStr = (params: {
   // the old all-whitespace-stripped fallback's risk of silently editing the
   // wrong line (e.g. a utility and its test sharing a similar line). Genuine
   // ambiguity falls through to the rich diagnostics below and fails cleanly.
-  const nearMatch = tryNearMatchAutoCorrect({
+  const nearMatch = await tryNearMatchAutoCorrect({
     initialContent,
     oldStr,
     newStr,
     allowMultiple,
     path,
+    ...(anchoredRange && { anchoredRange, fullContent }),
   })
   if (nearMatch) {
     logger.debug(

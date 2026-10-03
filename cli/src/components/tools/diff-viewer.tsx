@@ -3,7 +3,6 @@ import { TextAttributes } from '@opentui/core'
 
 import { Button } from '../button'
 import { useTheme } from '../../hooks/use-theme'
-import { wrapTextToVisualLines } from '../../utils/text-layout'
 
 import type { ReactNode } from 'react'
 import type { ThemeName } from '../../types/theme-system'
@@ -21,7 +20,7 @@ interface DiffViewerProps {
   initiallyCollapsedHunks?: number[]
 }
 
-const DIFF_LINE_COLORS = {
+const DIFF_LINE_COLORS: Record<ThemeName, { added: string; removed: string }> = {
   dark: {
     added: '#7ACC35',
     removed: '#BF6C69',
@@ -58,6 +57,8 @@ interface ParsedDiff {
 
 export const DIFF_INITIAL_MAX_LINES = 80
 export const DIFF_INITIAL_MAX_HUNKS = 8
+// Retained export for backward compatibility: the native <diff> renderable is
+// viewport-culled, so no client-side render-node cap logic remains.
 export const DIFF_MAX_RENDER_NODES = 400
 
 export function getInitiallyCollapsedDiffHunks(parsed: ParsedDiff): number[] {
@@ -72,43 +73,6 @@ export function getInitiallyCollapsedDiffHunks(parsed: ParsedDiff): number[] {
       return false
     })
     .map((hunk) => hunk.index)
-}
-
-interface SideBySideRow {
-  oldSide: BodyLine | null
-  newSide: BodyLine | null
-}
-
-const lineColor = (
-  line: string,
-  themeName: ThemeName,
-  mutedColor: string,
-  infoColor: string,
-): { fg: string; attrs?: number } => {
-  if (line.startsWith('@@')) {
-    return { fg: infoColor, attrs: TextAttributes.BOLD }
-  }
-  if (line.startsWith('+++') || line.startsWith('---')) {
-    return { fg: mutedColor, attrs: TextAttributes.BOLD }
-  }
-  if (
-    line.startsWith('diff ') ||
-    line.startsWith('index ') ||
-    line.startsWith('rename ') ||
-    line.startsWith('similarity ')
-  ) {
-    return { fg: mutedColor }
-  }
-  if (line.startsWith('+')) {
-    return { fg: DIFF_LINE_COLORS[themeName].added }
-  }
-  if (line.startsWith('-')) {
-    return { fg: DIFF_LINE_COLORS[themeName].removed }
-  }
-  if (line.startsWith('\\')) {
-    return { fg: mutedColor }
-  }
-  return { fg: '' }
 }
 
 const isFileHeaderLine = (line: string): boolean =>
@@ -270,44 +234,35 @@ export function formatLineNumber(num: number | null, width = 4): string {
   return ' '.repeat(width - s.length) + s
 }
 
-/** Pair consecutive del<->add lines into side-by-side rows; context spans both. */
-function pairSideBySideRows(bodyLines: BodyLine[]): SideBySideRow[] {
-  const rows: SideBySideRow[] = []
-  let i = 0
-  while (i < bodyLines.length) {
-    const line = bodyLines[i]
-    if (line.type === 'context') {
-      rows.push({ oldSide: line, newSide: line })
-      i += 1
-      continue
-    }
-    if (line.type === 'del') {
-      const dels: BodyLine[] = []
-      while (i < bodyLines.length && bodyLines[i].type === 'del') {
-        dels.push(bodyLines[i])
-        i += 1
-      }
-      const adds: BodyLine[] = []
-      while (i < bodyLines.length && bodyLines[i].type === 'add') {
-        adds.push(bodyLines[i])
-        i += 1
-      }
-      const max = Math.max(dels.length, adds.length)
-      for (let k = 0; k < max; k++) {
-        rows.push({ oldSide: dels[k] ?? null, newSide: adds[k] ?? null })
-      }
-      continue
-    }
-    // Pure additions with no preceding deletion.
-    const adds: BodyLine[] = []
-    while (i < bodyLines.length && bodyLines[i].type === 'add') {
-      adds.push(bodyLines[i])
-      i += 1
-    }
-    for (const a of adds) rows.push({ oldSide: null, newSide: a })
-  }
-  return rows
+const hunkBodyPrefix = (type: BodyLineType): string =>
+  type === 'add' ? '+' : type === 'del' ? '-' : ' '
+
+/**
+ * The line-number-gutter width gate: native gutters render only when the
+ * caller wants them AND the terminal is wide enough. `showLineNumbers`
+ * defaults to true, mirroring the DiffViewer prop default. Exported for the
+ * test suite, which cannot observe non-DOM intrinsic props through
+ * react-dom/server's static markup.
+ */
+export function showLineNumbersGate(
+  width: number,
+  showLineNumbers = true,
+): boolean {
+  return showLineNumbers && width >= 24
 }
+
+/**
+ * Rebuild well-formed unified diff text for one hunk so the native `<diff>`
+ * parser receives the `@@` header line plus body lines with their +/-/space
+ * prefixes restored exactly as parsed. Unknown content lines (preserved
+ * verbatim by parseDiffIntoHunks) are emitted as context so the native
+ * parser never sees an invalid body prefix.
+ */
+const hunkToDiffText = (hunk: Hunk): string =>
+  [
+    hunk.header,
+    ...hunk.bodyLines.map((line) => `${hunkBodyPrefix(line.type)}${line.text}`),
+  ].join('\n')
 
 export const DiffViewer = ({
   diffText,
@@ -327,8 +282,13 @@ export const DiffViewer = ({
       ]),
   )
   const width = Math.max(10, availableWidth ?? 80)
-  const effectiveShowLineNumbers = showLineNumbers && width >= 24
-  let renderNodeCount = 0
+  // The native <diff> renderable draws its own line-number gutters
+  // (DiffRenderableOptions.showLineNumbers in @opentui/core); keep the
+  // width >= 24 gate so cramped terminals stay gutter-free as before.
+  const effectiveShowLineNumbers = showLineNumbersGate(
+    width,
+    showLineNumbers,
+  )
 
   const toggleHunk = (index: number) => {
     setCollapsedHunks((prev) => {
@@ -339,26 +299,8 @@ export const DiffViewer = ({
     })
   }
 
-  const colorForType = (type: BodyLineType): string =>
-    type === 'add'
-      ? DIFF_LINE_COLORS[theme.name].added
-      : type === 'del'
-        ? DIFF_LINE_COLORS[theme.name].removed
-        : theme.foreground
-
-  // Unified-mode geometry: gutter = ' ' + old(4) + ' ' + new(4) + '│'
-  const gutterWidth = effectiveShowLineNumbers ? 1 + 4 + 1 + 4 + 1 : 0
-  const signWidth = 1
-  const textWrapWidth = Math.max(1, width - gutterWidth - signWidth)
-
-  // Side-by-side geometry (only when width is comfortable).
+  // Side-by-side mode only when the terminal is wide enough (unchanged gate).
   const useSideBySide = sideBySide && width >= 40
-  const sxsSeparator = ' │ '
-  const sxsColumnWidth = useSideBySide
-    ? Math.max(1, Math.floor((width - sxsSeparator.length) / 2))
-    : 0
-  const sxsNumWidth = 5 // 4-wide number + trailing space
-  const sxsTextWidth = Math.max(1, sxsColumnWidth - sxsNumWidth)
 
   if (diffText.trim() === '') {
     return (
@@ -374,20 +316,22 @@ export const DiffViewer = ({
 
   const { fileHeaders, hunks } = parsedDiff
 
-  const renderFileHeader = (line: string, idx: number): ReactNode => {
-    const safeLine = line.length === 0 ? ' ' : line
-    const { fg, attrs } = lineColor(line, theme.name, theme.muted, theme.info)
-    const resolvedFg = fg || theme.foreground
-    return wrapTextToVisualLines(safeLine, width).map((wrappedLine, wrapIdx) =>
-      renderNodeCount++ < DIFF_MAX_RENDER_NODES ? (
-        <text key={`fh-${idx}-${wrapIdx}`} style={{ wrapMode: 'none' }}>
-          <span fg={resolvedFg} attributes={attrs}>
-            {wrappedLine}
-          </span>
-        </text>
-      ) : null,
-    )
-  }
+  // File headers stay plain muted text (bold for the ---/+++ file pair);
+  // they are not part of any hunk, so they never reach the native <diff>.
+  const renderFileHeader = (line: string, idx: number): ReactNode => (
+    <text key={`fh-${idx}`}>
+      <span
+        fg={theme.muted}
+        attributes={
+          line.startsWith('---') || line.startsWith('+++')
+            ? TextAttributes.BOLD
+            : undefined
+        }
+      >
+        {line}
+      </span>
+    </text>
+  )
 
   const renderHunkHeader = (hunk: Hunk): ReactNode => {
     const collapsed = collapsedHunks.has(hunk.index)
@@ -428,120 +372,41 @@ export const DiffViewer = ({
     )
   }
 
-  const renderUnifiedBody = (hunk: Hunk): ReactNode =>
-    hunk.bodyLines.flatMap((bodyLine, lineIdx) => {
-      const sign =
-        bodyLine.type === 'add' ? '+' : bodyLine.type === 'del' ? '-' : ' '
-      const color = colorForType(bodyLine.type)
-      const wrapped = wrapTextToVisualLines(bodyLine.text, textWrapWidth)
-      return wrapped.map((seg, wrapIdx) => {
-        const isFirst = wrapIdx === 0
-        const oldStr = formatLineNumber(isFirst ? bodyLine.oldNum : null)
-        const newStr = formatLineNumber(isFirst ? bodyLine.newNum : null)
-        const gutter = effectiveShowLineNumbers ? ` ${oldStr} ${newStr}│` : ''
-        const signChar = isFirst ? sign : ' '
-        if (renderNodeCount++ >= DIFF_MAX_RENDER_NODES) return null
-        return (
-          <text
-            key={`b-${hunk.index}-${lineIdx}-${wrapIdx}`}
-            style={{ wrapMode: 'none' }}
-          >
-            {effectiveShowLineNumbers ? (
-              <span fg={theme.muted}>{gutter}</span>
-            ) : null}
-            <span fg={color}>
-              {signChar}
-              {seg}
-            </span>
-          </text>
-        )
-      })
-    })
-
-  const renderSideBySideBody = (hunk: Hunk): ReactNode => {
-    const rows = pairSideBySideRows(hunk.bodyLines)
-    return rows.flatMap((row, rowIdx) => {
-      const leftColor = row.oldSide
-        ? colorForType(row.oldSide.type)
-        : theme.muted
-      const rightColor = row.newSide
-        ? colorForType(row.newSide.type)
-        : theme.muted
-      const leftWrapped = row.oldSide
-        ? wrapTextToVisualLines(row.oldSide.text, Math.max(1, sxsTextWidth - 1))
-        : ['']
-      const rightWrapped = row.newSide
-        ? wrapTextToVisualLines(row.newSide.text, Math.max(1, sxsTextWidth - 1))
-        : ['']
-      const maxLines = Math.max(leftWrapped.length, rightWrapped.length, 1)
-      const out: ReactNode[] = []
-      for (let w = 0; w < maxLines; w++) {
-        if (renderNodeCount++ >= DIFF_MAX_RENDER_NODES) break
-        const leftSeg = leftWrapped[w] ?? ''
-        const rightSeg = rightWrapped[w] ?? ''
-        const leftNum =
-          w === 0 && row.oldSide ? formatLineNumber(row.oldSide.oldNum) : null
-        const rightNum =
-          w === 0 && row.newSide ? formatLineNumber(row.newSide.newNum) : null
-        const leftMarker = w === 0 && row.oldSide?.type === 'del' ? '-' : ' '
-        const rightMarker = w === 0 && row.newSide?.type === 'add' ? '+' : ' '
-        out.push(
-          <text
-            key={`sxs-${hunk.index}-${rowIdx}-${w}`}
-            style={{ wrapMode: 'none' }}
-          >
-            {effectiveShowLineNumbers ? (
-              <span fg={theme.muted}>
-                {leftNum !== null ? `${leftNum} ` : ''.padEnd(sxsNumWidth)}
-              </span>
-            ) : null}
-            <span fg={leftColor}>
-              {leftMarker}
-              {leftSeg.padEnd(Math.max(1, sxsTextWidth - 1))}
-            </span>
-            <span fg={theme.muted}>{sxsSeparator}</span>
-            {effectiveShowLineNumbers ? (
-              <span fg={theme.muted}>
-                {rightNum !== null ? `${rightNum} ` : ''.padEnd(sxsNumWidth)}
-              </span>
-            ) : null}
-            <span fg={rightColor}>
-              {rightMarker}
-              {rightSeg}
-            </span>
-          </text>,
-        )
-      }
-      return out
-    })
-  }
-
   return (
     <box
       style={{ flexDirection: 'column', gap: 0, width: '100%', flexGrow: 1 }}
     >
-      {fileHeaders.flatMap((line, idx) => renderFileHeader(line, idx))}
+      {fileHeaders.map((line, idx) => renderFileHeader(line, idx))}
       {hunks.map((hunk) => {
         const collapsed = collapsedHunks.has(hunk.index)
+        const hasBody = hunk.bodyLines.length > 0
         return (
           <box
             key={`hunk-${hunk.index}`}
             style={{ flexDirection: 'column', gap: 0, width: '100%' }}
           >
             {renderHunkHeader(hunk)}
-            {!collapsed
-              ? useSideBySide
-                ? renderSideBySideBody(hunk)
-                : renderUnifiedBody(hunk)
-              : null}
+            {!collapsed && hasBody ? (
+              // One native <diff> renderable per visible hunk. Prop names map
+              // 1:1 to DiffRenderableOptions (verified in node_modules/@opentui/react
+              // src/types/components.d.ts, where DiffProps =
+              // ComponentProps<DiffRenderableOptions, DiffRenderable>, and
+              // node_modules/@opentui/core renderables/Diff.d.ts). syntaxStyle
+              // is left undefined so the native defaults apply; the renderable
+              // is viewport-culled, so no client-side render-node cap is needed.
+              <diff
+                diff={hunkToDiffText(hunk)}
+                view={useSideBySide ? 'split' : 'unified'}
+                syncScroll={useSideBySide}
+                showLineNumbers={effectiveShowLineNumbers}
+                addedSignColor={DIFF_LINE_COLORS[theme.name].added}
+                removedSignColor={DIFF_LINE_COLORS[theme.name].removed}
+                style={{ width: '100%' }}
+              />
+            ) : null}
           </box>
         )
       })}
-      {renderNodeCount >= DIFF_MAX_RENDER_NODES ? (
-        <text
-          fg={theme.muted}
-        >{`… render capped at ${DIFF_MAX_RENDER_NODES} nodes; collapse hunks or narrow the diff`}</text>
-      ) : null}
     </box>
   )
 }

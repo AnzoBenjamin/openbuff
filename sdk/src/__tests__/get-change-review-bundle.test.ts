@@ -11,6 +11,8 @@ import {
   createInitialWorkspaceState,
 } from '@codebuff/common/types/workspace-state'
 
+import type { SemgrepRunner } from '../services/semgrep-baseline'
+
 describe('getChangeReviewBundle', () => {
   const temporaryRoots: string[] = []
 
@@ -336,5 +338,174 @@ describe('getChangeReviewBundle', () => {
     const bundle = value as { files: string[]; diff: string }
     expect(bundle.files).toEqual([])
     expect(bundle.diff).toBe('')
+  })
+
+  test('adds a securityScan field with parsed findings when semgrep is available', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-semgrep-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("one")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("two")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'second').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'exec(user_input)\n')
+
+    const sarif = JSON.stringify({
+      version: '2.1.0',
+      runs: [
+        {
+          tool: { driver: { name: 'semgrep' } },
+          results: [
+            {
+              ruleId: 'python.lang.security.audit.exec-detected',
+              level: 'error',
+              message: { text: 'Detected the use of exec().' },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: 'app.py' },
+                    region: {
+                      startLine: 1,
+                      startColumn: 1,
+                      endLine: 1,
+                      endColumn: 4,
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    const seenArgv: string[][] = []
+    const runner: SemgrepRunner = (argv) => {
+      seenArgv.push(argv)
+      if (argv[0] === '--version') {
+        return { exitCode: 0, stdout: '1.45.0\n', stderr: '' }
+      }
+      return { exitCode: 0, stdout: sarif, stderr: '' }
+    }
+
+    const result = await getChangeReviewBundle({
+      cwd,
+      securityScanRunner: runner,
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as {
+      snapshotId: string
+      files: string[]
+      securityScan: {
+        status: string
+        findings: Array<Record<string, unknown>>
+        toolVersion?: string
+      }
+    }
+    expect(bundle.files).toEqual(['app.py'])
+    expect(bundle.securityScan.status).toBe('ok')
+    expect(bundle.securityScan.toolVersion).toBe('1.45.0')
+    expect(bundle.securityScan.findings).toHaveLength(1)
+    expect(bundle.securityScan.findings[0]).toMatchObject({
+      file: 'app.py',
+      severity: 'error',
+      code: 'python.lang.security.audit.exec-detected',
+      message: 'Detected the use of exec().',
+      source: 'sarif',
+    })
+    const scanArgv = seenArgv.find((argv) => argv[0] === 'scan')
+    expect(scanArgv).toBeDefined()
+    expect(scanArgv![1]).toMatch(/^--baseline-commit=[0-9a-f]{40}$/)
+    expect(scanArgv).toContain('--sarif')
+    expect(scanArgv).toContain('--include')
+    expect(scanArgv).toContain('app.py')
+  })
+
+  test('keeps the bundle intact with an unavailable securityScan when semgrep is missing', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-nosemgrep-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("one")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("two")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'second').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'exec(user_input)\n')
+
+    const runner: SemgrepRunner = () => ({
+      exitCode: -1,
+      stdout: '',
+      stderr: 'spawn semgrep ENOENT',
+    })
+    const result = await getChangeReviewBundle({
+      cwd,
+      securityScanRunner: runner,
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as {
+      snapshotId: string
+      files: string[]
+      diff: string
+      securityScan: { status: string; reason?: string; findings: unknown[] }
+    }
+    expect(bundle.securityScan.status).toBe('unavailable')
+    expect(bundle.securityScan.reason).toBe('semgrep-not-found')
+    expect(bundle.securityScan.findings).toEqual([])
+    // The rest of the bundle is unchanged by the failed optional layer.
+    expect(typeof bundle.snapshotId).toBe('string')
+    expect(bundle.files).toEqual(['app.py'])
+    expect(bundle.diff).toContain('exec(user_input)')
+  })
+
+  test('reports a skipped securityScan and never runs semgrep when no changed file is scannable', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-skipsemgrep-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'notes.txt'), 'one\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'notes.txt'), 'two\n')
+
+    const runner: SemgrepRunner = () => {
+      throw new Error('semgrep must not run when nothing is scannable')
+    }
+    const result = await getChangeReviewBundle({
+      cwd,
+      securityScanRunner: runner,
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as {
+      files: string[]
+      securityScan: { status: string; reason?: string; findings: unknown[] }
+    }
+    expect(bundle.files).toEqual(['notes.txt'])
+    expect(bundle.securityScan).toMatchObject({
+      status: 'skipped',
+      reason: 'no-source-files',
+      findings: [],
+    })
   })
 })

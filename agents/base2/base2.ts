@@ -34,6 +34,10 @@ import {
   specialistRoutingSection,
 } from './quality-prompt-section'
 import { resolveModelToolNames, type UnlockedToolTier } from './tool-tiers'
+import {
+  BASE2_PROGRAMMATIC_TOOL_NAMES,
+  buildSpawnContractClauses,
+} from './spawn-contract'
 import { publisher } from '../constants'
 import {
   PLACEHOLDER,
@@ -456,16 +460,11 @@ export function createBase2(
     outputMode: 'last_message',
     includeMessageHistory: true,
     toolNames: modelToolNames,
-    programmaticToolNames: [
-      'spawn_agent_inline',
-      'git_status',
-      'run_file_change_hooks',
-      'inspect_codebase_structure',
-      'get_change_review_bundle',
-      'inspect_environment',
-      'get_affected_tests',
-      'get_build_targets',
-    ],
+    // Spread: the shared constant is readonly, while this property is a
+    // mutable array that each createBase2 call owns (the inline literal this
+    // replaces was also a fresh array per call). Emitted values stay
+    // byte-identical to the previous inline array.
+    programmaticToolNames: [...BASE2_PROGRAMMATIC_TOOL_NAMES],
     spawnableAgentToolMode: 'generic',
     programmaticConfig: {
       hasNoValidation,
@@ -577,7 +576,7 @@ ${
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
     : '- **Live visual verification:** Visual verification extends beyond web apps. Image artifacts from 3D renders (e.g. Blender frames), image/video exports, generated diagrams, and charts must be inspected with read_image, not inferred from text logs alone. The workflow is: render/export -> wait for the background job (check_job for agent readiness/exit; live job_update for users) -> read_image the emitted artifacts -> assess the result -> make a targeted edit -> re-render. check_job is only the agent-side bridge to artifact inspection — do not poll solely for user progress. Make one bounded check_job follow per job with wait_for plus timeout_seconds, thread nextCursor across follows, and terminal state means STOP with no further follows. After 2 empty follows with no new actionable artifact or progress, do other work, cancel/retry with a targeted edit, or ask the user. For web app visual checks specifically, start any long-running dev server through a BACKGROUND basher (finite commands stay SYNC), keep its returned jobId, use check_job to wait for readiness, then spawn browser-use for screenshots/navigation/interaction.'
 }
-- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use \`code_search\` for ripgrep-style content search (do not basher grep); for several patterns, issue one \`code_search\` call per pattern — independent calls can go in the same message. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don't force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: basher needs \`params.command\` (a shell string); general-agent needs prompt + params.filePaths/directoryPaths (not files); thinker needs prompt packet (params only depth/outputSchemaHint); dependency-manager needs params.manager+params.operation from manifest evidence; architect/advisory needs prompt+files (snapshot_id optional); reviewer-family manual spawns omit params.snapshot_id (security-reviewer needs changed_files+snapshot_fingerprint); put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "basher", "prompt": "...", "params": { "command": "..." } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
+- **Prefer dedicated harness tools over shell fallbacks:** Repository status is injected automatically by the runtime; do not spawn basher merely to run git status. Use read_files/read_outline/read_subtree/glob/list_directory/query_index for file and codebase inspection instead of shelling out to cat/ls/find/grep. Use \`code_search\` for ripgrep-style content search (do not basher grep); for several patterns, issue one \`code_search\` call per pattern — independent calls can go in the same message. Tiered read policy: small files (≤~400 lines) use read_files paths or ranges 1..totalLines for Tier1 whole-file auth (complete:true → reusable cap.v3); large/targeted blocks use read_files windows/around/symbol for Tier2 scoped caps (must be complete:true to mint). After successful edit_transaction, compress body to path/pointer but retain whole-file postEditCapabilities verbatim. Don't force windows for small files. Use basher for commands that do not have a dedicated tool, such as tests, builds, package scripts, and one-off project CLIs. Never embed a multi-KB file body or heredoc (\`<<'EOF' ... EOF\`) inside \`basher.params.command\`; the transport truncates large payloads and the JSON normalizer intentionally fails closed on truncated input. Author files with \`write_file\`/\`edit_transaction\` and run them via a short basher command instead. When you spawn an agent, pass its required params or the spawn fails: ${buildSpawnContractClauses()}; put these in \`params\`, not only in the prose prompt. Correct spawn_agents shape: { "agents": [{ "agent_type": "basher", "prompt": "...", "params": { "command": "..." } }] } — prompt and params go INSIDE each agent entry, never as siblings of agents, and agents is a real array (never a JSON string).
 
 # Code Editing Mandates
 
@@ -1090,16 +1089,36 @@ ${guideSections}
       // per iteration (eviction ledger, security/specialist freshness,
       // buildGateSnapshotDetails per fingerprint), re-opening and sha256-
       // hashing every file each time. Liveness without a filesystem watcher:
-      // a cached marker is reused ONLY while a fresh fstat of the same size +
-      // mtime matches the values captured when it was hashed, so any content
-      // change still re-hashes the live bytes. The marker string itself stays
-      // the per-path sha256 marker, so the cache can never serve a different
-      // file's bytes and every other failure marker (unreadable:*/missing)
-      // stays byte-identical. Bounded (250 entries), reset every turn.
+      // a cached marker is reused ONLY while a fresh stat taken AFTER the
+      // mtime-granularity grace window (GATE_MARKER_CACHE_GRACE_MS below)
+      // still matches the size + mtime (+ ctime, defense in depth) captured
+      // when it was hashed, so any content change still re-hashes the live
+      // bytes. The marker string itself stays the per-path sha256 marker, so
+      // the cache can never serve a different file's bytes and every other
+      // failure marker (unreadable:*/missing) stays byte-identical. Bounded
+      // (250 entries), reset every turn.
       const GATE_MARKER_CACHE_MAX = 250
+      // mtime-granularity grace window for the marker-cache fast path. A
+      // same-size rewrite landing in the SAME mtime tick (coarse-granularity
+      // filesystems, e.g. some CI runners: HFS+ 1s, FAT32 2s) would otherwise
+      // pass the size+mtime match and serve a STALE marker, collapsing the
+      // gate fingerprint sequence. Any real filesystem's mtime granularity is
+      // < 3s (ext4/apfs ~ns, HFS+ 1s, FAT32 2s), so a fresh stat taken MORE
+      // than 3s after the stamp with a matching mtime genuinely proves the
+      // file was not rewritten; within the window the cache always recomputes
+      // (fail-open toward correctness). This is the fix for the CI-only flake
+      // where the reviewer-repair A->B->A cycle guard fired early and ended
+      // the generator before the expected yield.
+      const GATE_MARKER_CACHE_GRACE_MS = 3000
       const gateMarkerCache = new Map<
         string,
-        { size: number; mtimeMs: number; marker: string }
+        {
+          size: number
+          mtimeMs: number
+          ctimeMs: number
+          stampedAt: number
+          marker: string
+        }
       >()
       const runReviewerGate = runValidationGate
       const reviewerAgentType = 'code-reviewer'
@@ -1558,6 +1577,15 @@ ${guideSections}
         ((activeWorkState.currentPhase === 'awaiting_validation' ||
           activeWorkState.currentPhase === 'awaiting_review') &&
           activeWorkState.changedFiles.length > 0)
+      // PR-T5 (D23) Slice 2: docs-only edit tracking. `editsHappened` keeps
+      // its exact existing semantics (it also gates validation hooks and the
+      // unsafe-state guard, and narrowing it would change those), so a
+      // docs-only edit additionally records this distinct turn-scoped flag.
+      // It does NOT by itself force a reviewer re-run: the reviewer-skip
+      // decision below uses it to pick the dedicated docs-only skip reason
+      // when the reviewable set is unchanged since the last review. A dirty
+      // REVIEWABLE file always re-arms the reviewer exactly as before.
+      let docsOnlyEditsHappened = false
       let gatePassedForCurrentEdits = false
       let finalResponseGateOpen =
         activeWorkState.currentPhase === 'final_response_allowed' &&
@@ -1870,6 +1898,13 @@ ${guideSections}
         )
         if (files.length > 0) {
           editsHappened = true
+          // PR-T5 (D23) Slice 2: an edit batch that touched NO reviewable
+          // file is docs-only bookkeeping and must not by itself demand a
+          // fresh reviewer pass; record the distinct flag for the skip
+          // decision.
+          if (selectReviewableGateFiles(files).length === 0) {
+            docsOnlyEditsHappened = true
+          }
           editsThisStep = true
           recordChangedFiles(files)
           activeWorkState.latestWorkSummary = `Latest detected edit/work touched: ${files.join(', ')}`
@@ -1894,6 +1929,11 @@ ${guideSections}
         }
         if (messageFiles.length > 0) {
           editsHappened = true
+          // PR-T5 (D23) Slice 2: same docs-only classification as the
+          // tool-result edit path above.
+          if (selectReviewableGateFiles(messageFiles).length === 0) {
+            docsOnlyEditsHappened = true
+          }
           editsThisStep = true
           recordChangedFiles(messageFiles)
           activeWorkState.latestWorkSummary = `Latest direct edit/work from message history touched: ${messageFiles.join(', ')}`
@@ -2002,6 +2042,11 @@ ${guideSections}
             })
           ) {
             editsHappened = true
+            // PR-T5 (D23) Slice 2: same docs-only classification as the
+            // tool-result edit path above.
+            if (selectReviewableGateFiles([file]).length === 0) {
+              docsOnlyEditsHappened = true
+            }
             recordChangedFiles([file], { fromStatusObservation: true })
             activeWorkState.latestWorkSummary = `Git status shows pending changed files: ${Array.from(pendingGateFiles).join(', ')}`
             markActiveWorkStateChanged()
@@ -5301,6 +5346,21 @@ ${guideSections}
           reviewableGateScopeFiles.length > 0 &&
           isAttestableSnapshotFingerprint(reviewableFingerprint) &&
           matchingReviewReceipt
+        // PR-T5 (D23) Slice 2: docs-only edits that happened after the last
+        // reviewer pass are distinguished from a plainly unchanged reviewable
+        // set. Two signals, either of which suffices: a this-turn edit that
+        // touched no reviewable file (docsOnlyEditsHappened), or a
+        // non-reviewable path already sitting in the frozen gate scope
+        // (pending/dirty docs bookkeeping, e.g. edited after the review that
+        // produced the matching receipt). This only refines the SKIP LABEL:
+        // the skip condition itself is unchanged, so a dirty reviewable file
+        // still re-arms the reviewer exactly as before.
+        const nonReviewableGateScopeFiles = gateScopeFiles.filter(
+          (file) => !isReviewableGateFile(file),
+        )
+        const docsOnlyEditsAfterLastReview =
+          reviewableSetAlreadyReviewed &&
+          (docsOnlyEditsHappened || nonReviewableGateScopeFiles.length > 0)
         const skipReviewerForReviewableScope =
           runReviewerGate &&
           editsHappened &&
@@ -5316,7 +5376,9 @@ ${guideSections}
           const reviewerSkipReason =
             reviewableGateScopeFiles.length === 0
               ? 'reviewer skip: no reviewable source files'
-              : 'reviewer skip: reviewable source set unchanged since last review'
+              : docsOnlyEditsAfterLastReview
+                ? 'reviewer skip: docs-only edits after last review'
+                : 'reviewer skip: reviewable source set unchanged since last review'
           markActiveWorkStateChanged()
           emitGateTelemetry({
             currentPhase: 'awaiting_review',
@@ -5328,7 +5390,9 @@ ${guideSections}
             skipReason:
               reviewableGateScopeFiles.length === 0
                 ? 'reviewer-skip-no-reviewable-source-files'
-                : 'reviewer-skip-reviewable-set-unchanged',
+                : docsOnlyEditsAfterLastReview
+                  ? 'reviewer-skip-docs-only-after-review'
+                  : 'reviewer-skip-reviewable-set-unchanged',
           })
           yield {
             toolName: 'add_message',
@@ -5341,7 +5405,9 @@ ${guideSections}
                   'skipped',
                   reviewableGateScopeFiles.length === 0
                     ? `reviewer-skip-no-reviewable-source-files: pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`
-                    : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewableGateScopeFiles.join(', ') || '(none)'}`,
+                    : docsOnlyEditsAfterLastReview
+                      ? `reviewer-skip-docs-only-after-review: non-reviewable files: ${nonReviewableGateScopeFiles.join(', ') || '(none)'}`
+                      : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewableGateScopeFiles.join(', ') || '(none)'}`,
                 ),
               ].join('\n'),
             },
@@ -10269,6 +10335,15 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
                     .map((advisory) => compactReceiptString(advisory, 180)),
                 }
               : {}),
+            // PR-T5 (D23) Slice 1: hash entries are exact content markers
+            // (compacting their text would corrupt them), so only the COUNT is
+            // bounded here — same shape as the reviewedFiles slice above.
+            ...(receipt.reviewedFileHashes &&
+            receipt.reviewedFileHashes.length > 0
+              ? {
+                  reviewedFileHashes: receipt.reviewedFileHashes.slice(0, 4),
+                }
+              : {}),
             receiptTruncated: true,
           }
           if (
@@ -10285,11 +10360,31 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             // advisoryCount survives so a consumer can still tell advisories
             // existed even though the texts did not fit the storage bound.
             advisories: undefined,
+            // PR-T5 (D23) Slice 1 — clean drop (not corruption): at the
+            // extreme bound the receipt keeps no per-file content bindings at
+            // all, so the storage invariant holds for arbitrarily wide
+            // reviews and no partially-truncated hash list can be mistaken
+            // for full coverage.
+            reviewedFileHashes: undefined,
           }
         }
 
         const gateId = `${reviewer}:${expectedFingerprint}`
         const reviewedFiles = normalizeGateFileList(result.reviewedFiles ?? [])
+        // PR-T5 (D23) Slice 1: bind the receipt to per-file content. For each
+        // reviewed file, capture the current readGateFileContentMarker and
+        // keep it only when it is a creditable content marker (a real sha256
+        // hash or a stable `missing` deletion); non-creditable markers
+        // (`unreadable:*`, ...) are skipped entirely rather than persisted as
+        // error strings. Both inline helpers are hoisted `function`
+        // declarations in this serialized handleSteps scope, so calling them
+        // here is safe even though their declarations appear later in the
+        // source.
+        const reviewedFileHashes = reviewedFiles.flatMap((file) => {
+          const marker = readGateFileContentMarker(file)
+          if (!isCreditableContentMarker(marker)) return []
+          return [{ path: file, hash: marker }]
+        })
         // Advisories are the reviewer's non-blocking observations. They are
         // recorded (and surfaced) but never become repair targets, which is
         // what lets a LOOKS_GOOD verdict carry cosmetic notes instead of
@@ -10316,6 +10411,10 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             compactReceiptString(value, MAX_RECEIPT_TEXT_LENGTH),
           ),
           reviewedFileCount: reviewedFiles.length,
+          // Omitted entirely when no reviewed file carries a creditable
+          // content marker, so receipts over virtual/legacy paths keep their
+          // exact prior serialized shape.
+          ...(reviewedFileHashes.length > 0 ? { reviewedFileHashes } : {}),
           ...(result.coverage ? { coverage: result.coverage } : {}),
           dimensions: result.dimensions ?? {},
           findings: (result.findingRecords ?? []).map((finding) => {
@@ -11785,11 +11884,17 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
        * `unreadable:<code>` marker so stale credit fails closed.
        */
       // M3-T2 cached wrapper (see gateMarkerCache above): fast path returns
-      // the previously computed marker when a fresh stat proves the file is
-      // still the same size and mtime it was hashed with; the uncached body
-      // below re-hashes otherwise. Error/sentinel markers (unreadable:*,
-      // missing) are NOT cached: they are cheap to recompute and a transient
-      // failure state must not pin stale credit.
+      // the previously computed marker only when a fresh stat taken AFTER the
+      // mtime-granularity grace window (GATE_MARKER_CACHE_GRACE_MS) still
+      // matches the size + mtime (+ ctime, defense in depth) captured when it
+      // was hashed; the uncached body below re-hashes otherwise. Entries
+      // stamped within the grace window always recompute (a same-tick
+      // same-size rewrite on a coarse-granularity filesystem is otherwise
+      // invisible to size+mtime) and are NOT deleted here: the recompute
+      // re-stamps a fresh entry. Only a genuine post-window mismatch (or a
+      // stat failure) evicts. Error/sentinel markers (unreadable:*, missing)
+      // are NOT cached: they are cheap to recompute and a transient failure
+      // state must not pin stale credit.
       function readGateFileContentMarker(normalizedPath: string): string {
         if (!normalizedPath) return 'unreadable:empty-path'
         const cached = gateMarkerCache.get(normalizedPath)
@@ -11805,19 +11910,33 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
                   requirePath().resolve(cwd, normalizedPath),
                 ),
               )
+              const withinGraceWindow =
+                Date.now() - cached.stampedAt < GATE_MARKER_CACHE_GRACE_MS
               if (
+                !withinGraceWindow &&
                 stat.isFile() &&
                 stat.size === cached.size &&
-                stat.mtimeMs === cached.mtimeMs
+                stat.mtimeMs === cached.mtimeMs &&
+                stat.ctimeMs === cached.ctimeMs
               ) {
                 return cached.marker
               }
+              if (!withinGraceWindow) {
+                // Past the grace window the fresh stat genuinely compared the
+                // live file against its stamped identity, so reaching here is
+                // a real mismatch: drop the entry (the recompute re-stamps).
+                gateMarkerCache.delete(normalizedPath)
+              }
+              // Within the grace window: skip the fast path WITHOUT deleting
+              // — the recompute below re-stamps a fresh entry.
             } catch {
               // Any stat/realpath failure falls through to a full recompute,
               // which re-derives the same fail-closed sentinels as before.
+              gateMarkerCache.delete(normalizedPath)
             }
+          } else {
+            gateMarkerCache.delete(normalizedPath)
           }
-          gateMarkerCache.delete(normalizedPath)
         }
         const marker = readGateFileContentMarkerUncached(normalizedPath)
         // Cache only present-file sha256 markers, keyed with the stat the
@@ -12021,6 +12140,8 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             gateMarkerCache.set(normalizedPath, {
               size: openedStat.size,
               mtimeMs: openedStat.mtimeMs,
+              ctimeMs: openedStat.ctimeMs,
+              stampedAt: Date.now(),
               marker,
             })
             while (gateMarkerCache.size > GATE_MARKER_CACHE_MAX) {

@@ -9,6 +9,7 @@ import type {
 } from './types'
 
 import { MAX_INDEX_AGE_MS } from './index-store'
+import { getPageRankAdjacency, personalizedPageRank } from './pagerank'
 import { getPostingCandidates, getPostingDocumentFrequency } from './query-data'
 
 export interface QueryOptions {
@@ -25,6 +26,14 @@ export interface QueryOptions {
    * project; tests / direct callers may override per-query.
    */
   lexicalWeights?: LexicalWeights
+  /**
+   * Blend weight for the personalized-PageRank component (P3-T9). The
+   * contribution is additive and bounded: the blended score is
+   * `pageRankWeight x pageRank` and PageRank scores sum to 1 across the
+   * whole graph, so the per-file contribution never exceeds this weight.
+   * Default: 0 (opt-in) — omitting it keeps ranking byte-identical.
+   */
+  pageRankWeight?: number
 }
 
 /** Historical hardcoded lexical scoring constants — the ranking baseline. */
@@ -173,6 +182,7 @@ export function queryIndex(
       commandIntent,
       lexicalWeights,
       pathPrefixes,
+      options.pageRankWeight,
     )
   }
   return querySearch(
@@ -185,6 +195,7 @@ export function queryIndex(
     commandIntent,
     lexicalWeights,
     pathPrefixes,
+    options.pageRankWeight,
   )
 }
 
@@ -231,6 +242,7 @@ function querySearch(
   commandIntent: boolean,
   lexicalWeights: Required<LexicalWeights>,
   pathPrefixes?: string[],
+  pageRankWeight = 0,
 ): QueryIndexResult[] {
   if (tokens.length === 0) {
     const results = Object.values(index.files)
@@ -272,6 +284,7 @@ function querySearch(
   }
 
   if (!commandIntent) {
+    blendPageRankScores(index, directResults, pageRankWeight)
     const graphScores = scoreGraphNeighborhood(index, adjacency, directResults)
     for (const [path, related] of graphScores.entries()) {
       if (!matchesFileType(index.files[path], fileTypes)) continue
@@ -648,6 +661,48 @@ function fileContainsToken(file: IndexedFile, token: string): boolean {
       return true
   }
   return false
+}
+
+/**
+ * P3-T9: blend personalized PageRank into the lexical scores as an additive,
+ * bounded component. The personalization seeds are the files that matched
+ * the query tokens (lexical score > 0), so rank diffuses from the query's
+ * own hits toward well-connected files. The added score is
+ * `pageRankWeight x pageRank` and PageRank scores sum to 1 across the whole
+ * graph, so the per-file contribution never exceeds `pageRankWeight`; the
+ * default weight of 0 skips the computation entirely. The directed adjacency
+ * is built once per immutable index object (WeakMap-cached, like
+ * adjacencyCache) and iteration is capped (maxIterations x edges), keeping
+ * the blend safe on large repositories.
+ */
+function blendPageRankScores(
+  index: MetadataIndex,
+  directResults: Map<string, QueryIndexResult>,
+  pageRankWeight: number,
+): void {
+  if (
+    pageRankWeight <= 0 ||
+    !Number.isFinite(pageRankWeight) ||
+    directResults.size === 0
+  ) {
+    return
+  }
+
+  const adjacency = getPageRankAdjacency(index)
+  const seeds = new Map<string, number>()
+  for (const path of directResults.keys()) {
+    const nodeId = fileNodeId(path)
+    if (adjacency.has(nodeId)) seeds.set(nodeId, 1)
+  }
+  if (seeds.size === 0) return
+
+  const scores = personalizedPageRank({ adjacency, seeds })
+  for (const [path, result] of directResults) {
+    const pageRank = scores.get(fileNodeId(path)) ?? 0
+    if (pageRank <= 0) continue
+    result.score += pageRankWeight * pageRank
+    result.matchedOn = addMatchedOn(result.matchedOn, 'graph')
+  }
 }
 
 function scoreGraphNeighborhood(

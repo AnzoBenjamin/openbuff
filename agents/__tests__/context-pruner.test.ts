@@ -5065,3 +5065,258 @@ describe('context-pruner dual-budget behavior', () => {
     expect(countKnowledgeMemoryEntries(content, 'Validation Results')).toBe(12)
   })
 })
+
+describe('context-pruner non-object JSON part values (D24/PR-T6 crash regression)', () => {
+  let mockAgentState: AgentState
+
+  beforeEach(() => {
+    mockAgentState = createMockAgentState([], 0)
+  })
+
+  const runHandleSteps = (messages: Message[]) => {
+    mockAgentState.messageHistory = messages
+    mockAgentState.contextTokenCount = 250000
+    const mockLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }
+    const generator = contextPruner.handleSteps!({
+      agentState: mockAgentState,
+      logger: mockLogger,
+      params: { maxContextLength: 200000 },
+    })
+    const results: any[] = []
+    let result = generator.next()
+    while (!result.done) {
+      if (typeof result.value === 'object') {
+        results.push(result.value)
+      }
+      result = generator.next()
+    }
+    return results
+  }
+
+  test('completes when an ask_user tool result carries a string-valued JSON part', () => {
+    // D24/PR-T6: a truthy-primitive JSON part value used to crash the pruner
+    // with "Cannot use 'in' operator to search for 'answers' in <string>".
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', 'boom — not an object'),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    const content = results[0].input.messages[0].content[0].text
+    expect(content).toContain('<conversation_summary>')
+    // The string part is simply not summarized as user answers.
+    expect(content).not.toContain('User answered:')
+    expect(content).not.toContain('User skipped question')
+  })
+
+  test('completes when an ask_user tool result carries a non-zero numeric JSON part value', () => {
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', 42),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    expect(results[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
+
+  test('completes when an ask_user tool result carries a boolean JSON part value', () => {
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', true),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    expect(results[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
+
+  test('completes when a run_terminal_command result carries a string-valued JSON part', () => {
+    // D24/PR-T6: the identical 'exitCode' in value hazard for a primitive value.
+    const messages = [
+      createMessage('user', 'Run tests'),
+      createToolCallMessage('call-1', 'run_terminal_command', {
+        command: 'npm test',
+      }),
+      createToolResultMessage('call-1', 'run_terminal_command', 'boom — not an object'),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    const content = results[0].input.messages[0].content[0].text
+    expect(content).toContain('<conversation_summary>')
+    expect(content).not.toContain('Command failed with exit code')
+  })
+})
+
+describe('context-pruner archive eviction pointers (D25/CQ-T1)', () => {
+  let mockAgentState: AgentState
+
+  beforeEach(() => {
+    mockAgentState = createMockAgentState([], 0)
+  })
+
+  const runHandleStepsWithParams = (
+    messages: Message[],
+    params: Record<string, unknown>,
+  ) => {
+    mockAgentState.messageHistory = messages
+    mockAgentState.contextTokenCount = 250000
+    const mockLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }
+    const generator = contextPruner.handleSteps!({
+      agentState: mockAgentState,
+      logger: mockLogger,
+      params,
+    })
+    const results: any[] = []
+    let result = generator.next()
+    while (!result.done) {
+      if (typeof result.value === 'object') {
+        results.push(result.value)
+      }
+      result = generator.next()
+    }
+    return results
+  }
+
+  test('threads a seeded archivePointers param verbatim into the pinned block', () => {
+    const pointer =
+      '[action=tool_result_eviction steps=12-18 msgs=7] deterministic tool-result eviction (stale recency)'
+    const messages = [
+      createMessage('user', 'Compact with archive eviction pointers'),
+      createMessage('assistant', 'Understood.'),
+    ]
+
+    const results = runHandleStepsWithParams(messages, {
+      maxContextLength: 200000,
+      archivePointers: [pointer],
+    })
+    const content = results[0].input.messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).toContain('Archive Pointers:')
+    expect(knowledgeMemory).toContain(`  - ${pointer}`)
+    // Backward-parseable placement: the pointer section is emitted BEFORE
+    // Goal: so a legacy parser (a pre-archive-pointers SECTION_RE) neither
+    // folds the pointer lines into the persisted nextAction field nor loses
+    // any recognized section.
+    expect(knowledgeMemory.indexOf('Archive Pointers:')).toBeLessThan(
+      knowledgeMemory.indexOf('Goal:'),
+    )
+  })
+
+  test('a legacy parser without the Archive Pointers header drops the leading section', () => {
+    // Backward-parseability pin: the emitted block leads with the unknown
+    // 'Archive Pointers:' section, so a pre-archive-pointers SECTION_RE (the
+    // only consumer shape that differs between versions) must skip it without
+    // folding the pointer lines into the persisted nextAction field and
+    // without losing any recognized section.
+    const legacyBlock = [
+      'Archive Pointers:',
+      '  - [action=semantic_compaction steps=0-120 msgs=121] pre-pass transcript archived before compaction.',
+      'Goal:',
+      '  Ship the repair behind the reviewer gate',
+      'Next Action:',
+      '  Re-run the compatibility review',
+      '',
+    ].join('\n')
+    const LEGACY_SECTION_RE =
+      /^(Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):\s*([\s\S]*?)(?=\n(?:Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):|(?![\s\S]))/gm
+    const parsed: Record<string, string> = {}
+    let match: RegExpExecArray | null
+    while ((match = LEGACY_SECTION_RE.exec(legacyBlock)) !== null) {
+      parsed[match[1]] = match[2].trim()
+    }
+
+    expect(parsed['Goal']).toBe('Ship the repair behind the reviewer gate')
+    expect(parsed['Next Action']).toBe('Re-run the compatibility review')
+    expect(parsed['Next Action']).not.toContain('Archive Pointers')
+    expect(parsed['Next Action']).not.toContain('semantic_compaction')
+  })
+
+  test('keeps archive pointers verbatim under a small-window budget', () => {
+    const pointer =
+      '[action=semantic_compaction steps=0-120 msgs=121] pre-pass transcript archived before compaction.'
+    const longPaths = Array.from(
+      { length: 40 },
+      (_, index) => `src/retention/module-${index}/file-${index}.ts`,
+    )
+    const messages = [
+      createMessage('user', 'Compact with archive eviction pointers'),
+      ...longPaths.flatMap((path, index) => [
+        createToolCallMessage(`ptr-read-${index}`, 'read_files', {
+          paths: [path],
+        }),
+        createToolResultMessage(`ptr-read-${index}`, 'read_files', {
+          kind: 'read_files_result',
+          version: 1,
+          status: 'ok',
+          summary: { requested: 1, ok: 1, partial: 0, failed: 0, uniquePaths: 1 },
+          results: [
+            {
+              selector: 'file',
+              requestIndex: 0,
+              path,
+              status: 'ok',
+              content: 'export const value = 1',
+              complete: true,
+              template: false,
+            },
+          ],
+        }),
+      ]),
+    ]
+
+    const results = runHandleStepsWithParams(messages, {
+      maxContextLength: 200000,
+      semanticBudget: {
+        triggerBudgetTokens: 2_800,
+        targetBudgetTokens: 2_500,
+      },
+      archivePointers: [pointer],
+    })
+    const content = results[0].input.messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    // The small-window ceiling (1,500 estimated tokens) evicts the ordinary
+    // retention lists, but the pinned pointer line survives verbatim.
+    expect(knowledgeMemory).toContain('Archive Pointers:')
+    expect(knowledgeMemory).toContain(`  - ${pointer}`)
+  })
+})

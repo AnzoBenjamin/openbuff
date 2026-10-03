@@ -19,7 +19,7 @@ const CI_WORKFLOW = readFileSync(
 
 /** The exact per-package test discovery command from the CI workflow. */
 const CI_FIND_COMMAND =
-  "find . \\( -path ./node_modules -o -path ./.git -o -path ./dist \\) -prune -o -type f -name '*.test.ts' ! -name '*.integration.test.ts' -print"
+  "find . \\( -path ./node_modules -o -path ./.git -o -path ./dist \\) -prune -o -type f \\( -name '*.test.ts' -o -name '*.test.tsx' \\) ! -name '*.integration.test.ts' -print"
 
 let tmpRoot: string
 
@@ -150,5 +150,36 @@ describe('CI flake ledger wiring (M4-T3)', () => {
     expect(CI_WORKFLOW).toContain('id: tests')
     expect(CI_WORKFLOW).toContain('steps.tests.outputs.total_attempts')
     expect(CI_WORKFLOW).toContain('scripts/flake-ledger.json')
+  })
+})
+
+describe('CI sdk dist build gating', () => {
+  test('sdk dist is built only for the cli matrix entries, not every package', () => {
+    // CLI tests import @openbuff/sdk through the ESM import condition, which
+    // resolves the dist bundle; every other package job must skip the sdk
+    // build instead of paying its cost across the whole matrix.
+    const lines = CI_WORKFLOW.split('\n')
+    const buildIndexes = lines
+      .map((line, index) =>
+        line.trim() === 'run: cd sdk && bun run build' ? index : -1,
+      )
+      .filter((index) => index !== -1)
+    // Exactly one gated build per test job: `test` and `test-integration`.
+    expect(buildIndexes.length).toBe(2)
+    for (const index of buildIndexes) {
+      const stepLines = lines.slice(index - 2, index)
+      expect(
+        stepLines.some(
+          (line) => line.trim() === "if: matrix.package == 'cli'",
+        ),
+      ).toBe(true)
+      expect(
+        stepLines.some((line) =>
+          line.includes(
+            'Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)',
+          ),
+        ),
+      ).toBe(true)
+    }
   })
 })

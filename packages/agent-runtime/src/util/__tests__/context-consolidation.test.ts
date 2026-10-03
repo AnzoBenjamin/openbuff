@@ -20,6 +20,13 @@ import {
 import { archivePreCompaction } from '../context-archive'
 import { maybeRunBackgroundConsolidation } from '../context-consolidation-runner'
 import { handleRecallContext } from '../../tools/handlers/tool/recall-context'
+// The REAL module is loaded (and its exports copied to a plain const) BEFORE
+// mock.module registers: after registration bun resolves reads on the
+// imported namespace through the mock registry, so referencing the namespace
+// inside the factory would re-enter the mock (self-recursion). The
+// registry-wide mock (afterAll(mock.restore) does NOT undo it) must keep the
+// other ~40 real exports working for sibling test files in this process.
+import * as spawnAgentUtilsReal from '../../tools/handlers/tool/spawn-agent-utils'
 
 import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
 import type { ContextConsolidation } from '@codebuff/common/types/context-consolidation'
@@ -247,7 +254,12 @@ const executeSubagentSpy = mock((..._args: unknown[]) => {
 const createAgentStateSpy = mock(() => ({}))
 const extractSubagentContextParamsSpy = mock(() => ({}))
 
+// Real exports first, overrides after, so the overrides win.
+const realSpawnAgentUtils = { ...spawnAgentUtilsReal }
+
+// Registry-wide leak class prevented: raw mock.module registrations are process-wide and survive mock.restore(), so a sibling spawn suite co-scheduled in this worker would crash on the unconditional throwing spy — the afterAll below re-registers the untouched real-module snapshot for them. This is the first registration for the specifier in this file, so the inline snapshot (captured from the real module before this registration) is untainted.
 mock.module('../../tools/handlers/tool/spawn-agent-utils', () => ({
+  ...realSpawnAgentUtils,
   createAgentState: createAgentStateSpy,
   executeSubagent: executeSubagentSpy,
   extractSubagentContextParams: extractSubagentContextParamsSpy,
@@ -263,6 +275,13 @@ describe('maybeRunBackgroundConsolidation', () => {
 
   afterAll(() => {
     mock.restore()
+    // Re-register the untouched real module: mock.module registrations are
+    // process-wide and survive mock.restore(), so sibling suites co-scheduled
+    // in this worker keep resolving the real spawn-agent-utils.
+    mock.module(
+      '../../tools/handlers/tool/spawn-agent-utils',
+      () => ({ ...realSpawnAgentUtils }),
+    )
   })
   test('canary-off: no import/spawn and no record when the gate is not exactly true', () => {
     for (const programmaticConfig of [undefined, {}, { backgroundSnapshotConsolidation: false }]) {
