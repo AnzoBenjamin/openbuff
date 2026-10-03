@@ -71,7 +71,8 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
 
   `createRequire` captures have one sanctioned exception: when a workspace
   package's ESM `import` condition resolves to a build artifact that may be
-  stale or broken under `bun test` (e.g. `@openbuff/sdk` → `sdk/dist/index.mjs`),
+  stale or broken under `bun test` (e.g. `@openbuff/sdk` resolves to the sdk
+  package's dist bundle output, not its source),
   capture the real exports via `createRequire` (the `require` condition),
   spread them EAGERLY into the factory, and never read the capture lazily —
   lazy delegation through a require-captured binding is the CJS/ESM bridge
