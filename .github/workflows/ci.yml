@@ -187,7 +187,8 @@ jobs:
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
           echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
-      - name: Build SDK before tests
+      - name: Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)
+        if: matrix.package == 'cli'
         run: cd sdk && bun run build
 
       - name: Prebuild CLI agents
@@ -341,7 +342,8 @@ jobs:
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
           echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
-      - name: Build SDK before integration tests
+      - name: Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)
+        if: matrix.package == 'cli'
         run: cd sdk && bun run build
 
       - name: Prebuild CLI agents
