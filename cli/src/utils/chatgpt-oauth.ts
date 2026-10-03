@@ -25,6 +25,24 @@ import { safeOpen } from './open-url'
 
 import type { ChatGptOAuthCredentials } from '@openbuff/sdk'
 
+/**
+ * TEST-ONLY override for the OAuth redirect URI. Production must keep using
+ * the provider-registered CHATGPT_OAUTH_REDIRECT_URI — that exact callback
+ * URL is what the ChatGPT OAuth provider allows — so this seam exists purely
+ * for tests: each test flow sets a unique loopback redirect URI and clears
+ * the override afterwards. Never call this outside test code.
+ */
+let testRedirectUriOverride: string | null = null
+
+/**
+ * TEST-ONLY: make flows begun while set authorize against (and bind callback
+ * servers on) `uri` instead of the provider-registered constant; pass null
+ * to restore production behavior.
+ */
+export function setChatGptOAuthRedirectUriForTests(uri: string | null): void {
+  testRedirectUriOverride = uri
+}
+
 function parseOAuthTokenResponse(data: unknown): {
   accessToken: string
   refreshToken: string
@@ -87,6 +105,8 @@ function generateCodeChallenge(verifier: string): string {
 type PendingOAuthFlow = {
   codeVerifier: string
   state: string
+  /** The redirect URI this flow was authorized against (TEST-ONLY overrideable). */
+  redirectUri: string
   server: http.Server | null
   timeout: ReturnType<typeof setTimeout> | null
   settled: boolean
@@ -378,9 +398,15 @@ function beginOAuthFlow(): { flow: PendingOAuthFlow; authUrl: string } {
   // learn the verifier.
   const state = toBase64Url(crypto.randomBytes(32))
 
+  // The redirect URI is resolved per flow, so the TEST-ONLY override applies
+  // to exactly the flow that begins while it is set; in production this is
+  // always the provider-registered constant.
+  const redirectUri = testRedirectUriOverride ?? CHATGPT_OAUTH_REDIRECT_URI
+
   const flow: PendingOAuthFlow = {
     codeVerifier,
     state,
+    redirectUri,
     server: null,
     timeout: null,
     settled: false,
@@ -392,7 +418,7 @@ function beginOAuthFlow(): { flow: PendingOAuthFlow; authUrl: string } {
   const authUrl = new URL(CHATGPT_OAUTH_AUTHORIZE_URL)
   authUrl.searchParams.set('response_type', 'code')
   authUrl.searchParams.set('client_id', CHATGPT_OAUTH_CLIENT_ID)
-  authUrl.searchParams.set('redirect_uri', CHATGPT_OAUTH_REDIRECT_URI)
+  authUrl.searchParams.set('redirect_uri', flow.redirectUri)
   authUrl.searchParams.set('code_challenge', codeChallenge)
   authUrl.searchParams.set('code_challenge_method', 'S256')
   authUrl.searchParams.set('state', state)
@@ -456,7 +482,7 @@ function callbackPageHtml(success: boolean, errorMessage?: string): string {
 async function startCallbackServer(
   flow: PendingOAuthFlow,
 ): Promise<ChatGptOAuthCredentials> {
-  const redirectUrl = new URL(CHATGPT_OAUTH_REDIRECT_URI)
+  const redirectUrl = new URL(flow.redirectUri)
   const port = parseInt(redirectUrl.port, 10)
   const callbackPath = redirectUrl.pathname
 
@@ -531,7 +557,7 @@ async function startCallbackServer(
       }
 
       try {
-        const fullCallbackUrl = `${CHATGPT_OAUTH_REDIRECT_URI}${reqUrl.search}`
+        const fullCallbackUrl = `${flow.redirectUri}${reqUrl.search}`
         const credentials = await exchangeChatGptCodeForTokens(
           fullCallbackUrl,
           flow.codeVerifier,
@@ -716,7 +742,7 @@ export async function exchangeChatGptCodeForTokens(
     body: JSON.stringify({
       grant_type: 'authorization_code',
       client_id: CHATGPT_OAUTH_CLIENT_ID,
-      redirect_uri: CHATGPT_OAUTH_REDIRECT_URI,
+      redirect_uri: flow.redirectUri,
       code,
       code_verifier: verifier,
     }),

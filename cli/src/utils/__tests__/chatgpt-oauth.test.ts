@@ -1,20 +1,24 @@
+import { createRequire } from 'node:module'
+
 import net from 'net'
 
-import { CHATGPT_OAUTH_REDIRECT_URI } from '@codebuff/common/constants/chatgpt-oauth'
-import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { createRequire } from 'node:module'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import {
   connectChatGptOAuth,
   exchangeChatGptCodeForTokens,
+  setChatGptOAuthRedirectUriForTests,
   startChatGptOAuthFlow,
   stopChatGptOAuthServer,
 } from '../chatgpt-oauth'
 
 // connectChatGptOAuth opens the authorize URL in the user's browser; stub
 // safeOpen so these tests never spawn a browser or depend on a display
-// server.
+// server. The real module is captured and spread so this remains a partial
+// override rather than a full replacement of a first-party module.
+const realOpenUrlModule = { ...(await import('../open-url')) }
 mock.module('../open-url', () => ({
+  ...realOpenUrlModule,
   safeOpen: async () => true,
 }))
 
@@ -26,10 +30,15 @@ let saveChatGptOAuthCredentialsCalls = 0
 
 // mock.module is registry-wide for the whole test process (bun does not
 // isolate registrations across test files, and afterAll(mock.restore) does
-// NOT undo it), so capture the REAL @openbuff/sdk exports BEFORE registration
-// and spread them in the factory; only the OAuth seams below are overridden.
-// require() of the ESM package may wrap the exports in a `default` key, so
-// spread both shapes — real exports first, overrides after, so overrides win.
+// NOT undo it), so the @openbuff/sdk mock is registered once at module
+// scope.
+//
+// The real module MUST be captured via createRequire rather than `await
+// import`: @openbuff/sdk's ESM `import` condition resolves to a build
+// artifact (sdk/dist/index.mjs) that may be stale or unparseable under bun
+// test, while the `require` condition resolves the working source. The
+// capture is spread eagerly (no lazy reads), so it is safe under the
+// repo's mock-module guard.
 const requireReal = createRequire(import.meta.url)
 const realSdkModule = requireReal('@openbuff/sdk') as {
   default?: typeof import('@openbuff/sdk')
@@ -49,38 +58,39 @@ mock.module('@openbuff/sdk', () => ({
 
 describe('chatgpt-oauth utility', () => {
   const originalFetch = globalThis.fetch
+  // Each test binds its own loopback redirect port, so no two flows ever
+  // share a port and the afterEach teardown can never race the next test's
+  // bind onto the fixed production port.
+  let testRedirectUri = ''
+
+  /** Allocate a fresh loopback port for a per-test redirect URI. */
+  async function allocateTestRedirectPort(): Promise<number> {
+    return new Promise<number>((resolve, reject) => {
+      const probe = net.createServer()
+      probe.once('listening', () => {
+        const { port } = probe.address() as net.AddressInfo
+        probe.close(() => resolve(port))
+      })
+      probe.once('error', reject)
+      probe.listen(0, '127.0.0.1')
+    })
+  }
+
+  beforeEach(async () => {
+    const port = await allocateTestRedirectPort()
+    testRedirectUri = `http://127.0.0.1:${port}/auth/callback`
+    setChatGptOAuthRedirectUriForTests(testRedirectUri)
+  })
 
   afterEach(async () => {
     globalThis.fetch = originalFetch
     saveChatGptOAuthCredentialsCalls = 0
+    setChatGptOAuthRedirectUriForTests(null)
 
-    // Every flow binds the SAME fixed redirect port, and
-    // stopChatGptOAuthServer closes that server asynchronously. A next test
-    // that binds immediately can lose the race: the stale server keeps
-    // answering with ITS flow's state, so the new flow's genuine callback
-    // gets a 400 state mismatch instead of 200 (seen in CI). Stop any active
-    // flow here and wait until the port is actually free before yielding.
+    // stopChatGptOAuthServer disposes the active flow; because every test
+    // bound its OWN redirect port, no teardown here can race a later test's
+    // bind and no port-drain polling is needed.
     stopChatGptOAuthServer()
-    const redirectPort = parseInt(new URL(CHATGPT_OAUTH_REDIRECT_URI).port, 10)
-    const deadline = Date.now() + 2_000
-    while (Date.now() < deadline) {
-      const portFree = await new Promise<boolean>((resolve) => {
-        const probe = net.connect(redirectPort, '127.0.0.1')
-        probe.once('connect', () => {
-          probe.destroy()
-          resolve(false)
-        })
-        probe.once('error', () => resolve(true))
-        probe.setTimeout(100, () => {
-          probe.destroy()
-          resolve(true)
-        })
-      })
-      if (portFree) {
-        return
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25))
-    }
   })
 
   test('token exchange error is sanitized and does not include response body', async () => {
@@ -112,6 +122,12 @@ describe('chatgpt-oauth utility', () => {
     expect(state).not.toBe(codeVerifier)
     expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(new URL(authUrl).searchParams.get('state')).toBe(state)
+    // The TEST-ONLY redirect override is honored: the flow authorizes
+    // against this test's own loopback redirect URI, not the provider-
+    // registered production constant.
+    expect(new URL(authUrl).searchParams.get('redirect_uri')).toBe(
+      testRedirectUri,
+    )
   })
 
   test('successive OAuth flows generate different states', () => {
@@ -222,8 +238,8 @@ describe('chatgpt-oauth utility', () => {
   })
 
   test('a superseded server held open by a keep-alive connection still releases the fixed port', async () => {
-    // The fixed redirect port both flows' callback servers bind.
-    const redirectPort = parseInt(new URL(CHATGPT_OAUTH_REDIRECT_URI).port, 10)
+    // This test's own redirect port: both flows' callback servers bind it.
+    const redirectPort = parseInt(new URL(testRedirectUri).port, 10)
 
     const tryConnect = (): Promise<boolean> =>
       new Promise((resolve) => {
@@ -240,8 +256,8 @@ describe('chatgpt-oauth utility', () => {
 
     const first = connectChatGptOAuth()
 
-    // Wait (bounded) for the first flow's callback server to bind the fixed
-    // redirect port, then hold an idle connection open on it: server.close()
+    // Wait (bounded) for the first flow's callback server to bind this
+    // test's redirect port, then hold an idle connection open on it: server.close()
     // does not complete while such a keep-alive connection exists, so this
     // reproduces exactly the stalled-teardown case where the port stayed
     // bound when the old release chain's fallback fired and the replacement
@@ -301,8 +317,8 @@ describe('chatgpt-oauth utility', () => {
   })
 
   test('a release queued after a failed bind does not stall the replacement flow behind the hard cap', async () => {
-    // The fixed redirect port both flows' callback servers bind.
-    const redirectPort = parseInt(new URL(CHATGPT_OAUTH_REDIRECT_URI).port, 10)
+    // This test's own redirect port: both flows' callback servers bind it.
+    const redirectPort = parseInt(new URL(testRedirectUri).port, 10)
 
     const tryConnect = (): Promise<boolean> =>
       new Promise((resolve) => {
@@ -317,7 +333,7 @@ describe('chatgpt-oauth utility', () => {
         socket.once('timeout', () => done(false))
       })
 
-    // Hold the fixed redirect port so the first flow's bind fails with
+    // Hold this test's redirect port so the first flow's bind fails with
     // EADDRINUSE: the server emits 'error' and the flow settles, queueing
     // this server's port release only AFTER the bind already failed — the
     // exact case where waiting for fresh 'listening'/'error' events would
@@ -364,15 +380,15 @@ describe('chatgpt-oauth utility', () => {
   })
 
   test('a late redirect from a superseded flow does not kill the active flow', async () => {
-    const redirect = new URL(CHATGPT_OAUTH_REDIRECT_URI)
+    const redirect = new URL(testRedirectUri)
     const loopbackBase = `http://127.0.0.1:${redirect.port}`
     const callbackPath = redirect.pathname
 
     const flow = connectChatGptOAuth()
     const state = new URL(flow.authUrl).searchParams.get('state')
 
-    // Wait (bounded) for the active flow's callback server to bind the fixed
-    // redirect port; a probe to a non-callback path answers 404 without
+    // Wait (bounded) for the active flow's callback server to bind this
+    // test's redirect port; a probe to a non-callback path answers 404 without
     // touching the flow.
     const bindDeadline = Date.now() + 2_000
     let bound = false
@@ -392,7 +408,7 @@ describe('chatgpt-oauth utility', () => {
 
     // A stale tab from a superseded flow completes late: its redirect —
     // carrying the OLD flow's state — lands on the NEW flow's server on the
-    // shared fixed port. The mismatch must be answered with the retry page
+    // same test redirect port. The mismatch must be answered with the retry
     // without terminally settling the active flow.
     const mismatchRes = await originalFetch(
       `${loopbackBase}${callbackPath}?code=abc&state=stale-flow-state`,
@@ -442,14 +458,14 @@ describe('chatgpt-oauth utility', () => {
   })
 
   test('a token exchange still in flight when the flow settles is discarded, not persisted or written', async () => {
-    const redirect = new URL(CHATGPT_OAUTH_REDIRECT_URI)
+    const redirect = new URL(testRedirectUri)
     const loopbackBase = `http://127.0.0.1:${redirect.port}`
     const callbackPath = redirect.pathname
 
     const flow = connectChatGptOAuth()
     const state = new URL(flow.authUrl).searchParams.get('state')
 
-    // Wait (bounded) for the callback server to bind the fixed redirect port.
+    // Wait (bounded) for the callback server to bind this test's redirect port.
     const bindDeadline = Date.now() + 2_000
     let bound = false
     while (Date.now() < bindDeadline) {
