@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 
 import type { TerminalLayout } from '../../hooks/use-terminal-layout'
+import type { MarkdownPalette } from '../../utils/markdown-renderer'
 
 type CapturedButton = {
   text: string
@@ -61,19 +62,34 @@ const textFromReactNode = (node: React.ReactNode): string => {
   return ''
 }
 
+// Armed/delegating like this file's other mocks: the capture stub must only
+// be visible to THIS suite — an unconditional override leaks the recording
+// Button to every later file that renders <Button> in the same worker.
+let buttonArmed = false
+
 mock.module('../button', () => ({
   // Real exports first: the registry-wide mock must not drop real exports
   // for later files importing this module in the same process.
   ...realButtonModule,
-  Button: ({
-    children,
-    onClick,
-    ...rest
-  }: {
+  Button: (props: {
     children?: React.ReactNode
     onClick?: (event?: unknown) => void | Promise<unknown>
     [key: string]: unknown
   }) => {
+    // Disarmed: render the real Button through createElement — the real
+    // export may be a memo/forwardRef-style object, which must not be called
+    // as a plain function. realButtonModule is a `?real` query import — a
+    // separate module instance this registry-wide mock cannot patch — so
+    // the delegation cannot re-enter this override.
+    if (!buttonArmed) {
+      return React.createElement(
+        realButtonModule.Button as unknown as React.ElementType,
+        props,
+      )
+    }
+
+    const { children, onClick, ...rest } = props
+
     capturedButtons.push({ text: textFromReactNode(children), onClick })
 
     return React.createElement('box', rest, children)
@@ -104,11 +120,23 @@ mock.module('../../hooks/use-theme', () => ({
 // import below so the mock factory closes over the variable.
 let syntaxStyleSetupError: Error | null = null
 
+// Armed/delegating like this file's other mocks: the throwing stub must
+// only be visible to THIS suite — an unconditional override leaks
+// '__stub-syntax-style__' to every later file rendering native markdown in
+// the same worker.
+let syntaxStyleArmed = false
+
 mock.module('../../utils/opentui-syntax-style', () => ({
   // Real exports first so createCodeSyntaxStyle and friends survive for
-  // later files; the throwing stub below must keep winning.
+  // later files; the throwing stub below must keep winning while armed.
   ...realSyntaxStyleModule,
-  createMarkdownSyntaxStyle: () => {
+  createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
+    if (!syntaxStyleArmed) {
+      // Delegate to the `?real` module instance — a separate module object
+      // this registry-wide mock cannot patch, so this cannot re-enter the
+      // override.
+      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette)
+    }
     if (syntaxStyleSetupError) {
       throw syntaxStyleSetupError
     }
@@ -142,6 +170,8 @@ describe('PlanBox', () => {
     capturedButtons.length = 0
     syntaxStyleSetupError = null
     treeSitterArmed = true
+    syntaxStyleArmed = true
+    buttonArmed = true
     // Suite default 80x24: the tests were written against that layout, and
     // under renderToStaticMarkup the real useTerminalLayout hook has no
     // terminal to measure. Individual tests that need a different layout set
@@ -149,12 +179,14 @@ describe('PlanBox', () => {
     mockLayout = computeTerminalLayout(80, 24)
   })
 
-  // Fall through to the real hook + disarm the tree-sitter stub: the
-  // registry-wide mocks survive this file, so neither a stale layout nor the
-  // stub string must ever leak to sibling files.
+  // Fall through to the real hook + disarm the stubs: the registry-wide
+  // mocks survive this file, so neither a stale layout nor the Button /
+  // syntax-style / tree-sitter stubs must ever leak to sibling files.
   afterAll(() => {
     mockLayout = undefined
     treeSitterArmed = false
+    syntaxStyleArmed = false
+    buttonArmed = false
   })
 
   test('renders markdown plan content and execute action', () => {

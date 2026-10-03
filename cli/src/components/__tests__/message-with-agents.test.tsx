@@ -72,19 +72,36 @@ const textFromReactNode = (node: React.ReactNode): string => {
   return ''
 }
 
+// Armed at module scope (this suite's own tests capture buttons through the
+// stub, and there is no beforeEach arming here — same shape as
+// treeSitterArmed below); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real Button for later files in
+// the same worker.
+let buttonArmed = true
+
 mock.module('../button', () => ({
   // Real exports first: the registry-wide mock must not drop real exports
   // for later files importing this module in the same process.
   ...realButtonModule,
-  Button: ({
-    children,
-    onClick,
-    ...rest
-  }: {
+  Button: (props: {
     children?: React.ReactNode
     onClick?: (event?: unknown) => void | Promise<unknown>
     [key: string]: unknown
   }) => {
+    // Disarmed: render the real Button through createElement — the real
+    // export may be a memo/forwardRef-style object, which must not be called
+    // as a plain function. realButtonModule is a `?real` query import — a
+    // separate module instance this registry-wide mock cannot patch — so
+    // the delegation cannot re-enter this override.
+    if (!buttonArmed) {
+      return React.createElement(
+        realButtonModule.Button as unknown as React.ElementType,
+        props,
+      )
+    }
+
+    const { children, onClick, ...rest } = props
+
     capturedButtons.push({ text: textFromReactNode(children), onClick })
 
     return React.createElement('box', rest, children)
@@ -105,11 +122,24 @@ mock.module('../../hooks/use-terminal-layout', () => ({
 // before the dynamic import below so the mock factory closes over it.
 let syntaxStyleSetupError: Error | null = null
 
+// Armed at module scope (every agent-message render that reaches native
+// markdown needs the stub; there is no beforeEach arming here — same shape
+// as treeSitterArmed below); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real module for later files in
+// the same worker.
+let syntaxStyleArmed = true
+
 mock.module('../../utils/opentui-syntax-style', () => ({
   // Real exports first so createCodeSyntaxStyle and friends survive for
-  // later files; the throwing stub below must keep winning.
+  // later files; the throwing stub below must keep winning while armed.
   ...realSyntaxStyleModule,
-  createMarkdownSyntaxStyle: () => {
+  createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
+    if (!syntaxStyleArmed) {
+      // Delegate to the `?real` module instance — a separate module object
+      // this registry-wide mock cannot patch, so this cannot re-enter the
+      // override.
+      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette)
+    }
     if (syntaxStyleSetupError) {
       throw syntaxStyleSetupError
     }
@@ -256,11 +286,14 @@ beforeEach(() => {
   useChatStore.setState({ streamingAgents: new Set<string>() })
 })
 
-// Fall through to the real hook: the registry-wide mock survives this
-// file, so a stale layout must never leak to sibling files.
+// Fall through to the real hook + disarm the stubs: the registry-wide
+// mocks survive this file, so neither a stale layout nor the Button /
+// syntax-style / tree-sitter stubs must ever leak to sibling files.
 afterAll(() => {
   mockLayout = undefined
   treeSitterArmed = false
+  syntaxStyleArmed = false
+  buttonArmed = false
 })
 
 afterEach(() => {

@@ -26,11 +26,22 @@ let getSharedTreeSitterClientCalls = 0
 let syntaxStyleSetupError: Error | null = null
 let treeSitterClientSetupError: Error | null = null
 
+// Armed at module scope (every native-markdown render needs the stub); the
+// top-level afterAll below disarms it so the registry-wide override
+// delegates to the real module for later files in the same worker.
+// realSyntaxStyleModule is a `?real` query import — a separate module object
+// this registry-wide mock cannot patch — so the delegation cannot re-enter
+// the override.
+let syntaxStyleArmed = true
+
 mock.module('../../../utils/opentui-syntax-style', () => ({
   // Real exports first (registry-wide leak guard); the counting stub below
-  // must keep winning.
+  // must keep winning while armed.
   ...realSyntaxStyleModule,
   createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
+    if (!syntaxStyleArmed) {
+      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette)
+    }
     createMarkdownSyntaxStyleCalls.push(palette)
     if (syntaxStyleSetupError) {
       throw syntaxStyleSetupError
@@ -67,6 +78,7 @@ mock.module('../../../utils/tree-sitter-client', () => ({
 
 afterAll(() => {
   treeSitterArmed = false
+  syntaxStyleArmed = false
 })
 
 const { ContentWithMarkdown } = await import('../content-with-markdown')

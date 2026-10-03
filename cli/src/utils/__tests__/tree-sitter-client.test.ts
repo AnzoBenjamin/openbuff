@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import path from 'path'
 
 import * as realFs from 'fs'
@@ -7,6 +7,12 @@ import * as realOpenTuiCore from '@opentui/core'
 
 import type { FiletypeParserOptions } from '@opentui/core'
 
+// SNAPSHOT (not the live namespace): mock.module patches `import * as`
+// bindings in place, so the disarmed delegates below must read from this
+// frozen copy — reading the live namespace would call ITSELF (the same-mock
+// spin). `{ ...ns }` freezes the original references.
+const realOpenTuiCoreSnapshot = { ...realOpenTuiCore }
+
 // Doubles for the @opentui/core tree-sitter surface used by
 // ../tree-sitter-client. The stub client never spawns a worker; it either
 // records construction or throws on demand.
@@ -14,20 +20,47 @@ const addDefaultParsersCalls: FiletypeParserOptions[][] = []
 let constructedClientCount = 0
 let clientConstructorError: Error | null = null
 
+// Armed at module scope (this suite's own tests exercise the stub
+// constructor and the recording addDefaultParsers); the top-level afterAll
+// below disarms it so the registry-wide override delegates to the real
+// @opentui/core exports for later files in the same worker.
+let openTuiArmed = true
+
 mock.module('@opentui/core', () => ({
   ...realOpenTuiCore,
-  TreeSitterClient: class StubTreeSitterClient {
-    constructor(_options: unknown) {
-      if (clientConstructorError) {
-        throw clientConstructorError
-      }
-      constructedClientCount += 1
+  // The stub/real choice is read at CALL time, not factory time: bun applies
+  // the factory result once (patching already-loaded namespaces in place),
+  // so a factory-body ternary would freeze whichever branch ran first.
+  // TreeSitterClient stays constructable in both branches: when disarmed,
+  // `new` returns the REAL client instance built from the snapshot.
+  TreeSitterClient: function StubTreeSitterClient(options: unknown) {
+    if (!openTuiArmed) {
+      return new realOpenTuiCoreSnapshot.TreeSitterClient(
+        options as ConstructorParameters<
+          typeof realOpenTuiCoreSnapshot.TreeSitterClient
+        >[0],
+      )
     }
+    if (clientConstructorError) {
+      throw clientConstructorError
+    }
+    constructedClientCount += 1
+    // Constructor called with `new`: returning undefined keeps `this` (the
+    // fresh instance) as the result. Explicit so noImplicitReturns stays
+    // satisfied alongside the disarmed path's object return.
+    return undefined
   },
   addDefaultParsers: (parsers: FiletypeParserOptions[]) => {
+    if (!openTuiArmed) {
+      return realOpenTuiCoreSnapshot.addDefaultParsers(parsers)
+    }
     addDefaultParsersCalls.push(parsers)
   },
 }))
+
+afterAll(() => {
+  openTuiArmed = false
+})
 
 // Hide one descriptor's wasm/highlights assets (markdown_inline) behind a
 // filtered existsSync double so the asset-existence filter has a skip to
@@ -51,7 +84,7 @@ mock.module('fs', fsMock)
 mock.module('node:fs', fsMock)
 
 // Imported after the mocks register so the module under test binds to them.
-const { buildDefaultParsers, getSharedTreeSitterClient } = await import(
+const { buildDefaultParsers, getSharedTreeSitterClient, resetTreeSitterClientStateForTests } = await import(
   '../tree-sitter-client'
 )
 
@@ -120,6 +153,11 @@ const highlightWithRealClient = async (
 
 describe('getSharedTreeSitterClient', () => {
   beforeEach(() => {
+    // bun's --isolate reuses worker processes: an earlier suite in this
+    // worker may have constructed a real client or cached a creation
+    // failure through the delegating mock chain, so every test starts from
+    // pristine singleton state.
+    resetTreeSitterClientStateForTests()
     addDefaultParsersCalls.length = 0
     constructedClientCount = 0
     clientConstructorError = null
@@ -186,11 +224,18 @@ describe('getSharedTreeSitterClient', () => {
   })
 
   test('caches a client-creation failure and keeps returning null', () => {
-    // The previous test's call already failed client creation; the cached
-    // failure must short-circuit without re-registering parsers or
-    // attempting a second construction.
+    // beforeEach resets the singleton, so this test establishes its own
+    // failure instead of relying on the previous test's cached state (which
+    // worker reuse across files could otherwise mutate). The FIRST call
+    // registers parsers and fails client construction, caching the failure;
+    // the SECOND call must short-circuit on the cached failure without
+    // re-registering parsers or attempting a second construction.
+    clientConstructorError = new Error('simulated TreeSitterClient failure')
     expect(getSharedTreeSitterClient()).toBeNull()
-    expect(addDefaultParsersCalls).toHaveLength(0)
+
+    clientConstructorError = null
+    expect(getSharedTreeSitterClient()).toBeNull()
+    expect(addDefaultParsersCalls).toHaveLength(1)
     expect(constructedClientCount).toBe(0)
   })
 })

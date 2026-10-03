@@ -8,6 +8,12 @@ import * as realOs from 'os'
 
 import * as realSyntaxStyleModule from '../../../utils/opentui-syntax-style'
 
+// SNAPSHOT (not the live namespace): mock.module patches `import * as`
+// bindings in place, so the disarmed delegate below must read from this
+// frozen copy — reading the live namespace would call ITSELF (the same-mock
+// spin). `{ ...ns }` freezes the original references.
+const realSyntaxStyleSnapshot = { ...realSyntaxStyleModule }
+
 // SNAPSHOT (not `import * as`): the namespace is a live binding that
 // mock.module patches in place, so a lazy delegate reading
 // `ns.getSharedTreeSitterClient()` after registration would call ITSELF
@@ -33,9 +39,21 @@ let getSharedTreeSitterClientCalls = 0
 let syntaxStyleSetupError: Error | null = null
 let treeSitterClientSetupError: Error | null = null
 
+// Armed at module scope (every CodeBlock render through the native <code>
+// branch needs the stub); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real module for later files in the
+// same worker.
+let syntaxStyleArmed = true
+
 mock.module('../../../utils/opentui-syntax-style', () => ({
   ...realSyntaxStyleModule,
   createCodeSyntaxStyle: (palette: MarkdownPalette) => {
+    if (!syntaxStyleArmed) {
+      // Delegate to the SNAPSHOT, never the live `import * as` namespace:
+      // mock.module patches that binding in place, so a live-namespace read
+      // here would call this override again (the same-mock spin).
+      return realSyntaxStyleSnapshot.createCodeSyntaxStyle(palette)
+    }
     createCodeSyntaxStyleCalls.push(palette)
     if (syntaxStyleSetupError) {
       throw syntaxStyleSetupError
@@ -70,6 +88,7 @@ mock.module('../../../utils/tree-sitter-client', () => ({
 
 afterAll(() => {
   treeSitterArmed = false
+  syntaxStyleArmed = false
 })
 
 const { CodeBlock, resolveCodeFiletype } = await import('../code-block')
