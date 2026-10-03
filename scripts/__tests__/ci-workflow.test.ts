@@ -19,7 +19,7 @@ const CI_WORKFLOW = readFileSync(
 
 /** The exact per-package test discovery command from the CI workflow. */
 const CI_FIND_COMMAND =
-  "find . \\( -path ./node_modules -o -path ./.git -o -path ./dist \\) -prune -o -type f -name '*.test.ts' ! -name '*.integration.test.ts' -print"
+  "find . \\( -path ./node_modules -o -path ./.git -o -path ./dist \\) -prune -o -type f \\( -name '*.test.ts' -o -name '*.test.tsx' \\) ! -name '*.integration.test.ts' -print"
 
 let tmpRoot: string
 

@@ -116,11 +116,20 @@ mock.module('../../utils/opentui-syntax-style', () => ({
   },
 }))
 
+// Armed/delegating like this file's other mocks: the stub must only be
+// visible to THIS suite — an unconditional override leaks the stub string to
+// every later file calling getSharedTreeSitterClient (tree-sitter-client.test.ts
+// got '__stub-tree-sitter-client__' instead of null in full-suite runs).
+let treeSitterArmed = false
+
 mock.module('../../utils/tree-sitter-client', () => ({
   // Real exports first so buildDefaultParsers and friends survive for later
-  // files; the stub below must keep winning.
+  // files; the stub below must keep winning while armed.
   ...realTreeSitterModule,
-  getSharedTreeSitterClient: () => '__stub-tree-sitter-client__',
+  getSharedTreeSitterClient: () =>
+    treeSitterArmed
+      ? '__stub-tree-sitter-client__'
+      : realTreeSitterModule.getSharedTreeSitterClient(),
 }))
 
 const { PlanBox } = await import('../renderers/plan-box')
@@ -132,6 +141,7 @@ describe('PlanBox', () => {
   beforeEach(() => {
     capturedButtons.length = 0
     syntaxStyleSetupError = null
+    treeSitterArmed = true
     // Suite default 80x24: the tests were written against that layout, and
     // under renderToStaticMarkup the real useTerminalLayout hook has no
     // terminal to measure. Individual tests that need a different layout set
@@ -139,10 +149,12 @@ describe('PlanBox', () => {
     mockLayout = computeTerminalLayout(80, 24)
   })
 
-  // Fall through to the real hook: the registry-wide mock survives this
-  // file, so a stale layout must never leak to sibling files.
+  // Fall through to the real hook + disarm the tree-sitter stub: the
+  // registry-wide mocks survive this file, so neither a stale layout nor the
+  // stub string must ever leak to sibling files.
   afterAll(() => {
     mockLayout = undefined
+    treeSitterArmed = false
   })
 
   test('renders markdown plan content and execute action', () => {

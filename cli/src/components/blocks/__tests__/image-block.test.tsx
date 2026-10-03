@@ -30,8 +30,28 @@ mock.module('../../../utils/terminal-images', () => ({
     inlineImageSupported ? 'stub inline images' : 'No inline image support',
 }))
 
+// The `?real` capture + spread + delegate pattern: a factory with ONLY the
+// constant stub dropped every real export of image-display and pinned
+// calculateDisplaySize to {width:40,height:12} process-wide, breaking
+// image-dimensions.test.ts later in the same run (Expected <= 20, Received 40).
+const realImageDisplayModule = (await import(
+  '../../../utils/image-display?real' as string
+)) as unknown as typeof import('../../../utils/image-display')
+
+let mockDisplaySize:
+  | { width: number; height: number }
+  | undefined
+
 mock.module('../../../utils/image-display', () => ({
-  calculateDisplaySize: () => ({ width: 40, height: 12 }),
+  // Real exports first (registry-wide leak guard); this suite's assertions do
+  // not depend on the stub, so delegation is unconditional.
+  ...realImageDisplayModule,
+  calculateDisplaySize: (
+    input: Parameters<
+      typeof realImageDisplayModule.calculateDisplaySize
+    >[0],
+  ) =>
+    mockDisplaySize ?? realImageDisplayModule.calculateDisplaySize(input),
 }))
 
 mock.module('../../../hooks/use-theme', () => ({
