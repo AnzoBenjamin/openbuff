@@ -20,9 +20,24 @@
  * Safe shape: `const real = { ...(await import('<spec>')) }` before
  * `mock.module('<spec>', () => ({ ...real, fn: (...a) => real.fn(...a) }))`.
  *
- * Heuristic, regex-based (no AST): it targets the exact hang trap, not every
- * possible aliasing. Run: `bun scripts/mock-module-guard.ts` (exit 1 on
- * findings).
+ * Second check class — first-party FULL-REPLACEMENT factories: a
+ * `mock.module('<spec>', ...)` whose specifier is first-party (relative
+ * `./`/`../`, or the `@codebuff/`/`@openbuff/` scopes) and whose factory
+ * body contains no `...identifier` spread. bun's `mock.module` is
+ * registry-wide for the whole worker process (and `bun test --isolate`
+ * reuses worker processes across test files), so such a factory drops
+ * every un-overridden export of the real module for all sibling suites in
+ * the same worker. Fix: snapshot-spread (`const real = { ...(await
+ * import('<spec>')) }` + `{ ...real, ...overrides }`) or the shared
+ * `mockModules()` helper from `@codebuff/common/testing/mock-modules`.
+ * Builtins (`node:*`, `bun:*`, and a small builtin list) are skipped, and
+ * an inline `mock-module-guard: intentional full replacement` marker (on
+ * the `mock.module(` line or the comment line directly above it) exempts
+ * a call.
+ *
+ * Heuristic, regex-based (no AST): both checks target their exact leak
+ * traps, not every possible aliasing. Run: `bun scripts/mock-module-guard.ts`
+ * (exit 1 on findings).
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
@@ -32,6 +47,11 @@ export type MockModuleFinding = {
   path: string
   line: number
   message: string
+  /**
+   * Which check emitted the finding. Only the second check class sets it;
+   * full-replacement findings sort after lazy-binding findings per file.
+   */
+  kind?: 'full-replacement'
 }
 
 const SKIP_DIRECTORIES = new Set([
@@ -56,6 +76,30 @@ const LIVE_DYNAMIC_IMPORT_REGEX =
 const STATIC_NAMESPACE_IMPORT_REGEX =
   /import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+(['"`])([^'"`]+)\2/g
 
+// Second check class (first-party full-replacement factories): any
+// `...identifier` spread in the factory body counts as keeping the real
+// exports alive. This also matches `...rest` parameters inside the factory
+// body — an acceptable false positive, since a rest parameter implies a
+// delegating wrapper, which is the safe shape this check wants anyway.
+const SPREAD_IN_FACTORY_REGEX = /\.\.\.\s*[A-Za-z_$][\w$]*/
+// Exact exemption token for intentional full replacements; honored on the
+// `mock.module(` line itself or on the comment line directly above it.
+const INTENTIONAL_FULL_REPLACEMENT_MARKER =
+  'mock-module-guard: intentional full replacement'
+// Bare builtins have no sibling first-party exports to drop;
+// `node:`/`bun:`-prefixed specifiers are skipped for the same reason.
+const BUILTIN_SPECIFIERS = new Set([
+  'fs',
+  'path',
+  'os',
+  'net',
+  'http',
+  'crypto',
+  'url',
+  'util',
+  'child_process',
+])
+
 function lineOf(content: string, index: number): number {
   let line = 1
   for (let i = 0; i < index; i++) {
@@ -65,13 +109,87 @@ function lineOf(content: string, index: number): number {
 }
 
 /**
+ * Blanks out the interior of `//` line comments and C-style block comments
+ * with spaces while preserving every newline and all non-comment characters
+ * byte-for-byte, so indices and `lineOf` still map to the original line
+ * numbers. String literals ('...', "...", `...`) are tracked FIRST, so a
+ * `//` inside a string (e.g. 'http://localhost:1455') is never treated as a
+ * comment. Backtick template literals are handled as plain strings; nested
+ * `${...}` interpolation inside a template may be misclassified — an
+ * acceptable trade-off for a heuristic guard.
+ */
+function stripCommentsPreservingLines(content: string): string {
+  const chars = content.split('')
+  let state: 'code' | 'single' | 'double' | 'template' | 'line' | 'block' =
+    'code'
+  let i = 0
+  while (i < content.length) {
+    const ch = content[i]
+    const next = content[i + 1] ?? ''
+    if (state === 'code') {
+      if (ch === "'") state = 'single'
+      else if (ch === '"') state = 'double'
+      else if (ch === '`') state = 'template'
+      else if (ch === '/' && next === '/') {
+        state = 'line'
+        chars[i] = ' '
+        chars[i + 1] = ' '
+        i += 2
+        continue
+      } else if (ch === '/' && next === '*') {
+        state = 'block'
+        chars[i] = ' '
+        chars[i + 1] = ' '
+        i += 2
+        continue
+      }
+      i++
+      continue
+    }
+    if (state === 'single' || state === 'double' || state === 'template') {
+      if (ch === '\\') {
+        i += 2
+        continue
+      }
+      if (
+        (state === 'single' && ch === "'") ||
+        (state === 'double' && ch === '"') ||
+        (state === 'template' && ch === '`')
+      ) {
+        state = 'code'
+      }
+      i++
+      continue
+    }
+    if (state === 'line') {
+      if (ch === '\n') state = 'code'
+      else chars[i] = ' '
+      i++
+      continue
+    }
+    // Block comment: blank the interior (newlines kept) and the closing
+    // delimiter, so comment text can never match a regex pass below.
+    if (ch === '*' && next === '/') {
+      state = 'code'
+      chars[i] = ' '
+      chars[i + 1] = ' '
+      i += 2
+      continue
+    }
+    if (ch !== '\n') chars[i] = ' '
+    i++
+  }
+  return chars.join('')
+}
+
+/**
  * Returns the source text of each `mock.module(...)` call (balanced parens),
  * so references inside the factory can be checked.
  */
 function mockModuleCalls(
   content: string,
-): Array<{ specifier: string; body: string }> {
-  const calls: Array<{ specifier: string; body: string }> = []
+): Array<{ specifier: string; body: string; index: number }> {
+  const calls: Array<{ specifier: string; body: string; index: number }> = []
   for (const match of content.matchAll(MOCK_MODULE_CALL_REGEX)) {
     const start = match.index ?? 0
     const open = content.indexOf('(', start)
@@ -88,7 +206,11 @@ function mockModuleCalls(
         }
       }
     }
-    calls.push({ specifier: match[2]!, body: content.slice(open, end) })
+    calls.push({
+      specifier: match[2]!,
+      body: content.slice(open, end),
+      index: start,
+    })
   }
   return calls
 }
@@ -97,30 +219,56 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Analyze one test file's source. `path` is only used for reporting. */
+/** A specifier whose module is owned by this workspace. */
+function isFirstPartySpecifier(specifier: string): boolean {
+  return (
+    specifier.startsWith('.') ||
+    specifier.startsWith('@codebuff/') ||
+    specifier.startsWith('@openbuff/')
+  )
+}
+
+/**
+ * Specifiers whose mocks never need a spread: bare builtins have no sibling
+ * first-party exports to drop, and `node:`/`bun:`-prefixed builtins likewise.
+ */
+function isSkippedSpecifier(specifier: string): boolean {
+  return (
+    specifier.startsWith('node:') ||
+    specifier.startsWith('bun:') ||
+    BUILTIN_SPECIFIERS.has(specifier)
+  )
+}
+
+/** Analyze one test file's source with both checks. `path` is only used for reporting. */
 export function analyzeTestFile(
   path: string,
   content: string,
 ): MockModuleFinding[] {
-  const calls = mockModuleCalls(content)
+  // Regex passes run on a comment-stripped view: a `mock.module(...)` mention
+  // inside a comment must not create a phantom call, and `import * as` inside
+  // a comment must not create a phantom binding. The stripped text preserves
+  // every newline, so indices still map to the original line numbers.
+  const stripped = stripCommentsPreservingLines(content)
+  const calls = mockModuleCalls(stripped)
   if (calls.length === 0) return []
 
   const findings: MockModuleFinding[] = []
   const bindings: Array<{ name: string; specifier: string; index: number }> =
     []
-  for (const m of content.matchAll(LIVE_DYNAMIC_IMPORT_REGEX)) {
+  for (const m of stripped.matchAll(LIVE_DYNAMIC_IMPORT_REGEX)) {
     bindings.push({ name: m[1]!, specifier: m[3]!, index: m.index ?? 0 })
   }
-  for (const m of content.matchAll(STATIC_NAMESPACE_IMPORT_REGEX)) {
+  for (const m of stripped.matchAll(STATIC_NAMESPACE_IMPORT_REGEX)) {
     bindings.push({ name: m[1]!, specifier: m[3]!, index: m.index ?? 0 })
   }
-  for (const r of content.matchAll(CREATE_REQUIRE_BINDING_REGEX)) {
+  for (const r of stripped.matchAll(CREATE_REQUIRE_BINDING_REGEX)) {
     const requireFn = escapeRegex(r[1]!)
     const requireCall = new RegExp(
       `\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${requireFn}\\(\\s*(['"\`])([^'"\`]+)\\2\\s*\\)`,
       'g',
     )
-    for (const m of content.matchAll(requireCall)) {
+    for (const m of stripped.matchAll(requireCall)) {
       bindings.push({ name: m[1]!, specifier: m[3]!, index: m.index ?? 0 })
     }
   }
@@ -143,7 +291,40 @@ export function analyzeTestFile(
     }
   }
 
-  return findings.sort((a, b) => a.line - b.line)
+  // Second check class: first-party FULL-REPLACEMENT factories. A factory
+  // that never spreads the real module's exports drops every un-overridden
+  // export for all sibling suites in the same worker (bun's mock.module is
+  // registry-wide; `bun test --isolate` reuses worker processes).
+  const fullReplacementFindings: MockModuleFinding[] = []
+  const lines = content.split('\n')
+  for (const call of calls) {
+    if (!isFirstPartySpecifier(call.specifier)) continue
+    if (isSkippedSpecifier(call.specifier)) continue
+    if (SPREAD_IN_FACTORY_REGEX.test(call.body)) continue
+    const callLineIndex = lineOf(content, call.index) - 1
+    const callLine = lines[callLineIndex] ?? ''
+    const previousLine =
+      callLineIndex > 0 ? (lines[callLineIndex - 1] ?? '') : ''
+    if (
+      callLine.includes(INTENTIONAL_FULL_REPLACEMENT_MARKER) ||
+      previousLine.includes(INTENTIONAL_FULL_REPLACEMENT_MARKER)
+    ) {
+      continue
+    }
+    fullReplacementFindings.push({
+      path,
+      line: callLineIndex + 1,
+      kind: 'full-replacement',
+      message: `full-replacement mock of first-party module '${call.specifier}' never spreads the real exports, dropping every un-overridden export for all sibling suites in the same worker (bun's mock.module is registry-wide; \`bun test --isolate\` reuses worker processes) — spread a snapshot instead: \`const real = { ...(await import('${call.specifier}')) }\` + \`{ ...real, ...overrides }\`, or use the shared helper \`mockModules()\` from '@codebuff/common/testing/mock-modules' (if intentional, add \`// mock-module-guard: intentional full replacement\` above the call)`,
+    })
+  }
+
+  // New-class findings sort after the original lazy-binding findings per
+  // file; each group keeps line order.
+  return [
+    ...findings.sort((a, b) => a.line - b.line),
+    ...fullReplacementFindings.sort((a, b) => a.line - b.line),
+  ]
 }
 
 function* testFiles(dir: string): Generator<string> {
@@ -164,9 +345,14 @@ export function runMockModuleGuard(root: string): MockModuleFinding[] {
     if (EXCLUDED_PATHS.has(projectPath)) continue
     findings.push(...analyzeTestFile(projectPath, readFileSync(file, 'utf8')))
   }
-  return findings.sort((a, b) =>
-    a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1,
-  )
+  return findings.sort((a, b) => {
+    if (a.path !== b.path) return a.path < b.path ? -1 : 1
+    // Full-replacement findings sort after the original lazy-binding
+    // findings within the same file, regardless of line.
+    const rank = (f: MockModuleFinding) =>
+      f.kind === 'full-replacement' ? 1 : 0
+    return rank(a) - rank(b) || a.line - b.line
+  })
 }
 
 if (import.meta.main) {
