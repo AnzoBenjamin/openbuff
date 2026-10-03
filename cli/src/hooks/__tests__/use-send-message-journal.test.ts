@@ -1,7 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from 'bun:test'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import React from 'react'
+import * as runJournalPathModule from '../../utils/run-journal-path'
+import * as openbuffProviderModule from '../../utils/openbuff-provider'
+import * as codebuffClientModule from '../../utils/codebuff-client'
+import * as localAgentRegistryModule from '../../utils/local-agent-registry'
+import * as deferredRegistriesModule from '../../services/deferred-registries'
+import * as createRunConfigModule from '../../utils/create-run-config'
 
 // Ensure required env vars exist so logger/env parsing succeeds in tests
 // (same preamble as send-message.test.ts).
@@ -25,147 +39,13 @@ process.env.NEXT_PUBLIC_POSTHOG_HOST_URL =
 
 const openRunJournalCalls: unknown[] = []
 
-// bun's mock.module is registry-wide for the whole test process and cannot be
-// unregistered, so every override below is an ARMED/DELEGATING stub: when
-// `journalHooksArmed` is false — i.e. for every sibling suite sharing this
-// process — the override delegates verbatim to the real captured module
-// function (all args in, real result out, promises included), and only the
-// journal suite's beforeEach/afterEach arms/disarms the flag to install the
-// test-controlled behavior. Recording into openRunJournalCalls happens only
-// while armed, so sibling suites always observe real behavior.
-let journalHooksArmed = false
-
-// Capture the REAL modules through the ESM registry (top-level await import),
-// NOT createRequire — a createRequire capture loads a second, distinct CJS
-// module instance, and a delegating override that closes over that copy
-// bridges the mock registry to the CJS instance and busy-spins a sibling
-// suite's real call at ~98% CPU (the test-cli hang). Top-level await import
-// resolves the SAME ESM instance the SUT and sibling suites use.
-// SNAPSHOT the real exports into a plain object BEFORE mock.module: an ESM
-// namespace is a live binding that bun's mock.module patches in place, so a
-// delegating stub reading `ns.fn` after registration would call ITSELF
-// (the sibling-suite spin). `{ ...ns }` freezes the original references.
-const realRunJournalPath = { ...(await import('../../utils/run-journal-path')) }
-mock.module('../../utils/run-journal-path', () => ({
-  ...realRunJournalPath,
-  openRunJournalForRun: (
-    ...args: Parameters<typeof realRunJournalPath.openRunJournalForRun>
-  ) => {
-    if (!journalHooksArmed) {
-      return realRunJournalPath.openRunJournalForRun(...args)
-    }
-    openRunJournalCalls.push(args[0])
-    return {
-      append: () => {},
-      events: () => [],
-      lastEvent: () => undefined,
-      toolResultFor: () => undefined,
-      toolResultForInput: () => undefined,
-      runIds: () => [],
-      close: () => Promise.resolve(),
-    }
-  },
-  resolveRunJournalPath: (
-    ...args: Parameters<typeof realRunJournalPath.resolveRunJournalPath>
-  ) =>
-    journalHooksArmed
-      ? path.join(tmpdir(), 'use-send-message-journal-test.db')
-      : realRunJournalPath.resolveRunJournalPath(...args),
-}))
-
+// Per-suite spyOn + mock.restore per the bash-command.test.ts pattern: no
+// registry-wide mock.module — sibling suites keep real behavior by
+// construction (CONTRIBUTING prefers spyOn over mock.module).
 let readinessResult: { ok: boolean; message?: string } = {
   ok: false,
   message: 'provider not ready (test fixture)',
 }
-// bun's mock.module is registry-wide for the whole test process and cannot
-// be unregistered, so capture the REAL module before registering and spread
-// its exports (real keys first, the readiness override wins) — a stub with
-// only one export would otherwise drop every other export of the module
-// (e.g. setupOpenbuffProviderFromArgs) for sibling suites running in the
-// same batched process. The override itself is armed/delegating (see the
-// run-journal-path block above): unless the journal suite armed the flag, it
-// delegates to the real getOpenbuffProviderReadiness so sibling suites never
-// see the fixture.
-const realOpenbuffProvider = {
-  ...(await import('../../utils/openbuff-provider')),
-}
-mock.module('../../utils/openbuff-provider', () => ({
-  ...realOpenbuffProvider,
-  getOpenbuffProviderReadiness: (
-    ...args: Parameters<typeof realOpenbuffProvider.getOpenbuffProviderReadiness>
-  ) =>
-    journalHooksArmed
-      ? readinessResult
-      : realOpenbuffProvider.getOpenbuffProviderReadiness(...args),
-}))
-
-// Every mock.module here spreads the REAL module's exports first (captured
-// before registration) — bun's mock.module is registry-wide for the whole
-// test process and cannot be unregistered, so a stub with only one export
-// drops every other export of that module for sibling suites running in the
-// same batched process (the setupOpenbuffProviderFromArgs/getLoadedMCPServers
-// leak class). Every overriding export is also armed/delegating (see the
-// run-journal-path block above): the registry-wide override is replaced by
-// delegate-unless-armed, so sibling suites always see real behavior.
-const realCodebuffClient = {
-  ...(await import('../../utils/codebuff-client')),
-}
-mock.module('../../utils/codebuff-client', () => ({
-  ...realCodebuffClient,
-  getCodebuffClient: async (
-    ...args: Parameters<typeof realCodebuffClient.getCodebuffClient>
-  ) => {
-    if (journalHooksArmed) {
-      return {
-        run: () => {
-          throw new Error('client.run must not be reached in this test')
-        },
-      }
-    }
-    return realCodebuffClient.getCodebuffClient(...args)
-  },
-}))
-
-const realLocalAgentRegistry = {
-  ...(await import('../../utils/local-agent-registry')),
-}
-mock.module('../../utils/local-agent-registry', () => ({
-  ...realLocalAgentRegistry,
-  loadAgentDefinitions: (
-    ...args: Parameters<typeof realLocalAgentRegistry.loadAgentDefinitions>
-  ) =>
-    journalHooksArmed
-      ? []
-      : realLocalAgentRegistry.loadAgentDefinitions(...args),
-}))
-
-const realDeferredRegistries = {
-  ...(await import('../../services/deferred-registries')),
-}
-mock.module('../../services/deferred-registries', () => ({
-  ...realDeferredRegistries,
-  whenRegistriesReady: (
-    ...args: Parameters<typeof realDeferredRegistries.whenRegistriesReady>
-  ) =>
-    journalHooksArmed
-      ? Promise.resolve()
-      : realDeferredRegistries.whenRegistriesReady(...args),
-}))
-
-const realCreateRunConfig = {
-  ...(await import('../../utils/create-run-config')),
-}
-mock.module('../../utils/create-run-config', () => ({
-  ...realCreateRunConfig,
-  createRunConfig: (
-    ...args: Parameters<typeof realCreateRunConfig.createRunConfig>
-  ) => {
-    if (journalHooksArmed) {
-      throw new Error('createRunConfig must not be reached in this test')
-    }
-    return realCreateRunConfig.createRunConfig(...args)
-  },
-}))
 
 const { setProjectRoot } = await import('../../project-files')
 const { useSendMessage } = await import('../use-send-message')
@@ -222,14 +102,68 @@ describe('useSendMessage journal lazy-open ordering', () => {
       useCallback: <T,>(callback: T) => callback,
       useEffect: () => {},
     }
+
+    spyOn(runJournalPathModule, 'openRunJournalForRun').mockImplementation(
+      ((params: unknown) => {
+        openRunJournalCalls.push(params)
+        return {
+          append: () => {},
+          events: () => [],
+          lastEvent: () => undefined,
+          toolResultFor: () => undefined,
+          toolResultForInput: () => undefined,
+          runIds: () => [],
+          flush: () => Promise.resolve(),
+          pruneRuns: () => {},
+          close: () => Promise.resolve(),
+        }
+      }) as typeof runJournalPathModule.openRunJournalForRun,
+    )
+    spyOn(runJournalPathModule, 'resolveRunJournalPath').mockImplementation(
+      (() =>
+        path.join(
+          tmpdir(),
+          'use-send-message-journal-test.db',
+        )) as typeof runJournalPathModule.resolveRunJournalPath,
+    )
+    spyOn(
+      openbuffProviderModule,
+      'getOpenbuffProviderReadiness',
+    ).mockImplementation(
+      (() =>
+        readinessResult) as typeof openbuffProviderModule.getOpenbuffProviderReadiness,
+    )
+    // The run-throwing stub intentionally does not implement the full
+    // OpenbuffClient shape (the test must never reach client.run), so the
+    // minimal stub is cast through unknown.
+    spyOn(codebuffClientModule, 'getCodebuffClient').mockImplementation(
+      (async () => ({
+        run: () => {
+          throw new Error('client.run must not be reached in this test')
+        },
+      })) as unknown as typeof codebuffClientModule.getCodebuffClient,
+    )
+    spyOn(localAgentRegistryModule, 'loadAgentDefinitions').mockImplementation(
+      (() => []) as typeof localAgentRegistryModule.loadAgentDefinitions,
+    )
+    spyOn(deferredRegistriesModule, 'whenRegistriesReady').mockImplementation(
+      (() =>
+        Promise.resolve()) as typeof deferredRegistriesModule.whenRegistriesReady,
+    )
+    spyOn(createRunConfigModule, 'createRunConfig').mockImplementation(
+      (() => {
+        throw new Error('createRunConfig must not be reached in this test')
+      }) as typeof createRunConfigModule.createRunConfig,
+    )
+
     openRunJournalCalls.length = 0
     setProjectRoot(tmpdir())
-    journalHooksArmed = true
   })
 
   afterEach(() => {
     reactInternals.H = originalDispatcher!
-    journalHooksArmed = false
+    // Restores every bun:test spy (the six above) — must run last.
+    mock.restore()
   })
 
   it('a providerReadiness failure early-return never opens the run journal', async () => {
