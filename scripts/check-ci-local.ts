@@ -61,7 +61,7 @@ export function formatSuiteFailedMessage(
 }
 
 export function formatSuccessMessage(): string {
-  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, full agents + common suites).'
+  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, full agents + common suites).'
 }
 
 export function ciLocalLockPath(root: string): string {
@@ -420,7 +420,20 @@ export function runCiLocalChecks(
       return 1
     }
 
-    console.log('→ Step F: full agents + common test suites')
+    console.log('→ Step F: bun --cwd=scripts run guard:mock-module')
+    const mockModule = runStep(
+      'bun',
+      ['--cwd=scripts', 'run', 'guard:mock-module'],
+      root,
+    )
+    if (mockModule.status !== 0) {
+      console.error(
+        formatStepFailedMessage('guard:mock-module', mockModule.status),
+      )
+      return 1
+    }
+
+    console.log('→ Step G: full agents + common test suites')
     for (const step of FULL_SUITE_STEPS) {
       const suite = runStep('bun', ['test'], join(root, step.cwd))
       if (suite.status !== 0) {
