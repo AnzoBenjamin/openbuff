@@ -12,8 +12,10 @@ export type ToolName =
   | 'edit_3d_asset'
   | 'find_files'
   | 'find_files_matching_content'
+  | 'find_references'
   | 'git_status'
   | 'git_branch'
+  | 'go_to_definition'
   | 'get_task'
   | 'get_change_review_bundle'
   | 'inspect_workspace'
@@ -30,6 +32,7 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
+  | 'hover_type'
   | 'recall_context'
   | 'record_decision'
   | 'read_docs'
@@ -55,6 +58,7 @@ export type ToolName =
   | 'think_deeply'
   | 'update_plan_status'
   | 'web_search'
+  | 'workspace_symbol'
   | 'write_file'
   | 'write_audit_findings'
   | 'write_todos'
@@ -73,8 +77,10 @@ export interface ToolParamsMap {
   edit_3d_asset: Edit3dAssetParams
   find_files: FindFilesParams
   find_files_matching_content: FindFilesMatchingContentParams
+  find_references: FindReferencesParams
   git_status: GitStatusParams
   git_branch: GitBranchParams
+  go_to_definition: GoToDefinitionParams
   get_task: GetTaskParams
   get_change_review_bundle: GetChangeReviewBundleParams
   inspect_workspace: InspectWorkspaceParams
@@ -91,6 +97,7 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
+  hover_type: HoverTypeParams
   recall_context: RecallContextParams
   record_decision: RecordDecisionParams
   read_docs: ReadDocsParams
@@ -116,6 +123,7 @@ export interface ToolParamsMap {
   think_deeply: ThinkDeeplyParams
   update_plan_status: UpdatePlanStatusParams
   web_search: WebSearchParams
+  workspace_symbol: WorkspaceSymbolParams
   write_file: WriteFileParams
   write_audit_findings: WriteAuditFindingsParams
   write_todos: WriteTodosParams
@@ -406,6 +414,18 @@ export interface FindFilesMatchingContentParams {
 }
 
 /**
+ * Parameters for find_references tool
+ */
+export interface FindReferencesParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
+}
+
+/**
  * Read-only git status and (optionally) diff for the current project.
  */
 export interface GitStatusParams {
@@ -429,6 +449,18 @@ export interface GitBranchParams {
   switch?: boolean
   /** When true, skip the dirty-tree refusal check. Defaults to false — the tool refuses to branch when the working tree has uncommitted changes. */
   allow_dirty?: boolean
+}
+
+/**
+ * Parameters for go_to_definition tool
+ */
+export interface GoToDefinitionParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -596,6 +628,18 @@ export interface QueryIndexParams {
   from?: string
   /** Optional target file path for path mode. Also used as the seed file for references mode when from is omitted or not indexed. */
   to?: string
+}
+
+/**
+ * Parameters for hover_type tool
+ */
+export interface HoverTypeParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -1155,6 +1199,14 @@ export interface WebSearchParams {
   include_links?: boolean
   /** Maximum number of links to extract when include_links is true. Default: 40. */
   max_links?: number
+}
+
+/**
+ * Parameters for workspace_symbol tool
+ */
+export interface WorkspaceSymbolParams {
+  /** Symbol name (or substring) to search for, e.g. "createUser". */
+  query: string
 }
 
 /**

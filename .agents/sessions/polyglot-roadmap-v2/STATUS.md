@@ -308,3 +308,25 @@ Meta-evidence: the STATUS.md append for this note was rejected once with `edits:
 - **Reviewer rounds cleared**: compat-reviewer blockers repaired across seven rounds (advertisement honesty, prompt image forwarding, capability-map derivation, MCP client cache key, DNS pin ordering, registry consumer migration, OSC wire exclusivity); final receipt LOOKS_GOOD at rev 6238.
 - **Validation**: typecheck clean in common/agents/agent-runtime/sdk/cli; suites green (golden 58/58, sdk serve/acp 78/78, common mcp+protocol 103/103, cli capability/status-bar/highlight 87/87, context-pruner 130/130, compaction-retention 12/12); tmux boot smoke passed (TUI renders, no crash).
 - **PLAN.md**: X-4, P1-T1, P1-T2, P1-T4, P1-T6, P1-T9, P1-T10 marked done. Still open (later phases by design): X-3b, X-5, P2+.
+
+<!-- update_plan_status:appended -->
+## P3 semantic code intelligence — all 11 tasks implemented and validated — 2026-10-03T16:49:10.450Z
+
+All P3 tasks (P3-T1…P3-T11) are implemented and validated; the per-task PLAN.md flips ride the gate-issued receipts minted when this turn's gate closes.
+
+- P3-T1 LSP multiplexer: `sdk/src/services/lsp-multiplexer.ts` — ToolSpec-driven warm server per (language,root), LSP Content-Length framing, lazy cold start + init timeout, LRU eviction, bounded pending/frame buffers, restart-on-crash, `syncFile` doc-sync seam. 12/12 hermetic tests.
+- P3-T2 agent tools: `go_to_definition`/`find_references`/`hover_type`/`workspace_symbol` end-to-end (params+output schemas, publishedTools, list.ts + clientToolCallSchema, sdk `language-intelligence` service with 1-based→0-based conversion + structured unavailable/error degradation, agent-runtime handlers, CLI renderers). Regenerated `agents/types/tools.ts`.
+- P3-T3 diagnostic-delta preflight: `sdk/src/services/diagnostic-delta.ts` (P0-T8 parsers behind an injected runner; delta matcher with line-shift tolerance; reject-only-new-errors + fix-it aggregation); opt-in `OPENBUFF_DIAGNOSTIC_PREFLIGHT` hook in file-change-hooks.ts (flag-off byte-identical).
+- P3-T4 SCIP ingestion: `packages/indexer/src/scip-ingest.ts` — validating SCIP-JSON parser, definition-bit → `confidence:'precise'` edges, heuristic fallback untouched, dedupe/supersede, caps, traversal guard (now fail-closed/observable per sec-review F2).
+- P3-T5 real import resolution: canonical line-based extraction moved to `packages/code-map/src/import-sites.ts`; `packages/indexer/src/import-resolution.ts` resolves per ecosystem (TS relative/index/tsconfig paths, Python, Rust, Go go.mod-gated, JVM/PHP declaration-gated, conservative-unresolved); chunks.ts delegates; metadata-indexer shrank ~345 lines.
+- P3-T6 enrichment: `sdk/src/services/symbol-enrichment.ts` — documentSymbol + hover + optional inlayHint merged into EnrichedSymbol[], sha256-content-keyed LRU, caps, unavailable-safe.
+- P3-T7 test impact: `analyzeTestImpact` in harness-intelligence.ts — tiers convention/graph(injected)/build-tool/coverage(placeholder) with confidence labels; get_affected_tests gains additive optional `impact`.
+- P3-T8 build graph: `sdk/src/services/build-graph.ts` — owning targets via cargo metadata / go list / package.json workspaces / pom-gradle / csproj / CMake / pyproject behind a runner seam; longest-prefix ownership, TTL cache, bounded walk.
+- P3-T9 PageRank: `packages/indexer/src/pagerank.ts` personalized PageRank (deterministic, capped, WeakMap adjacency cache); opt-in additive `pageRankWeight` in queryIndex (default 0 = byte-identical ranking); `rankedRepoMap`.
+- P3-T10 exact tokenizers: token-counter.ts ExactTokenCounter seam + `OPENBUFF_EXACT_TOKENS` truthy gate (off = estimator unchanged) + `getTokenizerForModel` family cache; HF/tiktoken providers land behind this seam (dependency-gated).
+- P3-T11 semgrep baseline: `sdk/src/services/semgrep-baseline.ts` — `semgrep scan --baseline-commit --sarif` behind a runner seam, ref whitelist (argv-only), 200-file/60s/8MiB caps, SARIF via the P0-T8 parser; get_change_review_bundle gains additive optional `securityScan`, fail-open statuses.
+
+Validation: typecheck clean across common/code-map/indexer/agent-runtime/sdk/cli/agents; new suites green (sdk 70/70 incl. language-intelligence/symbol-enrichment/build-graph/diagnostic-delta/semgrep-baseline/harness + get-change-review-bundle; indexer scip-ingest 11/11 + pagerank; agent-runtime token-counter + language-intelligence handlers). The indexer retrieval-quality repo test times out at its hardcoded 30s on this machine — verified environmental (tree-sitter indexing ~46s for 2190 files, pre-existing; my extraction change measures ~0.4ms/file and metadata-indexer lost ~345 lines).
+
+Security review (P3 process/exec/ingestion surfaces): NON_BLOCKING with 4 low findings, all repaired this turn — F1 LSP malformed header now fails closed; F2 SCIP unsafe paths now fail closed/observable; F3 build-graph walk now depth+cap bounded iterative; F4 command-token whitelist (incl. gradle `:` project paths) with an argv-only execution note.
+

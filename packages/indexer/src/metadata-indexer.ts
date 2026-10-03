@@ -9,6 +9,11 @@ import {
 } from '@codebuff/code-map'
 
 import {
+  extractImportSpecifiers,
+  resolveImportToFile,
+  stripJsonComments,
+} from './import-resolution'
+import {
   BINARY_EXTENSIONS,
   statProjectFiles,
   walkProjectDetailed,
@@ -101,11 +106,7 @@ export function compareRevisions(
   return strA < strB ? -1 : strA > strB ? 1 : 0
 }
 
-// Captures the module specifier from: `import … from 'x'`, `export … from 'x'`
-// (re-exports), `require('x')` / `import('x')` (dynamic), and `import 'x'`
-// (side-effect). The {0,500} bound avoids catastrophic backtracking.
-const IMPORT_REGEX =
-  /(?:\b(?:import|export)\b[\s\S]{0,500}?\bfrom\s+['"]([^'"]+)['"])|(?:\b(?:require|import)\s*\(\s*['"]([^'"]+)['"])|(?:\bimport\s+['"]([^'"]+)['"])/g
+
 const MARKDOWN_LINK_REGEX = /\[[^\]]+\]\(([^)]+)\)/g
 
 /**
@@ -1023,85 +1024,7 @@ function getTopSymbols(
 }
 
 function extractImports(content: string, extension: string): string[] {
-  const imports = new Set<string>()
-  const addMatches = (
-    regex: RegExp,
-    select: (match: RegExpExecArray) => string | undefined,
-  ) => {
-    let match: RegExpExecArray | null
-    while ((match = regex.exec(content)) !== null && imports.size < 50) {
-      const importPath = select(match)?.trim()
-      if (importPath) imports.add(importPath)
-    }
-  }
-
-  if (
-    ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'].includes(
-      extension,
-    )
-  ) {
-    addMatches(
-      new RegExp(IMPORT_REGEX.source, 'g'),
-      (match) => match[1] ?? match[2] ?? match[3],
-    )
-  } else if (['.py', '.pyi'].includes(extension)) {
-    addMatches(/^\s*from\s+([.\w]+)\s+import\b/gm, (match) => match[1])
-    addMatches(/^\s*import\s+([\w.]+)/gm, (match) => match[1])
-  } else if (extension === '.rs') {
-    addMatches(/^\s*(?:pub\s+)?(?:use|mod)\s+([\w:]+)/gm, (match) => match[1])
-  } else if (extension === '.go') {
-    addMatches(
-      /^\s*import\s+(?:[\w.]+\s+)?["`]([^"`]+)["`]/gm,
-      (match) => match[1],
-    )
-    addMatches(/\bimport\s*\(([\s\S]*?)\)/gm, (blockMatch) => {
-      for (const line of (blockMatch[1] ?? '').split(/\r?\n/)) {
-        const item = line.match(
-          /^\s*(?:[\w.]+\s+)?["`]([^"`]+)["`]\s*(?:\/\/.*)?$/,
-        )
-        if (item?.[1]) imports.add(item[1])
-      }
-      return undefined
-    })
-  } else if (['.java', '.kt', '.kts'].includes(extension)) {
-    addMatches(
-      /^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;?\s*$/gm,
-      (match) => match[1],
-    )
-  } else if (
-    ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(
-      extension,
-    )
-  ) {
-    addMatches(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm, (match) => match[1])
-  } else if (extension === '.cs') {
-    addMatches(
-      /^\s*(?:global\s+)?using\s+(?:[\w]+\s*=\s*)?([\w.]+)\s*;/gm,
-      (match) => match[1],
-    )
-  } else if (extension === '.rb') {
-    addMatches(
-      /^\s*require(?:_relative)?\s*[('" ]+([^'"\s)]+)/gm,
-      (match) => match[1],
-    )
-  } else if (extension === '.php') {
-    addMatches(/^\s*use\s+([\w\\]+)/gm, (match) =>
-      match[1]?.replace(/\\/g, '/'),
-    )
-    addMatches(
-      /\b(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)/g,
-      (match) => match[1],
-    )
-  } else if (extension === '.swift') {
-    addMatches(/^\s*import\s+(?:\w+\s+)?([\w.]+)/gm, (match) => match[1])
-  } else if (extension === '.gd') {
-    addMatches(
-      /\b(?:preload|load)\s*\(\s*["'](?:res:\/\/)?([^"']+)/g,
-      (match) => match[1],
-    )
-  }
-
-  return Array.from(imports)
+  return extractImportSpecifiers(content, extension)
 }
 
 function extractHeadings(content: string): string[] {
@@ -1367,14 +1290,8 @@ function conceptNodeId(concept: string): string {
   return `concept:${concept}`
 }
 
-export type TsAliasMap = Record<string, string[]>
-
-function stripJsonComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
-    .replace(/,(\s*[}\]])/g, '$1')
-}
+export type { TsAliasMap } from './import-resolution'
+import type { TsAliasMap } from './import-resolution'
 
 /**
  * Load tsconfig `compilerOptions.paths` aliases (following `extends`), so the
@@ -1398,15 +1315,18 @@ function loadTsAliases(projectRoot: string): TsAliasMap {
       visited.add(configPath)
       const raw = JSON.parse(
         stripJsonComments(fs.readFileSync(configPath, 'utf8')),
-      )
+      ) as {
+        compilerOptions?: { paths?: unknown }
+        extends?: unknown
+      }
       const paths = raw?.compilerOptions?.paths
       if (paths && typeof paths === 'object') {
         for (const [key, value] of Object.entries(paths)) {
           // Closest config wins; do not let a base config override.
           if (!(key in aliases) && Array.isArray(value)) {
-            aliases[key] = (value as string[]).map((t) =>
-              t.replace(/^\.\//, '').replace(/\\/g, '/'),
-            )
+            aliases[key] = (value as unknown[])
+              .filter((t): t is string => typeof t === 'string')
+              .map((t) => t.replace(/^\.\//, '').replace(/\\/g, '/'))
           }
         }
       }
@@ -1425,239 +1345,6 @@ function loadTsAliases(projectRoot: string): TsAliasMap {
   }
   tsAliasCacheByRoot.set(projectRoot, aliases)
   return aliases
-}
-
-function resolveModuleCandidates(
-  base: string,
-  files: Record<string, IndexedFile>,
-): string | null {
-  const normalized = base.replace(/^\.\//, '')
-  const sourceExtensions = [
-    '.ts',
-    '.tsx',
-    '.js',
-    '.jsx',
-    '.mts',
-    '.cts',
-    '.mjs',
-    '.cjs',
-    '.py',
-    '.pyi',
-    '.rs',
-    '.go',
-    '.java',
-    '.kt',
-    '.kts',
-    '.cs',
-    '.c',
-    '.cc',
-    '.cpp',
-    '.cxx',
-    '.h',
-    '.hh',
-    '.hpp',
-    '.hxx',
-    '.rb',
-    '.php',
-    '.swift',
-    '.gd',
-  ]
-  const candidates = [
-    normalized,
-    ...sourceExtensions.map((extension) => `${normalized}${extension}`),
-    ...sourceExtensions.map((extension) => `${normalized}/index${extension}`),
-    `${normalized}/__init__.py`,
-    `${normalized}/mod.rs`,
-  ]
-  return candidates.find((candidate) => files[candidate]) ?? null
-}
-
-/**
- * Resolve a non-relative import via tsconfig `paths` aliases (e.g.
- * "@codebuff/common/util/x" -> "common/src/util/x"). Supports both wildcard
- * (`@scope/*`) and exact (`@scope/sdk`) patterns. Targets are interpreted
- * relative to the project root (baseUrl="." in this repo).
- */
-function resolveAliasImport(
-  importPath: string,
-  aliases: TsAliasMap,
-  files: Record<string, IndexedFile>,
-): string | null {
-  for (const [pattern, targets] of Object.entries(aliases)) {
-    const starIndex = pattern.indexOf('*')
-    if (starIndex >= 0) {
-      const prefix = pattern.slice(0, starIndex)
-      const suffix = pattern.slice(starIndex + 1)
-      if (
-        importPath.startsWith(prefix) &&
-        importPath.endsWith(suffix) &&
-        importPath.length >= prefix.length + suffix.length
-      ) {
-        const middle = importPath.slice(
-          prefix.length,
-          importPath.length - suffix.length,
-        )
-        for (const target of targets) {
-          const base = target.replace('*', middle)
-          const resolved = resolveModuleCandidates(base, files)
-          if (resolved) return resolved
-        }
-      }
-    } else if (importPath === pattern) {
-      for (const target of targets) {
-        const resolved = resolveModuleCandidates(target, files)
-        if (resolved) return resolved
-      }
-    }
-  }
-  return null
-}
-
-function resolveImportToFile(
-  fromFilePath: string,
-  fromExtension: string,
-  importPath: string,
-  files: Record<string, IndexedFile>,
-  aliases?: TsAliasMap,
-): string | null {
-  const normalizedImport = importPath.replace(/\\/g, '/')
-  let suffixSpecifier = normalizedImport
-  if (fromExtension === '.gd') {
-    return resolveModuleCandidates(
-      normalizedImport.replace(/^res:\/\//, ''),
-      files,
-    )
-  }
-  if (
-    ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx', '.rb'].includes(
-      fromExtension,
-    )
-  ) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const local = resolveModuleCandidates(
-      path.posix.normalize(path.posix.join(fromDir, normalizedImport)),
-      files,
-    )
-    if (local) return local
-  }
-  if (['.java', '.kt', '.kts', '.cs', '.php'].includes(fromExtension)) {
-    const dottedPath = normalizedImport.replace(/\./g, '/')
-    suffixSpecifier = dottedPath
-    if (['.java', '.kt', '.kts', '.php'].includes(fromExtension)) {
-      const declared = resolveDeclaredPackageImport(
-        dottedPath,
-        fromExtension,
-        files,
-      )
-      if (declared) return declared
-    } else {
-      const exact = resolveModuleCandidates(dottedPath, files)
-      if (exact) return exact
-    }
-  }
-  if (fromExtension === '.rs') {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const rustPath = normalizedImport
-      .replace(/^crate::/, '')
-      .replace(/^self::/, '')
-      .replace(/^super::/, '../')
-      .replace(/::/g, '/')
-    const local = resolveModuleCandidates(
-      path.posix.normalize(path.posix.join(fromDir, rustPath)),
-      files,
-    )
-    if (local) return local
-    const crateRelative = resolveModuleCandidates(`src/${rustPath}`, files)
-    if (crateRelative) return crateRelative
-  }
-  if (['.py', '.pyi'].includes(fromExtension)) {
-    const leadingDots = normalizedImport.match(/^\.+/)?.[0].length ?? 0
-    const modulePath = normalizedImport.slice(leadingDots).replace(/\./g, '/')
-    if (leadingDots > 0) {
-      let baseDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-      for (let index = 1; index < leadingDots; index++)
-        baseDir = path.posix.dirname(baseDir)
-      const relative = resolveModuleCandidates(
-        path.posix.join(baseDir, modulePath),
-        files,
-      )
-      if (relative) return relative
-    }
-    const absolute = resolveModuleCandidates(modulePath, files)
-    if (absolute) return absolute
-  }
-  if (normalizedImport.startsWith('.')) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const normalizedBase = path.posix.normalize(
-      path.posix.join(fromDir, normalizedImport),
-    )
-    return resolveModuleCandidates(normalizedBase, files)
-  }
-  // Non-relative: try tsconfig path aliases (workspace-internal imports).
-  if (aliases) {
-    const aliasResolved = resolveAliasImport(normalizedImport, aliases, files)
-    if (aliasResolved) return aliasResolved
-  }
-  // Go module imports and Ruby load paths often include a repository/module
-  // prefix. Resolve only an unambiguous suffix to avoid inventing graph edges.
-  if (fromExtension !== '.go') {
-    return null
-  }
-  const goModule = files['go.mod']?.contentSample?.match(
-    /^\s*module\s+([^\s]+)\s*$/m,
-  )?.[1]
-  if (!goModule || !normalizedImport.startsWith(`${goModule}/`)) return null
-  suffixSpecifier = normalizedImport.slice(goModule.length + 1)
-  const suffixMatches = Object.keys(files).filter((candidate) => {
-    const withoutExtension = candidate.replace(/\.[^.\/]+$/, '')
-    const packageDirectory = path.posix.dirname(withoutExtension)
-    return (
-      suffixSpecifier.endsWith(withoutExtension) ||
-      withoutExtension.endsWith(suffixSpecifier) ||
-      (fromExtension === '.go' &&
-        packageDirectory !== '.' &&
-        suffixSpecifier.endsWith(packageDirectory))
-    )
-  })
-  if (suffixMatches.length === 1) return suffixMatches[0]
-  return null
-}
-
-function resolveDeclaredPackageImport(
-  importPath: string,
-  fromExtension: string,
-  files: Record<string, IndexedFile>,
-): string | null {
-  const segments = importPath.split('/').filter(Boolean)
-  if (segments.length < 2) return null
-  const symbolName = segments.at(-1)!
-  const packageName = segments
-    .slice(0, -1)
-    .join(fromExtension === '.php' ? '\\' : '.')
-  const allowedExtensions =
-    fromExtension === '.php' ? new Set(['.php']) : new Set(['.java', '.kt'])
-  const matches = Object.values(files).filter((candidate) => {
-    if (!allowedExtensions.has(candidate.ext)) return false
-    if (path.posix.basename(candidate.path, candidate.ext) !== symbolName) {
-      return false
-    }
-    const sample = candidate.contentSample ?? ''
-    if (fromExtension === '.php') {
-      return new RegExp(
-        `^\\s*namespace\\s+${escapeRegex(packageName)}\\s*;`,
-        'm',
-      ).test(sample)
-    }
-    return new RegExp(
-      `^\\s*package\\s+${escapeRegex(packageName)}\\s*;?`,
-      'm',
-    ).test(sample)
-  })
-  return matches.length === 1 ? matches[0].path : null
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function dedupeEdges(edges: IndexEdge[]): IndexEdge[] {

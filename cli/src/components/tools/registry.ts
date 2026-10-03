@@ -4,6 +4,12 @@ import { EditTransactionComponent } from './edit-transaction'
 import { GlobComponent } from './glob'
 import { GitStatusComponent } from './git-status'
 import { ListDirectoryComponent } from './list-directory'
+import {
+  FindReferencesComponent,
+  GoToDefinitionComponent,
+  HoverTypeComponent,
+  WorkspaceSymbolComponent,
+} from './language-intelligence'
 import { QueryIndexComponent } from './query-index'
 import { ReadDocsComponent } from './read-docs'
 import { ReadFilesComponent } from './read-files'
@@ -81,6 +87,10 @@ const toolComponentRegistry = new Map<
   [GitStatusComponent.toolName, GitStatusComponent],
   [ListDirectoryComponent.toolName, ListDirectoryComponent],
   [QueryIndexComponent.toolName, QueryIndexComponent],
+  [GoToDefinitionComponent.toolName, GoToDefinitionComponent],
+  [FindReferencesComponent.toolName, FindReferencesComponent],
+  [HoverTypeComponent.toolName, HoverTypeComponent],
+  [WorkspaceSymbolComponent.toolName, WorkspaceSymbolComponent],
   [RunFileChangeHooksComponent.toolName, RunFileChangeHooksComponent],
   [RunTerminalCommandComponent.toolName, RunTerminalCommandComponent],
   [CheckJobComponent.toolName, CheckJobComponent],

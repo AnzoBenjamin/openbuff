@@ -17,6 +17,27 @@ export const getAffectedTestsParams = {
           packageRoot: z.string(),
         }),
       ),
+      impact: z
+        .array(
+          z.object({
+            source: z.string(),
+            packageRoot: z.string(),
+            tiers: z.object({
+              convention: z.array(z.string()),
+              graph: z.array(z.string()),
+              buildTool: z.array(z.string()),
+              coverage: z.array(z.string()),
+            }),
+            candidates: z.array(
+              z.object({
+                path: z.string(),
+                tier: z.enum(['convention', 'graph', 'build-tool', 'coverage']),
+                confidence: z.enum(['high', 'medium', 'low']),
+              }),
+            ),
+          }),
+        )
+        .optional(),
     }),
   ),
 } satisfies $ToolParams

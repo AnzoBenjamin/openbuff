@@ -177,14 +177,18 @@ export function resolveModelToolNames(
   }
   const unlocked = new Set<UnlockedToolTier>(unlockedTiers)
   // Deduped so a name listed in both CORE and a tier surfaces exactly once.
-  return [
-    ...new Set<AllToolNames>([
-      ...BASE2_CORE_TOOL_NAMES,
-      // Single pass over the canonical tier order: no intermediate filtered
-      // array, and locked tiers contribute nothing.
-      ...NON_CORE_TIERS.flatMap((tier) =>
-        unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
-      ),
-    ]),
-  ].filter((name) => modeAllowsTool(name, gates))
+  // The source name arrays are `as const` readonly literal tuples; a readonly
+  // array cannot spread into a mutable AllToolNames[], and the flatMap union
+  // defeats the Set constructor overload. Concatenate instead: concat widens
+  // each readonly ToolName tuple to AllToolNames cleanly, and Set dedupes.
+  const combined = (BASE2_CORE_TOOL_NAMES as readonly AllToolNames[]).concat(
+    // Single pass over the canonical tier order: no intermediate filtered
+    // array, and locked tiers contribute nothing.
+    ...NON_CORE_TIERS.flatMap((tier): readonly AllToolNames[] =>
+      unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
+    ),
+  )
+  return [...new Set<AllToolNames>(combined)].filter((name): name is AllToolNames =>
+    modeAllowsTool(name, gates),
+  )
 }

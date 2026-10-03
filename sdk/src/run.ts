@@ -92,6 +92,14 @@ import { runTargetedValidation } from './tools/run-targeted-validation'
 import { inspectEnvironment } from './tools/inspect-environment'
 import { getAffectedTests } from './tools/get-affected-tests'
 import { getBuildTargets } from './tools/get-build-targets'
+import { findReferences } from './tools/find-references'
+import { goToDefinition } from './tools/go-to-definition'
+import { hoverType } from './tools/hover-type'
+import { workspaceSymbol } from './tools/workspace-symbol'
+import {
+  createLanguageIntelligence,
+  type LanguageIntelligenceService,
+} from './services/language-intelligence'
 import {
   evaluateAuditCoverageTool,
   inspectCodebaseStructureTool,
@@ -956,6 +964,17 @@ async function runOnce({
   const approvalService = new HarnessApprovalService(
     new LocalHarnessStore(resolvedHarnessStateDir),
   )
+  // P3-T2 (LI-01): lazily-built language-intelligence service shared across the
+  // four LSP read tools. Only constructed when a language-intelligence client
+  // tool actually fires, so a run that never uses them never spawns a server.
+  let languageIntelligenceService: LanguageIntelligenceService | undefined
+  const getLanguageIntelligence = (): LanguageIntelligenceService => {
+    languageIntelligenceService ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+      spawn,
+    })
+    return languageIntelligenceService
+  }
   if (workspaceJournal) {
     try {
       const persistedWorkspace = workspaceJournal.read()
@@ -1215,6 +1234,7 @@ async function runOnce({
         onFilesChanged,
         onFilesystemMutation,
         verifyExternalMutation,
+        getLanguageIntelligence,
         customToolDefinitions: customToolDefinitions
           ? Object.fromEntries(
               customToolDefinitions.map((def) => [def.toolName, def]),
@@ -1584,6 +1604,12 @@ async function runOnce({
     // browses opened this run are still owned next turn until stopped here.
     clientSessionId: trustedJobOwner.clientSessionId,
   })
+  // Dispose warm language servers; no-op when no language-intelligence tool ran.
+  try {
+    await languageIntelligenceService?.dispose()
+  } catch {
+    // best-effort
+  }
   const cleanupLibrarianClone = (cloneDir: string) => {
     try {
       rmSync(cloneDir, { recursive: true, force: true })
@@ -1880,6 +1906,7 @@ export async function handleToolCall({
   onFilesChanged,
   onFilesystemMutation,
   verifyExternalMutation,
+  getLanguageIntelligence,
   signal,
 }: {
   action: ServerAction<'tool-call-request'>
@@ -1920,12 +1947,31 @@ export async function handleToolCall({
   onFilesChanged?: OpenbuffClientOptions['onFilesChanged']
   onFilesystemMutation?: OpenbuffClientOptions['onFilesystemMutation']
   verifyExternalMutation?: OpenbuffClientOptions['verifyExternalMutation']
+  /**
+   * P3-T2 (LI-01): lazily builds/returns this run's shared language-intelligence
+   * service. Optional so existing direct `handleToolCall` callers keep working;
+   * when absent the four LSP read tools fall back to a spawner-less service that
+   * degrades each query into a structured result instead of throwing.
+   */
+  getLanguageIntelligence?: () => LanguageIntelligenceService
   signal?: AbortSignal
 }): Promise<{
   output: ToolResultOutput[]
   canonicalReceipt?: CommitReceiptV1
 }> {
   const toolName = action.toolName
+  // P3-T2 (LI-01): resolve the shared language-intelligence service. runOnce
+  // injects a getter closing over this run's spawn/cwd; direct handleToolCall
+  // callers (tests) fall back to a spawner-less service whose queries degrade
+  // into a structured errorMessage result rather than throwing.
+  let fallbackLanguageIntelligence: LanguageIntelligenceService | undefined
+  const resolveLanguageIntelligence = (): LanguageIntelligenceService => {
+    if (getLanguageIntelligence) return getLanguageIntelligence()
+    fallbackLanguageIntelligence ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+    })
+    return fallbackLanguageIntelligence
+  }
   const input =
     typeof action.input === 'string'
       ? parseJsonBounded(action.input)
@@ -2611,6 +2657,26 @@ export async function handleToolCall({
       result = getAffectedTests(
         requireCwd(cwd, 'get_affected_tests'),
         (input as { files: string[] }).files,
+      )
+    } else if (toolName === 'go_to_definition') {
+      result = await goToDefinition(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'find_references') {
+      result = await findReferences(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'hover_type') {
+      result = await hoverType(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'workspace_symbol') {
+      result = await workspaceSymbol(
+        resolveLanguageIntelligence(),
+        input as { query: string },
       )
     } else if (toolName === 'get_build_targets') {
       result = getBuildTargets(
