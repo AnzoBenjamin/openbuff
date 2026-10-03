@@ -214,7 +214,10 @@ jobs:
               # This avoids xargs exit code issues with orphaned child processes
               # M1-T6: search the whole package (not just src/) so packages
               # whose tests live in __tests__/ (e.g. scripts) actually run.
-              TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f -name '*.test.ts' ! -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ')
+              # 2026-10-03b: include '*.test.tsx' too — the OpenTUI render
+              # tests (36 files, 463 tests) were previously invisible to CI;
+              # the full tsx suite passes under the pinned bun 1.3.5.
+              TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ')
               if [ -n "$TEST_FILES" ]; then
                 # --isolate: per-file test isolation prevents cross-file
                 # mock.module / module-state leakage (e.g. indexer's
@@ -224,7 +227,7 @@ jobs:
                 # M4-T3: an empty glob is a truth failure, not a pass. A
                 # missing/pruned test directory must fail the job instead of
                 # reporting a vacuous green suite.
-                echo "No tests found in ${{ matrix.package }} (expected '*.test.ts' files; find glob or checkout is broken)" >&2
+                echo "No tests found in ${{ matrix.package }} (expected '*.test.ts'/'*.test.tsx' files; find glob or checkout is broken)" >&2
                 exit 1
               fi
             fi

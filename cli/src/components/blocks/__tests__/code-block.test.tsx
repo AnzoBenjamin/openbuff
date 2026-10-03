@@ -246,7 +246,9 @@ describe('CodeBlock', () => {
       <code
         content="const x = 1"
         filetype="typescript"
-        syntaxStyle={outcome.syntaxStyle}
+        syntaxStyle={
+          'fg:#abc123' as unknown as typeof outcome.syntaxStyle
+        }
         treeSitterClient={
           '__real-tree-sitter-client__' as unknown as InstanceType<
             typeof realOpenTuiModule.TreeSitterClient
@@ -260,7 +262,7 @@ describe('CodeBlock', () => {
     expect(markup).toContain('const x = 1')
     expect(markup).toContain('filetype="typescript"')
     // The sentinel keyword scope reached the element's syntax style.
-    expect(markup).toContain('#abc123')
+    expect(markup).toContain('fg:#abc123')
   })
 })
 

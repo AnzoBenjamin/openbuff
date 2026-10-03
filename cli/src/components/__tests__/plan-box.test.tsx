@@ -81,10 +81,13 @@ mock.module('../button', () => ({
 }))
 
 mock.module('../../hooks/use-terminal-layout', () => ({
-  // Real exports first (registry-wide leak guard); the fixed 80x24 override
-  // below must keep winning for this suite's assertions.
+  // Real exports first (registry-wide leak guard); when this suite has not
+  // set mockLayout, fall through to the REAL hook (same leak-safety shape as
+  // build-mode-buttons.test.tsx): pinning a fixed 80x24 layout here leaks to
+  // every later file in the process (e.g. status-bar.test.tsx renders at
+  // 152 cols and its chips vanish under a 80-col layout).
   ...realLayoutModule,
-  useTerminalLayout: () => mockLayout ?? computeTerminalLayout(80, 24),
+  useTerminalLayout: () => mockLayout ?? realLayoutModule.useTerminalLayout(),
 }))
 
 mock.module('../../hooks/use-theme', () => ({
@@ -129,6 +132,11 @@ describe('PlanBox', () => {
   beforeEach(() => {
     capturedButtons.length = 0
     syntaxStyleSetupError = null
+    // Suite default 80x24: the tests were written against that layout, and
+    // under renderToStaticMarkup the real useTerminalLayout hook has no
+    // terminal to measure. Individual tests that need a different layout set
+    // mockLayout themselves (as before).
+    mockLayout = computeTerminalLayout(80, 24)
   })
 
   // Fall through to the real hook: the registry-wide mock survives this
