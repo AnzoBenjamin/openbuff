@@ -116,11 +116,22 @@ mock.module('../../utils/opentui-syntax-style', () => ({
   },
 }))
 
+// Armed at module scope (every agent-message render that reaches native
+// markdown needs the stub); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real module for later files in the
+// same worker. bun's --isolate REUSES worker processes across test files, so
+// an unconditional stub leaked '__stub-tree-sitter-client__' into
+// tree-sitter-client.test.ts's null assertions in CI.
+let treeSitterArmed = true
+
 mock.module('../../utils/tree-sitter-client', () => ({
   // Real exports first so buildDefaultParsers and friends survive for later
-  // files; the stub below must keep winning.
+  // files; the stub below must keep winning while armed.
   ...realTreeSitterModule,
-  getSharedTreeSitterClient: () => '__stub-tree-sitter-client__',
+  getSharedTreeSitterClient: () =>
+    treeSitterArmed
+      ? '__stub-tree-sitter-client__'
+      : realTreeSitterModule.getSharedTreeSitterClient(),
 }))
 
 const { MessageWithAgents } = await import('../message-with-agents')
@@ -243,6 +254,7 @@ beforeEach(() => {
 // file, so a stale layout must never leak to sibling files.
 afterAll(() => {
   mockLayout = undefined
+  treeSitterArmed = false
 })
 
 afterEach(() => {

@@ -50,9 +50,37 @@ mock.module('@openbuff/sdk', () => ({
 describe('chatgpt-oauth utility', () => {
   const originalFetch = globalThis.fetch
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch
     saveChatGptOAuthCredentialsCalls = 0
+
+    // Every flow binds the SAME fixed redirect port, and
+    // stopChatGptOAuthServer closes that server asynchronously. A next test
+    // that binds immediately can lose the race: the stale server keeps
+    // answering with ITS flow's state, so the new flow's genuine callback
+    // gets a 400 state mismatch instead of 200 (seen in CI). Stop any active
+    // flow here and wait until the port is actually free before yielding.
+    stopChatGptOAuthServer()
+    const redirectPort = parseInt(new URL(CHATGPT_OAUTH_REDIRECT_URI).port, 10)
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      const portFree = await new Promise<boolean>((resolve) => {
+        const probe = net.connect(redirectPort, '127.0.0.1')
+        probe.once('connect', () => {
+          probe.destroy()
+          resolve(false)
+        })
+        probe.once('error', () => resolve(true))
+        probe.setTimeout(100, () => {
+          probe.destroy()
+          resolve(true)
+        })
+      })
+      if (portFree) {
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
   })
 
   test('token exchange error is sanitized and does not include response body', async () => {

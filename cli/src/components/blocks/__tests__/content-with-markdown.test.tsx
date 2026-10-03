@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
@@ -41,11 +41,22 @@ mock.module('../../../utils/opentui-syntax-style', () => ({
   },
 }))
 
+// Armed at module scope (every native-markdown render needs the stub); the
+// top-level afterAll below disarms it so the registry-wide override
+// delegates to the real module for later files in the same worker. bun's
+// --isolate REUSES worker processes across test files, so an unconditional
+// stub leaked '__stub-tree-sitter-client__' into tree-sitter-client.test.ts's
+// null assertions in CI.
+let treeSitterArmed = true
+
 mock.module('../../../utils/tree-sitter-client', () => ({
   // Real exports first (registry-wide leak guard); the counting stub below
-  // must keep winning.
+  // must keep winning while armed.
   ...realTreeSitterModule,
   getSharedTreeSitterClient: () => {
+    if (!treeSitterArmed) {
+      return realTreeSitterModule.getSharedTreeSitterClient()
+    }
     getSharedTreeSitterClientCalls += 1
     if (treeSitterClientSetupError) {
       throw treeSitterClientSetupError
@@ -53,6 +64,10 @@ mock.module('../../../utils/tree-sitter-client', () => ({
     return '__stub-tree-sitter-client__'
   },
 }))
+
+afterAll(() => {
+  treeSitterArmed = false
+})
 
 const { ContentWithMarkdown } = await import('../content-with-markdown')
 

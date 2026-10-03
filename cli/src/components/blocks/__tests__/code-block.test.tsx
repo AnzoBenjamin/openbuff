@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import path from 'path'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -7,7 +7,15 @@ import * as realFs from 'fs'
 import * as realOs from 'os'
 
 import * as realSyntaxStyleModule from '../../../utils/opentui-syntax-style'
-import * as realTreeSitterClientModule from '../../../utils/tree-sitter-client'
+
+// SNAPSHOT (not `import * as`): the namespace is a live binding that
+// mock.module patches in place, so a lazy delegate reading
+// `ns.getSharedTreeSitterClient()` after registration would call ITSELF
+// (the same-mock spin). `{ ...ns }` freezes the original references; the
+// armed/delegating override below reads only from this snapshot.
+const realTreeSitterClientModule = {
+  ...(await import('../../../utils/tree-sitter-client')),
+}
 
 import type { MarkdownPalette } from '../../../utils/markdown-renderer'
 import type { FiletypeParserOptions, SyntaxStyle } from '@opentui/core'
@@ -38,9 +46,20 @@ mock.module('../../../utils/opentui-syntax-style', () => ({
   },
 }))
 
+// Armed at module scope (every CodeBlock render through the native <code>
+// branch needs the stub); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real module for later files in the
+// same worker. bun's --isolate REUSES worker processes across test files, so
+// an unconditional stub leaked '__stub-tree-sitter-client__' into
+// tree-sitter-client.test.ts's null assertions in CI.
+let treeSitterArmed = true
+
 mock.module('../../../utils/tree-sitter-client', () => ({
   ...realTreeSitterClientModule,
   getSharedTreeSitterClient: () => {
+    if (!treeSitterArmed) {
+      return realTreeSitterClientModule.getSharedTreeSitterClient()
+    }
     getSharedTreeSitterClientCalls += 1
     if (treeSitterClientSetupError) {
       throw treeSitterClientSetupError
@@ -48,6 +67,10 @@ mock.module('../../../utils/tree-sitter-client', () => ({
     return '__stub-tree-sitter-client__'
   },
 }))
+
+afterAll(() => {
+  treeSitterArmed = false
+})
 
 const { CodeBlock, resolveCodeFiletype } = await import('../code-block')
 
