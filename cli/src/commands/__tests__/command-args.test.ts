@@ -1,4 +1,12 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
+import {
+  describe,
+  test,
+  expect,
+  mock,
+  beforeEach,
+  afterEach,
+  afterAll,
+} from 'bun:test'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -32,28 +40,25 @@ import type {
   TextContentBlock,
 } from '../../types/chat'
 import type { OpenbuffClient } from '@openbuff/sdk'
-import { createRequire } from 'node:module'
 
 /**
  * Hermetic codebuff-client double for the attach-mode exit tests. The /exit
  * handler calls detachOnExit() with no deps, so the client seam is mocked at
- * the codebuff-client module boundary (mock.module applies retroactively to
- * the already-imported live bindings in attach-session.ts and
+ * the codebuff-client module boundary (the mock applies retroactively to the
+ * already-imported live bindings in attach-session.ts and
  * command-registry.ts). The detach becomes observable through
  * getLastDetachedSessionId() without touching a real backend, and module
  * state resets per test via setAttachTarget(undefined).
  *
- * The factory spreads the REAL module's exports: mock.module is registry-wide
- * for the whole test process, and CI's bun 1.3.5 does not isolate mock.module
- * registrations across test files. Spreading keeps working implementations —
- * e.g. the real ManagedOpenbuffClient, which codebuff-client.test.ts
- * exercises — flowing through the mock; only the three attach-mode seams are
- * overridden here.
+ * The REAL module is snapshotted (await import) BEFORE the mock.module
+ * registration and its exports are spread in the factory; afterAll
+ * re-registers the original: mock.module is registry-wide for the whole test
+ * process, and CI's bun 1.3.5 does not isolate mock.module registrations
+ * across test files. Spreading keeps working implementations — e.g. the real
+ * ManagedOpenbuffClient, which codebuff-client.test.ts exercises — flowing
+ * through the mock, and the afterAll restore keeps the three attach-mode
+ * seams from leaking real-module drops into sibling files.
  */
-const requireReal = createRequire(import.meta.url)
-const realCodebuffClient = requireReal('../../utils/codebuff-client') as
-  typeof import('../../utils/codebuff-client')
-
 type FakeBackend = {
   detach?: () => Promise<string | undefined>
   attach?: (sessionId: string) => Promise<void>
@@ -62,12 +67,14 @@ type FakeBackend = {
 let fakeBackend: FakeBackend | undefined
 let fakeAttachTarget: { socketPath: string; token?: string } | undefined
 
+// Snapshot the real module BEFORE the mock.module registration so the real
+// exports can be spread in the factory and re-registered in afterAll.
+const realCodebuffClientModule = {
+  ...(await import('../../utils/codebuff-client')),
+}
+
 mock.module('../../utils/codebuff-client', () => ({
-  // Spread the REAL exports so the registry-wide mock (bun does not isolate
-  // mock.module across test files on CI's bun 1.3.5) still serves working
-  // implementations — e.g. the real ManagedOpenbuffClient — to any other
-  // test file importing this module in the same process.
-  ...realCodebuffClient,
+  ...realCodebuffClientModule,
   getAttachTarget: () => fakeAttachTarget,
   setAttachTarget: (
     target: { socketPath: string; token?: string } | undefined,
@@ -81,6 +88,13 @@ mock.module('../../utils/codebuff-client', () => ({
     return { backend: fakeBackend } as unknown as OpenbuffClient
   },
 }))
+
+afterAll(() => {
+  // Restore the real codebuff-client module registry-wide: without this the
+  // attach-seam mock registration leaks into every other test file sharing
+  // this worker (bun does not isolate mock.module across test files).
+  mock.module('../../utils/codebuff-client', () => ({ ...realCodebuffClientModule }))
+})
 
 /**
  * Tests for the command factory pattern.

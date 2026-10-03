@@ -257,6 +257,7 @@ const extractSubagentContextParamsSpy = mock(() => ({}))
 // Real exports first, overrides after, so the overrides win.
 const realSpawnAgentUtils = { ...spawnAgentUtilsReal }
 
+// Registry-wide leak class prevented: raw mock.module registrations are process-wide and survive mock.restore(), so a sibling spawn suite co-scheduled in this worker would crash on the unconditional throwing spy — the afterAll below re-registers the untouched real-module snapshot for them. This is the first registration for the specifier in this file, so the inline snapshot (captured from the real module before this registration) is untainted.
 mock.module('../../tools/handlers/tool/spawn-agent-utils', () => ({
   ...realSpawnAgentUtils,
   createAgentState: createAgentStateSpy,
@@ -274,6 +275,13 @@ describe('maybeRunBackgroundConsolidation', () => {
 
   afterAll(() => {
     mock.restore()
+    // Re-register the untouched real module: mock.module registrations are
+    // process-wide and survive mock.restore(), so sibling suites co-scheduled
+    // in this worker keep resolving the real spawn-agent-utils.
+    mock.module(
+      '../../tools/handlers/tool/spawn-agent-utils',
+      () => ({ ...realSpawnAgentUtils }),
+    )
   })
   test('canary-off: no import/spawn and no record when the gate is not exactly true', () => {
     for (const programmaticConfig of [undefined, {}, { backgroundSnapshotConsolidation: false }]) {

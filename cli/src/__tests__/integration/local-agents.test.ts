@@ -3,10 +3,28 @@ import os from 'os'
 import path from 'path'
 
 import { validateAgents } from '@openbuff/sdk'
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
+import {
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+  afterAll,
+  mock,
+} from 'bun:test'
 
-// Mock the logger to prevent analytics initialization errors in tests
+// Mock the logger to prevent analytics initialization errors in tests.
+// Snapshot the real logger module BEFORE the mock.module registration and
+// spread its exports in the factory instead of replacing them wholesale:
+// bun's mock.module is registry-wide for the whole test process (CI's bun
+// does not isolate registrations across test files), and a full replacement
+// would starve sibling files — logger.test.ts imports loggerContext,
+// LOG_MAX_BYTES, clearLogFile, rotateLogIfNeeded, resetLogStream,
+// endPreviousPinoDestination and getLivePinoDestinationFd.
+const realLoggerModule = { ...(await import('../../utils/logger')) }
+
 mock.module('../../utils/logger', () => ({
+  ...realLoggerModule,
   logger: {
     debug: () => {},
     info: () => {},
@@ -15,6 +33,12 @@ mock.module('../../utils/logger', () => ({
     fatal: () => {},
   },
 }))
+
+afterAll(() => {
+  // Re-register the original logger module so the registry-wide mock
+  // registration above cannot leak into other test files in this worker.
+  mock.module('../../utils/logger', () => ({ ...realLoggerModule }))
+})
 
 import { setProjectRoot, getProjectRoot } from '../../project-files'
 import {

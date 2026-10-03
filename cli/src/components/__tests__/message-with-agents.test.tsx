@@ -47,10 +47,11 @@ const realTreeSitterModule = (await import(
 
 const { computeTerminalLayout } = realLayoutModule
 
-// Allow per-test override of the terminal layout; when unset, fall through to
-// the fixed 80x24 layout this suite's assertions were written against. The
-// mock is registry-wide, so resetting mockLayout keeps a stale layout from
-// leaking to later files in the same process.
+// Allow per-test override of the terminal layout; when unset, the factory
+// falls through to the real hook so no stale layout can leak to later files
+// in the same process. beforeEach seeds the fixed 80x24 layout this suite's
+// assertions were written against; tests that override it keep their
+// override.
 let mockLayout: TerminalLayout | undefined
 
 const capturedButtons: CapturedButton[] = []
@@ -91,10 +92,12 @@ mock.module('../button', () => ({
 }))
 
 mock.module('../../hooks/use-terminal-layout', () => ({
-  // Real exports first (registry-wide leak guard); the fixed 80x24 override
-  // below must keep winning for this suite's assertions.
+  // Real exports first (registry-wide leak guard); the suite default seeded
+  // in beforeEach must keep winning for this suite's assertions, and the
+  // unset fall-through delegates to the real hook instead of a fixed layout
+  // that would survive this file.
   ...realLayoutModule,
-  useTerminalLayout: () => mockLayout ?? computeTerminalLayout(80, 24),
+  useTerminalLayout: () => mockLayout ?? realLayoutModule.useTerminalLayout(),
 }))
 
 // Native-markdown collaborators are mocked so agent-message tests can force
@@ -244,6 +247,9 @@ const initializeStore = (
 }
 
 beforeEach(() => {
+  // Suite default: the fixed 80x24 layout these assertions were written
+  // against; individual tests may override it.
+  mockLayout = computeTerminalLayout(80, 24)
   capturedButtons.length = 0
   syntaxStyleSetupError = null
   initializeStore()

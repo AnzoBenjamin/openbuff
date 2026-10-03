@@ -54,11 +54,21 @@ mock.module('../../../utils/image-display', () => ({
     mockDisplaySize ?? realImageDisplayModule.calculateDisplaySize(input),
 }))
 
+// Snapshot the real theme module BEFORE mock.module registration: an ESM
+// namespace is a live binding that mock.module patches in place, so only a
+// plain-object snapshot freezes the originals. The `?real` query bypasses
+// the registry so a previously leaked mock cannot shadow the real module.
+const realUseThemeModule = (await import(
+  '../../../hooks/use-theme?real' as string
+)) as unknown as typeof import('../../../hooks/use-theme')
+
 mock.module('../../../hooks/use-theme', () => ({
-  // A complete real theme, not a partial stub: bun's mock.module is global to
-  // the test process, so later test files that render theme-consuming
-  // components (DiffViewer reads theme.name via DIFF_LINE_COLORS) would
-  // otherwise crash on undefined fields. Mirrors the plan-box.test.tsx pattern.
+  // Real exports first (registry-wide leak guard): bun's mock.module is
+  // global to the test process, so a full replacement would drop
+  // useThemeStore, detectSystemTheme, and applyOscDetectedThemeToStore for
+  // later importers in the same process (they would get undefined). Only
+  // the overrides this suite needs sit on top of the spread.
+  ...realUseThemeModule,
   useTheme: () => chatThemes.dark,
   initializeThemeStore: () => {},
 }))
