@@ -107,6 +107,20 @@ let clientCreationFailed = false
 let parsersRegistered = false
 
 /**
+ * TEST-ONLY: reset the singleton state (shared client, cached creation
+ * failure, parser-registration flag). bun's `--isolate` REUSES worker
+ * processes across test files, so a suite that constructed a real client
+ * (or cached a creation failure) would otherwise leak that state into a
+ * later suite's assertions in the same worker. Production behavior is
+ * unchanged when the seam is never called.
+ */
+export function resetTreeSitterClientStateForTests(): void {
+  sharedClient = null
+  clientCreationFailed = false
+  parsersRegistered = false
+}
+
+/**
  * Resolve the @opentui/core package root so the shipped grammar wasm and
  * highlights query files can be addressed by absolute path. Throws are
  * caught by callers; nothing here runs at import time.

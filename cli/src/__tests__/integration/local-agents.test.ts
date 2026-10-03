@@ -2,43 +2,25 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync } from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { validateAgents } from '@openbuff/sdk'
 import {
   describe,
   test,
   expect,
   beforeEach,
   afterEach,
-  afterAll,
-  mock,
 } from 'bun:test'
 
-// Mock the logger to prevent analytics initialization errors in tests.
-// Snapshot the real logger module BEFORE the mock.module registration and
-// spread its exports in the factory instead of replacing them wholesale:
-// bun's mock.module is registry-wide for the whole test process (CI's bun
-// does not isolate registrations across test files), and a full replacement
-// would starve sibling files — logger.test.ts imports loggerContext,
-// LOG_MAX_BYTES, clearLogFile, rotateLogIfNeeded, resetLogStream,
-// endPreviousPinoDestination and getLivePinoDestinationFd.
-const realLoggerModule = { ...(await import('../../utils/logger')) }
-
-mock.module('../../utils/logger', () => ({
-  ...realLoggerModule,
-  logger: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    fatal: () => {},
-  },
-}))
-
-afterAll(() => {
-  // Re-register the original logger module so the registry-wide mock
-  // registration above cannot leak into other test files in this worker.
-  mock.module('../../utils/logger', () => ({ ...realLoggerModule }))
-})
+// TEST-ONLY: replace the registry's module logger with a noop so logger
+// side effects (analytics initialization) cannot run in tests. This uses
+// the registry's injection seam instead of mock.module, which is
+// registry-wide for the whole bun test worker and cannot be unregistered.
+const noopLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  fatal: () => {},
+} as typeof import('../../utils/logger').logger
 
 import { setProjectRoot, getProjectRoot } from '../../project-files'
 import {
@@ -51,6 +33,7 @@ import {
   getAgentRegistryDiagnostics,
   announceLoadedAgents,
   __resetLocalAgentRegistryForTests,
+  setAgentRegistryLoggerForTests,
 } from '../../utils/local-agent-registry'
 
 const initializeAgentRegistry = () =>
@@ -79,6 +62,7 @@ describe('Local Agent Integration', () => {
     process.chdir(tempDir)
     setProjectRoot(tempDir)
     __resetLocalAgentRegistryForTests()
+    setAgentRegistryLoggerForTests(noopLogger)
 
     agentsDir = path.join(tempDir, '.agents')
   })
@@ -87,8 +71,8 @@ describe('Local Agent Integration', () => {
     process.chdir(originalCwd)
     setProjectRoot(originalProjectRoot ?? originalCwd)
     __resetLocalAgentRegistryForTests()
+    setAgentRegistryLoggerForTests(null)
     rmSync(tempDir, { recursive: true, force: true })
-    mock.restore()
   })
 
   test('handles missing .agents directory gracefully', async () => {
