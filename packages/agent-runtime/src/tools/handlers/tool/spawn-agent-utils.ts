@@ -476,6 +476,10 @@ const HANDOFF_GRANTABLE_READ_ONLY_TOOLS: readonly string[] = [
   'find_files_matching_content',
 ]
 
+const HANDOFF_GRANTABLE_READ_ONLY_TOOL_SET: ReadonlySet<string> = new Set(
+  HANDOFF_GRANTABLE_READ_ONLY_TOOLS,
+)
+
 export function deriveSpawnTemplateCapabilities(params: {
   agentTemplate: AgentTemplate
   parentAgentTemplate: AgentTemplate
@@ -512,7 +516,7 @@ export function deriveSpawnTemplateCapabilities(params: {
       ? handoff.permissions.allowedTools
       : staticTools,
   )
-  const grantableReadOnlyTools = new Set(HANDOFF_GRANTABLE_READ_ONLY_TOOLS)
+  const grantableReadOnlyTools = HANDOFF_GRANTABLE_READ_ONLY_TOOL_SET
   // A handoff may grant the closed allowlist of read-only discovery tools even
   // when they are absent from the child's static tool set. Any other requested
   // tool outside the static set is a genuine authority widening and still
@@ -933,14 +937,14 @@ function sweepExpiredOversizeArtifacts(dir: string, now: number): void {
   }
 }
 
-let oversizeArtifactDirEnsured = false
+let oversizeArtifactDirEnsured: string | undefined
 
 function persistOversizeArtifact(serialized: string): string | undefined {
   try {
     const dir = join(tmpdir(), 'openbuff-spawn-output')
-    if (!oversizeArtifactDirEnsured) {
+    if (oversizeArtifactDirEnsured !== dir) {
       mkdirSync(dir, { recursive: true })
-      oversizeArtifactDirEnsured = true
+      oversizeArtifactDirEnsured = dir
     }
     const artifactPath = join(
       dir,
@@ -3002,78 +3006,78 @@ export async function executeSubagent(
       localAgentTemplates: withDefaults.localAgentTemplates,
     })
   } else {
-  try {
-    result = await loopAgentSteps({
-      ...withDefaults,
-      onResponseChunk,
-      // Don't propagate parent's image content to subagents.
-      // If subagents need to see images, they get them through includeMessageHistory,
-      // not by creating new image-containing messages for their prompts.
-      content: undefined,
-      // Same fallback contract as the supervised branch above: an unset
-      // parentAgentState.runId must not leak an empty string (not a valid
-      // runId) into the child's ancestorRunIds.
-      ancestorRunIds: [
-        ...ancestorRunIds,
-        parentAgentState.runId ?? parentAgentState.agentId,
-      ],
-      agentType: agentTemplate.id,
-    })
-  } catch (error) {
-    // Any subagent failure (cancellation, budget exhaustion, thrown error) must
-    // still emit a finish event so the UI never shows a subagent that started
-    // but never finished.
-    failed = true
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    onResponseChunk({
-      type: 'subagent_finish',
-      agentId: withDefaults.agentState.agentId,
-      agentType: agentTemplate.id,
-      displayName: agentTemplate.displayName,
-      onlyChild: isOnlyChild,
-      parentAgentId: parentAgentState.agentId,
-      prompt,
-      params: spawnParams,
-      spawnToolCallId,
-      spawnIndex,
-      error: errorMessage,
-    })
-    // Only GENUINE parent/user cancellation must keep propagating so the run
-    // aborts. Gate this on the PARENT signal actually being aborted — never on
-    // error.name === 'AbortError'/'TimeoutError' alone. A child-internal abort
-    // (an aborted sub-operation, a timed-out provider fetch, or an abort
-    // raised while the settle tail processes a large set_output payload plus
-    // receipt reconciliation) surfaces as an AbortError while the parent
-    // signal is still live. The previous guard re-threw on the error NAME
-    // regardless of the parent signal, so a mutating child (editor /
-    // repair-editor) that had ALREADY committed its edits crashed the entire
-    // parent turn at receipt-delivery time with 'Error executing handleSteps
-    // for agent base2: The operation was aborted'. Reviewers rarely tripped it
-    // because they settle a tiny attestation object fast; the long mutating
-    // settle tail is what widened the window. When the parent signal is NOT
-    // aborted we degrade to the structured error output below instead of
-    // taking down the session.
-    const parentSignalAborted =
-      (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
-    if (parentSignalAborted) {
-      throw error
+    try {
+      result = await loopAgentSteps({
+        ...withDefaults,
+        onResponseChunk,
+        // Don't propagate parent's image content to subagents.
+        // If subagents need to see images, they get them through includeMessageHistory,
+        // not by creating new image-containing messages for their prompts.
+        content: undefined,
+        // Same fallback contract as the supervised branch above: an unset
+        // parentAgentState.runId must not leak an empty string (not a valid
+        // runId) into the child's ancestorRunIds.
+        ancestorRunIds: [
+          ...ancestorRunIds,
+          parentAgentState.runId ?? parentAgentState.agentId,
+        ],
+        agentType: agentTemplate.id,
+      })
+    } catch (error) {
+      // Any subagent failure (cancellation, budget exhaustion, thrown error) must
+      // still emit a finish event so the UI never shows a subagent that started
+      // but never finished.
+      failed = true
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      onResponseChunk({
+        type: 'subagent_finish',
+        agentId: withDefaults.agentState.agentId,
+        agentType: agentTemplate.id,
+        displayName: agentTemplate.displayName,
+        onlyChild: isOnlyChild,
+        parentAgentId: parentAgentState.agentId,
+        prompt,
+        params: spawnParams,
+        spawnToolCallId,
+        spawnIndex,
+        error: errorMessage,
+      })
+      // Only GENUINE parent/user cancellation must keep propagating so the run
+      // aborts. Gate this on the PARENT signal actually being aborted — never on
+      // error.name === 'AbortError'/'TimeoutError' alone. A child-internal abort
+      // (an aborted sub-operation, a timed-out provider fetch, or an abort
+      // raised while the settle tail processes a large set_output payload plus
+      // receipt reconciliation) surfaces as an AbortError while the parent
+      // signal is still live. The previous guard re-threw on the error NAME
+      // regardless of the parent signal, so a mutating child (editor /
+      // repair-editor) that had ALREADY committed its edits crashed the entire
+      // parent turn at receipt-delivery time with 'Error executing handleSteps
+      // for agent base2: The operation was aborted'. Reviewers rarely tripped it
+      // because they settle a tiny attestation object fast; the long mutating
+      // settle tail is what widened the window. When the parent signal is NOT
+      // aborted we degrade to the structured error output below instead of
+      // taking down the session.
+      const parentSignalAborted =
+        (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
+      if (parentSignalAborted) {
+        throw error
+      }
+      // Degrade instead of throwing: a re-raised error previously propagated
+      // through Promise.allSettled as a rejected settlement and failed the whole
+      // parent turn — including the common case where the child had already
+      // committed its edits and only the final receipt delivery crashed. A
+      // structured error output keeps the failure visible to the parent (the
+      // spawned-output normalizer maps it to an explicit partial diagnostic;
+      // covered by spawn-agent-utils-output.test.ts) without taking down the
+      // session.
+      result = {
+        agentState: withDefaults.agentState,
+        output: {
+          type: 'error' as const,
+          message: `Subagent ${agentTemplate.id} crashed: ${errorMessage}`,
+        },
+      }
     }
-    // Degrade instead of throwing: a re-raised error previously propagated
-    // through Promise.allSettled as a rejected settlement and failed the whole
-    // parent turn — including the common case where the child had already
-    // committed its edits and only the final receipt delivery crashed. A
-    // structured error output keeps the failure visible to the parent (the
-    // spawned-output normalizer maps it to an explicit partial diagnostic;
-    // covered by spawn-agent-utils-output.test.ts) without taking down the
-    // session.
-    result = {
-      agentState: withDefaults.agentState,
-      output: {
-        type: 'error' as const,
-        message: `Subagent ${agentTemplate.id} crashed: ${errorMessage}`,
-      },
-    }
-  }
   } // end flag-off in-process branch (P2-T8 supervised alternative above)
 
   if (!failed) {
