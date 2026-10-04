@@ -34,6 +34,9 @@ export const getSdkEnv = (): SdkEnv => ({
   OVERRIDE_TARGET: process.env.OVERRIDE_TARGET,
   OVERRIDE_PLATFORM: process.env.OVERRIDE_PLATFORM,
   OVERRIDE_ARCH: process.env.OVERRIDE_ARCH,
+
+  // Diagnostic-delta preflight match mode
+  OPENBUFF_DIAGNOSTIC_DELTA_MODE: process.env.OPENBUFF_DIAGNOSTIC_DELTA_MODE,
 })
 
 /**

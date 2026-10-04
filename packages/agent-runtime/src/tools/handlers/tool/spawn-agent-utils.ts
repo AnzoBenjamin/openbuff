@@ -949,6 +949,9 @@ function persistOversizeArtifact(serialized: string): string | undefined {
     // Owner-only permissions regardless of the process umask: these files
     // hold untruncated child output in a shared tmp directory.
     writeFileSync(artifactPath, serialized, { mode: 0o600 })
+    // NOTE(P2-T1): operational TTL sweep (mtime expiry), not a replay-
+    // deterministic timestamp; the injected clock is not threaded to this
+    // module boundary. Deferred per the P2-T1 determinism roadmap.
     sweepExpiredOversizeArtifacts(dir, Date.now())
     return artifactPath
   } catch {

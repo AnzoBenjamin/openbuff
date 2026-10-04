@@ -12,6 +12,7 @@ import {
   type LanguageDiagnosticTextEdit,
 } from '../tools/language-diagnostics'
 import { mapWithConcurrency } from '../tools/concurrency'
+import { getSdkEnv } from '../env'
 
 /**
  * Diagnostic-delta preflight (LI-02 tiers 1–2).
@@ -294,7 +295,9 @@ function resolveDeltaKeyOf(mode?: DeltaMatchMode): (
   diagnostic: LanguageDiagnostic,
 ) => string {
   if (mode) return mode === 'tolerant' ? tolerantKey : strictKey
-  return process.env[DELTA_MODE_ENV_FLAG]?.trim().toLowerCase() === 'strict'
+  // Env access is routed through the SDK env helper (env-architecture gate);
+  // DELTA_MODE_ENV_FLAG names the OPENBUFF_DIAGNOSTIC_DELTA_MODE var.
+  return getSdkEnv()[DELTA_MODE_ENV_FLAG]?.trim().toLowerCase() === 'strict'
     ? strictKey
     : tolerantKey
 }

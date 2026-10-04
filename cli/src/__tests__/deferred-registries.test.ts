@@ -26,7 +26,18 @@ function releaseAgentGate(): void {
   agentGate.resolvers = []
 }
 
+// Snapshot the real module BEFORE the mock.module registration so the real
+// exports can be spread in the factory (a bare full replacement would drop
+// every un-overridden export for sibling suites in the same worker).
+const realLocalAgentRegistryModule = {
+  ...(await import('../utils/local-agent-registry')),
+}
+const realSkillRegistryModule = {
+  ...(await import('../utils/skill-registry')),
+}
+
 mock.module('../utils/local-agent-registry', () => ({
+  ...realLocalAgentRegistryModule,
   initializeAgentRegistry: async (opts: { trustProjectAgents: boolean }) => {
     agentCalls.push(opts)
     if (agentGate.hold) {
@@ -37,6 +48,7 @@ mock.module('../utils/local-agent-registry', () => ({
   },
 }))
 mock.module('../utils/skill-registry', () => ({
+  ...realSkillRegistryModule,
   initializeSkillRegistry: async (opts: { trustProjectSkills: boolean }) => {
     skillCalls.push(opts)
   },
