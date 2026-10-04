@@ -33,10 +33,14 @@ import { isBlockedMcpAddress } from './client'
  * https pinning is applied ONLY on a runtime that honors it
  * ({@link runtimeSupportsTlsServerName}); on Node/undici a pinned-IP https
  * URL dials with no serverName and certificate validation would fail for
- * EVERY pinned https server, so https there keeps the ORIGINAL URL and
- * relies on the per-request re-validation above (http keeps the authority
- * pin, which needs no SNI). No address is leaked into the refusal error
- * message beyond the blocked host itself.
+ * EVERY pinned https server, while keeping the ORIGINAL https URL would
+ * skip the authority pin and reopen the check-then-connect rebinding gap.
+ * https there therefore FAILS CLOSED: {@link createPinnedMcpFetch} throws
+ * {@link McpDnsRebindingError} (naming the host) instead of dialing
+ * unpinned — the only exception is an explicitly allowlisted loopback
+ * address (`serve.allowedLoopbackMcp`), which proceeds through the pinned
+ * path (http keeps the authority pin, which needs no SNI). No address is
+ * leaked into the refusal error message beyond the blocked host itself.
  */
 
 export interface DnsPinningOptions {
@@ -51,7 +55,9 @@ export interface DnsPinningOptions {
    * (`tls.serverName`), which preserves certificate validation for a
    * pinned-IP https URL. Defaults to {@link runtimeSupportsTlsServerName};
    * injectable so the Node/undici behavior (no SNI extension) is exercisable
-   * under a Bun test runner.
+   * under a Bun test runner. When false, non-allowlisted https requests fail
+   * closed: {@link createPinnedMcpFetch} throws {@link McpDnsRebindingError}
+   * rather than dialing https without the authority pin.
    */
   supportsTlsServerName?: boolean
   /**
@@ -253,7 +259,12 @@ export async function resolvePinnedMcpAddress(
  *   any socket opens when resolution fails or any address is blocked),
  * - pinned to the validated address by rewriting the URL authority while
  *   preserving the original `Host` header and TLS SNI, and
- * - issued with `redirect: 'manual'`, so redirects are never followed.
+ * - issued with `redirect: 'manual'`, so redirects are never followed, and
+ * - on a runtime WITHOUT the Bun-only `tls` RequestInit extension, https is
+ *   REFUSED (fail closed, {@link McpDnsRebindingError}) unless the resolved
+ *   address is an explicitly allowlisted loopback, because a pinned-IP
+ *   https URL there cannot preserve SNI and keeping the original URL would
+ *   skip the authority pin.
  *
  * The returned function is stable for the lifetime of one transport: the pin
  * is re-validated per request, so a re-resolution between requests cannot
@@ -283,15 +294,27 @@ export function createPinnedMcpFetch(
     // Runtime-aware https pin (NEW-7): on a runtime WITHOUT the Bun-only
     // `tls` RequestInit extension (Node/undici), a pinned-IP https URL dials
     // with no SNI/serverName and certificate validation would fail for EVERY
-    // pinned https server. Keep the ORIGINAL https URL there so certificate
-    // validation runs against the real hostname; the per-request
-    // resolvePinnedMcpAddress validation above (and `redirect: 'manual'`)
-    // still refuse a hostname that resolves to a blocked address. http keeps
-    // the authority pin, which needs no SNI.
+    // pinned https server — while keeping the ORIGINAL https URL would skip
+    // the authority pin and reopen the check-then-connect DNS-rebinding
+    // TOCTOU. Fail closed instead: refuse unpinned https outright, EXCEPT
+    // for an explicitly allowlisted loopback address
+    // (`serve.allowedLoopbackMcp`), which falls through to the pinned path
+    // below. http keeps the authority pin, which needs no SNI.
     const supportsTlsServerName =
       options.supportsTlsServerName ?? runtimeSupportsTlsServerName()
-    if (requestUrl.protocol === 'https:' && !supportsTlsServerName) {
-      return fetch(input, requestInit)
+    if (
+      requestUrl.protocol === 'https:' &&
+      !supportsTlsServerName &&
+      !isAllowedLoopbackMcpAuthority(
+        pin.address,
+        pin.port,
+        options.allowedLoopbackMcp,
+      )
+    ) {
+      throw new McpDnsRebindingError(
+        requestUrl.hostname.replace(/^\[|\]$/g, ''),
+        'pinned https dial is unsupported on this runtime: connecting without the authority pin would reopen DNS rebinding',
+      )
     }
 
     const pinnedUrl = new URL(requestUrl.href)

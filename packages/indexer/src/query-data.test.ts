@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 
-import { getPostingCandidates } from './query-data'
+import {
+  getPostingCandidates,
+  getPostingDocumentFrequency,
+} from './query-data'
 import type { MetadataIndex } from './types'
 
 /** Minimal MetadataIndex fixture: getPostingCandidates only reads queryData.postings. */
@@ -89,5 +92,33 @@ describe('getPostingCandidates', () => {
     expect(candidates?.size).toBe(4097)
     expect(candidates?.has('src/z.ts')).toBe(true)
     expect(candidates?.has('src/file4999.ts')).toBe(false)
+  })
+})
+
+describe('getPostingDocumentFrequency', () => {
+  test('reports an exact posting document frequency and uncapped union sizes', () => {
+    const index = makeIndex({ auth: ['src/a.ts'], login: ['src/b.ts'] })
+    // Exact posting: the persisted document frequency wins.
+    expect(getPostingDocumentFrequency(index, 'auth')).toBe(1)
+    // No exact posting: the substring union is below the cap, so its real
+    // size is a safe document frequency.
+    const expanded = makeIndex({
+      auth: ['src/a.ts'],
+      authenticate: ['src/b.ts'],
+    })
+    expect(getPostingDocumentFrequency(expanded, 'aut')).toBe(2)
+  })
+
+  test('returns undefined instead of the 4096-capped union size for frequent tokens', () => {
+    const postings: Record<string, string[]> = {}
+    for (let i = 0; i < 5000; i++) {
+      postings[`aaa${i}`] = [`src/file${i}.ts`]
+    }
+    const index = makeIndex(postings)
+    // The substring union for "aaa" hits MAX_POSTING_CANDIDATE_PATHS (4096);
+    // reporting that truncated size as the document frequency would skew IDF,
+    // so the frequency is unknown and the caller falls back to whole-corpus
+    // counting (query.ts computeIdfForTokens handles undefined).
+    expect(getPostingDocumentFrequency(index, 'aaa')).toBeUndefined()
   })
 })

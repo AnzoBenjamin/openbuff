@@ -1,7 +1,13 @@
+import { lstatSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 
-import { AcpSessionData, runServe } from '@openbuff/sdk'
+import {
+  AcpSessionData,
+  getConfiguredCredentialEnvKeys,
+  runServe,
+  WELL_KNOWN_CREDENTIAL_ENV_KEYS,
+} from '@openbuff/sdk'
 
 import { getProjectRoot } from './project-files'
 import { getSystemProcessEnv } from './utils/env'
@@ -51,7 +57,68 @@ export type RunAcpServeDeps = {
    */
   trustedRootsPath?: string
   journalDir?: string
+  /**
+   * SEC-7 (§12.5) containment anchor threaded into runServe for BOTH
+   * transports. Optional so tests inject it; defaults to the CLI project
+   * root resolved by getProjectRoot().
+   */
+  projectRoot?: string
   signal?: AbortSignal
+  /**
+   * SEC (review: serve-socket-symlink): pre-bind socket-path safety gate.
+   * Defaults to `assertSocketPathIsNotSymlink` (lstat the resolved path and
+   * fail closed when it is an existing symlink); injected in tests so no
+   * real filesystem is touched.
+   */
+  assertSocketPathSafe?: (socketPath: string) => void
+}
+
+/**
+ * SEC: the default socket-path safety gate, run BEFORE the socket transport
+ * binds. An attacker who can plant a symlink at the configured socket path
+ * could otherwise redirect the bind (or make the bind clobber a link target
+ * elsewhere). The resolved path is lstat'd (symlinks are NOT followed): an
+ * existing symlink fails closed with a clear error; a regular file or an
+ * absent path (the normal bind case, where the socket is created by
+ * `runServe`) passes.
+ */
+export function assertSocketPathIsNotSymlink(socketPath: string): void {
+  const resolved = path.resolve(socketPath)
+  const stat = lstatSync(resolved, { throwIfNoEntry: false })
+  if (stat?.isSymbolicLink()) {
+    throw new Error(
+      `refusing to bind serve socket: ${socketPath} is a symlink (resolves to ${resolved}); remove the symlink or choose a different --socket path`,
+    )
+  }
+}
+
+/**
+ * Builds the `credentialEnv` projection for `runServe` (NEW-3, §12.8): the
+ * host environment restricted to credential-bearing keys — the well-known
+ * holdback keys plus every `apiKeyEnv` name the provider configuration
+ * declares (built-in presets and custom openbuff.json providers). Values
+ * come only from the live process env; non-credential env vars are never
+ * copied, so the SDK holdback sees exactly the credentials it must never
+ * split and nothing else. A failed provider-config load degrades to the
+ * well-known keys alone (a config-load failure must never break serving,
+ * and degrading means LESS credential exposure, not more).
+ */
+function buildCredentialEnv(): Record<string, string | undefined> {
+  const source = getSystemProcessEnv()
+  const keys = new Set<string>(WELL_KNOWN_CREDENTIAL_ENV_KEYS)
+  try {
+    for (const key of getConfiguredCredentialEnvKeys(source)) {
+      keys.add(key)
+    }
+  } catch {
+    // Provider config unavailable (e.g. invalid OPENBUFF_PROVIDER_CONFIG
+    // override): fall back to the well-known keys only.
+  }
+  const credentialEnv: Record<string, string | undefined> = {}
+  for (const key of keys) {
+    credentialEnv[key] = source[key]
+  }
+  return credentialEnv
 }
 
 /**
@@ -79,11 +146,14 @@ export async function runAcpServeCommand(
     deps?.generateToken ?? (() => randomBytes(32).toString('hex'))
   const writeStderr =
     deps?.writeStderr ?? ((line: string) => process.stderr.write(line + '\n'))
-  // Resolve getProjectRoot() lazily here (after initializeApp has run in
-  // index.tsx), never at module load; tests that inject journalDir never call it.
+  // SEC-7 (audit HIGH #1): resolve the containment root ONCE and thread it
+  // into runServe for BOTH transports, so the SDK's SEC-7 cwd containment
+  // and additionalDirectories allowlist are actually wired. Injectable via
+  // deps.projectRoot so tests never call getProjectRoot(). Resolved lazily
+  // here (after initializeApp has run in index.tsx), never at module load.
+  const projectRoot = deps?.projectRoot ?? getProjectRoot()
   const journalDir =
-    deps?.journalDir ??
-    path.join(getProjectRoot(), '.openbuff', 'acp-journal')
+    deps?.journalDir ?? path.join(projectRoot, '.openbuff', 'acp-journal')
 
   // NEW-2 (design §12.8): report the project-scope agent/MCP trust decision
   // on stderr for BOTH transports (stdout is the ACP protocol wire). The hint
@@ -112,11 +182,21 @@ export async function runAcpServeCommand(
       transport: { kind: 'stdio' },
       agentId: args.agentId,
       signal: deps?.signal,
-      // NEW-3 (§12.8): hand the live environment to runServe so the SDK
-      // collects the configured credential VALUES for the streaming holdback.
-      credentialEnv: getSystemProcessEnv(),
+      // NEW-3 (§12.8): hand the credential-allowlisted env to runServe so
+      // the SDK collects the configured credential VALUES for the streaming
+      // holdback — never the rest of the host environment.
+      credentialEnv: buildCredentialEnv(),
+      // SEC-7 (audit HIGH #1): bind the containment root for stdio too.
+      projectRoot,
     })
   }
+
+  // SEC (review: serve-socket-symlink): fail closed BEFORE bind when the
+  // configured socket path is an existing symlink. Injectable so tests stay
+  // hermetic.
+  const assertSocketPathSafe =
+    deps?.assertSocketPathSafe ?? assertSocketPathIsNotSymlink
+  assertSocketPathSafe(args.socketPath)
 
   const token = args.token ?? generateToken()
   const listener = runServeImpl({
@@ -125,8 +205,12 @@ export async function runAcpServeCommand(
     transport: { kind: 'socket', socketPath: args.socketPath, token },
     agentId: args.agentId,
     signal: deps?.signal,
-    // NEW-3 (§12.8): same credential collection for the socket transport.
-    credentialEnv: getSystemProcessEnv(),
+    // NEW-3 (§12.8): same credential-allowlisted collection for the socket
+    // transport.
+    credentialEnv: buildCredentialEnv(),
+    // SEC-7 (audit HIGH #1): bind the containment root for socket mode,
+    // decided once here at serve start (never per connection).
+    projectRoot,
   })
   // Connection info to STDERR so a client can connect; token never hits stdout.
   writeStderr(`openbuff serve: ACP v1 over unix socket ${args.socketPath}`)

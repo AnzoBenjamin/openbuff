@@ -16,8 +16,10 @@ import {
   detectAvailableScipIndexersAsync,
   runScipIngest,
   parseScipDumpEdges,
+  type AsyncScipRunner,
   type ScipRunner,
   type ScipRunnerInvocation,
+  type ScipRunnerResult,
 } from './scip-runner'
 
 import type { MetadataIndex } from './types'
@@ -937,5 +939,98 @@ describe('defaultScipRunner', () => {
     // error mapping must not swallow it.
     expect(result.status).toBeNull()
     expect(result.stderr).toContain('timed out')
+  })
+})
+
+describe('detection hard timeout (inFlightDetections leak)', () => {
+  test('a never-settling probe is abandoned at the hard deadline and its in-flight entry is deleted', async () => {
+    const root = makeRoot()
+    let invocations = 0
+    // A broken runner seam that NEVER settles — the exact leak shape: every
+    // detection call would previously hold its inFlightDetections entry
+    // forever, so later callers joined the wedged promise and detection for
+    // those binaries never recovered.
+    const neverRunner: AsyncScipRunner = async () => {
+      invocations += 1
+      return new Promise<ScipRunnerResult>(() => {})
+    }
+    const started = Date.now()
+    const settled = await Promise.race([
+      detectAvailableScipIndexersAsync(root, {
+        asyncRunner: neverRunner,
+        detectionHardTimeoutMs: 100,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('detection wedged past deadline+grace')),
+          5_000,
+        ),
+      ),
+    ])
+    // The timed-out probes fail open to unavailable, never throw, and the
+    // whole call settles well within the deadline + generous grace.
+    expect(settled).toEqual([])
+    expect(Date.now() - started).toBeLessThan(5_000)
+    // The in-flight entry was DELETED on timeout: a second call re-probes
+    // from scratch (2 x 8 fresh invocations) instead of joining the wedged
+    // promise forever (which would leave the count at 8).
+    await detectAvailableScipIndexersAsync(root, {
+      asyncRunner: neverRunner,
+      detectionHardTimeoutMs: 100,
+    })
+    expect(invocations).toBe(2 * SCIP_INDEXER_COMMANDS.length)
+  })
+})
+
+describe('worker-load degradation memoization', () => {
+  test('the failed worker spawn is attempted once per seam and the degradation is surfaced once', async () => {
+    const root = makeRoot()
+    const dumpPath = join(root, 'index.scip')
+    writeFileSync(dumpPath, JSON.stringify(scipDump))
+    let constructions = 0
+    const spawnOnce = (): Worker => {
+      constructions += 1
+      return makeLoadFailedWorker()
+    }
+    const degradations: string[] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('[scip-runner]')) {
+        degradations.push(first)
+      }
+    }
+    try {
+      const edges = await parseScipDumpEdges(dumpPath, spawnOnce)
+      expect(edges).toHaveLength(1)
+      expect(constructions).toBe(1)
+      expect(degradations).toHaveLength(1)
+      // A second ingest on the SAME seam skips the doomed worker attempt
+      // (memoized degradation) instead of silently degrading every time.
+      const again = await parseScipDumpEdges(dumpPath, spawnOnce)
+      expect(again).toHaveLength(1)
+      expect(constructions).toBe(1)
+      // Log-once: the diagnostic is not re-emitted per ingest.
+      expect(degradations).toHaveLength(1)
+      expect(degradations[0]).toContain('degrading to on-thread')
+    } finally {
+      console.error = originalError
+    }
+  })
+
+  test('memoization is per seam: a fresh seam attempts its worker again', async () => {
+    const root = makeRoot()
+    const dumpPath = join(root, 'index.scip')
+    writeFileSync(dumpPath, JSON.stringify(scipDump))
+    let constructions = 0
+    const freshSeam = (): Worker => {
+      constructions += 1
+      return makeLoadFailedWorker()
+    }
+    // The earlier test's seam was degraded, but THIS seam has its own entry,
+    // so it still attempts (and fails, then degrades) its own worker.
+    const edges = await parseScipDumpEdges(dumpPath, freshSeam)
+    expect(edges).toHaveLength(1)
+    expect(constructions).toBe(1)
   })
 })

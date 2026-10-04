@@ -19,6 +19,8 @@ import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 
+import { sanitizeOutbound } from '../serve/outbound-filter'
+
 import type { IndexManager } from '@codebuff/indexer'
 import type { StructureDiagnostic } from '@codebuff/code-map'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
@@ -315,7 +317,7 @@ const MCP_TOOLS: Tool[] = [
   {
     name: 'read_files',
     description:
-      'Read project files through the Openbuff capability guard (sensitive-path blocklist, host read policy, 10MB ceiling, bounded range reads). Complete reads mint cap.v3 read capabilities for edit tooling.',
+      'Read project files through the Openbuff capability guard (sensitive-path blocklist, host read policy, 10MB ceiling, bounded range reads). Complete reads mint cap.v3 read capabilities for edit tooling; the token itself is redacted from MCP output (SEC-1) and stays usable only in-process.',
     inputSchema: READ_FILES_INPUT_SCHEMA,
     annotations: { title: 'Read files', ...READ_ONLY_ANNOTATIONS },
   },
@@ -779,8 +781,15 @@ function renderReadFilesItem(item: {
     return `${header}\nerror(${item.error?.code ?? 'io_error'}): ${item.error?.message ?? 'unknown error'}`
   }
   const capability = item.editAnchor?.readCapability
+  // SEC (SEC-1): a minted cap.v3 read capability is a LIVE bearer token for
+  // this process. The MCP transport is an untrusted-host boundary, so the
+  // token never appears in tool output: it is redacted with the SAME
+  // outbound redaction the ACP wire uses (`sanitizeOutbound`), while the
+  // response still reports honestly that a capability was minted. The
+  // in-process SDK surfaces keep the raw token; only this MCP projection
+  // redacts it.
   const footer = capability
-    ? `\n\n[READ_CAPABILITY lines ${item.selector === 'range' ? `${item.startLine}-${item.endLine}` : `1-${item.totalLines ?? '?'}`}: ${capability}]`
+    ? `\n\n[READ_CAPABILITY lines ${item.selector === 'range' ? `${item.startLine}-${item.endLine}` : `1-${item.totalLines ?? '?'}`}: ${sanitizeOutbound(capability)} — capability token redacted over MCP]`
     : ''
   return `${header}\n${item.content ?? ''}${footer}`
 }

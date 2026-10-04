@@ -236,6 +236,41 @@ describe('personalizedPageRank', () => {
     expect(DEFAULT_PAGERANK_DAMPING).toBe(0.85)
   })
 
+  test('clamps damping into (0, 1) exclusive (damping 1 never converges)', () => {
+    const adjacency = adjacencyOf({ A: ['B'], B: ['A'] })
+    const seeds = new Map([
+      ['A', 3],
+      ['B', 1],
+    ])
+    // Damping exactly 1 admits non-convergence (the iteration can oscillate
+    // as a fixed point), so it is clamped to the exclusive upper bound — and
+    // the clamped result must be identical to requesting the bound itself.
+    const one = personalizedPageRank({
+      adjacency,
+      seeds,
+      damping: 1,
+      epsilon: 1e-12,
+      maxIterations: 200,
+    })
+    const upperBound = personalizedPageRank({
+      adjacency,
+      seeds,
+      damping: 1 - 1e-6,
+      epsilon: 1e-12,
+      maxIterations: 200,
+    })
+    expect(Array.from(one.entries())).toEqual(Array.from(upperBound.entries()))
+    // Damping 0 spreads no rank at all; it is clamped to the exclusive lower
+    // bound for the same reason.
+    const zero = personalizedPageRank({ adjacency, seeds, damping: 0 })
+    const lowerBound = personalizedPageRank({
+      adjacency,
+      seeds,
+      damping: 1e-6,
+    })
+    expect(Array.from(zero.entries())).toEqual(Array.from(lowerBound.entries()))
+  })
+
   test('clamps maxIterations into [1, 200]', () => {
     const adjacency = adjacencyOf({ A: ['B'], B: ['A'] })
     // 0 historically meant "return the personalization vector"; the clamp

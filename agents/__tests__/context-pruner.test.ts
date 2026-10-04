@@ -2621,6 +2621,110 @@ describe('context-pruner spawn_agents with prompt and params', () => {
     expect(content).not.toContain('Agent results:')
   })
 
+  test('strips control/escape/invisible chars from lines BEFORE extraction and pinning', () => {
+    const messages = [
+      createMessage('user', 'Implement the feature'),
+      createMessage(
+        'assistant',
+        [
+          'Working on it.',
+          'BLOCKING: \u001b[31mInjected via ANSI\u001b[0m fix the null guard.',
+          'Next required action: \u000bstrip\u200bme\u202e before pinning',
+        ].join('\n'),
+      ),
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000, {
+      assistantToolBudget: 1,
+      userBudget: 1,
+    })
+    const content = results[0].input.messages[0].content[0].text
+
+    expect(content).toContain('<pinned_active_work_state>')
+    // Sanitization happens BEFORE extraction, so an injected line cannot hide
+    // its operational shape inside control/escape characters: the sanitized
+    // text is what gets matched AND pinned.
+    expect(content).toContain('BLOCKING: Injected via ANSI fix the null guard.')
+    expect(content).toContain('Next required action: stripme before pinning')
+    // No escape/control/invisible character survives into the pinned state.
+    expect(content).not.toContain('\u001b')
+    expect(content).not.toContain('\u000b')
+    expect(content).not.toContain('\u200b')
+    expect(content).not.toContain('\u202e')
+  })
+
+  test('sanitizes decisions and blockers pinned into knowledge memory', () => {
+    const messages = [
+      createMessage('user', 'Implement the feature'),
+      createMessage(
+        'assistant',
+        [
+          'Decision: use the \u200bzerowidth\u202e-free parser.',
+          'BLOCKING: \u001b[1mreviewer\u001b[0m finding must not carry escapes.',
+        ].join('\n'),
+      ),
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000, {
+      assistantToolBudget: 1,
+      userBudget: 1,
+    })
+    const content = results[0].input.messages[0].content[0].text
+
+    expect(content).toContain('<knowledge_memory>')
+    expect(content).toContain(
+      'Decision: use the zerowidth-free parser.',
+    )
+    expect(content).toContain(
+      'BLOCKING: reviewer finding must not carry escapes.',
+    )
+    expect(content).not.toContain('\u200b')
+    expect(content).not.toContain('\u202e')
+    expect(content).not.toContain('\u001b')
+  })
+
+  test('removes escape sequences assembled across embedded control characters (CP-1 regression)', () => {
+    // CP-1: a control character embedded inside a would-be escape sequence
+    // (e.g. ESC [ 2 NUL J) used to defeat the sequence regex; the later
+    // control-character pass removed the NUL and the assembled 'ESC[2J'
+    // survived into pinned/summarized operational state. Sanitization must
+    // strip the control class first and iterate to a fixpoint so the
+    // assembled sequence is matched and removed whole.
+    const messages = [
+      createMessage('user', 'Implement the feature'),
+      createMessage(
+        'assistant',
+        [
+          'BLOCKING: \u001b[2\u0000Jassembled escape must not survive.',
+          'BLOCKING: \u001b]0\u0000\u0007OSC assembly must not survive.',
+          'Decision: \u001b[3\u0000mkeep this text visible.',
+          'BLOCKING: clean text stays byte-identical.',
+        ].join('\n'),
+      ),
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000, {
+      assistantToolBudget: 1,
+      userBudget: 1,
+    })
+    const content = results[0].input.messages[0].content[0].text
+
+    // The surrounding text is still extracted and pinned after sanitization.
+    expect(content).toContain('BLOCKING: assembled escape must not survive.')
+    // The OSC case: the terminator (BEL) was consumed by the control-class
+    // pass before the OSC pattern could match, so only the INERT `]0`
+    // fragment remains — no ESC survives, so no functional sequence exists.
+    expect(content).toContain('OSC assembly must not survive.')
+    expect(content).toContain('Decision: keep this text visible.')
+    expect(content).toContain('BLOCKING: clean text stays byte-identical.')
+    // No escape/control character or assembled sequence fragment survives.
+    expect(content).not.toContain('\u001b')
+    expect(content).not.toContain('\u0000')
+    expect(content).not.toContain('\u0007')
+    expect(content).not.toContain('[2J')
+    expect(content).not.toContain('[3m')
+  })
+
   test('limits long todo summaries to active tasks', () => {
     const todos = Array.from({ length: 12 }, (_, i) => ({
       task: `Todo ${i + 1}`,

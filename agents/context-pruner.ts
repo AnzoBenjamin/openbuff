@@ -1551,7 +1551,7 @@ const definition: AgentDefinition = {
         .map((l) => l.trim())
         .filter((l) => l && !l.startsWith('---') && !l.startsWith('```'))
       if (lines.length === 0) return ''
-      const first = lines[0]
+      const first = stripUnsafeTextChars(lines[0])
       if (first.length <= KNOWLEDGE_MEMORY_FILE_FINDING_CHARS) return first
       return first.slice(0, KNOWLEDGE_MEMORY_FILE_FINDING_CHARS - 3) + '...'
     }
@@ -2005,7 +2005,9 @@ const definition: AgentDefinition = {
       if (!Array.isArray(record.findings)) return []
       return record.findings.flatMap((finding) => {
         if (typeof finding === 'string') {
-          const text = finding.trim()
+          // Findings text is pinned verbatim into knowledge memory blockers;
+          // strip control/escape/invisible characters first.
+          const text = stripUnsafeTextChars(finding).trim()
           return text ? [{ id: '', text: truncateLongText(text, 2_000) }] : []
         }
         if (!finding || typeof finding !== 'object') return []
@@ -2014,11 +2016,11 @@ const definition: AgentDefinition = {
           typeof findingRecord.id === 'string' ? findingRecord.id.trim() : ''
         const summary =
           typeof findingRecord.summary === 'string'
-            ? findingRecord.summary.trim()
+            ? stripUnsafeTextChars(findingRecord.summary).trim()
             : ''
         const correction =
           typeof findingRecord.correction === 'string'
-            ? findingRecord.correction.trim()
+            ? stripUnsafeTextChars(findingRecord.correction).trim()
             : ''
         const text = [summary, correction].filter(Boolean).join(' Correction: ')
         return id || text
@@ -2045,10 +2047,12 @@ const definition: AgentDefinition = {
               // instead of rendering a bare `snapshot=` a reader could mistake
               // for a gate-attested fingerprint.
               '(manual/unattested)'
-            : rawFingerprint
+            : stripUnsafeTextChars(rawFingerprint)
           : '(legacy/unattested)'
       const coverage =
-        typeof record.coverage === 'string' ? record.coverage : 'n/a'
+        typeof record.coverage === 'string'
+          ? stripUnsafeTextChars(record.coverage)
+          : 'n/a'
       const findings = normalizeStructuredFindings(record)
       const findingIds = findings.map((finding) => finding.id).filter(Boolean)
       const findingTexts = findings
@@ -2077,7 +2081,10 @@ const definition: AgentDefinition = {
       const withoutThink = text.replace(/<think>[\s\S]*?<\/think>/g, '')
       const lines = withoutThink.split('\n')
       for (const line of lines) {
-        const trimmed = line.trim()
+        // Sanitize BEFORE extraction: the extracted decision text is pinned
+        // verbatim into knowledge memory, so it must not carry control,
+        // escape, or invisible characters from the raw model text.
+        const trimmed = stripUnsafeTextChars(line).trim()
         // Match common decision markers in agent output
         if (
           /^(?:Decision|Decided|Chose|Using|Selected|Will use|Opted)[:)]?\s/i.test(
@@ -2106,7 +2113,8 @@ const definition: AgentDefinition = {
       const lines: string[] = []
       const withoutThink = text.replace(/<think>[\s\S]*?<\/think>/g, '')
       for (const line of withoutThink.split('\n')) {
-        const trimmed = line
+        // Sanitize BEFORE extraction: these lines become pinned blockers.
+        const trimmed = stripUnsafeTextChars(line)
           .trim()
           .replace(/^[-*]\s*/, '')
           .trim()
@@ -2295,6 +2303,52 @@ const definition: AgentDefinition = {
       )
     }
 
+    /**
+     * CP-1: the control/invisible character class with ESC (\u001b)
+     * deliberately excluded. ESC is held back for one pass so the ANSI/OSC
+     * sequence regexes below can still remove an intact escape sequence whole
+     * instead of degrading it into visible fragments like "[31m"; a bare ESC
+     * that forms no sequence is removed by the final pass of the same
+     * iteration. LF (\u000a) and tab (\u0009) are also excluded.
+     */
+    const UNSAFE_CONTROL_CHARS_EXCEPT_ESC_RE =
+      /[\u0000-\u0008\u000b-\u001a\u001c-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufffe\uffff]/g
+    const ANSI_ESCAPE_SEQUENCE_RE = /\u001b\[[0-9;]*[A-Za-z]/g
+    const OSC_ESCAPE_SEQUENCE_RE = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g
+    const ESCAPE_CHAR_RE = /\u001b/g
+
+    /**
+     * Strips model-controlled control characters, ANSI/OSC escape sequences,
+     * and bidi/zero-width/invisible characters from text BEFORE operational
+     * extraction and pinning. Injected tool/assistant text must never be able
+     * to disguise an operational line's shape or smuggle escape sequences into
+     * state that is pinned verbatim across compaction. LF and tab are
+     * preserved; every other C0/C1 control, escape sequence, and invisible
+     * formatting character is removed.
+     *
+     * CP-1: the control/invisible character class is stripped FIRST, then the
+     * ANSI/OSC sequence patterns, and both passes iterate to a small bounded
+     * fixpoint. A control character embedded inside a would-be escape sequence
+     * (e.g. ESC [ 2 NUL J) defeats the sequence regex on raw input, but
+     * removing the control class first makes the assembled sequence matchable
+     * on the sequence pass, so no assembled escape sequence can survive into
+     * pinned/summarized operational state. Clean input converges on the first
+     * pass and is returned byte-identical.
+     */
+    function stripUnsafeTextChars(text: string): string {
+      let current = text
+      for (let pass = 0; pass < 4; pass += 1) {
+        const next = current
+          .replace(UNSAFE_CONTROL_CHARS_EXCEPT_ESC_RE, '')
+          .replace(ANSI_ESCAPE_SEQUENCE_RE, '')
+          .replace(OSC_ESCAPE_SEQUENCE_RE, '')
+          .replace(ESCAPE_CHAR_RE, '')
+        if (next === current) return current
+        current = next
+      }
+      return current
+    }
+
     function extractActiveWorkLines(text: string): string[] {
       const pinned: string[] = []
       let isInFinalResponseAllowedState = false
@@ -2316,7 +2370,10 @@ const definition: AgentDefinition = {
       }
 
       for (const line of text.split('\n')) {
-        const trimmed = line.trim()
+        // Sanitize BEFORE extraction: control/escape/invisible characters are
+        // stripped first so an injected line can neither dodge the match by
+        // hiding inside them nor smuggle them into the pinned state.
+        const trimmed = stripUnsafeTextChars(line).trim()
         if (!trimmed) {
           flushWorkflowTodoLines()
           continue
@@ -2420,7 +2477,10 @@ const definition: AgentDefinition = {
     }
 
     function sanitizeOperationalStateText(text: string): string {
-      const withoutPinnedState = text
+      // Strip control/escape/invisible characters BEFORE any line matching so
+      // neither the skip rules nor the surviving summary lines carry them.
+      const withoutUnsafeChars = stripUnsafeTextChars(text)
+      const withoutPinnedState = withoutUnsafeChars
         .replace(
           /<pinned_active_work_state>[\s\S]*?<\/pinned_active_work_state>\n*/g,
           '',

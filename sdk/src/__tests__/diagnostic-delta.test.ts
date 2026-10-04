@@ -10,6 +10,7 @@ import {
 import {
   captureDiagnostics,
   computeDiagnosticDelta,
+  DELTA_MODE_ENV_FLAG,
   preflightDiagnosticDelta,
   supportedDiagnosticFiles,
   type DiagnosticCommandRunner,
@@ -86,20 +87,32 @@ describe('computeDiagnosticDelta', () => {
     expect(computeDiagnosticDelta([], after)).toHaveLength(2)
   })
 
-  test('strict mode flags a line-shifted pre-existing error as new', () => {
-    const before = [makeDiagnostic({ range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } } })]
-    const after = [makeDiagnostic({ range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } } })]
-    // Strict mode matches on (file, line, column, code, severity); a line shift
-    // breaks the key, so the moved diagnostic is reported as new.
-    expect(computeDiagnosticDelta(before, after)).toHaveLength(1)
-  })
-
   test('tolerant mode survives a line shift by matching on (file, code)', () => {
     const before = [makeDiagnostic({ range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } } })]
     const after = [makeDiagnostic({ range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } } })]
     expect(computeDiagnosticDelta(before, after, { mode: 'tolerant' })).toEqual(
       [],
     )
+  })
+
+  test('DEFAULT mode is tolerant: a line-shifted pre-existing error is not new', () => {
+    // The strict default used to reject valid edits whose PRE-EXISTING
+    // errors merely shifted lines; the default is now tolerant, strict is
+    // opt-in.
+    const before = [makeDiagnostic({ range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } } })]
+    const after = [makeDiagnostic({ range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } } })]
+    expect(computeDiagnosticDelta(before, after)).toEqual([])
+  })
+
+  test('strict mode flags a line-shifted pre-existing error as new', () => {
+    const before = [makeDiagnostic({ range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } } })]
+    const after = [makeDiagnostic({ range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } } })]
+    // Strict mode matches on (file, line, column, code, severity); a line shift
+    // breaks the key, so the moved diagnostic is reported as new. Strict is
+    // opt-in now.
+    expect(
+      computeDiagnosticDelta(before, after, { mode: 'strict' }),
+    ).toHaveLength(1)
   })
 
   test('tolerant mode still flags a genuinely new rule code', () => {
@@ -113,7 +126,11 @@ describe('computeDiagnosticDelta', () => {
   test('strict mode distinguishes severity on the same location', () => {
     const before = [makeDiagnostic({ severity: 'warning' })]
     const after = [makeDiagnostic({ severity: 'error' })]
-    expect(computeDiagnosticDelta(before, after)).toHaveLength(1)
+    // Strict is opt-in: the tolerant default matches on (file, code) alone,
+    // which cannot see a severity change on the same location.
+    expect(
+      computeDiagnosticDelta(before, after, { mode: 'strict' }),
+    ).toHaveLength(1)
   })
 })
 
@@ -479,7 +496,28 @@ describe('preflightDiagnosticDelta', () => {
     expect(result).toEqual({ rejected: false })
   })
 
-  test('strict delta mode flags the shifted line as new without tolerant mode', async () => {
+  test('DEFAULT delta mode is tolerant: a shifted pre-existing error is accepted', async () => {
+    const before = JSON.stringify([ruffEntry('E501', 'line too long', 5)])
+    const after = JSON.stringify([ruffEntry('E501', 'line too long', 8)])
+    const { run } = ruffRunner(before, after)
+    let rolledBack = false
+    const result = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: run,
+      applyEdit: () => {},
+      rollbackEdit: () => {
+        rolledBack = true
+      },
+    })
+    // The strict default used to reject valid edits whose PRE-EXISTING errors
+    // merely shifted lines; the default is now tolerant, so the edit is
+    // accepted and never rolled back.
+    expect(result).toEqual({ rejected: false })
+    expect(rolledBack).toBe(false)
+  })
+
+  test('strict delta mode is opt-in and still flags the shifted line', async () => {
     const before = JSON.stringify([ruffEntry('E501', 'line too long', 5)])
     const after = JSON.stringify([ruffEntry('E501', 'line too long', 8)])
     const { run } = ruffRunner(before, after)
@@ -488,8 +526,87 @@ describe('preflightDiagnosticDelta', () => {
       cwd: '/repo',
       runCommand: run,
       applyEdit: () => {},
+      deltaMode: 'strict',
     })
     expect(result.rejected).toBe(true)
+  })
+
+  test('strict delta mode is opt-in via OPENBUFF_DIAGNOSTIC_DELTA_MODE', async () => {
+    const previous = process.env[DELTA_MODE_ENV_FLAG]
+    process.env[DELTA_MODE_ENV_FLAG] = 'strict'
+    try {
+      const before = JSON.stringify([ruffEntry('E501', 'line too long', 5)])
+      const after = JSON.stringify([ruffEntry('E501', 'line too long', 8)])
+      const { run } = ruffRunner(before, after)
+      const result = await preflightDiagnosticDelta({
+        files: ['src/a.py'],
+        cwd: '/repo',
+        runCommand: run,
+        applyEdit: () => {},
+      })
+      expect(result.rejected).toBe(true)
+    } finally {
+      if (previous === undefined) delete process.env[DELTA_MODE_ENV_FLAG]
+      else process.env[DELTA_MODE_ENV_FLAG] = previous
+    }
+  })
+
+  test('a throwing applyEdit rolls back and returns a structured rejection', async () => {
+    const baseline = JSON.stringify([])
+    const { run } = ruffRunner(baseline, baseline)
+    let rolledBack = false
+    const result = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: run,
+      applyEdit: () => {
+        throw new Error('apply exploded')
+      },
+      rollbackEdit: () => {
+        rolledBack = true
+      },
+    })
+    // The edit is undone and the caller gets a structured rejection (deny by
+    // default) instead of an unhandled throw with the edit left applied.
+    expect(result).toEqual({ rejected: true, newDiagnostics: [], fixIts: [] })
+    expect(rolledBack).toBe(true)
+  })
+
+  test('a throwing applyEdit rolls back even without an explicit rollbackEdit', async () => {
+    const baseline = JSON.stringify([])
+    const { run } = ruffRunner(baseline, baseline)
+    const result = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: run,
+      applyEdit: () => {
+        throw new Error('apply exploded')
+      },
+    })
+    expect(result).toEqual({ rejected: true, newDiagnostics: [], fixIts: [] })
+  })
+
+  test('a throwing rollbackEdit does not discard the rejection result', async () => {
+    const baseline = JSON.stringify([])
+    const after = JSON.stringify([ruffEntry('F401', 'unused import', 2)])
+    const { run } = ruffRunner(baseline, after)
+    const result = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: run,
+      applyEdit: () => {},
+      rollbackEdit: () => {
+        throw new Error('rollback exploded')
+      },
+    })
+    // The new error and its fix-its still reach the caller even though the
+    // rollback itself failed; the rollback failure is logged, not thrown.
+    expect(result.rejected).toBe(true)
+    if (result.rejected) {
+      expect(result.newDiagnostics).toHaveLength(1)
+      expect(result.newDiagnostics[0].code).toBe('F401')
+      expect(result.fixIts.length).toBeGreaterThanOrEqual(0)
+    }
   })
 })
 

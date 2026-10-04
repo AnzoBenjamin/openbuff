@@ -152,8 +152,21 @@ export class CdpPipeTransport {
     // `false` return reports): writeFrame defers this frame while the pipe's
     // outbound buffer sits at or above its high-water mark and waits for
     // 'drain', so a stalled Chrome reader cannot grow Node's internal send
-    // buffer without bound. The pending timeout above still applies.
-    void this.writeFrame(payload, timeoutMs).catch(() => undefined)
+    // buffer without bound. A write failure rejects the pending entry
+    // immediately — the caller must not wait out the full timeout to learn
+    // the frame never made it onto the wire — and the catch keeps that
+    // rejection from surfacing as an unhandled rejection.
+    void this.writeFrame(payload, timeoutMs).catch((error: unknown) => {
+      const failed = this.pending.get(id)
+      if (!failed) return
+      this.pending.delete(id)
+      clearTimeout(failed.timeout)
+      failed.reject(
+        error instanceof Error
+          ? error
+          : new Error(`CDP pipe write failed for ${method}`),
+      )
+    })
     return promise
   }
 

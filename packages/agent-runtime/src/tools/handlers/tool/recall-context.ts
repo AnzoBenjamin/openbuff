@@ -4,7 +4,10 @@ import {
   recallEmptyResultMessage,
   recallFromArchiveIndexed,
 } from '../../../util/archive-recall-index'
-import { searchConsolidations } from '../../../util/context-consolidation'
+import {
+  searchConsolidations,
+  type ConsolidationHit,
+} from '../../../util/context-consolidation'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -35,10 +38,21 @@ export const handleRecallContext = (async (params: {
   // Bounded summary hits from the canary-gated background consolidator
   // (OR-ranked). Omitted entirely when none exist, so the output contract is
   // additive: consumers that ignore the field keep verbatim-only behavior.
-  const consolidations = searchConsolidations(
-    agentState.contextConsolidations,
-    toolCall.input.query,
-  )
+  // Best-effort: the handler's no-throw guarantee covers the whole recall
+  // surface, so a consolidator-search failure degrades to an empty summary
+  // list (verbatim archive results unaffected) and is logged, not thrown.
+  let consolidations: ConsolidationHit[] = []
+  try {
+    consolidations = searchConsolidations(
+      agentState.contextConsolidations,
+      toolCall.input.query,
+    )
+  } catch (error) {
+    params.logger?.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      'recall_context: consolidation search failed; degrading to verbatim-only results.',
+    )
+  }
   return {
     output: jsonToolResult({
       ...result,

@@ -159,9 +159,7 @@ describe('tool registration consistency', () => {
         collectPatterns(z.toJSONSchema(schema, { io: 'input' }))
         converted.push(name)
       } catch {
-        // A few pre-existing schemas (e.g. z.preprocess-based input like
-        // evaluate_audit_coverage) are not JSON-Schema representable at all;
-        // those conversion throws are recorded here, never asserted.
+        // Recorded so the frozen allowlist below can be compared exactly.
         unrepresentable.push(name)
       }
     }
@@ -171,6 +169,20 @@ describe('tool registration consistency', () => {
     // regress the harness back to the pre-generation 400s.
     expect(converted).toContain('write_audit_findings')
     expect(unrepresentable).not.toContain('write_audit_findings')
+
+    // FROZEN ALLOWLIST — the exact set of registered tools whose input schema
+    // is NOT representable as JSON Schema (providerInputSchema ?? inputSchema).
+    // Currently EMPTY: every registered tool — including the z.preprocess-based
+    // ones (evaluate_audit_coverage, read_files, edit_transaction,
+    // spawn_agents, find_files_matching_content, ...) — converts via
+    // z.toJSONSchema(..., { io: 'input' }), as also asserted for every
+    // published tool by the x1 golden-vector suite. Extending this list is a
+    // DELIBERATE CONTRACT CHANGE: an unrepresentable wire schema means some
+    // provider request can never carry that tool's parameters, so adding a
+    // name here requires a note in the tool's params file explaining why the
+    // wire surface is legitimately unexpressable and how callers are expected
+    // to reach the tool anyway.
+    expect([...unrepresentable].sort()).toEqual([])
 
     expect(patterns.length).toBeGreaterThan(0)
     for (const pattern of patterns) {

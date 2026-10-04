@@ -752,6 +752,82 @@ describe('index cache ownership', () => {
       'original-a\n',
     )
   })
+
+  test('refuses to load an oversized metadata.json instead of parsing it', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-overload-'),
+    )
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir, { recursive: true })
+    // Content is intentionally not valid JSON: the stat-first byte cap (the
+    // same MAX_CHUNK_SIDECAR_BYTES bound the chunk sidecar has always had)
+    // must reject the artifact before any read+JSON.parse happens.
+    await fs.promises.writeFile(
+      path.join(dir, 'metadata.json'),
+      'x'.repeat(8_000_001),
+    )
+    expect(await loadIndex(root)).toBeNull()
+  })
+
+  test('treats an oversized semantic vector cache as a safe miss', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-vectors-overload-'),
+    )
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir, { recursive: true })
+    await fs.promises.writeFile(
+      path.join(dir, 'semantic-vectors.json'),
+      'x'.repeat(8_000_001),
+    )
+    expect(await loadSemanticVectors(root, 'model')).toEqual([])
+  })
+
+  test('writes documents over the compact-write threshold with a single compact serialization', async () => {
+    // Documents whose JSON length exceeds the 1 MiB compact-write threshold
+    // skip the pretty pass entirely and are written straight from the single
+    // compact serialization, instead of materializing the pretty form and
+    // discarding it (double serialization cost). The written bytes are
+    // identical to the previous compact branch, so snapshotId fixtures and
+    // the compact-vs-pretty assertions above are unaffected.
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-huge-compact-'),
+    )
+    const hugeSample = 'x'.repeat(1_100_000)
+    await saveIndex(
+      {
+        version: '2',
+        projectRoot: root,
+        builtAt: 1,
+        fileCount: 1,
+        files: {
+          'src/huge.ts': {
+            path: 'src/huge.ts',
+            mtime: 1,
+            size: hugeSample.length,
+            hash: 'hash-huge',
+            ext: '.ts',
+            symbols: [],
+            imports: [],
+            headings: [],
+            concepts: [],
+            contentSample: hugeSample,
+          },
+        },
+        graph: { nodes: {}, edges: [] },
+      },
+      root,
+    )
+    const rawIndex = await fs.promises.readFile(
+      path.join(getIndexDir(root), 'metadata.json'),
+      'utf8',
+    )
+    // Compact serialization: no pretty-printed indentation remains.
+    expect(rawIndex.includes('\n  "')).toBe(false)
+    // Still valid, still round-trips.
+    expect((await loadIndex(root))?.files['src/huge.ts']?.hash).toBe(
+      'hash-huge',
+    )
+  })
 })
 
 describe('reclaimStaleLock', () => {

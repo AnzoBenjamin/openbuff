@@ -596,6 +596,80 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
     }
   }
 
+  /**
+   * §12.6 LRU session tracking: `sessions` is a plain Map whose insertion
+   * order IS the recency order. Re-inserting a session id on every access
+   * (delete + set) moves it to the most-recently-used end, so the FIRST key
+   * is always the least-recently-used session.
+   */
+  const touchSession = (sessionId: string): AcpSessionState | undefined => {
+    const state = sessions.get(sessionId)
+    if (state === undefined) return undefined
+    sessions.delete(sessionId)
+    sessions.set(sessionId, state)
+    return state
+  }
+
+  /**
+   * §12.6 live-session cap with LRU eviction: the cap bounds per-connection
+   * memory, so inserting beyond 16 evicts the least-recently-used session
+   * (the first Map key) instead of rejecting the insert. Eviction is
+   * best-effort cleanup consistent with the existing teardown: the victim's
+   * in-flight AbortController — if any — is aborted, exactly what `cancel`
+   * does, and the session record is dropped.
+   *
+   * An ACTIVE session (one with a prompt turn in flight) is never chosen as
+   * the victim: recency is touched on every access (prompt/cancel/load),
+   * and eviction additionally skips any session whose AbortController is
+   * still live. When EVERY live session has a turn in flight there is
+   * nothing safe to evict and the insert fails closed with the same
+   * limit_exceeded error the cap has always produced.
+   */
+  const insertSessionBounded = (
+    sessionId: string,
+    state: AcpSessionState,
+  ): void => {
+    if (!sessions.has(sessionId) && sessions.size >= MAX_LIVE_SESSIONS) {
+      let victimId: string | undefined
+      for (const candidateId of sessions.keys()) {
+        if (sessions.get(candidateId)?.abortController === null) {
+          victimId = candidateId
+          break
+        }
+      }
+      if (victimId === undefined) {
+        throw makeLimitExceeded(
+          `ACP server holds at most ${MAX_LIVE_SESSIONS} live sessions and every one has a turn in flight.`,
+        )
+      }
+      // Best-effort teardown of the evicted session, consistent with what
+      // `cancel` does for an in-flight turn.
+      sessions.get(victimId)?.abortController?.abort()
+      sessions.delete(victimId)
+    }
+    // Re-inserting (delete + set) refreshes LRU recency for re-loads.
+    sessions.delete(sessionId)
+    sessions.set(sessionId, state)
+  }
+
+  // SEC: ext methods carry a client-supplied sessionId, so the store-serving
+  // paths must only answer for sessions THIS connection created
+  // (newSession) or restored (loadSession). The private `sessions` map is
+  // per-connection by construction and IS the per-connection session-id
+  // registry the ext dispatcher checks against.
+  const assertOwnedSession = (sessionId: string): void => {
+    if (!sessions.has(sessionId)) {
+      throw RequestError.invalidParams(
+        { sessionId },
+        `Unknown ACP session id '${sessionId}' for this connection.`,
+      )
+    }
+  }
+  const sessionIdOf = (data: unknown): string => {
+    const sessionId = (data as { sessionId?: unknown } | null)?.sessionId
+    return typeof sessionId === 'string' ? sessionId : ''
+  }
+
   return {
     initialize(params: InitializeRequest): InitializeResponse {
       negotiatedExt = negotiateOpenbuffExt(params)
@@ -667,11 +741,6 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         // half-loading the session.
         throw RequestError.methodNotFound('session/load')
       }
-      if (sessions.size >= MAX_LIVE_SESSIONS && !sessions.has(params.sessionId)) {
-        throw makeLimitExceeded(
-          `ACP server holds at most ${MAX_LIVE_SESSIONS} live sessions.`,
-        )
-      }
       // SEC-7 (§12.5 Reload): the client-supplied cwd must resolve inside the
       // project root AND match the session's recorded project root — a loaded
       // session must never silently re-point to a different root.
@@ -684,11 +753,14 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         )
       }
       // Register in the same private map newSession uses so subsequent
-      // prompt/cancel calls work against the loaded session id.
-      sessions.set(params.sessionId, {
+      // prompt/cancel calls work against the loaded session id. The bounded
+      // insert also refreshes the §12.6 LRU recency of the reloaded session,
+      // and a still-live in-flight turn keeps its controller so the
+      // concurrent-prompt guard in `prompt` stays honest.
+      insertSessionBounded(params.sessionId, {
         cwd: resolvedCwd,
         mcpServers: params.mcpServers,
-        abortController: null,
+        abortController: existing?.abortController ?? null,
       })
       await options.loadHandler({ sessionId: params.sessionId })
       // §4.1 (GV-26): replay the persisted chat history as sanitized
@@ -731,17 +803,12 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
     async newSession(
       params: NewSessionRequest,
     ): Promise<NewSessionResponse> {
-      if (sessions.size >= MAX_LIVE_SESSIONS) {
-        throw makeLimitExceeded(
-          `ACP server holds at most ${MAX_LIVE_SESSIONS} live sessions.`,
-        )
-      }
       // SEC-7 (§12.5): validate cwd containment and the additionalDirectories
       // allowlist BEFORE any session record is created.
       const resolvedCwd = rejectUncontainedCwd(params.cwd)
       rejectUnallowedAdditionalDirectories(params.additionalDirectories)
       const sessionId = randomUUID()
-      sessions.set(sessionId, {
+      insertSessionBounded(sessionId, {
         cwd: resolvedCwd,
         mcpServers: params.mcpServers,
         abortController: null,
@@ -767,7 +834,9 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
     },
 
     async prompt(params: PromptRequest): Promise<PromptResponse> {
-      const session = sessions.get(params.sessionId)
+      // Touch LRU recency first: an actively-prompted session is the
+      // most-recently-used one and can never be the §12.6 eviction victim.
+      const session = touchSession(params.sessionId)
       if (!session) {
         // A real JSON-RPC invalid-params error (not a bare Error) so clients
         // see a protocol-appropriate failure for an unknown session id.
@@ -776,11 +845,28 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
           `Unknown ACP session id '${params.sessionId}'.`,
         )
       }
+      // One prompt turn per session at a time: the previous behavior silently
+      // REPLACED the in-flight AbortController here, which left the first
+      // turn uncancellable (its cancel signal was dropped on the floor).
+      // Fail closed instead: a concurrent prompt on the same session is
+      // rejected with the protocol's invalid-params error (carrying an
+      // `openbuff.dev` `session_busy` conflict marker in the data) and may
+      // be retried once the in-flight turn settles.
+      if (session.abortController !== null) {
+        throw RequestError.invalidParams(
+          {
+            sessionId: params.sessionId,
+            [OPENBUFF_ACP_NS]: { code: 'session_busy' },
+          },
+          `A prompt turn is already in flight for ACP session '${params.sessionId}'.`,
+        )
+      }
       // §12.6: prompt-total and per-image limits, enforced before any handler
       // runs so an oversized turn never reaches the core.
       enforcePromptLimits(params.prompt)
       // One AbortController per prompt turn: `cancel` aborts the turn in
-      // flight, and the next prompt replaces the controller.
+      // flight, and the controller is released when the turn settles so a
+      // subsequent prompt is accepted again.
       const abortController = new AbortController()
       session.abortController = abortController
       // The baseline contract here only needs text: concatenate the
@@ -789,35 +875,46 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       const promptText = params.prompt
         .flatMap((block) => (block.type === 'text' ? [block.text] : []))
         .join('')
-      const result = await options.promptHandler({
-        sessionId: params.sessionId,
-        promptText,
-        mcpServers: session.mcpServers,
-        reverseRequests,
-        clientCapabilities,
-        eventsExtensionEnabled: negotiatedExt?.extensions.includes('events')
-          ? true
-          : undefined,
-        onReverseRequest,
-        onCancelRequest,
-        update: async (chunkText) => {
-          await options.connection.sessionUpdate({
-            sessionId: params.sessionId,
-            update: {
-              sessionUpdate: 'agent_message_chunk',
-              content: { type: 'text', text: chunkText },
-            },
-          })
-        },
-        signal: abortController.signal,
-      })
-      return { stopReason: result.stopReason }
+      try {
+        const result = await options.promptHandler({
+          sessionId: params.sessionId,
+          promptText,
+          mcpServers: session.mcpServers,
+          reverseRequests,
+          clientCapabilities,
+          eventsExtensionEnabled: negotiatedExt?.extensions.includes('events')
+            ? true
+            : undefined,
+          onReverseRequest,
+          onCancelRequest,
+          update: async (chunkText) => {
+            await options.connection.sessionUpdate({
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: chunkText },
+              },
+            })
+          },
+          signal: abortController.signal,
+        })
+        return { stopReason: result.stopReason }
+      } finally {
+        // The turn settled (finished, errored, or was cancelled): release the
+        // controller so the session accepts its next prompt. Only this
+        // turn's own controller is cleared.
+        if (session.abortController === abortController) {
+          session.abortController = null
+        }
+      }
     },
 
     cancel(params: CancelNotification): void {
       // Notifications carry no response, so an unknown session id is a no-op
-      // here rather than an error surface.
-      sessions.get(params.sessionId)?.abortController?.abort()
+      // here rather than an error surface. Recency is touched on cancel too,
+      // so an actively-driven session never looks stale to §12.6 LRU
+      // eviction.
+      touchSession(params.sessionId)?.abortController?.abort()
     },
 
     async extMethod(
@@ -863,6 +960,12 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
             )
           }
           return result as Record<string, unknown>
+        }
+        // The live store serves per-session data, so the requested sessionId
+        // must belong to THIS connection (an injected extensionHandler above
+        // is a bridge/test seam and stays ungated).
+        if (options.sessionData) {
+          assertOwnedSession(sessionIdOf(parsed.data))
         }
         return dispatchExtV1Method(
           known,
@@ -915,10 +1018,12 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
           sessionId: string
           limit?: number
         }
+        assertOwnedSession(sessionId)
         return options.sessionData.getReceipts(sessionId, limit)
       }
       if (options.sessionData && method === 'openbuff/gateState') {
         const { sessionId } = parsed.data as { sessionId: string }
+        assertOwnedSession(sessionId)
         return options.sessionData.getGateState(sessionId)
       }
       // 'openbuff/askUser' (and any other method with no store fallback)
@@ -1101,7 +1206,9 @@ export function serveAcpOverStdio(
  * §12.6 inbound guard: wraps the NDJSON byte stream so a single line longer
  * than `maxBytes` errors the readable (which the SDK surfaces as a connection
  * close) instead of letting the SDK's uncapped `LineBuffer` accumulate it.
- * Newline bytes are not counted, matching the SDK's line semantics. On a
+ * The limit applies per LINE: the byte counter accumulates non-newline bytes
+ * and resets at every newline, so one chunk carrying several sub-limit lines
+ * can never close a legitimate connection by chunk+line accumulation. On a
  * breach the underlying input is cancelled (no further bytes are read) and
  * `onLimitExceeded` fires BEFORE the readable errors, so the host can tear
  * down the outbound direction too and a peer with a request in flight
@@ -1124,30 +1231,28 @@ export function limitNdJsonLineBytes(
           return
         }
         if (!value) continue
-        let chunkCost = 0
+        // The limit applies per LINE, not per chunk: the counter accumulates
+        // non-newline bytes and resets at EVERY newline, so a chunk that
+        // carries several lines is accounted line-by-line and legitimate
+        // sub-limit lines can never trip the guard by accumulation.
         for (const byte of value) {
-          if (byte !== 0x0a) chunkCost += 1
-        }
-        if (currentLineBytes + chunkCost > maxBytes) {
-          // Tear down BOTH directions: the readable error closes the agent
-          // side, and the callback lets the host end the outbound side.
-          onLimitExceeded?.()
-          void reader.cancel().catch(() => {})
-          controller.error(
-            new Error(
-              `ACP inbound NDJSON frame exceeds the ${maxBytes}-byte limit; closing connection.`,
-            ),
-          )
-          return
-        }
-        currentLineBytes += chunkCost
-        if (value.includes(0x0a)) {
-          // A chunk can hold several lines; reset per-line accounting on the
-          // last newline boundary. Counting whole chunks against one line is
-          // conservative and bounded (a chunk straddling two lines over-counts
-          // the second by at most the first line's tail), which is acceptable
-          // for a hard limit whose only purpose is to cap a runaway peer.
-          currentLineBytes = 0
+          if (byte === 0x0a) {
+            currentLineBytes = 0
+            continue
+          }
+          currentLineBytes += 1
+          if (currentLineBytes > maxBytes) {
+            // Tear down BOTH directions: the readable error closes the agent
+            // side, and the callback lets the host end the outbound side.
+            onLimitExceeded?.()
+            void reader.cancel().catch(() => {})
+            controller.error(
+              new Error(
+                `ACP inbound NDJSON line exceeds the ${maxBytes}-byte limit; closing connection.`,
+              ),
+            )
+            return
+          }
         }
         controller.enqueue(value)
         return

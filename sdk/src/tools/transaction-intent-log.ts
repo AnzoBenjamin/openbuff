@@ -40,16 +40,27 @@
  *
  * Invariants:
  * - only before-images are stored (never after-bytes), and no cap.v3 secrets:
- *   paths, hashes and pre-images only.
- * - every append is tmp+rename atomic and fsynced: the tmp file's data is
- *   fsynced before the rename and the containing directory is fsynced after
- *   (best effort, on platforms that support directory fsync), so the durable
- *   pre-image survives power loss and not just process crashes; a crash
- *   mid-append leaves the previous log intact.
+ *   paths, hashes and pre-images only. RESIDUAL PLAINTEXT RISK: the recorded
+ *   pre-images ARE the plaintext bytes of user files, persisted unencrypted
+ *   in the state dir. The log and every artifact file around it (tmp file,
+ *   lock file, liveness-token file) are therefore written with mode 0o600 so
+ *   only the owning user can read them — but any process running as that
+ *   user can still read the pre-images, so the state dir must never be
+ *   shared or world-readable.
+ * - appends are APPEND-ONLY JSONL writes: each event line is appended to the
+ *   existing log (opened with the 'a' flag) and fsynced before the append is
+ *   reported durable; when the append creates the log file, the containing
+ *   directory is fsynced best-effort too. A crash mid-append can tear the
+ *   final line; the next append first closes the torn line off with a
+ *   newline so the reader skips the fragment instead of concatenating it
+ *   onto (and dropping) the new event. The whole-file read-rewrite
+ *   (tmp+rename, tmp fsynced before the rename and the directory fsynced
+ *   after) is reserved for the bounded trim, so a plain append costs one
+ *   line write instead of a full-file rewrite per event.
  * - appends are serialized by an exclusive-create lock file next to the log,
  *   so concurrent appenders (a parallel changeFiles transaction, or a second
- *   openbuff process sharing the harness state dir) can never interleave the
- *   read-rewrite and silently drop another transaction's tx_begin or
+ *   openbuff process sharing the harness state dir) can never interleave an
+ *   append or trim and silently drop another transaction's tx_begin or
  *   tx_commit/tx_abort line; the lock file records its holder's process id
  *   AND that process instance's liveness token, so a lock whose holder is
  *   PROVABLY DEAD is broken immediately, a lock whose recorded pid was
@@ -58,12 +69,21 @@
  *   later append, and a lock with no parsable holder identity is broken once
  *   stale — a LIVE holder's lock is never broken by a waiter (waiting callers
  *   fail with a structured timeout error instead), so a crash can never
- *   permanently wedge the log.
+ *   permanently wedge the log. Before breaking, the waiter re-reads the lock
+ *   file and unlinks only when the recorded pid AND instance token still
+ *   match what it observed at break-decision time, so a lock that was
+ *   released and re-acquired by a fresh holder in between is never deleted
+ *   (which would allow dual writers).
  * - the file is bounded: at most MAX_TRANSACTIONS transactions and MAX_BYTES
- *   total, oldest transactions dropped first. An appended event that cannot
- *   fit the byte cap is REJECTED (ok:false), never silently dropped: dropping
- *   a just-appended tx_begin while reporting success would leave the durable
- *   pre-image unwritten while the commit path believes it exists.
+ *   total, oldest DROPPABLE transactions dropped first — a transaction whose
+ *   tx_begin is present but whose terminal tx_commit/tx_abort has not been
+ *   seen is NEVER evicted, even when it is the oldest, because it may be a
+ *   live sibling's mid-commit transaction whose durable pre-image must
+ *   survive. An appended event that still cannot fit the caps after every
+ *   droppable transaction was dropped is REJECTED (ok:false), never silently
+ *   dropped: dropping a just-appended tx_begin while reporting success would
+ *   leave the durable pre-image unwritten while the commit path believes it
+ *   exists.
  * - corrupted lines are tolerated (skipped) on read.
  * - no ambient process.env reads: the state dir is injected.
  * - every operation is a never-reject helper returning a structured outcome;
@@ -301,10 +321,27 @@ function measuredBytes(groups: readonly TransactionIntentEvent[][]): number {
 }
 
 /**
+ * Whether a transaction group has seen its terminal event. A group whose
+ * events are still only its tx_begin is UNRESOLVED: its owner may be a live
+ * sibling mid multi-file commit, so its durable pre-image must survive every
+ * trim even when the group is the oldest in the log.
+ */
+function isFinishedTransactionGroup(
+  group: readonly TransactionIntentEvent[],
+): boolean {
+  return group.some((event) => event.kind !== 'tx_begin')
+}
+
+/**
  * Bounded-file policy: drop the OLDEST transactions first until the log fits
- * both the transaction-count cap and the byte cap. Returns the SURVIVING
- * groups (not pre-serialized lines) so appendEvent can tell whether the
- * just-appended event survived the trim.
+ * both the transaction-count cap and the byte cap — but only transactions
+ * that already saw their terminal commit/abort are droppable. An unresolved
+ * transaction (tx_begin with no terminal event) is never evicted, even when
+ * it is the oldest: dropping it would destroy a possibly live transaction's
+ * durable pre-image. Returns the SURVIVING groups; the LAST group (the
+ * just-appended event) is never dropped here, so if the result still exceeds
+ * the caps because nothing droppable remains, the caller rejects the append
+ * with a structured outcome instead of writing anything.
  */
 function boundTransactionGroups(
   groups: readonly TransactionIntentEvent[][],
@@ -313,10 +350,14 @@ function boundTransactionGroups(
 ): TransactionIntentEvent[][] {
   const bounded = [...groups]
   while (
-    bounded.length > 0 &&
+    bounded.length > 1 &&
     (bounded.length > maxTransactions || measuredBytes(bounded) > maxBytes)
   ) {
-    bounded.shift()
+    const droppableIndex = bounded
+      .slice(0, -1)
+      .findIndex(isFinishedTransactionGroup)
+    if (droppableIndex === -1) break
+    bounded.splice(droppableIndex, 1)
   }
   return bounded
 }
@@ -368,6 +409,31 @@ async function readIntentLogLockHolder(
 }
 
 /**
+ * Re-verifies, immediately before a break unlink, that the lock file is
+ * still the SAME lock that was observed at break-decision time: the recorded
+ * pid AND instance token must still match. A lock that was released and
+ * re-acquired by a fresh holder in between — the pid-recycle race — does not
+ * match and is left alone, because unlinking it would delete a fresh
+ * holder's lock and allow dual writers. A lock that vanished entirely needs
+ * no unlink either; the waiter's next exclusive-create retry simply
+ * proceeds. Residual window: a fresh holder that re-created the lock but has
+ * not yet written its identity is indistinguishable from the observed
+ * identity-less lock; the waiter's next retry re-evaluates it once its
+ * identity is parsable, and the timeout path handles any genuinely stale
+ * leftover.
+ */
+async function confirmLockIdentity(
+  lockPath: string,
+  observed: IntentLogLockHolder | undefined,
+): Promise<boolean> {
+  const current = await readIntentLogLockHolder(lockPath)
+  if (observed === undefined || current === undefined) {
+    return observed === undefined && current === undefined
+  }
+  return current.pid === observed.pid && current.token === observed.token
+}
+
+/**
  * Seam parameters the lock needs to tell a LIVE holder from a RECYCLED pid
  * occupying its slot: the holder identity to record, and the instance-token
  * publication/read seams shared with the recovery liveness guard.
@@ -382,7 +448,7 @@ type IntentLogLockSeams = {
 }
 
 /**
- * Cross-process mutual exclusion for the whole-file read-rewrite append. The
+ * Cross-process mutual exclusion for intent-log appends and trims. The
  * lock is an exclusive-create (O_EXCL) sentinel file next to the log: atomic
  * on every supported filesystem, with no native flock dependency. The holder
  * records `<pid> <instance-token>` in the file — and publishes its
@@ -402,19 +468,26 @@ type IntentLogLockSeams = {
  * outlives TRANSACTION_INTENT_LOG_LOCK_TIMEOUT_MS throws so appendEvent can
  * surface a structured ok:false instead of racing another writer and
  * dropping its event.
+ * BREAK CONFIRMATION: even after deciding to break, the waiter re-reads the
+ * lock file (see confirmLockIdentity) and unlinks ONLY when the recorded pid
+ * AND instance token still match what it observed at decision time — a lock
+ * that was released and re-acquired by a fresh holder in between is left
+ * intact, because unlinking it would let two writers run concurrently.
  */
 const withIntentLogLock = async <T>(
   lockPath: string,
   operation: () => Promise<T>,
   seams: IntentLogLockSeams,
   timeoutMs: number = TRANSACTION_INTENT_LOG_LOCK_TIMEOUT_MS,
+  confirmDelayMs: number = 0,
 ): Promise<T> => {
   await mkdir(path.dirname(lockPath), { recursive: true })
   const deadline = Date.now() + timeoutMs
   for (;;) {
     let handle: FileHandle
     try {
-      handle = await open(lockPath, 'wx')
+      // 0o600: artifact files in the shared state dir stay owner-only.
+      handle = await open(lockPath, 'wx', 0o600)
     } catch (error) {
       const code =
         typeof error === 'object' && error !== null && 'code' in error
@@ -449,7 +522,21 @@ const withIntentLogLock = async <T>(
                   // different process; break instead of wedging forever.
                   (await seams.readOwnerToken(holder.pid)) !== holder.token
         if (breakLock) {
-          await unlink(lockPath).catch(() => undefined)
+          // Widen the decision→confirmation window on demand (test seam) so
+          // tests can model a fresh holder acquiring the lock in between.
+          if (confirmDelayMs > 0) await sleep(confirmDelayMs)
+          // IDENTITY CONFIRMATION: the lock may have been released and
+          // re-acquired by a DIFFERENT holder between the observation above
+          // and this unlink (pid recycle, or a fresh process). Deleting
+          // without re-verifying would remove the fresh holder's lock and
+          // allow dual writers, so only unlink when the recorded pid AND
+          // instance token still match what was observed at break-decision
+          // time. Anything else is left alone: the timeout path handles a
+          // genuinely stale leftover, and a vanished lock needs no unlink.
+          const confirmed = await confirmLockIdentity(lockPath, holder)
+          if (confirmed) {
+            await unlink(lockPath).catch(() => undefined)
+          }
         }
       } catch {
         // The lock vanished between the failed create and the stat: retry.
@@ -516,6 +603,12 @@ export function createTransactionIntentLog(params: {
   ownerToken?: string
   /** Lock-wait budget override (tests shrink it instead of waiting 5s). */
   lockTimeoutMs?: number
+  /**
+   * Test seam: delay between a lock breaker's break decision and its
+   * re-verification of the lock identity, widening the race window so tests
+   * can replace the lock file with a fresh holder's in between.
+   */
+  lockBreakConfirmDelayMs?: number
 }): TransactionIntentLog {
   const fileName = params.fileName ?? 'transaction-intents.jsonl'
   const filePath = path.join(params.stateDir, fileName)
@@ -555,7 +648,11 @@ export function createTransactionIntentLog(params: {
    */
   const publishOwnerToken = async (): Promise<void> => {
     try {
-      await writeFile(ownerTokenFilePath(ownerPid), `${ownerToken}\n`, 'utf8')
+      // 0o600: identity artifacts in the shared state dir stay owner-only.
+      await writeFile(ownerTokenFilePath(ownerPid), `${ownerToken}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      })
     } catch {
       // Best-effort identity publication; see above.
     }
@@ -591,6 +688,86 @@ export function createTransactionIntentLog(params: {
     return events
   }
 
+  /**
+   * Best-effort directory fsync: on many filesystems a rename — or a newly
+   * created file's directory entry — is not durable until the containing
+   * directory is flushed. Platforms that reject fsync on a directory handle
+   * (e.g. Windows) degrade to file-level durability and must not fail the
+   * append.
+   */
+  const fsyncDirectoryBestEffort = async (): Promise<void> => {
+    try {
+      const dirHandle = await open(params.stateDir, 'r')
+      try {
+        await dirHandle.sync()
+      } finally {
+        await dirHandle.close().catch(() => undefined)
+      }
+    } catch {
+      // Directory fsync unsupported here: file-level durability stands.
+    }
+  }
+
+  /**
+   * Append-only write of ONE event line: open the log with the 'a' flag,
+   * write the line, and fsync it before reporting the append durable. The
+   * whole-file rewrite is reserved for the bounded trim — rewriting (and
+   * re-fsyncing) the entire log on every append costs O(n^2) cumulative
+   * under the 8 MiB cap. A crash mid-append can tear the final line; the
+   * next append closes the torn line off with a newline first so the reader
+   * skips the fragment instead of concatenating it onto (and thereby
+   * dropping) the new event. When this append creates the log file, the
+   * containing directory is fsynced best-effort so the new directory entry
+   * survives a power cycle too.
+   */
+  const appendEventLine = async (line: string): Promise<void> => {
+    let previousSize = 0
+    let created = false
+    try {
+      previousSize = (await stat(filePath)).size
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error as { code?: unknown }).code === 'ENOENT'
+      ) {
+        created = true
+      } else {
+        throw error
+      }
+    }
+    // 0o600: the log carries plaintext pre-images of user files (see the
+    // module header's residual-risk note).
+    const handle = await open(filePath, 'a', 0o600)
+    try {
+      if (previousSize > 0) {
+        const tail = Buffer.alloc(1)
+        const readHandle = await open(filePath, 'r')
+        try {
+          const { bytesRead } = await readHandle.read(
+            tail,
+            0,
+            1,
+            previousSize - 1,
+          )
+          if (bytesRead === 1 && tail[0] !== 0x0a) {
+            await handle.write('\n', 0, 'utf8')
+          }
+        } finally {
+          await readHandle.close().catch(() => undefined)
+        }
+      }
+      await handle.write(`${line}\n`, 0, 'utf8')
+      await handle.sync()
+    } finally {
+      await handle.close().catch(() => undefined)
+    }
+    if (created) {
+      await fsyncDirectoryBestEffort()
+    }
+  }
+
   const writeAtomic = async (content: string): Promise<void> => {
     const tmpPath = path.join(
       params.stateDir,
@@ -602,7 +779,9 @@ export function createTransactionIntentLog(params: {
       // file's data blocks, a power loss (not just a process crash) can leave
       // the renamed log zero-length or truncated and destroy the durable
       // pre-image a half-applied transaction needs to be recovered.
-      const handle = await open(tmpPath, 'w')
+      // 0o600: the tmp file becomes the log on rename, and the log carries
+      // plaintext pre-images of user files (see the module header).
+      const handle = await open(tmpPath, 'w', 0o600)
       try {
         await handle.write(content, 0, 'utf8')
         await handle.sync()
@@ -613,19 +792,8 @@ export function createTransactionIntentLog(params: {
       // Best-effort directory fsync AFTER the rename: on many filesystems
       // the rename itself is not durable until the containing directory is
       // flushed, so a power cycle could otherwise lose the just-appended
-      // tx_begin while the caller was told it persisted. Platforms that
-      // reject fsync on a directory handle (e.g. Windows) degrade to
-      // file-level durability and must not fail the append.
-      try {
-        const dirHandle = await open(params.stateDir, 'r')
-        try {
-          await dirHandle.sync()
-        } finally {
-          await dirHandle.close().catch(() => undefined)
-        }
-      } catch {
-        // Directory fsync unsupported here: file-level durability stands.
-      }
+      // tx_begin while the caller was told it persisted.
+      await fsyncDirectoryBestEffort()
     } catch (error) {
       await unlink(tmpPath).catch(() => undefined)
       throw error
@@ -636,44 +804,72 @@ export function createTransactionIntentLog(params: {
     event: TransactionIntentEvent,
   ): Promise<IntentOutcome> => {
     try {
-      // The whole-file read-rewrite is serialized behind an exclusive-create
-      // lock: a concurrent appender (a parallel changeFiles transaction, or a
-      // second openbuff process sharing the harness state dir) must never
-      // interleave its read with another writer's rename, or one transaction's
-      // tx_begin / tx_commit / tx_abort line is silently dropped. A lost
-      // tx_begin leaves a half-applied transaction unrecoverable; a lost
-      // terminal marker makes startup recovery revert already-committed user
-      // changes.
+      // The append (and any trim it triggers) is serialized behind an
+      // exclusive-create lock: a concurrent appender (a parallel changeFiles
+      // transaction, or a second openbuff process sharing the harness state
+      // dir) must never interleave its read of the log with another writer's
+      // append or rename, or one transaction's tx_begin / tx_commit /
+      // tx_abort line is silently dropped. A lost tx_begin leaves a
+      // half-applied transaction unrecoverable; a lost terminal marker makes
+      // startup recovery revert already-committed user changes.
       return await withIntentLogLock(
         `${filePath}.lock`,
         async () => {
-        const existing = await readEvents()
-        const appendedGroup: TransactionIntentEvent[] = [event]
-        const groups = [...groupTransactionEvents(existing), appendedGroup]
-        const bounded = boundTransactionGroups(groups, maxTransactions, maxBytes)
-        // The trim drops OLDEST groups first, so the just-appended event
-        // survives unless it alone cannot fit the byte cap. Dropping it while
-        // reporting ok:true would leave the durable tx_begin unwritten while
-        // the commit path proceeds believing a durable pre-image exists (and
-        // startup recovery would find no intent for a half-applied
-        // transaction), so an oversized event is a structured failure and the
-        // log is left byte-identical: existing recoverable transactions are
-        // never destroyed to make room for an event that cannot be persisted.
-        if (
-          bounded.length === 0 ||
-          bounded[bounded.length - 1] !== appendedGroup
-        ) {
-          return {
-            ok: false,
-            error: `transaction intent event for ${event.transactionId} exceeds the ${maxBytes}-byte intent-log cap; the log was left unchanged`,
+          const existing = await readEvents()
+          const appendedGroup: TransactionIntentEvent[] = [event]
+          const candidate = [
+            ...groupTransactionEvents(existing),
+            appendedGroup,
+          ]
+          // Drop whatever the caps require — but never an unresolved
+          // transaction, whose durable pre-image a live sibling may still
+          // need (see boundTransactionGroups).
+          const bounded = boundTransactionGroups(
+            candidate,
+            maxTransactions,
+            maxBytes,
+          )
+          // Whatever the trim could not drop (unresolved transactions are
+          // protected) can leave the candidate over the caps. The append is
+          // then a structured failure and the log is left byte-identical:
+          // reporting ok:true with the event unwritten would leave the
+          // commit path believing a durable pre-image exists (and startup
+          // recovery would find no intent for a half-applied transaction),
+          // and existing recoverable transactions are never destroyed to
+          // make room for an event that cannot be persisted.
+          if (
+            bounded.length > maxTransactions ||
+            measuredBytes(bounded) > maxBytes
+          ) {
+            return {
+              ok: false,
+              error: `transaction intent event for ${event.transactionId} exceeds the ${maxBytes}-byte intent-log cap (max ${maxTransactions} transactions); the log was left unchanged`,
+            }
           }
-        }
-        const lines = bounded
-          .flat()
-          .map((surviving) => JSON.stringify(surviving))
-        await mkdir(params.stateDir, { recursive: true })
-        await writeAtomic(`${lines.join('\n')}\n`)
-        return { ok: true }
+          await mkdir(params.stateDir, { recursive: true })
+          const candidateLines = candidate.reduce(
+            (total, group) => total + group.length,
+            0,
+          )
+          const boundedLines = bounded.reduce(
+            (total, group) => total + group.length,
+            0,
+          )
+          if (boundedLines === candidateLines) {
+            // Nothing was trimmed: the common path is an append-only JSONL
+            // write of exactly one line. Rewriting (and re-fsyncing) the
+            // whole log on every append would cost O(n^2) cumulative under
+            // the 8 MiB cap.
+            await appendEventLine(JSON.stringify(event))
+          } else {
+            // The trim rewrote the surviving events; the just-appended event
+            // lands in that atomic tmp+rename rewrite.
+            const lines = bounded
+              .flat()
+              .map((surviving) => JSON.stringify(surviving))
+            await writeAtomic(`${lines.join('\n')}\n`)
+          }
+          return { ok: true }
         },
         {
           ownerPid,
@@ -682,6 +878,7 @@ export function createTransactionIntentLog(params: {
           readOwnerToken: readOwnerTokenFile,
         },
         params.lockTimeoutMs,
+        params.lockBreakConfirmDelayMs,
       )
     } catch (error) {
       return {

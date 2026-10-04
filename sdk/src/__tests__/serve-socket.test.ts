@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { connect } from 'node:net'
 import type { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -311,6 +311,15 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
     await waitFor(() => failures.includes('auth-line-too-long'), 2_000)
     await waitFor(() => closed, 2_000)
     expect(failures).toEqual(['auth-line-too-long'])
+  })
+
+  test('the socket inode is already 0o600 when serveAcpOverSocket returns (no bind→chmod window)', () => {
+    const socketPath = join(dir, 'early-perm.sock')
+    startServer({ socketPath, token: 'token' })
+    // serveAcpOverSocket binds synchronously inside listen() and chmods
+    // BEFORE returning, so no same-uid peer can observe a connectable socket
+    // with a looser mode in the bind→chmod window.
+    expect(statSync(socketPath).mode & 0o777).toBe(0o600)
   })
 
   test('assertSocketDirSafe rejects a group/other-writable parent dir', () => {

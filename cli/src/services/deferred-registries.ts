@@ -19,6 +19,13 @@ import { initializeSkillRegistry } from '../utils/skill-registry'
  */
 
 let registriesPromise: Promise<void> | null = null
+// The options the current (possibly in-flight) load was started with; kept so
+// `awaitRegistriesReady` can warn when a caller's options would otherwise be
+// silently dropped, and so `resetDeferredRegistryLoads` can clear them.
+let pendingLoadOptions: {
+  shouldLoadAgents: boolean
+  effectiveTrust: boolean
+} | null = null
 
 export function startDeferredRegistryLoads(options: {
   shouldLoadAgents: boolean
@@ -28,6 +35,7 @@ export function startDeferredRegistryLoads(options: {
     return
   }
   const { shouldLoadAgents, effectiveTrust } = options
+  pendingLoadOptions = { shouldLoadAgents, effectiveTrust }
   registriesPromise = (async () => {
     // When --agent is provided, skip local .agents to avoid overrides.
     if (shouldLoadAgents) {
@@ -37,6 +45,21 @@ export function startDeferredRegistryLoads(options: {
   })().catch((error) => {
     logger.warn({ error }, 'Deferred agent/skill registry load failed')
   })
+}
+
+/**
+ * Drops the deferred registry loads (completed or in flight) so the next
+ * `startDeferredRegistryLoads` / `awaitRegistriesReady` starts a fresh load.
+ * Called when the project context switches: an in-flight load was kicked off
+ * with the PREVIOUS project's trust decision, so letting it satisfy later
+ * `whenRegistriesReady()` consumers would resolve stale/foreign trust
+ * decisions for the new project. The in-flight promise itself is not
+ * cancelled — the underlying initializers are fail-safe (see the module
+ * docstring above) — it simply no longer gates consumers.
+ */
+export function resetDeferredRegistryLoads(): void {
+  registriesPromise = null
+  pendingLoadOptions = null
 }
 
 /**
@@ -56,6 +79,9 @@ export const whenRegistriesReady = (): Promise<void> =>
  * them. When `startDeferredRegistryLoads` has not been called yet (the
  * command dispatches before the renderer path starts the loads), this starts
  * the loads and awaits them; otherwise it awaits the already-running loads.
+ * When a load is already running with different options, those options are
+ * dropped with a warning (use `resetDeferredRegistryLoads` — e.g. on a
+ * project switch — to make re-initialization with the new options possible).
  * The returned promise never rejects (the loads are fail-safe; see the
  * module docstring above).
  */
@@ -65,6 +91,18 @@ export async function awaitRegistriesReady(options: {
 }): Promise<void> {
   if (!registriesPromise) {
     startDeferredRegistryLoads(options)
+  } else if (
+    pendingLoadOptions &&
+    (pendingLoadOptions.shouldLoadAgents !== options.shouldLoadAgents ||
+      pendingLoadOptions.effectiveTrust !== options.effectiveTrust)
+  ) {
+    // An in-flight load was started with different options (e.g. a different
+    // trust decision, or a different shouldLoadAgents override). The caller's
+    // options cannot apply to it — warn instead of silently dropping them.
+    logger.warn(
+      { droppedOptions: options, inFlightOptions: pendingLoadOptions },
+      'Deferred registry load already in flight with different options; the new options are dropped',
+    )
   }
   await registriesPromise
 }

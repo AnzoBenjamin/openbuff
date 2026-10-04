@@ -4,6 +4,7 @@ import {
   buildOsc9Notification,
   buildOsc777Notification,
   notifyTerminal,
+  sanitizeOscText,
   terminalSupportsOscNotify,
 } from '../terminal-notify'
 
@@ -87,6 +88,48 @@ describe('terminal-notify (P1-T7)', () => {
           },
         ),
       ).not.toThrow()
+    })
+
+    test('sanitizes untrusted body text before emission (SEC)', () => {
+      // The approval-needed body carries untrusted text (request.target);
+      // an embedded ESC ... BEL must never forge a second escape sequence.
+      const writes: string[] = []
+      notifyTerminal(
+        { body: 'approval needed for \x1b]9;rm -rf /\x07' },
+        { write: (s) => writes.push(s), env: { TERM_PROGRAM: 'iTerm.app' } },
+      )
+      expect(writes).toEqual([
+        '\x1b]9;approval needed for ]9;rm -rf /\x07',
+      ])
+    })
+  })
+
+  describe('sanitizeOscText (SEC: OSC injection defense)', () => {
+    test('drops ESC, BEL, and other C0/C1 control characters', () => {
+      expect(sanitizeOscText('a\x1bb\x07c\x00d\x7fe\u009f')).toBe('abcde')
+    })
+
+    test('drops bidi and zero-width characters', () => {
+      // U+202E (RLO), U+200C/200D (zero-width), U+2060, U+FEFF, U+2067 (isolate).
+      expect(
+        sanitizeOscText('a\u202eb\u200cc\u200dd\u2060e\ufefff\u2067'),
+      ).toBe('abcdef')
+    })
+
+    test('keeps ordinary text unchanged', () => {
+      expect(sanitizeOscText('plain text ✓')).toBe('plain text ✓')
+    })
+
+    test('buildOsc9Notification neutralizes an injected OSC body', () => {
+      expect(buildOsc9Notification('\x1b]9;pwned\x07')).toBe(
+        '\x1b]9;]9;pwned\x07',
+      )
+    })
+
+    test('buildOsc777Notification sanitizes both title and body', () => {
+      expect(buildOsc777Notification('\u202Eevil', 'body\x1b]0;x')).toBe(
+        '\x1b]777;notify;evil;body]0;x\x07',
+      )
     })
   })
 })

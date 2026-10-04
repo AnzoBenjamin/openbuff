@@ -66,15 +66,36 @@ describe('runHeadlessCommand', () => {
 
     expect(code).toBe(0)
     // stdout carries ONLY ndjson: exactly one JSON.stringify(event) + '\n'
-    // line per event, and each line round-trips through JSON.parse.
-    expect(h.stdoutChunks).toEqual(
-      events.map((event) => JSON.stringify(event) + '\n'),
+    // line per event (writes are BATCHED, so assert on the JOINED stream),
+    // and each line round-trips through JSON.parse.
+    expect(h.stdoutChunks.join('')).toEqual(
+      events.map((event) => JSON.stringify(event) + '\n').join(''),
     )
     const lines = h.stdoutChunks.join('').split('\n').filter(Boolean)
     expect(lines).toHaveLength(events.length)
     expect(lines.map((line) => JSON.parse(line))).toEqual(events)
     // Human/diagnostic text goes to stderr only.
     expect(h.stderrLines.length).toBeGreaterThan(0)
+  })
+
+  test('batches stdout writes without breaking ndjson line integrity', async () => {
+    const events: PrintModeEvent[] = Array.from({ length: 100 }, (_, i) => ({
+      type: 'text' as const,
+      text: `event-${i}`,
+    }))
+    const h = makeHarness({ events, args: { json: true } })
+
+    const code = await runHeadlessCommand(h.args, h.deps)
+
+    expect(code).toBe(0)
+    // Flushed every 32 events plus the final drain: far fewer write calls
+    // than events, but never zero.
+    expect(h.stdoutChunks.length).toBeGreaterThan(0)
+    expect(h.stdoutChunks.length).toBeLessThan(events.length)
+    // Content and ordering are unchanged: every ndjson line round-trips.
+    const lines = h.stdoutChunks.join('').split('\n').filter(Boolean)
+    expect(lines).toHaveLength(events.length)
+    expect(lines.map((line) => JSON.parse(line))).toEqual(events)
   })
 
   test('non-json writes only text event content to stdout', async () => {
@@ -135,7 +156,11 @@ describe('runHeadlessCommand', () => {
   })
 
   describe('P2-T7 live run journal wiring', () => {
-    /** A minimal fake journal with the P2-T7 runIds dash extension. */
+    /**
+     * A minimal fake journal with the P2-T7 runIds dash extension and the
+     * slice-4 hardening members (forceFlush/recentEvents/eventsOfType), so it
+     * satisfies CreatedRunJournal structurally.
+     */
     const fakeJournal = () => ({
       append: () => undefined,
       lastEvent: () => undefined,
@@ -146,6 +171,10 @@ describe('runHeadlessCommand', () => {
       close: () => Promise.resolve(),
       pruneRuns: () => undefined,
       runIds: () => [],
+      runSummaries: () => [],
+      forceFlush: async () => {},
+      recentEvents: () => [],
+      eventsOfType: () => [],
     })
 
     test('the opened journal is threaded as BOTH journalWriter and journalReader, then closed', async () => {
@@ -215,6 +244,140 @@ describe('runHeadlessCommand', () => {
       expect('journalReader' in h.runCalls[0]).toBe(false)
       expect(h.stderrLines.join('')).toContain('continuing without journaling')
       expect(h.stderrLines.join('')).toContain('boom')
+    })
+  })
+
+  describe('timeout (--timeout)', () => {
+    /**
+     * A client stub whose run hangs forever until its signal aborts, then
+     * rejects with the abort reason — the shape a real SDK run has when the
+     * deadline (or an external signal) cancels it.
+     */
+    const hangingClient = {
+      run: async (opts: Record<string, unknown>) => {
+        return new Promise<never>((_resolve, reject) => {
+          const signal = opts.signal as AbortSignal | undefined
+          signal?.addEventListener('abort', () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error(String(signal.reason ?? 'aborted')),
+            )
+          })
+        })
+      },
+    }
+
+    const makeTimeoutHarness = (deps: Partial<RunHeadlessDeps> = {}) => {
+      const stdoutChunks: string[] = []
+      const stderrLines: string[] = []
+      const runCalls: Array<Record<string, unknown>> = []
+      return {
+        stdoutChunks,
+        stderrLines,
+        runCalls,
+        deps: {
+          getClient: async () => {
+            return {
+              run: async (opts: Record<string, unknown>) => {
+                runCalls.push(opts)
+                return hangingClient.run(opts)
+              },
+            } as unknown as OpenbuffClient
+          },
+          writeStdout: (chunk: string) => {
+            stdoutChunks.push(chunk)
+          },
+          writeStderr: (line: string) => {
+            stderrLines.push(line)
+          },
+          projectRoot: '/injected/project',
+          ...deps,
+        },
+      }
+    }
+
+    test('aborts a hung run after the deadline: exit 1 with a clean ndjson error event', async () => {
+      // The parser restricts --timeout to whole seconds, but the command
+      // accepts any positive number of seconds, so tests use a fractional
+      // 0.05s deadline to keep the suite fast.
+      const t = makeTimeoutHarness()
+
+      const code = await runHeadlessCommand(
+        { prompt: 'hang', json: true, timeout: 0.05 },
+        t.deps,
+      )
+
+      expect(code).toBe(1)
+      // stdout stays strictly ndjson: exactly one error line.
+      const lines = t.stdoutChunks.join('').split('\n').filter(Boolean)
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0])).toEqual({
+        type: 'error',
+        message: expect.stringContaining('timed out'),
+      })
+      expect(t.stderrLines.join('')).toContain('timed out')
+    })
+
+    test('non-json mode reports the timeout on stderr only', async () => {
+      const t = makeTimeoutHarness()
+
+      const code = await runHeadlessCommand(
+        { prompt: 'hang', json: false, timeout: 0.05 },
+        t.deps,
+      )
+
+      expect(code).toBe(1)
+      expect(t.stdoutChunks).toEqual([])
+      expect(t.stderrLines.join('')).toContain('timed out')
+    })
+
+    test('a run finishing before the deadline still succeeds', async () => {
+      const h = makeHarness({
+        events: [{ type: 'text', text: 'done' }],
+        args: { json: true, timeout: 30 },
+      })
+
+      const code = await runHeadlessCommand(h.args, h.deps)
+
+      expect(code).toBe(0)
+      expect(JSON.parse(h.stdoutChunks.join('').trim())).toEqual({
+        type: 'text',
+        text: 'done',
+      })
+    })
+
+    test('the run receives a signal when a timeout is set (none before this change)', async () => {
+      const h = makeHarness({ args: { prompt: 'hi' } })
+      await runHeadlessCommand(h.args, h.deps)
+      expect(h.runCalls[0].signal).toBeUndefined()
+
+      const t = makeTimeoutHarness()
+      // Fractional deadline (the suite's fast-deadline pattern): a whole-second
+      // 30 would outlive bun's 5s test timeout on a hanging client.
+      await runHeadlessCommand({ prompt: 'hi', json: false, timeout: 0.05 }, t.deps)
+      expect(t.runCalls[0].signal).toBeInstanceOf(AbortSignal)
+    })
+
+    test('an injected deps.signal still aborts the run when a timeout is also set', async () => {
+      const external = new AbortController()
+      const t = makeTimeoutHarness({ signal: external.signal })
+
+      const pending = runHeadlessCommand(
+        { prompt: 'hang', json: true, timeout: 30 },
+        t.deps,
+      )
+      // Let the run start, then cancel from the external signal.
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      external.abort(new Error('client hangup'))
+      const code = await pending
+
+      expect(code).toBe(1)
+      const lines = t.stdoutChunks.join('').split('\n').filter(Boolean)
+      expect(JSON.parse(lines[lines.length - 1])).toEqual({
+        type: 'error',
+        message: 'client hangup',
+      })
     })
   })
 })

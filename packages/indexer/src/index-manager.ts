@@ -998,6 +998,11 @@ function mergeMutationDeltas(
 ): IndexMutationDelta {
   // P8.3: select the max revision with numeric-aware comparison; plain string
   // territory ("10" < "9") would let an older-dated delta win the merge.
+  // Mixed-type numeric tie (e.g. `9` vs `'9'`, `'09'` vs `9`): compareRevisions
+  // returns 0 and the incoming revision wins verbatim — an arbitrary but
+  // harmless tiebreak, because every consumer (the staleness check in
+  // updateMetadataIndex) compares through the same numeric-aware key, so the
+  // stored revision's string/number type never re-enters a raw comparison.
   const revision =
     current?.revision !== undefined &&
     next.revision !== undefined &&

@@ -12,6 +12,9 @@ import {
   createTurnSnapshot,
   isTurnBisectionRunning,
   listTurnSnapshots,
+  MAX_RETAINED_SNAPSHOTS,
+  prunePlanPure,
+  pruneTurnSnapshots,
   restoreToTurn,
   runTurnBisection,
   undoLastTurn,
@@ -199,6 +202,86 @@ describe('turn-snapshots', () => {
 
       const listed = await listTurnSnapshots({ projectRoot: repoRoot })
       expect(listed[0]?.label).toBe('shell')
+    })
+  })
+
+  describe('prunePlanPure (SEC retention bound)', () => {
+    test('keeps the newest maxRetained and prunes older entries', () => {
+      const shas = Array.from({ length: 6 }, (_, i) => `s${i}`)
+      expect(prunePlanPure(shas, 4)).toEqual({
+        keep: ['s0', 's1', 's2', 's3'],
+        prune: ['s4', 's5'],
+      })
+    })
+
+    test('keeps everything when the chain is within the bound', () => {
+      const shas = ['a', 'b']
+      expect(prunePlanPure(shas, 50)).toEqual({
+        keep: ['a', 'b'],
+        prune: [],
+      })
+      expect(prunePlanPure(['a'], 1)).toEqual({ keep: ['a'], prune: [] })
+    })
+
+    test('defaults maxRetained to MAX_RETAINED_SNAPSHOTS', () => {
+      expect(MAX_RETAINED_SNAPSHOTS).toBe(50)
+      const shas = Array.from({ length: 52 }, (_, i) => `s${i}`)
+      const plan = prunePlanPure(shas)
+      expect(plan.keep).toHaveLength(50)
+      expect(plan.prune).toHaveLength(2)
+    })
+
+    test('handles an empty chain', () => {
+      expect(prunePlanPure([], 50)).toEqual({ keep: [], prune: [] })
+    })
+  })
+
+  describe('pruneTurnSnapshots', () => {
+    test('keeps at most MAX_RETAINED snapshots reachable from the private ref', async () => {
+      // Build a chain longer than the retention bound.
+      for (let i = 1; i <= 53; i++) {
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+        const outcome = await createTurnSnapshot({
+          projectRoot: repoRoot,
+          label: `v${i}`,
+        })
+        expect(outcome.status).toBe('created')
+      }
+
+      // createTurnSnapshot prunes automatically after each update-ref.
+      const listed = await listTurnSnapshots({ projectRoot: repoRoot })
+      expect(listed.length).toBe(MAX_RETAINED_SNAPSHOTS)
+      // The newest snapshot is still the ref tip.
+      expect(listed[0]?.label).toBe('v53')
+    }, 120_000)
+
+    test('explicit pruneTurnSnapshots call detaches the oldest snapshot via git plumbing', async () => {
+      for (let i = 1; i <= 4; i++) {
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+        await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+      }
+
+      // A small custom bound prunes everything older than the last 2.
+      await pruneTurnSnapshots({ projectRoot: repoRoot, maxRetained: 2 })
+
+      const listed = await listTurnSnapshots({ projectRoot: repoRoot })
+      expect(listed.map((entry) => entry.label)).toEqual(['v4', 'v3'])
+      // A replace ref was created for the graft (git plumbing evidence).
+      const replaceRefs = await git(repoRoot, 'for-each-ref', 'refs/replace/')
+      expect(replaceRefs.trim().length).toBeGreaterThan(0)
+    })
+
+    test('is a no-op below the bound and outside a git repo', async () => {
+      await createTurnSnapshot({ projectRoot: repoRoot, label: 't1' })
+      await expect(
+        pruneTurnSnapshots({ projectRoot: repoRoot }),
+      ).resolves.toBeUndefined()
+      expect((await listTurnSnapshots({ projectRoot: repoRoot })).length).toBe(1)
+
+      // Outside a git repo: total, never throws.
+      await expect(
+        pruneTurnSnapshots({ projectRoot: plainDir }),
+      ).resolves.toBeUndefined()
     })
   })
 

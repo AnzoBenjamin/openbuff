@@ -33,6 +33,7 @@ import { getRgPath } from './native/ripgrep'
 import { getProjectRoot, startNewChat } from './project-files'
 import {
   awaitRegistriesReady,
+  resetDeferredRegistryLoads,
   startDeferredRegistryLoads,
 } from './services/deferred-registries'
 import { connectChatGptOAuth } from './utils/chatgpt-oauth'
@@ -123,6 +124,36 @@ function createQueryClient(): QueryClient {
       },
     },
   })
+}
+
+/**
+ * Process-level error boundary for the non-renderer command dispatch
+ * (serve/mcp/run/replay/dash). Those paths run outside any top-level error
+ * boundary, so an unhandled rejection or uncaught exception used to crash
+ * with a raw stack trace. The handlers print one clean error line to stderr
+ * and set exitCode 1 instead. The TUI renderer path is untouched: it keeps
+ * its own earlyFatalHandler + installProcessCleanupHandlers lifecycle and
+ * never installs these.
+ *
+ * Guarded to the CLI entry (import.meta.main): test runners (bun test /
+ * vitest) import CLI modules but are never the process entry point, so their
+ * own unhandled rejections must NOT be swallowed here.
+ */
+function installNonRendererErrorHandlers(): void {
+  if (!import.meta.main) {
+    return
+  }
+  const fatalHandler = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    try {
+      console.error('openbuff: fatal error:', message)
+    } catch {
+      // stderr may be closed
+    }
+    process.exitCode = 1
+  }
+  process.on('unhandledRejection', fatalHandler)
+  process.on('uncaughtException', fatalHandler)
 }
 
 async function main(): Promise<void> {
@@ -375,6 +406,18 @@ async function main(): Promise<void> {
     attach,
   } = parsedArgs
 
+  // Non-renderer command paths (serve/mcp/run/replay/dash) run OUTSIDE any
+  // top-level error boundary, so install process-level unhandledRejection /
+  // uncaughtException handlers BEFORE the command dispatch: an unhandled
+  // rejection prints one clean error line and sets exitCode 1 instead of
+  // crashing with a stack trace (and, on the protocol-wire paths, corrupting
+  // stdout). The TUI renderer path is untouched: isRendererCommand is false
+  // exactly for the non-renderer commands, and every one of those dispatch
+  // blocks below returns from main() before the renderer is created.
+  if (!isRendererCommand(parsedArgs)) {
+    installNonRendererErrorHandlers()
+  }
+
   // Start OSC theme detection so it runs CONCURRENTLY with CLI init (P1-T9),
   // but ONLY on paths that end in the OpenTUI renderer. The serve/mcp/run/replay
   // commands return from main() before the renderer is created and use
@@ -607,6 +650,11 @@ async function main(): Promise<void> {
 
         try {
           await switchProjectContext(newProjectPath)
+          // The deferred registry loads (if any) were bound to the PREVIOUS
+          // project's trust decision; drop them so the next
+          // whenRegistriesReady() consumer re-initializes with the CURRENT
+          // project's trust instead of resolving a stale/foreign decision.
+          resetDeferredRegistryLoads()
           await resetCodebuffClient()
           if (isPublishCommand || !hasAgentOverride) {
             await initializeAgentRegistry({ trustProjectAgents })
@@ -635,6 +683,10 @@ async function main(): Promise<void> {
           setShowProjectPickerScreen(false)
         } catch (error) {
           await switchProjectContext(previousProjectRoot)
+          // A failed switch may have left the loads bound to the NEW
+          // project's context; reset again so the restored project
+          // re-initializes on its own terms.
+          resetDeferredRegistryLoads()
           await resetCodebuffClient()
           logger.error({ error }, 'Failed to switch projects')
           throw error

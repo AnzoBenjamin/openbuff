@@ -15,7 +15,13 @@ import {
   agentRoleSchema,
 } from '@codebuff/common/types/agent-handoff'
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -886,7 +892,47 @@ function summarizeNestedAgentOutput(value: unknown): unknown {
  * `tmpdir()` is resolved at call time so TMPDIR overrides in tests are
  * respected. Returns the artifact path, or undefined on ANY error — the
  * oversize fallback must stay lossless-of-receipt even when tmp is unwritable.
+ *
+ * Security/retention: artifacts carry FULL untruncated child output, so every
+ * file is written with owner-only 0o600 permissions regardless of the process
+ * umask, and retention is bounded — every persist runs a best-effort TTL sweep
+ * deleting artifacts older than OVERSIZE_ARTIFACT_TTL_MS (24h), inspecting at
+ * most OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES (50) directory entries per call so
+ * the sweep itself stays O(1) on this hot path. A failed sweep never fails the
+ * persist.
  */
+const OVERSIZE_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000
+const OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES = 50
+
+/**
+ * Best-effort TTL sweep for persisted oversize artifacts: delete files in
+ * `dir` older than OVERSIZE_ARTIFACT_TTL_MS. Work is capped — at most
+ * OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES entries are even stat'ed per call — and
+ * every per-entry failure is swallowed so one stuck file cannot starve the
+ * rest. A directory-level failure (missing dir, unreadable) aborts the whole
+ * sweep silently; it must never propagate into the persist path.
+ */
+function sweepExpiredOversizeArtifacts(dir: string, now: number): void {
+  try {
+    let checked = 0
+    for (const entry of readdirSync(dir)) {
+      if (checked >= OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES) return
+      checked += 1
+      const filePath = join(dir, entry)
+      try {
+        if (now - statSync(filePath).mtimeMs > OVERSIZE_ARTIFACT_TTL_MS) {
+          unlinkSync(filePath)
+        }
+      } catch {
+        // Best-effort per entry: a raced deletion or EACCES on one file
+        // must not stop the sweep.
+      }
+    }
+  } catch {
+    // Best-effort: a failed sweep never fails the persist.
+  }
+}
+
 let oversizeArtifactDirEnsured = false
 
 function persistOversizeArtifact(serialized: string): string | undefined {
@@ -900,7 +946,10 @@ function persistOversizeArtifact(serialized: string): string | undefined {
       dir,
       `${createHash('sha256').update(serialized).digest('hex')}.json`,
     )
-    writeFileSync(artifactPath, serialized)
+    // Owner-only permissions regardless of the process umask: these files
+    // hold untruncated child output in a shared tmp directory.
+    writeFileSync(artifactPath, serialized, { mode: 0o600 })
+    sweepExpiredOversizeArtifacts(dir, Date.now())
     return artifactPath
   } catch {
     return undefined
@@ -1835,21 +1884,48 @@ function buildRuntimeAgentReceiptOrThrow(params: {
       normalizedTruncationRecord.omittedItems > 0) ||
     (typeof normalizedTruncationRecord?.omittedChars === 'number' &&
       normalizedTruncationRecord.omittedChars > 0)
+  // PR-T1 supervised-outcome threading: honor the explicit structured
+  // `supervisedOutcome` stamped on the supervised error envelope so
+  // missing_output / schema_invalid / truncated settles keep their PR-T1
+  // classification (retryable) instead of collapsing into 'crashed'.
+  // params.error still wins: a genuine crash is never downgraded by the
+  // transport-level classification, and an unknown field value fails closed
+  // to the legacy message-shape derivation below.
+  const supervisedOutcomeRaw =
+    rawOutputRecord?.type === 'error' && !params.error
+      ? rawOutputRecord.supervisedOutcome
+      : undefined
+  const supervisedOutcome =
+    supervisedOutcomeRaw === 'missing_output' ||
+    supervisedOutcomeRaw === 'schema_invalid' ||
+    supervisedOutcomeRaw === 'truncated'
+      ? supervisedOutcomeRaw
+      : undefined
+  // schema_invalid diagnostic detail: the set_output rejection when one was
+  // recorded, else the supervised crash-envelope message that carries the
+  // schema_invalid settle detail.
+  const schemaInvalidDetail =
+    lastSetOutputErrorText ??
+    crashEnvelopeMessage ??
+    'set_output failed schema validation'
   const outcome:
     | 'ok'
     | 'missing_output'
     | 'schema_invalid'
     | 'truncated'
     | 'crashed' =
-    params.error || crashEnvelopeMessage
+    params.error
       ? 'crashed'
-      : rawOutputMissing
-        ? 'missing_output'
-        : lastSetOutputErrorText
-          ? 'schema_invalid'
-          : normalizedOutputTruncated
-            ? 'truncated'
-            : 'ok'
+      : (supervisedOutcome ??
+        (crashEnvelopeMessage
+          ? 'crashed'
+          : rawOutputMissing
+            ? 'missing_output'
+            : lastSetOutputErrorText
+              ? 'schema_invalid'
+              : normalizedOutputTruncated
+                ? 'truncated'
+                : 'ok'))
   // D24 fail-closed: a runtime-derived non-ok outcome must never yield a
   // completed receipt unless runtime-attested mutations are the completion
   // authority (RF-2). `truncated` stays visible via the outcome field without
@@ -1888,7 +1964,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
       })
     } else if (outcome === 'schema_invalid') {
       errors.push({
-        message: `${params.agentType} receipt outcome 'schema_invalid': ${lastSetOutputErrorText}`,
+        message: `${params.agentType} receipt outcome 'schema_invalid': ${schemaInvalidDetail}`,
         retryable: true,
       })
     }
@@ -2521,6 +2597,19 @@ export function logAgentSpawn(params: {
 // (never a top-level import in this hot path).
 
 /**
+ * PR-T1: additive structured outcome field on the supervised error envelope.
+ * The crash-envelope MESSAGE deliberately keeps its legacy shape (it is the
+ * conservative fallback if the field is ever lost in transit), but the field
+ * lets buildRuntimeAgentReceiptOrThrow classify missing_output /
+ * schema_invalid / truncated settles per the PR-T1 precedence instead of
+ * collapsing them into 'crashed'. Additive only: consumers that ignore the
+ * field see the byte-identical envelope they saw before.
+ */
+type SupervisedErrorOutput = AgentOutput & {
+  supervisedOutcome?: 'missing_output' | 'schema_invalid' | 'truncated'
+}
+
+/**
  * Maps a transport-level settle failure (crashed / missing_output /
  * schema_invalid / truncated) to the structured error output the in-process
  * catch path produces, with the bounded stderr tail folded into the message
@@ -2530,19 +2619,25 @@ export function logAgentSpawn(params: {
  * in-process failure, and the stderrTail rides errors[] via the
  * crash-envelope path — so the orchestration ledger pairing and lease
  * release run unchanged.
+ *
+ * PR-T1: the non-crash outcomes additionally stamp the explicit
+ * `supervisedOutcome` field on the envelope so the receipt derivation honors
+ * the transport-level classification (retryable missing_output /
+ * schema_invalid) instead of reporting a crashed, non-retryable settle.
  */
 function mapSettledOutcomeToAgentOutput(params: {
   agentType: string
   outcome: ReceiptOutcome
   stderrTail: string
-}): AgentOutput {
+}): SupervisedErrorOutput {
   const detail = params.stderrTail.trim().slice(0, 2_000)
   const detailSuffix = detail.length > 0 ? `: ${detail}` : ''
   // The message deliberately reuses the in-process crash envelope shape
-  // (`Subagent <type> crashed: ...`), which buildRuntimeAgentReceiptOrThrow
-  // classifies as outcome 'crashed' → errors[] → status 'failed'. That is
-  // how the bounded stderrTail ends up folded into the synthesized failed
-  // receipt's errors[] without any settle-chain change.
+  // (`Subagent <type> crashed: ...`) as the conservative fallback, while the
+  // structured `supervisedOutcome` field carries the PR-T1 classification to
+  // buildRuntimeAgentReceiptOrThrow. That is how the bounded stderrTail ends
+  // up folded into the synthesized failed receipt's errors[] without any
+  // settle-chain change.
   switch (params.outcome) {
     case 'crashed':
       return {
@@ -2553,16 +2648,19 @@ function mapSettledOutcomeToAgentOutput(params: {
       return {
         type: 'error',
         message: `Subagent ${params.agentType} crashed: supervised child produced no receipt (missing_output)${detailSuffix}`,
+        supervisedOutcome: 'missing_output',
       }
     case 'schema_invalid':
       return {
         type: 'error',
         message: `Subagent ${params.agentType} crashed: supervised receipt failed agentReceiptSchema (schema_invalid)${detailSuffix}`,
+        supervisedOutcome: 'schema_invalid',
       }
     case 'truncated':
       return {
         type: 'error',
         message: `Subagent ${params.agentType} crashed: supervised receipt exceeded the supervisor's 8 MiB stdout capture cap (truncated)${detailSuffix}`,
+        supervisedOutcome: 'truncated',
       }
     case 'ok':
       // Unreachable through the callers below; kept total for the enum.

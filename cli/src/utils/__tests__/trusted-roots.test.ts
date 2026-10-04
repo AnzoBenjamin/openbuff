@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import fs from 'fs'
+import os from 'os'
 import path from 'path'
 
 import {
@@ -183,6 +185,25 @@ describe('isTrustedProjectRoot', () => {
 
   test('is false for an empty allowlist', () => {
     expect(isTrustedProjectRoot('/repo', [])).toBe(false)
+  })
+
+  test('canonicalizes both sides with realpath, so a symlinked allowlist entry matches', () => {
+    const base = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'trusted-roots-')),
+    )
+    const realRoot = path.join(base, 'real-root')
+    fs.mkdirSync(realRoot)
+    const linkedRoot = path.join(base, 'linked-root')
+    fs.symlinkSync(realRoot, linkedRoot, 'dir')
+    try {
+      expect(isTrustedProjectRoot(realRoot, [linkedRoot])).toBe(true)
+      expect(isTrustedProjectRoot(linkedRoot, [realRoot])).toBe(true)
+      // A missing path on either side still falls back to resolve-based
+      // comparison (no crash, no false negative).
+      expect(isTrustedProjectRoot('/repo', ['/repo'])).toBe(true)
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true })
+    }
   })
 })
 

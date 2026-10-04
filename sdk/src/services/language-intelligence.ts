@@ -121,7 +121,9 @@ function toStructuredLocations(
 
 /** Convert the human-friendly 1-based `line` to the 0-based LSP position. */
 function toLspPosition(line: number, character: number): LspPosition {
-  return { line: line - 1, character }
+  // Clamp: a 1-based caller can pass line 0 (loop boundary / off-by-one);
+  // LSP rejects a negative line, so degrade to the first line instead.
+  return { line: Math.max(0, line - 1), character }
 }
 
 /** Bounded work: cap files synced per syncMutatedFiles call. */

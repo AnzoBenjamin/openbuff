@@ -441,6 +441,14 @@ export interface ScipIngestRunOptions {
   indexers?: string[]
   /** Cap on indexers processed, clamped to [1, MAX_SCIP_INDEXERS_PER_CALL]. */
   maxIndexers?: number
+  /**
+   * Hard ceiling (ms) raced against each async detection probe, independent
+   * of the runner seam's own timeoutMs handling. A runner that never
+   * settles must not wedge its in-flight detection entry: the timed-out
+   * probe is rejected, deleted from the in-flight map, and retried on the
+   * next call. Defaults to DETECTION_PROBE_HARD_TIMEOUT_MS.
+   */
+  detectionHardTimeoutMs?: number
 }
 
 /**
@@ -463,17 +471,32 @@ export function detectAvailableScipIndexers(
 
 /**
  * Async counterpart of {@link detectAvailableScipIndexers} over the
- * non-blocking runner seam, sharing the same detection cache.
+ * non-blocking runner seam, sharing the same detection cache. Each probe is
+ * additionally raced against `detectionHardTimeoutMs` (default
+ * DETECTION_PROBE_HARD_TIMEOUT_MS) so a runner seam that never settles
+ * cannot wedge its in-flight entry.
  */
 export async function detectAvailableScipIndexersAsync(
   root: string,
-  opts: { runner?: ScipRunner; asyncRunner?: AsyncScipRunner } = {},
+  opts: {
+    runner?: ScipRunner
+    asyncRunner?: AsyncScipRunner
+    detectionHardTimeoutMs?: number
+  } = {},
 ): Promise<string[]> {
   const { run, identity } = resolveAsyncRunner(opts)
   const available: string[] = []
   await Promise.all(
     SCIP_INDEXER_COMMANDS.map(async (entry) => {
-      if ((await detectionStatusAsync(root, entry, run, identity)) === 0) {
+      if (
+        (await detectionStatusAsync(
+          root,
+          entry,
+          run,
+          identity,
+          opts.detectionHardTimeoutMs,
+        )) === 0
+      ) {
         available.push(entry.id)
       }
     }),
@@ -514,11 +537,47 @@ function detectionStatusSync(
   }
 }
 
+/** Hard ceiling (ms) on one async detection probe, independent of the runner seam. */
+const DETECTION_PROBE_HARD_TIMEOUT_MS = 10_000
+
+/**
+ * Race a detection probe against a hard ceiling. The runner seam is
+ * documented to honor `timeoutMs`, but a broken implementation that never
+ * settles would otherwise hold its in-flight-detection entry FOREVER: every
+ * later caller on the same key joins the wedged promise and detection for
+ * that binary never recovers. The race rejects after `hardTimeoutMs`; the
+ * probe's catch maps that rejection to the same fail-open `-1` as any other
+ * throwing runner and its finally deletes the in-flight entry, so the next
+ * call re-probes from scratch. Promise.race subscribes to EVERY input, so
+ * the losing branch's later settle is absorbed by the race and can never
+ * surface as an unhandledRejection.
+ */
+function raceDetectionTimeout(
+  detection: Promise<ScipRunnerResult>,
+  entry: ScipIndexerCommand,
+  hardTimeoutMs: number,
+): Promise<ScipRunnerResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          `SCIP detection probe for ${entry.bin} exceeded ${hardTimeoutMs}ms and was abandoned`,
+        ),
+      )
+    }, hardTimeoutMs)
+  })
+  return Promise.race([detection, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+  })
+}
+
 async function detectionStatusAsync(
   root: string,
   entry: ScipIndexerCommand,
   runner: AsyncScipRunner,
   identity: object,
+  hardTimeoutMs: number = DETECTION_PROBE_HARD_TIMEOUT_MS,
 ): Promise<number | null> {
   const key = detectionCacheKey(identity, root, entry.bin)
   const cached = detectionCache.get(key)
@@ -534,13 +593,17 @@ async function detectionStatusAsync(
   let probe: Promise<number | null> | undefined
   probe = (async () => {
     try {
-      const detection = await runner({
-        command: entry.bin,
-        argv: entry.detectionArgv,
-        cwd: root,
-        timeoutMs: DETECTION_TIMEOUT_MS,
-        maxBufferBytes: DETECTION_BUFFER_BYTES,
-      })
+      const detection = await raceDetectionTimeout(
+        runner({
+          command: entry.bin,
+          argv: entry.detectionArgv,
+          cwd: root,
+          timeoutMs: DETECTION_TIMEOUT_MS,
+          maxBufferBytes: DETECTION_BUFFER_BYTES,
+        }),
+        entry,
+        hardTimeoutMs,
+      )
       detectionCache.set(key, {
         status: detection.status,
         expiresAt: Date.now() + DETECTION_CACHE_TTL_MS,
@@ -549,7 +612,11 @@ async function detectionStatusAsync(
       return detection.status
     } catch {
       // A throwing runner is not an available indexer; nothing is cached so
-      // a transient failure is retried on the next call.
+      // a transient failure is retried on the next call. The hard-timeout
+      // race above also lands here: a runner that never settles must not
+      // wedge its in-flight entry (the finally below deletes it either way),
+      // so the next call re-probes from scratch instead of joining a dead
+      // promise forever.
       return -1
     } finally {
       if (inFlightDetections.get(key) === probe) inFlightDetections.delete(key)
@@ -602,7 +669,13 @@ export async function runScipIngest(
     candidates.map(async (entry) => {
       detectionStatuses.set(
         entry.id,
-        await detectionStatusAsync(root, entry, run, identity),
+        await detectionStatusAsync(
+          root,
+          entry,
+          run,
+          identity,
+          opts.detectionHardTimeoutMs,
+        ),
       )
     }),
   )
@@ -744,6 +817,32 @@ function defaultScipParseWorkerSpawn(): Worker {
 }
 
 /**
+ * Memoized worker-load degradation, keyed per spawn seam. Once a seam's
+ * worker has failed to load — a constructor throw or an async script-load
+ * 'error' — every later parse for the SAME seam skips the doomed worker
+ * attempt and derives on-thread directly (same stages, same errors, worse
+ * latency) instead of silently re-paying the failed spawn on every ingest.
+ * Keyed per seam so injected (test) seams stay independent; the default
+ * seam's entry is process-lifetime. The first failure per seam is surfaced
+ * once through console.error so the degradation is an observable status
+ * rather than a silent per-ingest fallback.
+ */
+const degradedWorkerSpawns = new WeakMap<ScipParseWorkerSpawn, string>()
+
+function recordWorkerLoadDegradation(
+  spawnWorker: ScipParseWorkerSpawn,
+  reason: unknown,
+): void {
+  if (degradedWorkerSpawns.has(spawnWorker)) return
+  const detail =
+    reason instanceof Error ? reason.message : String(reason ?? 'unknown')
+  degradedWorkerSpawns.set(spawnWorker, detail)
+  console.error(
+    `[scip-runner] SCIP parse worker unavailable (${detail}); degrading to on-thread dump derivation for the rest of this process.`,
+  )
+}
+
+/**
  * Run the OFF-thread front half of SCIP dump ingestion in a one-shot worker
  * (perf: scip-dump-json-parse-heap-spike): the worker reads the dump at
  * `filePath`, JSON.parses it, validates it through `parseScipJson`, and
@@ -763,16 +862,26 @@ function defaultScipParseWorkerSpawn(): Worker {
  * build where './scip-parse-worker.ts' does not exist next to the compiled
  * module). A worker exit with a non-zero code or a timeout still rejects
  * (fail-open per-indexer status), exactly like the on-thread pipeline's
- * failure modes.
+ * failure modes. The degradation is memoized per spawn seam (see
+ * degradedWorkerSpawns): the first failure is surfaced once and later
+ * ingests skip the worker attempt instead of retrying the doomed spawn
+ * every time.
  */
 export async function parseScipDumpEdges(
   filePath: string,
   spawnWorker: ScipParseWorkerSpawn = defaultScipParseWorkerSpawn,
 ): Promise<IndexEdge[]> {
+  // Memoized degradation (see degradedWorkerSpawns): once this seam's
+  // worker has failed to load, skip the doomed spawn and derive on-thread
+  // directly instead of re-paying the failed worker attempt per ingest.
+  if (degradedWorkerSpawns.has(spawnWorker)) {
+    return deriveScipDumpEdges(filePath)
+  }
   let worker: Worker
   try {
     worker = spawnWorker()
-  } catch {
+  } catch (error) {
+    recordWorkerLoadDegradation(spawnWorker, error)
     // Workers are unavailable in this runtime: same stages, same errors,
     // worse latency — fall back to the on-thread derivation instead of
     // failing the ingest.
@@ -808,17 +917,21 @@ export async function parseScipDumpEdges(
         }
       })
     })
-    worker.on('error', () => {
+    worker.on('error', (workerError: unknown) => {
       settle(() => {
         // The worker failed before reporting any derivation result — the
         // async twin of the constructor-throw fallback above (Node reports
         // a worker script that cannot be loaded via the 'error' event, not
         // at construction). Degrade to the documented on-thread derivation
         // — same stages, same stage-tagged errors, same results — instead
-        // of failing the ingest with an untagged worker error. A derivation
-        // that itself fails throws the same ScipDumpDerivationError the
-        // on-thread pipeline produces, so runSingleIndexer's stage-based
-        // merge-vs-parse attribution is preserved either way.
+        // of failing the ingest with an untagged worker error. The
+        // degradation is memoized per spawn seam so later ingests skip the
+        // worker attempt instead of silently degrading again every time. A
+        // derivation that itself fails throws the same
+        // ScipDumpDerivationError the on-thread pipeline produces, so
+        // runSingleIndexer's stage-based merge-vs-parse attribution is
+        // preserved either way.
+        recordWorkerLoadDegradation(spawnWorker, workerError)
         try {
           resolve(deriveScipDumpEdges(filePath))
         } catch (derivationError) {

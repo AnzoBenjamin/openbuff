@@ -454,17 +454,47 @@ class LspServerConnection {
   }
 
   private handleMessage(body: string): void {
+    // A response frame that cannot be correlated to a pending request (an
+    // unparseable body, or an id that is not a number) would otherwise leave
+    // in-flight requests hanging until their timeout. Reject them with a
+    // structured protocol error instead; the connection itself stays up.
+    // Only broken *framing* tears it down (see consume()).
+    const rejectUncorrelated = (detail: string): void => {
+      if (this.pending.size === 0) return
+      this.rejectAll(
+        new LspServerError(
+          `LSP server sent a response that could not be correlated (${detail}).`,
+          { reason: 'protocol' },
+        ),
+      )
+    }
     let message: unknown
     try {
       message = JSON.parse(body)
     } catch {
+      rejectUncorrelated('response body is not valid JSON')
       return
     }
-    if (!isRecord(message)) return
+    if (!isRecord(message)) {
+      rejectUncorrelated('response body is not a JSON object')
+      return
+    }
+    // A message carrying a `method` is a server->client request or
+    // notification, never a response to one of ours; never correlate (or
+    // reject pending work) against it.
+    if (typeof message['method'] === 'string') return
     const id = message['id']
-    if (typeof id !== 'number') return // a server->client notification/request
+    if (typeof id !== 'number') {
+      rejectUncorrelated(`non-numeric response id ${describeValue(id)}`)
+      return
+    }
     const entry = this.pending.get(id)
-    if (!entry) return
+    if (!entry) {
+      // Unknown id: a duplicate/late response or a reply to a request this
+      // client never sent. Ignored silently (one uncorrelated frame is not
+      // a reason to reject pending work or tear down the connection).
+      return
+    }
     this.pending.delete(id)
     const errorPayload = message['error']
     if (errorPayload !== undefined && errorPayload !== null) {
@@ -605,7 +635,10 @@ export type LspMultiplexer = {
   documentSymbol(params: {
     filePath: string
   }): Promise<LspDocumentSymbol[] | null>
-  workspaceSymbol(query: string): Promise<LspWorkspaceSymbol[] | null>
+  workspaceSymbol(
+    query: string,
+    filePath?: string,
+  ): Promise<LspWorkspaceSymbol[] | null>
   syncFile(params: {
     filePath: string
     version: number
@@ -751,11 +784,22 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     const key = `${languageId}:${rootUri}`
     const existing = servers.get(key)
     if (existing) {
-      // LRU touch: re-insert to move to the most-recent position.
-      servers.delete(key)
-      servers.set(key, existing)
       if (existing.restarting) await existing.restarting
-      return existing
+      if (existing.connection.isRunning) {
+        // LRU touch: re-insert to move to the most-recent position.
+        servers.delete(key)
+        servers.set(key, existing)
+        return existing
+      }
+      // Dead entry: a restart that gave up leaves the cached connection
+      // permanently not-running, so handing it back would fail every query
+      // with 'stopped' until LRU eviction. Treat it as a miss and fall
+      // through to the single-flight cold start below, which replaces the
+      // entry (single-flight guards against a reconnect storm). A
+      // reserved-but-still-starting entry (isRunning false while its own
+      // cold start is in flight) is left in place: deleting it would make
+      // the in-flight start see its slot as stolen and churn a respawn.
+      if (!starting.has(key)) servers.delete(key)
     }
     // Single-flight cold start: concurrent acquire() calls for the same
     // (languageId, root) key join one in-flight start instead of each
@@ -884,24 +928,56 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
    * `acquire`. Bounded wait: returns undefined when no server becomes warm
    * within the timeout so a bare workspace/symbol never hangs.
    */
+  function latestWarmEntry(languageId?: SupportedLanguageId): ServerEntry | undefined {
+    let latest: ServerEntry | undefined
+    for (const entry of servers.values()) {
+      if (languageId !== undefined && entry.languageId !== languageId) continue
+      // Reserved-but-still-starting entries are not warm yet: answering a
+      // workspace/symbol query against one would reject with 'stopped'.
+      if (!entry.connection.isRunning) continue
+      latest = entry
+    }
+    if (latest) {
+      // LRU touch: re-insert to move to the most-recent position.
+      servers.delete(latest.key)
+      servers.set(latest.key, latest)
+    }
+    return latest
+  }
+
   async function warmEntryForWorkspaceSymbol(): Promise<ServerEntry | undefined> {
     const deadline = Date.now() + WARM_ANCHOR_TIMEOUT_MS
     for (;;) {
-      let latest: ServerEntry | undefined
-      for (const entry of servers.values()) {
-        // Reserved-but-still-starting entries are not warm yet: answering a
-        // workspace/symbol query against one would reject with 'stopped'.
-        if (entry.connection.isRunning) latest = entry
-      }
+      const latest = latestWarmEntry()
       if (latest) {
-        // LRU touch: re-insert to move to the most-recent position.
-        servers.delete(latest.key)
-        servers.set(latest.key, latest)
         if (latest.restarting) await latest.restarting
         return latest
       }
       if (disposed || Date.now() >= deadline) return undefined
       await sleep(WARM_ANCHOR_POLL_MS)
+    }
+  }
+
+  async function requestWorkspaceSymbols(
+    entry: ServerEntry,
+    query: string,
+  ): Promise<LspWorkspaceSymbol[] | null> {
+    // Degrade a server that reports a protocol error or lacks support to the
+    // same null (unavailable) result the no-warm-server path returns rather
+    // than throwing.
+    try {
+      const result = (await entry.connection.request('workspace/symbol', {
+        query,
+      })) as LspWorkspaceSymbol[] | null
+      return result ?? null
+    } catch (error) {
+      if (
+        error instanceof LspServerError &&
+        (error.reason === 'protocol' || error.reason === 'unavailable')
+      ) {
+        return null
+      }
+      throw error
     }
   }
 
@@ -923,31 +999,37 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       withServer<LspDocumentSymbol[]>(filePath, 'textDocument/documentSymbol', {
         textDocument: { uri: filePathToUri(filePath) },
       }),
-    // workspace/symbol is issued against the already-warm server for the
-    // workspace. The `query` text is NOT a file path, so the warm server
-    // entry is selected directly — never via `withServer`→`acquire`, which
-    // would misclassify the server map key as a file path and throw
-    // 'unsupported-language'. This keeps workspace/symbol a true warm-server
-    // query (per P3-T2) that never cold-starts a server just to answer a
-    // symbol search. A server that lacks workspace/symbol support resolves
-    // to an empty result rather than throwing.
-    workspaceSymbol: async (query) => {
-      const entry = await warmEntryForWorkspaceSymbol()
-      if (!entry) return null
-      try {
-        const result = (await entry.connection.request('workspace/symbol', {
-          query,
-        })) as LspWorkspaceSymbol[] | null
-        return result ?? null
-      } catch (error) {
-        if (
-          error instanceof LspServerError &&
-          (error.reason === 'protocol' || error.reason === 'unavailable')
-        ) {
+    // workspace/symbol is issued against an already-warm server. When a
+    // `filePath` context is provided, the language is derived from its
+    // extension via the registry mapping and the query is routed to THAT
+    // language's warm server; without a filePath the most-recently-warm
+    // server answers. The `query` text is NOT a file path, so the warm
+    // server entry is selected directly (never via `withServer` or
+    // `acquire`, which would misclassify the server map key as a file path
+    // and throw 'unsupported-language'). This keeps workspace/symbol a true
+    // warm-server query (per P3-T2) that never cold-starts a server just to
+    // answer a symbol search: when no language can be determined or no
+    // server for it is warm, the query degrades to the same unavailable
+    // result (null) as the context-free path. A server that lacks
+    // workspace/symbol support resolves to an empty result rather than
+    // throwing.
+    workspaceSymbol: async (query, filePath) => {
+      if (filePath !== undefined) {
+        let languageId: SupportedLanguageId
+        try {
+          languageId = resolveLanguage(filePath)
+        } catch {
+          // No language can be determined from the query context: degrade
+          // to the existing unavailable result instead of throwing.
           return null
         }
-        throw error
+        const entry = latestWarmEntry(languageId)
+        if (!entry) return null
+        return requestWorkspaceSymbols(entry, query)
       }
+      const entry = await warmEntryForWorkspaceSymbol()
+      if (!entry) return null
+      return requestWorkspaceSymbols(entry, query)
     },
     async syncFile({ filePath, version, text, open, close }) {
       const entry = await acquire(filePath)

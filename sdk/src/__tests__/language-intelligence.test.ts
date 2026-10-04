@@ -87,6 +87,30 @@ describe('language-intelligence service', () => {
     ])
   })
 
+  test('a 1-based line 0 clamps to LSP line 0 instead of going negative', async () => {
+    let captured: { filePath: string; position: { line: number; character: number } } | undefined
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      multiplexer: makeMultiplexer({
+        definition: async (params) => {
+          captured = params
+          return makeLocation()
+        },
+      }),
+    })
+    const output = await service.goToDefinition({
+      path: 'src/foo.ts',
+      line: 0,
+      character: 2,
+    })
+    // LSP rejects a negative line; the clamp degrades line 0 to the first line.
+    expect(captured).toEqual({
+      filePath: '/repo/src/foo.ts',
+      position: { line: 0, character: 2 },
+    })
+    expect(firstValue(output).locations).toHaveLength(1)
+  })
+
   test('find_references returns a flattened locations array', async () => {
     const service = createLanguageIntelligence({
       cwd: CWD,

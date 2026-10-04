@@ -8,6 +8,7 @@ import { originOf } from '@codebuff/common/mcp/client'
 
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { MCPConfig } from '@codebuff/common/types/mcp'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { McpServer } from '@agentclientprotocol/sdk'
 
 import { createServeBridge } from '../serve/bridge'
@@ -709,5 +710,103 @@ describe('createServeBridge', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  test('§12.8: a rejecting update during the idle flush is contained (warn, no unhandled rejection)', async () => {
+    const sessionData = new AcpSessionData()
+    const warns: Array<{ data: unknown; msg?: string }> = []
+    const logger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (data, msg) => {
+        warns.push({ data, msg })
+      },
+      error: () => {},
+    }
+    // An inline client that keeps the run LIVE past the §12.8 idle window so
+    // the unref'd idle flusher actually ticks: the chunk is held (≤ the
+    // 256-char holdback floor) and goes idle, so the timer releases it
+    // through the seams — where the client hang-up rejects the update.
+    const client: ServeBridgeClient = {
+      async run(runOptions) {
+        await runOptions.handleEvent?.({ type: 'text', text: 'held' })
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        return DONE_STATE
+      },
+    }
+    const { promptHandler } = createServeBridge({ client, sessionData, logger })
+
+    const result = await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      // A hung-up client rejects the update seam mid-stream.
+      update: async () => {
+        throw new Error('client hang-up')
+      },
+      signal: new AbortController().signal,
+    })
+
+    // The rejection was contained INSIDE the idle timer tick: the turn still
+    // completes normally instead of the process dying on an unhandled
+    // rejection from a fire-and-forget flush.
+    expect(result.stopReason).toBe('end_turn')
+    expect(
+      warns.some(
+        (warn) =>
+          (warn.data as { source?: string } | undefined)?.source ===
+          'idle-flush update',
+      ),
+    ).toBe(true)
+  })
+
+  test('§12.8: a turn-end flush rejection never masks the run error', async () => {
+    const sessionData = new AcpSessionData()
+    const client: ServeBridgeClient = {
+      async run(runOptions) {
+        await runOptions.handleEvent?.({ type: 'text', text: 'held' })
+        throw new Error('run exploded')
+      },
+    }
+    const { promptHandler } = createServeBridge({ client, sessionData })
+
+    // The held chunk flushes at turn end through a hung-up update seam; the
+    // flush failure is best-effort and must NOT replace the run error as the
+    // turn's rejection reason.
+    await expect(
+      promptHandler({
+        sessionId: 's1',
+        promptText: 'hi',
+        update: async () => {
+          throw new Error('client hang-up')
+        },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('run exploded')
+  })
+
+  test('§12.8: a cancelled turn drains held windows without flushing them to the sink', async () => {
+    const sessionData = new AcpSessionData()
+    const { updates, update } = collectUpdates()
+    const controller = new AbortController()
+    const client: ServeBridgeClient = {
+      async run(runOptions) {
+        await runOptions.handleEvent?.({ type: 'text', text: 'held mid-cancel' })
+        controller.abort()
+        return DONE_STATE
+      },
+    }
+    const { promptHandler } = createServeBridge({ client, sessionData })
+
+    const result = await promptHandler({
+      sessionId: 's1',
+      promptText: 'hi',
+      update,
+      signal: controller.signal,
+    })
+
+    expect(result.stopReason).toBe('cancelled')
+    // The held text is drained (memory stays bounded) but never crosses the
+    // sink of a cancelled turn — a client hang-up mid-cancel gets no frames.
+    expect(updates).toEqual([])
   })
 })

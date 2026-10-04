@@ -3097,6 +3097,30 @@ export async function executeToolCall<T extends ToolName>(
     toolCallsToAddToMessageHistory.push(finalToolCall)
   }
 
+  // P2-T2 slice-4 hardening: the caller (executeSingleToolCall) appended the
+  // tool_call completion marker BEFORE this seam runs, but a batching journal
+  // writer defers that commit — a kill -9 between here and the handler's own
+  // durability point would leave the marker uncommitted and the resume replay
+  // would re-execute the tool (double execution). Force the writer's pending
+  // batch to commit BEFORE the side effect executes. The method is OPTIONAL
+  // on JournalWriter (a per-append writer flushes eagerly and has nothing
+  // buffered), so probing structurally keeps other implementors unaffected;
+  // a forced-flush failure is fail-open (logged, never fails the tool) like
+  // every other journal write point.
+  if (
+    params.journalWriter &&
+    typeof params.journalWriter.forceFlush === 'function'
+  ) {
+    try {
+      await params.journalWriter.forceFlush()
+    } catch (error) {
+      logger.debug(
+        { error, toolName, toolCallId: toolCall.toolCallId },
+        'Failed to force-flush the run journal before tool execution (non-fatal)',
+      )
+    }
+  }
+
   let canonicalReceipt: unknown
   const toolResultPromise = Promise.resolve().then(() =>
     handler({

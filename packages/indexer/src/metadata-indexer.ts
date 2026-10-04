@@ -125,9 +125,10 @@ const tsAliasCacheByRoot = new Map<string, TsAliasMap>()
  * Upper bound on the number of distinct project roots whose parse/alias
  * caches we retain in-process. Eviction is FIFO (Map insertion order). A
  * long-lived process that indexes many distinct roots can't grow these
- * without bound; the oldest root's cache is dropped on overflow.
+ * without bound; the oldest root's cache is dropped on overflow. Exported
+ * so tests can assert the bound is enforced on every write path.
  */
-const MAX_INDEXED_PROJECT_ROOTS = 8
+export const MAX_INDEXED_PROJECT_ROOTS = 8
 
 function evictOldestRootCacheIfNeeded(): void {
   if (parsedCacheByRoot.size >= MAX_INDEXED_PROJECT_ROOTS) {
@@ -137,6 +138,56 @@ function evictOldestRootCacheIfNeeded(): void {
       tsAliasCacheByRoot.delete(oldestRoot)
     }
   }
+}
+
+/**
+ * Single write path into parsedCacheByRoot: every insert routes through the
+ * FIFO eviction guard so MAX_INDEXED_PROJECT_ROOTS bounds the number of
+ * retained per-root caches even when a build/update holds a complete parse
+ * result to store (previously those paths called .set directly and bypassed
+ * eviction, letting the map grow past the bound).
+ */
+function setParsedCache(
+  projectRoot: string,
+  cache: Record<string, ParsedFileTokens>,
+): void {
+  if (!parsedCacheByRoot.has(projectRoot)) {
+    evictOldestRootCacheIfNeeded()
+  }
+  parsedCacheByRoot.set(projectRoot, cache)
+}
+
+/** Test hook: number of roots currently holding parse caches. */
+export function getParsedCacheRootCount(): number {
+  return parsedCacheByRoot.size
+}
+
+/**
+ * Warn-latch for transient hash-read failures: the same unreadable path
+ * previously failed silently on every refresh. Each distinct path warns at
+ * most once per process; the latch is FIFO-bounded so a long-lived process
+ * indexing many distinct failing paths cannot grow it without bound. Keyed
+ * by absolute path so identical relative paths in different projects are
+ * warned (and latched) independently.
+ */
+const HASH_READ_FAILURE_WARN_LATCH_LIMIT = 256
+const hashReadFailureWarnedPaths = new Set<string>()
+
+function recordHashReadFailure(
+  absolutePath: string,
+  relativePath: string,
+  error: unknown,
+): void {
+  if (hashReadFailureWarnedPaths.has(absolutePath)) return
+  if (hashReadFailureWarnedPaths.size >= HASH_READ_FAILURE_WARN_LATCH_LIMIT) {
+    const oldest = hashReadFailureWarnedPaths.keys().next()
+    if (!oldest.done) hashReadFailureWarnedPaths.delete(oldest.value)
+  }
+  hashReadFailureWarnedPaths.add(absolutePath)
+  const message = error instanceof Error ? error.message : String(error)
+  console.warn(
+    `[metadata-indexer] hash read failed for ${relativePath} (will retry on a later refresh): ${message}`,
+  )
 }
 
 function getParsedCache(projectRoot: string): Record<string, ParsedFileTokens> {
@@ -178,7 +229,7 @@ export async function buildMetadataIndex(
       parseDiagnostics = data.diagnostics
       parseCoverage = data.coverage
       parseData = data.parsed
-      parsedCacheByRoot.set(projectRoot, parseData)
+      setParsedCache(projectRoot, parseData)
     } catch (error) {
       parseDiagnostics = [createParseDiagnostic(projectRoot, error)]
     }
@@ -264,6 +315,11 @@ export async function updateMetadataIndex(
 
   const hashByPath = new Map<string, string>()
   const hashReadFailedPaths = new Set<string>()
+  // Content reads that failed inside indexWalkedFile even though hashing
+  // succeeded (e.g. the file became unreadable between the hash read and the
+  // content read). Mirrors hashReadFailedPaths: a still-walked file must
+  // keep its previous indexed entry instead of being dropped from the index.
+  const contentReadFailedPaths = new Set<string>()
   const changedFiles: typeof files = []
   const updatedFiles: Record<string, IndexedFile> = { ...existing.files }
   let metadataOnlyChange = false
@@ -282,6 +338,13 @@ export async function updateMetadataIndex(
     // prescribed by the DEPTH audit): a touch-less write that keeps mtime
     // AND size identical is invisible to this gate. Stat failures fall back
     // to hashing, preserving the previous behavior.
+    // Residual race (documented, tolerated): the fresh stat() above and the
+    // hash read below are not atomic. A write landing between them is hashed
+    // as NEW content but recorded under the PRE-write mtime/size from the
+    // walk, so that record's stat identity is temporarily wrong. The next
+    // refresh's fresh stat() then mismatches the indexed record and forces a
+    // re-hash — the index self-heals one refresh late; content is never
+    // lost, only transiently attributed to a stale stat.
     let hash: string | undefined
     if (indexed) {
       try {
@@ -303,8 +366,11 @@ export async function updateMetadataIndex(
         hash = file.asset
           ? await hashBinaryFile(file.absolutePath)
           : await hashFile(file.absolutePath)
-      } catch {
+      } catch (error) {
         hashReadFailedPaths.add(file.relativePath)
+        // Bounded diagnostics: warn once per path instead of silently
+        // retrying (and silently failing) on every refresh.
+        recordHashReadFailure(file.absolutePath, file.relativePath, error)
         changedFiles.push(file)
         continue
       }
@@ -410,7 +476,7 @@ export async function updateMetadataIndex(
       parseDiagnostics = data.diagnostics
       parseCoverage = data.coverage
       parseData = data.parsed
-      parsedCacheByRoot.set(projectRoot, parseData)
+      setParsedCache(projectRoot, parseData)
     } catch (error) {
       parseDiagnostics = [createParseDiagnostic(projectRoot, error)]
       parserDegraded = true
@@ -451,11 +517,13 @@ export async function updateMetadataIndex(
       tokenScores: tokenScores[file.relativePath] ?? {},
       previousChunks: previous?.chunks,
       previousHash: previous?.hash,
+      readFailedPaths: contentReadFailedPaths,
     })
     if (indexed) {
       updatedFiles[file.relativePath] = indexed
     } else if (
-      hashReadFailedPaths.has(file.relativePath) &&
+      (hashReadFailedPaths.has(file.relativePath) ||
+        contentReadFailedPaths.has(file.relativePath)) &&
       existing.files[file.relativePath]
     ) {
       // Transient (non-deletion) read failure: the walk still sees the file,
@@ -500,6 +568,12 @@ async function indexWalkedFile(params: {
   tokenScores: Record<string, number>
   previousChunks?: IndexedFile['chunks']
   previousHash?: string
+  /**
+   * Caller-collected set of relative paths whose content read failed
+   * transiently inside this function, so the caller can keep the previous
+   * indexed entry instead of dropping a still-existing file.
+   */
+  readFailedPaths?: Set<string>
 }): Promise<IndexedFile | null> {
   // Skip binary files entirely — they cannot be parsed as UTF-8 text and
   // reading them would corrupt the index with garbage imports/symbols.
@@ -562,6 +636,9 @@ async function indexWalkedFile(params: {
   try {
     content = await fs.promises.readFile(params.absolutePath, 'utf8')
   } catch {
+    // Transient read failure: report it so the caller can keep the previous
+    // indexed entry for this still-walked file instead of dropping it.
+    params.readFailedPaths?.add(params.relativePath)
     return null
   }
 
@@ -1135,6 +1212,17 @@ function mergeConcepts(primary: string[], secondary: string[]): string[] {
   return Array.from(new Set([...primary, ...secondary])).slice(0, 160)
 }
 
+/**
+ * Raw command text (package.json script bodies, CI `run:`/`name:` lines) is
+ * embedded verbatim as a query-facing concept; cap each such concept so a
+ * pathological multi-kilobyte command cannot dominate the concept index.
+ */
+const MAX_RAW_CONCEPT_LENGTH = 200
+const clampRawConcept = (concept: string): string =>
+  concept.length > MAX_RAW_CONCEPT_LENGTH
+    ? concept.slice(0, MAX_RAW_CONCEPT_LENGTH)
+    : concept
+
 function extractPackageJsonConcepts(content: string): string[] {
   const concepts = new Set<string>([
     'package manifest',
@@ -1158,7 +1246,7 @@ function extractPackageJsonConcepts(content: string): string[] {
     if (typeof command !== 'string') continue
     concepts.add(name)
     concepts.add(`script ${name}`)
-    concepts.add(`script:${name}=${command}`)
+    concepts.add(clampRawConcept(`script:${name}=${command}`))
     for (const token of conceptTokens(`${name} ${command}`)) concepts.add(token)
   }
   return Array.from(concepts).slice(0, 160)
@@ -1176,11 +1264,13 @@ function extractCiWorkflowConcepts(content: string): string[] {
     if (/^(?:-\s*)?(run|uses|name):\s+/i.test(trimmed)) {
       const isRunCommand = /^(?:-\s*)?run:/i.test(trimmed)
       concepts.add(
-        isRunCommand
-          ? trimmed.startsWith('run:')
-            ? trimmed
-            : `run:${trimmed}`
-          : trimmed,
+        clampRawConcept(
+          isRunCommand
+            ? trimmed.startsWith('run:')
+              ? trimmed
+              : `run:${trimmed}`
+            : trimmed,
+        ),
       )
       for (const token of conceptTokens(trimmed)) concepts.add(token)
     }

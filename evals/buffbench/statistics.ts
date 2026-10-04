@@ -100,7 +100,7 @@ export function pairedBootstrapMeanDiffCI(
   const lowerIdx = Math.floor((alpha / 2) * iterations)
   const upperIdx = Math.min(
     iterations - 1,
-    Math.floor((1 - alpha / 2) * iterations),
+    Math.ceil((1 - alpha / 2) * iterations) - 1,
   )
 
   return {
@@ -139,25 +139,66 @@ function erf(x: number): number {
 }
 
 /**
+ * P8-T4a: minimum number of nonzero paired differences required before the
+ * Wilcoxon normal approximation (with continuity and tie corrections) is
+ * considered reliable. Below this, the test reports a structured
+ * not-applicable verdict instead of a computed p-value.
+ */
+export const WILCOXON_NORMAL_APPROX_MIN_N = 10
+
+/** Reason reported when the Wilcoxon normal approximation is not applicable. */
+export const WILCOXON_NOT_APPLICABLE_REASON =
+  'n < 10; normal approximation unreliable'
+
+/**
+ * Result of the Wilcoxon signed-rank test. `applicable` is false when the
+ * normal approximation was not applied (n below WILCOXON_NORMAL_APPROX_MIN_N);
+ * `reason` then explains why and `pValueTwoSided` carries the neutral 1 rather
+ * than a computed value. Callers must treat a not-applicable result as NOT
+ * significant.
+ */
+export interface WilcoxonSignedRankResult {
+  statistic: number
+  n: number
+  z: number
+  pValueTwoSided: number
+  applicable: boolean
+  reason?: string
+}
+
+/**
  * Wilcoxon signed-rank test on the nonzero per-pair differences
  * (after - before). Zero diffs are dropped before ranking; tied absolute
  * differences receive average ranks. W is the sum of positive ranks. The
  * normal approximation with continuity and tie corrections gives z, and the
  * two-sided p-value is derived from the local normal CDF.
  *
- * @returns `{statistic:0, n:0, z:0, pValueTwoSided:1}` when there are no
- *   nonzero diffs (or `pairs` is empty). `n` is the count of nonzero diffs.
+ * P8-T4a: the normal approximation is applied only when n (the count of
+ * nonzero diffs) is at least WILCOXON_NORMAL_APPROX_MIN_N. Below that the
+ * result is a structured not-applicable verdict, not a computed p-value.
+ *
+ * @returns `{applicable: false, reason}` with `pValueTwoSided: 1` when there
+ *   are fewer than WILCOXON_NORMAL_APPROX_MIN_N nonzero diffs (including the
+ *   empty/`pairs`-empty case, where `n` is 0). `n` is the count of nonzero
+ *   diffs.
  */
 export function wilcoxonSignedRankTest(
   pairs: ReadonlyArray<{ before: number; after: number }>,
-): { statistic: number; n: number; z: number; pValueTwoSided: number } {
+): WilcoxonSignedRankResult {
   const diffs = pairs
     .map((p) => p.after - p.before)
     .filter((d) => d !== 0)
 
   const n = diffs.length
   if (n === 0) {
-    return { statistic: 0, n: 0, z: 0, pValueTwoSided: 1 }
+    return {
+      statistic: 0,
+      n: 0,
+      z: 0,
+      pValueTwoSided: 1,
+      applicable: false,
+      reason: WILCOXON_NOT_APPLICABLE_REASON,
+    }
   }
 
   // Rank by absolute value with average ranks for ties.
@@ -188,13 +229,33 @@ export function wilcoxonSignedRankTest(
     if (indexed[k].sign > 0) W += ranks[k]
   }
 
+  // P8-T4a: the normal approximation is only reliable for sufficiently large
+  // samples. Below the minimum n, return a structured not-applicable verdict
+  // instead of a fake p-value; callers must treat this as NOT significant.
+  if (n < WILCOXON_NORMAL_APPROX_MIN_N) {
+    return {
+      statistic: W,
+      n,
+      z: 0,
+      pValueTwoSided: 1,
+      applicable: false,
+      reason: WILCOXON_NOT_APPLICABLE_REASON,
+    }
+  }
+
   const meanW = (n * (n + 1)) / 4
   const tieCorrection =
     tieSizes.reduce((sum, t) => sum + (t * t * t - t), 0) / 48
   const varW = (n * (n + 1) * (2 * n + 1)) / 24 - tieCorrection
 
   if (varW <= 0) {
-    return { statistic: W, n, z: 0, pValueTwoSided: 1 }
+    return {
+      statistic: W,
+      n,
+      z: 0,
+      pValueTwoSided: 1,
+      applicable: true,
+    }
   }
 
   // Continuity correction toward the mean.
@@ -208,5 +269,6 @@ export function wilcoxonSignedRankTest(
     n,
     z,
     pValueTwoSided: Math.min(1, Math.max(0, pValueTwoSided)),
+    applicable: true,
   }
 }

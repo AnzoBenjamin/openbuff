@@ -71,24 +71,41 @@ const ignoredDiscoveryDirectories = new Set([
 ])
 
 function discoverNamedFiles(root: string): string[] {
+  // Iterative walk with hard caps on depth and visited directories, ported
+  // from build-graph's discoverBuildGraphFiles (security review F3): the old
+  // unbounded recursion could stack-overflow or stall the main thread on a
+  // pathological/deep tree. Symlinks are skipped, so hard-linked loops are
+  // the remaining risk, bounded by the visit cap.
+  const MAX_WALK_DEPTH = 12
+  const MAX_VISITED_DIRS = 2_000
   const wanted = new Set([
     ...manifestNames,
     ...lockfileNames,
     ...discoveryMarkerNames,
   ])
   const found: string[] = []
-  const visit = (directory: string): void => {
+  const stack: Array<{ directory: string; depth: number }> = [
+    { directory: root, depth: 0 },
+  ]
+  let visited = 0
+  while (stack.length > 0) {
+    const current = stack.pop()
+    if (!current) break
+    if (visited++ >= MAX_VISITED_DIRS) break
+    if (current.depth > MAX_WALK_DEPTH) continue
     let entries: fs.Dirent[]
     try {
-      entries = fs.readdirSync(directory, { withFileTypes: true })
+      entries = fs.readdirSync(current.directory, { withFileTypes: true })
     } catch {
-      return
+      continue
     }
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue
-      const absolute = path.join(directory, entry.name)
+      const absolute = path.join(current.directory, entry.name)
       if (entry.isDirectory()) {
-        if (!ignoredDiscoveryDirectories.has(entry.name)) visit(absolute)
+        if (!ignoredDiscoveryDirectories.has(entry.name)) {
+          stack.push({ directory: absolute, depth: current.depth + 1 })
+        }
       } else if (
         wanted.has(entry.name) ||
         entry.name.endsWith('.csproj') ||
@@ -98,7 +115,6 @@ function discoverNamedFiles(root: string): string[] {
       }
     }
   }
-  visit(root)
   return found.sort()
 }
 
@@ -240,6 +256,52 @@ function toolVersion(
   return { available: true, ...(version ? { version } : {}) }
 }
 
+/**
+ * Module-level TTL cache for the tool-version probes (perf): every
+ * inspect_environment call used to spawn all 14 `--version` probes serially,
+ * even though installed tool versions change far more slowly than any single
+ * run. The cache is a single slot keyed by the fixed, cwd-independent probe
+ * list (tool availability is a property of PATH, not of the workspace),
+ * invalidated by TTL or clearHarnessToolsCache. Statuses stay honest: each
+ * entry records exactly what its probe returned at cache time; no availability
+ * is ever fabricated for a tool that was absent.
+ */
+const toolsCacheTtlMs = 60_000
+let toolsCache:
+  | { expiresAt: number; result: EnvironmentInspection['tools'] }
+  | undefined
+
+/** Drop the cached tool-probe record (tests; toolchain installs in long runs). */
+export function clearHarnessToolsCache(): void {
+  toolsCache = undefined
+}
+
+function probeTools(): EnvironmentInspection['tools'] {
+  const now = Date.now()
+  if (toolsCache && toolsCache.expiresAt > now) return toolsCache.result
+  const result: EnvironmentInspection['tools'] = {
+    git: toolVersion('git'),
+    bun: toolVersion('bun'),
+    node: toolVersion('node'),
+    python: toolVersion('python3'),
+    rust: toolVersion('rustc'),
+    go: toolVersion('go', ['version']),
+    k6: toolVersion('k6'),
+    cargo: toolVersion('cargo'),
+    uv: toolVersion('uv'),
+    poetry: toolVersion('poetry'),
+    maven: toolVersion('mvn'),
+    gradle: toolVersion('gradle'),
+    dotnet: toolVersion('dotnet'),
+    blender: toolVersion('blender'),
+  }
+  // Frozen so a caller mutating the returned record cannot poison the cache.
+  for (const probe of Object.values(result)) Object.freeze(probe)
+  const frozen = Object.freeze(result)
+  toolsCache = { expiresAt: now + toolsCacheTtlMs, result: frozen }
+  return frozen
+}
+
 type WorkspaceDiscovery = {
   root: string
   manifests: string[]
@@ -312,22 +374,7 @@ export function inspectHarnessEnvironment(cwd: string): EnvironmentInspection {
     manifests,
     lockfiles,
     workspaces,
-    tools: {
-      git: toolVersion('git'),
-      bun: toolVersion('bun'),
-      node: toolVersion('node'),
-      python: toolVersion('python3'),
-      rust: toolVersion('rustc'),
-      go: toolVersion('go', ['version']),
-      k6: toolVersion('k6'),
-      cargo: toolVersion('cargo'),
-      uv: toolVersion('uv'),
-      poetry: toolVersion('poetry'),
-      maven: toolVersion('mvn'),
-      gradle: toolVersion('gradle'),
-      dotnet: toolVersion('dotnet'),
-      blender: toolVersion('blender'),
-    },
+    tools: probeTools(),
   }
 }
 
@@ -451,6 +498,39 @@ function packageTestScripts(manifestPath: string): string[] {
 }
 
 /**
+ * Package name from a Cargo.toml's `[package]` section, via a bounded
+ * line-oriented scan (no TOML dependency): comments are stripped per line,
+ * the current section is tracked, and the first `name = ...` inside
+ * `[package]` wins. Returns undefined when the manifest is unreadable or has
+ * no parseable package name, so callers can omit `-p` instead of guessing a
+ * bogus package id (the directory basename is NOT the package id).
+ */
+function cargoPackageName(cwd: string, manifest: string): string | undefined {
+  let content: string
+  try {
+    content = fs.readFileSync(path.join(cwd, manifest), 'utf8')
+  } catch {
+    return undefined
+  }
+  let inPackageSection = false
+  for (const rawLine of content.split('\n')) {
+    // Naive comment strip: a '#' inside a quoted string truncates that line
+    // only, which at worst misses the name (callers then omit -p) — it can
+    // never manufacture a wrong name.
+    const line = rawLine.split('#')[0].trim()
+    if (line.startsWith('[')) {
+      inPackageSection = line === '[package]'
+      continue
+    }
+    if (!inPackageSection) continue
+    const match =
+      /^name\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"']+))\s*$/.exec(line)
+    if (match) return match[1] ?? match[2] ?? match[3]
+  }
+  return undefined
+}
+
+/**
  * Test commands for the package owning a source file, derived from workspace
  * manifests already discovered by `discoverWorkspaces`. When the owning
  * workspace is nested (root !== '.'), the package is confirmed: it declared
@@ -463,17 +543,33 @@ function buildToolTestCommands(
   directory: string,
 ): { commands: string[]; confirmed: boolean } {
   if (!workspace) return { commands: [], confirmed: false }
-  if (workspace.manager === 'cargo')
+  if (workspace.manager === 'cargo') {
+    // `-p` needs the crate's real package name from Cargo.toml; the directory
+    // basename produces a bogus query when they differ. When the name is
+    // unparseable (or unsafe to interpolate into a command), omit `-p`.
+    const packageName = cargoPackageName(cwd, workspace.manifest)
+    const packageFlag =
+      packageName && /^[A-Za-z0-9._-]+$/.test(packageName)
+        ? ` -p ${packageName}`
+        : ''
     return {
-      commands: [`cargo test -p ${path.posix.basename(workspace.root)}`],
+      commands: [`cargo test${packageFlag}`],
       confirmed: true,
     }
+  }
   if (workspace.manager === 'go')
     return {
       commands: [`go test ./${directory === '.' ? '...' : directory}`],
       confirmed: true,
     }
   if (workspace.ecosystem === 'javascript') {
+    // A workspace whose manager could not be identified (e.g. an unparseable
+    // package.json) has no runnable package-manager command; emitting
+    // `unknown run <script>` would be a junk command, so omit the build-tool
+    // query entirely instead.
+    if (workspace.manager === 'unknown') {
+      return { commands: [], confirmed: false }
+    }
     const scripts = packageTestScripts(path.join(cwd, workspace.manifest))
     return {
       commands: scripts.map((script) => `${workspace.manager} run ${script}`),

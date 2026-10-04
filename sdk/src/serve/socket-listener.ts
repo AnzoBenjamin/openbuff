@@ -70,7 +70,9 @@ const MAX_AUTH_LINE_BYTES = 64 * 1024
  *  1. OS-credential layer. The parent directory is asserted safe
  *     ({@link assertSocketDirSafe}): it must exist, be a real directory (not a
  *     symlink), be owned by the current euid, and carry no group/other write
- *     bits. After binding, the socket itself is chmod'd `0o600`. Together the
+ *     bits. The socket itself is chmod'd `0o600` synchronously immediately
+ *     after the bind, BEFORE any accept callback can run (no bind→chmod
+ *     connectability window). Together the
  *     owner-only directory + `0o600` socket mean ONLY the same uid can even
  *     `connect()` — this is the SO_PEERCRED-equivalent guard, since node does
  *     not expose the peer uid directly.
@@ -161,10 +163,25 @@ export function serveAcpOverSocket(options: ServeAcpOverSocketOptions): {
     })
 
     // SEC-4 step 4: bind, then chmod 0o600 so ONLY the owner uid can connect.
+    // The chmod runs SYNCHRONOUSLY right after listen() returns, before any
+    // event-loop turn: node binds a unix socket inside the listen() call
+    // (uv_pipe_bind creates the socket inode), while the 'listening' and
+    // connection callbacks only run on a later turn. chmod'ing in the
+    // listening callback left a bind→chmod window in which the inode existed
+    // with the process-default mode and a same-uid peer could connect()
+    // before the mode was tightened. A failed bind leaves no inode (ENOENT):
+    // the real bind error then surfaces through the server 'error' handler
+    // below; any OTHER chmod failure is fail-loud.
     server.listen(socketPath, () => {
-      chmodSync(socketPath, 0o600)
       onListening?.({ socketPath })
     })
+    try {
+      chmodSync(socketPath, 0o600)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err
+      }
+    }
 
     let closed = false
     const onAbort = (): void => {

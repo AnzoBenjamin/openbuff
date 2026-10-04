@@ -106,6 +106,18 @@ export async function loadIndex(
 ): Promise<MetadataIndex | null> {
   const indexPath = path.join(getIndexDir(projectRoot, cacheDir), INDEX_FILE)
   try {
+    // Stat-first byte cap (mirrors the chunk sidecar's MAX_CHUNK_SIDECAR_BYTES,
+    // reliability finding index-load-unbounded-read): refuse to read+parse an
+    // oversized metadata.json. The index is rebuild-worthy, and stat-first
+    // keeps the read+JSON.parse cost bounded instead of parsing unbounded
+    // bytes.
+    const stat = await fs.promises.stat(indexPath)
+    if (stat.size > MAX_CHUNK_SIDECAR_BYTES) {
+      console.warn(
+        `[index-store] skipping oversized index artifact ${indexPath} (${stat.size} bytes > ${MAX_CHUNK_SIDECAR_BYTES} byte load cap)`,
+      )
+      return null
+    }
     const content = await fs.promises.readFile(indexPath, 'utf8')
     let parsed: unknown
     try {
@@ -385,6 +397,15 @@ async function readSemanticVectorCache(
     SEMANTIC_VECTOR_FILE,
   )
   try {
+    // Same stat-first byte cap as loadIndex/loadChunkSidecar: refuse to
+    // read+parse an oversized vector cache and treat it as a safe miss.
+    const stat = await fs.promises.stat(cachePath)
+    if (stat.size > MAX_CHUNK_SIDECAR_BYTES) {
+      console.warn(
+        `[index-store] skipping oversized vector cache ${cachePath} (${stat.size} bytes > ${MAX_CHUNK_SIDECAR_BYTES} byte load cap)`,
+      )
+      return null
+    }
     const parsed: unknown = JSON.parse(
       await fs.promises.readFile(cachePath, 'utf8'),
     )
@@ -464,6 +485,15 @@ export function computeIndexSnapshotId(index: MetadataIndex): string {
 }
 
 const MAX_CHUNK_SIDECAR_ENTRIES = 200_000
+/**
+ * Byte cap shared by every JSON artifact read back from the cache directory
+ * (metadata.json via loadIndex, semantic-vectors.json via
+ * readSemanticVectorCache, chunks.json via loadChunkSidecar). Mirrors the
+ * historical chunk-sidecar bound so all three artifacts use one value: the
+ * stat-first size checks refuse to read+JSON.parse oversized files
+ * (reliability finding index-load-unbounded-read) instead of parsing an
+ * unbounded payload, and the artifact is treated as a safe miss.
+ */
 const MAX_CHUNK_SIDECAR_BYTES = 8_000_000
 
 /**
@@ -1071,14 +1101,39 @@ export async function releaseOwnedLock(
  */
 const PRETTY_PRINT_MAX_CHARS = 4_096
 
+/**
+ * Compact-write threshold (reliability finding
+ * atomicwritejson-double-serializes-large-docs): documents whose compact JSON
+ * exceeds COMPACT_WRITE_THRESHOLD_CHARS (1 MiB) are written straight from
+ * their single compact JSON.stringify pass — previously the pretty form was
+ * always materialized first and then discarded for large documents, roughly
+ * doubling peak memory and CPU on every refresh. Documents at or below the
+ * threshold keep the historical pretty-vs-compact decision
+ * (PRETTY_PRINT_MAX_CHARS), so byte-sensitive fixtures and golden snapshotId
+ * round-trips are unaffected: for those documents the written bytes are
+ * identical to the previous behavior.
+ */
+const COMPACT_WRITE_THRESHOLD_CHARS = 1_048_576
+
 async function atomicWriteJson(
   filePath: string,
   value: unknown,
 ): Promise<void> {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  const pretty = JSON.stringify(value, null, 2)
-  const payload =
-    pretty.length > PRETTY_PRINT_MAX_CHARS ? JSON.stringify(value) : pretty
+  const compact = JSON.stringify(value)
+  let payload: string
+  if (compact.length > COMPACT_WRITE_THRESHOLD_CHARS) {
+    // Oversized document: a single compact serialization, written directly.
+    // (Compact length lower-bounds pretty length, so the previous
+    // pretty-first path would have materialized and discarded an even
+    // larger string for these documents.)
+    payload = compact
+  } else {
+    // Small/medium document: keep the historical pretty-vs-compact decision
+    // so byte-sensitive fixtures are unaffected.
+    const pretty = JSON.stringify(value, null, 2)
+    payload = pretty.length > PRETTY_PRINT_MAX_CHARS ? compact : pretty
+  }
   let handle: fs.promises.FileHandle | undefined
   try {
     handle = await fs.promises.open(temporaryPath, 'wx')

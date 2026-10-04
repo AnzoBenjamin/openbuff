@@ -308,6 +308,69 @@ function parseWorkflowProgress(value: unknown): AcpGateStateSnapshot['workflow']
 }
 
 /**
+ * The non-idle phases `parseGateStateBlock` can project a snapshot onto.
+ * `idle` is the no-snapshot answer and is never stored, so a restored
+ * snapshot claiming it is malformed by construction.
+ */
+const STORED_GATE_PHASES: ReadonlySet<string> = new Set([
+  'validating',
+  'reviewing',
+  'blocked',
+  'skipped',
+  'final_response_allowed',
+])
+
+/**
+ * Structural validation of a journal-restored gate-state snapshot (§12.6
+ * journal trust boundary). The journal lives under the project root, which
+ * serve mode treats as untrusted, so the historically type-asserted replay
+ * must not let tampered bytes forge a gate state — e.g. a hand-written
+ * `phase: 'final_response_allowed'` (surfaced as 'passed' on the wire).
+ * There is no exported Zod schema for the internal `AcpGateStateSnapshot`
+ * projection, so this is the structural equivalent of what
+ * `parseGateStateBlock` accepts: known gate, non-empty status, string
+ * details, a stored (non-idle) phase, and shape-valid optional fields.
+ * Everything `parseGateStateBlock` produces passes; anything else — an
+ * unknown gate name, an invented phase, a malformed `workflow` — is
+ * rejected so the caller treats the snapshot as ABSENT.
+ */
+function isGateStateSnapshot(value: unknown): value is AcpGateStateSnapshot {
+  if (!isPlainRecord(value)) return false
+  if (typeof value.gate !== 'string' || !KNOWN_GATES.has(value.gate)) {
+    return false
+  }
+  if (typeof value.status !== 'string' || value.status.length === 0) {
+    return false
+  }
+  if (typeof value.details !== 'string') return false
+  if (
+    typeof value.phase !== 'string' ||
+    !STORED_GATE_PHASES.has(value.phase)
+  ) {
+    return false
+  }
+  for (const key of ['repairRound', 'maxRepairRounds'] as const) {
+    const round = value[key]
+    if (round === undefined) continue
+    if (typeof round !== 'number' || !Number.isFinite(round)) return false
+  }
+  if (value.advisories !== undefined) {
+    if (
+      !Array.isArray(value.advisories) ||
+      !value.advisories.every((advisory) => typeof advisory === 'string')
+    ) {
+      return false
+    }
+  }
+  if (value.workflow !== undefined) {
+    // Reuses the producer-side validator: an object that fails it is a
+    // shape no real snapshot could have carried.
+    if (parseWorkflowProgress(value.workflow) === undefined) return false
+  }
+  return true
+}
+
+/**
  * Extracts and leniently validates the last `<gate-state>` block in `text`.
  * Plain-object checks only (the strict CLI parser lives in cli/ and is not
  * importable from sdk/): unknown or malformed payloads return null so the
@@ -763,7 +826,9 @@ export class AcpSessionData {
    * `session/load`-restored session recovers its receipt history and last
    * gate-state snapshot. Receipts replay newest-last capped at
    * MAX_RECEIPTS_PER_SESSION; the snapshot is the last valid `gate_state`
-   * line. Malformed lines are skipped fail-closed and any read failure
+   * line. Malformed lines are skipped fail-closed, and a `gate_state`
+   * snapshot that fails structural validation is treated as ABSENT (no
+   * gate state) with a warn diagnostic; any read failure
    * degrades to "no journal" — this never throws. Receipt envelopes are
    * replayed only when already redaction-clean (GV-07), and capability
    * lines re-derive the honest baseline map instead of serving the
@@ -796,9 +861,10 @@ export class AcpSessionData {
       if (!isPlainRecord(parsed)) continue
       // The journal lives under the project root, which serve mode treats
       // as untrusted. Receipt envelopes are accepted only when proven
-      // redaction-clean (the gate above); gate-state lines restore
-      // best-effort (the plain-object check only bridges the JSON
-      // round-trip); capability lines only validate the SHAPE — the stored
+      // redaction-clean (the gate above); gate-state snapshots are
+      // validated structurally before they are restored, and an invalid
+      // snapshot is treated as ABSENT (no gate state) with a warn
+      // diagnostic; capability lines only validate the SHAPE — the stored
       // map is re-derived from this store's real posture, never served from
       // the replayed bytes (a schema-valid line from a tampered journal must
       // not become a security advertisement).
@@ -815,7 +881,18 @@ export class AcpSessionData {
         parsed.kind === 'gate_state' &&
         isPlainRecord(parsed.snapshot)
       ) {
-        snapshot = parsed.snapshot as AcpGateStateSnapshot
+        // The type assertion here used to be the whole gate: a tampered
+        // journal could forge any phase — including 'final_response_allowed'
+        // (surfaced as 'passed' on the wire). Validate the restored
+        // snapshot against the gate-state shape and treat an invalid
+        // snapshot as ABSENT (no gate state) with a warn diagnostic.
+        if (isGateStateSnapshot(parsed.snapshot)) {
+          snapshot = parsed.snapshot
+        } else {
+          console.warn(
+            `[acp-session-data] journal gate_state snapshot for session '${sessionId}' failed validation; treating it as absent (no gate state).`,
+          )
+        }
       } else if (parsed.kind === 'capabilities') {
         const replayed = capabilityMapV1Schema.safeParse(parsed.capabilities)
         if (replayed.success) {

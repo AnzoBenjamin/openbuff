@@ -137,6 +137,70 @@ describe('printModeToSessionUpdates', () => {
     ])
   })
 
+  test('NEW-3: tool_call rawInput redacts configured credential values', () => {
+    const secret = 'sk-live-credential-value-9876543210'
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't3',
+        toolName: 'run_terminal_command',
+        input: {
+          command: `curl -H "Authorization: Bearer ${secret}" https://example.com`,
+        },
+      },
+      makeCtx({ credentialValues: [secret] }),
+    )
+    const rawInput = (updates[0] as { rawInput: Record<string, unknown> })
+      .rawInput
+    expect(rawInput.command).toBe(
+      'curl -H "Authorization: Bearer [REDACTED_SECRET]" https://example.com',
+    )
+    expect(JSON.stringify(rawInput)).not.toContain(secret)
+  })
+
+  test('NEW-3: credential redaction reaches nested rawInput fields', () => {
+    const secret = 'sk-deep-credential-value-42'
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't4',
+        toolName: 'edit_transaction',
+        input: {
+          path: 'src/config.ts',
+          edits: [{ oldString: `const key = '${secret}'`, newString: 'x' }],
+        },
+      },
+      makeCtx({ credentialValues: [secret] }),
+    )
+    const rawInput = (updates[0] as { rawInput: Record<string, unknown> })
+      .rawInput
+    const edits = rawInput.edits as Array<Record<string, unknown>>
+    expect(edits[0]!.oldString).toBe("const key = '[REDACTED_SECRET]'")
+  })
+
+  test('NEW-3 composes with NEW-6: non-content fields of a sensitive-path card still redact credentials', () => {
+    const secret = 'sk-compose-credential-value-777'
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't5',
+        toolName: 'write_file',
+        input: {
+          path: '.env',
+          content: `TOKEN=${secret}`,
+          note: `rotate ${secret} soon`,
+        },
+      },
+      makeCtx({ credentialValues: [secret] }),
+    )
+    const rawInput = (updates[0] as { rawInput: Record<string, unknown> })
+      .rawInput
+    // NEW-6: content-bearing fields of a sensitive path become [sensitive].
+    expect(rawInput.content).toBe('[sensitive]')
+    // NEW-3: every other string field still has the credential value replaced.
+    expect(rawInput.note).toBe('rotate [REDACTED_SECRET] soon')
+  })
+
   test('NEW-6: a sensitive-path replace_range tool_call redacts the top-level newContent field', () => {
     const updates = printModeToSessionUpdates(
       {
@@ -757,5 +821,180 @@ describe('printModeToSessionUpdates', () => {
     expect(() => printModeToSessionUpdates(event, makeCtx())).toThrow(
       /'mystery'/,
     )
+  })
+
+  test('EV-1: a sensitive-path mutation redacts content fields from the raw-JSON text block', () => {
+    const mutationValue = {
+      kind: 'file_mutation_result',
+      outcome: 'applied',
+      actions: [
+        {
+          outcome: 'applied',
+          path: '.env',
+          afterContent: 'OPENROUTER_API_KEY=sk-live-echo-secret\n',
+          patch: '--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n',
+          content: 'raw post-edit content',
+          beforeContent: 'raw pre-edit content',
+        },
+      ],
+    }
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_result',
+        toolCallId: 't-ev1',
+        toolName: 'write_file',
+        output: [{ type: 'json', value: mutationValue }],
+      },
+      makeCtx(),
+    )
+    const payload = updates[0] as {
+      content?: Array<{ type: string; text?: string }>
+    }
+    const textBlock = payload.content?.find((block) => block.type === 'text')
+    expect(typeof textBlock?.text).toBe('string')
+    // Each text block line stays JSON.parse-able for downstream consumers.
+    const parsed = JSON.parse(textBlock!.text!) as {
+      actions: Array<Record<string, unknown>>
+    }
+    expect(parsed.actions[0]!.path).toBe('.env')
+    expect(parsed.actions[0]!.afterContent).toBe('[sensitive]')
+    expect(parsed.actions[0]!.patch).toBe('[sensitive]')
+    expect(parsed.actions[0]!.content).toBe('[sensitive]')
+    expect(parsed.actions[0]!.beforeContent).toBe('[sensitive]')
+    expect(textBlock!.text!).not.toContain('sk-live-echo-secret')
+    // The separate diff block is still the sensitive placeholder.
+    expect(payload.content).toContainEqual({
+      type: 'text',
+      text: '[sensitive file changed: .env]',
+    })
+  })
+
+  test('EV-1: non-sensitive actions in a mixed mutation keep their afterContent verbatim', () => {
+    const mutationValue = {
+      kind: 'file_mutation_result',
+      outcome: 'applied',
+      actions: [
+        {
+          outcome: 'applied',
+          path: '.env',
+          afterContent: 'SECRET_ENV_CONTENT',
+        },
+        {
+          outcome: 'applied',
+          path: 'src/a.ts',
+          afterContent: 'export const answer = 42',
+        },
+      ],
+    }
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_result',
+        toolCallId: 't-ev1b',
+        toolName: 'edit_transaction',
+        output: [{ type: 'json', value: mutationValue }],
+      },
+      makeCtx(),
+    )
+    const payload = updates[0] as {
+      content?: Array<{
+        type: string
+        text?: string
+        path?: string
+        newText?: string
+      }>
+    }
+    const textBlock = payload.content?.find((block) => block.type === 'text')
+    const parsed = JSON.parse(textBlock!.text!) as {
+      actions: Array<Record<string, unknown>>
+    }
+    expect(parsed.actions[0]!.afterContent).toBe('[sensitive]')
+    expect(parsed.actions[1]!.afterContent).toBe('export const answer = 42')
+    // The non-sensitive action still emits its diff block.
+    expect(payload.content).toContainEqual({
+      type: 'diff',
+      path: 'src/a.ts',
+      newText: 'export const answer = 42',
+    })
+  })
+
+  test('EV-2: credential redaction past the walk depth cap is fail-closed', () => {
+    const secret = 'sk-capped-credential-value-31337'
+    let deep: unknown = { leaf: `token=${secret}` }
+    for (let i = 0; i < 64; i += 1) deep = { nested: deep }
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-ev2',
+        toolName: 'code_search',
+        input: { query: 'x', payload: deep },
+      },
+      makeCtx({ credentialValues: [secret] }),
+    )
+    const rawInput = (updates[0] as { rawInput: Record<string, unknown> })
+      .rawInput
+    const serialized = JSON.stringify(rawInput)
+    // The capped tail must NOT pass through unredacted.
+    expect(serialized).not.toContain(secret)
+    expect(serialized).toContain('[REDACTED_SECRET]')
+  })
+
+  test('EV-2: subtrees shallower than the walk depth cap keep their structure', () => {
+    const secret = 'sk-shallow-credential-value-8'
+    let deep: unknown = { leaf: `token=${secret}` }
+    for (let i = 0; i < 20; i += 1) deep = { nested: deep }
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-ev2b',
+        toolName: 'code_search',
+        input: { query: 'x', payload: deep },
+      },
+      makeCtx({ credentialValues: [secret] }),
+    )
+    const rawInput = (updates[0] as { rawInput: Record<string, unknown> })
+      .rawInput
+    let node = rawInput.payload as Record<string, unknown>
+    for (let i = 0; i < 20; i += 1) {
+      expect(Array.isArray(node)).toBe(false)
+      node = node.nested as Record<string, unknown>
+    }
+    expect(node.leaf).toBe('token=[REDACTED_SECRET]')
+  })
+
+  test('EV-3: pathologically nested sensitive-path rawInput is depth-bounded, not stack-bound', () => {
+    const secret = 'sk-deep-sensitive-echo-999'
+    let deepElement: Record<string, unknown> = {
+      tail: `OPENROUTER_API_KEY=${secret}`,
+    }
+    for (let i = 0; i < 50_000; i += 1) deepElement = { nested: deepElement }
+    const updates = printModeToSessionUpdates(
+      {
+        type: 'tool_call',
+        toolCallId: 't-ev3',
+        toolName: 'edit_transaction',
+        input: {
+          path: '.env',
+          edits: [deepElement],
+        },
+      },
+      makeCtx(),
+    )
+    const rawInput = (updates[0] as { rawInput: Record<string, unknown> })
+      .rawInput
+    // Walk the nested chain iteratively: the capped tail collapses to the
+    // sensitive marker within the depth bound instead of recursing to the
+    // 50_000-deep leaf.
+    let node: unknown = (rawInput.edits as unknown[])[0]
+    let found = false
+    for (let i = 0; i <= 50 && !found; i += 1) {
+      if (typeof node === 'string') {
+        expect(node).toBe('[sensitive]')
+        found = true
+        break
+      }
+      node = (node as Record<string, unknown>).nested
+    }
+    expect(found).toBe(true)
+    expect(JSON.stringify(rawInput)).not.toContain('sk-deep-sensitive-echo')
   })
 })

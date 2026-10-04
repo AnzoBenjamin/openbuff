@@ -256,10 +256,14 @@ export const handleSpawnAgentInline = (async (
   let prunerChunks = 0
 
   // Exception-safe settle bookkeeping: `receiptReconciled` flips only after
-  // `reconcileAgentReceiptIntoParent` returns, so the catch below can tell an
-  // execute throw from a settle throw, and the lease release in the finally
+  // `reconcileAgentReceiptIntoParent` returns, and `spawnStartedEmitted` only
+  // after the `spawn_started` ledger event lands, so the catch below can tell
+  // an execute throw from a settle throw and never closes a ledger pair that
+  // was never opened (a `spawn_started` emission that throws must not leave a
+  // dangling `interrupted` event behind), and the lease release in the finally
   // below runs on every path.
   let receiptReconciled = false
+  let spawnStartedEmitted = false
   let result: Awaited<ReturnType<typeof executeSubagent>>
   try {
     // Emitted only once the lease is held: any throw after this point —
@@ -279,6 +283,7 @@ export const handleSpawnAgentInline = (async (
         workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
       },
     })
+    spawnStartedEmitted = true
     // Extract common context params to avoid bugs from spreading all params
     const contextParams = extractSubagentContextParams(params)
 
@@ -425,7 +430,9 @@ export const handleSpawnAgentInline = (async (
     // A settle throw (receipt build or receipt reconcile) must not leave the
     // `spawn_started` ledger event dangling: close the pair with an
     // `interrupted` event unless the terminal receipt was already reconciled.
-    if (!receiptReconciled) {
+    // A `spawn_started` emission that itself threw opened no pair, so no
+    // `interrupted` closure is emitted for it either.
+    if (spawnStartedEmitted && !receiptReconciled) {
       appendOrchestrationEvent({
         state: parentAgentState,
         event: {

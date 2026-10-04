@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   sanitizeForChatPersistence,
   sanitizeForDebugLog,
+  sanitizeMediaForUiState,
 } from '../payload-sanitizer'
 
 describe('payload-sanitizer', () => {
@@ -208,6 +209,91 @@ describe('payload-sanitizer token redaction', () => {
     expect(sanitized.normalUrl).toBe('https://example.com/safe')
     expect(JSON.stringify(sanitized)).not.toContain(secret)
   })
+
+  test('redacts the added credential words (auth, passphrase, pwd) and credentialsJson', () => {
+    const addedSecret = 'sk-newly-covered-credential-value'
+    const payload = {
+      auth: addedSecret,
+      authHeader: addedSecret,
+      authorizationHeader: addedSecret,
+      passphrase: addedSecret,
+      sudoPassphrase: addedSecret,
+      pwd: addedSecret,
+      dbPwd: addedSecret,
+      credentialsJson: addedSecret,
+      api_key_json: addedSecret,
+      // Metadata keys that merely CONTAIN the new words stay kept.
+      authorized: 'kept',
+      pwdLength: 'kept',
+      authAttemptCount: 'kept',
+      passphraseHintQuestion: 'kept',
+    }
+
+    const sanitized = sanitizeForDebugLog(payload) as any
+
+    expect(sanitized.auth).toBe('[REDACTED]')
+    expect(sanitized.authHeader).toBe('[REDACTED]')
+    expect(sanitized.authorizationHeader).toBe('[REDACTED]')
+    expect(sanitized.passphrase).toBe('[REDACTED]')
+    expect(sanitized.sudoPassphrase).toBe('[REDACTED]')
+    expect(sanitized.pwd).toBe('[REDACTED]')
+    expect(sanitized.dbPwd).toBe('[REDACTED]')
+    expect(sanitized.credentialsJson).toBe('[REDACTED]')
+    expect(sanitized.api_key_json).toBe('[REDACTED]')
+    expect(sanitized.authorized).toBe('kept')
+    expect(sanitized.pwdLength).toBe('kept')
+    expect(sanitized.authAttemptCount).toBe('kept')
+    expect(sanitized.passphraseHintQuestion).toBe('kept')
+    expect(JSON.stringify(sanitized)).not.toContain(addedSecret)
+  })
+
+  test('added credential words redact in persisted chat state too', () => {
+    const addedSecret = 'sk-chat-persist-credential-value'
+    const sanitized = sanitizeForChatPersistence({
+      passphrase: addedSecret,
+      credentialsJson: addedSecret,
+    }) as any
+
+    expect(sanitized.passphrase).toBe('[REDACTED]')
+    expect(sanitized.credentialsJson).toBe('[REDACTED]')
+    expect(JSON.stringify(sanitized)).not.toContain(addedSecret)
+  })
+
+  test('sanitizeMediaForUiState caps deep recursion instead of crashing', () => {
+    // Build a payload nested far deeper than MAX_SANITIZE_DEPTH.
+    let deep: any = { leaf: 'bottom' }
+    for (let i = 0; i < 200; i += 1) deep = { nested: deep }
+
+    const sanitized = sanitizeMediaForUiState({ root: deep }) as any
+
+    // Walk down to the depth cutoff: the branch below the bound is replaced
+    // with a truncation marker rather than walking (and crashing) further.
+    let node = sanitized.root
+    let depth = 0
+    while (node && typeof node === 'object' && node.nested) {
+      node = node.nested
+      depth += 1
+    }
+    expect(depth).toBeLessThanOrEqual(32)
+    expect(typeof node === 'string' || node.leaf === 'bottom').toBe(true)
+    expect(JSON.stringify(sanitized)).toContain('nested deeper than 32 levels')
+  })
+
+  test('sanitizeMediaForUiState caps array and object element counts', () => {
+    const payload = {
+      items: Array.from({ length: 500 }, (_, i) => `item-${i}`),
+      wide: Object.fromEntries(
+        Array.from({ length: 500 }, (_, i) => [`k${i}`, `v${i}`]),
+      ),
+    }
+
+    const sanitized = sanitizeMediaForUiState(payload) as any
+
+    expect(sanitized.items.length).toBeLessThanOrEqual(201)
+    expect(JSON.stringify(sanitized)).toContain('omitted')
+    expect(Object.keys(sanitized.wide).length).toBeLessThanOrEqual(201)
+    expect(sanitized.wide.__openbuff_omitted_keys).toBeGreaterThan(0)
+  })
 })
 
 describe('payload-sanitizer word-boundary key redaction', () => {
@@ -292,6 +378,90 @@ describe('payload-sanitizer word-boundary key redaction', () => {
       expect(sanitized[key]).toBe('[REDACTED]')
     }
     for (const key of KEEP_KEYS) {
+      expect(sanitized[key]).toBe(`kept-${key}`)
+    }
+    expect(JSON.stringify(sanitized)).not.toContain(secret)
+  })
+})
+
+describe('payload-sanitizer multi-word credential key shapes (PS-1)', () => {
+  const secret = 'sk-multiword-credential-value-should-never-leak'
+
+  // Keys whose credential word is split by tokenization (privateKey becomes
+  // private + key) or followed by a non-carrier descriptor before a terminal
+  // 'key' (awsSecretAccessKey becomes aws + secret + access + key,
+  // access_key becomes access + key). privateSigningKey is covered by the
+  // terminal-'key'-backed-by-secret-holder rule instead of a shape entry.
+  const MULTI_WORD_REDACT_KEYS = [
+    'privateKey',
+    'private_key',
+    'PRIVATE_KEY',
+    'awsSecretAccessKey',
+    'aws_secret_access_key',
+    'access_key',
+    'secretAccessKey',
+    'clientSecret',
+    'privateSigningKey',
+  ]
+
+  // Innocuous keys that merely contain credential-ish substrings or use a
+  // credential word as a descriptor must stay kept: classification is
+  // whole-token/whole-key, never substring matching.
+  const SHAPE_KEEP_KEYS = [
+    'monkey',
+    'keyboard',
+    'tokenize',
+    'tokenizerName',
+    'publicKey',
+    'accessKeyCount',
+    'privateKeyCount',
+    'secretSantaName',
+    'awsAccessKeyId',
+  ]
+
+  test('redacts split multi-word credential keys in debug logs', () => {
+    for (const key of MULTI_WORD_REDACT_KEYS) {
+      const sanitized = sanitizeForDebugLog({ [key]: secret }) as any
+      expect(sanitized[key]).toBe('[REDACTED]')
+      expect(JSON.stringify(sanitized)).not.toContain(secret)
+    }
+  })
+
+  test('redacts split multi-word credential keys in persisted chat state', () => {
+    for (const key of MULTI_WORD_REDACT_KEYS) {
+      const sanitized = sanitizeForChatPersistence({ [key]: secret }) as any
+      expect(sanitized[key]).toBe('[REDACTED]')
+      expect(JSON.stringify(sanitized)).not.toContain(secret)
+    }
+  })
+
+  test('keeps innocuous substring and descriptor keys verbatim in debug logs', () => {
+    for (const key of SHAPE_KEEP_KEYS) {
+      const sanitized = sanitizeForDebugLog({ [key]: secret }) as any
+      expect(sanitized[key]).toBe(secret)
+      expect(JSON.stringify(sanitized)).toContain(secret)
+    }
+  })
+
+  test('keeps innocuous substring and descriptor keys verbatim in chat state', () => {
+    for (const key of SHAPE_KEEP_KEYS) {
+      const sanitized = sanitizeForChatPersistence({ [key]: secret }) as any
+      expect(sanitized[key]).toBe(secret)
+      expect(JSON.stringify(sanitized)).toContain(secret)
+    }
+  })
+
+  test('classifies mixed multi-word shapes and innocuous keys in one pass', () => {
+    const payload: Record<string, string> = {}
+    for (const key of MULTI_WORD_REDACT_KEYS) payload[key] = secret
+    for (const key of SHAPE_KEEP_KEYS) payload[key] = `kept-${key}`
+
+    const sanitized = sanitizeForDebugLog(payload) as any
+
+    for (const key of MULTI_WORD_REDACT_KEYS) {
+      expect(sanitized[key]).toBe('[REDACTED]')
+    }
+    for (const key of SHAPE_KEEP_KEYS) {
       expect(sanitized[key]).toBe(`kept-${key}`)
     }
     expect(JSON.stringify(sanitized)).not.toContain(secret)

@@ -709,4 +709,198 @@ describe('createLspMultiplexer', () => {
     expect(events.some((event) => event.kind === 'restart')).toBe(true)
     await mux.dispose()
   })
+
+  // Remediation (dead-entry cold-start replacement): a cached entry whose
+  // connection is permanently dead (the single restart attempt gave up) must
+  // be treated as a miss and replaced by a fresh cold start through the
+  // existing single-flight path, instead of being handed back and failing
+  // every query with 'stopped' until LRU eviction.
+  test('a dead cached entry is replaced by a cold start instead of failing with stopped', async () => {
+    const events: string[] = []
+    const peers: FakePeer[] = []
+    const mux = createLspMultiplexer({
+      onEvent: (event) => events.push(event.kind),
+      startupTimeoutMs: 50,
+      requestTimeoutMs: 1_000,
+      spawner: () => {
+        // Spawn 1: the healthy original. Spawn 2: the restart attempt, whose
+        // initialize handshake never completes, so the restart gives up and
+        // leaves the cached entry dead. Spawn 3: the healthy replacement.
+        const peer = makePeer(peers.length === 1 ? () => null : defaultBehavior)
+        peers.push(peer)
+        return peer.child
+      },
+    })
+    await mux.syncFile({ filePath: '/proj/a.ts', version: 1, text: 'const x = 1' })
+    expect(mux.warmServerCount()).toBe(1)
+
+    // Crash the warm server; its one restart attempt never initializes and
+    // gives up, leaving the cached entry with a dead connection.
+    peers[0].crash()
+    expect(events).toContain('restart')
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (events.includes('gave-up')) break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(events).toContain('gave-up')
+
+    // The next acquire must cold-start a replacement (spawn 3) instead of
+    // returning the dead entry whose requests all reject with 'stopped'.
+    const result = await mux.hover({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    expect(result).not.toBeNull()
+    expect(peers.length).toBe(3)
+    expect(events.filter((kind) => kind === 'started')).toHaveLength(2)
+    await mux.dispose()
+  })
+
+  // Remediation (uncorrelatable response frames): a framed response whose
+  // body is unparseable cannot be matched to any pending request. The
+  // pending request must be rejected with a structured protocol error
+  // promptly instead of hanging until the request timeout, and the
+  // connection must stay up (only broken *framing* tears it down).
+  test('an unparseable response body rejects the pending request with a protocol error instead of hanging', async () => {
+    const events: string[] = []
+    const peer = makeRawPeer((message) =>
+      message.method === 'initialize'
+        ? { jsonrpc: '2.0', id: message.id as number, result: okInitialize }
+        : null,
+    )
+    const mux = createLspMultiplexer({
+      spawner: () => peer.child,
+      onEvent: (event) => events.push(event.kind),
+      // Long on purpose: a 'protocol' rejection (not 'timeout') proves the
+      // pending request did not hang until this fired.
+      requestTimeoutMs: 10_000,
+    })
+    await mux.syncFile({ filePath: '/proj/a.ts', version: 1, text: 'const x = 1' })
+
+    const inFlight = mux.hover({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    await waitUntilSent(peer, 'textDocument/hover')
+    // Well-formed framing, unparseable body: correlation is impossible.
+    peer.emitRaw(frame('not json at all'))
+
+    const failure = await inFlight.then(
+      () => {
+        throw new Error('expected the in-flight request to reject')
+      },
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(LspServerError)
+    expect((failure as LspServerError).reason).toBe('protocol')
+    // Not torn down: no crash/restart event fired for one bad frame.
+    expect(events.some((kind) => kind === 'restart' || kind === 'gave-up')).toBe(false)
+
+    // The connection still works: a follow-up request is answered normally.
+    peer.respond((message) => {
+      if (message.method === 'textDocument/hover') {
+        return { jsonrpc: '2.0', id: message.id as number, result: { contents: 'recovered' } }
+      }
+      return null
+    })
+    const followUp = await mux.hover({
+      filePath: '/proj/a.ts',
+      position: { line: 0, character: 0 },
+    })
+    expect(followUp).not.toBeNull()
+    await mux.dispose()
+  })
+
+  test('a non-numeric response id rejects pending requests; an unknown id is ignored silently', async () => {
+    const peer = makeRawPeer((message) =>
+      message.method === 'initialize'
+        ? { jsonrpc: '2.0', id: message.id as number, result: okInitialize }
+        : null,
+    )
+    const mux = createLspMultiplexer({
+      spawner: () => peer.child,
+      requestTimeoutMs: 10_000,
+    })
+    await mux.syncFile({ filePath: '/proj/a.ts', version: 1, text: 'const x = 1' })
+
+    const inFlight = mux.hover({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    await waitUntilSent(peer, 'textDocument/hover')
+    peer.emitRaw(frame(JSON.stringify({ jsonrpc: '2.0', id: 'not-a-number', result: null })))
+
+    const failure = await inFlight.then(
+      () => {
+        throw new Error('expected the in-flight request to reject')
+      },
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(LspServerError)
+    expect((failure as LspServerError).reason).toBe('protocol')
+
+    // An unknown numeric id (a reply to a request this client never sent) is
+    // ignored silently: nothing is rejected and the connection stays up, so
+    // the next real response still resolves its request.
+    peer.respond((message) =>
+      message.method === 'textDocument/hover'
+        ? { jsonrpc: '2.0', id: message.id as number, result: { contents: 'ok' } }
+        : null,
+    )
+    peer.emitRaw(frame(JSON.stringify({ jsonrpc: '2.0', id: 9999, result: 'stray' })))
+    const later = mux.hover({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    expect(await later).not.toBeNull()
+    await mux.dispose()
+  })
+
+  // Remediation (workspace/symbol language routing): with a filePath context
+  // the language is derived from the extension via the registry mapping and
+  // the query routes to THAT language's warm server; when no language can be
+  // determined or no server for it is warm, it degrades to the existing
+  // unavailable result (null) without cold-starting.
+  test('workspaceSymbol routes by filePath language and degrades to null when unavailable', async () => {
+    const peers: FakePeer[] = []
+    const mux = createLspMultiplexer({
+      spawner: () => {
+        const index = peers.length
+        const peer = makePeer((message) => {
+          const id = message.id as number
+          if (message.method === 'workspace/symbol') {
+            return {
+              jsonrpc: '2.0',
+              id,
+              result: [
+                {
+                  name: `symbol-from-${index}`,
+                  kind: 12,
+                  location: {
+                    uri: `file:///x${index}`,
+                    range: {
+                      start: { line: 0, character: 0 },
+                      end: { line: 0, character: 0 },
+                    },
+                  },
+                },
+              ],
+            }
+          }
+          return defaultBehavior(message)
+        })
+        peers.push(peer)
+        return peer.child
+      },
+    })
+    // Warm one server per language: peers[0] is typescript, peers[1] python.
+    await mux.definition({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    await mux.definition({ filePath: '/proj/b.py', position: { line: 0, character: 0 } })
+    expect(peers.length).toBe(2)
+    expect(mux.warmServerCount()).toBe(2)
+
+    // The .py context routes to the python server (peers[1]), NOT whichever
+    // warm server is most recent.
+    const pySymbols = await mux.workspaceSymbol('foo', '/proj/c.py')
+    expect(pySymbols?.[0]?.name).toBe('symbol-from-1')
+    const tsSymbols = await mux.workspaceSymbol('foo', '/proj/c.ts')
+    expect(tsSymbols?.[0]?.name).toBe('symbol-from-0')
+
+    // No language determinable -> unavailable (null), never a throw.
+    expect(await mux.workspaceSymbol('foo', '/proj/c.unknownext')).toBeNull()
+    // Known language with no warm server for it -> unavailable (null), and
+    // no cold start is issued for the symbol query.
+    expect(await mux.workspaceSymbol('foo', '/proj/c.rs')).toBeNull()
+    expect(peers.length).toBe(2)
+    expect(mux.warmServerCount()).toBe(2)
+    await mux.dispose()
+  })
 })

@@ -450,4 +450,33 @@ describe('handleRecallContext consolidation merge failure paths', () => {
     expect(value.snapshotsSearched).toBe(0)
     expect(value.message).toContain('No archived pre-compaction content matched')
   })
+
+  test('searchConsolidations failure degrades to verbatim-only output instead of throwing', async () => {
+    // A corrupt stored consolidation (non-string summary) makes the keyword
+    // search throw; the handler's no-throw guarantee must hold: verbatim
+    // archive results survive, the consolidations field is omitted, and the
+    // failure is logged (best-effort degrade, not an error envelope).
+    const warn = mock(() => {})
+    const agentState = buildRunnerState({
+      contextConsolidations: [
+        { consolidatedAt: 99, sourceArchivedAts: [11], action: 'semantic_compaction', summary: null, coveredMessages: 2 },
+      ] as unknown as ContextConsolidation[],
+    })
+    const { output } = await handleRecallContext({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'recall_context',
+        toolCallId: 'recall-degrade',
+        input: { query: 'keystone-11' },
+      } as CodebuffToolCall<'recall_context'>,
+      agentState,
+      logger: { debug: mock(() => {}), info: mock(() => {}), warn, error: mock(() => {}) },
+    })
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0]
+      .value as { matches: unknown[]; consolidations?: unknown; message?: string }
+    expect(value.matches.length).toBeGreaterThan(0)
+    expect(value.consolidations).toBeUndefined()
+    expect(value.message).toBeUndefined()
+    expect(warn).toHaveBeenCalled()
+  })
 })

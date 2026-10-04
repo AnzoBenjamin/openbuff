@@ -620,6 +620,52 @@ export function buildPdfAttachmentMetadata(data: string) {
 }
 
 /**
+ * Probe seam for the /proc files chromeSandboxArgs reads. Unit tests replace
+ * it to model kernel states (Ubuntu 24.04's apparmor userns restriction,
+ * unreadable procfs, ...) without touching the real filesystem — the same
+ * seam pattern as removeUserDataDirImpl below.
+ */
+export type ChromeSandboxProbe = {
+  existsSync: (path: string) => boolean
+  readFileSync: (path: string, encoding: 'utf8') => string
+}
+
+let sandboxProbeImpl: ChromeSandboxProbe = { existsSync, readFileSync }
+
+/** Test seam: restores the real /proc probes between tests. */
+export function __setChromeSandboxProbeForTest(
+  probe: ChromeSandboxProbe | null,
+): void {
+  sandboxProbeImpl = probe ?? { existsSync, readFileSync }
+}
+
+/**
+ * Diagnostic sink for undeterminable sandbox probes. chromeSandboxArgs has
+ * no logger in scope, so the warn diagnostic goes to console.warn by
+ * default; tests swap in a capturing sink here.
+ */
+let sandboxDiagnosticImpl: (message: string) => void = (message) => {
+  console.warn(message)
+}
+
+/** Test seam: captures (or silences) sandbox-probe diagnostics. */
+export function __setChromeSandboxDiagnosticForTest(
+  sink: ((message: string) => void) | null,
+): void {
+  sandboxDiagnosticImpl =
+    sink ??
+    ((message) => {
+      console.warn(message)
+    })
+}
+
+function warnUndeterminableSandbox(reason: string): void {
+  sandboxDiagnosticImpl(
+    `chromeSandboxArgs: sandbox state undeterminable (${reason}); failing open to --no-sandbox`,
+  )
+}
+
+/**
  * Decide whether Chrome must be launched with `--no-sandbox`.
  *
  * `--no-sandbox` disables Chrome's own OS-level sandbox and is a last resort:
@@ -628,9 +674,16 @@ export function buildPdfAttachmentMetadata(data: string) {
  * Windows) never need it — Chrome's sandbox works out of the box there, so we
  * return `[]`. On Linux we probe: running as root can't use the setuid
  * sandbox without extra setup (common in CI/containers), and unprivileged
- * user namespaces must be available for the namespace sandbox. When the
- * sandbox can't work or availability is undeterminable we fail open with
- * `['--no-sandbox']`, since a broken sandbox launch would hang the tool.
+ * user namespaces must be available for the namespace sandbox. Ubuntu 24.04
+ * additionally restricts unprivileged user namespaces with AppArmor
+ * (apparmor_restrict_unprivileged_userns=1) even while max_user_namespaces
+ * stays positive, so that knob is checked FIRST: when it reads '1' the
+ * namespace sandbox cannot create its userns and we treat the host exactly
+ * like one without userns. When the sandbox can't work we fail open with
+ * `['--no-sandbox']`, since a broken sandbox launch would hang the tool; when
+ * availability is UNDETERMINABLE (a probe threw, or no probe file was
+ * readable) the same documented fallback applies but a warn diagnostic names
+ * the reason instead of disabling the sandbox silently.
  *
  * Note: no `CHROME_DISABLE_SANDBOX` env escape hatch is wired up here. Adding
  * one would require surfacing a new key from getSdkEnv() and editing the
@@ -649,28 +702,62 @@ export function chromeSandboxArgs(): string[] {
   }
 
   // Linux, non-root: probe unprivileged user-namespace availability.
+  // apparmor_restrict_unprivileged_userns first: on Ubuntu 24.04 it is the
+  // deciding knob and the probes below would otherwise report 'available'.
+  const apparmorPath =
+    '/proc/sys/kernel/apparmor_restrict_unprivileged_userns'
   try {
-    const clonePath = '/proc/sys/kernel/unprivileged_userns_clone'
-    if (existsSync(clonePath)) {
-      return readFileSync(clonePath, 'utf8').trim() === '1'
+    if (sandboxProbeImpl.existsSync(apparmorPath)) {
+      if (
+        sandboxProbeImpl.readFileSync(apparmorPath, 'utf8').trim() === '1'
+      ) {
+        // AppArmor restricts unprivileged userns: the namespace sandbox
+        // cannot work, so treat the host as no-userns.
+        return ['--no-sandbox']
+      }
+    }
+  } catch (error) {
+    warnUndeterminableSandbox(
+      `could not read ${apparmorPath} (${error instanceof Error ? error.message : String(error)})`,
+    )
+    return ['--no-sandbox']
+  }
+
+  const clonePath = '/proc/sys/kernel/unprivileged_userns_clone'
+  try {
+    if (sandboxProbeImpl.existsSync(clonePath)) {
+      return sandboxProbeImpl.readFileSync(clonePath, 'utf8').trim() === '1'
         ? []
         : ['--no-sandbox']
     }
-  } catch {
+  } catch (error) {
+    warnUndeterminableSandbox(
+      `could not read ${clonePath} (${error instanceof Error ? error.message : String(error)})`,
+    )
     return ['--no-sandbox']
   }
 
+  const maxPath = '/proc/sys/user/max_user_namespaces'
   try {
-    const maxPath = '/proc/sys/user/max_user_namespaces'
-    if (existsSync(maxPath)) {
-      const max = parseInt(readFileSync(maxPath, 'utf8').trim(), 10)
+    if (sandboxProbeImpl.existsSync(maxPath)) {
+      const max = parseInt(
+        sandboxProbeImpl.readFileSync(maxPath, 'utf8').trim(),
+        10,
+      )
       return Number.isFinite(max) && max > 0 ? [] : ['--no-sandbox']
     }
-  } catch {
+  } catch (error) {
+    warnUndeterminableSandbox(
+      `could not read ${maxPath} (${error instanceof Error ? error.message : String(error)})`,
+    )
     return ['--no-sandbox']
   }
 
-  // Undeterminable: fail open so the tool doesn't hang on a broken sandbox.
+  // Undeterminable: fail open so the tool doesn't hang on a broken sandbox,
+  // and name the reason instead of disabling the sandbox silently.
+  warnUndeterminableSandbox(
+    'none of the /proc probes (apparmor_restrict_unprivileged_userns, unprivileged_userns_clone, max_user_namespaces) was present or readable',
+  )
   return ['--no-sandbox']
 }
 

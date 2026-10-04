@@ -439,6 +439,66 @@ describe('acp agent skeleton', () => {
     expect((failure as RequestError).code).toBe(-32601)
   })
 
+  test('ext methods serve only session ids created or loaded by THIS connection', async () => {
+    const { connection } = makeRecordingConnection()
+    const sessionData = new AcpSessionData()
+    const agent = createAcpAgent({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      connection,
+      sessionData,
+    })
+
+    // Same-connection flow keeps working: gateState answers for the id this
+    // connection minted at session/new.
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-own',
+      mcpServers: [],
+    })
+    const gate = await agent.extMethod('openbuff/gateState', { sessionId })
+    expect(gate).toBeDefined()
+
+    // A foreign session id (another connection's session, or a guessed id)
+    // fails closed with the protocol's invalid-params error.
+    let failure: unknown
+    try {
+      await agent.extMethod('openbuff/gateState', {
+        sessionId: 'other-connection-session',
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(RequestError)
+    expect((failure as RequestError).code).toBe(-32602)
+
+    // The ext-v1 namespaced methods are gated by the same ownership check.
+    let v1Failure: unknown
+    try {
+      await agent.extMethod('_openbuff.dev/capabilities/get', {
+        sessionId: 'other-connection-session',
+      })
+    } catch (error) {
+      v1Failure = error
+    }
+    expect(v1Failure).toBeInstanceOf(RequestError)
+    expect((v1Failure as RequestError).code).toBe(-32602)
+
+    // A second agent (a different connection) sharing the same store cannot
+    // read the first connection's session either.
+    const secondAgent = createAcpAgent({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      connection,
+      sessionData,
+    })
+    let crossFailure: unknown
+    try {
+      await secondAgent.extMethod('openbuff/gateState', { sessionId })
+    } catch (error) {
+      crossFailure = error
+    }
+    expect(crossFailure).toBeInstanceOf(RequestError)
+    expect((crossFailure as RequestError).code).toBe(-32602)
+  })
+
   test('prompt threads the optional reverseRequests seam into the handler input', async () => {
     const { connection } = makeRecordingConnection()
     const seen: Array<unknown> = []
@@ -634,6 +694,163 @@ describe('acp agent skeleton', () => {
     expect(seen[0]?.clientCapabilities).toBeUndefined()
     expect(seen[0]?.eventsExtensionEnabled).toBeUndefined()
   })
+
+  test('a concurrent prompt on the same session is rejected with invalid-params instead of silently replacing the in-flight turn', async () => {
+    const { connection } = makeRecordingConnection()
+    // The turn stays in flight until aborted (with a safety timeout so a
+    // regression cannot hang the suite).
+    const promptHandler: AcpPromptHandler = (input) =>
+      new Promise((resolve) => {
+        input.signal.addEventListener('abort', () =>
+          resolve({ stopReason: 'cancelled' }),
+        )
+        setTimeout(() => resolve({ stopReason: 'end_turn' }), 50)
+      })
+    const agent = createAcpAgent({ promptHandler, connection })
+
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-busy',
+      mcpServers: [],
+    })
+    const first = agent.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'turn one' }],
+    })
+
+    // A second concurrent prompt on the SAME session is rejected with the
+    // protocol's invalid-params error (an `openbuff.dev` `session_busy`
+    // conflict marker in the data) — it must NOT replace the first turn's
+    // AbortController, which would leave the first turn uncancellable.
+    let failure: unknown
+    try {
+      await agent.prompt({
+        sessionId,
+        prompt: [{ type: 'text', text: 'turn two' }],
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(RequestError)
+    expect((failure as RequestError).code).toBe(-32602)
+    expect(
+      (
+        (failure as RequestError).data as
+          | Record<string, Record<string, unknown>>
+          | undefined
+      )?.['openbuff.dev']?.code,
+    ).toBe('session_busy')
+
+    // The FIRST turn remains cancellable: cancel still reaches its signal.
+    agent.cancel({ sessionId })
+    expect(await first).toEqual({ stopReason: 'cancelled' })
+
+    // Once the in-flight turn settles, the session accepts a new prompt.
+    const next = await agent.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'turn three' }],
+    })
+    expect(next).toEqual({ stopReason: 'end_turn' })
+  })
+
+  test('§12.6 LRU: the 17th session insert evicts the least-recently-used session', async () => {
+    const { connection } = makeRecordingConnection()
+    const agent = makeAgentWithDefaultHandler(connection)
+
+    const ids: string[] = []
+    for (let i = 0; i < 16; i += 1) {
+      const { sessionId } = await agent.newSession({
+        cwd: `/tmp/openbuff-lru-${i}`,
+        mcpServers: [],
+      })
+      ids.push(sessionId)
+    }
+
+    // Touch the OLDEST session: recency tracking (delete + re-set on access)
+    // moves it to the most-recently-used end, so the 17th insert must evict
+    // the next-oldest session instead of it.
+    await agent.prompt({
+      sessionId: ids[0]!,
+      prompt: [{ type: 'text', text: 'touch' }],
+    })
+    await agent.newSession({ cwd: '/tmp/openbuff-lru-17', mcpServers: [] })
+
+    // The touched (MRU) session is still live and prompts normally.
+    const survivor = await agent.prompt({
+      sessionId: ids[0]!,
+      prompt: [{ type: 'text', text: 'still here' }],
+    })
+    expect(survivor).toEqual({ stopReason: 'end_turn' })
+
+    // The untouched next-oldest session was the eviction victim: it is no
+    // longer owned by this connection, so prompt fails closed invalid-params.
+    let failure: unknown
+    try {
+      await agent.prompt({
+        sessionId: ids[1]!,
+        prompt: [{ type: 'text', text: 'evicted' }],
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(RequestError)
+    expect((failure as RequestError).code).toBe(-32602)
+  })
+
+  test('§12.6 LRU: an active session is never evicted; all-active fails closed with limit_exceeded', async () => {
+    const { connection } = makeRecordingConnection()
+    // Every turn stays in flight until aborted (safety timeout guards hangs).
+    const promptHandler: AcpPromptHandler = (input) =>
+      new Promise((resolve) => {
+        input.signal.addEventListener('abort', () =>
+          resolve({ stopReason: 'cancelled' }),
+        )
+        setTimeout(() => resolve({ stopReason: 'end_turn' }), 2_000)
+      })
+    const agent = createAcpAgent({ promptHandler, connection })
+
+    const ids: string[] = []
+    for (let i = 0; i < 16; i += 1) {
+      const { sessionId } = await agent.newSession({
+        cwd: `/tmp/openbuff-active-${i}`,
+        mcpServers: [],
+      })
+      ids.push(sessionId)
+    }
+    // Put a turn in flight on EVERY live session so no safe victim exists.
+    const pending = ids.map((sessionId) =>
+      agent.prompt({
+        sessionId,
+        prompt: [{ type: 'text', text: 'in flight' }],
+      }),
+    )
+
+    let failure: unknown
+    try {
+      await agent.newSession({
+        cwd: '/tmp/openbuff-active-17',
+        mcpServers: [],
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(RequestError)
+    expect((failure as RequestError).code).toBe(-32602)
+    expect(
+      (
+        (failure as RequestError).data as
+          | Record<string, Record<string, unknown>>
+          | undefined
+      )?.['openbuff.dev']?.code,
+    ).toBe('limit_exceeded')
+
+    // No active session was evicted: cancel resolves every in-flight turn.
+    for (const sessionId of ids) {
+      agent.cancel({ sessionId })
+    }
+    for (const turn of pending) {
+      expect(await turn).toEqual({ stopReason: 'cancelled' })
+    }
+  })
 })
 
 const RESTORE_CONTENT = 'export const answer = 42\n'
@@ -826,11 +1043,17 @@ describe('resolveAcpServeOptions load→restore integration', () => {
     })
     const agent = createAcpAgent({ ...resolved, connection })
 
-    // Empty before load.
-    expect(
-      (await agent.extMethod('openbuff/getReceipts', { sessionId }))
-        .receipts,
-    ).toEqual([])
+    // Before session/load the id is not yet owned by this connection, so
+    // the ext surface fails closed with invalid-params (per-connection
+    // session ownership) instead of serving store data for a foreign id.
+    let beforeLoad: unknown
+    try {
+      await agent.extMethod('openbuff/getReceipts', { sessionId })
+    } catch (error) {
+      beforeLoad = error
+    }
+    expect(beforeLoad).toBeInstanceOf(RequestError)
+    expect((beforeLoad as RequestError).code).toBe(-32602)
 
     // session/load drives the derived loadHandler → restoreFromJournal.
     const response = await agent.loadSession({

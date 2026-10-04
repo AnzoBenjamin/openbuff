@@ -7,6 +7,13 @@ import { getCliEnv } from './env'
 
 import type { CliEnv } from '../types/env'
 
+/**
+ * P1-T7 wiring note: the DA1 image-capability parser lives in this module so
+ * it can be merged into detectTerminalImageSupport in a later pass (see the
+ * TODO above parseDa1ImageCapability); until then the env-based detection is
+ * the only production path, and the parser is exercised by its unit tests.
+ */
+
 export type TerminalImageProtocol = 'iterm2' | 'kitty' | 'sixel' | 'none'
 
 let cachedProtocol: TerminalImageProtocol | null = null
@@ -215,6 +222,20 @@ export function renderInlineImage(
  * and iTerm2 are recognized; sixel is reported when its attribute (4) or an
  * explicit sixel marker appears; anything else (including an empty/unparseable
  * response) is 'none'. Never throws.
+ *
+ * TODO(P1-T7-wiring): this parser has no production call site yet —
+ * detectTerminalImageSupport() above decides purely from env vars. The
+ * intended integration is the preferred option from the finding: when the CLI
+ * starts up and runs capability detection, query DA1 (write `\x1b[c` to the
+ * raw tty, read the response with a bounded timeout, restore the tty mode)
+ * and merge the parser's result with the env-based detection —
+ * `parseDa1ImageCapability(response) !== 'none'` beats an env-derived 'none',
+ * while a parser 'none' or a query timeout/absent tty leaves the env-based
+ * verdict untouched (env-only fallback). Wiring it now would force
+ * detectTerminalImageSupport to become async and ripple through
+ * cli/src/index.tsx, image-block.tsx, and image-card.tsx, which is out of
+ * scope for this pass; the parser is exported and unit-tested so the wiring
+ * lands as a one-site change later.
  */
 export function parseDa1ImageCapability(
   response: string,

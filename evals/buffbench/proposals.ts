@@ -424,8 +424,17 @@ export function decideProposalPromotion(params: {
         iterations: policy.bootstrapIterations,
         seed: policy.bootstrapSeed,
       })
-      significanceSummary = `, wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)}, bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
-      if (wilcoxon.pValueTwoSided > maxPValue || ci.lower <= 0) {
+      // P8-T4a: a not-applicable Wilcoxon verdict (underpowered comparison,
+      // n < 10) must BLOCK promotion. The promotion gate rejects
+      // underpowered comparisons instead of trusting a neutral p-value.
+      significanceSummary = wilcoxon.applicable
+        ? `, wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)}, bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
+        : `, wilcoxon not applicable (${wilcoxon.reason}), bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
+      if (!wilcoxon.applicable) {
+        reasons.push(
+          `improvement not statistically significant (wilcoxon not applicable: ${wilcoxon.reason}; bootstrap meanDiff=${ci.meanDiff.toFixed(2)}, CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}])`,
+        )
+      } else if (wilcoxon.pValueTwoSided > maxPValue || ci.lower <= 0) {
         reasons.push(
           `improvement not statistically significant (wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)} > ${maxPValue.toFixed(4)} or bootstrap CI lower ${ci.lower.toFixed(2)} <= 0; meanDiff=${ci.meanDiff.toFixed(2)}, CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}])`,
         )

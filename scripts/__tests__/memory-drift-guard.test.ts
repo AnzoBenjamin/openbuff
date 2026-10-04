@@ -30,6 +30,7 @@ import {
   loadReviewReceipt,
   verifyReceiptCoversPair,
   sha256FileHash,
+  setGitCommandForTest,
 } from '../memory-drift-guard'
 
 /**
@@ -1271,5 +1272,220 @@ describe('staleness checker review-receipt suppression', () => {
         files,
       ),
     ).toBe(false)
+  })
+})
+
+describe('review receipt strict validation (forgery resistance)', () => {
+  /** Canonical stale fixture: knowledge.md committed before sibling src/. */
+  function seedStalePairStrict(): {
+    srcFile: string
+    srcFileKey: string
+    mdRel: string
+  } {
+    initGitRepo(tmpRoot)
+    mkdirSync(join(tmpRoot, 'packages', 'demo', 'src'), { recursive: true })
+    writeFileSync(join(tmpRoot, 'packages', 'demo', 'knowledge.md'), '# demo\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/knowledge.md'],
+      'add knowledge',
+      '2023-01-01T00:00:00',
+    )
+    const srcFile = join(tmpRoot, 'packages', 'demo', 'src', 'index.ts')
+    writeFileSync(srcFile, 'export const x = 1\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/src/index.ts'],
+      'add src',
+      '2024-06-01T00:00:00',
+    )
+    return {
+      srcFile,
+      srcFileKey: 'packages/demo/src/index.ts',
+      mdRel: 'packages/demo/knowledge.md',
+    }
+  }
+
+  function writeReceiptStrict(receipt: Record<string, unknown>): void {
+    mkdirSync(join(tmpRoot, '.openbuff', 'memory'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, '.openbuff', 'memory', 'review-receipt.json'),
+      JSON.stringify(receipt),
+    )
+  }
+
+  test('a wrong schemaVersion is treated as ABSENT (never suppressive)', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 2,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    expect(
+      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
+    ).toBe(true)
+  })
+
+  test('an unknown verdict string is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'SURE_FINE_TRUST_ME',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    expect(
+      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
+    ).toBe(true)
+  })
+
+  test('a fileHashes value that is not 64-hex sha256 is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    for (const badHash of [
+      `sha256:${'a'.repeat(64)}`,
+      'a'.repeat(63),
+      'a'.repeat(65),
+      'zzzz-not-hex-at-all-just-a-forgeable-string!!',
+      '',
+    ]) {
+      writeReceiptStrict({
+        schemaVersion: 1,
+        reviewer: 'code-reviewer',
+        verdict: 'LOOKS_GOOD',
+        reviewedFiles: ['packages/demo/src'],
+        fileHashes: { [pair.srcFileKey]: badHash },
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      })
+      expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    }
+    expect(
+      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
+    ).toBe(true)
+  })
+
+  test('an empty reviewer name is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: '   ',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+  })
+
+  test('an empty optional receiptId/agentId is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      receiptId: '',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      agentId: 42,
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    expect(
+      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
+    ).toBe(true)
+  })
+
+  test('a valid receipt carries receiptId/agentId and still suppresses', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      receiptId: 'review-run-1234',
+      agentId: 'agent-code-reviewer-9',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    const receipt = loadReviewReceipt(tmpRoot)
+    expect(receipt?.receiptId).toBe('review-run-1234')
+    expect(receipt?.agentId).toBe('agent-code-reviewer-9')
+    expect(
+      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
+    ).toBe(false)
+  })
+
+  test('checkStaleness degrades visibly when git fails during the per-pair work', () => {
+    const pair = seedStalePairStrict()
+    // The initial probe (`rev-parse --git-dir`) must SUCCEED so the guard
+    // enters the per-pair section; every other git spawn fails. Before the
+    // fail-visible wrap, such a mid-work git failure (batched last-commit
+    // lookup, receipt hash cross-check) was swallowed into a silent
+    // zero-findings result (fail-open). The shim inspects its first argument
+    // to pass only the probe.
+    const fakeBin = join(tmpRoot, 'probe-only-bin')
+    mkdirSync(fakeBin, { recursive: true })
+    const gitShim = join(fakeBin, 'git')
+    writeFileSync(
+      gitShim,
+      '#!/bin/sh\nif [ "$1" = "rev-parse" ]; then exit 0; fi\nexit 1\n',
+    )
+    chmodSync(gitShim, 0o755)
+    setGitCommandForTest(gitShim)
+    try {
+      const findings = checkStaleness(tmpRoot)
+      expect(
+        findings.some(
+          (f) => f.path === pair.mdRel && f.message.includes('degraded'),
+        ),
+      ).toBe(true)
+      expect(
+        findings.some(
+          (f) =>
+            f.path === pair.mdRel &&
+            f.message.includes('git failure during staleness check'),
+        ),
+      ).toBe(true)
+      expect(findings.some((f) => f.message.includes('UNVERIFIED'))).toBe(true)
+    } finally {
+      setGitCommandForTest(null)
+    }
+  })
+
+  test('checkStaleness degrades visibly (not silently clean) when git cannot run', () => {
+    const pair = seedStalePairStrict()
+    // Mutating process.env.PATH does NOT change child-process resolution
+    // under Bun (the real git keeps running), so a PATH-shim fixture can never
+    // reach the degraded path. Instead use the module's TEST-ONLY git command
+    // seam: /bin/false exits non-zero for every spawn, so the initial probe
+    // itself fails and the guard must report UNVERIFIED findings instead of
+    // silently reading as a clean pass.
+    setGitCommandForTest('/bin/false')
+    try {
+      const findings = checkStaleness(tmpRoot)
+      expect(
+        findings.some(
+          (f) => f.path === pair.mdRel && f.message.includes('degraded'),
+        ),
+      ).toBe(true)
+      expect(findings.some((f) => f.message.includes('UNVERIFIED'))).toBe(true)
+    } finally {
+      setGitCommandForTest(null)
+    }
   })
 })

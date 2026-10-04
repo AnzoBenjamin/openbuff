@@ -17,6 +17,7 @@ const realOpenTuiCoreSnapshot = { ...realOpenTuiCore }
 // ../tree-sitter-client. The stub client never spawns a worker; it either
 // records construction or throws on demand.
 const addDefaultParsersCalls: FiletypeParserOptions[][] = []
+const constructedClientOptions: Array<{ dataPath: string }> = []
 let constructedClientCount = 0
 let clientConstructorError: Error | null = null
 
@@ -45,6 +46,11 @@ mock.module('@opentui/core', () => ({
       throw clientConstructorError
     }
     constructedClientCount += 1
+    // Record the construction options so tests can assert the dataPath the
+    // client is bound to (SEC: per-user cache isolation).
+    constructedClientOptions.push(
+      JSON.parse(JSON.stringify(options)) as { dataPath: string },
+    )
     // Constructor called with `new`: returning undefined keeps `this` (the
     // fresh instance) as the result. Explicit so noImplicitReturns stays
     // satisfied alongside the disarmed path's object return.
@@ -66,12 +72,33 @@ afterAll(() => {
 // filtered existsSync double so the asset-existence filter has a skip to
 // exercise; every other path stays on the real filesystem.
 const realExistsSync = realFs.existsSync
+// Armed only by the foreign-ownership test below: when true, statSync reports
+// a DIFFERENT uid for the per-user tree-sitter cache dir so the ownership
+// check's fail-closed fallback can be exercised hermetically.
+let foreignTreeSitterCacheOwner = false
 const fsMock = () => ({
   ...realFs,
   existsSync: (candidate: Parameters<typeof realExistsSync>[0]): boolean =>
     typeof candidate === 'string' && candidate.includes('markdown_inline')
       ? false
       : realExistsSync(candidate),
+  statSync: (
+    candidate: string,
+    options?: { throwIfNoEntry?: boolean },
+  ): realFs.Stats | undefined => {
+    if (
+      foreignTreeSitterCacheOwner &&
+      candidate.includes('codebuff-tree-sitter')
+    ) {
+      const ownUid =
+        typeof process.getuid === 'function' ? process.getuid() : 0
+      return {
+        uid: ownUid + 1,
+        isSymbolicLink: () => false,
+      } as unknown as realFs.Stats
+    }
+    return realFs.statSync(candidate, options)
+  },
 })
 // mock.module is registry-wide for the whole test process (bun does not
 // isolate registrations across test files, and afterAll(mock.restore) does
@@ -84,7 +111,7 @@ mock.module('fs', fsMock)
 mock.module('node:fs', fsMock)
 
 // Imported after the mocks register so the module under test binds to them.
-const { buildDefaultParsers, getSharedTreeSitterClient, resetTreeSitterClientStateForTests } = await import(
+const { buildDefaultParsers, getSharedTreeSitterClient, getTreeSitterDataPath, resetTreeSitterClientStateForTests } = await import(
   '../tree-sitter-client'
 )
 
@@ -159,6 +186,7 @@ describe('getSharedTreeSitterClient', () => {
     // pristine singleton state.
     resetTreeSitterClientStateForTests()
     addDefaultParsersCalls.length = 0
+    constructedClientOptions.length = 0
     constructedClientCount = 0
     clientConstructorError = null
   })
@@ -268,6 +296,52 @@ describe('buildDefaultParsers', () => {
       // Every registered highlight query must actually exist on disk.
       expect(highlights.every((query) => realExistsSync(query))).toBe(true)
     }
+  })
+})
+
+describe('getTreeSitterDataPath (SEC: per-user cache isolation)', () => {
+  beforeEach(() => {
+    foreignTreeSitterCacheOwner = false
+  })
+
+  test('returns a per-uid cache path under the OS tmpdir', () => {
+    const dataPath = getTreeSitterDataPath()
+    expect(path.dirname(dataPath)).toBe(realOs.tmpdir())
+    expect(path.basename(dataPath)).toMatch(/^codebuff-tree-sitter-.+/)
+    // On POSIX the suffix is the numeric uid: the same user's repeat runs
+    // share the cache (the WASM cache-hit path), other users cannot.
+    if (typeof process.getuid === 'function') {
+      expect(dataPath).toContain(`u${process.getuid()}`)
+    }
+  })
+
+  test('fails closed to a private temp dir when the cache dir is owned by another uid', () => {
+    foreignTreeSitterCacheOwner = true
+    try {
+      const dataPath = getTreeSitterDataPath()
+      expect(path.basename(dataPath)).toMatch(
+        /^codebuff-tree-sitter-untrusted-/,
+      )
+      // The fallback dir is a fresh mkdtemp we own; clean it up.
+      realFs.rmSync(dataPath, { recursive: true, force: true })
+    } finally {
+      foreignTreeSitterCacheOwner = false
+    }
+  })
+
+  test('the shared client binds the stable per-user dataPath (cache-hit path intact)', () => {
+    const first = getSharedTreeSitterClient()
+    expect(first).not.toBeNull()
+    expect(constructedClientOptions).toHaveLength(1)
+    expect(
+      path.basename(constructedClientOptions[0]?.dataPath ?? ''),
+    ).toMatch(/^codebuff-tree-sitter-/)
+
+    // The memoized singleton reuses the SAME client and dataPath, so the
+    // worker's content-addressed grammar cache is still hit on later calls.
+    expect(getSharedTreeSitterClient()).toBe(first)
+    expect(constructedClientOptions).toHaveLength(1)
+    expect(constructedClientCount).toBe(1)
   })
 })
 

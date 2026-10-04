@@ -50,6 +50,14 @@ export type EventBridgeContext = {
     toolName: string,
     mutation?: { actions: Array<{ action: string }> },
   ) => string
+  /**
+   * NEW-3 (§12.8): the configured credential VALUES the streaming holdback
+   * redacts from chunk text. The holdback does NOT cover `tool_call`
+   * rawInput, so the same value substitution is applied here over every
+   * rawInput string field before emission. Omitted/empty → no credential
+   * redaction (matching the holdback's default posture).
+   */
+  credentialValues?: readonly string[]
 }
 
 /**
@@ -195,17 +203,23 @@ const RAW_INPUT_LIST_KEYS = ['replacements', 'edits']
  * field-listed. Arrays and plain objects are rebuilt; everything else passes
  * through.
  */
-function redactAllStringsDeep(value: unknown): unknown {
+function redactAllStringsDeep(value: unknown, depth: number): unknown {
   if (typeof value === 'string') {
     return SENSITIVE_PLACEHOLDER
   }
+  if (depth >= REDACT_WALK_MAX_DEPTH) {
+    // Same fail-closed shape as redactCredentialValuesDeep: a capped subtree
+    // is serialized rather than passed through, and redact-all-strings of
+    // that serialized form is the marker itself.
+    return SENSITIVE_PLACEHOLDER
+  }
   if (Array.isArray(value)) {
-    return value.map((element) => redactAllStringsDeep(element))
+    return value.map((element) => redactAllStringsDeep(element, depth + 1))
   }
   if (isRecord(value)) {
     const copy: Record<string, unknown> = {}
     for (const [field, fieldValue] of Object.entries(value)) {
-      copy[field] = redactAllStringsDeep(fieldValue)
+      copy[field] = redactAllStringsDeep(fieldValue, depth + 1)
     }
     return copy
   }
@@ -234,10 +248,76 @@ function redactSensitiveRawInput(
     const list = redacted[key]
     if (!Array.isArray(list)) continue
     redacted[key] = list.map((element) =>
-      isRecord(element) ? redactAllStringsDeep(element) : element,
+      isRecord(element) ? redactAllStringsDeep(element, 0) : element,
     )
   }
   return redacted
+}
+
+/** The NEW-3 substitution literal, identical to OutboundHoldback's emit path. */
+const CREDENTIAL_VALUE_REDACTED = '[REDACTED_SECRET]'
+
+/**
+ * Recursion bound shared by the deep-redaction walks (credential-value and
+ * sensitive-string) over a hostile nested rawInput. At the cap a walk does
+ * NOT pass the remaining subtree through: it is serialized and the
+ * serialized text is redacted instead (fail-closed).
+ */
+const REDACT_WALK_MAX_DEPTH = 32
+
+/** Applies the credential-value substitution to one serialized text blob. */
+function redactCredentialValuesInString(
+  text: string,
+  credentials: readonly string[],
+): string {
+  let redacted = text
+  for (const credential of credentials) {
+    if (credential.length === 0) continue
+    redacted = redacted.split(credential).join(CREDENTIAL_VALUE_REDACTED)
+  }
+  return redacted
+}
+
+/**
+ * NEW-3 (§12.8): substitutes every configured credential VALUE found in any
+ * string at any depth of a rawInput payload with "[REDACTED_SECRET]"
+ * (mirroring OutboundHoldback's emit path, which only covers streaming chunk
+ * text — rawInput bypassed the holdback entirely). Depth-bounded so a
+ * hostile deep payload cannot overflow the stack; at the depth cap the
+ * remaining subtree is serialized and the serialized text is redacted rather
+ * than passed through unredacted (EV-2, fail-closed).
+ */
+function redactCredentialValuesDeep(
+  value: unknown,
+  credentials: readonly string[],
+  depth: number,
+): unknown {
+  if (typeof value === 'string') {
+    return redactCredentialValuesInString(value, credentials)
+  }
+  if (depth >= REDACT_WALK_MAX_DEPTH) {
+    const serialized = JSON.stringify(value)
+    return typeof serialized === 'string'
+      ? redactCredentialValuesInString(serialized, credentials)
+      : value
+  }
+  if (Array.isArray(value)) {
+    return value.map((element) =>
+      redactCredentialValuesDeep(element, credentials, depth + 1),
+    )
+  }
+  if (isRecord(value)) {
+    const copy: Record<string, unknown> = {}
+    for (const [field, fieldValue] of Object.entries(value)) {
+      copy[field] = redactCredentialValuesDeep(
+        fieldValue,
+        credentials,
+        depth + 1,
+      )
+    }
+    return copy
+  }
+  return value
 }
 
 /** Whether any collected tool_call location points at a sensitive path. */
@@ -326,6 +406,58 @@ function mutationActionBlock(
     return { type: 'diff', path: action.path, newText: action.afterContent }
   }
   return undefined
+}
+
+/** Content-bearing mutation-result fields redacted for a sensitive-path action. */
+const MUTATION_RESULT_CONTENT_KEYS = [
+  'afterContent',
+  'beforeContent',
+  'patch',
+  'content',
+] as const
+
+/**
+ * EV-1: returns `values` with the content-bearing fields of every
+ * sensitive-path mutation action replaced with "[sensitive]" (the same
+ * placeholder the diff block's convention uses) so the raw-JSON
+ * `tool_result` text block never echoes post-edit file content for a
+ * sensitive path. Values without a sensitive-path mutation pass through
+ * unchanged (the same array when nothing is sensitive), and every serialized
+ * line stays JSON.parse-able.
+ */
+function redactSensitiveMutationValues(values: unknown[]): unknown[] {
+  const sensitivePaths = new Set<string>()
+  for (const value of values) {
+    const parsed = asMutationResult(value)
+    if (parsed === undefined) continue
+    for (const action of parsed.actions) {
+      if (isSensitivePath(action.path)) sensitivePaths.add(action.path)
+    }
+  }
+  if (sensitivePaths.size === 0) return values
+  return values.map((value) => {
+    if (
+      !isRecord(value) ||
+      value.kind !== 'file_mutation_result' ||
+      !Array.isArray(value.actions)
+    ) {
+      return value
+    }
+    return {
+      ...value,
+      actions: value.actions.map((action) => {
+        if (!isRecord(action) || !sensitivePaths.has(String(action.path)))
+          return action
+        const redacted = { ...action }
+        for (const key of MUTATION_RESULT_CONTENT_KEYS) {
+          if (typeof redacted[key] === 'string') {
+            redacted[key] = SENSITIVE_PLACEHOLDER
+          }
+        }
+        return redacted
+      }),
+    }
+  })
 }
 
 /**
@@ -507,9 +639,21 @@ export function printModeToSessionUpdates(
       // location path is sensitive, the content-bearing input fields are
       // replaced with "[sensitive]" (GV-25) before emission; the §12.1
       // transport chokepoint stays the last line of defense for the rest.
-      payload.rawInput = anyLocationSensitive(locations)
+      // NEW-6 (§12.8): rawInput rides every tool card. When any collected
+      // location path is sensitive, the content-bearing input fields are
+      // replaced with "[sensitive]" (GV-25) before emission; the §12.1
+      // transport chokepoint stays the last line of defense for the rest.
+      // NEW-3 (§12.8): the streaming holdback only covers chunk text, so the
+      // credential-value substitution is applied to rawInput here too — any
+      // configured credential value embedded in the tool input is replaced
+      // with "[REDACTED_SECRET]" before the card crosses the wire.
+      const rawInput = anyLocationSensitive(locations)
         ? redactSensitiveRawInput(event.input)
         : event.input
+      const credentials = ctx.credentialValues ?? []
+      payload.rawInput = credentials.some((value) => value.length > 0)
+        ? redactCredentialValuesDeep(rawInput, credentials, 0)
+        : rawInput
       return [payload]
     }
     case 'tool_start': {
@@ -567,8 +711,15 @@ export function printModeToSessionUpdates(
       }
 
       const content: Array<unknown> = []
+      // EV-1: the raw-JSON text block must not echo full post-edit file
+      // content for a sensitive-path action — the separate diff block already
+      // substitutes "[sensitive file changed]", so the content-bearing fields
+      // of any sensitive-path action are replaced with "[sensitive]" before
+      // serialization (each line stays JSON.parse-able).
       const text = capUtf8(
-        values.map((value) => JSON.stringify(value)).join('\n'),
+        redactSensitiveMutationValues(values)
+          .map((value) => JSON.stringify(value))
+          .join('\n'),
         TOOL_RESULT_CONTENT_MAX_BYTES,
       )
       if (text.length > 0) content.push({ type: 'text', text })

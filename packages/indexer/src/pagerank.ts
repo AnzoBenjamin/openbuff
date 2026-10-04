@@ -22,7 +22,11 @@ export interface PersonalizedPageRankParams {
    * vector over every node is used so scores still sum to 1.
    */
   seeds?: ReadonlyMap<string, number>
-  /** Damping factor (probability of following a link). Default: 0.85. */
+  /**
+   * Damping factor (probability of following a link). Default: 0.85. Clamped
+   * internally to (0, 1) EXCLUSIVE — damping exactly 1 makes the power
+   * iteration a fixed point that never converges.
+   */
   damping?: number
   /** Power-iteration cap. Default: 50. Clamped internally to [1, 200]. */
   maxIterations?: number
@@ -42,6 +46,13 @@ export const MAX_PAGERANK_NODES = 50_000
 const MAX_PAGERANK_ITERATIONS = 200
 /** Floor on the convergence epsilon so pathological inputs cannot loop forever. */
 const MIN_PAGERANK_EPSILON = 1e-12
+/**
+ * Damping clamp bounds, EXCLUSIVE of 1: damping exactly 1 never converges
+ * (the iteration can oscillate as a fixed point), so the clamp keeps strictly
+ * inside (0, 1).
+ */
+const MIN_PAGERANK_DAMPING = 1e-6
+const MAX_PAGERANK_DAMPING = 1 - 1e-6
 
 /**
  * Personalized PageRank: scores sum to <= 1 (rank pointed at unknown nodes is
@@ -52,7 +63,12 @@ export function personalizedPageRank(
   params: PersonalizedPageRankParams,
 ): Map<string, number> {
   const { adjacency } = params
-  const damping = sanitize(params.damping, DEFAULT_PAGERANK_DAMPING, 0, 1)
+  const damping = sanitize(
+    params.damping,
+    DEFAULT_PAGERANK_DAMPING,
+    MIN_PAGERANK_DAMPING,
+    MAX_PAGERANK_DAMPING,
+  )
   const maxIterations = Math.floor(
     sanitize(
       params.maxIterations,

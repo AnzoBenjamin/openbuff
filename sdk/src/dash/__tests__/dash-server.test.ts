@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 
 import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
+import type { JournalRunSummary } from '@codebuff/agent-runtime/util/run-journal'
 
 import { exportDashStatic, isInsideOutDir } from '../export'
 import { createDashProviderFromJournal } from '../provider'
@@ -409,6 +410,46 @@ describe('createDashProviderFromJournal', () => {
     expect(runs[0]!.startedAt).toBeUndefined()
     const runEvents = await provider.getRunEvents('run-bare')
     expect(runEvents[0]!.createdAt).toBeUndefined()
+  })
+
+  test('listRuns uses the runSummaries extension and never hydrates per-run events (O(runs))', async () => {
+    const events: JournalEventRow[] = [
+      {
+        seq: 0,
+        stepNumber: 0,
+        eventType: 'llm_request',
+        correlation: 'c1',
+        createdAt: 1704067200000,
+        payload: {},
+      },
+    ]
+    let eventsCalls = 0
+    const base = fakeJournalReader({ 'run-A': events })
+    const reader = {
+      ...base,
+      events: (runId: string) => {
+        eventsCalls += 1
+        return base.events(runId)
+      },
+      runSummaries: (): JournalRunSummary[] => [
+        { runId: 'run-A', eventCount: 1, firstCreatedAt: 1704067200000 },
+        { runId: 'run-bare', eventCount: 3 },
+      ],
+    } as JournalReader & {
+      runIds: () => string[]
+      runSummaries: () => JournalRunSummary[]
+    }
+    const provider = createDashProviderFromJournal({ journalReader: reader })
+
+    const runs = await provider.listRuns()
+    // Same output shape as the per-run fallback: a REAL startedAt when the
+    // aggregate carries MIN(created_at), omitted when it does not.
+    expect(runs).toEqual([
+      { runId: 'run-A', startedAt: '2024-01-01T00:00:00.000Z', eventCount: 1 },
+      { runId: 'run-bare', eventCount: 3 },
+    ])
+    // The bounded aggregate replaced per-run event hydration entirely.
+    expect(eventsCalls).toBe(0)
   })
 })
 

@@ -1,4 +1,4 @@
-import { existsSync } from 'fs'
+import { existsSync, mkdtempSync, statSync } from 'fs'
 import { createRequire } from 'module'
 import os from 'os'
 import path from 'path'
@@ -187,12 +187,64 @@ export const buildDefaultParsers = (): FiletypeParserOptions[] => {
 }
 
 /**
- * dataPath is where the tree-sitter worker caches grammars and queries
- * (the worker mkdirs `<dataPath>/tree-sitter/{languages,queries}` on init).
- * A temp-dir cache keeps the CLI from writing into the repo or the chat dir.
+ * SEC: the tree-sitter cache directory is PER-USER. A single shared
+ * /tmp/codebuff-tree-sitter is both predictable and symlinkable: another
+ * local account could pre-create it (or swap grammar/query files into it)
+ * and poison the WASM loads. The per-uid suffix isolates accounts, and a
+ * pre-existing directory owned by a DIFFERENT uid is never trusted — the
+ * call fails closed to a private mkdtemp dir for this run.
+ *
+ * Grammar/query files are content-addressed by the worker, so per-user
+ * isolation does not change the cache-hit path: repeat runs by the same
+ * user still reuse `<dataPath>/tree-sitter/{languages,queries}`.
  */
-const getTreeSitterDataPath = (): string => {
-  return path.join(os.tmpdir(), 'codebuff-tree-sitter')
+export const getTreeSitterDataPath = (): string => {
+  const perUserPath = path.join(
+    os.tmpdir(),
+    `codebuff-tree-sitter-${getTreeSitterCacheUserSuffix()}`,
+  )
+  try {
+    const stat = statSync(perUserPath, { throwIfNoEntry: false })
+    if (
+      stat !== undefined &&
+      typeof process.getuid === 'function' &&
+      stat.uid !== process.getuid()
+    ) {
+      logger.warn(
+        { perUserPath },
+        'tree-sitter cache directory is owned by another user; using a private temp dir for this run',
+      )
+      return mkdtempSync(
+        path.join(os.tmpdir(), 'codebuff-tree-sitter-untrusted-'),
+      )
+    }
+  } catch (error) {
+    logger.warn(
+      { error },
+      'could not inspect the tree-sitter cache directory; using a private temp dir for this run',
+    )
+    return mkdtempSync(
+      path.join(os.tmpdir(), 'codebuff-tree-sitter-untrusted-'),
+    )
+  }
+  return perUserPath
+}
+
+/**
+ * Per-user cache suffix: the numeric uid on POSIX; a sanitized username
+ * where uid is unavailable (Windows). If neither can be resolved, degrade
+ * to a pid-private dir (no cross-run cache reuse, but never shared).
+ */
+const getTreeSitterCacheUserSuffix = (): string => {
+  try {
+    const info = os.userInfo()
+    if (typeof info.uid === 'number' && Number.isFinite(info.uid)) {
+      return `u${info.uid}`
+    }
+    return `n${info.username.replace(/[^A-Za-z0-9_-]/g, '_')}`
+  } catch {
+    return `p${process.pid}`
+  }
 }
 
 /**

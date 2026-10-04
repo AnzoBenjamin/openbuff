@@ -593,6 +593,17 @@ export class IncrementalTokenCounter {
     return total
   }
 
+  /**
+   * Full prompt-cost estimate: {@link messagesTokens} plus the system+tools
+   * baseline set via {@link setSystemAndToolsTokens}. messagesTokens
+   * deliberately excludes that baseline (the caller adds it — the pinned
+   * run-agent-step pattern); this accessor serves callers that want the
+   * combined number without re-deriving the split.
+   */
+  totalTokens(messages: readonly unknown[]): number {
+    return this.messagesTokens(messages) + this.systemAndToolsTokens
+  }
+
   /** Drop memoized counts (full recount after a history-rewriting event). */
   reset(): void {
     this.countsByMessage = new WeakMap()

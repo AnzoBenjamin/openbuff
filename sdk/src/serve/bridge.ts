@@ -211,6 +211,34 @@ export function createServeBridge(options: ServeBridgeOptions): {
   const lastCapabilitiesPushAt = new Map<string, number>()
 
   /**
+   * Warn-level containment for best-effort flushes: a rejected update seam
+   * (e.g. a client hang-up rejecting the wire) must never surface as an
+   * unhandled rejection and crash the serve process. Contained and logged;
+   * never re-thrown.
+   */
+  const warnFlushFailure = (source: string, error: unknown): void => {
+    options.logger?.warn(
+      {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'best-effort holdback flush failed; continuing',
+    )
+  }
+
+  /** Awaits one emit, containing (warn-level) any rejection it produces. */
+  const tryEmit = async (
+    source: string,
+    emit: () => unknown,
+  ): Promise<void> => {
+    try {
+      await emit()
+    } catch (error) {
+      warnFlushFailure(source, error)
+    }
+  }
+
+  /**
    * §6.1: pushes `_openbuff.dev/capabilities_changed` when the session's map
    * changed since the last push, rate-limited to one push per 250 ms and
    * always sending the full map. A no-op without `onSessionUpdate`.
@@ -311,17 +339,22 @@ export function createServeBridge(options: ServeBridgeOptions): {
           now,
           IDLE_FLUSH_MS,
         )) {
-          void input.update(piece)
+          // Fire-and-forget WITH containment: a rejected update (client
+          // hang-up) must never surface as an unhandled rejection and crash
+          // the serve process from an idle timer tick.
+          void tryEmit('idle-flush update', () => input.update(piece))
         }
         for (const piece of thoughtHoldback.flushIdleSession(
           input.sessionId,
           now,
           IDLE_FLUSH_MS,
         )) {
-          void options.onSessionUpdate?.({
-            sessionUpdate: 'agent_thought_chunk',
-            content: { type: 'text', text: piece },
-          })
+          void tryEmit('idle-flush onSessionUpdate', () =>
+            options.onSessionUpdate?.({
+              sessionUpdate: 'agent_thought_chunk',
+              content: { type: 'text', text: piece },
+            }),
+          )
         }
       }, IDLE_FLUSH_MS)
       // A flush timer must never keep the process alive on its own.
@@ -421,6 +454,10 @@ export function createServeBridge(options: ServeBridgeOptions): {
         runId: undefined,
         eventsMode,
         projectRoot,
+        // NEW-3 (§12.8): the configured credential values back the holdback;
+        // the event bridge applies the same value substitution to tool_call
+        // rawInput, which the streaming holdback does not cover.
+        credentialValues,
         toolKind,
       })
       for (const payload of payloads) {
@@ -733,8 +770,23 @@ export function createServeBridge(options: ServeBridgeOptions): {
     } finally {
       // §12.8 NEW-3 flush contract: turn end AND cancel release everything
       // held; the idle timer is stopped so no per-turn timer outlives the turn.
+      // The final flush is best-effort: a rejected emit (e.g. a client
+      // hang-up) is contained at warn level and NEVER masks the run error or
+      // throws out of a finally — and a CANCELLED turn never flushes at all
+      // (its held windows are drained without emitting, so nothing crosses a
+      // dead sink while memory stays bounded). A normally-settled turn still
+      // attempts every held frame, so the last frame is never dropped.
       stopIdleFlusher()
-      await flushHoldbacks()
+      if (input.signal.aborted) {
+        void messageHoldback.flushSession(input.sessionId)
+        void thoughtHoldback.flushSession(input.sessionId)
+      } else {
+        try {
+          await flushHoldbacks()
+        } catch (error) {
+          warnFlushFailure('turn-end flush', error)
+        }
+      }
       // Turn teardown: detach the cancel listener and resolve every still-
       // pending approval/elicitation `false` so no timer or promise outlives
       // the turn.

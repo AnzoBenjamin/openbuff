@@ -11,12 +11,19 @@ import { isReadPathBlocked } from './read-policy'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { FileFilter } from './read-files'
 
 const MAX_INSPECT_BYTES = 256 * 1024 * 1024
 const MAX_TEXT_ASSET_BYTES = 24 * 1024 * 1024
 const BLENDER_TIMEOUT_MS = 120_000
 const BLENDER_JSON_MARKER = 'OPENBUFF_3D_JSON:'
+/**
+ * Cap on the serialized OPENBUFF_3D_OPERATIONS child-env payload. A huge
+ * operations array can exceed the OS per-env-var/exec limit (E2BIG) and fail
+ * the Blender spawn outright; refuse earlier with a clear error instead.
+ */
+const MAX_OPERATIONS_ENV_CHARS = 100_000
 
 type JsonRecord = Record<string, unknown>
 
@@ -299,7 +306,11 @@ async function runBlender(
       env: { ...getChildProcessEnv(), ...environment },
     })
     const maxOutputBytes = 8 * 1024 * 1024
-    let output = ''
+    // Separate stdout/stderr buffers: the OPENBUFF_3D_JSON: marker is printed
+    // on stdout only, so stderr noise interleaved into one merged buffer can
+    // bury or corrupt the marker line the JSON parse slices after it.
+    let stdout = ''
+    let stderr = ''
     let outputBytes = 0
     let forcedError: string | undefined
     let settled = false
@@ -322,25 +333,31 @@ async function runBlender(
         finish({ ok: false, error: message })
       }
     }
-    const appendOutput = (chunk: Buffer) => {
-      if (forcedError) return
-      outputBytes += chunk.byteLength
-      if (outputBytes > maxOutputBytes) {
-        stop('Blender output exceeded the 8MB safety limit.')
-        return
+    const makeAppendOutput = (sink: (text: string) => void) => {
+      return (chunk: Buffer) => {
+        if (forcedError) return
+        outputBytes += chunk.byteLength
+        if (outputBytes > maxOutputBytes) {
+          stop('Blender output exceeded the 8MB safety limit.')
+          return
+        }
+        sink(chunk.toString('utf8'))
       }
-      output += chunk.toString('utf8')
     }
-    child.stdout.on('data', appendOutput)
-    child.stderr.on('data', appendOutput)
+    child.stdout.on('data', makeAppendOutput((text) => (stdout += text)))
+    child.stderr.on('data', makeAppendOutput((text) => (stderr += text)))
     child.on('error', (error) => finish({ ok: false, error: error.message }))
     child.on('close', (code) => {
       if (forcedError) {
         finish({ ok: false, error: forcedError })
         return
       }
+      // Error diagnostics combine both streams (Python tracebacks and
+      // Blender's "Error: Python:" lines land on stderr); only the JSON
+      // marker parse done by callers is stdout-only.
+      const combined = stdout + stderr
       if (code !== 0) {
-        const detail = output.trim().slice(-4_000)
+        const detail = combined.trim().slice(-4_000)
         finish({
           ok: false,
           error: `Blender exited with status ${code}${detail ? `: ${detail}` : ''}`,
@@ -348,16 +365,16 @@ async function runBlender(
         return
       }
       if (
-        output.includes('Traceback (most recent call last)') ||
-        output.includes('Error: Python:')
+        combined.includes('Traceback (most recent call last)') ||
+        combined.includes('Error: Python:')
       ) {
         finish({
           ok: false,
-          error: `Blender Python execution failed: ${output.trim().slice(-4_000)}`,
+          error: `Blender Python execution failed: ${combined.trim().slice(-4_000)}`,
         })
         return
       }
-      finish({ ok: true, stdout: output })
+      finish({ ok: true, stdout })
     })
     const timeoutId = setTimeout(
       () => stop(`Blender operation timed out after ${timeout}ms.`),
@@ -556,6 +573,7 @@ export async function inspect3dAsset(params: {
   fs: CodebuffFileSystem
   signal?: AbortSignal
   fileFilter?: FileFilter
+  logger?: Logger
 }): Promise<CodebuffToolOutput<'inspect_3d_asset'>> {
   try {
     if (params.signal?.aborted) throw new Error('3D inspection cancelled.')
@@ -683,8 +701,19 @@ export async function inspect3dAsset(params: {
         await params.fs.writeFile(absoluteMetadataPath, metadataContent)
       }
       derivedMetadataPath = relativeMetadataPath
-    } catch {
-      // Inspection remains useful even when an adapter cannot persist caches.
+    } catch (error) {
+      // Inspection remains useful even when an adapter cannot persist caches;
+      // surface the failure once (warn) instead of silently swallowing it.
+      params.logger?.warn?.(
+        {
+          path: params.path,
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error).slice(0, 300),
+        },
+        'openbuff 3d: failed to persist the derived metadata cache',
+      )
     }
     return jsonOutput<'inspect_3d_asset'>({
       path: asset.resolved.relativePath,
@@ -908,11 +937,17 @@ export async function edit3dAsset(params: {
       flag: 'wx',
     })
 
+    const operationsEnv = JSON.stringify(params.operations)
+    if (operationsEnv.length > MAX_OPERATIONS_ENV_CHARS) {
+      return notApplied(
+        `The operations payload is too large to hand to Blender (${operationsEnv.length} chars; the limit is ${MAX_OPERATIONS_ENV_CHARS}). Split the edit into smaller batches.`,
+      )
+    }
     const blender = await runBlender(
       ['--background', workingPath, '--python', editScriptPath],
       BLENDER_TIMEOUT_MS,
       {
-        OPENBUFF_3D_OPERATIONS: JSON.stringify(params.operations),
+        OPENBUFF_3D_OPERATIONS: operationsEnv,
       },
       params.signal,
     )

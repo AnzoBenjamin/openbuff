@@ -125,6 +125,61 @@ describe('jsonSchemaToTypeScript unhandled-shape contract', () => {
       }),
     ).toBe('[string, ...(number)[]]')
   })
+
+  it('throws naming the field for a nested $ref instead of silently dropping it', () => {
+    expect(() =>
+      jsonSchemaToTypeScript({
+        type: 'object',
+        properties: {
+          payload: { $ref: '#/$defs/payload' },
+        },
+      }),
+    ).toThrow(
+      'Unsupported JSON Schema shape for TS mapping at schema.payload: $ref',
+    )
+  })
+
+  it('throws naming the tool for object-level composite keys it cannot express', () => {
+    // Object-level allOf/patternProperties/$defs/prefixItems used to be
+    // silently dropped from the emitted interface, under-constraining the
+    // frozen wire contract; each must now throw with the tool/field context.
+    for (const key of ['allOf', 'patternProperties', '$defs', 'prefixItems']) {
+      const schema: Record<string, unknown> = {
+        type: 'object',
+        properties: {},
+      }
+      schema[key] = []
+      expect(() => jsonSchemaToTypeScript(schema, 'my-tool')).toThrow(
+        `at my-tool: unhandled object-level key(s) ${key}`,
+      )
+    }
+  })
+
+  it('maps additionalProperties true to an any index signature', () => {
+    expect(
+      jsonSchemaToTypeScript({
+        type: 'object',
+        properties: {},
+        additionalProperties: true,
+      }),
+    ).toBe('{\n  [key: string]: any\n}')
+  })
+
+  it('maps a strict empty object (additionalProperties false) to a precise empty record', () => {
+    // additionalProperties: false is falsy-adjacent; the old falsy check
+    // collapsed it into the loose Record<string, any>. It must map to the
+    // precise empty-object shape instead.
+    expect(
+      jsonSchemaToTypeScript({
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      }),
+    ).toBe('Record<string, never>')
+    expect(
+      jsonSchemaToTypeScript({ type: 'object', additionalProperties: false }),
+    ).toBe('Record<string, never>')
+  })
 })
 
 const capabilityScope = {

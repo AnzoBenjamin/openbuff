@@ -1209,7 +1209,6 @@ ${guideSections}
         gatePassedReviewerVerdict: '',
         gatePassedValidationSummary: '',
         gatePassedFingerprint: '',
-        reviewedReviewableFingerprint: '',
         lastReviewerGateSkipReason: '',
         preEditSecurityReviewDone: false,
         securityReviewGateDone: false,
@@ -1243,7 +1242,6 @@ ${guideSections}
       activeWorkState.gatePassedReviewerVerdict ??= ''
       activeWorkState.gatePassedValidationSummary ??= ''
       activeWorkState.gatePassedFingerprint ??= ''
-      activeWorkState.reviewedReviewableFingerprint ??= ''
       activeWorkState.lastReviewerGateSkipReason ??= ''
       activeWorkState.openReviewerBlockers ??= []
       activeWorkState.openReviewerFindings ??= []
@@ -5329,10 +5327,9 @@ ${guideSections}
         // reviewer even though a matching LOOKS_GOOD receipt for those exact
         // bytes was still on file. The scalar added no safety (the gateId match
         // is strictly more specific — same family, same file set, same
-        // gate-computed bytes), only false misses. It is now WRITE-ONLY state
-        // kept for serialized-state compatibility with older sessions and
-        // scheduled for removal; see its docblock in agents/base2/gate-state.ts
-        // for the reader inventory and removal path.
+        // gate-computed bytes), only false misses, and it has since been
+        // removed entirely; older serialized state carrying the key is loaded
+        // harmlessly as an ignored unknown key.
         //
         // The attestability check is what keeps this fail-closed, and it is why
         // widening the rule is safe: a non-attestable marker such as
@@ -6728,13 +6725,6 @@ ${guideSections}
               passedPendingFiles,
               validationSummary,
             )
-            // Soft-deprecated WRITE-ONLY field: nothing in production source
-            // reads it (the reviewer skip reads the reviewReceipts ledger). It
-            // is still written so state serialized by this base2 stays
-            // round-trip identical for older readers; see its docblock in
-            // agents/base2/gate-state.ts for the removal path.
-            activeWorkState.reviewedReviewableFingerprint =
-              reviewableFingerprint
             activeWorkState.lastReviewerGateSkipReason = ''
             activeWorkState.repairRoundCount = 0
             activeWorkState.repairSessionId = undefined

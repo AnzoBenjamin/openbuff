@@ -13,6 +13,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -341,59 +342,108 @@ describe('transaction intent log crash simulation', () => {
 })
 
 describe('transaction intent log durability', () => {
-  test('the 101st transaction drops the oldest', async () => {
+  test('the 101st transaction drops the oldest finished one', async () => {
     const log = createTransactionIntentLog({ stateDir })
     for (let index = 0; index < TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS; index++) {
       expect((await begin(log, `tx-${index}`)).ok).toBe(true)
+      expect((await log.commitTransaction(`tx-${index}`)).ok).toBe(true)
     }
-    // All 100 half-applied transactions are recoverable.
+    // Everything is resolved, so nothing is recoverable. The commit of the
+    // 100th transaction (tx-99) is itself the 101st candidate event group,
+    // so the count cap already trimmed the OLDEST FINISHED transaction
+    // (tx-0) at that commit: 99 tx_begin groups survive the loop, and the
+    // just-appended terminal event is never the dropped one.
     let recovery = await log.recoverInterruptedTransactions()
-    expect(recovery.ok ? recovery.transactions.length : 0).toBe(
-      TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS,
-    )
+    expect(recovery.ok ? recovery.transactions : []).toEqual([])
+    let raw = readFileSync(log.filePath, 'utf8')
+    expect(raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')))
+      .toHaveLength(TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS - 1)
+    expect(raw).not.toContain('"tx-0"')
+    expect(raw).toContain('"tx-1"')
 
+    // The 101st transaction fills the freed slot back up to the cap: its
+    // begin stays half-applied and recoverable, and only FINISHED
+    // transactions are ever droppable.
     expect((await begin(log, 'tx-100')).ok).toBe(true)
     recovery = await log.recoverInterruptedTransactions()
-    const transactions = recovery.ok ? recovery.transactions : []
-    expect(transactions).toHaveLength(TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS)
-    // Oldest dropped first.
-    expect(transactions[0]?.transactionId).toBe('tx-1')
-    expect(transactions.at(-1)?.transactionId).toBe('tx-100')
+    expect(
+      recovery.ok ? recovery.transactions.map((tx) => tx.transactionId) : [],
+    ).toEqual(['tx-100'])
+    raw = readFileSync(log.filePath, 'utf8')
+    expect(raw).not.toContain('"tx-0"')
+    expect(raw).toContain('"tx-1"')
+    expect(raw).toContain('"tx-100"')
+    expect(raw.split('\n').filter((line) => line.includes('"kind":"tx_begin"')))
+      .toHaveLength(TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS)
   })
 
-  test('the byte cap drops the oldest transactions beyond it', async () => {
+  test('the byte cap drops the oldest finished transactions, never unresolved ones', async () => {
     const log = createTransactionIntentLog({
       stateDir,
       maxTransactions: 100,
-      maxBytes: 600,
+      maxBytes: 900,
     })
-    // Each begin line is well over 100 bytes because of the pre-image.
-    for (let index = 0; index < 8; index++) {
-      expect(
-        (
-          await log.beginTransaction({
-            transactionId: `tx-byte-${index}`,
-            operationId: `op-${index}`,
-            callId: `call-${index}`,
-            entries: [
-              {
-                path: `f${index}.ts`,
-                beforeHash: 'sha256:x',
-                beforeBytes: 'x'.repeat(80),
-              },
-            ],
-          })
-        ).ok,
-      ).toBe(true)
+    // Six finished (droppable) transactions, then two half-applied ones.
+    for (let index = 0; index < 6; index++) {
+      expect((await begin(log, `tx-byte-${index}`)).ok).toBe(true)
+      expect((await log.commitTransaction(`tx-byte-${index}`)).ok).toBe(true)
+    }
+    expect((await begin(log, 'tx-byte-6')).ok).toBe(true)
+    expect((await begin(log, 'tx-byte-7')).ok).toBe(true)
+
+    const recovery = await log.recoverInterruptedTransactions()
+    expect(
+      recovery.ok ? recovery.transactions.map((tx) => tx.transactionId) : [],
+    ).toEqual(['tx-byte-6', 'tx-byte-7'])
+    // Finished transactions were dropped oldest-first to fit the cap, but
+    // the two unresolved ones survive even though they are now the oldest.
+    const raw = readFileSync(log.filePath, 'utf8')
+    expect(raw).not.toContain('"tx-byte-0"')
+    expect(raw).toContain('"tx-byte-6"')
+    expect(raw).toContain('"tx-byte-7"')
+    // The file itself stays under the cap.
+    expect(raw.length).toBeLessThan(900)
+  })
+
+  test('trim keeps an unfinished transaction’s entries even when it is the oldest', async () => {
+    const log = createTransactionIntentLog({ stateDir, maxTransactions: 3 })
+    // The oldest transaction is never resolved: it models a live sibling
+    // mid-commit whose terminal marker has not landed yet.
+    expect((await begin(log, 'tx-unfinished-oldest')).ok).toBe(true)
+    expect((await begin(log, 'tx-fin-a')).ok).toBe(true)
+    expect((await log.commitTransaction('tx-fin-a')).ok).toBe(true)
+    expect((await begin(log, 'tx-fin-b')).ok).toBe(true)
+    expect((await log.commitTransaction('tx-fin-b')).ok).toBe(true)
+
+    // A fourth transaction overflows the count cap; the only droppable group
+    // is a finished one, so the OLDEST (unfinished) transaction survives.
+    expect((await begin(log, 'tx-newest')).ok).toBe(true)
+
+    const recovery = await log.recoverInterruptedTransactions()
+    expect(
+      recovery.ok ? recovery.transactions.map((tx) => tx.transactionId) : [],
+    ).toEqual(['tx-unfinished-oldest', 'tx-newest'])
+    const raw = readFileSync(log.filePath, 'utf8')
+    expect(raw).toContain('"tx-unfinished-oldest"')
+    expect(raw).toContain('"tx-fin-b"')
+    expect(raw).not.toContain('"tx-fin-a"')
+  })
+
+  test('an append that cannot fit without evicting an unresolved transaction is rejected', async () => {
+    const log = createTransactionIntentLog({ stateDir, maxTransactions: 2 })
+    expect((await begin(log, 'tx-half-1')).ok).toBe(true)
+    expect((await begin(log, 'tx-half-2')).ok).toBe(true)
+    // Both transactions are unresolved, so the third cannot fit without
+    // evicting one: a structured failure, and the log is left unchanged.
+    const outcome = await begin(log, 'tx-half-3')
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) {
+      expect(outcome.error).toContain('cap')
     }
     const recovery = await log.recoverInterruptedTransactions()
-    const transactions = recovery.ok ? recovery.transactions : []
-    expect(transactions.length).toBeLessThan(8)
-    expect(transactions.length).toBeGreaterThan(0)
-    // Oldest dropped first.
-    expect(transactions[0]?.transactionId).not.toBe('tx-byte-0')
-    // The file itself stays under the cap.
-    expect(readFileSync(log.filePath, 'utf8').length).toBeLessThan(600)
+    expect(
+      recovery.ok ? recovery.transactions.map((tx) => tx.transactionId) : [],
+    ).toEqual(['tx-half-1', 'tx-half-2'])
   })
 
   test('a single transaction larger than maxBytes is rejected, not silently dropped', async () => {
@@ -516,7 +566,7 @@ describe('transaction intent log durability', () => {
     ).toEqual(['tx-keep'])
   })
 
-  test('appends fsync the tmp file before the rename and the directory after', async () => {
+  test('a plain append fsyncs the log file itself and never creates a tmp rewrite', async () => {
     // FileHandle is a type-only binding in this tsconfig, so derive the
     // shared prototype from a real opened handle instead of the constructor
     // (every fs/promises handle shares it, so the spy intercepts the module).
@@ -524,9 +574,11 @@ describe('transaction intent log durability', () => {
     const handleProto = Object.getPrototypeOf(probe) as FileHandle
     await probe.close()
     const originalSync = handleProto.sync
-    // Per fsync: whether the tmp file still existed at the moment the fsync
-    // fired (true = before the rename, false = after it).
+    // Per fsync: whether some `.tmp` rewrite artifact existed at that moment
+    // (true would mean a whole-file read-rewrite happened).
     const syncSawTmpFile: boolean[] = []
+    const observedLockModes: number[] = []
+    let observedLogPath = ''
     const syncSpy = spyOn(handleProto, 'sync').mockImplementation(
       async function (this: FileHandle) {
         const tmpName = readdirSync(stateDir).find((name) =>
@@ -535,18 +587,97 @@ describe('transaction intent log durability', () => {
         syncSawTmpFile.push(
           tmpName !== undefined && existsSync(join(stateDir, tmpName)),
         )
+        // The append runs while the holder's lock file exists: record its
+        // mode to prove the lock artifact is written owner-only too.
+        if (observedLogPath !== '') {
+          const lockPath = `${observedLogPath}.lock`
+          if (existsSync(lockPath)) {
+            observedLockModes.push(statSync(lockPath).mode & 0o777)
+          }
+        }
         await originalSync.call(this)
       },
     )
     try {
       const log = createTransactionIntentLog({ stateDir })
-      expect((await begin(log, 'tx-fsync')).ok).toBe(true)
+      observedLogPath = log.filePath
+      expect((await begin(log, 'tx-append-fsync')).ok).toBe(true)
+      expect((await log.commitTransaction('tx-append-fsync')).ok).toBe(true)
+
+      // The append path fsyncs the log file itself...
+      expect(syncSawTmpFile.length).toBeGreaterThanOrEqual(2)
+      // ...and never touches a tmp rewrite artifact: the whole-file
+      // read-rewrite is reserved for the bounded trim.
+      expect(syncSawTmpFile.every((sawTmp) => sawTmp === false)).toBe(true)
+      // The lock that was held while the appends ran is owner-only.
+      expect(observedLockModes.length).toBeGreaterThanOrEqual(1)
+      expect(observedLockModes.every((mode) => mode === 0o600)).toBe(true)
+    } finally {
+      syncSpy.mockRestore()
+    }
+  })
+
+  test('the bounded trim still fsyncs the tmp file before the rename and the directory after', async () => {
+    const probe = await open(join(stateDir, '.fsync-probe'), 'w')
+    const handleProto = Object.getPrototypeOf(probe) as FileHandle
+    await probe.close()
+    const originalSync = handleProto.sync
+    // Per fsync: whether the tmp file still existed at the moment the fsync
+    // fired (true = before the rename, false = after it).
+    const syncSawTmpFile: boolean[] = []
+    const observedTmpModes: number[] = []
+    const syncSpy = spyOn(handleProto, 'sync').mockImplementation(
+      async function (this: FileHandle) {
+        const tmpName = readdirSync(stateDir).find((name) =>
+          name.endsWith('.tmp'),
+        )
+        if (tmpName !== undefined && existsSync(join(stateDir, tmpName))) {
+          syncSawTmpFile.push(true)
+          observedTmpModes.push(statSync(join(stateDir, tmpName)).mode & 0o777)
+        } else {
+          syncSawTmpFile.push(false)
+        }
+        await originalSync.call(this)
+      },
+    )
+    try {
+      const log = createTransactionIntentLog({ stateDir, maxBytes: 512 })
+      // Seed a FINISHED transaction whose lines exceed the byte cap, so the
+      // next append must trim — exercising the read-rewrite path.
+      writeFileSync(
+        log.filePath,
+        `${JSON.stringify({
+          kind: 'tx_begin',
+          transactionId: 'tx-seed',
+          operationId: 'op-seed',
+          callId: 'call-seed',
+          startedAt: new Date().toISOString(),
+          ownerPid: process.pid,
+          ownerToken: 'seed-token',
+          entries: [
+            {
+              path: 'seed.ts',
+              beforeHash: 'sha256:seed',
+              beforeBytes: 'x'.repeat(400),
+            },
+          ],
+        })}\n${JSON.stringify({
+          kind: 'tx_commit',
+          transactionId: 'tx-seed',
+          committedAt: new Date().toISOString(),
+        })}\n`,
+        'utf8',
+      )
+
+      expect((await begin(log, 'tx-trim-fsync')).ok).toBe(true)
 
       // The tmp file's data blocks are flushed BEFORE the rename: without
       // that, a power loss after the rename can leave the log zero-length or
       // truncated and destroy the durable pre-image.
       expect(syncSawTmpFile.length).toBeGreaterThanOrEqual(1)
       expect(syncSawTmpFile[0]).toBe(true)
+      // The tmp artifact is owner-only: it becomes the log on rename.
+      expect(observedTmpModes.every((mode) => mode === 0o600)).toBe(true)
       // The directory entry holding the rename is flushed AFTER the rename,
       // so the rename itself survives a power cycle. Platforms that reject
       // directory fsync (e.g. Windows) degrade to file-level durability and
@@ -557,6 +688,43 @@ describe('transaction intent log durability', () => {
     } finally {
       syncSpy.mockRestore()
     }
+  })
+})
+
+describe('transaction intent log append-only growth', () => {
+  test('appends grow the file monotonically without rewriting existing bytes', async () => {
+    const log = createTransactionIntentLog({ stateDir })
+    expect((await begin(log, 'tx-grow-1')).ok).toBe(true)
+    let previousSize = statSync(log.filePath).size
+    let previousContent = readFileSync(log.filePath, 'utf8')
+    const assertAppendOnly = () => {
+      const size = statSync(log.filePath).size
+      const raw = readFileSync(log.filePath, 'utf8')
+      // Strictly growing: each append added bytes and removed none.
+      expect(size).toBeGreaterThan(previousSize)
+      // The previous bytes survive verbatim as an exact prefix: nothing was
+      // rewritten in place.
+      expect(raw.startsWith(previousContent)).toBe(true)
+      previousSize = size
+      previousContent = raw
+    }
+
+    expect((await log.commitTransaction('tx-grow-1')).ok).toBe(true)
+    assertAppendOnly()
+    expect((await begin(log, 'tx-grow-2')).ok).toBe(true)
+    assertAppendOnly()
+    expect(
+      (await log.abortTransaction('tx-grow-2', 'changed my mind')).ok,
+    ).toBe(true)
+    assertAppendOnly()
+    expect((await begin(log, 'tx-grow-3')).ok).toBe(true)
+    assertAppendOnly()
+
+    // No tmp rewrite artifact was ever created on the append path: the
+    // whole-file read-rewrite is reserved for the bounded trim.
+    expect(
+      readdirSync(stateDir).filter((name) => name.endsWith('.tmp')),
+    ).toEqual([])
   })
 })
 
@@ -992,6 +1160,18 @@ describe('transaction intent log pre-image file mode', () => {
     // No recorded mode: nothing to restore, setMode is never invoked.
     expect(restoredModes).toEqual([])
   })
+
+  test('the log and its identity artifacts are written owner-only (0o600)', async () => {
+    const log = createTransactionIntentLog({ stateDir })
+    expect((await begin(log, 'tx-mode-600')).ok).toBe(true)
+    // The log persists plaintext pre-images in the shared state dir: it must
+    // not be readable by group/other.
+    expect(statSync(log.filePath).mode & 0o777).toBe(0o600)
+    // The liveness-token file is a pre-image-adjacent artifact: owner-only.
+    expect(
+      statSync(`${log.filePath}.live-${process.pid}`).mode & 0o777,
+    ).toBe(0o600)
+  })
 })
 
 describe('transaction intent log lock identity (pid-recycle guard)', () => {
@@ -1107,5 +1287,55 @@ describe('transaction intent log lock identity (pid-recycle guard)', () => {
       expect(outcome.error).toContain('timed out')
     }
     expect(existsSync(lockPath)).toBe(true)
+  })
+
+  test('a breaker does NOT unlink a lock a FRESH holder acquired in between', async () => {
+    // A dead holder crashed holding the lock; the waiter decides to break
+    // it. During the seam-widened window between the break decision and the
+    // unlink, a fresh live holder acquires the lock and records its own
+    // identity: pid AND instance token no longer match what the breaker
+    // observed, so the fresh lock must survive (unlinking it would allow
+    // dual writers).
+    const exited = spawnSync(process.execPath, ['-e', 'process.exit(0)'])
+    if (exited.pid === undefined) {
+      throw new Error('could not spawn a liveness probe process')
+    }
+    const log = createTransactionIntentLog({
+      stateDir,
+      ownerPid: exited.pid,
+      ownerToken: 'token-of-the-waiter',
+      lockTimeoutMs: 1_500,
+      lockBreakConfirmDelayMs: 400,
+    })
+    const lockPath = `${log.filePath}.lock`
+    writeFileSync(lockPath, `${exited.pid} token-of-the-dead-holder\n`, 'utf8')
+
+    const outcomePromise = begin(log, 'tx-race-waiter')
+    // While the breaker sits inside its decision→confirmation window, the
+    // fresh holder takes the lock and publishes its token file.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    writeFileSync(
+      lockPath,
+      `${process.pid} token-of-the-fresh-holder\n`,
+      'utf8',
+    )
+    writeFileSync(
+      `${log.filePath}.live-${process.pid}`,
+      'token-of-the-fresh-holder\n',
+      'utf8',
+    )
+
+    const outcome = await outcomePromise
+    // The fresh holder's lock was NOT unlinked by the stale breaker.
+    expect(existsSync(lockPath)).toBe(true)
+    expect(readFileSync(lockPath, 'utf8')).toBe(
+      `${process.pid} token-of-the-fresh-holder\n`,
+    )
+    // The waiter gave up with the structured timeout instead of racing the
+    // fresh holder.
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) {
+      expect(outcome.error).toContain('timed out')
+    }
   })
 })

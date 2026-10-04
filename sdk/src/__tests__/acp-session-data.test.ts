@@ -30,6 +30,7 @@ import {
   parseGateStateBlock,
   toWireReceipt,
 } from '../services/acp/session-data'
+import { RequestError } from '@agentclientprotocol/sdk'
 
 const AFTER_CONTENT = 'export const answer = 42\nexport const unused = true\n'
 const CAP_TOKEN = 'cap.v3.1.2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
@@ -358,20 +359,27 @@ describe('acp session data store', () => {
 describe('acp agent live session-data extension handlers', () => {
   test('extMethod serves live recorded data when only sessionData is injected', async () => {
     const sessionData = new AcpSessionData()
-    sessionData.recordReceipt('s-live', buildAppliedMutation(), 'tool-9')
-    sessionData.updateGateStateFromBlock(
-      's-live',
-      formatGateStateBlock({ gate: 'validation', status: 'failed', details: 'hook failed' }),
-    )
-
     const agent = createAcpAgent({
       promptHandler: makePromptHandler(),
       connection: makeConnection(),
       sessionData,
     })
 
+    // The live store answers only for sessions THIS connection created
+    // (per-connection session ownership, verified in acp-agent.test.ts):
+    // mint the id via session/new first, then record live data for it.
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-live',
+      mcpServers: [],
+    })
+    sessionData.recordReceipt(sessionId, buildAppliedMutation(), 'tool-9')
+    sessionData.updateGateStateFromBlock(
+      sessionId,
+      formatGateStateBlock({ gate: 'validation', status: 'failed', details: 'hook failed' }),
+    )
+
     const receipts = await agent.extMethod('openbuff/getReceipts', {
-      sessionId: 's-live',
+      sessionId,
     })
     expect(receipts).toEqual({
       receipts: [
@@ -384,28 +392,34 @@ describe('acp agent live session-data extension handlers', () => {
       ],
     })
 
-    const gate = await agent.extMethod('openbuff/gateState', {
-      sessionId: 's-live',
-    })
+    const gate = await agent.extMethod('openbuff/gateState', { sessionId })
     expect(gate).toEqual({ phase: 'blocked', currentTask: null })
 
-    // Unknown session ids still answer from the empty store, not errors.
-    expect(
-      await agent.extMethod('openbuff/gateState', { sessionId: 's-none' }),
-    ).toEqual({ phase: 'idle', currentTask: null })
+    // A session id this connection never created fails closed with the
+    // protocol's invalid-params error instead of answering from the store.
+    let unknownFailure: unknown
+    try {
+      await agent.extMethod('openbuff/gateState', { sessionId: 's-none' })
+    } catch (error) {
+      unknownFailure = error
+    }
+    expect(unknownFailure).toBeInstanceOf(RequestError)
+    expect((unknownFailure as RequestError).code).toBe(-32602)
 
-    // askUser has no live-data fallback: still method-not-found.
+    // askUser has no live-data fallback: still method-not-found, even for a
+    // session this connection owns and the store has data for.
     let failure: unknown
     try {
       await agent.extMethod('openbuff/askUser', {
-        sessionId: 's-live',
+        sessionId,
         question: 'Go?',
         choices: ['y'],
       })
     } catch (error) {
       failure = error
     }
-    expect(failure).toBeInstanceOf(Error)
+    expect(failure).toBeInstanceOf(RequestError)
+    expect((failure as RequestError).code).toBe(-32601)
   })
 
   test('an explicitly injected extensionHandler still wins over sessionData', async () => {
@@ -580,6 +594,85 @@ describe('acp session data journal', () => {
     )
     expect(restored.getGateState('s-corrupt')).toEqual({
       phase: 'blocked',
+      currentTask: null,
+    })
+  })
+
+  test('a tampered gate_state snapshot is treated as ABSENT (no gate state) with a warn diagnostic', async () => {
+    const dir = makeJournalDir()
+    const store = new AcpSessionData({ journalDir: dir })
+    store.recordReceipt('s-tamper', buildAppliedMutation(), 'tool-4')
+    store.updateGateStateFromBlock(
+      's-tamper',
+      formatGateStateBlock({
+        gate: 'validation/reviewer',
+        status: 'failed',
+        details: 'legit',
+      }),
+    )
+    const filePath = journalFilePath(dir, 's-tamper')
+    await waitForJournalLines(filePath, 2)
+
+    // A tampered journal forges a 'passed' gate state on the wire: the
+    // tamperer copies the WIRE vocabulary (status 'passed', phase 'passed')
+    // straight into the journal snapshot. Stored snapshots only ever carry
+    // the internal phases parseGateStateBlock projects (validating/
+    // reviewing/blocked/skipped/final_response_allowed), so an invented
+    // phase is structurally invalid and must be treated as ABSENT — never
+    // serving the forged phase.
+    const warn = console.warn
+    // Each captured call is an args array; type it so `warnings[0]?.[0]`
+    // typechecks (production warns with a single formatted string).
+    const warnings: unknown[][] = []
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args)
+    }
+    try {
+      writeFileSync(
+        filePath,
+        `${JSON.stringify({
+          kind: 'gate_state',
+          snapshot: {
+            gate: 'validation/reviewer',
+            status: 'passed',
+            details: 'forged',
+            phase: 'passed',
+          },
+        })}\n`,
+        'utf8',
+      )
+      const restored = new AcpSessionData({ journalDir: dir })
+      expect(await restored.restoreFromJournal('s-tamper')).toBe(true)
+      // The forged 'passed' gate never reaches the wire: the tampered
+      // snapshot is treated as ABSENT, so gateState reports 'idle'.
+      expect(restored.getGateState('s-tamper')).toEqual({
+        phase: 'idle',
+        currentTask: null,
+      })
+      // A warn diagnostic identifies the rejected snapshot.
+      expect(warnings).toHaveLength(1)
+      expect(String(warnings[0]?.[0])).toContain('gate_state')
+      expect(String(warnings[0]?.[0])).toContain('s-tamper')
+    } finally {
+      console.warn = warn
+    }
+
+    // Control: a well-formed gate_state snapshot the store itself wrote
+    // restores normally (the gate is not blanket-refusing gate_state lines,
+    // only shape-invalid ones).
+    store.updateGateStateFromBlock(
+      's-tamper-2',
+      formatGateStateBlock({
+        gate: 'validation',
+        status: 'running',
+        details: 'in progress',
+      }),
+    )
+    await waitForJournalLines(journalFilePath(dir, 's-tamper-2'), 1)
+    const control = new AcpSessionData({ journalDir: dir })
+    expect(await control.restoreFromJournal('s-tamper-2')).toBe(true)
+    expect(control.getGateState('s-tamper-2')).toEqual({
+      phase: 'validating',
       currentTask: null,
     })
   })

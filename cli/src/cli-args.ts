@@ -38,9 +38,11 @@ export type ParsedArgs = {
    * P1-T5: headless/CI mode — run the agent non-interactively on a prompt.
    * `json` selects the machine-readable ndjson event stream on stdout
    * (otherwise only `text` events stream); `agentId` overrides the default
-   * 'base' agent. The process exit code reflects the run outcome.
+   * 'base' agent; `timeout` is the explicit `--timeout <seconds>` deadline
+   * (undefined = no timeout, the previous behavior). The process exit code
+   * reflects the run outcome.
    */
-  run?: { prompt: string; json: boolean; agentId?: string }
+  run?: { prompt: string; json: boolean; agentId?: string; timeout?: number }
   /**
    * Populated ONLY when the `replay` subcommand ran (undefined otherwise).
    * P2-T3: deterministic replay/fork of a P2-T2 run journal. `runId` names
@@ -165,6 +167,16 @@ export function parseCliArgs(
         '--socket-token must not be empty (omit it to generate one)',
       )
     }
+    // An explicitly EMPTY --socket ("" or whitespace) must fail closed too:
+    // carrying it would select the socket transport with an empty path
+    // (no usable bind target). Same empty-value contract as --socket-token
+    // above; omitting the flag stays the stdio default.
+    if (
+      typeof serveOpts.socket === 'string' &&
+      serveOpts.socket.trim().length === 0
+    ) {
+      serveProgram.error('--socket must not be empty (pass a unix socket path)')
+    }
     const serve: ParsedArgs['serve'] =
       typeof serveOpts.socket === 'string'
         ? {
@@ -239,6 +251,10 @@ export function parseCliArgs(
         'Emit machine-readable events (one JSON object per line) on stdout',
       )
       .option('--agent <id>', 'Run a specific agent id (default: base)')
+      .option(
+        '--timeout <seconds>',
+        'Abort the run after this many seconds (default: no timeout)',
+      )
       .argument('<prompt...>', 'Prompt to send to the agent')
       .allowExcessArguments(true)
     if (options.exitOverride) {
@@ -253,6 +269,20 @@ export function parseCliArgs(
     const prompt = runProgram.args.join(' ')
     const runAgentId =
       typeof runOpts.agent === 'string' ? runOpts.agent : undefined
+    // Fail-closed --timeout validation, mirroring the --from-step contract:
+    // commander passes the raw string through, so a strict DECIMAL integer
+    // check runs first ('' / '0x10' / '1e2' must never silently parse), and
+    // 0 is rejected because a zero-second deadline would abort immediately.
+    let timeoutSeconds: number | undefined
+    if (typeof runOpts.timeout === 'string') {
+      const rawTimeout = runOpts.timeout.trim()
+      if (!/^\d+$/.test(rawTimeout) || Number(rawTimeout) < 1) {
+        runProgram.error(
+          `--timeout must be a positive integer (seconds), got ${JSON.stringify(runOpts.timeout)}`,
+        )
+      }
+      timeoutSeconds = Number(rawTimeout)
+    }
     return {
       initialPrompt: null,
       clearLogs: false,
@@ -263,6 +293,7 @@ export function parseCliArgs(
         prompt,
         json: runOpts.json === true,
         ...(runAgentId ? { agentId: runAgentId } : {}),
+        ...(timeoutSeconds !== undefined ? { timeout: timeoutSeconds } : {}),
       },
     }
   }

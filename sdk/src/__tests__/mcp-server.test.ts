@@ -344,8 +344,12 @@ describe('createMcpServer', () => {
         const content = result.content as { type: string; text: string }[]
         expect(content[0]?.type).toBe('text')
         expect(content[0]!.text).toContain('export const hi = 1')
-        // Complete cap-guarded reads mint a cap.v3 read capability.
-        expect(content[0]!.text).toContain('cap.v3.')
+        // Complete cap-guarded reads mint a cap.v3 read capability, but the
+        // token itself is REDACTED over MCP (SEC-1): the output reports the
+        // minted capability without ever carrying the live token.
+        expect(content[0]!.text).toContain('[READ_CAPABILITY')
+        expect(content[0]!.text).toContain('[REDACTED_CAPABILITY]')
+        expect(content[0]!.text).not.toContain('cap.v3.')
 
         // Outside-project escapes fail closed (error content, never a crash).
         const escape = await client.callTool({

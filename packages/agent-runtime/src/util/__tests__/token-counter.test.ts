@@ -161,6 +161,16 @@ describe('IncrementalTokenCounter (M3-T2)', () => {
     // After reset, the count is recomputed (identical value, fresh memo).
     expect(counter.messagesTokens([a])).toBe(counter.messageTokens(a))
   })
+
+  test('totalTokens returns the message sum plus the system+tools baseline', () => {
+    const counter = new IncrementalTokenCounter()
+    counter.setSystemAndToolsTokens(42)
+    const a = { role: 'user', content: 'abc' }
+    // The split stays: messagesTokens prices messages only (the pinned
+    // run-agent-step contract); totalTokens is the combined estimate.
+    expect(counter.messagesTokens([a])).toBe(counter.messageTokens(a))
+    expect(counter.totalTokens([a])).toBe(counter.messagesTokens([a]) + 42)
+  })
 })
 
 describe('exact token counter seam (P3-T10)', () => {

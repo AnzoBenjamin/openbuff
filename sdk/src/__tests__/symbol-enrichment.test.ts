@@ -142,6 +142,35 @@ describe('enrichFileSymbols', () => {
     expect(result.symbols[0].documentation).toBeUndefined()
   })
 
+  test('inlayHint request range ends on the last real line instead of one past EOF', async () => {
+    let capturedEndLine: number | undefined
+    const { multiplexer, inlayHintSpy } = makeFakeMultiplexer({
+      documentSymbol: () => [
+        {
+          name: 'foo',
+          kind: 13,
+          range: range(0, 0, 0, 20),
+          selectionRange: range(0, 14, 0, 17),
+        },
+      ],
+      hover: () => null,
+      inlayHint: (params: {
+        filePath: string
+        range?: { end: { line: number } }
+      }) => {
+        capturedEndLine = params.range?.end.line
+        return []
+      },
+    })
+
+    // TEXT ends with a trailing newline: split('\n').length is 2, and the raw
+    // value (2) is one past the last real 0-based line (1).
+    await enrichFileSymbols({ filePath: FILE, fileText: TEXT, multiplexer })
+
+    expect(inlayHintSpy).toHaveBeenCalledTimes(1)
+    expect(capturedEndLine).toBe(TEXT.split('\n').length - 1)
+  })
+
   test('skips inlayHint quietly when the seam (capability) is absent', async () => {
     const { multiplexer } = makeFakeMultiplexer({
       documentSymbol: () => [

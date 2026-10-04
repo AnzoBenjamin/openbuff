@@ -242,7 +242,10 @@ async function collectInlayHintsByLine(
   if (typeof multiplexer.inlayHint !== 'function') return byLine
   const range: LspRange = {
     start: { line: 0, character: 0 },
-    end: { line: fileText.split('\n').length, character: 0 },
+    // `split('\n').length` is one past the last 0-based line (LSP range.end
+    // is exclusive but line-indexed against real lines); some LSP servers
+    // reject an out-of-range end line, so clamp to the last real line.
+    end: { line: Math.max(0, fileText.split('\n').length - 1), character: 0 },
   }
   let hints: LspInlayHint[] | null
   try {

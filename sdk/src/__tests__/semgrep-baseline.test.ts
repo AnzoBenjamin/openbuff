@@ -8,6 +8,7 @@ import {
 } from '../services/semgrep-baseline'
 
 import type { SemgrepRunner } from '../services/semgrep-baseline'
+import { readFileSync, rmSync } from 'node:fs'
 
 const EMPTY_SARIF = JSON.stringify({
   version: '2.1.0',
@@ -586,4 +587,94 @@ describe('runSemgrepBaseline', () => {
     // (generous margin for slow CI; SIGKILL fires at deadline + grace).
     expect(elapsed).toBeLessThan(5_000)
   })
+
+  test('returns ok with parsed findings when semgrep exits 1 to report findings', async () => {
+    // semgrep exit code 1 means "findings found", not a failure: the SARIF
+    // must be parsed and the findings surfaced instead of dropped as an
+    // error.
+    const runner = availableRunner(() => ({
+      exitCode: 1,
+      stdout: SARIF_WITH_FINDING,
+      stderr: '',
+    }))
+    const result = await runSemgrepBaseline({
+      cwd: '/tmp/semgrep-test-exit1-findings',
+      baselineCommit: 'abc1234',
+      files: ['app.py'],
+      runner,
+    })
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.findings).toHaveLength(1)
+    expect(result.findings[0]).toMatchObject({
+      file: 'app.py',
+      severity: 'error',
+      code: 'python.lang.security.audit.exec-detected',
+      message: 'Detected the use of exec().',
+    })
+  })
+
+  test('still reports an error for exit code 1 when no SARIF findings parsed', async () => {
+    // Exit 1 without parsed findings is a genuine failure: keep the honest
+    // error status rather than treating every exit 1 as success.
+    const runner = availableRunner(() => ({
+      exitCode: 1,
+      stdout: EMPTY_SARIF,
+      stderr: 'internal error',
+    }))
+    const result = await runSemgrepBaseline({
+      cwd: '/tmp/semgrep-test-exit1-empty',
+      baselineCommit: 'abc1234',
+      files: ['a.py'],
+      runner,
+    })
+    expect(result.status).toBe('error')
+    if (result.status !== 'error') return
+    expect(result.reason).toContain('exit code 1')
+    expect(result.findings).toEqual([])
+  })
+
+  test('spawn runner does not kill a healthy scan at the grace delay before the deadline', async () => {
+    // The SIGKILL escalate timer used to be armed at spawn time with delay
+    // graceMs, killing any healthy scan that ran longer than the grace period
+    // even when its deadline had not fired. It must be armed inside the
+    // deadline callback instead: with the default 5s grace and a 10s
+    // deadline, the child must still be alive (and the run unsettled) past
+    // 5s, and the run must settle at the deadline itself.
+    const pidFile = `/tmp/semgrep-escalate-test-${process.pid}.pid`
+    rmSync(pidFile, { force: true })
+    const runner = makeSpawnRunner('sh')
+    const startedAt = Date.now()
+    let settledAt = 0
+    // The runner seam may settle synchronously or as a promise: normalize
+    // through Promise.resolve so the .then callback sees the settled
+    // SemgrepRunResult while the promise stays observable before the await.
+    const runPromise = Promise.resolve(
+      runner(
+        ['-c', `echo $$ > ${pidFile}; trap "" TERM; while :; do sleep 1; done`],
+        '/tmp',
+        10_000,
+      ),
+    ).then((result) => {
+      settledAt = Date.now()
+      return result
+    })
+    // Past the old spawn-time escalate point (grace = 5s): the child must
+    // still be running and the promise still pending.
+    await new Promise((resolve) => setTimeout(resolve, 5_600))
+    const pid = Number.parseInt(readFileSync(pidFile, 'utf8'), 10)
+    expect(Number.isNaN(pid)).toBe(false)
+    expect(() => process.kill(pid, 0)).not.toThrow()
+    const result = await runPromise
+    const settledElapsed = settledAt - startedAt
+    expect(result.signal).toBe('SIGTERM')
+    expect(result.exitCode).toBe(-1)
+    expect(result.stderr).toContain('timed out')
+    // Settled at the deadline (~10s), never at the 5s grace point.
+    expect(settledElapsed).toBeGreaterThanOrEqual(9_000)
+    rmSync(pidFile, { force: true })
+    // bun:test's default per-test timeout is 5s: this test deliberately waits
+    // past the 5s spawn-time escalate point and then for the 10s deadline to
+    // fire, so it needs an explicit larger budget to observe both moments.
+  }, 20_000)
 })

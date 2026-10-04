@@ -312,6 +312,27 @@ describe('recallFromArchiveIndexed query sanitization', () => {
     expect(result.matches.length).toBeGreaterThan(0)
     expect(result.matches.length).toBeLessThanOrEqual(RECALL_MAX_RESULTS)
   })
+
+  it('a non-tokenizable term is dropped instead of disabling FTS for the query', async () => {
+    // '&' has no FTS5 token character. Previously ANY such term made
+    // sanitizeFtsQuery return null and pushed the WHOLE query to the
+    // scanner fallback; now the bad term is dropped and the remaining
+    // expressible terms still run through the index.
+    const result = await recallFromArchiveIndexed(
+      state.compactionArchive,
+      'alpha & beta',
+    )
+    expect(result.indexState).toBe('indexed')
+    expect(result.indexError).toBeUndefined()
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].snippet).toContain('alpha')
+  })
+
+  it('still falls back when EVERY term is non-tokenizable', async () => {
+    const result = await recallFromArchiveIndexed(state.compactionArchive, '& %')
+    expect(result.indexState).toBe('fallback')
+    expect(result.indexError).toContain('no FTS5-expressible terms')
+  })
 })
 
 describe('recallFromArchiveIndexed ordering contract', () => {

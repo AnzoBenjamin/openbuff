@@ -1,6 +1,10 @@
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+
 import { describe, expect, test } from 'bun:test'
 
-import { runAcpServeCommand } from '../serve-command'
+import { assertSocketPathIsNotSymlink, runAcpServeCommand } from '../serve-command'
 
 import type { RunAcpServeDeps, ServeCommandArgs } from '../serve-command'
 
@@ -39,6 +43,10 @@ function makeHarness(overrides?: Partial<RunAcpServeDeps>) {
     generateToken,
     writeStderr: (line) => stderrLines.push(line),
     journalDir: '/injected/journal',
+    projectRoot: '/injected/project',
+    // SEC: hermetic no-op so the default lstat gate never touches a real
+    // filesystem in these tests; the gate itself is exercised below.
+    assertSocketPathSafe: () => {},
     ...overrides,
   }
 
@@ -176,15 +184,86 @@ describe('runAcpServeCommand', () => {
     )
   })
 
-  test('threads the live process env as credentialEnv into runServeImpl (NEW-3)', async () => {
-    const h = makeHarness()
-    await runAcpServeCommand({ transport: 'stdio' }, h.deps)
+  test('builds credentialEnv from the credential allowlist, not the full env (NEW-3)', async () => {
+    const originalOpenAiKey = process.env.OPENAI_API_KEY
+    const originalUserVar = process.env.SOME_USER_VAR
+    process.env.OPENAI_API_KEY = 'openai-secret'
+    process.env.SOME_USER_VAR = 'keep-me-out'
+    try {
+      const h = makeHarness()
+      await runAcpServeCommand({ transport: 'stdio' }, h.deps)
 
-    const call = h.runServeCalls[0] as {
-      credentialEnv?: Record<string, string | undefined>
+      const call = h.runServeCalls[0] as {
+        credentialEnv?: Record<string, string | undefined>
+      }
+      // The CLI hands runServe ONLY the credential-bearing env keys so the
+      // SDK can collect the configured credential VALUES for the streaming
+      // holdback; the rest of the host environment is never shared.
+      expect(call.credentialEnv?.OPENAI_API_KEY).toBe('openai-secret')
+      expect(call.credentialEnv?.SOME_USER_VAR).toBeUndefined()
+    } finally {
+      if (originalOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAiKey
+      }
+      if (originalUserVar === undefined) {
+        delete process.env.SOME_USER_VAR
+      } else {
+        process.env.SOME_USER_VAR = originalUserVar
+      }
     }
-    // The CLI hands the host environment to runServe so the SDK can collect
-    // the configured credential VALUES for the streaming holdback.
-    expect(call.credentialEnv).toBe(process.env)
+  })
+
+  test('threads the project root into runServeImpl for both transports (SEC-7)', async () => {
+    const stdio = makeHarness()
+    await runAcpServeCommand({ transport: 'stdio' }, stdio.deps)
+    expect(
+      (stdio.runServeCalls[0] as { projectRoot?: string }).projectRoot,
+    ).toBe('/injected/project')
+
+    const socket = makeHarness()
+    await runAcpServeCommand(
+      { transport: 'socket', socketPath: '/tmp/x.sock' },
+      socket.deps,
+    )
+    expect(
+      (socket.runServeCalls[0] as { projectRoot?: string }).projectRoot,
+    ).toBe('/injected/project')
+  })
+
+  test('socket: fails closed when the socket path is a symlink (SEC)', async () => {
+    const h = makeHarness({
+      assertSocketPathSafe: () => {
+        throw new Error('socket path is a symlink')
+      },
+    })
+    const args: ServeCommandArgs = {
+      transport: 'socket',
+      socketPath: '/tmp/evil-link.sock',
+    }
+
+    await expect(runAcpServeCommand(args, h.deps)).rejects.toThrow(/symlink/)
+    // The gate runs BEFORE bind: runServe is never reached.
+    expect(h.runServeCalls).toHaveLength(0)
+  })
+
+  test('the default socket-path gate rejects a symlink and passes regular/absent paths', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'serve-socket-gate-'))
+    try {
+      const target = path.join(dir, 'real.sock')
+      writeFileSync(target, '')
+      const link = path.join(dir, 'linked.sock')
+      symlinkSync(target, link)
+
+      expect(() => assertSocketPathIsNotSymlink(link)).toThrow(/symlink/)
+      expect(() => assertSocketPathIsNotSymlink(target)).not.toThrow()
+      // An absent path is the normal bind case (runServe creates the socket).
+      expect(() =>
+        assertSocketPathIsNotSymlink(path.join(dir, 'absent.sock')),
+      ).not.toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

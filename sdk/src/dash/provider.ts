@@ -7,6 +7,8 @@
  * journal contract) while receipts/gate still surface from their seams.
  */
 
+import type { JournalRunSummary } from '@codebuff/agent-runtime/util/run-journal'
+
 import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
 
 import type { DashDataProvider, DashRunEvent, DashRunSummary } from './server'
@@ -81,12 +83,17 @@ export type CreateDashProviderFromJournalParams = {
 /**
  * Build the dashboard provider from the journal/receipt/gate seams.
  *
- * listRuns groups the journal's events by runId: it scans the run ids the
- * reader exposes through its optional non-contract `runIds` extension (the
- * production sqlite journal provides it), bounded to `MAX_LISTED_RUNS`, and
- * derives `eventCount` — plus the run's REAL `startedAt` when the journal
- * carries a timestamp for its first event — from each run's own event list. A reader
- * without the extension surfaces no runs (fail-closed, never guesses ids).
+ * listRuns is O(runs), not O(events): when the reader exposes the optional
+ * non-contract `runSummaries` extension (the production sqlite journal
+ * provides it — one bounded COUNT + MIN(created_at) aggregate per runId),
+ * summaries come straight from that aggregate and the reader's events are
+ * never hydrated per poll. Readers without the extension fall back to the
+ * per-run `events()` scan over the ids exposed through the optional
+ * `runIds` extension (the production sqlite journal provides it too),
+ * bounded to `MAX_LISTED_RUNS`; a reader with neither surfaces no runs
+ * (fail-closed, never guesses ids). Both paths keep the same output shape:
+ * `eventCount`, plus the run's REAL `startedAt` when the journal carries a
+ * timestamp for its first event (omitted otherwise).
  */
 export function createDashProviderFromJournal(
   params: CreateDashProviderFromJournalParams = {},
@@ -108,6 +115,31 @@ export function createDashProviderFromJournal(
   return {
     async listRuns(): Promise<DashRunSummary[]> {
       if (!journalReader) return []
+      // O(runs) path: the optional runSummaries extension (the production
+      // sqlite journal provides it) serves one bounded COUNT + MIN(created_at)
+      // aggregate per runId, so the reader's events are never hydrated here.
+      const readerWithSummaries = journalReader as JournalReader & {
+        runSummaries?: () => JournalRunSummary[]
+      }
+      if (typeof readerWithSummaries.runSummaries === 'function') {
+        return readerWithSummaries
+          .runSummaries()
+          .slice(0, MAX_LISTED_RUNS)
+          .map((summary) => {
+            const startedAt =
+              typeof summary.firstCreatedAt === 'number'
+                ? new Date(summary.firstCreatedAt).toISOString()
+                : undefined
+            return {
+              runId: summary.runId,
+              eventCount: summary.eventCount,
+              ...(startedAt !== undefined ? { startedAt } : {}),
+            }
+          })
+      }
+      // Fallback for readers without the extension: the per-run events() scan
+      // over the ids runIds() exposes — same output shape, same
+      // startedAt-omission behavior.
       const summaries: DashRunSummary[] = []
       for (const runId of knownRunIds()) {
         const events = journalReader.events(runId)

@@ -1068,6 +1068,75 @@ describe('changeFile', () => {
     )
   })
 
+  test('an abort mid-commit stops the loop, rolls back applied changes, and reports a cancelled outcome', async () => {
+    const files: Record<string, string> = {
+      '/repo/src/one.ts': 'const one = 1\n',
+      '/repo/src/two.ts': 'const two = 1\n',
+      '/repo/src/three.ts': 'const three = 1\n',
+    }
+    const fs = createMockFs({ files })
+    const conditionalCommit = fs.conditionalCommit!.bind(fs)
+    // Abort right after the FIRST per-change commit lands, so the recheck
+    // before the SECOND commit must stop the loop with one file applied.
+    let commits = 0
+    const controller = new AbortController()
+    fs.conditionalCommit = async (filePath, data, options) => {
+      // The shared rollback path also goes through conditionalCommit to
+      // restore the applied change, so only commits made before the abort
+      // count as forward transaction commits.
+      const wasAborted = controller.signal.aborted
+      const result = await conditionalCommit(filePath, data, options)
+      if (!wasAborted) {
+        commits += 1
+        if (commits === 1) controller.abort()
+      }
+      return result
+    }
+
+    const result = await changeFiles({
+      parameters: [
+        {
+          type: 'patch',
+          path: 'src/one.ts',
+          content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+        },
+        {
+          type: 'patch',
+          path: 'src/two.ts',
+          content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+        },
+        {
+          type: 'patch',
+          path: 'src/three.ts',
+          content:
+            '@@ -1,1 +1,1 @@\n-const three = 1\n+const three = 2\n',
+        },
+      ],
+      cwd: '/repo',
+      fs,
+      signal: controller.signal,
+    })
+
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
+    // The applied changes were rolled back through the shared in-memory
+    // rollback path, so the outcome is the structured rolled_back shape —
+    // with a 'cancelled' error naming the abort, not an io_error.
+    expect(mutation.outcome).toBe('rolled_back')
+    expect(mutation.errors).toEqual([
+      expect.objectContaining({ code: 'cancelled' }),
+    ])
+    expect(mutation.authorityReceipt).toMatchObject({ status: 'rolled_back' })
+    // Exactly ONE change committed before the abort stopped the loop.
+    expect(commits).toBe(1)
+    // The rollback restored the already-applied change and the remaining
+    // changes were never applied.
+    expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
+    expect(files['/repo/src/two.ts']).toBe('const two = 1\n')
+    expect(files['/repo/src/three.ts']).toBe('const three = 1\n')
+  })
+
   test('returns a structured resource-limit result for oversized transactions', async () => {
     const fs = createMockFs()
     const result = await changeFiles({

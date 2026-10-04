@@ -83,6 +83,20 @@ export type RestoreOutcome =
  * - Untracked files are never captured nor restored (tracked-tree gate): the
  *   temp index is seeded from HEAD's tree and updated with `git add -u` (not
  *   `-A`, which would stage untracked paths into the snapshot).
+ *
+ * SECURITY WARNING (review: snapshot-secrets-in-mirror-push): snapshots
+ * capture the UNCOMMITTED tracked-tree content — whatever the working tree
+ * holds during a turn, which may include secrets, keys, or credentials that
+ * were never meant to be committed — into the private ref
+ * `refs/openbuff/turns`. That ref lives inside the user's .git directory and
+ * IS pushed by `git push --mirror` (or any wildcard refspec), so captured
+ * uncommitted content can leave the machine. A retention bound caps the
+ * exposure window: at most MAX_RETAINED_SNAPSHOTS snapshots stay reachable
+ * from the ref (pruneTurnSnapshots, run automatically by
+ * createTurnSnapshot); older ones are detached with git plumbing so they
+ * stop being part of the mirror-pushed history. This does not make snapshot
+ * history safe to mirror — it only bounds how much uncommitted content
+ * accumulates in it.
  * - Working-tree rolls use a temp index + `git checkout-index -a -f
  *   --prefix=<root>/`, which overwrites tracked files in place and leaves
  *   untracked files, the real index, and HEAD alone.
@@ -181,6 +195,34 @@ function removeTempIndexDir(tempDir: string | undefined): void {
   }
 }
 
+/**
+ * SEC retention bound (review: snapshot-secrets-in-mirror-push): at most
+ * MAX_RETAINED_SNAPSHOTS snapshots stay reachable from the private ref; the
+ * pruner detaches older ones so the exposure window for uncommitted (and
+ * possibly secret) content stays bounded. See the SECURITY WARNING in the
+ * module docblock above.
+ */
+export const MAX_RETAINED_SNAPSHOTS = 50
+
+/**
+ * Pure retention core (same style as bisectTurnsPure): given the snapshot
+ * chain newest-first, decide which shas stay reachable (`keep`) and which
+ * are detached from the chain (`prune`). The NEWEST `maxRetained` entries
+ * are always kept; everything older is pruned.
+ */
+export function prunePlanPure(
+  newestFirstShas: readonly string[],
+  maxRetained: number = MAX_RETAINED_SNAPSHOTS,
+): { keep: string[]; prune: string[] } {
+  if (newestFirstShas.length <= maxRetained) {
+    return { keep: [...newestFirstShas], prune: [] }
+  }
+  return {
+    keep: newestFirstShas.slice(0, maxRetained),
+    prune: newestFirstShas.slice(maxRetained),
+  }
+}
+
 export async function createTurnSnapshot(
   opts?: TurnSnapshotOpts,
   deps?: TurnSnapshotDeps,
@@ -254,11 +296,73 @@ export async function createTurnSnapshot(
     const sha = (await runGitCommand(deps, commitArgs, root, env)).stdout.trim()
     await runGitCommand(deps, ['update-ref', TURN_SNAPSHOT_REF, sha], root, env)
 
+    // SEC retention bound: cap how many uncommitted-tree snapshots stay
+    // reachable from the private ref (see the SECURITY WARNING above).
+    // Best-effort: a failed prune must never fail the just-created snapshot.
+    await pruneTurnSnapshots({ projectRoot: root }, deps)
+
     return { status: 'created', sha, label }
   } catch (error) {
     return { status: 'error', message: toErrorMessage(error) }
   } finally {
     removeTempIndexDir(tempDir)
+  }
+}
+
+/**
+ * SEC (review: snapshot-secrets-in-mirror-push): enforce the retention bound
+ * on the private snapshot ref. Snapshots capture the UNCOMMITTED tracked
+ * tree, which may hold secrets that were never committed; `git push
+ * --mirror` would push every snapshot still reachable from
+ * `refs/openbuff/turns`. When the chain exceeds MAX_RETAINED_SNAPSHOTS, the
+ * oldest kept snapshot is rewritten with `git replace --graft` (no
+ * parents), detaching everything older from the ref so it becomes
+ * unreachable and stops growing the mirror-push surface. Snapshot
+ * mechanics (chaining, restore, undo) are unchanged: only the retained
+ * history length is bound. Best-effort and total: never throws.
+ */
+export async function pruneTurnSnapshots(
+  opts?: { projectRoot?: string; maxRetained?: number },
+  deps?: TurnSnapshotDeps,
+): Promise<void> {
+  const root = resolveProjectRoot(opts)
+  if (!root) {
+    return
+  }
+  try {
+    const env = { ...getSystemProcessEnv() }
+    if (!(await revParse(deps, TURN_SNAPSHOT_REF, root, env))) {
+      return
+    }
+    const maxRetained = opts?.maxRetained ?? MAX_RETAINED_SNAPSHOTS
+    // One bounded walk: only maxRetained + 1 entries are ever read, so the
+    // per-snapshot overhead is a single extra git call in the common case.
+    const { stdout } = await runGitCommand(
+      deps,
+      ['log', `--max-count=${maxRetained + 1}`, '--format=%H %ct %s', TURN_SNAPSHOT_REF],
+      root,
+      env,
+    )
+    const newestFirstShas = stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => line.split(' ')[0] ?? '')
+      .filter((sha) => /^[0-9a-f]{7,40}$/.test(sha))
+    const { keep, prune } = prunePlanPure(newestFirstShas, maxRetained)
+    if (prune.length === 0 || keep.length === 0) {
+      return
+    }
+    // Graft the OLDEST kept snapshot into a root commit: its pruned parents
+    // fall off the ref's history. The replace ref itself carries no snapshot
+    // content, and the detached commits become garbage-collectable.
+    const graftTarget = keep[keep.length - 1]
+    if (!graftTarget) {
+      return
+    }
+    await runGitCommand(deps, ['replace', '--graft', graftTarget], root, env)
+  } catch {
+    // Retention is best-effort; never fail the caller (createTurnSnapshot).
   }
 }
 

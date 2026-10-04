@@ -15,7 +15,9 @@ import {
  * covered in client.test.ts; these tests cover the DNS-resolution layer added
  * on top of it: a hostname that resolves to a private/metadata address is
  * refused AFTER resolution (closing the TOCTOU gap), resolution failure is
- * fail-closed, and the pinned fetch never follows redirects.
+ * fail-closed, the pinned fetch never follows redirects, and https on a
+ * runtime without the Bun `tls` extension is refused (fail closed) unless
+ * the resolved address is an explicitly allowlisted loopback.
  */
 
 describe('resolvePinnedMcpAddress (NEW-7)', () => {
@@ -233,13 +235,46 @@ describe('createPinnedMcpFetch (NEW-7)', () => {
     }
   })
 
-  test('Node/undici (no tls extension): https keeps the ORIGINAL URL so certificate validation succeeds', async () => {
-    let seenUrl: string | undefined
-    let seenInit: RequestInit | undefined
+  test('Node/undici (no tls extension): https fails closed instead of dialing unpinned', async () => {
+    let fetchCalled = false
     const resolveHost = async () => ['93.184.216.34']
     const pinnedFetch = createPinnedMcpFetch({
       resolveHost,
       supportsTlsServerName: false,
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      fetchCalled = true
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+    try {
+      // Keeping the ORIGINAL https URL here would skip the authority pin and
+      // reopen the check-then-connect DNS-rebinding TOCTOU, so the request
+      // must be refused outright (fail closed) with the host named.
+      await expect(
+        pinnedFetch('https://mcp.example.com/rpc?x=1', { method: 'POST' }),
+      ).rejects.toThrow(
+        /mcp\.example\.com.*pinned https dial is unsupported on this runtime/,
+      )
+      await expect(
+        pinnedFetch('https://mcp.example.com/rpc?x=1', { method: 'POST' }),
+      ).rejects.toBeInstanceOf(McpDnsRebindingError)
+      // No socket is ever opened: nothing dials unpinned https.
+      expect(fetchCalled).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('Node/undici (no tls extension): an explicitly allowlisted loopback https address still dials the pinned path', async () => {
+    let seenUrl: string | undefined
+    let seenInit: RequestInit | undefined
+    const resolveHost = async () => ['127.0.0.1']
+    const pinnedFetch = createPinnedMcpFetch({
+      resolveHost,
+      supportsTlsServerName: false,
+      allowedLoopbackMcp: ['127.0.0.1:8443'],
     })
 
     const originalFetch = globalThis.fetch
@@ -249,15 +284,14 @@ describe('createPinnedMcpFetch (NEW-7)', () => {
       return new Response('{}', { status: 200 })
     }) as typeof fetch
     try {
-      await pinnedFetch('https://mcp.example.com/rpc?x=1', { method: 'POST' })
-      // The bare-IP https URL is NOT dialed (no SNI → cert validation would
-      // fail): the original hostname URL is kept so undici validates the
-      // certificate against mcp.example.com.
-      expect(seenUrl).toBe('https://mcp.example.com/rpc?x=1')
-      // No Bun-only `tls` init extension is attached on this runtime.
-      expect((seenInit as { tls?: unknown } | undefined)?.tls).toBeUndefined()
-      // Redirects still stay manual on the fallback path.
-      expect(seenInit?.redirect).toBe('manual')
+      await pinnedFetch('https://local-mcp.dev:8443/rpc', { method: 'POST' })
+      // The allowlisted loopback is exempt from the fail-closed refusal and
+      // goes through the normal pinned path: the authority is the pinned
+      // address while the original hostname stays on Host.
+      expect(seenUrl).toBe('https://127.0.0.1:8443/rpc')
+      expect(new Headers(seenInit?.headers).get('host')).toBe(
+        'local-mcp.dev:8443',
+      )
     } finally {
       globalThis.fetch = originalFetch
     }

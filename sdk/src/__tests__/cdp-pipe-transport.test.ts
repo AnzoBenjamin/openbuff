@@ -419,6 +419,25 @@ describe('CdpPipeTransport lifecycle and bounds', () => {
     expect(transport.pendingCount).toBe(0)
     transport.close()
   })
+
+  test('a synchronous write failure rejects the pending request immediately', async () => {
+    // A writable whose write() throws synchronously (e.g. an EPIPE/EBADF on
+    // the real pipe fd, surfaced before the stream machinery converts it to
+    // an async 'error' event): writeFrame rejects, and the pending request
+    // must surface that error right away instead of waiting out its full
+    // timeout.
+    const writable = new Writable({ highWaterMark: 16, write() {} })
+    writable.write = () => {
+      throw new Error('EPIPE: broken pipe')
+    }
+    const readable = new PassThrough()
+    const transport = new CdpPipeTransport({ writable, readable })
+
+    const promise = transport.send('A', {}, { timeoutMs: 5_000 })
+    await expect(promise).rejects.toThrow('EPIPE')
+    expect(transport.pendingCount).toBe(0)
+    transport.close()
+  })
 })
 
 // These suites exercise the multiplexed event router and the spawn rollback

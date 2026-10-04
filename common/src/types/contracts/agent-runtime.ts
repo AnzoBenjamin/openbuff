@@ -72,6 +72,18 @@ export interface JournalWriter {
    * is a no-op).
    */
   close?(): Promise<void>
+  /**
+   * P2-T2 slice-4 hardening (optional): force-drain any hot-path-batched
+   * events so everything appended so far is durably committed. The
+   * tool-execution path probes for it structurally (`typeof
+   * writer.forceFlush === 'function'`) and calls it BEFORE a side-effecting
+   * tool executes, so a batching writer's deferred tool_call completion
+   * marker cannot lag the side effect (a kill-9 in that window would replay
+   * the tool — double execution). Optional so existing implementors are
+   * never broken by an added member: a per-append writer flushes eagerly and
+   * has nothing buffered, so its drain is a no-op.
+   */
+  forceFlush?(): Promise<void>
 }
 
 /**

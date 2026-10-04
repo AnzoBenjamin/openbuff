@@ -172,14 +172,25 @@ export async function loadTrustedRoots(
 }
 
 /**
- * Pure check: is the project root (after path.resolve normalization on both
- * sides) EXACTLY present in the allowlist? No prefix matching — trusting
- * `/repo` does not trust `/repo-evil` or `/repo/sub`.
+ * Check: is the project root EXACTLY present in the allowlist? Both sides
+ * are canonicalized identically — path.resolve normalization followed by
+ * fs.realpathSync, so a symlinked allowlist entry (or a symlinked project
+ * root) matches its real target; a missing path falls back to its resolved
+ * form. No prefix matching — trusting `/repo` does not trust `/repo-evil` or
+ * `/repo/sub`.
  */
 export function isTrustedProjectRoot(
   projectRoot: string,
   roots: string[],
 ): boolean {
-  const resolvedRoot = path.resolve(projectRoot)
-  return roots.some((root) => path.resolve(root) === resolvedRoot)
+  const canonicalize = (value: string): string => {
+    const resolved = path.resolve(value)
+    try {
+      return fs.realpathSync(resolved)
+    } catch {
+      return resolved
+    }
+  }
+  const resolvedRoot = canonicalize(projectRoot)
+  return roots.some((root) => canonicalize(root) === resolvedRoot)
 }

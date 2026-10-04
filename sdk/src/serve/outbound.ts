@@ -31,6 +31,10 @@
  * when coalescing cannot bring the queue back under the cap it aborts the
  * session's run with `stopReason: 'cancelled'` so memory stays bounded
  * instead of letting a stalled reader grow the queue without limit.
+ *
+ * WIRING STATUS (§12.6 wire-or-mark audit): transports currently write
+ * directly to the writable — {@link OutboundQueue} is implemented and
+ * tested but not yet wired into any transport path.
  */
 
 import { loadProviderConfigSync } from '../provider-config'
@@ -40,11 +44,13 @@ import type { LoadedProviderConfig } from '../provider-config'
 
 /**
  * Well-known credential-bearing env keys the holdback protects out of the
- * box (§12.1 env-pair rule). The provider configuration surface (providers.json
- * `apiKeyEnv`, built-in presets) declares more; see
- * {@link getConfiguredCredentialEnvKeys}.
+ * box (§12.1 env-pair rule). Exported on the package surface (as
+ * WELL_KNOWN_CREDENTIAL_ENV_KEYS) so hosts can build a credential-only
+ * `credentialEnv` that keeps this exact holdback coverage. The provider
+ * configuration surface (providers.json `apiKeyEnv`, built-in presets)
+ * declares more; see {@link getConfiguredCredentialEnvKeys}.
  */
-const CREDENTIAL_ENV_KEYS = [
+export const CREDENTIAL_ENV_KEYS = [
   'OPENROUTER_API_KEY',
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
@@ -672,6 +678,12 @@ type QueueEntry = {
  * already-sanitized serializable objects; the queue tracks their serialized
  * UTF-8 byte size against {@link OUTBOUND_QUEUE_MAX_BYTES}.
  *
+ * LATER-WAVE SEAM — NOT YET WIRED (§12.6 wire-or-mark audit): this queue is
+ * implemented and unit-tested but no transport currently routes outbound
+ * frames through it; every transport writes directly to the writable. It
+ * stays exported so the §12.6 contract and its tests remain pinned — wire
+ * it in the later backpressure wave; do not remove it and do not assume a
+ * production caller exists.
  * Overflow handling is two-stage, in the order §12.6 prescribes:
  * 1. Coalesce: walk the queue and merge consecutive
  *    `agent_message_chunk`/`tool_call_update` frames that share an id. This

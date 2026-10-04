@@ -113,9 +113,15 @@ describe('useSendMessage journal lazy-open ordering', () => {
           toolResultFor: () => undefined,
           toolResultForInput: () => undefined,
           runIds: () => [],
+          runSummaries: () => [],
           flush: () => Promise.resolve(),
           pruneRuns: () => {},
           close: () => Promise.resolve(),
+          // CreatedRunJournal hardening members (slice 4): no-op stubs so the
+          // fake satisfies the full structural shape the opener returns.
+          forceFlush: () => Promise.resolve(),
+          recentEvents: () => [],
+          eventsOfType: () => [],
         }
       }) as typeof runJournalPathModule.openRunJournalForRun,
     )

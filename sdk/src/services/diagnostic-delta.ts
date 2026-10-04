@@ -74,15 +74,26 @@ export type DiagnosticCommandRunner = (params: {
  * How `computeDiagnosticDelta` decides whether a diagnostic in `after` already
  * existed in `before`.
  *
- * - 'strict' (default): match on (file, line, column, code/ruleId, severity).
- *   Precise, but a pre-existing diagnostic whose line merely shifted because an
- *   edit inserted/removed lines above it would be misread as NEW.
- * - 'tolerant': match on (file, code) only, so a pre-existing diagnostic that
- *   moved lines still matches its baseline and is NOT reported as new. Use this
- *   to survive line shifts; the trade-off is that two distinct diagnostics in
- *   the same file sharing a rule code collapse into one key.
+ * - 'tolerant' (default): match on (file, code) only, so a pre-existing
+ *   diagnostic that moved lines still matches its baseline and is NOT reported
+ *   as new. Tolerant is the default because the strict matcher rejected valid
+ *   edits whose PRE-EXISTING errors merely shifted lines (the edit did not
+ *   introduce them); tolerance is the safer failure mode for a fail-open
+ *   preflight. Opt back into strict via `deltaMode: 'strict'` or the
+ *   OPENBUFF_DIAGNOSTIC_DELTA_MODE=strict env var.
+ * - 'strict': match on (file, line, column, code/ruleId, severity). Precise,
+ *   but a pre-existing diagnostic whose line merely shifted because an edit
+ *   inserted/removed lines above it would be misread as NEW; two distinct
+ *   diagnostics sharing a rule code stay distinct.
  */
 export type DeltaMatchMode = 'strict' | 'tolerant'
+
+/**
+ * Env var that opts a caller back into the 'strict' delta matcher (value
+ * 'strict', case-insensitive). The default is 'tolerant' — see
+ * {@link DeltaMatchMode} for the trade-offs and why tolerant won.
+ */
+export const DELTA_MODE_ENV_FLAG = 'OPENBUFF_DIAGNOSTIC_DELTA_MODE'
 
 export type DiagnosticDeltaPreflightResult =
   | { rejected: false }
@@ -257,15 +268,35 @@ function tolerantKey(diagnostic: LanguageDiagnostic): string {
  * `before` under the requested match mode. Matching key (strict) is (file,
  * line, column, code/ruleId, severity); tolerant mode matches on (file, code)
  * to survive line shifts. See {@link DeltaMatchMode}.
+ *
+ * DEFAULT: 'tolerant'. The strict matcher rejected valid edits whose
+ * PRE-EXISTING errors merely shifted lines, so the default flips to tolerant;
+ * strict remains available via `options.mode: 'strict'` or the
+ * {@link DELTA_MODE_ENV_FLAG} env var.
  */
 export function computeDiagnosticDelta(
   before: readonly LanguageDiagnostic[],
   after: readonly LanguageDiagnostic[],
   options: { mode?: DeltaMatchMode } = {},
 ): LanguageDiagnostic[] {
-  const keyOf = options.mode === 'tolerant' ? tolerantKey : strictKey
+  const keyOf = resolveDeltaKeyOf(options.mode)
   const baseline = new Set(before.map(keyOf))
   return after.filter((diagnostic) => !baseline.has(keyOf(diagnostic)))
+}
+
+/**
+ * Resolve the effective delta match mode. Explicit `options.mode` wins;
+ * otherwise OPENBUFF_DIAGNOSTIC_DELTA_MODE=strict opts into the strict
+ * matcher and the default is 'tolerant' (fail-open-friendly: a pre-existing
+ * diagnostic that merely shifted lines must not fabricate a rejection).
+ */
+function resolveDeltaKeyOf(mode?: DeltaMatchMode): (
+  diagnostic: LanguageDiagnostic,
+) => string {
+  if (mode) return mode === 'tolerant' ? tolerantKey : strictKey
+  return process.env[DELTA_MODE_ENV_FLAG]?.trim().toLowerCase() === 'strict'
+    ? strictKey
+    : tolerantKey
 }
 
 /**
@@ -279,6 +310,16 @@ export function computeDiagnosticDelta(
  * rejection the edit is undone when `rollbackEdit` is supplied (keeping the
  * preflight non-mutating) and the new errors' fix-its are aggregated; on
  * acceptance the edit stays applied. New warnings never reject.
+ *
+ * Failure containment: a throwing `applyEdit` never leaves the edit applied
+ * with no rollback — the edit is rolled back best-effort inside its own
+ * try/catch (a rollback failure is logged, never masked over the original
+ * apply error) and a structured rejection is returned. The rejection carries
+ * no fabricated diagnostics: with no honest after-capture, `newDiagnostics`
+ * and `fixIts` are empty and the caller denies by default. Likewise a
+ * throwing `rollbackEdit` on the rejection path is logged and does NOT
+ * discard the rejection result — the caller still receives the new errors and
+ * their fix-its.
  */
 export async function preflightDiagnosticDelta(params: {
   files: string[]
@@ -316,7 +357,36 @@ export async function preflightDiagnosticDelta(params: {
     })
 
   const before = await capture()
-  await applyEdit()
+  // A throwing applyEdit used to leave the edit applied with no rollback and
+  // crash the whole preflight. Contain it: roll back best-effort in its own
+  // try/catch (a rollback failure is logged, never masked over the original
+  // apply error) and return a structured rejection. The rejection carries no
+  // fabricated diagnostics — with no honest after-capture, newDiagnostics and
+  // fixIts are empty and the caller denies by default (fail-open preflight
+  // semantics are preserved: nothing is invented to reject with).
+  try {
+    await applyEdit()
+  } catch (error) {
+    console.error(
+      '[diagnostic-delta] applyEdit threw; rolling back the edit',
+      error instanceof Error ? error : String(error),
+    )
+    if (rollbackEdit) {
+      try {
+        await rollbackEdit()
+      } catch (rollbackError) {
+        console.error(
+          '[diagnostic-delta] rollbackEdit threw while undoing a failed applyEdit; the edit may be left applied',
+          rollbackError instanceof Error ? rollbackError : String(rollbackError),
+        )
+      }
+    }
+    return {
+      rejected: true,
+      newDiagnostics: [],
+      fixIts: [],
+    }
+  }
   // A no-op applyEdit cannot change diagnostics, so the second capture is
   // guaranteed redundant work on the hot file-change path; reuse the baseline
   // instead of re-running the full command set.
@@ -333,7 +403,20 @@ export async function preflightDiagnosticDelta(params: {
     return { rejected: false }
   }
 
-  if (rollbackEdit) await rollbackEdit()
+  // A throwing rollbackEdit used to discard the whole rejection result. Log
+  // it and still return the structured rejection with the new diagnostics and
+  // their fix-its; the caller decides what to do with an edit that failed to
+  // roll back.
+  if (rollbackEdit) {
+    try {
+      await rollbackEdit()
+    } catch (rollbackError) {
+      console.error(
+        '[diagnostic-delta] rollbackEdit threw after rejecting the edit; the edit may be left applied',
+        rollbackError instanceof Error ? rollbackError : String(rollbackError),
+      )
+    }
+  }
   const fixIts: LanguageDiagnosticTextEdit[] = []
   const seenFixes = new Set<string>()
   for (const diagnostic of newErrors) {

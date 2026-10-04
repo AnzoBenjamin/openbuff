@@ -114,6 +114,14 @@ describe('serve subcommand parsing', () => {
     expect(() => parse(['serve', '--socket'])).toThrow()
   })
 
+  test('rejects an empty --socket instead of selecting socket transport with an empty path', () => {
+    // Fail-closed contract mirroring the empty --socket-token rejection:
+    // `--socket ''` used to select the socket transport with an empty path,
+    // which has no usable bind target.
+    expect(() => parse(['serve', '--socket', ''])).toThrow(/--socket/)
+    expect(() => parse(['serve', '--socket', '   '])).toThrow(/--socket/)
+  })
+
   test('parses --socket with a path', () => {
     expect(parse(['serve', '--socket', '/tmp/x.sock']).serve).toEqual({
       transport: 'socket',
@@ -227,6 +235,34 @@ describe('run subcommand parsing', () => {
       json: false,
       agentId: 'reviewer',
     })
+  })
+
+  test('parses --timeout into run.timeout (seconds)', () => {
+    expect(parse(['run', '--timeout', '120', 'do it']).run).toEqual({
+      prompt: 'do it',
+      json: false,
+      timeout: 120,
+    })
+  })
+
+  test('leaves run.timeout undefined by default (no timeout)', () => {
+    // The default preserves the pre---timeout behavior: no deadline at all.
+    expect(parse(['run', 'hello']).run?.timeout).toBeUndefined()
+  })
+
+  test('rejects a non-integer --timeout', () => {
+    // Fail-closed contract mirroring --from-step: Number('') is 0,
+    // Number('0x10') is 16 and Number('1e2') is 100; none is a decimal
+    // integer literal, so all must error rather than silently parse.
+    expect(() => parse(['run', '--timeout', 'nope', 'x'])).toThrow()
+    expect(() => parse(['run', '--timeout', '0x10', 'x'])).toThrow()
+    expect(() => parse(['run', '--timeout', '1e2', 'x'])).toThrow()
+    expect(() => parse(['run', '--timeout', '', 'x'])).toThrow()
+    expect(() => parse(['run', '--timeout', '   ', 'x'])).toThrow()
+  })
+
+  test('rejects a zero --timeout (a zero-second deadline would abort immediately)', () => {
+    expect(() => parse(['run', '--timeout', '0', 'x'])).toThrow(/--timeout/)
   })
 
   test('errors when the prompt is empty', () => {

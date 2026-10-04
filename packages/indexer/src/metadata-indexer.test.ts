@@ -7,6 +7,8 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import {
   buildMetadataIndex,
   DEFAULT_GRAPH_WEIGHTS,
+  getParsedCacheRootCount,
+  MAX_INDEXED_PROJECT_ROOTS,
   resolveGraphWeights,
   updateMetadataIndex,
 } from './metadata-indexer'
@@ -602,6 +604,106 @@ describe('metadata indexer', () => {
       first.files['docs/a.md']?.hash,
     )
     expect(second.files['docs/a.md']?.headings).toContain('Bravo')
+  })
+
+  test('evicts the oldest root parse cache once MAX_INDEXED_PROJECT_ROOTS is exceeded', async () => {
+    // build/update must route every parsedCacheByRoot write through the
+    // evicting helper, so indexing more distinct roots than the retention
+    // bound can never grow the in-process cache past MAX_INDEXED_PROJECT_ROOTS
+    // entries (previously the build/update paths called .set directly and
+    // bypassed eviction).
+    for (let i = 0; i < MAX_INDEXED_PROJECT_ROOTS + 2; i++) {
+      const root = await makeTempProject({
+        'src/a.ts': 'export const a = 1\n',
+      })
+      await buildMetadataIndex(root)
+      expect(getParsedCacheRootCount()).toBeLessThanOrEqual(
+        MAX_INDEXED_PROJECT_ROOTS,
+      )
+    }
+  })
+
+  test('keeps the previous entry when hashing succeeds but the content read fails', async () => {
+    const root = await makeTempProject({
+      'docs/a.md': '# Alpha\n\nalpha topic\n',
+    })
+    const targetPath = path.join(root, 'docs/a.md')
+    const first = await buildMetadataIndex(root)
+    expect(first.files['docs/a.md']).toBeDefined()
+
+    // Rewrite the file so the hash read succeeds with a NEW hash, then fail
+    // only the content read inside indexWalkedFile (the second read of the
+    // path) — e.g. the file became unreadable between the two reads.
+    await fs.promises.writeFile(targetPath, '# Bravo\n\nbravo topic\n', 'utf8')
+
+    const originalReadFile = fs.promises.readFile.bind(
+      fs.promises,
+    ) as typeof fs.promises.readFile
+    let targetReads = 0
+    const readFileSpy = spyOn(fs.promises, 'readFile').mockImplementation(
+      (async (filePath, options) => {
+        if (filePath === targetPath) {
+          targetReads++
+          if (targetReads > 1) {
+            throw new Error('simulated content read failure')
+          }
+        }
+        return originalReadFile(filePath, options)
+      }) as typeof fs.promises.readFile,
+    )
+
+    try {
+      const second = await updateMetadataIndex(first, root)
+
+      // The walk still sees the file and hashing succeeded, but the content
+      // read failed transiently: the previous indexed entry must be kept
+      // (mirroring the hashReadFailedPaths keep-previous guard) instead of
+      // silently dropping a still-existing file from the index.
+      expect(targetReads).toBeGreaterThanOrEqual(2)
+      expect(second.files['docs/a.md']).toEqual(first.files['docs/a.md'])
+      expect(second.graph.nodes['file:docs/a.md']).toBeDefined()
+    } finally {
+      readFileSpy.mockRestore()
+    }
+  })
+
+  test('warns at most once per path for repeated hash-read failures', async () => {
+    const root = await makeTempProject({
+      'docs/a.md': '# Alpha\n\nalpha topic\n',
+    })
+    const targetPath = path.join(root, 'docs/a.md')
+    const first = await buildMetadataIndex(root)
+
+    // Force every content read to fail (e.g. EACCES on a locked file) across
+    // TWO consecutive refreshes: the first failure for the path warns once,
+    // and the repeated failure on the next refresh must stay silent instead
+    // of logging the same diagnostic on every refresh.
+    const future = new Date(Date.now() + 5_000)
+    await fs.promises.utimes(targetPath, future, future)
+    const readFileSpy = spyOn(fs.promises, 'readFile').mockRejectedValue(
+      Object.assign(new Error('EACCES: file is locked'), { code: 'EACCES' }),
+    )
+    const warnSpy = spyOn(console, 'warn')
+    // Read inside the try: bun:test's mockRestore() also resets mock.calls,
+    // so calls read after the finally block would always be empty.
+    let hashFailureWarns: string[] = []
+    try {
+      await updateMetadataIndex(first, root)
+      await updateMetadataIndex(first, root)
+      hashFailureWarns = warnSpy.mock.calls
+        .map((call) => call.map(String).join(' '))
+        .filter(
+          (line) =>
+            line.includes('hash read failed') && line.includes('docs/a.md'),
+        )
+    } finally {
+      warnSpy.mockRestore()
+      readFileSpy.mockRestore()
+    }
+
+    // At-most-once: two consecutive failing refreshes warn exactly once for
+    // the path (the warn-once latch keys on the absolute path).
+    expect(hashFailureWarns).toHaveLength(1)
   })
 })
 

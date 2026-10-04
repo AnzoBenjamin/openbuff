@@ -369,20 +369,73 @@ export function checkIndexSync(root: string): Finding[] {
 }
 
 /**
+ * TEST-ONLY seam: when set, this module spawns this command instead of the
+ * literal `git` binary for its staleness probe and history lookups. Tests use
+ * it to force a broken git environment (e.g. `/bin/false`, or a shim that
+ * fails only some subcommands) without PATH manipulation, which does not
+ * affect child-process resolution under Bun. Never set outside tests.
+ */
+let gitCommandForTest: string | null = null
+
+/**
+ * TEST-ONLY: inject the git command this module spawns (`null` restores the
+ * default `git` binary). Always reset to `null` in a test's `finally`.
+ */
+export function setGitCommandForTest(cmd: string | null): void {
+  gitCommandForTest = cmd
+}
+
+function gitBinary(): string {
+  return gitCommandForTest ?? 'git'
+}
+
+/**
+ * One cheap git probe distinguishing a BROKEN git environment (the binary is
+ * missing or git itself fails) from a defined no-history state ("not a git
+ * repository", exit 128). Returns a human-readable failure note for the
+ * former and null otherwise, so `checkStaleness` can degrade VISIBLY —
+ * reporting that freshness could not be verified — instead of silently
+ * reporting "clean" when its git lookups fail (fail-visible, not fail-open).
+ */
+function gitProbeFailure(root: string): string | null {
+  try {
+    execFileSync(gitBinary(), ['rev-parse', '--git-dir'], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    return null
+  } catch (err) {
+    const e = err as { code?: unknown; status?: unknown }
+    // Exit 128 is git's defined "not a git repository" refusal: there is no
+    // history to drift against, which is a clean (not degraded) state.
+    if (e.status === 128) return null
+    if (e.code === 'ENOENT') return 'git could not be spawned'
+    return `git probe failed (status ${String(e.status ?? 'unknown')})`
+  }
+}
+
+/**
  * Flags knowledge.md / *.knowledge.md files whose last commit is older than
  * the last commit of their sibling src/ (or topic-relevant src subset).
  *
  * PR-T5 (D23) Slice 3 — recorded review receipts: before emitting a stale
  * finding for a pair, the guard consults
  * `<root>/.openbuff/memory/review-receipt.json` (loaded ONCE per call). A
- * receipt with verdict LOOKS_GOOD whose `fileHashes` entry for EVERY file of
- * the pair's last source commit (`git log -1 --name-only --format= --
- * <srcRelative>`, batched like batchLastCommitEpochs) matches the CURRENT
- * sha256 of the raw bytes on disk means those exact bytes were reviewed, so
- * the stale finding is suppressed. Any missing entry, hash mismatch, or
- * unreadable file keeps the finding standing. FAIL-OPEN on the receipt
- * itself: a missing, unreadable, or malformed receipt is treated as absent
- * and the guard never requires it to exist for correctness.
+ * STRICTLY VALID receipt (see {@link loadReviewReceipt}) with verdict
+ * LOOKS_GOOD whose `fileHashes` entry for EVERY file of the pair's last
+ * source commit (`git log -1 --name-only --format= -- <srcRelative>`, batched
+ * like batchLastCommitEpochs) matches the CURRENT sha256 of the raw bytes on
+ * disk means those exact bytes were reviewed, so the stale finding is
+ * suppressed. Any missing entry, hash mismatch, unreadable file, or receipt
+ * that failed strict validation (treated as ABSENT) keeps the finding
+ * standing — a malformed or forged receipt can never suppress a finding.
+ *
+ * FAIL-VISIBLE on the tool, not fail-open: a BROKEN git environment (binary
+ * missing, git itself failing) is reported as a DEGRADED finding per
+ * candidate pair — freshness could not be verified — instead of silently
+ * looking like a clean pass. A defined no-history state (the path is not in a
+ * git repository, or the path has no commits) remains a clean skip.
  */
 export function checkStaleness(
   root: string,
@@ -413,7 +466,20 @@ export function checkStaleness(
     candidates.push({ filePath, projectPath, srcRelative, topic, base })
   }
   if (candidates.length === 0) return []
-  try {
+  const degradedFindings = (reason: string): Finding[] =>
+    candidates.map((c) => ({
+      path: c.projectPath,
+      line: 1,
+      message: `staleness check degraded (${reason}): could not verify whether ${c.base} is stale — treat as UNVERIFIED, not clean`,
+    }))
+  // Fail-visible gate: a broken git environment must not be indistinguishable
+  // from a clean pass. One probe call; when git is unusable every candidate
+  // pair is reported as DEGRADED instead of silently producing no findings.
+  const gitFailure = gitProbeFailure(root)
+  if (gitFailure !== null) {
+    return degradedFindings(`git unavailable: ${gitFailure}`)
+  }
+  const computeFindings = (): Finding[] => {
     // Batch git worktree-dirty checks: one `git status` for all knowledge
     // paths instead of one per knowledge.md (spawns scale with files, not
     // knowledge.md count). Batch commit-timestamp lookups by deduplicating
@@ -495,14 +561,36 @@ export function checkStaleness(
       }
     }
     return findings
-  } catch (err) {
-    console.debug(
-      `[memory-drift-guard] checkStaleness git lookup failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    )
-    return []
   }
+  // Fail-visible wrap around the ENTIRE per-pair computation: a git failure
+  // DURING the work (batched last-commit lookups, receipt hash cross-check)
+  // must degrade VISIBLY per pair, not fall into a silent zero-findings
+  // result that reads as a clean gate.
+  try {
+    return computeFindings()
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    console.debug(
+      `[memory-drift-guard] checkStaleness git lookup failed: ${reason}`,
+    )
+    // Degraded, not suppressed: an unexpected git failure still reports every
+    // candidate pair as UNVERIFIED so a broken environment cannot read as a
+    // clean gate.
+    return degradedFindings(`git failure during staleness check: ${reason}`)
+  }
+}
+
+/**
+ * A git failure during the per-pair staleness work is a DEFINED no-history
+ * state only when git itself refuses with exit 128 ("not a git repository"):
+ * then the caller keeps its clean default. Every other failure (git
+ * semi-broken, crashed, killed) is rethrown so `checkStaleness`'s post-probe
+ * wrap can degrade VISIBLY instead of the failure being swallowed into silent
+ * zero findings (fail-open).
+ */
+function isGitNoHistoryFailure(err: unknown): boolean {
+  const e = err as { status?: unknown }
+  return e.status === 128
 }
 
 function batchLastCommitEpochs(
@@ -513,6 +601,16 @@ function batchLastCommitEpochs(
   for (const ps of pathspecs) out.set(ps, lastCommitEpoch(root, ps))
   return out
 }
+
+/**
+ * The only verdicts a recorded review receipt may carry. A receipt with any
+ * other verdict string is not a real reviewer run's output and is treated as
+ * ABSENT (never suppressive).
+ */
+const RECEIPT_VERDICTS = new Set(['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING'])
+
+/** A recorded file hash must be exactly a 64-char lowercase sha256 hex digest. */
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/
 
 /**
  * PR-T5 (D23) Slice 3 — recorded review receipt consumed by `checkStaleness`.
@@ -532,15 +630,33 @@ export type RecordedReviewReceipt = {
   reviewedFiles: string[]
   fileHashes: Record<string, string>
   recordedAt: string
+  /**
+   * Optional reviewer-run identity. Validated (non-empty string) when
+   * present; the receipt's anti-forgery binding is the fileHashes
+   * cross-check against the CURRENT bytes of the pair's last src commit,
+   * not this identity.
+   */
+  receiptId?: string
+  agentId?: string
 }
 
 /**
  * Load the recorded review receipt.
  *
- * FAIL-OPEN by contract: a missing, unreadable, malformed, or shapeless
+ * FAIL-OPEN ON PRESENCE, FAIL-CLOSED ON TRUST: a missing or unreadable
  * receipt is treated as ABSENT (null) and is never required for correctness —
  * the staleness gate behaves exactly as before whenever the receipt cannot be
- * trusted. Only a structurally valid record is returned.
+ * found. But a receipt that IS present must validate STRICTLY before it may
+ * influence anything: `schemaVersion` must be exactly 1, `verdict` must be
+ * one of the known reviewer verdicts, `reviewer` must name a real reviewer
+ * agent, every `fileHashes` VALUE must be a 64-char lowercase sha256 hex
+ * digest (the keys are the project-relative file paths those digests attest),
+ * and the optional reviewer-run identity fields (`receiptId`, `agentId`) must
+ * be non-empty strings when present. A malformed or suspicious receipt —
+ * wrong schema version, unknown verdict, prefixed or non-hex hash value,
+ * empty identity — is treated as ABSENT (null), never as suppressive
+ * evidence, so a forged or corrupted receipt cannot manufacture a clean gate.
+ * Only a structurally valid record is returned.
  */
 export function loadReviewReceipt(root: string): RecordedReviewReceipt | null {
   const receiptFile = join(root, '.openbuff', 'memory', 'review-receipt.json')
@@ -553,32 +669,55 @@ export function loadReviewReceipt(root: string): RecordedReviewReceipt | null {
       return null
     }
     const record = parsed as Record<string, unknown>
+    const fileHashes = record.fileHashes
     if (
-      typeof record.schemaVersion !== 'number' ||
+      record.schemaVersion !== 1 ||
       typeof record.reviewer !== 'string' ||
+      record.reviewer.trim().length === 0 ||
       typeof record.verdict !== 'string' ||
+      !RECEIPT_VERDICTS.has(record.verdict) ||
       typeof record.recordedAt !== 'string' ||
+      record.recordedAt.trim().length === 0 ||
       !Array.isArray(record.reviewedFiles) ||
-      !record.reviewedFiles.every((file) => typeof file === 'string') ||
-      !record.fileHashes ||
-      typeof record.fileHashes !== 'object' ||
-      Array.isArray(record.fileHashes) ||
-      !Object.values(record.fileHashes).every(
-        (hash) => typeof hash === 'string',
+      !record.reviewedFiles.every(
+        (file) => typeof file === 'string' && file.length > 0,
+      ) ||
+      !fileHashes ||
+      typeof fileHashes !== 'object' ||
+      Array.isArray(fileHashes) ||
+      !Object.entries(fileHashes).every(
+        ([path, hash]) =>
+          path.length > 0 &&
+          typeof hash === 'string' &&
+          SHA256_HEX_RE.test(hash),
       )
     ) {
       return null
     }
-    return {
+    // Optional reviewer-run identity: when carried, it must be well-formed.
+    const receiptId = record.receiptId
+    const agentId = record.agentId
+    if (
+      (receiptId !== undefined &&
+        (typeof receiptId !== 'string' || receiptId.trim().length === 0)) ||
+      (agentId !== undefined &&
+        (typeof agentId !== 'string' || agentId.trim().length === 0))
+    ) {
+      return null
+    }
+    const receipt: RecordedReviewReceipt = {
       schemaVersion: record.schemaVersion,
       reviewer: record.reviewer,
       verdict: record.verdict,
       reviewedFiles: record.reviewedFiles as string[],
       fileHashes: Object.fromEntries(
-        Object.entries(record.fileHashes as Record<string, string>),
+        Object.entries(fileHashes as Record<string, string>),
       ),
       recordedAt: record.recordedAt,
     }
+    if (typeof receiptId === 'string') receipt.receiptId = receiptId
+    if (typeof agentId === 'string') receipt.agentId = agentId
+    return receipt
   } catch (err) {
     console.debug(
       `[memory-drift-guard] loadReviewReceipt failed for ${receiptFile}: ${
@@ -623,7 +762,7 @@ function lastCommitFiles(root: string, pathspec: string): string[] {
   let stdout: string
   try {
     stdout = execFileSync(
-      'git',
+      gitBinary(),
       ['log', '-1', '--name-only', '--format=', '--', pathspec],
       {
         cwd: root,
@@ -631,8 +770,9 @@ function lastCommitFiles(root: string, pathspec: string): string[] {
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     )
-  } catch {
-    return []
+  } catch (err) {
+    if (isGitNoHistoryFailure(err)) return []
+    throw err
   }
   return stdout
     .split('\n')
@@ -676,7 +816,7 @@ function batchDirtySet(root: string, pathspecs: string[]): Set<string> {
   if (pathspecs.length === 0) return new Set()
   try {
     const stdout = execFileSync(
-      'git',
+      gitBinary(),
       ['status', '--porcelain', '--', ...pathspecs],
       {
         cwd: root,
@@ -696,8 +836,9 @@ function batchDirtySet(root: string, pathspecs: string[]): Set<string> {
       dirty.add(p)
     }
     return dirty
-  } catch {
-    return new Set()
+  } catch (err) {
+    if (isGitNoHistoryFailure(err)) return new Set()
+    throw err
   }
 }
 
@@ -714,7 +855,7 @@ function lastCommitEpoch(root: string, pathspec: string): number | null {
   let stdout: string
   try {
     stdout = execFileSync(
-      'git',
+      gitBinary(),
       ['log', '-1', '--format=%ct', '--', pathspec],
       {
         cwd: root,
@@ -722,8 +863,9 @@ function lastCommitEpoch(root: string, pathspec: string): number | null {
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     )
-  } catch {
-    return null
+  } catch (err) {
+    if (isGitNoHistoryFailure(err)) return null
+    throw err
   }
   const trimmed = stdout.trim()
   if (trimmed === '') {
@@ -753,7 +895,7 @@ function lastCommitEpochForTopic(
   let stdout: string
   try {
     stdout = execFileSync(
-      'git',
+      gitBinary(),
       [
         'log',
         '-1',
@@ -768,8 +910,9 @@ function lastCommitEpochForTopic(
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     )
-  } catch {
-    return null
+  } catch (err) {
+    if (isGitNoHistoryFailure(err)) return null
+    throw err
   }
   const trimmed = stdout.trim()
   if (trimmed === '') {

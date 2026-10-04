@@ -199,7 +199,10 @@ export function extractImportSitesFromLines(
     }
     if (ext === '.go') {
       if (inGoImportBlock) {
-        if (line.includes(')')) {
+        // Close only on a bare `)` line (optionally with a trailing comment):
+        // any line that merely CONTAINS ')' — a quoted path or comment with a
+        // paren — must not terminate the block.
+        if (/^\s*\)\s*(?:\/\/.*)?$/.test(line)) {
           inGoImportBlock = false
           return
         }

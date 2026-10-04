@@ -6,7 +6,10 @@
  * - Bound to 127.0.0.1 ONLY (never 0.0.0.0): the dashboard exposes run
  *   journals and receipts, so it must never leave the loopback interface.
  * - Every route except `/healthz` requires the shared token, presented via
- *   `Authorization: Bearer <token>` OR `?token=`. The comparison is
+ *   `Authorization: Bearer <token>` (primary) OR the legacy `?token=` query
+ *   parameter (kept: the dash URL carries `?token=` and a plain browser
+ *   navigation cannot set headers, so query tokens must remain accepted).
+ *   The comparison is
  *   constant-time (sha256 digests of BOTH sides, mirroring
  *   `serve/socket-listener.ts`'s constant-time token style) and a failure
  *   returns 401 without revealing which side mismatched.
@@ -131,8 +134,11 @@ function tokenMatches(provided: string, expected: string): boolean {
 
 /**
  * The request's presented token: the `Authorization: Bearer` header when
- * present, otherwise the `?token=` query parameter. An absent token compares
- * as the empty string (still constant-time, still a plain 401).
+ * present (the PRIMARY, preferred channel), otherwise the `?token=` query
+ * parameter. Query tokens are LEGACY/less-preferred but must stay accepted:
+ * the dash URL carries `?token=` and a plain browser navigation cannot set
+ * headers. An absent token compares as the empty string (still
+ * constant-time, still a plain 401).
  */
 function extractProvidedToken(req: Request, url: URL): string {
   const auth = req.headers.get('authorization')

@@ -11491,7 +11491,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       gatePassedReviewerVerdict: '',
       gatePassedValidationSummary: '',
       gatePassedFingerprint: '',
-      reviewedReviewableFingerprint: '',
       lastReviewerGateSkipReason: '',
       reviewReceipts: [],
       testWriterGateDone: true,
@@ -11557,10 +11556,12 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
     }
   }
 
-  test('a matching receipt skips the reviewer even when the scalar holds a later-wave fingerprint', () => {
-    // Wave 1 reviewed {A}, wave 2 reviewed {C}, so the single scalar holds only
-    // fingerprint({C}). A later cycle that re-arms on the unchanged {A} set
-    // must reuse the durable receipt instead of re-spawning the reviewer.
+  test('legacy serialized state carrying the removed reviewedReviewableFingerprint key is ignored', () => {
+    // reviewedReviewableFingerprint was removed from Base2GateState (it was
+    // write-only dead state; the reviewer skip reads the reviewReceipts
+    // ledger). Sessions serialized by older base2 still carry the key; it
+    // must load as an ignored unknown key and a matching receipt must still
+    // skip the reviewer.
     const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
       'base2-reviewer-skip-receipt-',
     )
@@ -11794,7 +11795,7 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
     }
   })
 
-  test('a matching receipt plus a matching scalar still skips the reviewer (no regression)', () => {
+  test('a matching receipt skips the reviewer (no regression)', () => {
     const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
       'base2-reviewer-skip-scalar-',
     )
@@ -11802,7 +11803,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const { decision } = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: reviewableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'code-reviewer',
@@ -11848,7 +11848,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const { decision } = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: nonAttestableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'code-reviewer',
@@ -11921,7 +11920,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const mismatchedFiles = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: reviewableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'code-reviewer',
@@ -11940,7 +11938,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const mismatchedFamily = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: reviewableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'security-reviewer',
@@ -12173,7 +12170,6 @@ describe('base2 EXECUTE_PLAN gate-issued plan-task receipts', () => {
       gatePassedReviewerVerdict: '',
       gatePassedValidationSummary: '',
       gatePassedFingerprint: '',
-      reviewedReviewableFingerprint: '',
       lastReviewerGateSkipReason: '',
       reviewReceipts: [],
       testWriterGateDone: true,
@@ -13684,7 +13680,6 @@ describe('base2 committed-surface review mode', () => {
       gatePassedReviewerVerdict: '',
       gatePassedValidationSummary: '',
       gatePassedFingerprint: '',
-      reviewedReviewableFingerprint: '',
       lastReviewerGateSkipReason: '',
       reviewReceipts: [],
       testWriterGateDone: true,

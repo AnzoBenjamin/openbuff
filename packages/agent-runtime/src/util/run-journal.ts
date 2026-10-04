@@ -29,6 +29,8 @@
  * (flush-per-append, unbounded).
  */
 
+import { Buffer } from 'node:buffer'
+
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 
 import type {
@@ -71,6 +73,19 @@ type BunSqliteModule = {
  * slice-4 members are required because the built-in implementation always
  * provides them.
  */
+/**
+ * Bounded per-run aggregate for journal enumeration consumers (P2-T7 dash):
+ * the event count plus the FIRST event's timestamp (MIN(created_at)) per
+ * runId — everything a run listing needs without hydrating the run's event
+ * list.
+ */
+export type JournalRunSummary = {
+  runId: string
+  eventCount: number
+  /** Epoch ms of the run's FIRST event, when the journal carries one. */
+  firstCreatedAt?: number
+}
+
 export interface RunJournal extends JournalWriter, JournalReader {
   /**
    * Optional (slice 4): drain any hot-path-batched events so every event
@@ -100,6 +115,49 @@ export interface RunJournal extends JournalWriter, JournalReader {
    * it structurally and surface no runs when it is absent.
    */
   runIds?(): string[]
+  /**
+   * Optional (P2-T7 dash) extension: per-run COUNT + MIN(created_at)
+   * aggregates, NEWEST FIRST (MIN(created_at) descending — the same order
+   * runIds() documents), so consumers that list runs (the `openbuff dash`
+   * provider) never hydrate every event of every run per poll. Optional so
+   * an existing implementor is never broken by an added member; consumers
+   * must probe for it structurally and fall back to per-run events() when
+   * it is absent, keeping results identical.
+   */
+  runSummaries?(): JournalRunSummary[]
+  /**
+   * Optional (slice-4 hardening): force-drain any hot-path-batched events so
+   * everything appended so far is durably committed BEFORE a side-effecting
+   * tool executes — closing the kill-9 replay double-execution window that
+   * batching otherwise opens (a batching writer defers the tool_call
+   * completion-marker commit past tool execution). The built-in journal
+   * drains synchronously, so the marker is committed before the caller
+   * proceeds. Optional so an existing implementor is never broken by an
+   * added member (a per-append writer has nothing buffered; its drain is a
+   * no-op). Callers must probe structurally (`typeof writer.forceFlush ===
+   * 'function'`), mirroring the runIds treatment.
+   */
+  forceFlush?(): Promise<void>
+  /**
+   * Optional (slice-4 hardening) bounded read: the LAST `limit` events for
+   * runId, NEWEST FIRST (ORDER BY seq DESC LIMIT ...). Consumers that only
+   * inspect a run's tail (classifyRunResume) use this instead of
+   * materializing the full event list; they must probe for it structurally
+   * and fall back to events() when it is absent, keeping results identical.
+   */
+  recentEvents?(runId: string, limit: number): JournalEventRow[]
+  /**
+   * Optional (slice-4 hardening) targeted read: EVERY event of one eventType
+   * for runId in seq ASC order, served by the (run_id, event_type, seq)
+   * index. Consumers that only need one event type (planChildResume's
+   * spawn/step_boundary scan) use this instead of loading and filtering the
+   * full event list; they must probe for it structurally and fall back to
+   * events() when it is absent, keeping results identical.
+   */
+  eventsOfType?(
+    runId: string,
+    eventType: JournalEvent['eventType'],
+  ): JournalEventRow[]
 }
 
 /**
@@ -116,6 +174,17 @@ export type CreatedRunJournal = RunJournal & {
   pruneRuns(keepRunIds: string[]): void
   /** P2-T7 dash extension: always provided by the built-in journal. */
   runIds(): string[]
+  /** P2-T7 dash extension: always provided by the built-in journal. */
+  runSummaries(): JournalRunSummary[]
+  /** Slice-4 hardening: always provided by the built-in journal. */
+  forceFlush(): Promise<void>
+  /** Slice-4 hardening bounded read: always provided by the built-in journal. */
+  recentEvents(runId: string, limit: number): JournalEventRow[]
+  /** Slice-4 hardening targeted read: always provided by the built-in journal. */
+  eventsOfType(
+    runId: string,
+    eventType: JournalEvent['eventType'],
+  ): JournalEventRow[]
 }
 
 export type RunResumeClassification =
@@ -133,6 +202,23 @@ type RunEventRow = {
   created_at: number
 }
 
+/**
+ * Structural probe for the OPTIONAL bounded-read extensions the built-in
+ * sqlite journal provides (mirroring how the P2-T7 `runIds` extension is
+ * probed): consumers must check `typeof reader.recentEvents === 'function'`
+ * before calling, and fall back to a full `events()` load when the extension
+ * is absent, keeping results identical.
+ */
+type BoundedReadJournalReader = JournalReader & {
+  /** Last `limit` events for runId, NEWEST FIRST (ORDER BY seq DESC LIMIT). */
+  recentEvents?(runId: string, limit: number): JournalEventRow[]
+  /** Every event of one eventType for runId, seq ASC (index-served). */
+  eventsOfType?(
+    runId: string,
+    eventType: JournalEvent['eventType'],
+  ): JournalEventRow[]
+}
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS run_events (
   run_id TEXT NOT NULL,
@@ -146,6 +232,7 @@ CREATE TABLE IF NOT EXISTS run_events (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_run_events_run_step ON run_events (run_id, step_number, seq);
 CREATE INDEX IF NOT EXISTS idx_run_events_correlation ON run_events (run_id, correlation);
+CREATE INDEX IF NOT EXISTS idx_run_events_run_type_seq ON run_events (run_id, event_type, seq);
 `
 
 /**
@@ -281,6 +368,17 @@ const DEFAULT_MAX_BATCH_EVENTS = 32
 const DEFAULT_MAX_BATCH_DELAY_MS = 50
 
 /**
+ * Bounded tail window for classifyRunResume (slice-4 hardening): the resume
+ * match predicates only ever fire for events AFTER the tail event's seq, and
+ * the built-in reader's lastEvent IS the max-seq row, so a bounded
+ * newest-first window (ORDER BY seq DESC LIMIT, via the optional
+ * recentEvents extension) decides the classification without materializing
+ * the run's full event list. Readers without recentEvents fall back to a
+ * full events() load with identical results.
+ */
+const RESUME_TAIL_EVENT_LIMIT = 64
+
+/**
  * Optional per-run retention bounds (P2-T2 slice 4). Both caps are opt-in;
  * when set, the OLDEST rows beyond the cap are deleted on every append (or
  * batch flush). Surviving seq numbers are never rewritten — deletion leaves
@@ -404,6 +502,32 @@ export function createRunJournal(params: {
   let lastError: unknown
 
   /**
+   * Cached per-run payload-byte totals (slice-4 hardening): seeded ONCE at
+   * open with a single SQL SUM over LENGTH(CAST(payload AS BLOB)) per runId,
+   * then maintained in memory — insertEvent adds each committed event's
+   * serialized byte length, and any retention DELETE recomputes the exact
+   * total from SQL. Without this cache EVERY append with byte retention ran
+   * a full per-run ordered scan (O(n) per append).
+   */
+  const runPayloadBytes = new Map<string, number>()
+  const recomputeRunPayloadBytes = (runId: string): number => {
+    const row = db
+      .query(
+        'SELECT COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) AS total FROM run_events WHERE run_id = ?',
+      )
+      .get(runId) as { total: number } | undefined
+    return row?.total ?? 0
+  }
+  if (maxBytesCap !== undefined) {
+    const rows = db
+      .query(
+        'SELECT run_id, COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) AS total FROM run_events GROUP BY run_id',
+      )
+      .all() as Array<{ run_id: string; total: number }>
+    for (const row of rows) runPayloadBytes.set(row.run_id, row.total)
+  }
+
+  /**
    * Slice 4: enforce the per-run retention bounds by deleting the OLDEST
    * rows beyond the cap. Surviving seq numbers are NEVER rewritten: deletion
    * leaves gaps at the low end and the next append still mints MAX(seq) + 1,
@@ -412,7 +536,10 @@ export function createRunJournal(params: {
    * classifying the retained tail correctly. The NEWEST row is always
    * retained even when it alone exceeds maxBytes, so a kill-9'd tail event
    * (e.g. an in-flight tool_call) is never deleted out from under the resume
-   * classifier.
+   * classifier. The byte-cap dimension reads a CACHED per-run total (seeded
+   * at open, maintained per append) and only scans rows when the total is
+   * actually over the cap, so retention stays O(1) per append in the common
+   * case.
    */
   const enforceRetention = (runId: string): void => {
     if (maxEventsCap === undefined && maxBytesCap === undefined) return
@@ -422,6 +549,7 @@ export function createRunJournal(params: {
     // next append re-runs enforcement, so a skipped pass only delays the
     // bound by one event.
     try {
+      let deletedRows = false
       if (maxEventsCap !== undefined) {
         // The (maxEvents)-th newest row bounds the kept window; delete
         // everything strictly older (one indexed scan + one range DELETE).
@@ -436,6 +564,7 @@ export function createRunJournal(params: {
             runId,
             boundary.seq,
           )
+          deletedRows = true
         }
       }
       if (maxBytesCap !== undefined) {
@@ -444,31 +573,53 @@ export function createRunJournal(params: {
         // AS BLOB)) counts UTF-8 BYTES, not characters: bare LENGTH on a
         // TEXT column counts characters, so multibyte payloads would be
         // under-counted and the retained tail could exceed the byte budget.
-        // Delete the oldest rows greedily until the remaining payload bytes
-        // fit the cap, keeping as many NEWEST rows as possible and never
-        // deleting the newest row.
-        const rows = db
-          .query(
-            'SELECT seq, LENGTH(CAST(payload AS BLOB)) AS len FROM run_events WHERE run_id = ? ORDER BY seq ASC',
-          )
-          .all(runId) as Array<{ seq: number; len: number }>
-        let total = 0
-        for (const row of rows) total += row.len
-        let deletedBytes = 0
-        let cutSeq = -1
-        for (let i = 0; i < rows.length; i++) {
-          if (total - deletedBytes <= maxBytesCap) break
-          if (i === rows.length - 1) break // never delete the newest row
-          deletedBytes += rows[i].len
-          cutSeq = rows[i].seq
+        //
+        // The per-run total is CACHED (seeded once at open via SQL SUM,
+        // incremented O(1) per append in insertEvent) so the common append
+        // never runs a full ordered scan; the scan below happens only when
+        // the cached total is actually over the cap, and the exact total is
+        // recomputed from SQL after any delete. Delete the oldest rows
+        // greedily until the remaining payload bytes fit the cap, keeping as
+        // many NEWEST rows as possible and never deleting the newest row.
+        let total = runPayloadBytes.get(runId)
+        if (total === undefined) {
+          total = recomputeRunPayloadBytes(runId)
+          runPayloadBytes.set(runId, total)
         }
-        if (cutSeq >= 0) {
-          db.run(
-            'DELETE FROM run_events WHERE run_id = ? AND seq <= ?',
-            runId,
-            cutSeq,
-          )
+        if (total > maxBytesCap) {
+          const rows = db
+            .query(
+              'SELECT seq, LENGTH(CAST(payload AS BLOB)) AS len FROM run_events WHERE run_id = ? ORDER BY seq ASC',
+            )
+            .all(runId) as Array<{ seq: number; len: number }>
+          // Authoritative total for the cut decision, summed from the rows the
+          // scan already fetched: the cached total is only the fast-path check
+          // and must never drive deletes (a stale cache could over-delete).
+          let exactTotal = 0
+          for (const row of rows) exactTotal += row.len
+          let deletedBytes = 0
+          let cutSeq = -1
+          for (let i = 0; i < rows.length; i++) {
+            if (exactTotal - deletedBytes <= maxBytesCap) break
+            if (i === rows.length - 1) break // never delete the newest row
+            deletedBytes += rows[i].len
+            cutSeq = rows[i].seq
+          }
+          if (cutSeq >= 0) {
+            db.run(
+              'DELETE FROM run_events WHERE run_id = ? AND seq <= ?',
+              runId,
+              cutSeq,
+            )
+            deletedRows = true
+          }
         }
+      }
+      // Any DELETE (from either cap) invalidates the cached byte total:
+      // recompute the exact total from SQL once per enforcement pass that
+      // deleted rows, so the next append's O(1) increment stays accurate.
+      if (deletedRows && maxBytesCap !== undefined) {
+        runPayloadBytes.set(runId, recomputeRunPayloadBytes(runId))
       }
     } catch {
       // Skip this enforcement pass; the next append retries.
@@ -514,6 +665,10 @@ export function createRunJournal(params: {
             )
             .get(runId) as { max_seq: number | null } | undefined
           const nextSeq = (maxRow?.max_seq ?? -1) + 1
+          // Serialize ONCE and reuse: the cached per-run byte total must count
+          // the SAME serialization that is inserted (Buffer.byteLength of this
+          // string equals LENGTH(CAST(payload AS BLOB)) in SQLite).
+          const serializedPayload = JSON.stringify(event.payload)
           db.run(
             'INSERT INTO run_events (run_id, seq, step_number, event_type, correlation, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
             runId,
@@ -521,10 +676,21 @@ export function createRunJournal(params: {
             event.stepNumber,
             event.eventType,
             event.correlation ?? null,
-            JSON.stringify(event.payload),
+            serializedPayload,
             clock.now(),
           )
           db.run('COMMIT;')
+          // Maintain the cached per-run byte total (O(1) per append) so the
+          // retention fast path never needs a full ordered scan. Guarded on
+          // the byte cap being set: without byte retention this is a no-op
+          // and the default path stays byte-identical.
+          if (maxBytesCap !== undefined) {
+            runPayloadBytes.set(
+              runId,
+              (runPayloadBytes.get(runId) ?? 0) +
+                Buffer.byteLength(serializedPayload, 'utf8'),
+            )
+          }
           return
         } catch (error) {
           // A failed INSERT/COMMIT leaves the transaction open, and the
@@ -669,6 +835,10 @@ export function createRunJournal(params: {
       for (const { run_id: existingRunId } of runIds) {
         if (!keep.has(existingRunId)) {
           db.run('DELETE FROM run_events WHERE run_id = ?', existingRunId)
+          // The pruned run's cached byte total is stale after the delete;
+          // drop it so a later append recomputes from SQL instead of
+          // over-counting deleted bytes.
+          runPayloadBytes.delete(existingRunId)
         }
       }
       pending = pending.filter((item) => keep.has(item.runId))
@@ -689,6 +859,76 @@ export function createRunJournal(params: {
         )
         .all() as Array<{ run_id: string }>
       return rows.map((row) => row.run_id)
+    },
+
+    /**
+     * P2-T7 dash extension: ONE bounded aggregate query — COUNT(*) plus
+     * MIN(created_at) per runId, newest first — so a run listing stays
+     * O(runs) even when runs are huge. Read-only: it never writes or prunes.
+     */
+    runSummaries(): JournalRunSummary[] {
+      const rows = db
+        .query(
+          'SELECT run_id, COUNT(*) AS event_count, MIN(created_at) AS first_created_at FROM run_events GROUP BY run_id ORDER BY MIN(created_at) DESC',
+        )
+        .all() as Array<{
+        run_id: string
+        event_count: number
+        first_created_at: number
+      }>
+      return rows.map((row) => ({
+        runId: row.run_id,
+        eventCount: row.event_count,
+        ...(typeof row.first_created_at === 'number'
+          ? { firstCreatedAt: row.first_created_at }
+          : {}),
+      }))
+    },
+
+    /**
+     * Slice-4 hardening: force-drain any hot-path-batched events so every
+     * event appended so far is durably committed — the tool-execution path
+     * calls this BEFORE a side-effecting tool runs so the tool_call
+     * completion marker can never lag the side effect (closing the kill-9
+     * replay double-execution window batching otherwise opens). Synchronous
+     * drain over this journal's single connection, so there is always at
+     * most one drain in flight. Post-close no-op.
+     */
+    forceFlush(): Promise<void> {
+      if (closed) return Promise.resolve()
+      drainPending()
+      return Promise.resolve()
+    },
+
+    /**
+     * Slice-4 hardening bounded read: the LAST `limit` events for runId,
+     * NEWEST FIRST (ORDER BY seq DESC LIMIT) — an indexed top-N scan instead
+     * of materializing the run's full event list. `limit` is clamped to >= 0.
+     */
+    recentEvents(runId: string, limit: number): JournalEventRow[] {
+      const rows = db
+        .query(
+          'SELECT seq, step_number, event_type, correlation, payload, created_at FROM run_events WHERE run_id = ? ORDER BY seq DESC LIMIT ?',
+        )
+        .all(runId, Math.max(0, Math.floor(limit))) as RunEventRow[]
+      return rows.map(parseRow)
+    },
+
+    /**
+     * Slice-4 hardening targeted read: every event of ONE eventType for
+     * runId in seq ASC order, served by the (run_id, event_type, seq) index
+     * instead of loading and filtering the full event list.
+     */
+    eventsOfType(
+      runId: string,
+      eventType: JournalEvent['eventType'],
+    ): JournalEventRow[] {
+      const rows = db
+        .query(
+          'SELECT seq, step_number, event_type, correlation, payload, created_at FROM run_events WHERE run_id = ? AND event_type = ? ORDER BY seq ASC',
+        )
+        .all(runId, eventType) as RunEventRow[]
+      return rows.map(parseRow)
     },
 
     lastEvent(runId: string): JournalEventRow | undefined {
@@ -764,11 +1004,15 @@ export function createRunJournal(params: {
       // answers the requested occurrence the lookup resolves undefined, so
       // the caller re-executes live rather than reusing a stale result or
       // skipping a side-effecting call.
+      // Targeted query (slice-4 hardening): the (run_id, event_type, seq)
+      // index serves the tool_call rows and json_extract pre-filters them to
+      // this toolName, so the per-row JSON.parse below only sees candidates
+      // for THIS tool instead of every tool_call the run ever journaled.
       const rows = db
         .query(
-          "SELECT seq, correlation, payload FROM run_events WHERE run_id = ? AND event_type = 'tool_call' ORDER BY seq ASC",
+          "SELECT seq, correlation, payload FROM run_events WHERE run_id = ? AND event_type = 'tool_call' AND json_extract(payload, '$.toolName') = ? ORDER BY seq ASC",
         )
-        .all(runId) as Array<{
+        .all(runId, toolName) as Array<{
         seq: number
         correlation: string | null
         payload: string
@@ -814,13 +1058,22 @@ export function createRunJournal(params: {
      * which closed the journal keeps running — it just stops journaling,
      * exactly like the unopenable-journal fail-open path.
      */
-    close(): Promise<void> {
-      if (closed) return Promise.resolve()
-      drainPending()
-      clearFlushTimer()
-      db.close()
-      closed = true
-      return Promise.resolve()
+    async close(): Promise<void> {
+      if (closed) return
+      // try/finally (slice-4 hardening): a failing final drain (e.g. SQLITE_BUSY
+      // exhausting the bounded retries inside insertEvent) must still release
+      // the sqlite handle and clear the pending delay timer — otherwise close()
+      // leaks both on the throw path. The async body surfaces that drain
+      // failure as a REJECTED promise — the declared Promise<void> contract
+      // awaited callers and the close-on-throw test rely on — instead of a
+      // synchronous throw that would bypass .catch()/await error handling.
+      try {
+        drainPending()
+      } finally {
+        clearFlushTimer()
+        db.close()
+        closed = true
+      }
     },
   }
 }
@@ -847,6 +1100,19 @@ export function classifyRunResume(
   const last = reader.lastEvent(runId)
   if (!last) return { kind: 'clean' }
 
+  // Bounded tail (slice-4 hardening): the match predicates below only count
+  // events AFTER the tail event's seq, and the built-in reader's lastEvent IS
+  // the max-seq row, so a newest-first window (ORDER BY seq DESC LIMIT via the
+  // optional recentEvents extension) decides the classification without
+  // materializing the run's full event list. Readers without the extension
+  // fall back to a full events() load — identical results, seq gaps included
+  // (ordering is by seq, never row count).
+  const bounded = reader as BoundedReadJournalReader
+  const tailWindow =
+    typeof bounded.recentEvents === 'function'
+      ? bounded.recentEvents(runId, RESUME_TAIL_EVENT_LIMIT)
+      : reader.events(runId)
+
   if (last.eventType === 'tool_call') {
     const correlation = last.correlation
     // Correlation reuse guard: only a tool_result recorded AFTER this
@@ -856,14 +1122,12 @@ export function classifyRunResume(
     // the resume path would skip the toolResultFor cross-check.
     const hasResult =
       correlation != null &&
-      reader
-        .events(runId)
-        .some(
-          (e) =>
-            e.seq > last.seq &&
-            e.eventType === 'tool_result' &&
-            e.correlation === correlation,
-        )
+      tailWindow.some(
+        (e) =>
+          e.seq > last.seq &&
+          e.eventType === 'tool_result' &&
+          e.correlation === correlation,
+      )
     if (!hasResult) {
       // A tool_call tail with no later matching tool_result is in-flight —
       // including a null correlation: with no correlation no later tool_result
@@ -889,9 +1153,7 @@ export function classifyRunResume(
     // and resume the loop with a response that never arrived.
     const hasResponse =
       correlation != null &&
-      reader
-        .events(runId)
-        .some(
+      tailWindow.some(
         (e) =>
           e.seq > last.seq &&
           e.eventType === 'llm_response' &&
@@ -993,16 +1255,37 @@ export function planChildResume(
   reader: JournalReader,
   parentRunId: string,
 ): ResumePlan {
-  const events = reader.events(parentRunId)
+  // Targeted scan (slice-4 hardening): when the reader exposes the optional
+  // eventsOfType extension, only the `spawn` and `step_boundary` rows are
+  // fetched (served by the (run_id, event_type, seq) index) instead of
+  // materializing the full event list and filtering in memory. Results are
+  // identical: both lists are seq ASC, and the seq-relative "boundary AFTER
+  // the spawn" guard mirrors the index-based one (the (run_id, seq) PRIMARY
+  // KEY makes seq order == position order). Readers without the extension
+  // keep the full-list path byte-identical.
+  const bounded = reader as BoundedReadJournalReader
+  const targeted =
+    typeof bounded.eventsOfType === 'function'
+      ? {
+          spawns: bounded.eventsOfType(parentRunId, 'spawn'),
+          boundaries: bounded.eventsOfType(parentRunId, 'step_boundary'),
+        }
+      : undefined
+  const events = targeted ? targeted.spawns : reader.events(parentRunId)
   const inFlight: Array<ChildRunDisposition> = []
   const awaiting: Array<{ childRunId: string; childLastSeq: number }> = []
 
   for (let i = 0; i < events.length; i++) {
     const event = events[i]
-    if (event.eventType !== 'spawn') continue
+    if (!targeted && event.eventType !== 'spawn') continue
     const childRunId = event.correlation
     if (childRunId == null) continue
-    if (hasTerminalStepBoundaryAfter(events, childRunId, i + 1)) continue
+    const reconciled = targeted
+      ? targeted.boundaries.some(
+          (e) => e.seq > event.seq && e.correlation === childRunId,
+        )
+      : hasTerminalStepBoundaryAfter(events, childRunId, i + 1)
+    if (reconciled) continue
 
     const disposition = classifyChildRun(reader, childRunId)
     if (disposition.kind === 'child_completed') {

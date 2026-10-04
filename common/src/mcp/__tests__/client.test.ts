@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { join } from 'node:path'
 
 import { getMCPToolData } from '@codebuff/agent-runtime/mcp'
 
@@ -7,6 +8,7 @@ import {
   getMCPClient,
   getMCPClientCacheKey,
   isBlockedMcpAddress,
+  listMCPTools,
   markAllMCPConfigOrigins,
   markMCPConfigOrigin,
   MissingMcpEnvVarError,
@@ -858,6 +860,88 @@ describe('batch cache-key/enumeration impact of the trusted missing-var throw (R
       resolveMCPConfigValues(stdioVarConfig('MISSING_RESOLVE_VAR'), 'project'),
     ).toThrow(MissingMcpEnvVarError)
   })
+})
+
+describe('mcp client registry hardening (poisoned listTools cache, connect memoization)', () => {
+  test(
+    'a rejected listTools call is not cached forever: the next call retries',
+    async () => {
+      // The fixture is a real MCP stdio server, so this exercises the actual
+      // connect -> runningClients -> listMCPTools path end to end. It answers
+      // tools/list, rejecting any paged cursor.
+      const fixtureScript = join(
+        import.meta.dir,
+        'fixtures',
+        'mcp-stdio-server.mjs',
+      )
+      const config = {
+        type: 'stdio' as const,
+        command: process.execPath,
+        args: [fixtureScript],
+        env: {},
+      }
+      const clientId = await getMCPClient(config)
+
+      // Success path caches: two calls share ONE in-flight promise.
+      const ok1 = listMCPTools(clientId)
+      const ok2 = listMCPTools(clientId)
+      expect(ok2).toBe(ok1)
+      const listed = await ok1
+      expect(Array.isArray(listed.tools)).toBe(true)
+
+      // A failing call rejects...
+      const failing = listMCPTools(clientId, { cursor: 'boom' })
+      let firstFailure: unknown
+      try {
+        await failing
+      } catch (error) {
+        firstFailure = error
+      }
+      expect(firstFailure).toBeDefined()
+
+      // ...and is NOT cached: the next call retries with a fresh promise
+      // (which rejects again for the same reason) instead of returning the
+      // poisoned cached rejection forever.
+      const retry = listMCPTools(clientId, { cursor: 'boom' })
+      expect(retry).not.toBe(failing)
+      let secondFailure: unknown
+      try {
+        await retry
+      } catch (error) {
+        secondFailure = error
+      }
+      expect(secondFailure).toBeDefined()
+    },
+    15_000,
+  )
+
+  test('concurrent getMCPClient calls share one connect; a failed connect is retried', async () => {
+    const config = {
+      type: 'stdio' as const,
+      command: 'openbuff-no-such-mcp-binary',
+      args: [],
+      env: {},
+    }
+    const [first, second] = await Promise.allSettled([
+      getMCPClient(config),
+      getMCPClient(config),
+    ])
+    // Both reject, and because the connect is memoized per cache identity
+    // they share ONE rejection instance (one transport was built, not two).
+    expect(first.status).toBe('rejected')
+    expect(second.status).toBe('rejected')
+    if (first.status === 'rejected' && second.status === 'rejected') {
+      expect(first.reason).toBe(second.reason)
+    }
+
+    // A rejected connect is not memoized: a later call retries the connect
+    // (a fresh rejection, not the cached one).
+    const [later] = await Promise.allSettled([getMCPClient(config)])
+    expect(later.status).toBe('rejected')
+    if (later.status === 'rejected' && first.status === 'rejected') {
+      expect(later.reason).not.toBe(first.reason)
+    }
+  }, 15_000)
 })
 
 describe('getMCPToolData untrusted-description delimiter and per-server isolation', () => {

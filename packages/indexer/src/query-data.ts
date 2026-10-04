@@ -100,6 +100,14 @@ export function getPostingCandidates(
   return candidates
 }
 
+/**
+ * Document frequency for one query token, or undefined when no safe value is
+ * available. The substring-expansion fallback reuses getPostingCandidates,
+ * whose union is capped at MAX_POSTING_CANDIDATE_PATHS: when the union hits
+ * the cap its size is a truncated lower bound (badly skewed for frequent
+ * tokens), so this returns undefined instead and callers fall back to their
+ * own safe default (query.ts counts the token across the indexed corpus).
+ */
 export function getPostingDocumentFrequency(
   index: MetadataIndex,
   token: string,
@@ -108,7 +116,11 @@ export function getPostingDocumentFrequency(
   if (!normalized || !index.queryData) return undefined
   const exact = index.queryData.documentFrequencies[normalized]
   if (exact !== undefined) return exact
-  return getPostingCandidates(index, [normalized])?.size
+  const candidates = getPostingCandidates(index, [normalized])
+  if (!candidates) return undefined
+  // The union was truncated at the cap: its size is not a document frequency.
+  if (candidates.size >= MAX_POSTING_CANDIDATE_PATHS) return undefined
+  return candidates.size
 }
 
 export function collectFilePostingTokens(file: IndexedFile): Set<string> {

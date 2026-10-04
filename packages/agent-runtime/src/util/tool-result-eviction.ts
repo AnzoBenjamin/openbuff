@@ -65,11 +65,21 @@ const TOMBSTONE_MARKER = '[tool result evicted to free context'
 const buildTombstone = (tokensSaved: number): string =>
   `${TOMBSTONE_MARKER} (~${Math.max(1, Math.round(tokensSaved / 1000))}k tokens) — re-run the tool if you need this output again]`
 
+/**
+ * Full tombstone SHAPE, not a prefix: a genuine tool result can legitimately
+ * begin with the tombstone wording (e.g. a result that quotes an earlier
+ * tombstone), and a prefix match would misclassify it as already-evicted and
+ * silently skip eviction. Only the exact `buildTombstone` structure —
+ * marker, k-token figure, trailing instruction, closing bracket — counts.
+ */
+const TOMBSTONE_PATTERN =
+  /^\[tool result evicted to free context \(~\d+k tokens\) — re-run the tool if you need this output again\]$/
+
 const isEvicted = (message: ToolMessage): boolean =>
   message.content.some(
     (part) => part.type === 'json' &&
       typeof part.value === 'string' &&
-      part.value.startsWith(TOMBSTONE_MARKER),
+      TOMBSTONE_PATTERN.test(part.value),
   )
 
 /**
@@ -191,29 +201,49 @@ export type ToolResultEvictionResult = {
 const MAX_PROTECTED_CONTENT_SCAN_CHARS = 5_000_000
 
 /**
- * Whether a tool result's content references any importance-derived path.
- * Serializes the candidate's content once; the whole-array token accounting
- * below already pays a serialization pass, so this adds no asymptotic cost.
- * Substring matching is deliberate: a tool result that embeds a recorded
- * path anywhere in its output (file bodies, command output, search hits) is
- * exactly the content whose loss would orphan the memory that cites it.
+ * Precompute the protection matcher ONCE per step. The historical
+ * implementation re-scanned every candidate against up to MAX_PROTECTED_PATHS
+ * paths with one substring pass each (a 512-path scan per candidate, every
+ * step); a single alternation RegExp over the escaped path set preserves the
+ * exact any-path-substring-match semantics with ONE scan per candidate.
+ */
+const buildProtectedPathsPattern = (
+  protectedPaths: ReadonlySet<string> | undefined,
+): RegExp | undefined => {
+  if (protectedPaths === undefined || protectedPaths.size === 0) {
+    return undefined
+  }
+  const escaped = [...protectedPaths].map((path) =>
+    path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  )
+  return new RegExp(escaped.join('|'))
+}
+
+/**
+ * Whether a tool result's serialized content references any importance-
+ * derived path. Substring matching is deliberate: a tool result that embeds
+ * a recorded path anywhere in its output (file bodies, command output,
+ * search hits) is exactly the content whose loss would orphan the memory
+ * that cites it.
+ *
+ * Perf (eviction hot path): the caller serializes each candidate's content
+ * exactly once per step and passes the PRECOMPUTED per-step pattern, so this
+ * helper is a single bounded scan with no per-candidate set spread or
+ * re-serialization.
  */
 const contentReferencesProtectedPath = (
-  message: ToolMessage,
-  protectedPaths: ReadonlySet<string>,
+  serializedContent: string,
+  protectedPathsPattern: RegExp | undefined,
 ): boolean => {
-  const serialized = JSON.stringify(message.content)
+  if (protectedPathsPattern === undefined) return false
   // M3-T2: bounded scan region — compact results (the norm) scan fully and
   // keep byte-identical protection semantics; only pathological oversized
   // results get their scan cost capped.
   const scanRegion =
-    serialized.length > MAX_PROTECTED_CONTENT_SCAN_CHARS
-      ? serialized.slice(0, MAX_PROTECTED_CONTENT_SCAN_CHARS)
-      : serialized
-  for (const path of protectedPaths) {
-    if (scanRegion.includes(path)) return true
-  }
-  return false
+    serializedContent.length > MAX_PROTECTED_CONTENT_SCAN_CHARS
+      ? serializedContent.slice(0, MAX_PROTECTED_CONTENT_SCAN_CHARS)
+      : serializedContent
+  return protectedPathsPattern.test(scanRegion)
 }
 
 /**
@@ -243,6 +273,10 @@ export function evictStaleToolResults(
   const minSavingsTokens =
     opts?.minSavingsTokens ?? EVICTION_MIN_SAVINGS_TOKENS
   const protectedPaths = opts?.protectedPaths
+  // Precompute BOTH per-step artifacts once, before the candidate walk: the
+  // protection matcher (one regex over all protected paths) so the candidate
+  // filter below never re-derives it per candidate.
+  const protectedPathsPattern = buildProtectedPathsPattern(protectedPaths)
 
   // Walk the history, numbering each step (one assistant message plus the
   // tool results following it) so the recency window is step-based, not
@@ -256,7 +290,8 @@ export function evictStaleToolResults(
   const newestStep = Math.max(0, stepIndex)
 
   // Per-message size estimate for the tombstone label. Cheap and monotonic in
-  // real size; the authoritative accounting is the whole-array delta below.
+  // real size; the authoritative accounting is the per-candidate token delta
+  // below.
   const approximateTokens = (message: Message): number =>
     Math.max(1, Math.floor(JSON.stringify(message).length * 0.25))
 
@@ -279,9 +314,10 @@ export function evictStaleToolResults(
       return false
     }
     if (
-      protectedPaths !== undefined &&
-      protectedPaths.size > 0 &&
-      contentReferencesProtectedPath(message, protectedPaths)
+      contentReferencesProtectedPath(
+        JSON.stringify(message.content),
+        protectedPathsPattern,
+      )
     ) {
       return false
     }
@@ -318,10 +354,16 @@ export function evictStaleToolResults(
     )
   }
 
+  const replacementByMessage = new Map<ToolMessage, Message>()
   const nextMessages = messages.map((message) => {
     const slimmedContent = slimmedContentByMessage.get(message as ToolMessage)
     if (slimmedContent !== undefined) {
-      return { ...(message as ToolMessage), content: slimmedContent }
+      const replacement = {
+        ...(message as ToolMessage),
+        content: slimmedContent,
+      }
+      replacementByMessage.set(message as ToolMessage, replacement)
+      return replacement
     }
     const tombstone = tombstonesByMessage.get(message as ToolMessage)
     if (tombstone === undefined) return message
@@ -329,11 +371,22 @@ export function evictStaleToolResults(
       ...(message as ToolMessage),
       content: [{ type: 'json', value: tombstone }],
     }
+    replacementByMessage.set(message as ToolMessage, evicted)
     return evicted
   })
 
-  const tokensSaved =
-    countTokensJson(messages) - countTokensJson(nextMessages)
+  // Perf (eviction hot path): tokenize each candidate's original body and its
+  // replacement ONCE per step instead of re-encoding the FULL transcript array
+  // twice (plus its per-candidate serializations) on every iteration. The
+  // array-wrapper serialization overhead is identical on both sides (same
+  // message count), so the summed per-candidate delta equals the historical
+  // whole-array delta.
+  let tokensSaved = 0
+  for (const candidate of candidates) {
+    const replacement = replacementByMessage.get(candidate)
+    if (replacement === undefined) continue
+    tokensSaved += countTokensJson(candidate) - countTokensJson(replacement)
+  }
   if (tokensSaved < minSavingsTokens) {
     // Below the savings floor the rewrite is not worth the cache churn:
     // return the untouched input so the caller sees a no-op by reference.

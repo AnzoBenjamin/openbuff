@@ -126,15 +126,17 @@ const FTS5_OPERATOR_CHARS = /[(){}\[\]^*:+]/g
 const HAS_TOKEN_CHAR = /[\p{L}\p{N}]/u
 
 /**
- * Sanitize a user query into safe FTS5 MATCH terms, or `null` when the query
- * cannot be expressed safely (any term with no token character — quoting it
- * would yield a zero-token phrase). Split on whitespace like the scanner,
- * replace operator characters with spaces, and wrap each word in double
- * quotes with internal double quotes doubled — so `AND`, `OR`, `NOT`, `NEAR`,
- * parentheses and unbalanced quotes are literal strings, never operators, and
- * no syntax error is possible. Joined with spaces this gives implicit AND —
- * the scanner's ALL-terms semantics. E.g. `he said "hello" (AND)` →
- * `"he" "said" """hello""" "AND"`.
+ * Sanitize a user query into safe FTS5 MATCH terms, or `null` when NO term
+ * can be expressed safely (a term with no token character — quoting it would
+ * yield a zero-token phrase). Terms without a token character are DROPPED
+ * rather than failing the whole query: a single `--`-style term must not
+ * disable the FTS path for the remaining valid terms. Split on whitespace
+ * like the scanner, replace operator characters with spaces, and wrap each
+ * word in double quotes with internal double quotes doubled — so `AND`,
+ * `OR`, `NOT`, `NEAR`, parentheses and unbalanced quotes are literal
+ * strings, never operators, and no syntax error is possible. Joined with
+ * spaces this gives implicit AND — the scanner's ALL-terms semantics. E.g.
+ * `he said "hello" (AND)` → `"he" "said" """hello""" "AND"`.
  */
 const sanitizeFtsQuery = (query: string): string[] | null => {
   const terms: string[] = []
@@ -143,7 +145,9 @@ const sanitizeFtsQuery = (query: string): string[] | null => {
     .replace(FTS5_OPERATOR_CHARS, ' ')
     .split(/\s+/)) {
     if (word.length === 0) continue
-    if (!HAS_TOKEN_CHAR.test(word)) return null
+    // A token-less word cannot be quoted into an FTS5 phrase: drop it and
+    // keep the remaining expressible terms (never disable the whole query).
+    if (!HAS_TOKEN_CHAR.test(word)) continue
     terms.push(`"${word.replace(/"/g, '""')}"`)
   }
   return terms.length > 0 ? terms : null
@@ -255,9 +259,10 @@ export async function recallFromArchiveIndexed(
   }
   const sanitized = sanitizeFtsQuery(query)
   if (sanitized === null) {
-    // A term with no token characters (e.g. `--`) cannot be expressed as a
-    // safe FTS5 phrase; instead of returning a divergent empty result, fall
-    // back so matching behavior stays identical to the scanner.
+    // Every term was non-tokenizable (e.g. `--` alone): no FTS5 MATCH query
+    // can be built. A blank-MATCH query would return ALL rows unranked,
+    // diverging from the scanner, so fall back so matching behavior stays
+    // identical to the scanner.
     return fallback(
       'archive recall index: query has no FTS5-expressible terms; fell back to substring scan',
     )
@@ -298,9 +303,15 @@ export async function recallFromArchiveIndexed(
         .all(sanitized.join(' '), RECALL_MAX_RESULTS) as RecallRow[]
       const matches = found.map((row) => {
         // Same snippet semantics as the scanner: slice around the first term
-        // occurrence so match shapes stay byte-identical to recallFromArchive.
+        // occurrence so match shapes stay byte-identical to
+        // recallFromArchive. Terms dropped by sanitization (no token
+        // character) may be absent from a matched row; ignore their -1
+        // offsets instead of letting them anchor the snippet at 0.
         const lowered = row.text.toLowerCase()
-        const first = Math.min(...terms.map((t) => lowered.indexOf(t)))
+        const offsets = terms
+          .map((t) => lowered.indexOf(t))
+          .filter((offset) => offset >= 0)
+        const first = offsets.length > 0 ? Math.min(...offsets) : 0
         const start = Math.max(0, first - 120)
         return {
           step: row.step,

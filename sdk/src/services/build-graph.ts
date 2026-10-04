@@ -404,7 +404,13 @@ function resolveJavaScriptTargets(
         manager = parsed.packageManager.split('@')[0]
         confidence = 'confirmed'
       }
-      const resolvedManager = manager ?? 'npm'
+      // BG-1: `packageManager` is attacker-controlled manifest content, and
+      // the manager is interpolated as the `${manager} run <script>` prefix,
+      // so it passes through the SAME SAFE_COMMAND_TOKEN whitelist every
+      // other resolver uses. Unlike the tool-reported identifiers (which
+      // omit the command), a hostile manager token falls back to 'npm' so
+      // the target keeps a usable, honest recommendation.
+      const resolvedManager = safeCommandToken(manager ?? '') ?? 'npm'
       if (typeof parsed.scripts?.test === 'string') {
         testCommand = `${resolvedManager} run test`
       }
@@ -532,16 +538,23 @@ function resolvePythonTargets(
     const directory = path.posix.dirname(manifest)
     if (claimed.has(directory)) continue
     claimed.add(directory)
+    // F4: the directory is interpolated into the test command string, so it
+    // passes through the SAME SAFE_COMMAND_TOKEN whitelist every other
+    // resolver uses before interpolation. A manifest directory containing a
+    // shell metacharacter keeps its target but gets NO interpolated command
+    // (the command-string consumer must never see a metacharacter).
+    const safeDirectory = safeCommandToken(directory)
     targets.push({
       ecosystem: 'python',
       confidence: 'inferred',
       name: directoryName(root, directory),
       kind: 'package',
       root: directory,
-      testCommand:
-        directory === '.'
-          ? 'python -m pytest'
-          : `python -m pytest ${directory}`,
+      ...(directory === '.'
+        ? { testCommand: 'python -m pytest' }
+        : safeDirectory
+          ? { testCommand: `python -m pytest ${safeDirectory}` }
+          : {}),
     })
   }
   return targets

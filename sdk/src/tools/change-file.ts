@@ -666,6 +666,20 @@ export async function changeFiles(params: {
     const committed: PreparedTransactionChange[] = []
     try {
       for (const change of prepared) {
+        // Recheck the abort signal before EACH per-change commit: the
+        // pre-commit check above ran before any file was touched, so a
+        // caller that aborted after the first commit landed would
+        // otherwise keep applying the remaining changes. On abort, stop
+        // committing and let the catch below run the shared rollback path
+        // (in-memory rollback, failure receipt, durable tx_abort marker).
+        if (signal?.aborted) {
+          throw new TransactionAbortedError(
+            filesystemError(
+              'cancelled',
+              'Transaction aborted mid-commit; applied changes were rolled back.',
+            ),
+          )
+        }
         // Track the in-progress action before invoking the adapter. A failed
         // adapter call may have partially mutated state (notably a portable
         // move creates the destination before unlinking the source), so the
@@ -785,10 +799,16 @@ export async function changeFiles(params: {
         },
       ]
     } catch (error) {
-      const commitError = filesystemError(
-        'io_error',
-        error instanceof Error ? error.message : String(error),
-      )
+      // A mid-commit abort is not an I/O failure: it carries its own
+      // 'cancelled' FilesystemError so the structured outcome stays honest,
+      // while still reusing this rollback path verbatim.
+      const commitError =
+        error instanceof TransactionAbortedError
+          ? error.filesystemError
+          : filesystemError(
+              'io_error',
+              error instanceof Error ? error.message : String(error),
+            )
       const rollbackFailures = new Map<number, FilesystemError>()
       const rollbackRestored = new Set<number>()
       for (const change of committed.toReversed()) {
@@ -865,7 +885,9 @@ export async function changeFiles(params: {
         const abortedIntent =
           await durableIntentLog.abortTransaction(
             transactionId,
-            `commit failed: ${commitError.code}`,
+            error instanceof TransactionAbortedError
+              ? `aborted: ${commitError.message}`
+              : `commit failed: ${commitError.code}`,
           )
         if (!abortedIntent.ok) {
           logger?.warn(
@@ -1702,5 +1724,19 @@ class MutationApplicationError extends Error {
   constructor(readonly filesystemError: FilesystemError) {
     super(filesystemError.message)
     this.name = 'MutationApplicationError'
+  }
+}
+
+/**
+ * A mid-commit AbortSignal abort, thrown from the per-change commit loop so
+ * the existing catch block runs the shared rollback path (in-memory rollback,
+ * failure receipt, durable tx_abort marker) instead of duplicating it.
+ * Carries the structured 'cancelled' FilesystemError the rolled-back outcome
+ * reports, so the result is not misattributed to an io_error.
+ */
+class TransactionAbortedError extends Error {
+  constructor(readonly filesystemError: FilesystemError) {
+    super(filesystemError.message)
+    this.name = 'TransactionAbortedError'
   }
 }

@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir as osTmpdir } from 'node:os'
@@ -290,6 +294,61 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     // sits exactly at the per-string cap), so the file holds the full output.
     const persisted = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
     expect(persisted).toEqual({ findings })
+  })
+
+  test('persists the artifact with owner-only 0o600 permissions', () => {
+    // Unique payload so this test mints a FRESH artifact file: writeFileSync's
+    // mode option only applies at file creation (an open-with-truncate on an
+    // existing file keeps its old permissions), so asserting on a reused
+    // content-addressed path could read a stale pre-hardening artifact.
+    const findings = [
+      ...oversizeFindings(100),
+      `perms-probe-${Date.now()}-${Math.random()}`,
+    ]
+    const normalized = normalizeSpawnedAgentOutput(
+      { findings },
+      'security-reviewer',
+    ) as any
+    expect(typeof normalized.artifactPath).toBe('string')
+    // Owner-only read/write regardless of the process umask: the artifact
+    // holds the FULL untruncated child output in a shared tmp directory.
+    const mode = statSync(normalized.artifactPath).mode & 0o777
+    expect(mode).toBe(0o600)
+  })
+
+  test('sweeps artifacts older than the 24h retention TTL on persist', () => {
+    const dir = join(osTmpdir(), 'openbuff-spawn-output')
+    mkdirSync(dir, { recursive: true })
+    // Pre-clean the shared scratch dir so the probe sits within the first 50
+    // entries the capped sweep inspects (artifacts from earlier runs would
+    // otherwise push the probe past the sweep window and make this test
+    // order-dependent).
+    try {
+      for (const entry of readdirSync(dir)) {
+        try {
+          rmSync(join(dir, entry), { force: true })
+        } catch {
+          // Best-effort cleanup only.
+        }
+      }
+    } catch {
+      // Best-effort cleanup only.
+    }
+    // An artifact written 25h ago (past the 24h TTL) must be deleted by the
+    // next persist's best-effort TTL sweep.
+    const stalePath = join(dir, 'stale-artifact-probe.json')
+    writeFileSync(stalePath, '{}')
+    const twentyFiveHoursAgo = new Date(Date.now() - 25 * 60 * 60 * 1000)
+    utimesSync(stalePath, twentyFiveHoursAgo, twentyFiveHoursAgo)
+
+    const normalized = normalizeSpawnedAgentOutput(
+      { findings: oversizeFindings(100) },
+      'security-reviewer',
+    ) as any
+    expect(typeof normalized.artifactPath).toBe('string')
+    expect(statSync(normalized.artifactPath).isFile()).toBe(true)
+    // The stale artifact was swept; the fresh one survives.
+    expect(() => statSync(stalePath)).toThrow()
   })
 
   test('content-addresses the artifact deterministically', () => {
@@ -924,5 +983,92 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     const legacy: Record<string, unknown> = { ...receipt }
     delete legacy.outcome
     expect(agentReceiptSchema.parse(legacy).outcome).toBeUndefined()
+  })
+
+  // PR-T1 supervised-outcome threading: the supervised error envelope's
+  // structured `supervisedOutcome` field is honored by the outcome derivation
+  // so a non-crash supervised settle keeps its PR-T1 classification instead of
+  // collapsing into a non-retryable 'crashed'.
+  test('honors supervisedOutcome missing_output as retryable, not crashed', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'thinker',
+      agentId: 'a-sup-missing',
+      output: {
+        type: 'error',
+        message:
+          'Subagent thinker crashed: supervised child produced no receipt (missing_output)',
+        supervisedOutcome: 'missing_output',
+      },
+    } as any)
+    // Previously this collapsed into outcome 'crashed' with retryable:false,
+    // bypassing the PR-T1 precedence.
+    expect(receipt.outcome).toBe('missing_output')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "thinker receipt outcome 'missing_output': thinker ended without calling set_output",
+        retryable: true,
+      },
+    ])
+  })
+
+  test('honors supervisedOutcome schema_invalid as retryable with the settle detail', () => {
+    const settleMessage =
+      'Subagent thinker crashed: supervised receipt failed agentReceiptSchema (schema_invalid): stderr tail'
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'thinker',
+      agentId: 'a-sup-schema',
+      output: {
+        type: 'error',
+        message: settleMessage,
+        supervisedOutcome: 'schema_invalid',
+      },
+    } as any)
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    // No lastSetOutputError exists on the supervised path, so the diagnostic
+    // falls back to the crash-envelope message that carries the settle detail.
+    expect(receipt.errors).toEqual([
+      {
+        message: `thinker receipt outcome 'schema_invalid': ${settleMessage}`,
+        retryable: true,
+      },
+    ])
+  })
+
+  test('honors supervisedOutcome truncated without downgrading the status', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-sup-truncated',
+      output: {
+        type: 'error',
+        message:
+          "Subagent researcher-web crashed: supervised receipt exceeded the supervisor's 8 MiB stdout capture cap (truncated)",
+        supervisedOutcome: 'truncated',
+      },
+    } as any)
+    // `truncated` records the outcome without the D24 downgrade and without
+    // appending a diagnostic error.
+    expect(receipt.outcome).toBe('truncated')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+  })
+
+  test('a genuine params.error crash still wins over a supervisedOutcome field', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'thinker',
+      agentId: 'a-sup-crash-wins',
+      output: {
+        type: 'error',
+        message: 'Subagent thinker crashed: supervised settle',
+        supervisedOutcome: 'missing_output',
+      },
+      error: new Error('genuine crash'),
+    } as any)
+    // The risk guard: the crash path is unchanged when params.error exists.
+    expect(receipt.outcome).toBe('crashed')
+    expect(receipt.status).toBe('failed')
+    expect(receipt.errors).toEqual([{ message: 'genuine crash', retryable: false }])
   })
 })

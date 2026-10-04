@@ -7,7 +7,7 @@ import {
   stripColors,
   truncateStringWithMessage,
 } from '../../../common/src/util/string'
-import { getChildProcessEnv } from '../env'
+import { getChildProcessEnv, scrubChildProcessEnv } from '../env'
 import {
   isProcessTreeAlive,
   killBackgroundJob,
@@ -38,6 +38,9 @@ function validateStagedCommit(cwd: string): string | undefined {
   const runGit = (args: string[]) =>
     spawnSync('git', args, {
       cwd,
+      // Route the preflight git spawn through the credential scrub so the
+      // safety check never runs with the agent process's provider secrets.
+      env: getChildProcessEnv(),
       encoding: 'utf8',
       maxBuffer: GIT_SAFETY_OUTPUT_LIMIT,
     })
@@ -479,10 +482,12 @@ export function runTerminalCommand({
           : Object.assign(new Error('Aborted'), { name: 'AbortError' })
       }
       const isWindows = os.platform() === 'win32'
-      const processEnv = {
+      // Merge caller overrides FIRST, then scrub the merged object so a
+      // caller-supplied env cannot re-inject credential-named keys.
+      const processEnv = scrubChildProcessEnv({
         ...getChildProcessEnv(),
         ...(env ?? {}),
-      } as NodeJS.ProcessEnv
+      })
 
       let shell: string
       let shellArgs: string[]
@@ -551,10 +556,12 @@ export function runTerminalCommand({
       CodebuffToolOutput<'run_terminal_command'>
     >((resolve, reject) => {
       const isWindows = os.platform() === 'win32'
-      const processEnv = {
+      // Merge caller overrides FIRST, then scrub the merged object so a
+      // caller-supplied env cannot re-inject credential-named keys.
+      const processEnv = scrubChildProcessEnv({
         ...getChildProcessEnv(),
         ...(env ?? {}),
-      } as NodeJS.ProcessEnv
+      })
 
       let shell: string
       let shellArgs: string[]

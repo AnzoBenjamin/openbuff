@@ -114,10 +114,33 @@ describe('pairedBootstrapMeanDiffCI', () => {
     expect(a.lower).toBeLessThanOrEqual(a.meanDiff)
     expect(a.upper).toBeGreaterThanOrEqual(a.meanDiff)
   })
+
+  it('produces a centered CI for a symmetric sample (symmetric paired indices)', () => {
+    // diffs [-3, -2, -1, 1, 2, 3] are symmetric about 0, so the percentile CI
+    // must be (approximately) symmetric around meanDiff = 0. The old
+    // floor-both-sides indices were asymmetric (50 vs 1950 for 2000
+    // iterations), shifting the window one order statistic to the right.
+    const pairs = [
+      { before: 0, after: -3 },
+      { before: 0, after: -2 },
+      { before: 0, after: -1 },
+      { before: 0, after: 1 },
+      { before: 0, after: 2 },
+      { before: 0, after: 3 },
+    ]
+    const result = pairedBootstrapMeanDiffCI(pairs, {
+      iterations: 2000,
+      seed: 11,
+    })
+    expect(result.meanDiff).toBe(0)
+    expect(result.lower).toBeLessThan(0)
+    expect(result.upper).toBeGreaterThan(0)
+    expect(Math.abs(result.lower + result.upper)).toBeLessThan(0.4)
+  })
 })
 
 describe('wilcoxonSignedRankTest', () => {
-  it('returns n 0 and p 1 when all diffs are zero', () => {
+  it('returns a not-applicable verdict when all diffs are zero', () => {
     const pairs = [
       { before: 1, after: 1 },
       { before: 2, after: 2 },
@@ -127,9 +150,11 @@ describe('wilcoxonSignedRankTest', () => {
     expect(result.pValueTwoSided).toBe(1)
     expect(result.statistic).toBe(0)
     expect(result.z).toBe(0)
+    expect(result.applicable).toBe(false)
+    expect(result.reason).toContain('n < 10')
   })
 
-  it('returns a small p for a clearly-shifted set', () => {
+  it('returns a small p for a clearly-shifted set at adequate sample size', () => {
     // Every pair improves substantially.
     const pairs = Array.from({ length: 12 }, (_, i) => ({
       before: i,
@@ -137,11 +162,42 @@ describe('wilcoxonSignedRankTest', () => {
     }))
     const result = wilcoxonSignedRankTest(pairs)
     expect(result.n).toBe(12)
+    expect(result.applicable).toBe(true)
+    expect(result.reason).toBeUndefined()
     expect(result.pValueTwoSided).toBeLessThan(0.05)
   })
 
-  it('returns p near 1 for a symmetric/no-effect set', () => {
-    // Balanced positive and negative diffs of equal magnitude.
+  it('returns a not-applicable verdict below the P8-T4a minimum n (n < 10)', () => {
+    // 9 clearly-shifted pairs: the old code emitted a fake small p-value from
+    // the normal approximation; the guard now refuses to compute one.
+    const pairs = Array.from({ length: 9 }, (_, i) => ({
+      before: i,
+      after: i + 5,
+    }))
+    const result = wilcoxonSignedRankTest(pairs)
+    expect(result.n).toBe(9)
+    expect(result.applicable).toBe(false)
+    expect(result.reason).toBe('n < 10; normal approximation unreliable')
+    expect(result.pValueTwoSided).toBe(1)
+    // W is still reported for diagnostics.
+    expect(result.statistic).toBe(45)
+  })
+
+  it('applies the normal approximation exactly at the minimum n', () => {
+    const pairs = Array.from({ length: 10 }, (_, i) => ({
+      before: i,
+      after: i + 5,
+    }))
+    const result = wilcoxonSignedRankTest(pairs)
+    expect(result.n).toBe(10)
+    expect(result.applicable).toBe(true)
+    expect(result.reason).toBeUndefined()
+    expect(result.pValueTwoSided).toBeLessThan(0.05)
+  })
+
+  it('reports not-applicable for a symmetric/no-effect set below the minimum n', () => {
+    // Balanced positive and negative diffs of equal magnitude. Below n = 10
+    // the normal approximation is not applied, so p stays neutral at 1.
     const pairs = [
       { before: 0, after: 1 },
       { before: 0, after: -1 },
@@ -151,6 +207,7 @@ describe('wilcoxonSignedRankTest', () => {
       { before: 0, after: -3 },
     ]
     const result = wilcoxonSignedRankTest(pairs)
-    expect(result.pValueTwoSided).toBeGreaterThan(0.9)
+    expect(result.applicable).toBe(false)
+    expect(result.pValueTwoSided).toBe(1)
   })
 })

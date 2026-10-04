@@ -97,8 +97,9 @@ function isSafeBaselineRef(ref: string): boolean {
  * Builds a spawn-based runner for `command`: bounded stdout/stderr
  * accumulation, a deadline that sends SIGTERM and settles the promise
  * immediately (matching the previous spawnSync timeout shape), and a short
- * unref'd grace timer that escalates to SIGKILL so a child ignoring SIGTERM
- * cannot stretch the wall-clock bound past the deadline + grace. Exported so
+ * unref'd grace timer — armed only when the deadline fires — that escalates
+ * to SIGKILL so a child ignoring SIGTERM cannot stretch the wall-clock bound
+ * past the deadline + grace. Exported so
  * tests can bind the deadline machinery to a controllable child process.
  */
 export function makeSpawnRunner(
@@ -137,9 +138,10 @@ export function makeSpawnRunner(
       // The wall-clock bound must not depend on the child cooperating with
       // SIGTERM: a child that ignores the signal would otherwise leave
       // runSemgrepBaseline awaiting forever, whereas the replaced spawnSync
-      // runner always returned at the deadline. A short unref'd grace timer
-      // escalates to SIGKILL so a still-alive child is reaped without ever
-      // holding the process open on its own.
+      // runner always returned at the deadline. A short unref'd grace timer —
+      // armed HERE, when the deadline fires, never at spawn time — escalates
+      // to SIGKILL so a still-alive child is reaped without ever holding the
+      // process open on its own.
       const timer = setTimeout(() => {
         try {
           child.kill('SIGTERM')
@@ -152,17 +154,22 @@ export function makeSpawnRunner(
           stderr: 'semgrep timed out',
           signal: 'SIGTERM',
         })
+        // SIGKILL escalation is armed at the deadline (the
+        // diagnostic-delta-runner shape), never at spawn time: arming it at
+        // spawn would SIGKILL any healthy scan that merely outlives the grace
+        // period while its deadline is still far off. Unref'd so it can never
+        // hold the process open on its own.
+        escalate = setTimeout(() => {
+          try {
+            child.kill('SIGKILL')
+          } catch {
+            /* already gone */
+          }
+        }, graceMs)
+        escalate.unref()
       }, timeoutMs)
       // A deadline timer must never hold the process open on its own.
       timer.unref()
-      escalate = setTimeout(() => {
-        try {
-          child.kill('SIGKILL')
-        } catch {
-          /* already gone */
-        }
-      }, graceMs)
-      escalate.unref()
       // Bound the buffered SARIF document (the async equivalent of spawnSync's
       // maxBuffer): past the cap the child is killed and the run fails rather
       // than buffering unbounded output.
@@ -406,10 +413,21 @@ export async function runSemgrepBaseline(params: {
       findings: [],
     }
   }
-  if (scan.signal === 'SIGTERM' || /timed out/i.test(scan.stderr)) {
+  // Timeout is detected from the structured signal field, not by sniffing
+  // stderr for prose.
+  if (scan.signal === 'SIGTERM') {
     return { status: 'error', reason: 'semgrep-timeout', findings: [] }
   }
-  if (scan.exitCode !== 0) {
+  // Parse the SARIF before classifying the exit code: semgrep exits 1 when
+  // the scan simply found results — a successful scan whose findings must be
+  // surfaced, not dropped as a failure. Exit 1 without parsed findings (and
+  // any other nonzero exit) stays an honest error.
+  const findings = parseLanguageDiagnostics({
+    command: 'semgrep scan --baseline-commit',
+    cwd: params.cwd,
+    stdout: scan.stdout,
+  }).slice(0, MAX_FINDINGS)
+  if (scan.exitCode !== 0 && !(scan.exitCode === 1 && findings.length > 0)) {
     const snippet = scan.stderr
       .trim()
       .replace(/\s+/g, ' ')
@@ -420,11 +438,6 @@ export async function runSemgrepBaseline(params: {
       findings: [],
     }
   }
-  const findings = parseLanguageDiagnostics({
-    command: 'semgrep scan --baseline-commit',
-    cwd: params.cwd,
-    stdout: scan.stdout,
-  }).slice(0, MAX_FINDINGS)
   return {
     status: 'ok',
     findings,

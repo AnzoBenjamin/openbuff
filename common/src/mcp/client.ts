@@ -29,6 +29,43 @@ const listToolsCache: Record<
 > = {}
 
 /**
+ * Hard cap on concurrently live MCP clients. Each registry entry holds an
+ * OPEN transport (a spawned stdio process or a kept-alive HTTP connection),
+ * so an unbounded registry leaks processes/file descriptors for the process
+ * lifetime. Eviction is LRU-by-registration: the oldest registered id is
+ * dropped (with its listTools cache entry) when the cap is exceeded.
+ */
+const maxRunningClients = 64
+
+/** Insertion-ordered registry keys mirroring runningClients, for LRU eviction. */
+const runningClientOrder = new Set<string>()
+
+/**
+ * In-flight connect promises memoized per cache identity (the same key
+ * runningClients uses). Concurrent getMCPClient calls for one config share
+ * ONE connect instead of racing two transports; the memo is cleared when the
+ * promise settles, so a rejected connect is retried by the next call.
+ */
+const pendingConnects = new Map<string, Promise<string>>()
+
+function registerRunningClient(key: string): void {
+  runningClientOrder.add(key)
+  while (runningClientOrder.size > maxRunningClients) {
+    const oldest = runningClientOrder.values().next()
+    if (oldest.done || oldest.value === key) break
+    runningClientOrder.delete(oldest.value)
+    delete runningClients[oldest.value]
+    // listTools cache entries are keyed `${clientId}\0${argsHash}` (see
+    // listMCPTools), so eviction must sweep every per-args entry belonging to
+    // the evicted client rather than a single bare-clientId key.
+    const evictedPrefix = `${oldest.value}\0`
+    for (const cacheKey of Object.keys(listToolsCache)) {
+      if (cacheKey.startsWith(evictedPrefix)) delete listToolsCache[cacheKey]
+    }
+  }
+}
+
+/**
  * Thrown when a trusted-origin MCP config references a `$VAR` whose value is
  * absent from this process's environment. Carries every missing variable name
  * collected during a single substitution pass so one value/record produces one
@@ -642,6 +679,42 @@ export async function getMCPClient(
     return key
   }
 
+  // Double-connect race: concurrent getMCPClient calls for the SAME config
+  // identity share one in-flight connect promise instead of each building a
+  // transport (previously both raced, and the loser's transport/client was
+  // discarded while its socket/process stayed open). The memo entry is
+  // cleared when the promise settles, so a REJECTED connect is retried by
+  // the next call rather than served from a poisoned memo.
+  const pending = pendingConnects.get(key)
+  if (pending) {
+    return pending
+  }
+  const connectPromise = connectMCPClient(
+    config,
+    origin,
+    allowedLoopbackMcp,
+    key,
+  ).finally(() => {
+    pendingConnects.delete(key)
+  })
+  pendingConnects.set(key, connectPromise)
+  return connectPromise
+}
+
+/**
+ * Builds ONE transport/client for the given cache identity and connects it.
+ * Extracted verbatim from getMCPClient (SEC-3 SSRF guard, NEW-7 DNS pinning,
+ * and the argv-safe stdio spawn are unchanged) so the memoization wrapper
+ * above stays small. A rejection propagates to every caller sharing the
+ * memoized promise and the memo entry is cleared, so the next call retries
+ * the connect instead of replaying a cached failure.
+ */
+async function connectMCPClient(
+  config: MCPConfig,
+  origin: MCPConfigOrigin,
+  allowedLoopbackMcp: readonly string[] | undefined,
+  key: string,
+): Promise<string> {
   const resolved = resolveMCPConfigValues(config, origin)
   let transport: Transport
   if (resolved.type === 'stdio') {
@@ -673,8 +746,8 @@ export async function getMCPClient(
           `${hostname} is a private/loopback address`,
       )
     }
-    for (const [key, value] of Object.entries(resolved.params)) {
-      url.searchParams.set(key, value)
+    for (const [paramKey, value] of Object.entries(resolved.params)) {
+      url.searchParams.set(paramKey, value)
     }
     const headers = resolved.headers
     if (origin === 'client') {
@@ -735,6 +808,7 @@ export async function getMCPClient(
 
   await client.connect(transport)
   runningClients[key] = client
+  registerRunningClient(key)
 
   return key
 }
@@ -747,10 +821,26 @@ export function listMCPTools(
   if (!client) {
     throw new Error(`listTools: client not found with id: ${clientId}`)
   }
-  if (!listToolsCache[clientId]) {
-    listToolsCache[clientId] = client.listTools(...args)
+  // The cache is keyed per (client, serialized call args), not per client:
+  // two listTools calls with different arguments (e.g. a no-args listing and
+  // a cursor-paged one) have different responses, so an entry cached for one
+  // call shape must never be replayed for another. Distinct keys also mean
+  // the rejection deletion below fires for the exact call that failed instead
+  // of being masked by an entry cached under different args.
+  const cacheKey = `${clientId}\0${stableHash(args)}`
+  if (!listToolsCache[cacheKey]) {
+    const pending = client.listTools(...args)
+    listToolsCache[cacheKey] = pending
+    // A REJECTED listTools must not poison the cache forever: drop the entry
+    // once the failure settles so the next call retries against the
+    // (possibly recovered) client instead of replaying the cached rejection.
+    void pending.catch(() => {
+      if (listToolsCache[cacheKey] === pending) {
+        delete listToolsCache[cacheKey]
+      }
+    })
   }
-  return listToolsCache[clientId]
+  return listToolsCache[cacheKey]
 }
 
 function getResourceData(

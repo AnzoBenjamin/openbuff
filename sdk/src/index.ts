@@ -171,6 +171,13 @@ export {
 export { createServeBridge } from './serve/bridge'
 export type { ServeBridgeClient, ServeBridgeOptions } from './serve/bridge'
 export { sanitizeOutbound } from './serve/outbound-filter'
+// Published so hosts (the CLI serve command) can build a credential-only
+// `credentialEnv` for runServe: the well-known holdback keys plus every
+// `apiKeyEnv` name the provider configuration declares.
+export {
+  getConfiguredCredentialEnvKeys,
+  CREDENTIAL_ENV_KEYS as WELL_KNOWN_CREDENTIAL_ENV_KEYS,
+} from './serve/outbound'
 export { serveAcpOverSocket } from './serve/socket-listener'
 export type { ServeAcpOverSocketOptions } from './serve/socket-listener'
 export { runServe } from './serve/serve'

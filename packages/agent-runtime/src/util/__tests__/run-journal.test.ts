@@ -2339,3 +2339,289 @@ describe('P2-T2 slice 4: hot-path batching', () => {
     }
   })
 })
+
+describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, bounded reads', () => {
+  /**
+   * Journal over a COUNTING createDatabase seam: tallies the per-run greedy
+   * byte scan (the O(n)-per-append query byte retention used to run on EVERY
+   * append) and can fail every BEGIN IMMEDIATE with a NON-busy error to
+   * exercise the close() drain-throw path.
+   */
+  const makeCountingJournal = (
+    overrides: Partial<Parameters<typeof createRunJournal>[0]> = {},
+  ) => {
+    let byteScans = 0
+    let failBegins = false
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: fixedClock,
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            if (failBegins && sql === 'BEGIN IMMEDIATE;') {
+              throw new Error('injected non-busy failure')
+            }
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            if (
+              sql.startsWith('SELECT seq, LENGTH(CAST(payload AS BLOB)) AS len')
+            ) {
+              byteScans += 1
+            }
+            return (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+      ...overrides,
+    })
+    return {
+      journal,
+      scanned: () => byteScans,
+      setFailBegins: (value: boolean) => {
+        failBegins = value
+      },
+    }
+  }
+
+  it('maxBytes retention no longer full-scans the run on every append while under the cap', () => {
+    const { journal, scanned } = makeCountingJournal({
+      retention: { maxBytes: 100_000 },
+    })
+    try {
+      for (let i = 0; i < 50; i++) journal.append('run-fast', stepEvent(i))
+      // 50 appends with a far-away byte cap: the greedy per-run ordered scan
+      // must run ZERO times (the SQL-seeded cached total stays under the cap
+      // and each append only O(1)-increments it).
+      expect(scanned()).toBe(0)
+      // Behavior equivalence: nothing was dropped.
+      expect(journal.events('run-fast').map((e) => e.seq)).toEqual(
+        Array.from({ length: 50 }, (_, i) => i),
+      )
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('maxBytes retention still enforces the cap once the cached total exceeds it', () => {
+    // stepEvent's default payload serializes to 15 bytes, so the run goes
+    // over the 60-byte cap at the fifth append.
+    const { journal, scanned } = makeCountingJournal({
+      retention: { maxBytes: 60 },
+    })
+    try {
+      for (let i = 0; i < 20; i++) journal.append('run-cap', stepEvent(i))
+      const events = journal.events('run-cap')
+      const totalBytes = events.reduce(
+        (sum, e) => sum + JSON.stringify(e.payload).length,
+        0,
+      )
+      expect(totalBytes).toBeLessThanOrEqual(60)
+      expect(events.length).toBeGreaterThan(0)
+      expect(events[events.length - 1].seq).toBe(19)
+      // The scan runs only on appends that find the total over the cap —
+      // not once per append.
+      expect(scanned()).toBeLessThan(20)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('forceFlush drains buffered events so the tool_call marker is durable pre-execution', async () => {
+    const journal = makeJournalWith({
+      batching: { maxBatchEvents: 32, maxBatchDelayMs: 60_000 },
+    })
+    try {
+      expect(typeof journal.forceFlush).toBe('function')
+      journal.append('run-ff', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'ff-tool',
+        payload: { toolName: 'write_file' },
+      })
+      // Not durable until forced.
+      expect(journal.events('run-ff')).toHaveLength(0)
+      await journal.forceFlush()
+      expect(journal.events('run-ff').map((e) => e.seq)).toEqual([0])
+      expect(classifyRunResume(journal, 'run-ff')).toEqual({
+        kind: 'in_flight_tool',
+        toolCallId: 'ff-tool',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('forceFlush is a no-op without batching and after close', async () => {
+    const journal = makeJournalWith()
+    try {
+      journal.append('run-ff2', stepEvent(0))
+      await journal.forceFlush()
+      expect(journal.events('run-ff2')).toHaveLength(1)
+      await journal.close()
+      // Post-close forceFlush resolves without touching the closed connection.
+      await journal.forceFlush()
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('close() closes the db and clears the timer even when the final drain throws', async () => {
+    const path = tmpDbPath()
+    const { journal, setFailBegins } = makeCountingJournal({
+      path,
+      batching: { maxBatchEvents: 32, maxBatchDelayMs: 60_000 },
+    })
+    for (let i = 0; i < 3; i++) journal.append('run-throw', stepEvent(i))
+    setFailBegins(true)
+    // The drain throws (the non-busy failure propagates out of insertEvent),
+    // but close() must still release the sqlite handle and clear the pending
+    // delay timer instead of leaking both.
+    await expect(journal.close()).rejects.toThrow('injected non-busy failure')
+    setFailBegins(false)
+    // The handle was released: the file can be re-opened immediately.
+    const reopened = makeJournalWith({}, path)
+    try {
+      // The failed drain committed nothing.
+      expect(reopened.events('run-throw')).toHaveLength(0)
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it('recentEvents returns the newest N events newest-first', () => {
+    const journal = makeJournal()
+    try {
+      for (let i = 0; i < 10; i++) journal.append('run-tail', stepEvent(i))
+      expect(journal.recentEvents('run-tail', 3).map((e) => e.seq)).toEqual([
+        9, 8, 7,
+      ])
+      expect(journal.recentEvents('run-tail', 0)).toEqual([])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('eventsOfType returns only the requested eventType in seq ASC order', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-eot', stepEvent(0))
+      journal.append('run-eot', {
+        eventType: 'spawn',
+        stepNumber: 1,
+        correlation: 'child-a',
+        payload: {},
+      })
+      journal.append('run-eot', stepEvent(1))
+      journal.append('run-eot', {
+        eventType: 'spawn',
+        stepNumber: 2,
+        correlation: 'child-b',
+        payload: {},
+      })
+      expect(
+        journal.eventsOfType('run-eot', 'spawn').map((e) => e.correlation),
+      ).toEqual(['child-a', 'child-b'])
+      expect(journal.eventsOfType('run-eot', 'llm_request')).toEqual([])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('classifyRunResume stays correct on a run longer than the bounded tail window', () => {
+    const journal = makeJournalWith({ retention: { maxEvents: 200 } })
+    try {
+      for (let i = 0; i < 100; i++) journal.append('run-long', stepEvent(i))
+      journal.append('run-long', {
+        eventType: 'llm_request',
+        stepNumber: 100,
+        correlation: 'llm-1',
+        payload: { model: 'x' },
+      })
+      // 101 events: the bounded window cannot hold them all, yet the tail
+      // classification is unchanged (the tail IS the newest event).
+      expect(classifyRunResume(journal, 'run-long')).toEqual({
+        kind: 'in_flight_llm',
+      })
+      journal.append('run-long', {
+        eventType: 'llm_response',
+        stepNumber: 100,
+        correlation: 'llm-1',
+        payload: { ok: true },
+      })
+      expect(classifyRunResume(journal, 'run-long')).toEqual({ kind: 'clean' })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('planChildResume reconciles a child whose step_boundary follows far after its spawn', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-parent', {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: 'child-x',
+        payload: {},
+      })
+      for (let i = 0; i < 80; i++) journal.append('run-parent', stepEvent(i))
+      journal.append('run-parent', {
+        eventType: 'step_boundary',
+        stepNumber: 81,
+        correlation: 'child-x',
+        payload: {},
+      })
+      // The targeted path compares seq order across separately-fetched spawn
+      // and step_boundary lists, so a boundary far after its spawn still
+      // reconciles the child (live_continue, not needs_children/unknown).
+      expect(planChildResume(journal, 'run-parent')).toEqual({
+        kind: 'live_continue',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('toolResultForInput resolves via the targeted toolName-filtered query', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-tri', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'c1',
+        payload: { toolName: 'write_file', input: { path: 'a.ts' } },
+      })
+      journal.append('run-tri', {
+        eventType: 'tool_result',
+        stepNumber: 0,
+        correlation: 'c1',
+        payload: { result: [{ type: 'text', text: 'ok' }] },
+      })
+      expect(
+        journal.toolResultForInput('run-tri', 'write_file', { path: 'a.ts' }, 0),
+      ).toEqual({ result: [{ type: 'text', text: 'ok' }] })
+      // A different toolName with the same input shape resolves nothing.
+      expect(
+        journal
+          .toolResultForInput('run-tri', 'read_files', { path: 'a.ts' }, 0),
+      ).toBeUndefined()
+    } finally {
+      journal.close()
+    }
+  })
+})
