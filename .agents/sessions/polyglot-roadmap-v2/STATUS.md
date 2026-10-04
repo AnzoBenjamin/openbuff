@@ -330,3 +330,18 @@ Validation: typecheck clean across common/code-map/indexer/agent-runtime/sdk/cli
 
 Security review (P3 process/exec/ingestion surfaces): NON_BLOCKING with 4 low findings, all repaired this turn — F1 LSP malformed header now fails closed; F2 SCIP unsafe paths now fail closed/observable; F3 build-graph walk now depth+cap bounded iterative; F4 command-token whitelist (incl. gradle `:` project paths) with an argv-only execution note.
 
+
+<!-- update_plan_status:appended -->
+## P3 audit remediation wave landed — 2026-10-03 — 2026-10-03T18:23:45.803Z
+
+The P3 coherence audit (6 shards, findings in findings/p3-*.md) surfaced 5 HIGH + several MEDIUM/LOW gaps. All landed this turn with mutation receipts:
+
+- **HIGH-1 base2 reachability:** the four LSP tools added to MODE_NEUTRAL lists but absent from `packages/agent-runtime/src/util/base2-tool-tiers.ts` tier lists — fixed (tools now in the read/analysis tier; base2.ts confirmed to derive toolNames solely via resolveModelToolNames).
+- **HIGH-2 diagnostic-delta dead in production:** NEW `sdk/src/services/diagnostic-delta-runner.ts` builds a fail-open injector over the run's child-process spawn seam; threaded into `run_file_change_hooks` and `run_targeted_validation` via `sdk/src/run.ts` (flag check stays inside runFileChangeHooks, flag-off byte-identical).
+- **HIGH-3 syncFile unwired:** `syncMutatedFiles` added to the language-intelligence service (bounded 32 paths, per-path monotonic version, fail-open per path) and called at the committed-mutation site in run.ts (delete paths skipped, move syncs destination).
+- **HIGH-4 per-directory root keying:** `defaultRootResolver` now walks upward (bounded 32) for the spec's rootMarkers (first wins); no-marker fallback unchanged; test pins one warm server across a subtree.
+- **HIGH-5 renderer `{' '}` blank-app risk:** eliminated; renderer now reuses shortenPath, displays 1-based line AND column, has a settled '–' unavailable glyph (additive statusGlyph mapping), explicit 'no results' empty state, and a NEW render test suite + registry pin (REG-LI01).
+- **MEDIUM/LOW:** param bounds (.max on line/character/query), PATH_INPUTS entries for the three position tools, semgrep ref whitelist tightened (no '..'/trailing '/', option-injection safe) + additive `truncated` cap flag surfaced through the securityScan schema, symbol-enrichment cache key now path-aware, owningTargets (resolveOwningTargets) wired additively into get_build_targets output, graphNote honesty note on get_affected_tests, conservative Python/Rust import resolution (no more bare-name false matches), repo-map localeCompare → code-point ordering, PageRank iteration/epsilon clamps, NEW opt-in `packages/indexer/src/scip-runner.ts` (argv-only table for 8 scip-* indexers, detection+index runners bounded, per-indexer fail-open, capped; IndexManager.ingestScipDump opt-in merge; automatic refresh-time running deliberately deferred), F1/F3 missing regression pins still tracked as remaining test work, module-header deferred notes on diagnostic-delta + build-graph, CASE 6c bounded ~5MB estimator row in the perf-guards baseline (D12 prerequisite), PLAN.md P3-T1..T11 entries flipped with honest DONE/DEFERRED notes, tool-definition mirrors regenerated (no diff — additive fields don't change generated output).
+
+Validation: workspace-wide typecheck exit 0; targeted suites 0 fail (sdk 9 suites incl. lsp-multiplexer 15/15, diagnostic-delta, semgrep, symbol-enrichment; indexer 4 suites incl. scip-runner 10/10; agent-runtime token-counter 21/21 + handlers; common tools; cli components/tools incl. the new renderer suite). Known flake: token-counter LRU test failed once under parallel load, passes in isolation (5.6s timing-sensitive).
+

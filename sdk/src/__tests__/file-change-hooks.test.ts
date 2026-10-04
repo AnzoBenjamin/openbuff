@@ -12,6 +12,7 @@ import {
 } from '../tools/file-change-hooks'
 import { mergeFileChangeHooks } from '../provider-config'
 
+import { runFileChangeHooksParams } from '@codebuff/common/tools/params/tool/run-file-change-hooks'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 
 function withTempDir(run: (dir: string) => void): void {
@@ -659,5 +660,95 @@ describe('mergeFileChangeHooks — concat-with-dedup (R3c)', () => {
     // base typecheck (first slot, overridden → override entry), base lint, override test
     expect(merged.map((h) => h.name)).toEqual(['typecheck', 'lint', 'test'])
     expect(merged[0]).toMatchObject({ timeoutSeconds: 90 })
+  })
+})
+
+describe('run_file_change_hooks outputSchema covers the diagnostic-delta shapes', () => {
+  // Schema-faithful runner: real runTerminalCommand output carries `command`,
+  // which the terminalCommandOutputSchema arm of the output schema requires.
+  const schemaRunner = (async () =>
+    [
+      {
+        type: 'json' as const,
+        value: {
+          command: 'tsc --noEmit',
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+        },
+      },
+    ]) as any
+
+  test('a diagnostic_delta_rejected result parses against the declared outputSchema', async () => {
+    const out = await runFileChangeHooks({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: '1' },
+      hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
+      runCommand: schemaRunner,
+      diagnosticDelta: async () => ({
+        rejected: true,
+        newDiagnostics: [
+          {
+            file: 'src/a.ts',
+            range: {
+              start: { line: 2, column: 4 },
+              end: { line: 2, column: 10 },
+            },
+            severity: 'error' as const,
+            code: 'TS2322',
+            message: 'Type mismatch',
+            command: 'tsc --noEmit',
+            source: 'tsc',
+          },
+        ],
+        fixIts: [
+          {
+            file: 'src/a.ts',
+            newText: 'const x = 1',
+            range: {
+              start: { line: 2, column: 4 },
+              end: { line: 2, column: 10 },
+            },
+            applicability: 'machineApplicable' as const,
+          },
+        ],
+      }),
+    })
+
+    const results = jsonValue(out)
+    const deltaResult = results?.find(
+      (result) => result.hookName === 'diagnostic-delta',
+    )
+    expect(deltaResult).toMatchObject({
+      validationStatus: 'diagnostic_delta_rejected',
+    })
+    // The emitted delta shape must fit the declared outputSchema —
+    // schema-parsing consumers previously rejected this arm entirely.
+    expect(() =>
+      runFileChangeHooksParams.outputSchema.parse(out),
+    ).not.toThrow()
+  })
+
+  test('a diagnostic_delta_passed result parses against the declared outputSchema', async () => {
+    const out = await runFileChangeHooks({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
+      hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
+      runCommand: schemaRunner,
+      diagnosticDelta: async () => ({ rejected: false }),
+    })
+
+    const results = jsonValue(out)
+    const deltaResult = results?.find(
+      (result) => result.hookName === 'diagnostic-delta',
+    )
+    expect(deltaResult).toMatchObject({
+      validationStatus: 'diagnostic_delta_passed',
+    })
+    expect(() =>
+      runFileChangeHooksParams.outputSchema.parse(out),
+    ).not.toThrow()
   })
 })

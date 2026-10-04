@@ -1,5 +1,12 @@
+import { EventEmitter } from 'node:events'
+
 import { describe, expect, test } from 'bun:test'
 
+import {
+  createDiagnosticCommandRunner,
+  createDiagnosticDeltaHook,
+  MAX_CAPTURED_STREAM_BYTES,
+} from '../services/diagnostic-delta-runner'
 import {
   captureDiagnostics,
   computeDiagnosticDelta,
@@ -18,6 +25,8 @@ import type {
   LanguageDiagnosticTextEdit,
 } from '../tools/language-diagnostics'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
+import type { ChildProcess } from 'node:child_process'
+import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 
 function makeDiagnostic(
   overrides: Partial<LanguageDiagnostic> = {},
@@ -236,6 +245,74 @@ describe('captureDiagnostics', () => {
       (command) => command === 'ruff check --output-format=json',
     )
     expect(ruffCalls).toHaveLength(1)
+  })
+
+  test('fans the capture commands out with bounded parallelism', async () => {
+    // perf: diagnostic-preflight-serial-commands-hot-path — the per-capture
+    // command loop used to run strictly serially, adding up to ~8 minutes of
+    // hook latency under the 120s default timeout. Multiple languages yield
+    // multiple commands; the fan-out must overlap them with a bounded
+    // in-flight window instead of awaiting each in turn.
+    let inFlight = 0
+    let maxInFlight = 0
+    const run: DiagnosticCommandRunner = async () => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      inFlight -= 1
+      return { stdout: '[]' }
+    }
+    await captureDiagnostics({
+      files: ['src/a.ts', 'src/b.py', 'src/c.rs', 'src/d.go'],
+      cwd: '/repo',
+      runCommand: run,
+    })
+    expect(maxInFlight).toBeGreaterThan(1)
+    expect(maxInFlight).toBeLessThanOrEqual(4)
+  })
+
+  test('parallel fan-out still joins diagnostics in deterministic command order', async () => {
+    // The bounded window must not reorder output: diagnostics join in the
+    // same command order the serial loop produced, per repeated runs. Each
+    // command returns its native parseable shape (tsc plain-text compiler
+    // lines, eslint JSON) with a deliberately skewed delay so a reordered
+    // join would flip the result.
+    const run: DiagnosticCommandRunner = async ({ command }) => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, command.startsWith('tsc') ? 20 : 5),
+      )
+      if (command === 'tsc --noEmit --pretty false') {
+        return { stdout: 'src/a.ts(1,1): error TS1: from tsc' }
+      }
+      return {
+        stdout: JSON.stringify([
+          {
+            filePath: 'src/a.ts',
+            messages: [
+              {
+                message: 'from eslint',
+                line: 2,
+                column: 1,
+                ruleId: 'ES1',
+                severity: 2,
+              },
+            ],
+          },
+        ]),
+      }
+    }
+    const first = await captureDiagnostics({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      runCommand: run,
+    })
+    const second = await captureDiagnostics({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      runCommand: run,
+    })
+    expect(first.map((d) => d.code)).toEqual(second.map((d) => d.code))
+    expect(first.map((d) => d.code)).toEqual(['TS1', 'ES1'])
   })
 })
 
@@ -578,5 +655,220 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
       },
     })
     expect(deltaInvoked).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createDiagnosticDeltaHook — production wiring for the preflight seam
+// ---------------------------------------------------------------------------
+describe('createDiagnosticDeltaHook', () => {
+  type FakeSpawnCall = {
+    file: string
+    args: string[]
+    options: unknown
+  }
+
+  function fakeSpawn(
+    results: Record<string, { exitCode?: number; stdout?: string } | 'error'>,
+  ): { spawn: CodebuffSpawn; calls: FakeSpawnCall[] } {
+    const calls: FakeSpawnCall[] = []
+    const spawn = (
+      file: string,
+      args: readonly string[] | undefined,
+      options: unknown,
+    ) => {
+      calls.push({ file, args: [...(args ?? [])], options })
+      const stdout = new EventEmitter()
+      const child = Object.assign(new EventEmitter(), {
+        stdout,
+      }) as unknown as ChildProcess
+      process.nextTick(() => {
+        const spec = results[file]
+        if (spec === 'error') {
+          child.emit('error', new Error('spawn ENOENT'))
+          return
+        }
+        if (spec?.stdout) stdout.emit('data', spec.stdout)
+        child.emit('close', spec?.exitCode ?? 0)
+      })
+      return child
+    }
+    return { spawn: spawn as unknown as CodebuffSpawn, calls }
+  }
+
+  test('runs preflightDiagnosticDelta over the argv-array child-process seam', async () => {
+    const { spawn, calls } = fakeSpawn({})
+    const hook = createDiagnosticDeltaHook({ spawn })
+    const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
+    // No tool output -> empty baseline and after-capture -> acceptance; a
+    // hook-seam preflight never fabricates a rejection.
+    expect(result).toEqual({ rejected: false })
+    // Commands execute as argv arrays over spawn, never through a shell.
+    const tscCall = calls.find((call) => call.file === 'tsc')
+    expect(tscCall).toBeDefined()
+    expect(Array.isArray(tscCall?.args)).toBe(true)
+    expect(tscCall?.args).toContain('--noEmit')
+    expect(tscCall?.options).toMatchObject({ cwd: '/repo' })
+  })
+
+  test('skips the second capture when applyEdit is a no-op (hook seam)', async () => {
+    const { spawn, calls } = fakeSpawn({
+      tsc: { exitCode: 0, stdout: '[]' },
+      eslint: { exitCode: 0, stdout: '[]' },
+    })
+    const hook = createDiagnosticDeltaHook({ spawn })
+    await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
+    // The hook seam's applyEdit is a no-op, so each diagnostic command must
+    // run exactly once per hook invocation — not once per capture (twice).
+    const tscCalls = calls.filter((call) => call.file === 'tsc')
+    const eslintCalls = calls.filter((call) => call.file === 'eslint')
+    expect(tscCalls).toHaveLength(1)
+    expect(eslintCalls).toHaveLength(1)
+  })
+
+  test('is fail-open: a throwing preflight resolves to undefined', async () => {
+    const { spawn } = fakeSpawn({})
+    const hook = createDiagnosticDeltaHook({
+      spawn,
+      preflight: (async () => {
+        throw new Error('preflight exploded')
+      }) as unknown as typeof preflightDiagnosticDelta,
+    })
+    await expect(
+      hook({ files: ['src/a.ts'], cwd: '/repo' }),
+    ).resolves.toBeUndefined()
+  })
+
+  test('an absent diagnostic tool yields no diagnostics and no rejection', async () => {
+    const { spawn } = fakeSpawn({ tsc: 'error' })
+    const hook = createDiagnosticDeltaHook({ spawn })
+    const result = await hook({ files: ['src/a.ts'], cwd: '/repo' })
+    expect(result).toEqual({ rejected: false })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createDiagnosticCommandRunner — byte-bounded, multibyte-safe stream capture
+// (perf: diagnostic-capture-utf8-chunk-split)
+// ---------------------------------------------------------------------------
+describe('createDiagnosticCommandRunner stream capture', () => {
+  /** Spawn fake whose stdout is delivered as raw byte chunks. */
+  function bufferSpawn(stdoutChunks: Buffer[]): CodebuffSpawn {
+    return ((file: string) => {
+      const stdout = new EventEmitter()
+      const child = Object.assign(new EventEmitter(), {
+        stdout,
+      }) as unknown as ChildProcess
+      process.nextTick(() => {
+        for (const chunk of stdoutChunks) stdout.emit('data', chunk)
+        child.emit('close', 0)
+      })
+      return child
+    }) as unknown as CodebuffSpawn
+  }
+
+  test('decodes a multibyte UTF-8 sequence split across stream chunks intact', async () => {
+    // '😀' is 4 UTF-8 bytes; the fake stream splits it mid-sequence. The old
+    // per-chunk chunk.toString() decode turned each half into U+FFFD.
+    const emoji = Buffer.from('😀', 'utf8')
+    const runCommand = createDiagnosticCommandRunner({
+      spawn: bufferSpawn([
+        Buffer.from('prefix '),
+        emoji.subarray(0, 2),
+        emoji.subarray(2),
+        Buffer.from(' suffix'),
+      ]),
+    })
+    const result = await runCommand({
+      command: 'tsc --noEmit',
+      cwd: '/repo',
+      timeoutSeconds: 5,
+    })
+    expect(result.stdout).toBe('prefix 😀 suffix')
+    expect(result.stdout).not.toContain('\uFFFD')
+  })
+
+  test('caps the capture in BYTES and never splits a multibyte char at the boundary', async () => {
+    const emoji = Buffer.from('😀', 'utf8') // 4 bytes
+    // Multibyte-heavy stream past the byte cap, chunked at 63-byte boundaries
+    // so chunks split emojis. The old UTF-16-length cap would have retained
+    // MORE than the named byte budget (1 UTF-16 unit per 4-byte emoji).
+    const emojiCount = Math.ceil((MAX_CAPTURED_STREAM_BYTES + 64) / emoji.length)
+    const payload = Buffer.concat(
+      Array.from({ length: emojiCount }, () => emoji),
+    )
+    const chunks: Buffer[] = []
+    for (let i = 0; i < payload.length; i += 63) {
+      chunks.push(payload.subarray(i, i + 63))
+    }
+    const runCommand = createDiagnosticCommandRunner({
+      spawn: bufferSpawn(chunks),
+    })
+    const result = await runCommand({
+      command: 'tsc --noEmit',
+      cwd: '/repo',
+      timeoutSeconds: 5,
+    })
+    // Exactly the named byte cap is retained, and the truncation boundary
+    // lands on a whole emoji (cap is divisible by 4), so no U+FFFD appears.
+    expect(Buffer.byteLength(result.stdout ?? '', 'utf8')).toBe(
+      MAX_CAPTURED_STREAM_BYTES,
+    )
+    expect(result.stdout).toBe('😀'.repeat(MAX_CAPTURED_STREAM_BYTES / 4))
+    expect(result.stdout).not.toContain('\uFFFD')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createDiagnosticCommandRunner — SIGTERM→SIGKILL escalation
+// (perf: diagnostic-runner-timeout-no-sigkill-escalation)
+// ---------------------------------------------------------------------------
+describe('createDiagnosticCommandRunner timeout escalation', () => {
+  /** Spawn fake whose child ignores SIGTERM and terminates only on SIGKILL. */
+  function sigtermIgnoringSpawn(): {
+    spawn: CodebuffSpawn
+    signals: string[]
+  } {
+    const signals: string[] = []
+    const spawn = ((file: string) => {
+      const stdout = new EventEmitter()
+      const child = Object.assign(new EventEmitter(), {
+        stdout,
+        kill: (signal?: string) => {
+          signals.push(signal ?? 'SIGTERM')
+          if (signal === 'SIGKILL') {
+            // A SIGTERM-ignoring child only terminates on SIGKILL.
+            process.nextTick(() => child.emit('close', null))
+          }
+        },
+      }) as unknown as ChildProcess
+      return child
+    }) as unknown as CodebuffSpawn
+    return { spawn, signals }
+  }
+
+  test('settles at the deadline and reaps a SIGTERM-ignoring child via SIGKILL', async () => {
+    const { spawn, signals } = sigtermIgnoringSpawn()
+    const runCommand = createDiagnosticCommandRunner({
+      spawn,
+      sigtermGraceMs: 25,
+    })
+    const started = performance.now()
+    const result = await runCommand({
+      command: 'tsc --noEmit',
+      cwd: '/repo',
+      timeoutSeconds: 0.05,
+    })
+    // The result settles AT the deadline (the SIGTERM), not at the SIGKILL
+    // escalation: the escalation bounds the leaked child's lifetime without
+    // delaying callers on the hot file-change path.
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(result.timedOut).toBe(true)
+    // SIGTERM at the deadline, then the SIGKILL escalation after the grace.
+    // The escalation deliberately does NOT delay the settled result, so it
+    // fires after the promise resolves — wait past the injected grace before
+    // asserting the escalation sequence.
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
   })
 })

@@ -5,8 +5,10 @@
  * measurement baseline and far too slow for CI, so runPerfGuardsBaseline is
  * driven here with 1 timed run, 0 warmups, and every case scaled to a single
  * timed op. The assertion is behavioral, not numeric: the full case list
- * (CASE 1-9, including the X-2 token-count / code-search / X-2a hot-path /
- * stream-parse rows) completes without throwing and returns measured rows.
+ * (CASE 1-13, including the X-2 token-count / code-search / X-2a hot-path /
+ * stream-parse rows, the wave-2 capture/cache rows, and the wave-3 identity-
+ * window and escalation rows) completes without throwing and returns
+ * measured rows.
  */
 import { describe, expect, test } from 'bun:test'
 
@@ -25,16 +27,35 @@ describe('measure-perf-guards-baseline runner smoke', () => {
     })
 
     expect(Array.isArray(rows)).toBe(true)
-    // Cases 1-5 each push at least one CaseRow (CASE 1, 2, 3, 3c, 3d, 4,
-    // 4d, 5); the X-2 cases (6-9) print absolute rows without pushing.
-    expect(rows.length).toBeGreaterThanOrEqual(8)
+    // Cases 1-5 and 10-13 each push at least one CaseRow (CASE 1, 2, 3, 3c,
+    // 3d, 4, 4d, 5, 10, 11, 12, 12b, 13); the X-2 cases (6-9) print absolute
+    // rows without pushing.
+    expect(rows.length).toBeGreaterThanOrEqual(10)
     const cases = new Set(rows.map((row) => row.case))
-    for (const expected of ['CASE 1', 'CASE 2', 'CASE 3', 'CASE 4', 'CASE 5']) {
+    for (const expected of [
+      'CASE 1',
+      'CASE 2',
+      'CASE 3',
+      'CASE 4',
+      'CASE 5',
+      'CASE 10',
+      'CASE 11',
+    ]) {
+      expect(cases.has(expected)).toBe(true)
+    }
+    // The backfilled evidence rows for this wave's remaining unmeasured
+    // seams: the identity-read window (like-for-like), the retention and
+    // escalation contract rows, and their parity/contract assertions.
+    for (const expected of ['CASE 12', 'CASE 12b', 'CASE 13']) {
       expect(cases.has(expected)).toBe(true)
     }
     for (const row of rows) {
       expect(row.before.medianMsPerOp).toBeGreaterThan(0)
       expect(row.after.medianMsPerOp).toBeGreaterThan(0)
     }
-  })
+    // CASE 13 drives a real SIGTERM-ignoring child whose pre-fix reaping
+    // waits for the child's natural exit (~1.5s) and is NOT scaled by
+    // iterationsScale, so the smoke run carries several seconds of fixed
+    // wall-clock cost; give it a generous ceiling instead of the 5s default.
+  }, 60_000)
 })

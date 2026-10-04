@@ -7,7 +7,7 @@ import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig, ToolRenderOptions } from './types'
-import { statusGlyph } from './discovery-results'
+import { shortenPath, statusGlyph } from './discovery-results'
 
 type LiLocation = {
   path?: unknown
@@ -58,12 +58,17 @@ function extractSymbols(output: LiOutput | undefined): LiSymbol[] {
   return output.symbols.filter(isRecord) as LiSymbol[]
 }
 
-function formatLocation(location: LiLocation): string {
-  const path = typeof location.path === 'string' ? location.path : '(unknown)'
+function formatLocation(location: LiLocation, basePath?: string): string {
+  const rawPath =
+    typeof location.path === 'string' ? location.path : '(unknown)'
+  const path = basePath ? shortenPath(rawPath, basePath) : rawPath
   const line = location.range?.start?.line
   const character = location.range?.start?.character
   const lineNum = typeof line === 'number' ? line + 1 : undefined
-  const charNum = typeof character === 'number' ? character : undefined
+  // LSP positions are 0-based on both axes; display follows the editor
+  // convention (1-based line AND column), matching the 1-based line shown in
+  // the tool params.
+  const charNum = typeof character === 'number' ? character + 1 : undefined
   const pos =
     lineNum !== undefined
       ? `:${lineNum}${charNum !== undefined ? `:${charNum}` : ''}`
@@ -143,6 +148,20 @@ function makeLanguageIntelligenceComponent(
       const resultCount =
         toolName === 'workspace_symbol' ? symbols.length : locations.length
 
+      // Shorten entry paths relative to the queried file's directory (posix),
+      // the same prefix-strip the sibling discovery renderers apply via
+      // shortenPath. workspace_symbol has no queried path, so it keeps raw ones.
+      const basePath = path.includes('/')
+        ? path.slice(0, path.lastIndexOf('/'))
+        : undefined
+
+      const readyButEmpty =
+        !error &&
+        !unavailableReason &&
+        output !== undefined &&
+        toolName !== 'hover_type' &&
+        resultCount === 0
+
       let status: string
       if (error) status = 'failed'
       else if (toolBlock.lifecycle === 'queued') status = 'queued'
@@ -163,7 +182,9 @@ function makeLanguageIntelligenceComponent(
               ? hoverText
                 ? target
                 : `${target} — no type info`
-              : `${target} — ${resultCount} ${toolName === 'workspace_symbol' ? 'symbol' : 'location'}${resultCount === 1 ? '' : 's'}`
+              : readyButEmpty
+                ? `${target} — no results`
+                : `${target} — ${resultCount} ${toolName === 'workspace_symbol' ? 'symbol' : 'location'}${resultCount === 1 ? '' : 's'}`
 
       const Content = () => {
         const theme = useTheme()
@@ -173,8 +194,7 @@ function makeLanguageIntelligenceComponent(
               name={label}
               description={
                 <>
-                  {wrapTextPreservingNewlines(summary, colWidth)}
-                  {' '}
+                  {`${wrapTextPreservingNewlines(summary, colWidth)} `}
                   <span fg={color}>{glyph}</span>
                 </>
               }
@@ -212,10 +232,18 @@ function makeLanguageIntelligenceComponent(
                   </span>
                 </text>
               ) : null}
+              {readyButEmpty ? (
+                <text style={{ wrapMode: 'word' }}>
+                  <span fg={theme.muted}>no results</span>
+                </text>
+              ) : null}
               {locations.slice(0, 30).map((location, index) => (
                 <text key={`loc-${index}`} style={{ wrapMode: 'word' }}>
                   <span fg={theme.directory}>
-                    {wrapTextPreservingNewlines(formatLocation(location), colWidth)}
+                    {wrapTextPreservingNewlines(
+                      formatLocation(location, basePath),
+                      colWidth,
+                    )}
                   </span>
                 </text>
               ))}
@@ -227,7 +255,7 @@ function makeLanguageIntelligenceComponent(
                     ? ` · ${symbol.containerName}`
                     : ''
                 const loc = symbol.location
-                  ? ` · ${formatLocation(symbol.location)}`
+                  ? ` · ${formatLocation(symbol.location, basePath)}`
                   : ''
                 return (
                   <text key={`sym-${index}`} style={{ wrapMode: 'word' }}>

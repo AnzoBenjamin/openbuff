@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { getLanguageToolSpecs } from '@codebuff/common/util/language-capabilities'
 import { LANGUAGE_CAPABILITY_REGISTRY } from '@codebuff/common/util/language-capabilities'
 
@@ -33,6 +36,8 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_PENDING_REQUESTS = 256
 const DEFAULT_MAX_FRAME_BYTES = 8 * 1024 * 1024
 const RESTART_BACKOFF_MS = 200
+/** Poll interval while an evictor waits for reserved-but-starting slots to settle. */
+const EVICT_WAIT_POLL_MS = 25
 const INITIALIZE_REQUEST_ID = 1
 
 export type LspPosition = { line: number; character: number }
@@ -512,16 +517,79 @@ type ServerEntry = {
   restarting: Promise<void> | null
 }
 
-function defaultRootResolver(params: {
+/** Upper bound on the upward rootMarker walk (monorepo depth safety). */
+const MAX_ROOT_WALK_DEPTH = 32
+
+/**
+ * Memoized directory→root resolutions for the default root resolver
+ * (perf: root-resolver-unmemoized-sync-walk-per-acquire). The upward
+ * fs.existsSync walk is a sync syscall chain — up to MAX_ROOT_WALK_DEPTH
+ * levels per marker — and acquire() runs it on every LSP request, so results
+ * are memoized per (start directory, marker list) with a short TTL: repeated
+ * definition/hover/references calls against the same subtree pay the walk
+ * once per TTL window instead of once per request. Mirrors the
+ * buildGraphCache pattern in build-graph.ts (bounded entries, insert-order
+ * eviction); tests reset it via clearRootResolutionCache.
+ */
+const rootResolutionCacheTtlMs = 5_000
+const rootResolutionCacheMaxEntries = 512
+const rootResolutionCache = new Map<
+  string,
+  { expiresAt: number; root: string }
+>()
+
+/** Drop the memoized directory→root resolutions (tests, workspace changes). */
+export function clearRootResolutionCache(): void {
+  rootResolutionCache.clear()
+}
+
+/**
+ * Default root resolution (P3 audit fix): walk upward from the file's
+ * directory looking for the spec's rootMarkers — the first marker in array
+ * order wins — so a monorepo gets one warm server per project root instead of
+ * one per directory (which thrashed the maxServers LRU). When no marker is
+ * found within the bounded walk (or the spec declares none), fall back to the
+ * file's parent directory, matching the previous behavior. Results are
+ * memoized per (start directory, marker list) for rootResolutionCacheTtlMs
+ * (bounded at rootResolutionCacheMaxEntries entries, insert-order eviction).
+ * Exported for direct tests of the walk + memo contract.
+ */
+export function defaultRootResolver(params: {
   filePath: string
   rootMarkers: readonly string[]
 }): string {
-  // Without fs access in the multiplexer, default to the file's directory;
-  // production wiring supplies a real rootMarker-aware resolver.
-  void params.rootMarkers
   const normalized = params.filePath.replace(/\\/g, '/')
   const index = normalized.lastIndexOf('/')
-  return index === -1 ? '.' : normalized.slice(0, index)
+  const parentDir = index === -1 ? '.' : normalized.slice(0, index)
+  if (parentDir === '') return parentDir
+  const cacheKey = `${parentDir}\u0000${params.rootMarkers.join('\u0001')}`
+  const now = Date.now()
+  const cached = rootResolutionCache.get(cacheKey)
+  if (cached && cached.expiresAt > now) return cached.root
+  let root = parentDir
+  for (const marker of params.rootMarkers) {
+    let dir = parentDir
+    for (let depth = 0; depth < MAX_ROOT_WALK_DEPTH; depth++) {
+      if (fs.existsSync(path.join(dir, marker))) {
+        root = dir
+        break
+      }
+      const parent = path.dirname(dir)
+      if (parent === dir) break // filesystem root
+      dir = parent
+    }
+    if (root !== parentDir) break
+  }
+  rootResolutionCache.delete(cacheKey)
+  if (rootResolutionCache.size >= rootResolutionCacheMaxEntries) {
+    const oldest = rootResolutionCache.keys().next()
+    if (!oldest.done) rootResolutionCache.delete(oldest.value)
+  }
+  rootResolutionCache.set(cacheKey, {
+    expiresAt: now + rootResolutionCacheTtlMs,
+    root,
+  })
+  return root
 }
 
 export type LspMultiplexer = {
@@ -562,7 +630,38 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
   const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES
   const rootResolver = options.rootResolver ?? defaultRootResolver
   const servers = new Map<string, ServerEntry>()
+  // In-flight cold starts keyed by (languageId, rootUri): concurrent acquire()
+  // callers join the winner's start instead of spawning duplicate servers
+  // whose losing child process would leak.
+  const starting = new Map<string, Promise<ServerEntry>>()
   let disposed = false
+  // Registration critical section (perf: lsp-coldstart-evict-overshoot):
+  // concurrent cold starts for distinct (language, root) keys used to each
+  // observe room after evictIfNeeded (which awaited connection.stop()
+  // outside any lock) and then both register, transiently exceeding
+  // maxServers. Eviction + slot reservation are serialized through this
+  // promise chain, and the slot is reserved by inserting the entry BEFORE
+  // the child starts, so the server count can never exceed the bound.
+  let registrationChain: Promise<void> = Promise.resolve()
+  const reserveServerSlot = (
+    entry: ServerEntry,
+    key: string,
+  ): Promise<void> => {
+    const run = registrationChain.then(async () => {
+      if (disposed) {
+        throw new LspServerError('LSP multiplexer is disposed.', {
+          reason: 'disposed',
+        })
+      }
+      await evictIfNeeded()
+      servers.set(key, entry)
+    })
+    registrationChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
 
   function emit(event: LspMultiplexerEvent): void {
     options.onEvent?.(event)
@@ -609,15 +708,35 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
   }
 
   async function evictIfNeeded(): Promise<void> {
-    while (servers.size >= maxServers) {
-      const oldestKey = servers.keys().next()
-      if (oldestKey.done) return
-      const oldest = servers.get(oldestKey.value)
-      servers.delete(oldestKey.value)
-      if (oldest) {
-        await oldest.connection.stop()
-        emit({ kind: 'evicted', key: oldestKey.value })
+    for (;;) {
+      if (servers.size < maxServers) return
+      // Prefer evicting a warm (running) server: a reserved-but-still-starting
+      // slot is owned by an in-flight cold start, which re-reserves when its
+      // slot is stolen. Keys iterate in LRU (insertion) order, so the first
+      // running entry is the oldest warm one.
+      let oldestKey: string | undefined
+      for (const candidate of servers.keys()) {
+        if (servers.get(candidate)?.connection.isRunning) {
+          oldestKey = candidate
+          break
+        }
       }
+      if (oldestKey !== undefined) {
+        const oldest = servers.get(oldestKey)
+        servers.delete(oldestKey)
+        if (oldest) {
+          await oldest.connection.stop()
+          emit({ kind: 'evicted', key: oldestKey })
+        }
+        continue
+      }
+      // Every registered entry is reserved-but-still-starting (only reachable
+      // when concurrent distinct-key cold starts exceed the cap). Stealing a
+      // starting slot would orphan its live child and churn respawn loops, so
+      // wait for the oldest reservation to settle instead: a start is bounded
+      // by startupTimeoutMs, so the entry either becomes a warm (evictable)
+      // server or is removed by its failed start within that bound.
+      await sleep(EVICT_WAIT_POLL_MS)
     }
   }
 
@@ -638,50 +757,98 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       if (existing.restarting) await existing.restarting
       return existing
     }
-    await evictIfNeeded()
-    const entry: ServerEntry = {
-      key,
-      languageId,
-      rootUri,
-      restarting: null,
-      connection: new LspServerConnection({
-        spawner: options.spawner,
-        spawnSpec: { argv: spec.argv, cwd: root },
-        requestTimeoutMs,
-        startupTimeoutMs,
-        maxPendingRequests,
-        maxFrameBytes,
-        onCrash: (reason) => {
-          emit({ kind: 'restart', key, reason })
-          entry.restarting = (async () => {
-            await sleep(RESTART_BACKOFF_MS)
-            try {
-              const fresh = new LspServerConnection({
-                spawner: options.spawner,
-                spawnSpec: { argv: spec.argv, cwd: root },
-                requestTimeoutMs,
-                startupTimeoutMs,
-                maxPendingRequests,
-                maxFrameBytes,
-                onCrash: (again) => {
-                  emit({ kind: 'gave-up', key, reason: again })
-                },
-              })
-              await fresh.start(rootUri)
-              entry.connection = fresh
-            } catch {
-              emit({ kind: 'gave-up', key, reason })
-            } finally {
-              entry.restarting = null
-            }
-          })()
-        },
-      }),
+    // Single-flight cold start: concurrent acquire() calls for the same
+    // (languageId, root) key join one in-flight start instead of each
+    // spawning a duplicate server. The bounded-parallel syncMutatedFiles
+    // path (concurrency 4) makes this race reachable on every multi-file
+    // mutation commit, and the losing child process of a duplicated cold
+    // start used to leak permanently.
+    const inFlight = starting.get(key)
+    if (inFlight) {
+      const entry = await inFlight
+      // LRU touch on the winner's freshly started entry.
+      servers.delete(key)
+      servers.set(key, entry)
+      return entry
     }
-    await entry.connection.start(rootUri)
-    servers.set(key, entry)
-    emit({ kind: 'started', key, languageId, rootUri })
-    return entry
+    const startPromise = (async (): Promise<ServerEntry> => {
+      const buildEntry = (): ServerEntry => {
+        const entry: ServerEntry = {
+          key,
+          languageId,
+          rootUri,
+          restarting: null,
+          connection: new LspServerConnection({
+            spawner: options.spawner,
+            spawnSpec: { argv: spec.argv, cwd: root },
+            requestTimeoutMs,
+            startupTimeoutMs,
+            maxPendingRequests,
+            maxFrameBytes,
+            onCrash: (reason) => {
+              emit({ kind: 'restart', key, reason })
+              entry.restarting = (async () => {
+                await sleep(RESTART_BACKOFF_MS)
+                try {
+                  const fresh = new LspServerConnection({
+                    spawner: options.spawner,
+                    spawnSpec: { argv: spec.argv, cwd: root },
+                    requestTimeoutMs,
+                    startupTimeoutMs,
+                    maxPendingRequests,
+                    maxFrameBytes,
+                    onCrash: (again) => {
+                      emit({ kind: 'gave-up', key, reason: again })
+                    },
+                  })
+                  await fresh.start(rootUri)
+                  entry.connection = fresh
+                } catch {
+                  emit({ kind: 'gave-up', key, reason })
+                } finally {
+                  entry.restarting = null
+                }
+              })()
+            },
+          }),
+        }
+        return entry
+      }
+      let entry = buildEntry()
+      for (;;) {
+        await reserveServerSlot(entry, key)
+        try {
+          await entry.connection.start(rootUri)
+        } catch (error) {
+          if (servers.get(key) === entry) servers.delete(key)
+          throw error
+        }
+        if (servers.get(key) === entry) break
+        // The reserved slot was stolen by a newer cold start while this one
+        // was still starting (only reachable when concurrent cold starts
+        // exceed the cap): stop the orphan child and re-reserve instead of
+        // registering past the bound or leaking the process.
+        await entry.connection.stop()
+        entry = buildEntry()
+      }
+      if (disposed) {
+        // dispose() ran while this cold start was in flight: stop the child
+        // instead of registering a server nobody will ever dispose.
+        if (servers.get(key) === entry) servers.delete(key)
+        await entry.connection.stop()
+        throw new LspServerError('LSP multiplexer is disposed.', {
+          reason: 'disposed',
+        })
+      }
+      emit({ kind: 'started', key, languageId, rootUri })
+      return entry
+    })()
+    starting.set(key, startPromise)
+    try {
+      return await startPromise
+    } finally {
+      if (starting.get(key) === startPromise) starting.delete(key)
+    }
   }
 
   async function withServer<T>(
@@ -702,31 +869,38 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     }
   }
 
-  /**
-   * Returns the filePath-ish anchor of the most-recently-warm server so
-   * workspace/symbol can reuse it. The anchor is the synthetic file path that
-   * acquired the server (its language/root already resolved), so passing it to
-   * `withServer` re-resolves to the same warm (languageId, root) entry.
-   */
-  function lastWarmAnchor(): string | undefined {
-    let latest: string | undefined
-    for (const entry of servers.values()) {
-      latest = entry.key
-    }
-    return latest
-  }
-
   const WARM_ANCHOR_POLL_MS = 50
   const WARM_ANCHOR_TIMEOUT_MS = 2_000
 
-  // Bounded wait for a warm server anchor. Returns undefined when no server
-  // becomes warm within the timeout so a bare workspace/symbol never hangs.
-  async function waitForWarmAnchor(): Promise<string | undefined> {
+  /**
+   * Returns the most-recently-warm server entry so workspace/symbol can reuse
+   * it directly. The server map key ('<languageId>:<rootUri>') is NOT a
+   * resolvable file path, so routing it back through `withServer`→`acquire`
+   * would make `resolveLanguage` throw
+   * LspServerUnavailableError('unsupported-language') on the only path where a
+   * server is actually warm. This bypasses `acquire` entirely: it never
+   * cold-starts a server (workspace/symbol is a warm-server query, per P3-T2)
+   * and performs the same LRU touch + restart-await as the warm-hit branch of
+   * `acquire`. Bounded wait: returns undefined when no server becomes warm
+   * within the timeout so a bare workspace/symbol never hangs.
+   */
+  async function warmEntryForWorkspaceSymbol(): Promise<ServerEntry | undefined> {
     const deadline = Date.now() + WARM_ANCHOR_TIMEOUT_MS
     for (;;) {
-      const anchor = lastWarmAnchor()
-      if (anchor) return anchor
-      if (Date.now() >= deadline) return undefined
+      let latest: ServerEntry | undefined
+      for (const entry of servers.values()) {
+        // Reserved-but-still-starting entries are not warm yet: answering a
+        // workspace/symbol query against one would reject with 'stopped'.
+        if (entry.connection.isRunning) latest = entry
+      }
+      if (latest) {
+        // LRU touch: re-insert to move to the most-recent position.
+        servers.delete(latest.key)
+        servers.set(latest.key, latest)
+        if (latest.restarting) await latest.restarting
+        return latest
+      }
+      if (disposed || Date.now() >= deadline) return undefined
       await sleep(WARM_ANCHOR_POLL_MS)
     }
   }
@@ -749,21 +923,23 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       withServer<LspDocumentSymbol[]>(filePath, 'textDocument/documentSymbol', {
         textDocument: { uri: filePathToUri(filePath) },
       }),
-    // workspace/symbol is issued against the warm server for the workspace.
-    // The `query` text is NOT a path, so anchor the (languageId, root)
-    // selection on the current working directory instead: `resolveLanguage`
-    // would misclassify a bare query string as an unknown file extension.
-    // When a server is already warm for a workspace language, reuse it; this
-    // keeps workspace/symbol a true warm-server query (per P3-T2) and never
-    // cold-starts a server just to answer a symbol search. A server that
-    // lacks workspace/symbol support resolves to an empty result rather than
-    // throwing.
+    // workspace/symbol is issued against the already-warm server for the
+    // workspace. The `query` text is NOT a file path, so the warm server
+    // entry is selected directly — never via `withServer`→`acquire`, which
+    // would misclassify the server map key as a file path and throw
+    // 'unsupported-language'. This keeps workspace/symbol a true warm-server
+    // query (per P3-T2) that never cold-starts a server just to answer a
+    // symbol search. A server that lacks workspace/symbol support resolves
+    // to an empty result rather than throwing.
     workspaceSymbol: async (query) => {
-      const anchor = await waitForWarmAnchor()
-      if (!anchor) return null
-      return withServer<LspWorkspaceSymbol[]>(anchor, 'workspace/symbol', {
-        query,
-      }).catch((error) => {
+      const entry = await warmEntryForWorkspaceSymbol()
+      if (!entry) return null
+      try {
+        const result = (await entry.connection.request('workspace/symbol', {
+          query,
+        })) as LspWorkspaceSymbol[] | null
+        return result ?? null
+      } catch (error) {
         if (
           error instanceof LspServerError &&
           (error.reason === 'protocol' || error.reason === 'unavailable')
@@ -771,7 +947,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
           return null
         }
         throw error
-      })
+      }
     },
     async syncFile({ filePath, version, text, open, close }) {
       const entry = await acquire(filePath)

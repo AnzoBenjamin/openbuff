@@ -162,6 +162,78 @@ export function mergeScipIntoIndex(
 }
 
 /**
+ * Derive the precise file→file reference edges of a validated SCIP index —
+ * the same derivation {@link mergeScipIntoIndex} performs — without merging.
+ * Fails closed with the typed {@link ScipIngestError} when any document
+ * escapes the project root. The scip-runner derives every indexer dump's
+ * edges up front and merges them all in one pass, instead of chaining one
+ * full-index-copying merge per indexer.
+ */
+export function scipPreciseEdges(scip: ScipIndex): IndexEdge[] {
+  const { edges, skippedUnsafePaths } = scipEdges(scip)
+  if (skippedUnsafePaths > 0) {
+    throw new ScipIngestError(
+      'malformed',
+      `SCIP index contains ${skippedUnsafePaths} document(s) whose relative_path escapes the project root`,
+    )
+  }
+  return edges
+}
+
+/**
+ * Merge already-derived precise edges into an index snapshot in one pass.
+ * Pure: the input is not mutated. Semantics match {@link mergeScipIntoIndex}
+ * (heuristic duplicates of the same (from, to, type) tuple are superseded,
+ * dedupe by (from, to, type, label), edge cap enforced) but the index is
+ * copied exactly once regardless of how many sources contributed edges —
+ * the chained per-indexer merge shape copied the full snapshot once per
+ * successful indexer (O(k x |index|) allocations for k indexers).
+ *
+ * @returns the merged snapshot and the number of edges actually added.
+ */
+export function mergeScipEdgesIntoIndex(
+  index: MetadataIndex,
+  preciseEdges: readonly IndexEdge[],
+): { index: MetadataIndex; edgesMerged: number } {
+  if (preciseEdges.length === 0) return { index, edgesMerged: 0 }
+
+  const nodes: Record<string, IndexNode> = { ...index.graph.nodes }
+  const preciseTuples = new Set(preciseEdges.map(edgeTupleKey))
+  const merged: IndexEdge[] = []
+  for (const edge of index.graph.edges) {
+    if (
+      (edge.confidence ?? 'heuristic') === 'heuristic' &&
+      preciseTuples.has(edgeTupleKey(edge))
+    ) {
+      continue
+    }
+    merged.push(edge)
+  }
+
+  const addedKeys = new Set<string>()
+  let addedCount = 0
+  for (const edge of preciseEdges) {
+    const key = edgeDedupeKey(edge)
+    if (addedKeys.has(key)) continue
+    if (addedCount >= SCIP_MAX_MERGED_EDGES) {
+      throw new ScipIngestError(
+        'edge-limit',
+        `SCIP merge exceeded the cap of ${SCIP_MAX_MERGED_EDGES} edges`,
+      )
+    }
+    addedKeys.add(key)
+    addedCount++
+    ensureFileNode(nodes, edge.from)
+    ensureFileNode(nodes, edge.to)
+    merged.push(edge)
+  }
+
+  const next: MetadataIndex = { ...index, graph: { nodes, edges: merged } }
+  delete next.queryData
+  return { index: next, edgesMerged: addedCount }
+}
+
+/**
  * Derive precise file→file reference edges from a validated SCIP index.
  * Definition occurrences (symbol_roles definition bit) map symbols to their
  * defining document; reference occurrences then point at that file. Local

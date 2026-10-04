@@ -1,3 +1,16 @@
+/**
+ * Build graph (P3-T8): maps source files to their owning build targets so
+ * edits can run the owning target's tests/builds.
+ *
+ * Supported toolchains (resolveOwningTargets): cargo metadata (Rust), go list
+ * (Go), package.json workspaces (JS/TS), pom.xml/gradle static files (JVM),
+ * .csproj (dotnet), CMakeLists.txt (C/C++), and pyproject.toml/setup.py
+ * (Python).
+ *
+ * Deferred: Bazel, nx, real MSBuild, the Gradle Tooling API, and the CMake
+ * File API are not implemented — those ecosystems resolve from static
+ * manifest files only.
+ */
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -32,6 +45,22 @@ export type OwningTargetResolution = {
  * Command-runner seam for ecosystem build tools (`cargo metadata`, `go list`).
  * Tests inject a fake; the default spawns the tool with a bounded timeout,
  * mirroring `toolVersion` in harness-intelligence.ts.
+ *
+ * The default runner is intentionally synchronous (`spawnSync`), like the
+ * semgrep-baseline runner seam — do not convert to async. It now sits on the
+ * live `get_build_targets` tool path, so the event-loop cost is bounded and
+ * amortized by contract:
+ * - each spawn is capped (`runnerTimeoutMs` timeout, `runnerMaxBufferBytes`
+ *   maxBuffer), so a runaway tool cannot stall the event loop indefinitely;
+ * - the per-cwd target index is cached for `buildGraphCacheTtlMs`, so the
+ *   ecosystem probes run once per TTL window per cwd, not per tool call;
+ * - each ecosystem resolver is isolated (an absent/failing/slow tool
+ *   contributes nothing) and resolution is capped at `maxFilesPerCall` files;
+ * - the cargo/go probes are gated on a discovered Cargo.toml/go.mod, so repos
+ *   that do not use an ecosystem never pay that ecosystem's spawn at all.
+ * A mixed sync/async seam would be worse than either; if the blocking cost
+ * ever matters in practice, move the whole resolution off the event loop
+ * (e.g. a worker) rather than making the seam half-async.
  */
 export type BuildGraphRunner = (
   argv: string[],
@@ -88,6 +117,8 @@ const ignoredDiscoveryDirectories = new Set([
 
 const discoveredFileNames = new Set([
   'package.json',
+  'Cargo.toml',
+  'go.mod',
   'pom.xml',
   'build.gradle',
   'build.gradle.kts',
@@ -541,12 +572,18 @@ function buildTargetIndex(
 ): IndexedTarget[] {
   let discovered: string[] | undefined
   const discover = () => (discovered ??= discoverBuildGraphFiles(root))
+  // The sync ecosystem probes are gated on a discovered manifest: `cargo
+  // metadata` requires a Cargo.toml and module-mode `go list` requires a
+  // go.mod, so repos that do not use an ecosystem never pay that spawnSync
+  // on the live tool path (perf: build-graph-spawnsync-blocking-new-tool-path).
+  const hasManifest = (name: string) =>
+    discover().some((file) => file === name || file.endsWith(`/${name}`))
   // A failing or slow ecosystem tool must never break resolution of the
   // other ecosystems: each resolver is isolated and contributes nothing when
   // its tool is absent or its output unusable.
   const resolvers: Array<() => IndexedTarget[]> = [
-    () => resolveCargoTargets(root, runner),
-    () => resolveGoTargets(root, runner),
+    () => (hasManifest('Cargo.toml') ? resolveCargoTargets(root, runner) : []),
+    () => (hasManifest('go.mod') ? resolveGoTargets(root, runner) : []),
     () => resolveJavaScriptTargets(root, discover()),
     () => resolveJvmTargets(root, discover()),
     () => resolveDotnetTargets(discover()),

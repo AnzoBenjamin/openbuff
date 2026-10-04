@@ -19,3 +19,17 @@ describe('tool renderer metadata', () => {
     }
   })
 })
+
+describe('language intelligence renderer registration', () => {
+  test('[REG-LI01] all four LSP tools are pinned in the tool component registry', () => {
+    const registered = getRegisteredToolNames()
+    for (const toolName of [
+      'go_to_definition',
+      'find_references',
+      'hover_type',
+      'workspace_symbol',
+    ] as const) {
+      expect(registered).toContain(toolName)
+    }
+  })
+})

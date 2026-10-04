@@ -197,7 +197,7 @@ describe('personalizedPageRank', () => {
     expect(scores.get('B')).toBeGreaterThan(scores.get('C') ?? 0)
   })
 
-  test('respects the iteration cap (0 iterations returns the personalization vector)', () => {
+  test('clamps a sub-floor iteration cap to one iteration (bounded work)', () => {
     const scores = personalizedPageRank({
       adjacency: adjacencyOf({ A: ['B'], B: ['A'] }),
       seeds: new Map([
@@ -206,8 +206,10 @@ describe('personalizedPageRank', () => {
       ]),
       maxIterations: 0,
     })
-    expect(scores.get('A')).toBeCloseTo(0.75, 12)
-    expect(scores.get('B')).toBeCloseTo(0.25, 12)
+    // maxIterations clamps to [1, 200]: a 0 request performs exactly one
+    // bounded iteration instead of returning the raw personalization vector.
+    expect(scores.get('A')).toBeCloseTo(0.325, 12)
+    expect(scores.get('B')).toBeCloseTo(0.675, 12)
   })
 
   test('returns an empty map for an empty graph', () => {
@@ -232,6 +234,71 @@ describe('personalizedPageRank', () => {
 
   test('uses the documented default damping factor', () => {
     expect(DEFAULT_PAGERANK_DAMPING).toBe(0.85)
+  })
+
+  test('clamps maxIterations into [1, 200]', () => {
+    const adjacency = adjacencyOf({ A: ['B'], B: ['A'] })
+    // 0 historically meant "return the personalization vector"; the clamp
+    // floor of 1 keeps at least one iteration of work bounded, so the result
+    // differs from the raw personalization vector.
+    const clampedToFloor = personalizedPageRank({
+      adjacency,
+      seeds: new Map([
+        ['A', 3],
+        ['B', 1],
+      ]),
+      maxIterations: Number.MAX_SAFE_INTEGER,
+    })
+    const afterOneIteration = personalizedPageRank({
+      adjacency,
+      seeds: new Map([
+        ['A', 3],
+        ['B', 1],
+      ]),
+      maxIterations: 1,
+    })
+    expect(clampedToFloor.get('A')).toBeGreaterThan(afterOneIteration.get('A') ?? 0)
+    // The floor is 1: even a pathological 0/NaN request cannot skip iteration.
+    const zeroRequested = personalizedPageRank({
+      adjacency,
+      maxIterations: Number.NaN,
+    })
+    expect(zeroRequested.size).toBe(2)
+    // 200 cap: a huge request produces the same converged vector as exactly
+    // 200 iterations (the cap, not the request, bounds the work).
+    const huge = personalizedPageRank({
+      adjacency,
+      maxIterations: 1e9,
+      epsilon: 1e-12,
+    })
+    const capped = personalizedPageRank({
+      adjacency,
+      maxIterations: 200,
+      epsilon: 1e-12,
+    })
+    expect(Array.from(huge.entries())).toEqual(Array.from(capped.entries()))
+  })
+
+  test('clamps epsilon to a minimum floor of 1e-12', () => {
+    const adjacency = adjacencyOf({ A: ['B'], B: ['C'], C: ['A'] })
+    // An epsilon of 0 (or sub-floor) must behave like the documented floor:
+    // the loop is still bounded, and the result matches epsilon=1e-12.
+    const zero = personalizedPageRank({ adjacency, epsilon: 0 })
+    const floor = personalizedPageRank({ adjacency, epsilon: 1e-12 })
+    expect(Array.from(zero.entries())).toEqual(Array.from(floor.entries()))
+    const subFloor = personalizedPageRank({
+      adjacency,
+      epsilon: Number.MIN_VALUE,
+      maxIterations: 200,
+    })
+    const cappedFloor = personalizedPageRank({
+      adjacency,
+      epsilon: 1e-12,
+      maxIterations: 200,
+    })
+    expect(Array.from(subFloor.entries())).toEqual(
+      Array.from(cappedFloor.entries()),
+    )
   })
 })
 

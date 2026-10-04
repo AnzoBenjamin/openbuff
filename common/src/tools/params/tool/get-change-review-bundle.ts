@@ -40,6 +40,10 @@ export const getChangeReviewBundleParams = {
             findings: z.array(z.record(z.string(), z.any())),
             reason: z.string().optional(),
             toolVersion: z.string().optional(),
+            // Additive: set when the scan's file cap (MAX_SEMGREP_FILES)
+            // truncated the scanned file list; optional so existing
+            // consumers parse unchanged.
+            truncated: z.boolean().optional(),
           })
           .optional(),
       }),

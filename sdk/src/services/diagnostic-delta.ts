@@ -11,6 +11,7 @@ import {
   type LanguageDiagnostic,
   type LanguageDiagnosticTextEdit,
 } from '../tools/language-diagnostics'
+import { mapWithConcurrency } from '../tools/concurrency'
 
 /**
  * Diagnostic-delta preflight (LI-02 tiers 1–2).
@@ -35,6 +36,10 @@ import {
  * command list aligned with its registry validation stages and tool metadata
  * (e.g. tsc/eslint for TypeScript, ruff/pyright for Python, cargo check for
  * Rust, go vet for Go).
+ *
+ * Deferred: the incremental daemons (tsc --watch, cargo check JSON daemon,
+ * ruff server, dmypy) are not implemented; the preflight runs one-shot
+ * diagnostic commands per invocation.
  *
  * All command execution goes through the injected {@link DiagnosticCommandRunner}
  * seam — this module never spawns directly — so tests are hermetic and the
@@ -99,6 +104,16 @@ const MAX_TOTAL_DIAGNOSTICS = 200
 const MAX_FIXITS = 50
 /** Diagnostic commands can be slow; bound each run through the runner seam. */
 const DEFAULT_DIAGNOSTIC_TIMEOUT_SECONDS = 120
+/**
+ * Bounded parallel window for the per-capture command fan-out (perf:
+ * diagnostic-preflight-serial-commands-hot-path): running up to
+ * MAX_DIAGNOSTIC_COMMANDS (4) compile-scale commands strictly serially added
+ * up to ~8 minutes of hook latency per file-change-hook invocation under the
+ * 120s default timeout. Two concurrent toolchain processes already saturate
+ * most dev machines, so the window trades a bounded CPU-contention increase
+ * for a bounded (halved) worst-case latency instead of fanning out wider.
+ */
+const MAX_DIAGNOSTIC_CONCURRENCY = 2
 
 /**
  * Ordered, parseable validation commands per language, aligned with each
@@ -176,26 +191,49 @@ export async function captureDiagnostics(params: {
   const commands = collectDiagnosticCommands(files)
 
   const diagnostics: LanguageDiagnostic[] = []
-  for (const command of commands) {
-    if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break
-    let result: DiagnosticRunResult
-    try {
-      result = await runCommand({ command, cwd, timeoutSeconds, env, signal })
-    } catch {
-      // A failing/absent tool must not abort the preflight or fabricate a
-      // rejection; treat it as producing no diagnostics and move on.
-      continue
-    }
-    const parsed = parseLanguageDiagnostics({
-      command,
-      cwd,
-      stdout: result.stdout ?? '',
-      stderr: result.stderr ?? '',
-    })
+  // Bounded parallel fan-out instead of a strictly serial command loop
+  // (perf: diagnostic-preflight-serial-commands-hot-path): each command is a
+  // compile-scale process with the full runner-seam timeout, so serial
+  // execution summed every command's worst-case wall clock on the hot
+  // file-change path. The window is capped at MAX_DIAGNOSTIC_CONCURRENCY and
+  // each command still carries the caller's timeoutSeconds, so total work is
+  // bounded. A failing/absent tool must not abort the preflight or fabricate
+  // a rejection; treat it as producing no diagnostics and move on.
+  const perCommand = await mapWithConcurrency(
+    commands,
+    // Floor of 1: mapWithConcurrency requires a positive integer, and a
+    // capture with no commands must resolve empty exactly as the serial loop
+    // did (an empty worker pool would resolve holes).
+    Math.max(1, Math.min(MAX_DIAGNOSTIC_CONCURRENCY, commands.length)),
+    async (command): Promise<LanguageDiagnostic[]> => {
+      try {
+        const result = await runCommand({
+          command,
+          cwd,
+          timeoutSeconds,
+          env,
+          signal,
+        })
+        return parseLanguageDiagnostics({
+          command,
+          cwd,
+          stdout: result.stdout ?? '',
+          stderr: result.stderr ?? '',
+        })
+      } catch {
+        return []
+      }
+    },
+  )
+  // Keep the serial loop's deterministic join order and total cap: results
+  // are index-aligned with `commands`, so diagnostics accumulate in command
+  // order and stop at MAX_TOTAL_DIAGNOSTICS exactly as before.
+  for (const parsed of perCommand) {
     for (const diagnostic of parsed) {
       if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break
       diagnostics.push(diagnostic)
     }
+    if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break
   }
   return diagnostics
 }
@@ -253,6 +291,17 @@ export async function preflightDiagnosticDelta(params: {
   timeoutSeconds?: number
   maxFiles?: number
   deltaMode?: DeltaMatchMode
+  /**
+   * Skip the second diagnostic capture when the caller's `applyEdit` is a
+   * guaranteed no-op. Used by the file-change-hook seam, which observes
+   * already-changed files and passes a no-op applyEdit: a second capture can
+   * only re-observe the identical on-disk state, so compile-scale commands
+   * (tsc --noEmit, ruff, cargo check) would run twice per hook invocation for
+   * a guaranteed-empty delta. With this flag the after-capture reuses the
+   * baseline capture (delta collapses to empty → accept); the mutation-broker
+   * path, whose applyEdit actually mutates, keeps both captures.
+   */
+  skipSecondCapture?: boolean
 }): Promise<DiagnosticDeltaPreflightResult> {
   const { files, cwd, runCommand, applyEdit, rollbackEdit, env, signal } = params
   const capture = () =>
@@ -268,7 +317,10 @@ export async function preflightDiagnosticDelta(params: {
 
   const before = await capture()
   await applyEdit()
-  const after = await capture()
+  // A no-op applyEdit cannot change diagnostics, so the second capture is
+  // guaranteed redundant work on the hot file-change path; reuse the baseline
+  // instead of re-running the full command set.
+  const after = params.skipSecondCapture ? before : await capture()
 
   const delta = computeDiagnosticDelta(before, after, {
     mode: params.deltaMode,

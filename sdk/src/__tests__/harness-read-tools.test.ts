@@ -61,5 +61,30 @@ describe('harness intelligence read tools', () => {
     expect(getBuildTargets(root, ['app.ts'])[0]).toMatchObject({
       value: { targets: [{ scripts: ['test', 'build'] }] },
     })
+    // Audit fix (J): the empty graph tier is explained honestly, not faked.
+    const affectedValue = affected.type === 'json' ? affected.value : undefined
+    expect(affectedValue).toMatchObject({
+      impact: [
+        {
+          graphNote:
+            'indexer reverse-dependency graph is not wired into this tool yet; graph tier is empty',
+        },
+      ],
+    })
+    // Audit fix (I): owningTargets from the build-graph service rides along as
+    // an additive optional field without displacing the existing `targets`.
+    const buildTargets = getBuildTargets(root, ['app.ts'])[0]
+    expect(buildTargets).toMatchObject({
+      value: {
+        targets: [{ scripts: ['test', 'build'] }],
+        owningTargets: [
+          {
+            file: 'app.ts',
+            ecosystem: 'javascript',
+            targets: [{ kind: 'package' }],
+          },
+        ],
+      },
+    })
   }, 15_000)
 })

@@ -11,6 +11,11 @@ import {
 } from './index-store'
 import { queryIndex, type QueryOptions } from './query'
 import {
+  mergeScipEdgesIntoIndex,
+  parseScipJson,
+  scipPreciseEdges,
+} from './scip-ingest'
+import {
   buildFileVectors,
   fileEmbeddingHash,
   getSemanticConfigFingerprint,
@@ -785,6 +790,40 @@ export class IndexManager {
       this.embed &&
       this.fileVectors.length > 0,
     )
+  }
+
+  /**
+   * Opt-in SCIP ingestion (P3-T4): parse an already-produced SCIP JSON
+   * document and merge its precise cross-reference edges into the manager's
+   * current index snapshot. The merge is in-memory only — a subsequent
+   * refresh rebuild replaces the snapshot from disk, so callers that want the
+   * merge to survive should pair this with their own persistence story.
+   * Automatic refresh-time scip-* running is deliberately deferred (cost
+   * control); see `scip-runner.ts` for the explicit opt-in runner.
+   *
+   * Fails closed: a malformed dump throws the typed `ScipIngestError` from
+   * scip-ingest; an index that is not built yet throws `Error`.
+   *
+   * @returns the number of precise edges added by the merge.
+   */
+  ingestScipDump(dumpJson: unknown): number {
+    if (!this.index) {
+      throw new Error(
+        'ingestScipDump requires a built index; call waitUntilReady() first.',
+      )
+    }
+    const scip = parseScipJson(dumpJson)
+    // Count exactly what the merge adds (the documented contract): each
+    // deduped precise edge that lands in the merged snapshot — including one
+    // that supersedes a heuristic duplicate of the same (from, to, type)
+    // tuple. A raw graph-edge length delta would net to 0 here (and go
+    // negative when one precise edge supersedes several heuristic
+    // duplicates), because the merge replaces heuristic edges instead of
+    // appending alongside them.
+    const preciseEdges = scipPreciseEdges(scip)
+    const merged = mergeScipEdgesIntoIndex(this.index, preciseEdges)
+    this.index = merged.index
+    return merged.edgesMerged
   }
 
   getStatus(): IndexStatus {

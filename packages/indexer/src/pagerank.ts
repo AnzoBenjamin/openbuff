@@ -24,9 +24,12 @@ export interface PersonalizedPageRankParams {
   seeds?: ReadonlyMap<string, number>
   /** Damping factor (probability of following a link). Default: 0.85. */
   damping?: number
-  /** Power-iteration cap. Default: 50. */
+  /** Power-iteration cap. Default: 50. Clamped internally to [1, 200]. */
   maxIterations?: number
-  /** L1 convergence epsilon. Default: 1e-6. */
+  /**
+   * L1 convergence epsilon. Default: 1e-6. Clamped internally to a minimum
+   * floor of 1e-12 so pathological inputs cannot loop unboundedly.
+   */
   epsilon?: number
 }
 
@@ -35,6 +38,10 @@ export const DEFAULT_PAGERANK_MAX_ITERATIONS = 50
 export const DEFAULT_PAGERANK_EPSILON = 1e-6
 /** Node count above which iteration is skipped entirely (bounded-work guard). */
 export const MAX_PAGERANK_NODES = 50_000
+/** Hard clamp on the power-iteration cap so callers cannot trigger unbounded loops. */
+const MAX_PAGERANK_ITERATIONS = 200
+/** Floor on the convergence epsilon so pathological inputs cannot loop forever. */
+const MIN_PAGERANK_EPSILON = 1e-12
 
 /**
  * Personalized PageRank: scores sum to <= 1 (rank pointed at unknown nodes is
@@ -50,14 +57,14 @@ export function personalizedPageRank(
     sanitize(
       params.maxIterations,
       DEFAULT_PAGERANK_MAX_ITERATIONS,
-      0,
-      Number.MAX_SAFE_INTEGER,
+      1,
+      MAX_PAGERANK_ITERATIONS,
     ),
   )
   const epsilon = sanitize(
     params.epsilon,
     DEFAULT_PAGERANK_EPSILON,
-    0,
+    MIN_PAGERANK_EPSILON,
     Number.POSITIVE_INFINITY,
   )
 

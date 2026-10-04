@@ -116,6 +116,9 @@ const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
   edit_3d_asset: ['path'],
   inspect_3d_asset: ['path'],
   render_3d_preview: ['path'],
+  go_to_definition: ['path'],
+  find_references: ['path'],
+  hover_type: ['path'],
   read_files: [
     'paths[]',
     'ranges[].path',

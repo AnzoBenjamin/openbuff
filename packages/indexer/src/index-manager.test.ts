@@ -490,3 +490,58 @@ describe('IndexManager.detached holder forwarding', () => {
     expect(holderInternal.pendingMutationDelta).toBeUndefined()
   })
 })
+
+describe('IndexManager.ingestScipDump', () => {
+  test('returns the number of precise edges added, superseding heuristic duplicates', async () => {
+    const root = makeProject()
+    writeFileSync(join(root, 'src', 'util.ts'), 'export function helper() {}\n')
+    writeFileSync(
+      join(root, 'src', 'app.ts'),
+      "import { helper } from './util'\n\nexport function run() { return helper() }\n",
+    )
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index?: MetadataIndex }
+    const referenceEdgesBetween = (index: MetadataIndex | undefined) =>
+      (index?.graph.edges ?? []).filter(
+        (edge) =>
+          edge.type === 'references' &&
+          edge.from === 'file:src/app.ts' &&
+          edge.to === 'file:src/util.ts',
+      )
+
+    // Precondition: the built index holds the heuristic import edge this
+    // dump supersedes (otherwise the supersede path is not exercised).
+    const before = referenceEdgesBetween(internal.index)
+    expect(before.length).toBeGreaterThanOrEqual(1)
+    expect(before[0]?.confidence ?? 'heuristic').toBe('heuristic')
+
+    const symbol = 'scip-typescript npm pkg 1.0.0 src/util.ts/helper().'
+    const dump = {
+      documents: [
+        {
+          relative_path: 'src/util.ts',
+          language: 'typescript',
+          occurrences: [{ range: [0, 0, 0, 8], symbol, symbol_roles: 1 }],
+        },
+        {
+          relative_path: 'src/app.ts',
+          occurrences: [{ range: [2, 0, 2, 8], symbol }],
+        },
+      ],
+    }
+
+    // Documented contract: "the number of precise edges added by the merge" —
+    // 1 here even though the superseded heuristic edge nets the raw
+    // graph-edge length delta to 0 (and negative when one precise edge
+    // supersedes several heuristic duplicates).
+    expect(mgr.ingestScipDump(dump)).toBe(1)
+
+    // Supersede, not doubling: exactly one references edge between the two
+    // files remains, and it is now the precise one.
+    const after = referenceEdgesBetween(internal.index)
+    expect(after).toHaveLength(1)
+    expect(after[0]?.confidence).toBe('precise')
+  })
+})

@@ -35,6 +35,12 @@ export const getAffectedTestsParams = {
                 confidence: z.enum(['high', 'medium', 'low']),
               }),
             ),
+            graphNote: z
+              .string()
+              .optional()
+              .describe(
+                'Why the graph tier contributed nothing, when known (e.g. the indexer reverse-dependency graph is not wired into this tool yet).',
+              ),
           }),
         )
         .optional(),

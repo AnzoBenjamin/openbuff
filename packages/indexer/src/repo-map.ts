@@ -8,6 +8,16 @@ import type {
   QueryIndexResult,
 } from './types'
 
+/**
+ * Deterministic code-point string comparison (locale-independent). ICU's
+ * `localeCompare` is environment-dependent, so ordering must never rely on it.
+ */
+function compareStrings(a: string, b: string): number {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
 export interface RepoMapOptions {
   maxFiles?: number
   maxSymbolsPerFile?: number
@@ -79,7 +89,7 @@ export function buildRepoMap(
   const opts = { ...DEFAULT_REPO_MAP_OPTIONS, ...options }
   const entries = Object.values(index.files)
     .filter((file) => matchesFileType(file, options.fileTypes))
-    .sort((a, b) => a.path.localeCompare(b.path))
+    .sort((a, b) => compareStrings(a.path, b.path))
     .slice(0, opts.maxFiles)
     .map((file) => toRepoMapEntry(file, opts))
 
@@ -125,7 +135,9 @@ export function rankedRepoMap(
     if (!matchesFileType(index.files[path], options.fileTypes)) continue
     entries.push({ path, score: round(score) })
   }
-  entries.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+  entries.sort(
+    (a, b) => b.score - a.score || compareStrings(a.path, b.path),
+  )
   return { entries: entries.slice(0, limit) }
 }
 
@@ -166,7 +178,9 @@ export function queryRepoMap(
   return entries
     .map((entry) => scoreRepoMapEntry(entry, tokens))
     .filter((result) => result.score > 0)
-    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+    .sort(
+      (a, b) => b.score - a.score || compareStrings(a.path, b.path),
+    )
     .slice(0, limit)
 }
 

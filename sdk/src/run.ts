@@ -50,6 +50,7 @@ import {
 import { WorkspaceJournalService } from './services/workspace-journal'
 import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
+import { createDiagnosticDeltaHook } from './services/diagnostic-delta-runner'
 import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
 import type { MemoryV2ClientConfig } from './services/memory-v2/types'
 import {
@@ -106,7 +107,10 @@ import {
   inspectFeatureCompletenessTool,
 } from './tools/audit-intelligence'
 import { gitBranch } from './tools/git-branch'
-import { runFileChangeHooks } from './tools/file-change-hooks'
+import {
+  runFileChangeHooks,
+  type DiagnosticDeltaHook,
+} from './tools/file-change-hooks'
 import {
   findFileMutationResult,
   writeAuditFindings,
@@ -853,6 +857,13 @@ async function runOnce({
   } else {
     spawn = nodeSpawn as CodebuffSpawn
   }
+  // Audit fix (B): production diagnostic-delta preflight wiring. The runner
+  // executes diagnostic commands as argv arrays over this run's child-process
+  // seam (never a shell), and the injector is fail-open. The
+  // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check lives inside runFileChangeHooks,
+  // so passing the injector unconditionally keeps flag-off behavior
+  // byte-identical.
+  const diagnosticDeltaHook = createDiagnosticDeltaHook({ spawn })
   const preparedContent = wrapContentForUserMessage(content)
 
   // Per-run client session id (also the trusted process-job owner session).
@@ -1235,6 +1246,7 @@ async function runOnce({
         onFilesystemMutation,
         verifyExternalMutation,
         getLanguageIntelligence,
+        diagnosticDelta: diagnosticDeltaHook,
         customToolDefinitions: customToolDefinitions
           ? Object.fromEntries(
               customToolDefinitions.map((def) => [def.toolName, def]),
@@ -1907,6 +1919,7 @@ export async function handleToolCall({
   onFilesystemMutation,
   verifyExternalMutation,
   getLanguageIntelligence,
+  diagnosticDelta,
   signal,
 }: {
   action: ServerAction<'tool-call-request'>
@@ -1954,6 +1967,12 @@ export async function handleToolCall({
    * degrades each query into a structured result instead of throwing.
    */
   getLanguageIntelligence?: () => LanguageIntelligenceService
+  /** Audit fix (B): fail-open diagnostic-delta preflight injector threaded
+   * into run_file_change_hooks (and forwarded to run_targeted_validation).
+   * Optional so existing direct callers/tests keep working; absent means the
+   * preflight seam stays off. The OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check
+   * lives inside runFileChangeHooks. */
+  diagnosticDelta?: DiagnosticDeltaHook
   signal?: AbortSignal
 }): Promise<{
   output: ToolResultOutput[]
@@ -2574,6 +2593,7 @@ export async function handleToolCall({
         env,
         signal,
         fileSystem: fs,
+        diagnosticDelta,
       })
     } else if (toolName === 'check_job') {
       // The trusted owner overrides any model-supplied owner in the input.
@@ -2649,6 +2669,7 @@ export async function handleToolCall({
         env,
         signal,
         fileSystem: fs,
+        diagnosticDelta,
         workspaceState: getWorkspaceState(),
       })
     } else if (toolName === 'inspect_environment') {
@@ -2789,6 +2810,24 @@ export async function handleToolCall({
       ? advanceWorkspaceJournal(workspaceChange)
       : advanceWorkspaceState(getWorkspaceState(), workspaceChange)
     setWorkspaceState(workspaceState)
+    // Audit fix (C): push the committed files into any already-running
+    // language server so post-edit LSP answers are not stale. Guarded and
+    // fail-open: sync can never fail the run that just committed the write.
+    // Only successfully-written project-relative paths are synced; a move
+    // syncs its destination path.
+    const syncedPaths = changedActions
+      .filter((changed) => changed.action !== 'delete')
+      .map((changed) =>
+        changed.action === 'move' ? changed.destinationPath : changed.path,
+      )
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    if (syncedPaths.length > 0) {
+      try {
+        await getLanguageIntelligence?.().syncMutatedFiles(syncedPaths)
+      } catch (error) {
+        logger?.warn({ error }, 'Language-server document sync failed')
+      }
+    }
     // Only a mutation that was actually part of `result` can be enriched in
     // place. Tools whose declared output is a compact receipt reach this block
     // through `compactReceiptMutation`; their receipt schema declares no

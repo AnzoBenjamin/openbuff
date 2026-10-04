@@ -1,6 +1,13 @@
-import { describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-import { createLanguageIntelligence } from '../services/language-intelligence'
+import { afterEach, describe, expect, test } from 'bun:test'
+
+import {
+  createLanguageIntelligence,
+  MAX_SYNC_FILE_BYTES,
+} from '../services/language-intelligence'
 import {
   LspServerError,
   LspServerUnavailableError,
@@ -212,5 +219,215 @@ describe('language-intelligence per-language resolution', () => {
     const value = firstValue(output)
     expect(value.unavailable?.reason).toBe('unsupported-language')
     expect(value.errorMessage).toBeUndefined()
+  })
+})
+
+describe('language-intelligence syncMutatedFiles', () => {
+  const tempRoots: string[] = []
+  afterEach(() => {
+    for (const root of tempRoots.splice(0))
+      fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  test('pushes on-disk bytes with monotonically increasing versions and skips unsupported files', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-sync-'))
+    tempRoots.push(root)
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1\n')
+    fs.writeFileSync(path.join(root, 'README.md'), 'docs')
+    const synced: Array<{ filePath: string; version: number; text: string }> = []
+    const service = createLanguageIntelligence({
+      cwd: root,
+      multiplexer: makeMultiplexer({
+        syncFile: async (params) => {
+          synced.push(params)
+        },
+      }),
+    })
+    await service.syncMutatedFiles(['a.ts', 'README.md'])
+    await service.syncMutatedFiles(['a.ts'])
+    // Each committed path syncs the current disk bytes (never a cache) with a
+    // per-path monotonically increasing version; non-source files are skipped.
+    // Sync runs with bounded parallelism, so ordering between distinct paths
+    // is not asserted — only the exact set of synced documents and versions.
+    expect(synced).toEqual([
+      {
+        filePath: path.join(root, 'a.ts'),
+        version: 1,
+        text: 'export const a = 1\n',
+      },
+      {
+        filePath: path.join(root, 'a.ts'),
+        version: 2,
+        text: 'export const a = 1\n',
+      },
+    ])
+  })
+
+  test('is fail-open per path and caps at 32 paths per call', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-sync-'))
+    tempRoots.push(root)
+    fs.writeFileSync(path.join(root, 'a.ts'), 'x')
+    fs.writeFileSync(path.join(root, 'b.ts'), 'y')
+    const versions: number[] = []
+    const service = createLanguageIntelligence({
+      cwd: root,
+      multiplexer: makeMultiplexer({
+        syncFile: async (params) => {
+          versions.push(params.version)
+          if (params.filePath.endsWith('b.ts')) {
+            throw new Error('server hiccup')
+          }
+        },
+      }),
+    })
+    // Alternating paths plus one that does not exist: every failure mode
+    // (server error, missing file) is swallowed and the call still resolves.
+    const manyPaths = Array.from({ length: 40 }, (_, index) =>
+      index % 2 === 0 ? 'a.ts' : index === 39 ? 'missing.ts' : 'b.ts',
+    )
+    await expect(
+      service.syncMutatedFiles(manyPaths),
+    ).resolves.toBeUndefined()
+    // 40 supplied paths are capped at 32 sync attempts.
+    expect(versions.length).toBe(32)
+  })
+
+  test('syncs distinct paths with bounded parallelism, preserving per-path versions', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-sync-'))
+    tempRoots.push(root)
+    const PATH_COUNT = 8
+    const paths = Array.from(
+      { length: PATH_COUNT },
+      (_, index) => `src/file-${index}.ts`,
+    )
+    for (const projectPath of paths) {
+      fs.mkdirSync(path.join(root, 'src'), { recursive: true })
+      fs.writeFileSync(
+        path.join(root, projectPath),
+        `export const file${paths.indexOf(projectPath)} = 1\n`,
+      )
+    }
+    let inFlight = 0
+    let maxInFlight = 0
+    let completed = 0
+    const service = createLanguageIntelligence({
+      cwd: root,
+      multiplexer: makeMultiplexer({
+        syncFile: async (params) => {
+          inFlight++
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          await new Promise((resolve) => setTimeout(resolve, 5))
+          inFlight--
+          completed++
+          expect(params.version).toBe(1)
+        },
+      }),
+    })
+    await service.syncMutatedFiles(paths)
+    // Every distinct path was synced exactly once, and the sync ran with
+    // bounded parallelism: more than one round-trip was in flight at a time,
+    // but never an unbounded number (the serial pre-fix loop would keep
+    // maxInFlight at 1; the unbounded Promise.all shape would spike to 8).
+    expect(completed).toBe(PATH_COUNT)
+    expect(maxInFlight).toBeGreaterThan(1)
+    expect(maxInFlight).toBeLessThanOrEqual(PATH_COUNT)
+  })
+
+  test('skips files larger than the per-file read cap', async () => {
+    // perf: sync-mutated-files-unbounded-file-read — a single large generated
+    // file committed in a mutation batch must not produce an unbounded read
+    // + LSP frame on the path that awaits inline after every committed
+    // mutation. Files at or above MAX_SYNC_FILE_BYTES are skipped entirely
+    // while ordinary files still sync.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-sync-'))
+    tempRoots.push(root)
+    fs.writeFileSync(path.join(root, 'small.ts'), 'export const a = 1\n')
+    fs.writeFileSync(
+      path.join(root, 'huge.ts'),
+      'x'.repeat(MAX_SYNC_FILE_BYTES + 1),
+    )
+    const syncedPaths: string[] = []
+    const service = createLanguageIntelligence({
+      cwd: root,
+      multiplexer: makeMultiplexer({
+        syncFile: async (params) => {
+          syncedPaths.push(params.filePath)
+        },
+      }),
+    })
+    await expect(
+      service.syncMutatedFiles(['small.ts', 'huge.ts']),
+    ).resolves.toBeUndefined()
+    expect(syncedPaths).toEqual([path.join(root, 'small.ts')])
+  })
+
+  test('no-ops when the multiplexer was never built (no cold start)', async () => {
+    const service = createLanguageIntelligence({ cwd: '/repo' })
+    await expect(
+      service.syncMutatedFiles(['src/a.ts']),
+    ).resolves.toBeUndefined()
+    // The sync must not have lazily built a multiplexer: a subsequent query
+    // still hits the no-spawner degradation instead of a spawned server.
+    const output = await service.goToDefinition({
+      path: 'src/a.ts',
+      line: 1,
+      character: 0,
+    })
+    expect(firstValue(output).errorMessage).toContain(
+      'No LSP spawner configured',
+    )
+  })
+
+  test('the per-path sync-version map stays bounded across many synced paths', async () => {
+    // perf: sync-versions-map-unbounded. The per-run version map used to be an
+    // unbounded Map keyed by absolute path; it is now a bounded LRU. Asserted
+    // entirely through externally visible syncFile calls: three disjoint
+    // 32-path batches fill and then overflow the 64-entry bound, so the first
+    // batch is fully evicted. A still-cached path keeps its monotonic version
+    // (batch 2 re-syncs at version 2) while every evicted batch-1 path
+    // re-opens at version 1 — with the current on-disk bytes, so eviction can
+    // never serve stale content.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-sync-'))
+    tempRoots.push(root)
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true })
+    const BATCH = 32
+    const makePaths = (batch: number) =>
+      Array.from(
+        { length: BATCH },
+        (_, index) => `src/b${batch}-file-${index}.ts`,
+      )
+    for (let batch = 0; batch < 3; batch++) {
+      for (const projectPath of makePaths(batch)) {
+        fs.writeFileSync(path.join(root, projectPath), 'export const x = 1\n')
+      }
+    }
+    const versionsByPath = new Map<string, number[]>()
+    const service = createLanguageIntelligence({
+      cwd: root,
+      multiplexer: makeMultiplexer({
+        syncFile: async (params) => {
+          const list = versionsByPath.get(params.filePath) ?? []
+          list.push(params.version)
+          versionsByPath.set(params.filePath, list)
+        },
+      }),
+    })
+    await service.syncMutatedFiles(makePaths(0))
+    await service.syncMutatedFiles(makePaths(1))
+    // The map now holds exactly its 64-entry bound.
+    await service.syncMutatedFiles(makePaths(2))
+    // Batch 3 overflowed the bound: every batch-1 entry was evicted. Refresh
+    // batch 1 first (still cached -> monotonic version 2), then batch 0
+    // (evicted -> re-opened at version 1).
+    await service.syncMutatedFiles(makePaths(1))
+    await service.syncMutatedFiles(makePaths(0))
+    for (let index = 0; index < BATCH; index++) {
+      const b0 = versionsByPath.get(path.resolve(root, makePaths(0)[index]))
+      expect(b0).toEqual([1, 1])
+      const b1 = versionsByPath.get(path.resolve(root, makePaths(1)[index]))
+      expect(b1).toEqual([1, 2])
+      const b2 = versionsByPath.get(path.resolve(root, makePaths(2)[index]))
+      expect(b2).toEqual([1])
+    }
   })
 })

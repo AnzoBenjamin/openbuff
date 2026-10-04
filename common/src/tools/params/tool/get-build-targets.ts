@@ -20,6 +20,27 @@ export const getBuildTargetsParams = {
           confidence: z.enum(['confirmed', 'inferred', 'unknown']).optional(),
         }),
       ),
+      owningTargets: z
+        .array(
+          z.object({
+            file: z.string(),
+            ecosystem: z.string(),
+            confidence: z.enum(['confirmed', 'inferred', 'unknown']),
+            targets: z.array(
+              z.object({
+                name: z.string(),
+                kind: z.enum(['package', 'crate', 'module', 'project', 'target']),
+                root: z.string(),
+                testCommand: z.string().optional(),
+                buildCommand: z.string().optional(),
+              }),
+            ),
+          }),
+        )
+        .optional()
+        .describe(
+          'Best-effort per-file owning build-target resolution from the build-graph service; absent when resolution failed.',
+        ),
     }),
   ),
 } satisfies $ToolParams

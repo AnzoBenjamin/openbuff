@@ -214,16 +214,62 @@ describe('enrichFileSymbols', () => {
     expect(documentSymbolSpy).toHaveBeenCalledTimes(2)
   })
 
-  test('same content under a different path is a cache hit (content hash, not path)', async () => {
+  test('same content at different paths produces separate cache entries', async () => {
+    // Hover enrichment is path-dependent (imports resolve per location), so
+    // the cache key is path + content: byte-identical files at different
+    // paths must not share an entry.
+    const { multiplexer, documentSymbolSpy } = makeFakeMultiplexer({
+      documentSymbol: () => [
+        {
+          name: 'foo',
+          kind: 13,
+          range: range(0, 0, 0, 20),
+          selectionRange: range(0, 14, 0, 17),
+        },
+      ],
+      hover: (params) => ({ contents: `docs for ${params.filePath}` }),
+    })
+
+    const first = await enrichFileSymbols({
+      filePath: '/proj/src/a.ts',
+      fileText: TEXT,
+      multiplexer,
+    })
+    const second = await enrichFileSymbols({
+      filePath: '/proj/src/b.ts',
+      fileText: TEXT,
+      multiplexer,
+    })
+
+    expect(documentSymbolSpy).toHaveBeenCalledTimes(2)
+    expect(symbolEnrichmentCacheSizeForTest()).toBe(2)
+    expect(first.symbols[0].documentation).toBe('docs for /proj/src/a.ts')
+    expect(second.symbols[0].documentation).toBe('docs for /proj/src/b.ts')
+
+    // Re-enriching either path is still a cache hit against its own entry.
+    const again = await enrichFileSymbols({
+      filePath: '/proj/src/a.ts',
+      fileText: TEXT,
+      multiplexer,
+    })
+    expect(documentSymbolSpy).toHaveBeenCalledTimes(2)
+    expect(again.symbols[0].documentation).toBe('docs for /proj/src/a.ts')
+  })
+
+  test('same path with changed content still invalidates (path does not mask content)', async () => {
     const { multiplexer, documentSymbolSpy } = makeFakeMultiplexer({
       documentSymbol: () => [],
       hover: () => null,
     })
 
-    await enrichFileSymbols({ filePath: '/a.ts', fileText: TEXT, multiplexer })
-    await enrichFileSymbols({ filePath: '/b.ts', fileText: TEXT, multiplexer })
+    await enrichFileSymbols({ filePath: FILE, fileText: TEXT, multiplexer })
+    await enrichFileSymbols({
+      filePath: FILE,
+      fileText: `${TEXT}// changed\n`,
+      multiplexer,
+    })
 
-    expect(documentSymbolSpy).toHaveBeenCalledTimes(1)
+    expect(documentSymbolSpy).toHaveBeenCalledTimes(2)
   })
 
   test('keeps the symbol when hover yields no result', async () => {
@@ -370,5 +416,40 @@ describe('enrichFileSymbols', () => {
     expect(symbolEnrichmentCacheSizeForTest()).toBe(
       SYMBOL_ENRICHMENT_CACHE_MAX_ENTRIES,
     )
+  })
+
+  test('fans hover requests out with bounded concurrency instead of serial round-trips', async () => {
+    const symbolCount = 12
+    let inFlight = 0
+    let maxInFlight = 0
+    const { multiplexer, hoverSpy } = makeFakeMultiplexer({
+      documentSymbol: () =>
+        Array.from({ length: symbolCount }, (_, i) => ({
+          name: `sym${i}`,
+          kind: 12,
+          range: range(i, 0, i, 5),
+          selectionRange: range(i, 0, i, 5),
+        })),
+      hover: async () => {
+        inFlight++
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        inFlight--
+        return { contents: 'docs' }
+      },
+    })
+
+    const result = await enrichFileSymbols({
+      filePath: FILE,
+      fileText: TEXT,
+      multiplexer,
+    })
+
+    // Every symbol is still enriched (index-aligned), and the hover requests
+    // actually overlapped instead of running as 12 serial LSP round-trips.
+    expect(result.symbols).toHaveLength(symbolCount)
+    expect(result.symbols.every((s) => s.documentation === 'docs')).toBe(true)
+    expect(hoverSpy).toHaveBeenCalledTimes(symbolCount)
+    expect(maxInFlight).toBeGreaterThan(1)
   })
 })

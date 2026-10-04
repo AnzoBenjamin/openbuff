@@ -23,11 +23,13 @@ export const hoverTypeParams = {
       .number()
       .int()
       .min(1)
+      .max(1_000_000)
       .describe('1-based line number (as shown in editors and read_files).'),
     character: z
       .number()
       .int()
       .min(0)
+      .max(100_000)
       .describe('0-based character offset within the line (LSP convention).'),
   }),
   outputSchema: jsonToolResultSchema(

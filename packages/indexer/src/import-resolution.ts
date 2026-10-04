@@ -18,8 +18,13 @@ import type { ImportSite } from '@codebuff/code-map'
  *
  * - TS/JS: relative `./`/`../` paths with extension + `/index` resolution,
  *   then tsconfig `compilerOptions.paths` aliases for non-relative specifiers.
- * - Python: dotted/relative modules with `__init__.py` package resolution.
- * - Rust: `mod`/`use` paths including `crate::`/`self::`/`super::` prefixes.
+ * - Python: relative (`from .`) modules resolve from the importing file's
+ *   directory; absolute modules resolve only when their first segment is an
+ *   indexed top-level package/namespace directory — a loose same-named file
+ *   never satisfies `import X` (conservative-unresolved contract).
+ * - Rust: `mod`/`use` paths including `crate::`/`self::`/`super::` prefixes;
+ *   the crate-root (`src/`) fallback applies only to explicit `crate::`
+ *   paths, so bare imports resolve only in the importing file's directory.
  * - Go: module-path prefixes gated on the local `go.mod` module identity.
  * - JVM/PHP: imports only resolve when the target file declares the matching
  *   `package`/`namespace` (no filename guessing).
@@ -177,10 +182,47 @@ export function resolveAliasImport(
 }
 
 /**
+ * Perf guard: the conservative Python absolute-import rule checks whether an
+ * import's first segment is an indexed top-level directory. Deriving that set
+ * scans every indexed path, so it is memoized per `files` snapshot (the
+ * indexer reuses one record for a whole build pass) instead of rescanning all
+ * paths for every absolute import site — O(imports x files) becomes O(files)
+ * once per snapshot.
+ */
+const topLevelDirsCache = new WeakMap<
+  Record<string, ImportResolutionFile>,
+  Set<string>
+>()
+
+function topLevelDirsFor(
+  files: Record<string, ImportResolutionFile>,
+): Set<string> {
+  let dirs = topLevelDirsCache.get(files)
+  if (!dirs) {
+    dirs = new Set()
+    for (const candidate of Object.keys(files)) {
+      const slash = candidate.indexOf('/')
+      // Only nested paths contribute a top-level directory; a loose top-level
+      // file (e.g. `json.py`) never satisfies an absolute import.
+      if (slash > 0) dirs.add(candidate.slice(0, slash))
+    }
+    topLevelDirsCache.set(files, dirs)
+  }
+  return dirs
+}
+
+/**
  * Resolve one import specifier to a project-relative file path, or `null`
  * when it is external, ambiguous, or unmatched. Conservative by design:
  * non-TS/JS bare specifiers (other than tsconfig aliases) never resolve, so
  * e.g. `import React from 'react'` cannot match a local `react.ts`.
+ *
+ * Snapshot contract: the conservative Python absolute-import rule derives its
+ * top-level-directory set once per `files` record object identity (memoized
+ * via {@link topLevelDirsFor}) and is NOT recomputed when the same record
+ * object is mutated in place between calls. Callers that mutate the record
+ * must pass a fresh record (or a copy) for the mutation to be reflected in
+ * resolution results — a stale record silently yields stale results.
  */
 export function resolveImportToFile(
   fromFilePath: string,
@@ -227,6 +269,7 @@ export function resolveImportToFile(
   }
   if (fromExtension === '.rs') {
     const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
+    const isCrateRooted = normalizedImport.startsWith('crate::')
     const rustPath = normalizedImport
       .replace(/^crate::/, '')
       .replace(/^self::/, '')
@@ -237,8 +280,13 @@ export function resolveImportToFile(
       hasFile,
     )
     if (local) return local
-    const crateRelative = resolveModuleSpecifier(`src/${rustPath}`, hasFile)
-    if (crateRelative) return crateRelative
+    // Crate-root fallback only for explicit `crate::` paths (audit G): a
+    // bare `use config;` must not match a same-named module in some other
+    // directory — only the importing file's own directory counts.
+    if (isCrateRooted) {
+      const crateRelative = resolveModuleSpecifier(`src/${rustPath}`, hasFile)
+      if (crateRelative) return crateRelative
+    }
   }
   if (['.py', '.pyi'].includes(fromExtension)) {
     const leadingDots = normalizedImport.match(/^\.+/)?.[0].length ?? 0
@@ -252,9 +300,24 @@ export function resolveImportToFile(
         hasFile,
       )
       if (relative) return relative
+    } else {
+      // Conservative absolute-import rule (audit G): an absolute import
+      // resolves only when its FIRST segment is an indexed top-level
+      // package/namespace directory; segment resolution then continues under
+      // it. A bare `import X` whose X is only a loose same-named file stays
+      // unresolved ('conservative-unresolved' contract) instead of inventing
+      // a graph edge.
+      const firstSegment = modulePath.split('/')[0] ?? ''
+      // Membership test against the per-snapshot memoized top-level directory
+      // set (see topLevelDirsFor) instead of a full indexed-path scan per
+      // import site.
+      const hasTopLevelDir =
+        firstSegment.length > 0 && topLevelDirsFor(files).has(firstSegment)
+      if (hasTopLevelDir) {
+        const absolute = resolveModuleSpecifier(modulePath, hasFile)
+        if (absolute) return absolute
+      }
     }
-    const absolute = resolveModuleSpecifier(modulePath, hasFile)
-    if (absolute) return absolute
   }
   if (normalizedImport.startsWith('.')) {
     const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))

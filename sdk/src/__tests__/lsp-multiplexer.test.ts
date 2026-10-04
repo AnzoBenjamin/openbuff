@@ -1,6 +1,16 @@
-import { describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-import { createLspMultiplexer, LspServerError, LspServerUnavailableError } from '../services/lsp-multiplexer'
+import { afterEach, describe, expect, test } from 'bun:test'
+
+import {
+  clearRootResolutionCache,
+  createLspMultiplexer,
+  defaultRootResolver,
+  LspServerError,
+  LspServerUnavailableError,
+} from '../services/lsp-multiplexer'
 
 import type { LspChildHandle, LspSpawnSpec } from '../services/lsp-multiplexer'
 
@@ -90,6 +100,13 @@ function makePeer(
 }
 
 const okInitialize = { capabilities: {} }
+
+// The default root resolver memoizes directory→root walks for a TTL window;
+// every test must start from a cold cache so fixtures created inside a test
+// are actually seen by the walk.
+afterEach(() => {
+  clearRootResolutionCache()
+})
 
 function defaultBehavior(message: Record<string, unknown>): Record<string, unknown> | null {
   const id = message.id as number
@@ -273,5 +290,227 @@ describe('createLspMultiplexer', () => {
     await mux.dispose()
     expect(mux.warmServerCount()).toBe(0)
     for (const peer of peers) expect(peer.killCount()).toBeGreaterThan(0)
+  })
+
+  test('marker-aware root resolution shares one warm server across a subtree', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lsp-mux-root-'))
+    const nested = path.join(root, 'packages', 'app')
+    fs.mkdirSync(nested, { recursive: true })
+    fs.writeFileSync(path.join(root, 'tsconfig.json'), '{}')
+    const roots: string[] = []
+    const mux = createLspMultiplexer({
+      spawner: (spec: LspSpawnSpec) => {
+        roots.push(spec.cwd)
+        return makePeer(defaultBehavior).child
+      },
+    })
+    try {
+      await mux.definition({
+        filePath: path.join(nested, 'a.ts'),
+        position: { line: 0, character: 0 },
+      })
+      await mux.hover({
+        filePath: path.join(nested, 'src', 'b.ts'),
+        position: { line: 0, character: 0 },
+      })
+      // tsconfig.json at the temp root claims both files' root: one warm
+      // server, so exactly ONE cold-start spawn happened, at the marker
+      // directory (the second call reused the warm server).
+      expect(roots).toEqual([root])
+      expect(mux.warmServerCount()).toBe(1)
+    } finally {
+      await mux.dispose()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('the first rootMarker in the spec wins over later markers', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lsp-mux-prio-'))
+    const nested = path.join(root, 'packages', 'app')
+    fs.mkdirSync(nested, { recursive: true })
+    // The TypeScript spec lists tsconfig.json before package.json, so the
+    // nearer package.json must not claim the root.
+    fs.writeFileSync(path.join(root, 'tsconfig.json'), '{}')
+    fs.writeFileSync(path.join(nested, 'package.json'), '{}')
+    const roots: string[] = []
+    const mux = createLspMultiplexer({
+      spawner: (spec: LspSpawnSpec) => {
+        roots.push(spec.cwd)
+        return makePeer(defaultBehavior).child
+      },
+    })
+    try {
+      await mux.definition({
+        filePath: path.join(nested, 'a.ts'),
+        position: { line: 0, character: 0 },
+      })
+      expect(roots).toEqual([root])
+    } finally {
+      await mux.dispose()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('falls back to the parent directory when the spec has no rootMarkers', async () => {
+    const roots: string[] = []
+    const mux = createLspMultiplexer({
+      spawner: (spec: LspSpawnSpec) => {
+        roots.push(spec.cwd)
+        return makePeer(defaultBehavior).child
+      },
+    })
+    // The csharp spec declares rootMarkers: [] — parent-directory keying is
+    // unchanged.
+    await mux.definition({
+      filePath: '/proj/src/a.cs',
+      position: { line: 0, character: 0 },
+    })
+    expect(roots).toEqual(['/proj/src'])
+    await mux.dispose()
+  })
+
+  test('memoizes the walk per (directory, rootMarkers) until cleared', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lsp-mux-memo-'))
+    const nested = path.join(root, 'packages', 'app')
+    fs.mkdirSync(nested, { recursive: true })
+    fs.writeFileSync(path.join(root, 'tsconfig.json'), '{}')
+    const markers = ['tsconfig.json']
+    const first = defaultRootResolver({
+      filePath: path.join(nested, 'a.ts'),
+      rootMarkers: markers,
+    })
+    expect(first).toBe(root)
+    // A nearer marker appearing AFTER the first resolution is not seen on the
+    // next call: the TTL memo served the walk result, so no new syscall walk
+    // ran for the same (directory, marker list).
+    fs.writeFileSync(path.join(nested, 'tsconfig.json'), '{}')
+    const second = defaultRootResolver({
+      filePath: path.join(nested, 'a.ts'),
+      rootMarkers: markers,
+    })
+    expect(second).toBe(first)
+    // Clearing the cache drops the memo, so the walk re-runs and now sees the
+    // nearer marker.
+    clearRootResolutionCache()
+    const third = defaultRootResolver({
+      filePath: path.join(nested, 'a.ts'),
+      rootMarkers: markers,
+    })
+    expect(third).toBe(nested)
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  test('coalesces concurrent cold starts for the same (language, root) key', async () => {
+    const peers: FakePeer[] = []
+    const mux = createLspMultiplexer({
+      spawner: () => {
+        const peer = makePeer(defaultBehavior)
+        peers.push(peer)
+        return peer.child
+      },
+    })
+    // The bounded-parallel syncMutatedFiles path (concurrency 4) makes
+    // concurrent acquire() on the same key reachable on every multi-file
+    // mutation commit: the losers must join the winner's cold start instead
+    // of spawning duplicate servers whose losing child would leak.
+    const results = await Promise.all([
+      mux.definition({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } }),
+      mux.hover({ filePath: '/proj/b.ts', position: { line: 0, character: 0 } }),
+      mux.documentSymbol({ filePath: '/proj/c.ts' }),
+    ])
+    expect(results.every((result) => result !== null)).toBe(true)
+    expect(peers.length).toBe(1)
+    expect(mux.warmServerCount()).toBe(1)
+    await mux.dispose()
+  })
+
+  test('concurrent cold starts for distinct keys never overshoot maxServers', async () => {
+    const mux = createLspMultiplexer({
+      maxServers: 2,
+      rootResolver: ({ filePath }) => filePath, // each file its own root
+      spawner: () => makePeer(defaultBehavior).child,
+    })
+    // Two concurrent cold starts that each observe room after one eviction
+    // used to both proceed and register, transiently exceeding the cap
+    // (evictIfNeeded checked size synchronously, awaited connection.stop(),
+    // and re-checked nothing). Eviction + slot reservation are now
+    // serialized, so the bound holds under concurrent distinct-key starts.
+    const settled = await Promise.allSettled([
+      mux.definition({ filePath: '/r1/a.ts', position: { line: 0, character: 0 } }),
+      mux.definition({ filePath: '/r2/b.ts', position: { line: 0, character: 0 } }),
+      mux.definition({ filePath: '/r3/c.ts', position: { line: 0, character: 0 } }),
+      mux.definition({ filePath: '/r4/d.ts', position: { line: 0, character: 0 } }),
+    ])
+    expect(mux.warmServerCount()).toBeLessThanOrEqual(2)
+    // At least one caller must get a usable server, and every rejection (a
+    // caller whose entry was evicted right after its start completed fails
+    // its request with the typed stopped error) is an LspServerError, never
+    // an unexpected crash.
+    expect(settled.some((outcome) => outcome.status === 'fulfilled')).toBe(true)
+    for (const outcome of settled) {
+      if (outcome.status === 'rejected') {
+        expect(outcome.reason).toBeInstanceOf(LspServerError)
+      }
+    }
+    await mux.dispose()
+  })
+
+  test('workspaceSymbol reuses an already-warm server without cold-starting or erroring', async () => {
+    const peers: FakePeer[] = []
+    const mux = createLspMultiplexer({
+      spawner: () => {
+        const peer = makePeer((message) => {
+          const id = message.id as number
+          if (message.method === 'workspace/symbol') {
+            return {
+              jsonrpc: '2.0',
+              id,
+              result: [
+                {
+                  name: 'foo',
+                  kind: 12,
+                  location: {
+                    uri: 'file:///proj/src/a.ts',
+                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+                  },
+                },
+              ],
+            }
+          }
+          return defaultBehavior(message)
+        })
+        peers.push(peer)
+        return peer.child
+      },
+    })
+    // Warm the server with a file-anchored request first. The resulting
+    // server map key ('typescript:file:///proj/src') is not a resolvable file
+    // path, so the symbol query must reuse the warm entry directly instead of
+    // re-acquiring via the key (which used to throw unsupported-language).
+    await mux.definition({ filePath: '/proj/src/a.ts', position: { line: 0, character: 0 } })
+    const symbols = await mux.workspaceSymbol('foo')
+    expect(Array.isArray(symbols)).toBe(true)
+    expect(symbols?.[0]?.name).toBe('foo')
+    // No cold start for the symbol query: the warm peer answered it.
+    expect(peers.length).toBe(1)
+    expect(mux.warmServerCount()).toBe(1)
+    const methods = peers[0].received.map((body) => (JSON.parse(body) as { method?: string }).method)
+    expect(methods).toContain('workspace/symbol')
+    expect(methods.filter((method) => method === 'initialize')).toHaveLength(1)
+    await mux.dispose()
+  })
+
+  test('workspaceSymbol with no warm server returns null without spawning', async () => {
+    let spawned = 0
+    const mux = createLspMultiplexer({
+      spawner: () => {
+        spawned++
+        return makePeer(defaultBehavior).child
+      },
+    })
+    const symbols = await mux.workspaceSymbol('foo')
+    expect(symbols).toBeNull()
+    expect(spawned).toBe(0)
+    await mux.dispose()
   })
 })

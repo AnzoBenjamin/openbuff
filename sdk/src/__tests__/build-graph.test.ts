@@ -40,6 +40,9 @@ const failingRunner: BuildGraphRunner = () => ({
 describe('build graph service', () => {
   test('resolves rust crate ownership and commands from cargo metadata', () => {
     const root = tempRoot()
+    // The sync ecosystem probes are gated on a discovered manifest, so the
+    // fixture needs one for the cargo resolver to run at all.
+    writeFixture(root, 'Cargo.toml', '[package]\nname = "ws"\n')
     const runner: BuildGraphRunner = (argv) => {
       if (argv[0] === 'cargo') {
         return {
@@ -108,6 +111,7 @@ describe('build graph service', () => {
 
   test('resolves go package ownership and commands from go list', () => {
     const root = tempRoot()
+    writeFixture(root, 'go.mod', 'module example.com/mymod\n\ngo 1.21\n')
     const runner: BuildGraphRunner = (argv) => {
       if (argv[0] === 'go') {
         const packages = [
@@ -259,6 +263,7 @@ describe('build graph service', () => {
 
   test('caches per-cwd ecosystem detection until cleared', () => {
     const root = tempRoot()
+    writeFixture(root, 'Cargo.toml', '[package]\nname = "core"\n')
     let cargoCalls = 0
     const runner: BuildGraphRunner = (argv) => {
       if (argv[0] === 'cargo') {
@@ -390,5 +395,29 @@ describe('build graph service', () => {
     expect(
       resolveOwningTargets({ cwd: root, files, runner: failingRunner }),
     ).toHaveLength(500)
+  })
+
+  test('skips the sync ecosystem probes when no matching manifest is discovered', () => {
+    const root = tempRoot()
+    const probed: string[][] = []
+    const runner: BuildGraphRunner = (argv) => {
+      probed.push(argv)
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    writeFixture(root, 'package.json', JSON.stringify({ name: 'web' }))
+    const [resolution] = resolveOwningTargets({
+      cwd: root,
+      files: ['src/index.ts'],
+      runner,
+    })
+    // `cargo metadata` / `go list` are never spawned in a repo without a
+    // Cargo.toml/go.mod: the sync probes stay off the event loop here while
+    // the filesystem-discovered ecosystem still resolves.
+    expect(probed).toEqual([])
+    expect(resolution).toMatchObject({
+      ecosystem: 'javascript',
+      confidence: 'inferred',
+      targets: [{ name: 'web', root: '.' }],
+    })
   })
 })

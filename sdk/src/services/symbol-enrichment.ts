@@ -22,8 +22,11 @@ import type {
  *
  * Design/bounds:
  * - The multiplexer is injected (a multiplexer-like seam), so tests are hermetic.
- * - Results are cached by content hash (sha256 of fileText) in a bounded in-process
- *   LRU, so re-enriching an unchanged file is free and edits invalidate naturally.
+ * - Results are cached by path-aware content hash (sha256(filePath + '\0' +
+ *   fileText)) in a bounded in-process LRU, so re-enriching an unchanged file
+ *   is free and edits invalidate naturally. The path is in the key because
+ *   hover enrichment is location-dependent (imports resolve per path); two
+ *   byte-identical files at different paths must not share an entry.
  * - Per-file work is bounded: at most {@link MAX_SYMBOLS_PER_FILE} top-level symbols
  *   are enriched and at most {@link MAX_HOVER_CALLS_PER_FILE} hover calls are issued.
  * - Never throws for a missing/crashed server: `LspServerUnavailableError` /
@@ -35,8 +38,10 @@ import type {
 const MAX_SYMBOLS_PER_FILE = 200
 const MAX_HOVER_CALLS_PER_FILE = 200
 const MAX_INLAY_HINTS_PER_FILE = 1_000
+/** Bound on hover requests in flight concurrently per file enrichment. */
+const HOVER_CONCURRENCY = 8
 
-/** Upper bound on cached per-file enrichment results (keyed by content hash). */
+/** Upper bound on cached per-file enrichment results (keyed by path-aware content hash). */
 export const SYMBOL_ENRICHMENT_CACHE_MAX_ENTRIES = 200
 
 const ENRICHMENT_CACHE = new LRUCache<string, EnrichedSymbol[]>(
@@ -257,9 +262,9 @@ async function collectInlayHintsByLine(
 
 /**
  * Enriches a file's top-level document symbols with hover docs/type signatures
- * and (when supported) inlay-hint inferred types. Cached by content hash so an
- * unchanged file is a cache hit; an unavailable/crashed server returns an honest
- * `{ symbols: [], unavailable: { reason } }` instead of throwing.
+ * and (when supported) inlay-hint inferred types. Cached by path + content hash
+ * so an unchanged file is a cache hit; an unavailable/crashed server returns an
+ * honest `{ symbols: [], unavailable: { reason } }` instead of throwing.
  */
 export async function enrichFileSymbols(params: {
   filePath: string
@@ -267,7 +272,12 @@ export async function enrichFileSymbols(params: {
   multiplexer: SymbolEnrichmentMultiplexer
 }): Promise<EnrichFileSymbolsResult> {
   const { filePath, fileText, multiplexer } = params
-  const cacheKey = createHash('sha256').update(fileText).digest('hex')
+  // Key on path + content: hover enrichment is path-dependent (imports resolve
+  // per location), so two byte-identical files at different paths must not
+  // collide. The NUL separator keeps path+content concatenation unambiguous.
+  const cacheKey = createHash('sha256')
+    .update(`${filePath}\0${fileText}`)
+    .digest('hex')
   const cached = ENRICHMENT_CACHE.get(cacheKey)
   if (cached !== undefined) {
     return { symbols: cached }
@@ -297,21 +307,38 @@ export async function enrichFileSymbols(params: {
     multiplexer,
   )
 
-  const symbols: EnrichedSymbol[] = []
-  let hoverCalls = 0
-  for (const symbol of documentSymbols.slice(0, MAX_SYMBOLS_PER_FILE)) {
+  // Bounded-concurrency hover fan-out (perf:
+  // symbol-enrichment-serial-hover-roundtrips): first-touch enrichment used
+  // to issue up to MAX_HOVER_CALLS_PER_FILE hover round-trips strictly
+  // sequentially per uncached file (200 serial LSP round-trips) even though
+  // the language server answers requests concurrently. Results stay
+  // index-aligned with the capped symbol list, so enrichment output is
+  // identical to the serial loop's, and the per-file hover cap is unchanged.
+  const targets = documentSymbols.slice(0, MAX_SYMBOLS_PER_FILE)
+  const hoverTargets = targets.slice(0, MAX_HOVER_CALLS_PER_FILE)
+  const hovers = new Array<LspHover | null>(hoverTargets.length)
+  let nextHoverIndex = 0
+  await Promise.all(
+    Array.from(
+      { length: Math.min(HOVER_CONCURRENCY, hoverTargets.length) },
+      async () => {
+        while (nextHoverIndex < hoverTargets.length) {
+          const index = nextHoverIndex++
+          hovers[index] = await safeHover(
+            multiplexer,
+            filePath,
+            hoverTargets[index]!.selectionRange.start,
+          )
+        }
+      },
+    ),
+  )
+  const symbols: EnrichedSymbol[] = targets.map((symbol, index) => {
     const enriched = toEnrichedSymbol(symbol, inlayHintsByLine)
-    if (hoverCalls < MAX_HOVER_CALLS_PER_FILE) {
-      hoverCalls++
-      const hover = await safeHover(
-        multiplexer,
-        filePath,
-        symbol.selectionRange.start,
-      )
-      if (hover) applyHover(enriched, hover)
-    }
-    symbols.push(enriched)
-  }
+    const hover = hovers[index]
+    if (hover) applyHover(enriched, hover)
+    return enriched
+  })
 
   ENRICHMENT_CACHE.set(cacheKey, symbols)
   return { symbols }

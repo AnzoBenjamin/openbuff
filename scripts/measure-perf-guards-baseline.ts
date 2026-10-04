@@ -38,11 +38,24 @@
  *   MAX_JSON_CANDIDATES=32 parse budget ...... CASE 4c (headroom) + 4d (cap)
  *   single-visited-set-shared-across-results .. CASE 5 (per-payload depth-aware
  *       memo; re-walk on strictly shallower reach)
+ *   diagnostic-capture-utf8-chunk-split ........ CASE 10 (per-chunk toString
+ *       decode vs the shipped byte-bounded single-decode capture)
+ *   semgrep-availability-cache-unbounded +
+ *   sync-versions-map-unbounded ................ CASE 11 (unbounded Map vs the
+ *       shipped bounded-cache primitive; contract row — bounding IS the cap)
+ *   snapshot-identity-serial-file-reads ........ CASE 12 (serial per-file
+ *       identity reads vs the shipped bounded read window; CASE 12b is the
+ *       map-then-join retention contract row)
+ *   diagnostic-runner-timeout-no-sigkill-escalation ... CASE 13 (contract row —
+ *       bare SIGTERM vs the shipped SIGTERM→SIGKILL escalation on a
+ *       SIGTERM-ignoring child)
  *
  * X-2 additions — absolute "(after only)" rows (pure timing observations: no
  * before/after exists for these seams, so no speedup ratio is printed; each
  * case asserts only a small contract check on the shipped output):
  *   token-counting seam: raw BPE encode vs 100k-char-cap extrapolation CASE 6a/6b
+ *   5MB pathological estimator (D12/P3-T10; BPE bounded to the 20k sample,
+ *       body never BPE-encoded; own pass/fail, no parity row) ........ CASE 6c
  *   code_search JS-side rg line parse (formatCodeSearchOutput) ......... CASE 7
  *   X-2a hot paths (D13): assignDepths sweep + getPostingCandidates ... CASE 8a/8b
  *   tool-call stream parse (parseStreamChunk, 100KB in 1KB chunks) ..... CASE 9
@@ -65,6 +78,13 @@
  *
  * Usage: bun run scripts/measure-perf-guards-baseline.ts
  */
+
+import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { open, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import * as path from 'node:path'
 
 import {
   detectLanguageProfilesFromTask,
@@ -100,6 +120,17 @@ import {
 import type { SymbolRange } from '../packages/code-map/src/structure'
 import type { IndexedFile, MetadataIndex } from '../packages/indexer/src/types'
 import type { SupportedLanguageId } from '../common/src/util/language-capabilities'
+import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import {
+  BoundedStreamCapture,
+  createDiagnosticCommandRunner,
+  MAX_CAPTURED_STREAM_BYTES,
+} from '../sdk/src/services/diagnostic-delta-runner'
+import { LRUCache } from '../common/src/util/lru-cache'
+import {
+  hashIdentityFileBytes,
+} from '../sdk/src/tools/get-change-review-bundle'
+import { mapWithConcurrency } from '../sdk/src/tools/concurrency'
 
 /** Fixed measurement baseline: identical constants for before and after rows. */
 const RUNS = 5
@@ -221,6 +252,47 @@ function measure(
   for (let r = 0; r < runs; r++) {
     const started = performance.now()
     sink += once()
+    samples.push((performance.now() - started) / scaledIterations)
+  }
+  const medianMsPerOp = median(samples)
+  return {
+    medianMsPerOp,
+    minMsPerOp: Math.min(...samples),
+    maxMsPerOp: Math.max(...samples),
+    madMsPerOp: medianAbsoluteDeviation(samples, medianMsPerOp),
+  }
+}
+
+/**
+ * Async counterpart of {@link measure} for the I/O-shaped seams (CASE 12/13):
+ * identical dispersion bookkeeping, with each op awaited instead of called
+ * synchronously.
+ */
+async function measureAsync<T>(
+  fn: () => Promise<T>,
+  iterations: number,
+  runs = activeRuns,
+): Promise<Timing> {
+  const scaledIterations = Math.max(
+    1,
+    Math.round(iterations * activeIterationsScale),
+  )
+  const once = async (): Promise<number> => {
+    let checksum = 0
+    for (let i = 0; i < scaledIterations; i++) {
+      // String-returning ops (CASE 12 identity hashes) contribute no checksum
+      // but are still awaited every iteration, so nothing is dead-code
+      // eliminated and the measured work is the op itself.
+      const value = await fn()
+      if (typeof value === 'number') checksum += value
+    }
+    return checksum
+  }
+  for (let w = 0; w < activeWarmups; w++) sink += await once()
+  const samples: number[] = []
+  for (let r = 0; r < runs; r++) {
+    const started = performance.now()
+    sink += await once()
     samples.push((performance.now() - started) / scaledIterations)
   }
   const medianMsPerOp = median(samples)
@@ -866,6 +938,187 @@ function runCase6(): void {
       `after ${formatTiming(cappedMs)} ms/op  ` +
       `20k-char sample encode + ratio extrapolation → ~${cappedExtrapolatedTokens()} tokens (shipped capped estimator shape)`,
   )
+
+  // 5MB pathological estimator row (D12 prerequisite, P3-T10): the shipped
+  // over-cap estimator shape over a ~5MB body WITHOUT BPE-encoding the body —
+  // full gpt-tokenizer BPE on a multi-MB string stalls CI >2min (that is why
+  // the 100k-char cap exists). Self-contained check (own pass/fail, no
+  // before/after parity row): the BPE input is bounded to the fixed 20k-char
+  // sample for ANY body size.
+  //
+  // Accuracy is validated against REAL, falsifiable ground truth in a
+  // genuinely NON-uniform, NON-periodic token-density regime (perf:
+  // measurement-design-case6c-repetitive-body-linearity). The two earlier
+  // body shapes were both periodic with the 20k sample spanning many full
+  // cycles (TOKEN_WORKLOAD repeated verbatim, then a 4-segment ~2.5KB cycle),
+  // so prefix-sample extrapolation was near-exact BY PERIODICITY and the
+  // accuracy check could not fail on a sample-window or sample-region bug.
+  // The body is now built in two regions with NO short period at sample
+  // scale:
+  //   - a 20k-char BALANCED PRELUDE: the four heterogeneous segments (dense
+  //     code, prose, a low-density separator-free '=' run, comment prose)
+  //     tiled in round-robin 1k chunks, exactly five rounds, so the prefix
+  //     sample the estimator reads carries the exact 1:1:1:1 segment mix; and
+  //   - a BLOCK REGION of 15k SINGLE-SEGMENT blocks rotating through the same
+  //     four segments — a 60k rotation period strictly larger than the 20k
+  //     sample, with 15k mono-density stretches inside it.
+  // The block rotation preserves the 1:1:1:1 char mix, so the whole-body
+  // density equals the prelude density and the shipped prefix estimator is
+  // accurate — by prefix representativeness plus estimator correctness, not
+  // by periodicity — and the check CAN fail:
+  //   - a wrong-window estimator (a mid-body sample over the separator +
+  //     comment blocks) diverges far beyond the tolerance (asserted below),
+  //     which was impossible on the old periodic body where every 20k window
+  //     carried the body's exact mix, and
+  //   - a naive chars/3 density estimator misses by a wide margin (asserted).
+  // Ground truth is the full-BPE count of an 80k sibling (< the 100k
+  // MAX_BPE_ENCODE_CHARS cap) built as the prelude plus exactly ONE full 60k
+  // block rotation — the same 1:1:1:1 mix, encoded directly in CASE 6a
+  // style: an independent computation this check CAN fail against.
+  const pathologicalSampleChars = 20_000
+  // Deliberately different token densities per segment; segment order is
+  // fixed so the body is deterministic.
+  const HETERO_CODE = [
+    'export interface RuntimeContext {',
+    '  sessionId: string',
+    '  revision: number',
+    '  flags: ReadonlySet<string>',
+    '}',
+    'function hydrate(ctx: RuntimeContext, payload: unknown): void {',
+    '  const flags = new Set(ctx.flags)',
+    '  for (const key of Object.keys(payload ?? {})) flags.add(key)',
+    '  ctx.revision += 1',
+    '}',
+  ].join('\n')
+  const HETERO_PROSE =
+    'The runtime hydrates its context from the serialized payload before ' +
+    'each agent step, merging committed workspace flags into the live set so ' +
+    'later prompts observe the same session state the user saw. '
+  const HETERO_SEPARATOR = '='.repeat(2048)
+  const HETERO_COMMENT =
+    '// NOTE: keep this block aligned with the hydrate contract above; the ' +
+    '// serializer round-trips flags through the journal so restarts resume ' +
+    '// from the last committed revision without replaying the whole stream. '
+  const HETERO_SEGMENTS = [
+    HETERO_CODE,
+    HETERO_PROSE,
+    HETERO_SEPARATOR,
+    HETERO_COMMENT,
+  ]
+  /** Tile `segment` (repeated with newline joiners) to exactly `chars`. */
+  const tileSegment = (segment: string, chars: number): string => {
+    const unit = segment + '\n'
+    return unit.repeat(Math.ceil(chars / unit.length)).slice(0, chars)
+  }
+  // Balanced prelude: five 1k-char round-robin rounds over the four segments
+  // = exactly `pathologicalSampleChars` chars with the exact 1:1:1:1 mix.
+  const PRELUDE_CHUNK_CHARS = 1_000
+  const PRELUDE_ROUNDS = 5
+  const balancedPrelude = (() => {
+    const chunks: string[] = []
+    for (let round = 0; round < PRELUDE_ROUNDS; round++) {
+      for (const segment of HETERO_SEGMENTS) {
+        chunks.push(tileSegment(segment, PRELUDE_CHUNK_CHARS))
+      }
+    }
+    return chunks.join('')
+  })()
+  // Block region: 15k single-segment blocks rotating through the segments.
+  // The 60k rotation period exceeds the 20k sample, so no sample window
+  // spans a full body period and each block is a 15k mono-density stretch.
+  const BLOCK_CHARS = 15_000
+  const BLOCK_ROTATION_CHARS = BLOCK_CHARS * HETERO_SEGMENTS.length
+  const buildBlockBody = (targetChars: number): string => {
+    const parts: string[] = [balancedPrelude]
+    let total = balancedPrelude.length
+    let block = 0
+    while (total < targetChars) {
+      const chunk = tileSegment(
+        HETERO_SEGMENTS[block % HETERO_SEGMENTS.length]!,
+        BLOCK_CHARS,
+      )
+      parts.push(chunk)
+      total += chunk.length
+      block++
+    }
+    return parts.join('').slice(0, targetChars)
+  }
+  const pathologicalBody = buildBlockBody(5 * 1024 * 1024)
+  // Ground-truth sibling: prelude + exactly one full block rotation = 80k
+  // chars (< the 100k cap), so the full-BPE token count is directly
+  // computable, the sibling carries the same 1:1:1:1 mix as the sample, and
+  // the count is independent of the estimator.
+  const groundTruthSibling = buildBlockBody(
+    balancedPrelude.length + BLOCK_ROTATION_CHARS,
+  )
+  const pathologicalEstimator = (text: string): number => {
+    const sample = text.slice(0, pathologicalSampleChars)
+    return Math.floor((countTokens(sample) / sample.length) * text.length)
+  }
+  const pathologicalEstFull = pathologicalEstimator(pathologicalBody)
+  const pathologicalSample = pathologicalBody.slice(0, pathologicalSampleChars)
+  // Ground-truth accuracy: the estimator over the sibling must track the
+  // sibling's actual full-BPE count within a real relative tolerance. The
+  // estimate derives from the 20k-char prelude ratio; the truth comes from
+  // the complete encode of the 80k sibling — genuinely independent
+  // computations, so this check CAN fail.
+  const pathologicalEstSibling = pathologicalEstimator(groundTruthSibling)
+  const groundTruthTokens = countTokens(groundTruthSibling)
+  const pathologicalAccuracyError =
+    Math.abs(pathologicalEstSibling - groundTruthTokens) / groundTruthTokens
+  const pathologicalAccuracyTolerance = 0.08
+  // Discriminating-power guard 1: a naive chars/3 density estimator must MISS
+  // the tolerance — the body's true chars/token density is far from 3.
+  const naiveCharsPerTokenEstimate = Math.floor(groundTruthSibling.length / 3)
+  const naiveEstimatorError =
+    Math.abs(naiveCharsPerTokenEstimate - groundTruthTokens) /
+    groundTruthTokens
+  // Discriminating-power guard 2 (falsifiability against non-uniformity): an
+  // estimator that samples an UNREPRESENTATIVE window must also miss the
+  // tolerance. The window below starts inside the separator block and spans
+  // the separator + comment blocks, so its density diverges from the body's
+  // balanced density — proving the accuracy check can genuinely fail when
+  // the sample region is wrong.
+  const wrongWindowSample = groundTruthSibling.slice(
+    balancedPrelude.length + 2 * BLOCK_CHARS,
+    balancedPrelude.length + 2 * BLOCK_CHARS + pathologicalSampleChars,
+  )
+  const wrongWindowEstimate =
+    (countTokens(wrongWindowSample) / wrongWindowSample.length) *
+    groundTruthSibling.length
+  const wrongWindowError =
+    Math.abs(wrongWindowEstimate - groundTruthTokens) / groundTruthTokens
+  if (
+    pathologicalBody.length < 5 * 1024 * 1024 ||
+    pathologicalSample.length !== pathologicalSampleChars ||
+    balancedPrelude.length !== pathologicalSampleChars ||
+    BLOCK_ROTATION_CHARS <= pathologicalSampleChars ||
+    !(pathologicalEstFull > 0) ||
+    !(pathologicalEstSibling > 0) ||
+    pathologicalAccuracyError > pathologicalAccuracyTolerance ||
+    naiveEstimatorError <= pathologicalAccuracyTolerance ||
+    wrongWindowError <= pathologicalAccuracyTolerance
+  ) {
+    console.error(
+      `CASE 6c contract failure: body ${pathologicalBody.length}B, sample ${pathologicalSample.length} chars, est(5MB)=${pathologicalEstFull}, est(80KB sibling)=${pathologicalEstSibling}, full-BPE truth=${groundTruthTokens}, accuracy error ${(pathologicalAccuracyError * 100).toFixed(2)}%, naive chars/3 error ${(naiveEstimatorError * 100).toFixed(2)}%, wrong-window error ${(wrongWindowError * 100).toFixed(2)}% (expected >=5MB aperiodic body, ${pathologicalSampleChars}-char balanced prelude sample, block rotation > sample, est within ${(pathologicalAccuracyTolerance * 100).toFixed(0)}% of the full-BPE ground truth, naive chars/3 AND wrong-window estimators to MISS the tolerance so the check is falsifiable)`,
+    )
+    process.exit(1)
+  }
+  const pathologicalMs = measure(
+    () => pathologicalEstimator(pathologicalBody),
+    3,
+  )
+  if (!(pathologicalMs.medianMsPerOp < 2000)) {
+    console.error(
+      `CASE 6c boundedness failure: estimator median ${pathologicalMs.medianMsPerOp.toFixed(1)} ms/op over the ~5MB body — the estimator regressed toward full-body BPE (the >2min CI stall this row guards against)`,
+    )
+    process.exit(1)
+  }
+  console.log(
+    `  ${'CASE 6c'.padEnd(9)} ${'X-2: 5MB pathological estimator (D12)'.padEnd(44)} ` +
+      `after ${formatTiming(pathologicalMs)} ms/op  ` +
+      `${pathologicalBody.length}B aperiodic heterogeneous-density body (20k balanced prelude + rotating 15k mono-density code/prose/separator/comment blocks), BPE bounded to the ${pathologicalSampleChars}-char sample (body never BPE-encoded), est ~${pathologicalEstFull} tokens, est(80KB)=${pathologicalEstSibling} vs full-BPE truth ${groundTruthTokens} (accuracy error ${(pathologicalAccuracyError * 100).toFixed(2)}% <= ${(pathologicalAccuracyTolerance * 100).toFixed(0)}%; naive chars/3 misses at ${(naiveEstimatorError * 100).toFixed(0)}%; wrong-window estimator misses at ${(wrongWindowError * 100).toFixed(0)}%), <2s boundedness guard`,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,6 +1389,466 @@ function runCase9(): void {
 }
 
 // ---------------------------------------------------------------------------
+// CASE 10 — diagnostic-capture-utf8-chunk-split (shipped BoundedStreamCapture)
+// ---------------------------------------------------------------------------
+
+/**
+ * Before/after rows for the diagnostic-command runner's stream capture
+ * (RF: diagnostic-capture-utf8-chunk-split). The after row runs the SHIPPED
+ * exported BoundedStreamCapture from diagnostic-delta-runner.ts — the exact
+ * class createDiagnosticCommandRunner now feeds child stdout/stderr into —
+ * never a local mirror (RF-8 / after-rows-measure-mirrors). The before row
+ * is the pre-fix shape it replaced: per-chunk `chunk.toString()` decoding,
+ * capped by UTF-16 string length instead of bytes.
+ *
+ * Parity contract: over an ASCII workload both shapes retain the identical
+ * total, so the measured delta is only the decode/capture cost. The
+ * correctness half (multibyte sequences split at chunk boundaries) is
+ * asserted OUTSIDE the timed sections: the pre-fix shape demonstrably
+ * mangles a split 4-byte emoji into U+FFFD pairs while the shipped capture
+ * decodes it byte-exact — the check can fail if the shipped capture ever
+ * regresses to per-chunk decoding.
+ */
+const CAPTURE_CHUNKS: Buffer[] = Array.from(
+  { length: 256 },
+  () => Buffer.from('abcdefghij'.repeat(400), 'utf8'), // 4000B each → 1,024,000B total
+)
+
+function runCase10(): void {
+  // ASCII parity: identical retained totals — only the capture shape differs.
+  const preFixCapture = (): number => {
+    let captured = ''
+    for (const chunk of CAPTURE_CHUNKS) {
+      if (captured.length < MAX_CAPTURED_STREAM_BYTES) {
+        captured += chunk.toString()
+      }
+    }
+    return captured.length
+  }
+  const shippedCapture = (): number => {
+    const capture = new BoundedStreamCapture()
+    for (const chunk of CAPTURE_CHUNKS) capture.push(chunk)
+    return capture.text().length
+  }
+  assertParity('CASE 10 ascii capture totals', preFixCapture(), shippedCapture())
+  const legacyMs = measure(preFixCapture, 30)
+  const fixedMs = measure(shippedCapture, 30)
+  report({
+    case: 'CASE 10',
+    finding: 'diagnostic-capture-utf8-chunk-split',
+    before: legacyMs,
+    after: fixedMs,
+    ratioBasis: 'like-for-like',
+    note: `${CAPTURE_CHUNKS.length} × 4000B ASCII chunks (${CAPTURE_CHUNKS.length * 4000}B total): before decodes per-chunk (chunk.toString()) and caps by UTF-16 length, after accumulates raw bytes and decodes once at stream end (identical totals)`,
+  })
+
+  // Multibyte correctness check (outside the timed sections): a 4-byte emoji
+  // split across two stream chunks must survive the shipped capture intact,
+  // while the pre-fix per-chunk decode corrupts it. The corruption SHAPE is
+  // engine-specific (Bun and V8 emit different U+FFFD replacement patterns
+  // for the split bytes), so the pre-fix check pins only "not intact" — the
+  // falsifiable contract lives in the shipped decode and the byte cap below.
+  const emoji = Buffer.from('😀', 'utf8')
+  const splitEmojiChunks = [emoji.subarray(0, 2), emoji.subarray(2)]
+  const preFixSplitDecode = (): string => {
+    let captured = ''
+    for (const chunk of splitEmojiChunks) captured += chunk.toString()
+    return captured
+  }
+  const shippedSplitDecode = (): string => {
+    const capture = new BoundedStreamCapture()
+    for (const chunk of splitEmojiChunks) capture.push(chunk)
+    return capture.text()
+  }
+  const preFixText = preFixSplitDecode()
+  if (preFixText === '😀') {
+    console.error(
+      'CASE 10b pre-fix split-emoji decode unexpectedly intact — the pre-fix baseline is not reproducible on this engine',
+    )
+    process.exit(1)
+  }
+  assertParity('CASE 10b shipped split-emoji decode', shippedSplitDecode(), '😀')
+
+  // Byte-exact cap check (outside the timed sections): the shipped capture
+  // retains EXACTLY MAX_CAPTURED_STREAM_BYTES bytes (the constant's name is
+  // now honest) and its truncation boundary lands on a whole emoji (the cap
+  // is divisible by 4), so no U+FFFD appears.
+  const emojiStream = Buffer.concat(
+    Array.from(
+      { length: Math.ceil((MAX_CAPTURED_STREAM_BYTES + 64) / emoji.length) },
+      () => emoji,
+    ),
+  )
+  const capCheckChunks: Buffer[] = []
+  for (let i = 0; i < emojiStream.length; i += 63) {
+    capCheckChunks.push(emojiStream.subarray(i, i + 63))
+  }
+  const capCapture = (): number => {
+    const capture = new BoundedStreamCapture()
+    for (const chunk of capCheckChunks) capture.push(chunk)
+    return Buffer.byteLength(capture.text(), 'utf8')
+  }
+  const capCaptureText = (): string => {
+    const capture = new BoundedStreamCapture()
+    for (const chunk of capCheckChunks) capture.push(chunk)
+    return capture.text()
+  }
+  assertParity('CASE 10c byte cap total', capCapture(), MAX_CAPTURED_STREAM_BYTES)
+  assertParity('CASE 10c byte cap content', capCaptureText(), '😀'.repeat(MAX_CAPTURED_STREAM_BYTES / 4))
+  console.log(
+    `  ${'CASE 10b/c'.padEnd(9)} ${'(contract) multibyte-safe decode + byte-exact cap'.padEnd(44)} ` +
+      `split-emoji decode intact, cap retained at exactly ${MAX_CAPTURED_STREAM_BYTES} bytes`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// CASE 11 — semgrep-availability-cache-unbounded (bounded-cache contract row)
+// ---------------------------------------------------------------------------
+
+/**
+ * Evidence row for the unbounded-cache class of fixes in this wave
+ * (semgrep-availability-cache-unbounded; the identical shape — a Map keyed by
+ * cwd with a TTL but no entry cap — drove the sync-versions-map-unbounded
+ * fix in language-intelligence too, which shipped on the same bounded
+ * primitive). The after row times the SHIPPED bounded-cache primitive from
+ * common/src/util/lru-cache.ts — the exact class the semgrep availability
+ * cache and the syncVersions map are built on — over a fixed
+ * visit-many-distinct-cwds workload. The before row is the pre-fix shape it
+ * replaced: a plain Map that grows without bound.
+ *
+ * Ratio basis 'contract' (RF-8): the two rows retain different amounts BY
+ * DESIGN — bounding the retention IS the cap — so no speedup ratio is
+ * printed. The retention difference is asserted outside the timed sections:
+ * after one full pass the unbounded Map holds every key while the bounded
+ * cache holds at most its cap; if the two ever report identical retention
+ * the check fails (the bounded cache would not be bounding anything).
+ */
+const CACHE_KEYS = 2048
+const CACHE_KEYS_LIST: string[] = Array.from(
+  { length: CACHE_KEYS },
+  (_, i) => `/tmp/perf-baseline-cwd-${i}`,
+)
+const CACHE_CAP = 256
+
+function runCase11(): void {
+  const preFixCache = new Map<string, number>()
+  const shippedCache = new LRUCache<string, number>(CACHE_CAP)
+  const pass = (cache: Map<string, number> | LRUCache<string, number>): number => {
+    let hits = 0
+    for (const key of CACHE_KEYS_LIST) {
+      const cached = cache.get(key)
+      if (cached !== undefined) hits += cached
+      else cache.set(key, 1)
+    }
+    return hits + cache.size
+  }
+  // Warm both shapes with one full pass, then assert the retention contract.
+  pass(preFixCache)
+  pass(shippedCache)
+  if (preFixCache.size <= shippedCache.size) {
+    console.error(
+      `CASE 11 contract failure: pre-fix unbounded Map retained ${preFixCache.size} entries vs shipped bounded cache ${shippedCache.size} — the bounded cache is not bounding`,
+    )
+    process.exit(1)
+  }
+  if (shippedCache.size > CACHE_CAP) {
+    console.error(
+      `CASE 11 contract failure: shipped bounded cache grew to ${shippedCache.size} entries beyond its ${CACHE_CAP} cap`,
+    )
+    process.exit(1)
+  }
+  const preFixMs = measure(() => pass(preFixCache), 20)
+  const shippedMs = measure(() => pass(shippedCache), 20)
+  report({
+    case: 'CASE 11',
+    finding: 'semgrep-availability-cache-unbounded',
+    before: preFixMs,
+    after: shippedMs,
+    ratioBasis: 'contract',
+    note: `${CACHE_KEYS} distinct cwds over the shipped ${CACHE_CAP}-entry cap: before retains every entry (unbounded Map, ${preFixCache.size} entries), after evicts least-recently-used (${shippedCache.size} entries — retention differs by design)`,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// CASE 12 — snapshot-identity-serial-file-reads (shipped bounded read window)
+// ---------------------------------------------------------------------------
+
+/**
+ * Before/after rows for the snapshot-identity per-file reads
+ * (RF: snapshot-identity-serial-file-reads). The after row runs the SHIPPED
+ * exported hashIdentityFileBytes from
+ * sdk/src/tools/get-change-review-bundle.ts — the exact function
+ * buildSnapshotIdentity feeds the snapshot hash — never a local mirror
+ * (RF-8 / after-rows-measure-mirrors). The before row is the pre-fix shape it
+ * replaced: a strictly serial stat + capped-prefix read + hash loop over the
+ * sorted changed-file list.
+ *
+ * Parity contract: both shapes hash the identical byte stream (per-file
+ * headers + byte prefixes joined in the same sorted order), so the digests
+ * MUST be byte-identical — asserted outside the timed sections. The fixture
+ * is a real temp directory of fixed-size files: the seam is I/O-shaped
+ * (stat + open + read), so an in-memory synthetic would not exercise the
+ * read fan-out this row evidences. The fixture is removed in a finally block.
+ */
+const IDENTITY_FILE_COUNT = 200
+const IDENTITY_FILE_BYTES = 10_000
+
+function makeIdentityFixture(): { cwd: string; files: string[] } {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'perf-identity-'))
+  const files: string[] = []
+  for (let i = 0; i < IDENTITY_FILE_COUNT; i++) {
+    const name = `changed-${String(i).padStart(4, '0')}.txt`
+    writeFileSync(
+      path.join(cwd, name),
+      `${name}:${'x'.repeat(IDENTITY_FILE_BYTES - name.length - 2)}\n`,
+    )
+    files.push(name)
+  }
+  return { cwd, files: [...files].sort() }
+}
+
+/** Per-file identity read shared by every CASE 12/12b shape. */
+async function readIdentityContribution(
+  cwd: string,
+  file: string,
+): Promise<{ header: string; bytes?: Buffer } | null> {
+  const absolute = path.join(cwd, file)
+  const info = await stat(absolute).catch(() => null)
+  if (!info?.isFile()) return null
+  const header = `\0${file}\0size:${info.size}\0`
+  if (info.size === 0) return { header }
+  const handle = await open(absolute, 'r')
+  try {
+    const buffer = Buffer.allocUnsafe(info.size)
+    const read = await handle.read(buffer, 0, info.size, 0)
+    return { header, bytes: buffer.subarray(0, read.bytesRead) }
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Pre-fix CASE 12 shape: strictly serial stat + read + hash per file. */
+async function serialIdentityHash(
+  cwd: string,
+  files: string[],
+): Promise<string> {
+  const hash = createHash('sha256')
+  for (const file of files) {
+    const contribution = await readIdentityContribution(cwd, file)
+    if (!contribution) continue
+    hash.update(contribution.header)
+    if (contribution.bytes) hash.update(contribution.bytes)
+  }
+  return hash.digest('hex')
+}
+
+/** Shipped shape: the exported hashIdentityFileBytes over a fresh digest. */
+async function shippedIdentityHash(
+  cwd: string,
+  files: string[],
+): Promise<string> {
+  const hash = createHash('sha256')
+  await hashIdentityFileBytes(hash, cwd, files)
+  return hash.digest('hex')
+}
+
+/**
+ * CASE 12b's before row: the wave's interim concurrency shape — one
+ * mapWithConcurrency fan-out that collects EVERY per-file contribution in
+ * memory before the join pass hashes them (the
+ * snapshot-identity-contributions-unbounded-retention shape).
+ */
+async function mapThenJoinIdentityHash(
+  cwd: string,
+  files: string[],
+): Promise<string> {
+  const hash = createHash('sha256')
+  const contributions = await mapWithConcurrency(files, 8, (file) =>
+    readIdentityContribution(cwd, file),
+  )
+  for (const contribution of contributions) {
+    if (!contribution) continue
+    hash.update(contribution.header)
+    if (contribution.bytes) hash.update(contribution.bytes)
+  }
+  return hash.digest('hex')
+}
+
+async function runCase12(): Promise<void> {
+  const fixture = makeIdentityFixture()
+  try {
+    // Parity: the serial pre-fix shape, the interim map-then-join shape, and
+    // the shipped bounded window must all digest the identical byte stream.
+    assertParity(
+      'CASE 12 identity digests',
+      await serialIdentityHash(fixture.cwd, fixture.files),
+      await shippedIdentityHash(fixture.cwd, fixture.files),
+    )
+    assertParity(
+      'CASE 12b identity digests',
+      await mapThenJoinIdentityHash(fixture.cwd, fixture.files),
+      await shippedIdentityHash(fixture.cwd, fixture.files),
+    )
+    const serialMs = await measureAsync(
+      () => serialIdentityHash(fixture.cwd, fixture.files),
+      5,
+    )
+    const windowMs = await measureAsync(
+      () => shippedIdentityHash(fixture.cwd, fixture.files),
+      5,
+    )
+    report({
+      case: 'CASE 12',
+      finding: 'snapshot-identity-serial-file-reads',
+      before: serialMs,
+      after: windowMs,
+      ratioBasis: 'like-for-like',
+      note: `${IDENTITY_FILE_COUNT} × ~${IDENTITY_FILE_BYTES}B temp files: before hashes each file's stat + capped prefix strictly serially, after runs the shipped bounded read window (digest parity asserted)`,
+    })
+    const interimMs = await measureAsync(
+      () => mapThenJoinIdentityHash(fixture.cwd, fixture.files),
+      5,
+    )
+    report({
+      case: 'CASE 12b',
+      finding: 'snapshot-identity-contributions-unbounded-retention',
+      before: interimMs,
+      after: windowMs,
+      ratioBasis: 'contract',
+      note: `${IDENTITY_FILE_COUNT} changed files: the interim map-then-join shape retained every per-file byte prefix before hashing (changedFileCount × file-size retention), the shipped window hashes each contribution as it settles (retention bounded by the read window) — retention differs BY DESIGN, so no ratio is printed; digest parity is asserted`,
+    })
+  } finally {
+    rmSync(fixture.cwd, { recursive: true, force: true })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CASE 13 — diagnostic-runner-timeout-no-sigkill-escalation (contract row)
+// ---------------------------------------------------------------------------
+
+/**
+ * Contract row for the diagnostic command runner's timeout escalation
+ * (RF: diagnostic-runner-timeout-no-sigkill-escalation). The child ignores
+ * SIGTERM and exits on its own only after CASE13_CHILD_EXIT_MS. The before
+ * shape is the pre-fix timeout block: a bare `child.kill()` (SIGTERM) with
+ * no escalation, so a SIGTERM-ignoring child is only reaped at its natural
+ * exit — with live pipes on the hot file-change path. The after shape is the
+ * SHIPPED createDiagnosticCommandRunner with a short injected grace: the
+ * deadline sends SIGTERM and settles the result immediately, and the SIGKILL
+ * escalation reaps the child at deadline + grace.
+ *
+ * The evidenced property is the child's wall-clock reaping, so the
+ * assertions (run outside any timed section and able to fail) read the
+ * child's own pid and poll until the process is gone: the shipped runner
+ * must reap the child near deadline + grace while the pre-fix shape holds it
+ * to its natural exit. Timing rows repeat both shapes over the same child
+ * workload for scale evidence; a production-toolchain reap-latency benchmark
+ * would be machine-dependent by nature.
+ */
+const CASE13_CHILD_EXIT_MS = 1500
+const CASE13_DEADLINE_MS = 200
+const CASE13_GRACE_MS = 200
+
+async function runCase13(): Promise<void> {
+  const dir = mkdtempSync(path.join(tmpdir(), 'perf-case13-'))
+  const childPath = path.join(dir, 'ignore-sigterm.cjs')
+  const pidFile = path.join(dir, 'child.pid')
+  writeFileSync(
+    childPath,
+    [
+      "require('node:fs').writeFileSync(" +
+        JSON.stringify(pidFile) +
+        ', String(process.pid))',
+      "process.on('SIGTERM', () => {})",
+      `setTimeout(() => process.exit(0), ${CASE13_CHILD_EXIT_MS})`,
+    ].join('\n'),
+  )
+  /** Wall-clock ms from spawn start until the child process is reaped. */
+  const reapMs = async (shipped: boolean): Promise<number> => {
+    rmSync(pidFile, { force: true })
+    const started = performance.now()
+    if (shipped) {
+      const runCommand = createDiagnosticCommandRunner({
+        spawn: spawn as unknown as CodebuffSpawn,
+        sigtermGraceMs: CASE13_GRACE_MS,
+      })
+      // The runner settles its result AT the deadline; the child's reaping is
+      // observed below through its pid, not through the runner's promise.
+      void runCommand({
+        command: `${process.execPath} ${childPath}`,
+        cwd: dir,
+        timeoutSeconds: CASE13_DEADLINE_MS / 1000,
+      }).catch(() => {})
+    } else {
+      // Pre-fix shape: bare kill() at the deadline, no escalation.
+      const child = spawn(process.execPath, [childPath])
+      const timer = setTimeout(() => {
+        try {
+          child.kill()
+        } catch {
+          /* already gone */
+        }
+      }, CASE13_DEADLINE_MS)
+      timer.unref?.()
+      void new Promise<void>((resolve) => child.on('close', resolve)).catch(
+        () => {},
+      )
+    }
+    const giveUpAt = started + CASE13_CHILD_EXIT_MS + 5_000
+    let pid = -1
+    const sleepMs = (ms: number): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, ms))
+    while (pid === -1 && performance.now() < giveUpAt) {
+      try {
+        pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
+      } catch {
+        await sleepMs(10)
+      }
+    }
+    if (pid === -1) return Number.POSITIVE_INFINITY
+    for (;;) {
+      let gone = false
+      try {
+        process.kill(pid, 0)
+      } catch {
+        gone = true
+      }
+      if (gone) return performance.now() - started
+      if (performance.now() > giveUpAt) return Number.POSITIVE_INFINITY
+      await sleepMs(10)
+    }
+  }
+
+  try {
+    // Contract assertions (outside any timed section; these CAN fail).
+    const bareReap = await reapMs(false)
+    const shippedReap = await reapMs(true)
+    if (
+      bareReap < CASE13_CHILD_EXIT_MS * 0.8 ||
+      shippedReap > CASE13_DEADLINE_MS + CASE13_GRACE_MS + 1_000 ||
+      shippedReap >= bareReap
+    ) {
+      console.error(
+        `CASE 13 contract failure: SIGTERM-ignoring child reap latency — pre-fix bare-kill shape ${bareReap}ms (expected >= ${Math.round(CASE13_CHILD_EXIT_MS * 0.8)}ms: held to the child's natural exit), shipped escalated shape ${shippedReap}ms (expected <= ${CASE13_DEADLINE_MS + CASE13_GRACE_MS + 1_000}ms: reaped by the SIGKILL escalation)`,
+      )
+      process.exit(1)
+    }
+    const bareMs = await measureAsync(() => reapMs(false), 1, 2)
+    const escalatedMs = await measureAsync(() => reapMs(true), 1, 2)
+    report({
+      case: 'CASE 13',
+      finding: 'diagnostic-runner-timeout-no-sigkill-escalation',
+      before: bareMs,
+      after: escalatedMs,
+      ratioBasis: 'contract',
+      note: `SIGTERM-ignoring child (${CASE13_CHILD_EXIT_MS}ms natural exit, ${CASE13_DEADLINE_MS}ms deadline, ${CASE13_GRACE_MS}ms grace): before is the pre-fix bare-kill shape (child held to its natural exit), after is the shipped SIGTERM→SIGKILL escalation — the columns bound different failure modes BY DESIGN, so no ratio is printed; the reap-latency contract is asserted above and can fail`,
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 /**
  * Options for runPerfGuardsBaseline. Defaults preserve the fixed measurement
@@ -1184,6 +1897,10 @@ export async function runPerfGuardsBaseline(
   runCase7()
   await runCase8()
   runCase9()
+  runCase10()
+  runCase11()
+  await runCase12()
+  await runCase13()
   console.log('')
 console.log('--- Evidence notes ---')
 console.log(
@@ -1260,6 +1977,151 @@ console.log(
   '     and stream end) is structural and pinned by the tool-stream-parser suite;',
 )
 console.log('     CASE 3 measures the parse-side replay cost it complements.')
+console.log(
+  '  CASE 10 (RF diagnostic-capture-utf8-chunk-split): before decodes child output',
+)
+console.log(
+  '     per-chunk via chunk.toString() (splitting multibyte UTF-8 at chunk',
+)
+console.log(
+  '     boundaries) and caps by UTF-16 length; after runs the shipped',
+)
+console.log(
+  '     BoundedStreamCapture — raw-byte accumulation, ONE decode at stream end,',
+)
+console.log(
+  '     byte-exact cap. ASCII totals parity is asserted; the split-emoji decode',
+)
+console.log(
+  '     (10b) and byte-exact-cap (10c) contract checks run outside the timed',
+)
+console.log('     sections and CAN fail.')
+console.log(
+  '  CASE 11 (RF semgrep-availability-cache-unbounded / sync-versions-map-unbounded):',
+)
+console.log(
+  '     before is the pre-fix unbounded Map; after is the shipped bounded LRUCache',
+)
+console.log(
+  '     primitive the semgrep availability cache and the syncVersions map are built',
+)
+console.log(
+  '     on. Retention differs BY DESIGN (bounding the retention IS the cap), so no',
+)
+console.log(
+  '     speedup ratio is printed; the retention contract is asserted and can fail.',
+)
+console.log(
+  '  CASE 12 (RF snapshot-identity-serial-file-reads): before hashes each changed',
+)
+console.log(
+  "     file's stat + capped byte prefix strictly serially; after runs the shipped",
+)
+console.log(
+  '     hashIdentityFileBytes bounded read window (bounded in-flight reads,',
+)
+console.log(
+  '     contributions hashed in sorted order). Digest parity across the serial',
+)
+console.log(
+  '     shape, the interim map-then-join shape, and the shipped window is asserted',
+)
+console.log('     and can fail.')
+console.log(
+  '  CASE 12b (RF snapshot-identity-contributions-unbounded-retention): contract',
+)
+console.log(
+  '     row — the interim concurrency shape retained every per-file byte prefix',
+)
+console.log(
+  '     before hashing (changedFileCount × file-size retention); the shipped',
+)
+console.log(
+  '     window hashes each contribution as it settles, so retention is bounded',
+)
+console.log(
+  '     by the read window instead of the changed-file count. Retention differs',
+)
+console.log(
+  '     BY DESIGN (bounding the retention IS the cap), so no speedup ratio is',
+)
+console.log('     printed; digest parity is asserted and can fail.')
+console.log(
+  '  CASE 13 (RF diagnostic-runner-timeout-no-sigkill-escalation): contract row —',
+)
+console.log(
+  '     a SIGTERM-ignoring diagnostic child is reaped by the shipped SIGKILL',
+)
+console.log(
+  '     escalation near deadline + grace, while the pre-fix bare-kill shape held',
+)
+console.log(
+  '     it to its natural exit with live pipes. The columns bound different',
+)
+console.log(
+  '     failure modes BY DESIGN, so no ratio is printed; the reap-latency',
+)
+console.log("     contract is asserted against the child's real pid and can fail.")
+console.log(
+  '  Structural perf-tag attribution (guards whose property is pinned by their test',
+)
+console.log(
+  '     suite rather than timed here, per the stream-buffer precedent above):',
+)
+console.log(
+  '     scip-premerge-edge-accumulation — the merge-edge budget is consulted DURING',
+)
+console.log(
+  '       accumulation (runSingleIndexer + the batch budget in scip-runner.ts); the',
+)
+console.log(
+  '       over-cap retention bound is pinned by the scip-runner suite tests, so a',
+)
+console.log(
+  '       heap-spike timing row over a synthetic 256MiB dump would measure the',
+)
+console.log(
+  '       garbage collector, not the guard — attributed structurally instead.',
+)
+console.log(
+  '     scip-detection-probe-no-single-flight, scip-dump-json-parse-heap-spike,',
+)
+console.log(
+  '       lsp-coldstart-evict-overshoot, root-resolver-unmemoized-sync-walk-per-acquire,',
+)
+console.log(
+  '       symbol-enrichment-serial-hover-roundtrips, build-graph-spawnsync-blocking-new-tool-path,',
+)
+console.log(
+  '       sync-versions-map-unbounded, bundle-identity-unbounded-sync-io,',
+)
+console.log(
+  '       snapshot-identity-diff-capture-unbounded, identity-git-spawns-no-deadline —',
+)
+console.log(
+  '       concurrency/IO/process-seam guards whose property (bounded in-flight work,',
+)
+console.log(
+  '       bounded capture, non-blocking event loop) is pinned by the sdk/indexer test',
+)
+console.log(
+  '       suites; spawn-driven seams cannot be timed deterministically in CI, so they',
+)
+console.log(
+  '       are attributed structurally here instead of shipping fake numbers.',
+)
+console.log(
+  '       For symbol-enrichment-serial-hover-roundtrips specifically: the guarded',
+)
+console.log(
+  '       property is the bounded hover fan-out with index-aligned results (real',
+)
+console.log(
+  '       LSP round-trip latency is server- and machine-dependent), pinned by the',
+)
+console.log(
+  '       symbol-enrichment suite rather than a simulated-latency timing row.',
+)
 console.log('')
 console.log(
   `All parity/contract assertions passed across ${rows.length} measured rows.`,
@@ -1273,7 +2135,10 @@ console.log(
 console.log(
   "  Speedup ratios print only for like-for-like rows; 'contract' rows (3c, 4d,",
 )
-console.log('  CASE 5) print n/a — their columns measure different work by design.')
+console.log(
+  '  CASE 5, CASE 11, CASE 12b, CASE 13) print n/a — their columns measure',
+)
+console.log('  different work by design.')
 console.log(
   '  Ratio stability (RF-13): every row prints min/max/MAD dispersion and each',
 )
@@ -1289,6 +2154,21 @@ console.log(
 )
 console.log(
   '     make the 100k-char BPE cap visible (raw encode vs 20k-sample extrapolation);',
+)
+console.log(
+  '     CASE 6c (D12): ~5MB pathological estimator row — BPE stays bounded to the',
+)
+console.log(
+  '     20k-char sample (the body is never BPE-encoded), with a heterogeneous-density',
+)
+console.log(
+  '     accuracy check against a full-BPE ground-truth sibling body (a naive chars/3',
+)
+console.log(
+  '     estimator demonstrably misses it, so the check is falsifiable) and a <2s',
+)
+console.log(
+  '     boundedness guard against the >2min full-BPE CI stall.',
 )
 console.log(
   '     CASE 7 measures the JS-side rg line parse only (rg spawn is I/O-bound and',

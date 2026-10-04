@@ -19,6 +19,7 @@ export const workspaceSymbolParams = {
     query: z
       .string()
       .min(1)
+      .max(512)
       .describe('Symbol name (or substring) to search for, e.g. "createUser".'),
   }),
   outputSchema: jsonToolResultSchema(

@@ -83,8 +83,10 @@ export type {
   RetrievalQualityMetrics,
 } from './retrieval-quality'
 export {
+  mergeScipEdgesIntoIndex,
   mergeScipIntoIndex,
   parseScipJson,
+  scipPreciseEdges,
   SCIP_MAX_MERGED_EDGES,
   SCIP_MAX_OCCURRENCES_PER_DOCUMENT,
   ScipIngestError,
@@ -95,3 +97,20 @@ export type {
   ScipIngestErrorCode,
   ScipOccurrence,
 } from './scip-ingest'
+export {
+  MAX_SCIP_INDEXERS_PER_CALL,
+  SCIP_INDEXER_COMMANDS,
+  detectAvailableScipIndexers,
+  runScipIngest,
+} from './scip-runner'
+export type {
+  AsyncScipRunner,
+  ScipIndexerCommand,
+  ScipIndexerRunResult,
+  ScipIndexerStatus,
+  ScipIngestRunOptions,
+  ScipIngestRunResult,
+  ScipRunner,
+  ScipRunnerInvocation,
+  ScipRunnerResult,
+} from './scip-runner'
