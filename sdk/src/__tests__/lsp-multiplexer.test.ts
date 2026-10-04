@@ -513,4 +513,200 @@ describe('createLspMultiplexer', () => {
     expect(spawned).toBe(0)
     await mux.dispose()
   })
+
+  // P3 audit remediation (per-language spawn-spec pin): every stdio-launchable
+  // language must resolve extension -> language -> languageServer spec -> the
+  // exact spawn argv from the registry. gdscript is tcp-only and must be
+  // rejected as 'tcp-transport', never spawned. Hermetic: the spawner captures
+  // the spec and returns a fake peer; no real language server is started.
+  const SPAWN_ARGV_CASES: Array<{
+    languageId: string
+    filePath: string
+    argv: readonly string[]
+  }> = [
+    { languageId: 'typescript', filePath: '/proj/a.ts', argv: ['typescript-language-server', '--stdio'] },
+    { languageId: 'python', filePath: '/proj/a.py', argv: ['pyright-langserver', '--stdio'] },
+    { languageId: 'rust', filePath: '/proj/a.rs', argv: ['rust-analyzer'] },
+    { languageId: 'go', filePath: '/proj/a.go', argv: ['gopls'] },
+    { languageId: 'java', filePath: '/proj/a.java', argv: ['jdtls'] },
+    { languageId: 'csharp', filePath: '/proj/a.cs', argv: ['csharp-ls'] },
+    { languageId: 'cpp', filePath: '/proj/a.cpp', argv: ['clangd'] },
+    { languageId: 'ruby', filePath: '/proj/a.rb', argv: ['ruby-lsp'] },
+    { languageId: 'php', filePath: '/proj/a.php', argv: ['intelephense', '--stdio'] },
+    { languageId: 'swift', filePath: '/proj/a.swift', argv: ['sourcekit-lsp'] },
+    { languageId: 'kotlin', filePath: '/proj/a.kt', argv: ['kotlin-language-server'] },
+  ]
+
+  for (const { languageId, filePath, argv } of SPAWN_ARGV_CASES) {
+    test(`resolves ${languageId} to its languageServer spawn argv`, async () => {
+      const specs: LspSpawnSpec[] = []
+      const mux = createLspMultiplexer({
+        spawner: (spec: LspSpawnSpec) => {
+          specs.push(spec)
+          return makePeer(defaultBehavior).child
+        },
+      })
+      await mux.definition({ filePath, position: { line: 0, character: 0 } })
+      expect(specs).toHaveLength(1)
+      expect([...specs[0].argv]).toEqual([...argv])
+      await mux.dispose()
+    })
+  }
+
+  test('rejects the tcp-only gdscript server spec as tcp-transport without spawning', async () => {
+    let spawned = 0
+    const mux = createLspMultiplexer({
+      spawner: () => {
+        spawned++
+        return makePeer(defaultBehavior).child
+      },
+    })
+    const failure = await mux
+      .definition({ filePath: '/proj/a.gd', position: { line: 0, character: 0 } })
+      .then(
+        () => {
+          throw new Error('expected gdscript definition to reject')
+        },
+        (error: unknown) => error,
+      )
+    expect(failure).toBeInstanceOf(LspServerUnavailableError)
+    expect((failure as LspServerUnavailableError).reason).toBe('tcp-transport')
+    expect((failure as LspServerUnavailableError).languageId).toBe('gdscript')
+    expect(spawned).toBe(0)
+    await mux.dispose()
+  })
+
+  // F1 regression pin (fail-closed framing): a header block with no parseable
+  // Content-Length (or a non-numeric/oversize one) means the peer is not
+  // speaking LSP framing. The connection must tear down (in-flight request
+  // rejects with LspServerError reason 'crashed', a 'restart' event fires) and
+  // must NOT resynchronize — subsequent garbage is never parsed as a frame.
+  // The frame() helper always emits a valid header, so these peers emit the
+  // malformed header manually via an `emitRaw` stdout hook.
+  type RawPeer = FakePeer & { emitRaw(chunk: Buffer): void }
+
+  function makeRawPeer(
+    behavior: (message: Record<string, unknown>, peer: FakePeer) => Record<string, unknown> | null,
+  ): RawPeer {
+    const base = makePeer(behavior)
+    // Wrap (not replace) the base stdout so consume()'s 'data' listener joins
+    // the SAME listener chain the base peer's stdin->response loop pushes
+    // framed responses into. Replacing stdout with a fresh object disconnects
+    // that plumbing (the base loop fires its own captured array), deadlocking
+    // the initialize handshake before any malformed byte is ever emitted.
+    // emitRaw is an additional injection point feeding the same chain.
+    const consumers: Array<(chunk: Buffer) => void> = []
+    const child: LspChildHandle = {
+      ...base.child,
+      stdout: {
+        on(event: 'data', listener: (chunk: Buffer) => void) {
+          base.child.stdout.on(event, listener)
+          consumers.push(listener)
+        },
+      },
+    }
+    return {
+      ...base,
+      child,
+      emitRaw(chunk: Buffer) {
+        for (const consumer of consumers) consumer(chunk)
+      },
+    }
+  }
+
+  // The request promise travels several microtasks (withServer -> acquire ->
+  // connection.request) before send() registers it in the pending map and
+  // writes it to the peer. Emitting the malformed bytes only after the peer
+  // has received the request guarantees it is genuinely in flight, so the
+  // fail-closed teardown rejects it with 'crashed' rather than the request
+  // bouncing off the already-dead connection with 'stopped'.
+  async function waitUntilSent(peer: FakePeer, method: string): Promise<void> {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const sent = peer.received.some(
+        (body) => (JSON.parse(body) as { method?: string }).method === method,
+      )
+      if (sent) return
+    }
+    throw new Error(`peer never received '${method}'`)
+  }
+
+  test('a header block with no Content-Length fails closed, restarts, and never resynchronizes', async () => {
+    const events: Array<{ kind: string; reason?: string }> = []
+    const peer = makeRawPeer((message) =>
+      message.method === 'initialize'
+        ? { jsonrpc: '2.0', id: message.id as number, result: okInitialize }
+        : null,
+    )
+    const mux = createLspMultiplexer({
+      spawner: () => peer.child,
+      onEvent: (event) => events.push(event as { kind: string; reason?: string }),
+      requestTimeoutMs: 5_000,
+    })
+    // Warm the server so the initialize handshake completes.
+    await mux.syncFile({ filePath: '/proj/a.ts', version: 1, text: 'const x = 1' })
+
+    // Start an in-flight request the peer never answers, then push a malformed
+    // header block (no Content-Length) from the server's stdout.
+    const inFlight = mux.hover({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    await waitUntilSent(peer, 'textDocument/hover')
+    peer.emitRaw(
+      Buffer.from('Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n{}', 'utf8'),
+    )
+
+    const failure = await inFlight.then(
+      () => {
+        throw new Error('expected the in-flight request to reject')
+      },
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(LspServerError)
+    expect((failure as LspServerError).reason).toBe('crashed')
+    expect((failure as Error).message).toBe(
+      'LSP server died (malformed LSP header: missing Content-Length).',
+    )
+    // A crash (not a clean stop) fires a restart event.
+    expect(events.some((event) => event.kind === 'restart')).toBe(true)
+
+    // No resynchronization: bytes pushed after the teardown are never parsed
+    // as a frame. A valid-looking framed response injected now must not
+    // resolve anything or crash the process — the connection is dead.
+    const resurrect = frame(JSON.stringify({ jsonrpc: '2.0', id: 999, result: 'pwned' }))
+    peer.emitRaw(resurrect)
+    await mux.dispose()
+  })
+
+  test('an oversize Content-Length fails closed with invalid Content-Length', async () => {
+    const events: Array<{ kind: string; reason?: string }> = []
+    const peer = makeRawPeer((message) =>
+      message.method === 'initialize'
+        ? { jsonrpc: '2.0', id: message.id as number, result: okInitialize }
+        : null,
+    )
+    const mux = createLspMultiplexer({
+      spawner: () => peer.child,
+      onEvent: (event) => events.push(event as { kind: string; reason?: string }),
+      requestTimeoutMs: 5_000,
+    })
+    await mux.syncFile({ filePath: '/proj/a.ts', version: 1, text: 'const x = 1' })
+
+    const inFlight = mux.hover({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    await waitUntilSent(peer, 'textDocument/hover')
+    // A Content-Length past maxFrameBytes must fail closed, not buffer-wait.
+    peer.emitRaw(Buffer.from('Content-Length: 999999999999\r\n\r\n', 'utf8'))
+
+    const failure = await inFlight.then(
+      () => {
+        throw new Error('expected the in-flight request to reject')
+      },
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(LspServerError)
+    expect((failure as LspServerError).reason).toBe('crashed')
+    expect((failure as Error).message).toBe(
+      'LSP server died (invalid Content-Length 999999999999).',
+    )
+    expect(events.some((event) => event.kind === 'restart')).toBe(true)
+    await mux.dispose()
+  })
 })

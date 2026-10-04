@@ -1902,316 +1902,316 @@ export async function runPerfGuardsBaseline(
   await runCase12()
   await runCase13()
   console.log('')
-console.log('--- Evidence notes ---')
-console.log(
-  '  CASE 1-2, 4: before/after rows differ ONLY in RegExp construction timing',
-)
-console.log(
-  '     (per-call new RegExp vs module-level hoist / the shipped bounded',
-)
-console.log('     cachedRegExp memo); match work identical.')
-console.log(
-  '  CASE 3: before replays the whole carry buffer per chunk (quadratic); after',
-)
-console.log(
-  '     truncates the carry to the tag-tail window outside a call (identical totals).',
-)
-console.log(
-  '  CASE 3d: in-call payload replay — before re-concatenates and rescans the',
-)
-console.log(
-  '     whole accumulated payload per chunk (quadratic); after rescans only the',
-)
-console.log('     tag-tail window + the fresh chunk (identical totals).')
-console.log(
-  '  CASE 3b/3c (RF-1-41ffd2b0 cap evidence): 64KB maxToolCallBufferLength —',
-)
-console.log(
-  '     3b measures in-budget headroom (46KB call completes, 0 leaks); 3c the cap',
-)
-console.log(
-  '     engaging (114KB → 1 buffer-exceeded + silent discard) with the pre-budget',
-)
-console.log(
-  '     retain-and-rescan shape as the before row (outputs differ by design).',
-)
-console.log(
-  '  CASE 4c/4d (RF-1-41ffd2b0 cap evidence): MAX_JSON_CANDIDATES=32 — 4c measures',
-)
-console.log(
-  '     headroom (3 decoy braces + payload: 4 of 32 candidates, exact extraction);',
-)
-console.log(
-  '     4d the cap engaging (200 decoys: shipped candidate loop uncapped vs the',
-)
-console.log('     32-candidate budget, same outcome).')
-console.log(
-  '  CASE 5: parity + bounded-traversal row (the single-visited-set fix is correctness',
-)
-console.log(
-  "     hardening per its finding — 'structural hardening only', not a speedup): before",
-)
-console.log(
-  '     re-walks shared/cyclic nodes once per path under the depth>8 cap (exponential',
-)
-console.log(
-  '     in path levels); after memoizes the shallowest walk depth per object — arrays',
-)
-console.log(
-  '     included — and re-walks only on a strictly shallower reach (identical union,',
-)
-console.log(
-  '     <= 9 walks/object). Both rows run the shipped crediting layer over identical',
-)
-console.log(
-  '     payloads (like-for-like, RF-8), and the evidenced properties here are the',
-)
-console.log(
-  '     asserted union parity and the walk bound, not an isolated timing win — so no',
-)
-console.log('     speedup ratio is printed for this row.')
-console.log(
-  '  stream-buffer-unbounded-retained-text: the retention bound (flush at tool calls',
-)
-console.log(
-  '     and stream end) is structural and pinned by the tool-stream-parser suite;',
-)
-console.log('     CASE 3 measures the parse-side replay cost it complements.')
-console.log(
-  '  CASE 10 (RF diagnostic-capture-utf8-chunk-split): before decodes child output',
-)
-console.log(
-  '     per-chunk via chunk.toString() (splitting multibyte UTF-8 at chunk',
-)
-console.log(
-  '     boundaries) and caps by UTF-16 length; after runs the shipped',
-)
-console.log(
-  '     BoundedStreamCapture — raw-byte accumulation, ONE decode at stream end,',
-)
-console.log(
-  '     byte-exact cap. ASCII totals parity is asserted; the split-emoji decode',
-)
-console.log(
-  '     (10b) and byte-exact-cap (10c) contract checks run outside the timed',
-)
-console.log('     sections and CAN fail.')
-console.log(
-  '  CASE 11 (RF semgrep-availability-cache-unbounded / sync-versions-map-unbounded):',
-)
-console.log(
-  '     before is the pre-fix unbounded Map; after is the shipped bounded LRUCache',
-)
-console.log(
-  '     primitive the semgrep availability cache and the syncVersions map are built',
-)
-console.log(
-  '     on. Retention differs BY DESIGN (bounding the retention IS the cap), so no',
-)
-console.log(
-  '     speedup ratio is printed; the retention contract is asserted and can fail.',
-)
-console.log(
-  '  CASE 12 (RF snapshot-identity-serial-file-reads): before hashes each changed',
-)
-console.log(
-  "     file's stat + capped byte prefix strictly serially; after runs the shipped",
-)
-console.log(
-  '     hashIdentityFileBytes bounded read window (bounded in-flight reads,',
-)
-console.log(
-  '     contributions hashed in sorted order). Digest parity across the serial',
-)
-console.log(
-  '     shape, the interim map-then-join shape, and the shipped window is asserted',
-)
-console.log('     and can fail.')
-console.log(
-  '  CASE 12b (RF snapshot-identity-contributions-unbounded-retention): contract',
-)
-console.log(
-  '     row — the interim concurrency shape retained every per-file byte prefix',
-)
-console.log(
-  '     before hashing (changedFileCount × file-size retention); the shipped',
-)
-console.log(
-  '     window hashes each contribution as it settles, so retention is bounded',
-)
-console.log(
-  '     by the read window instead of the changed-file count. Retention differs',
-)
-console.log(
-  '     BY DESIGN (bounding the retention IS the cap), so no speedup ratio is',
-)
-console.log('     printed; digest parity is asserted and can fail.')
-console.log(
-  '  CASE 13 (RF diagnostic-runner-timeout-no-sigkill-escalation): contract row —',
-)
-console.log(
-  '     a SIGTERM-ignoring diagnostic child is reaped by the shipped SIGKILL',
-)
-console.log(
-  '     escalation near deadline + grace, while the pre-fix bare-kill shape held',
-)
-console.log(
-  '     it to its natural exit with live pipes. The columns bound different',
-)
-console.log(
-  '     failure modes BY DESIGN, so no ratio is printed; the reap-latency',
-)
-console.log("     contract is asserted against the child's real pid and can fail.")
-console.log(
-  '  Structural perf-tag attribution (guards whose property is pinned by their test',
-)
-console.log(
-  '     suite rather than timed here, per the stream-buffer precedent above):',
-)
-console.log(
-  '     scip-premerge-edge-accumulation — the merge-edge budget is consulted DURING',
-)
-console.log(
-  '       accumulation (runSingleIndexer + the batch budget in scip-runner.ts); the',
-)
-console.log(
-  '       over-cap retention bound is pinned by the scip-runner suite tests, so a',
-)
-console.log(
-  '       heap-spike timing row over a synthetic 256MiB dump would measure the',
-)
-console.log(
-  '       garbage collector, not the guard — attributed structurally instead.',
-)
-console.log(
-  '     scip-detection-probe-no-single-flight, scip-dump-json-parse-heap-spike,',
-)
-console.log(
-  '       lsp-coldstart-evict-overshoot, root-resolver-unmemoized-sync-walk-per-acquire,',
-)
-console.log(
-  '       symbol-enrichment-serial-hover-roundtrips, build-graph-spawnsync-blocking-new-tool-path,',
-)
-console.log(
-  '       sync-versions-map-unbounded, bundle-identity-unbounded-sync-io,',
-)
-console.log(
-  '       snapshot-identity-diff-capture-unbounded, identity-git-spawns-no-deadline —',
-)
-console.log(
-  '       concurrency/IO/process-seam guards whose property (bounded in-flight work,',
-)
-console.log(
-  '       bounded capture, non-blocking event loop) is pinned by the sdk/indexer test',
-)
-console.log(
-  '       suites; spawn-driven seams cannot be timed deterministically in CI, so they',
-)
-console.log(
-  '       are attributed structurally here instead of shipping fake numbers.',
-)
-console.log(
-  '       For symbol-enrichment-serial-hover-roundtrips specifically: the guarded',
-)
-console.log(
-  '       property is the bounded hover fan-out with index-aligned results (real',
-)
-console.log(
-  '       LSP round-trip latency is server- and machine-dependent), pinned by the',
-)
-console.log(
-  '       symbol-enrichment suite rather than a simulated-latency timing row.',
-)
-console.log('')
-console.log(
-  `All parity/contract assertions passed across ${rows.length} measured rows.`,
-)
-console.log(
-  'Parity rows compute identical before/after outputs; cap rows (3c, 4d) assert',
-)
-console.log(
-  "  the cap's contract on the shipped side (before/after outputs differ by design).",
-)
-console.log(
-  "  Speedup ratios print only for like-for-like rows; 'contract' rows (3c, 4d,",
-)
-console.log(
-  '  CASE 5, CASE 11, CASE 12b, CASE 13) print n/a — their columns measure',
-)
-console.log('  different work by design.')
-console.log(
-  '  Ratio stability (RF-13): every row prints min/max/MAD dispersion and each',
-)
-console.log(
-  '     speedup carries its min/max quotient envelope; envelopes spanning 1.0x',
-)
-console.log('     are marked within-noise and are not evidence of a speedup.')
-console.log(
-  '  X-2 CASE 6-9: absolute (after-only) timing rows on the shipped seams — no',
-)
-console.log(
-  '     before/after exists for these, so no speedup ratio is printed. CASE 6a/6b',
-)
-console.log(
-  '     make the 100k-char BPE cap visible (raw encode vs 20k-sample extrapolation);',
-)
-console.log(
-  '     CASE 6c (D12): ~5MB pathological estimator row — BPE stays bounded to the',
-)
-console.log(
-  '     20k-char sample (the body is never BPE-encoded), with a heterogeneous-density',
-)
-console.log(
-  '     accuracy check against a full-BPE ground-truth sibling body (a naive chars/3',
-)
-console.log(
-  '     estimator demonstrably misses it, so the check is falsifiable) and a <2s',
-)
-console.log(
-  '     boundedness guard against the >2min full-BPE CI stall.',
-)
-console.log(
-  '     CASE 7 measures the JS-side rg line parse only (rg spawn is I/O-bound and',
-)
-console.log(
-  '     machine-dependent, deliberately not measured); CASE 8 rows are attributed',
-)
-console.log(
-  '     "X-2a hot paths (D13)" — the indexer refresh loop stats real files, so its',
-)
-console.log(
-  '     two hot functions (assignDepths, getPostingCandidates) are measured directly;',
-)
-console.log(
-  "     CASE 8b's query workload engages the substring scan + MAX_POSTING_CANDIDATE_PATHS",
-)
-console.log(
-  '     bound (asserted: the union saturates the cap with exact-match paths added on',
-)
-console.log(
-  '     top per the superset-preservation guarantee), not just the exact-match path;',
-)
-console.log(
-  '     CASE 9 times the shipped parseStreamChunk seam over ~100KB in ~1KB chunks.',
-)
-console.log(
-  '  Manual-only X-2 rows (deliberately NOT measured here — they need a real',
-)
-console.log(
-  '     TUI/process and cannot run deterministically in CI; planned methods are',
-)
-console.log(
-  '     listed so the X-2 gate stays honest instead of shipping fake numbers):',
-)
-console.log(
-  '     TUI keystroke latency — scripted-keystroke p50/p99 keystroke-to-render',
-)
-console.log('       measured against the live Ink TUI in a real terminal;')
-console.log(
-  '     cold-start — CLI process spawn → first interactive prompt, warm vs cold',
-)
-console.log('     cache (process spawn timing is machine-dependent).')
-console.log(`Work checksum (defeats DCE): ${sink === 0 ? 0 : 1}`)
+  console.log('--- Evidence notes ---')
+  console.log(
+    '  CASE 1-2, 4: before/after rows differ ONLY in RegExp construction timing',
+  )
+  console.log(
+    '     (per-call new RegExp vs module-level hoist / the shipped bounded',
+  )
+  console.log('     cachedRegExp memo); match work identical.')
+  console.log(
+    '  CASE 3: before replays the whole carry buffer per chunk (quadratic); after',
+  )
+  console.log(
+    '     truncates the carry to the tag-tail window outside a call (identical totals).',
+  )
+  console.log(
+    '  CASE 3d: in-call payload replay — before re-concatenates and rescans the',
+  )
+  console.log(
+    '     whole accumulated payload per chunk (quadratic); after rescans only the',
+  )
+  console.log('     tag-tail window + the fresh chunk (identical totals).')
+  console.log(
+    '  CASE 3b/3c (RF-1-41ffd2b0 cap evidence): 64KB maxToolCallBufferLength —',
+  )
+  console.log(
+    '     3b measures in-budget headroom (46KB call completes, 0 leaks); 3c the cap',
+  )
+  console.log(
+    '     engaging (114KB → 1 buffer-exceeded + silent discard) with the pre-budget',
+  )
+  console.log(
+    '     retain-and-rescan shape as the before row (outputs differ by design).',
+  )
+  console.log(
+    '  CASE 4c/4d (RF-1-41ffd2b0 cap evidence): MAX_JSON_CANDIDATES=32 — 4c measures',
+  )
+  console.log(
+    '     headroom (3 decoy braces + payload: 4 of 32 candidates, exact extraction);',
+  )
+  console.log(
+    '     4d the cap engaging (200 decoys: shipped candidate loop uncapped vs the',
+  )
+  console.log('     32-candidate budget, same outcome).')
+  console.log(
+    '  CASE 5: parity + bounded-traversal row (the single-visited-set fix is correctness',
+  )
+  console.log(
+    "     hardening per its finding — 'structural hardening only', not a speedup): before",
+  )
+  console.log(
+    '     re-walks shared/cyclic nodes once per path under the depth>8 cap (exponential',
+  )
+  console.log(
+    '     in path levels); after memoizes the shallowest walk depth per object — arrays',
+  )
+  console.log(
+    '     included — and re-walks only on a strictly shallower reach (identical union,',
+  )
+  console.log(
+    '     <= 9 walks/object). Both rows run the shipped crediting layer over identical',
+  )
+  console.log(
+    '     payloads (like-for-like, RF-8), and the evidenced properties here are the',
+  )
+  console.log(
+    '     asserted union parity and the walk bound, not an isolated timing win — so no',
+  )
+  console.log('     speedup ratio is printed for this row.')
+  console.log(
+    '  stream-buffer-unbounded-retained-text: the retention bound (flush at tool calls',
+  )
+  console.log(
+    '     and stream end) is structural and pinned by the tool-stream-parser suite;',
+  )
+  console.log('     CASE 3 measures the parse-side replay cost it complements.')
+  console.log(
+    '  CASE 10 (RF diagnostic-capture-utf8-chunk-split): before decodes child output',
+  )
+  console.log(
+    '     per-chunk via chunk.toString() (splitting multibyte UTF-8 at chunk',
+  )
+  console.log(
+    '     boundaries) and caps by UTF-16 length; after runs the shipped',
+  )
+  console.log(
+    '     BoundedStreamCapture — raw-byte accumulation, ONE decode at stream end,',
+  )
+  console.log(
+    '     byte-exact cap. ASCII totals parity is asserted; the split-emoji decode',
+  )
+  console.log(
+    '     (10b) and byte-exact-cap (10c) contract checks run outside the timed',
+  )
+  console.log('     sections and CAN fail.')
+  console.log(
+    '  CASE 11 (RF semgrep-availability-cache-unbounded / sync-versions-map-unbounded):',
+  )
+  console.log(
+    '     before is the pre-fix unbounded Map; after is the shipped bounded LRUCache',
+  )
+  console.log(
+    '     primitive the semgrep availability cache and the syncVersions map are built',
+  )
+  console.log(
+    '     on. Retention differs BY DESIGN (bounding the retention IS the cap), so no',
+  )
+  console.log(
+    '     speedup ratio is printed; the retention contract is asserted and can fail.',
+  )
+  console.log(
+    '  CASE 12 (RF snapshot-identity-serial-file-reads): before hashes each changed',
+  )
+  console.log(
+    "     file's stat + capped byte prefix strictly serially; after runs the shipped",
+  )
+  console.log(
+    '     hashIdentityFileBytes bounded read window (bounded in-flight reads,',
+  )
+  console.log(
+    '     contributions hashed in sorted order). Digest parity across the serial',
+  )
+  console.log(
+    '     shape, the interim map-then-join shape, and the shipped window is asserted',
+  )
+  console.log('     and can fail.')
+  console.log(
+    '  CASE 12b (RF snapshot-identity-contributions-unbounded-retention): contract',
+  )
+  console.log(
+    '     row — the interim concurrency shape retained every per-file byte prefix',
+  )
+  console.log(
+    '     before hashing (changedFileCount × file-size retention); the shipped',
+  )
+  console.log(
+    '     window hashes each contribution as it settles, so retention is bounded',
+  )
+  console.log(
+    '     by the read window instead of the changed-file count. Retention differs',
+  )
+  console.log(
+    '     BY DESIGN (bounding the retention IS the cap), so no speedup ratio is',
+  )
+  console.log('     printed; digest parity is asserted and can fail.')
+  console.log(
+    '  CASE 13 (RF diagnostic-runner-timeout-no-sigkill-escalation): contract row —',
+  )
+  console.log(
+    '     a SIGTERM-ignoring diagnostic child is reaped by the shipped SIGKILL',
+  )
+  console.log(
+    '     escalation near deadline + grace, while the pre-fix bare-kill shape held',
+  )
+  console.log(
+    '     it to its natural exit with live pipes. The columns bound different',
+  )
+  console.log(
+    '     failure modes BY DESIGN, so no ratio is printed; the reap-latency',
+  )
+  console.log("     contract is asserted against the child's real pid and can fail.")
+  console.log(
+    '  Structural perf-tag attribution (guards whose property is pinned by their test',
+  )
+  console.log(
+    '     suite rather than timed here, per the stream-buffer precedent above):',
+  )
+  console.log(
+    '     scip-premerge-edge-accumulation — the merge-edge budget is consulted DURING',
+  )
+  console.log(
+    '       accumulation (runSingleIndexer + the batch budget in scip-runner.ts); the',
+  )
+  console.log(
+    '       over-cap retention bound is pinned by the scip-runner suite tests, so a',
+  )
+  console.log(
+    '       heap-spike timing row over a synthetic 256MiB dump would measure the',
+  )
+  console.log(
+    '       garbage collector, not the guard — attributed structurally instead.',
+  )
+  console.log(
+    '     scip-detection-probe-no-single-flight, scip-dump-json-parse-heap-spike,',
+  )
+  console.log(
+    '       lsp-coldstart-evict-overshoot, root-resolver-unmemoized-sync-walk-per-acquire,',
+  )
+  console.log(
+    '       symbol-enrichment-serial-hover-roundtrips, build-graph-spawnsync-blocking-new-tool-path,',
+  )
+  console.log(
+    '       sync-versions-map-unbounded, bundle-identity-unbounded-sync-io,',
+  )
+  console.log(
+    '       snapshot-identity-diff-capture-unbounded, identity-git-spawns-no-deadline —',
+  )
+  console.log(
+    '       concurrency/IO/process-seam guards whose property (bounded in-flight work,',
+  )
+  console.log(
+    '       bounded capture, non-blocking event loop) is pinned by the sdk/indexer test',
+  )
+  console.log(
+    '       suites; spawn-driven seams cannot be timed deterministically in CI, so they',
+  )
+  console.log(
+    '       are attributed structurally here instead of shipping fake numbers.',
+  )
+  console.log(
+    '       For symbol-enrichment-serial-hover-roundtrips specifically: the guarded',
+  )
+  console.log(
+    '       property is the bounded hover fan-out with index-aligned results (real',
+  )
+  console.log(
+    '       LSP round-trip latency is server- and machine-dependent), pinned by the',
+  )
+  console.log(
+    '       symbol-enrichment suite rather than a simulated-latency timing row.',
+  )
+  console.log('')
+  console.log(
+    `All parity/contract assertions passed across ${rows.length} measured rows.`,
+  )
+  console.log(
+    'Parity rows compute identical before/after outputs; cap rows (3c, 4d) assert',
+  )
+  console.log(
+    "  the cap's contract on the shipped side (before/after outputs differ by design).",
+  )
+  console.log(
+    "  Speedup ratios print only for like-for-like rows; 'contract' rows (3c, 4d,",
+  )
+  console.log(
+    '  CASE 5, CASE 11, CASE 12b, CASE 13) print n/a — their columns measure',
+  )
+  console.log('  different work by design.')
+  console.log(
+    '  Ratio stability (RF-13): every row prints min/max/MAD dispersion and each',
+  )
+  console.log(
+    '     speedup carries its min/max quotient envelope; envelopes spanning 1.0x',
+  )
+  console.log('     are marked within-noise and are not evidence of a speedup.')
+  console.log(
+    '  X-2 CASE 6-9: absolute (after-only) timing rows on the shipped seams — no',
+  )
+  console.log(
+    '     before/after exists for these, so no speedup ratio is printed. CASE 6a/6b',
+  )
+  console.log(
+    '     make the 100k-char BPE cap visible (raw encode vs 20k-sample extrapolation);',
+  )
+  console.log(
+    '     CASE 6c (D12): ~5MB pathological estimator row — BPE stays bounded to the',
+  )
+  console.log(
+    '     20k-char sample (the body is never BPE-encoded), with a heterogeneous-density',
+  )
+  console.log(
+    '     accuracy check against a full-BPE ground-truth sibling body (a naive chars/3',
+  )
+  console.log(
+    '     estimator demonstrably misses it, so the check is falsifiable) and a <2s',
+  )
+  console.log(
+    '     boundedness guard against the >2min full-BPE CI stall.',
+  )
+  console.log(
+    '     CASE 7 measures the JS-side rg line parse only (rg spawn is I/O-bound and',
+  )
+  console.log(
+    '     machine-dependent, deliberately not measured); CASE 8 rows are attributed',
+  )
+  console.log(
+    '     "X-2a hot paths (D13)" — the indexer refresh loop stats real files, so its',
+  )
+  console.log(
+    '     two hot functions (assignDepths, getPostingCandidates) are measured directly;',
+  )
+  console.log(
+    "     CASE 8b's query workload engages the substring scan + MAX_POSTING_CANDIDATE_PATHS",
+  )
+  console.log(
+    '     bound (asserted: the union saturates the cap with exact-match paths added on',
+  )
+  console.log(
+    '     top per the superset-preservation guarantee), not just the exact-match path;',
+  )
+  console.log(
+    '     CASE 9 times the shipped parseStreamChunk seam over ~100KB in ~1KB chunks.',
+  )
+  console.log(
+    '  Manual-only X-2 rows (deliberately NOT measured here — they need a real',
+  )
+  console.log(
+    '     TUI/process and cannot run deterministically in CI; planned methods are',
+  )
+  console.log(
+    '     listed so the X-2 gate stays honest instead of shipping fake numbers):',
+  )
+  console.log(
+    '     TUI keystroke latency — scripted-keystroke p50/p99 keystroke-to-render',
+  )
+  console.log('       measured against the live Ink TUI in a real terminal;')
+  console.log(
+    '     cold-start — CLI process spawn → first interactive prompt, warm vs cold',
+  )
+  console.log('     cache (process spawn timing is machine-dependent).')
+  console.log(`Work checksum (defeats DCE): ${sink === 0 ? 0 : 1}`)
   return [...rows]
 }
 

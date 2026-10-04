@@ -25,6 +25,7 @@ import type {
   LspPosition,
 } from './lsp-multiplexer'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { JSONValue } from '@codebuff/common/types/json'
 
 /**
  * P3-T2 (LI-01, Q2#5): language-intelligence service.
@@ -317,7 +318,9 @@ export function createLanguageIntelligence(
           type: 'json',
           value: {
             hover: {
-              contents: hover.contents as never,
+              // LSP hover contents (MarkupContent / MarkedString JSON) match
+              // the schema's jsonValueSchema — narrow to JSONValue, not never.
+              contents: hover.contents as JSONValue,
               ...(hover.range ? { range: hover.range } : {}),
             },
           },

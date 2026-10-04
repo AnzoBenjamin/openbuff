@@ -420,4 +420,143 @@ describe('build graph service', () => {
       targets: [{ name: 'web', root: '.' }],
     })
   })
+
+  // F4 regression pin (command-token whitelist, SAFE_COMMAND_TOKEN): manifest
+  // / tool-reported identifiers are attacker-controlled and are interpolated
+  // into testCommand/buildCommand strings. A token with a shell metacharacter
+  // must keep its target but OMIT the command fields (testCommand/buildCommand
+  // === undefined), never get interpolated into a runnable string.
+  test('omits rust commands for a cargo package name with shell metacharacters', () => {
+    const root = tempRoot()
+    writeFixture(root, 'Cargo.toml', '[package]\nname = "ws"\n')
+    const hostile = 'core; rm -rf /'
+    const runner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'cargo') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            packages: [
+              {
+                name: hostile,
+                manifest_path: path.join(root, 'crates', 'core', 'Cargo.toml'),
+                targets: [{ name: hostile, kind: ['lib'] }],
+              },
+            ],
+          }),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    const [resolution] = resolveOwningTargets({
+      cwd: root,
+      files: ['crates/core/src/lib.rs'],
+      runner,
+    })
+    // The target is kept (name/kind/root), but the hostile token is NOT
+    // interpolated into a command string.
+    expect(resolution.ecosystem).toBe('rust')
+    expect(resolution.targets).toHaveLength(1)
+    expect(resolution.targets[0].name).toBe(hostile)
+    expect(resolution.targets[0].kind).toBe('crate')
+    expect(resolution.targets[0].root).toBe('crates/core')
+    expect(resolution.targets[0].testCommand).toBeUndefined()
+    expect(resolution.targets[0].buildCommand).toBeUndefined()
+  })
+
+  test('omits rust commands for a cargo package name using command substitution', () => {
+    const root = tempRoot()
+    writeFixture(root, 'Cargo.toml', '[package]\nname = "ws"\n')
+    const hostile = 'core$(id)'
+    const runner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'cargo') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            packages: [
+              {
+                name: hostile,
+                manifest_path: path.join(root, 'crates', 'core', 'Cargo.toml'),
+                targets: [{ name: hostile, kind: ['lib'] }],
+              },
+            ],
+          }),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    const [resolution] = resolveOwningTargets({
+      cwd: root,
+      files: ['crates/core/src/lib.rs'],
+      runner,
+    })
+    expect(resolution.targets).toHaveLength(1)
+    expect(resolution.targets[0].name).toBe(hostile)
+    expect(resolution.targets[0].testCommand).toBeUndefined()
+    expect(resolution.targets[0].buildCommand).toBeUndefined()
+  })
+
+  test('omits go commands for a hostile go ImportPath', () => {
+    const root = tempRoot()
+    writeFixture(root, 'go.mod', 'module example.com/mymod\n\ngo 1.21\n')
+    const hostile = 'example.com/mymod; rm -rf /'
+    const runner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'go') {
+        const packages = [{ ImportPath: hostile, Dir: path.join(root, 'api') }]
+        return {
+          exitCode: 0,
+          stdout: packages.map((pkg) => JSON.stringify(pkg)).join('\n'),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    const [resolution] = resolveOwningTargets({
+      cwd: root,
+      files: ['api/server.go'],
+      runner,
+    })
+    expect(resolution.ecosystem).toBe('go')
+    expect(resolution.targets).toHaveLength(1)
+    expect(resolution.targets[0].name).toBe(hostile)
+    expect(resolution.targets[0].kind).toBe('package')
+    expect(resolution.targets[0].root).toBe('api')
+    expect(resolution.targets[0].testCommand).toBeUndefined()
+    expect(resolution.targets[0].buildCommand).toBeUndefined()
+  })
+
+  // Positive pin: the colon is allowed by the whitelist (Gradle project paths
+  // like ':libs:ui:test'); it is not a shell command separator. A gradle
+  // module path must still get its command strings.
+  test(
+    'keeps gradle commands for a colon-containing project path that passes the whitelist',
+    () => {
+      const root = tempRoot()
+      writeFixture(root, 'libs/ui/build.gradle.kts', '')
+      expect(
+        resolveOwningTargets({
+          cwd: root,
+          files: ['libs/ui/src/Main.kt'],
+          runner: failingRunner,
+        }),
+      ).toEqual([
+        {
+          file: 'libs/ui/src/Main.kt',
+          ecosystem: 'jvm',
+          targets: [
+            {
+              name: ':libs:ui',
+              kind: 'module',
+              root: 'libs/ui',
+              testCommand: 'gradle :libs:ui:test',
+              buildCommand: 'gradle :libs:ui:build',
+            },
+          ],
+          confidence: 'inferred',
+        },
+      ])
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
 })

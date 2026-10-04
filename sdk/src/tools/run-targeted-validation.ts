@@ -7,7 +7,6 @@ import {
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
-import type { SemgrepRunner } from '../services/semgrep-baseline'
 
 export async function runTargetedValidation(params: {
   cwd: string
@@ -24,13 +23,6 @@ export async function runTargetedValidation(params: {
    */
   diagnosticDelta?: DiagnosticDeltaHook
   workspaceState?: WorkspaceStateV1
-  /**
-   * Accepted for backward compatibility. Targeted validation no longer builds
-   * change-review bundles — both drift checks consult only the snapshotId via
-   * the identity-only path — so no semgrep scan is driven from here anymore;
-   * callers that need scanned findings use getChangeReviewBundle directly.
-   */
-  securityScanRunner?: SemgrepRunner
 }): Promise<CodebuffToolOutput<'run_targeted_validation'>> {
   const artifactKinds = params.artifactKinds ?? []
   // Snapshot identity only (perf: bundle-identity-unbounded-sync-io): both

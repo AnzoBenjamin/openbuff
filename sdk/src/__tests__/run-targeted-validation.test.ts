@@ -221,7 +221,6 @@ describe('runTargetedValidation', () => {
       snapshotId: bundleValue.snapshotId,
       files: ['app.py'],
       runHooks: async () => [{ type: 'json', value: [] }],
-      securityScanRunner,
     })
     expect(result[0]).toMatchObject({
       type: 'json',
