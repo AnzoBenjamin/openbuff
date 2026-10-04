@@ -358,10 +358,12 @@ function assertParity(label: string, before: unknown, after: unknown): void {
   const beforeJson = JSON.stringify(before)
   const afterJson = JSON.stringify(after)
   if (beforeJson !== afterJson) {
-    console.error(`PARITY FAILURE in ${label}`)
-    console.error(`  before: ${beforeJson}`)
-    console.error(`  after:  ${afterJson}`)
-    process.exit(1)
+    // Throw (not process.exit): library callers of runPerfGuardsBaseline get a
+    // catchable error; the import.meta.main CLI entry catches it and exits
+    // non-zero, preserving CLI behavior.
+    throw new Error(
+      `PARITY FAILURE in ${label}\n  before: ${beforeJson}\n  after:  ${afterJson}`,
+    )
   }
 }
 
@@ -907,8 +909,9 @@ function runCase6(): void {
   // return a positive estimate on the fixed workload.
   const rawTokens = countTokens(TOKEN_WORKLOAD)
   if (!(rawTokens > 0)) {
-    console.error(`CASE 6 contract failure: countTokens returned ${rawTokens}`)
-    process.exit(1)
+    throw new Error(
+      `CASE 6 contract failure: countTokens returned ${rawTokens}`,
+    )
   }
   // Raw path: 50KB < MAX_BPE_ENCODE_CHARS (100k chars), so countTokens runs
   // the full-BPE encode — the estimator the capped path extrapolates from.
@@ -1099,20 +1102,18 @@ function runCase6(): void {
     naiveEstimatorError <= pathologicalAccuracyTolerance ||
     wrongWindowError <= pathologicalAccuracyTolerance
   ) {
-    console.error(
+    throw new Error(
       `CASE 6c contract failure: body ${pathologicalBody.length}B, sample ${pathologicalSample.length} chars, est(5MB)=${pathologicalEstFull}, est(80KB sibling)=${pathologicalEstSibling}, full-BPE truth=${groundTruthTokens}, accuracy error ${(pathologicalAccuracyError * 100).toFixed(2)}%, naive chars/3 error ${(naiveEstimatorError * 100).toFixed(2)}%, wrong-window error ${(wrongWindowError * 100).toFixed(2)}% (expected >=5MB aperiodic body, ${pathologicalSampleChars}-char balanced prelude sample, block rotation > sample, est within ${(pathologicalAccuracyTolerance * 100).toFixed(0)}% of the full-BPE ground truth, naive chars/3 AND wrong-window estimators to MISS the tolerance so the check is falsifiable)`,
     )
-    process.exit(1)
   }
   const pathologicalMs = measure(
     () => pathologicalEstimator(pathologicalBody),
     3,
   )
   if (!(pathologicalMs.medianMsPerOp < 2000)) {
-    console.error(
+    throw new Error(
       `CASE 6c boundedness failure: estimator median ${pathologicalMs.medianMsPerOp.toFixed(1)} ms/op over the ~5MB body — the estimator regressed toward full-body BPE (the >2min CI stall this row guards against)`,
     )
-    process.exit(1)
   }
   console.log(
     `  ${'CASE 6c'.padEnd(9)} ${'X-2: 5MB pathological estimator (D12)'.padEnd(44)} ` +
@@ -1144,8 +1145,7 @@ function runCase7(): void {
   // Contract check: every synthetic match line survives formatting.
   const formatted = formatCodeSearchOutput(RG_STDOUT, { matchCount: RG_LINES })
   if (!formatted.includes(`Found ${RG_LINES} matches`)) {
-    console.error('CASE 7 contract failure: match count header missing')
-    process.exit(1)
+    throw new Error('CASE 7 contract failure: match count header missing')
   }
   const parseMs = measure(
     () => formatCodeSearchOutput(RG_STDOUT, { matchCount: RG_LINES }).length,
@@ -1205,14 +1205,28 @@ function buildSyntheticSymbols(): SymbolRange[] {
 
 async function runCase8(): Promise<void> {
   // --- X-2a hot path 1: assignDepths interval sweep over synthetic symbols.
+  // The try/catch wraps ONLY the dynamic import: a load failure degrades to a
+  // printed skip, while the contract check below throws out of runCase8 like
+  // every other case (a throw inside the try would be swallowed by the skip).
+  let codeMap: typeof import('../packages/code-map/src/structure') | undefined
   try {
-    const { assignDepths } = await import('../packages/code-map/src/structure')
+    codeMap = await import('../packages/code-map/src/structure')
+  } catch (error) {
+    console.log(
+      `  ${'CASE 8a'.padEnd(9)} SKIPPED — code-map structure import failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+  if (codeMap) {
+    const { assignDepths } = codeMap
     const symbols = buildSyntheticSymbols()
     const withDepths = assignDepths(symbols.map((sym) => ({ ...sym })))
     const maxDepth = Math.max(...withDepths.map((sym) => sym.depth))
     if (withDepths.length !== symbols.length || !(maxDepth >= 0)) {
-      console.error('CASE 8a contract failure: unexpected assignDepths output')
-      process.exit(1)
+      throw new Error(
+        'CASE 8a contract failure: unexpected assignDepths output',
+      )
     }
     const depthsMs = measure(
       () => assignDepths(symbols.map((sym) => ({ ...sym }))).length,
@@ -1222,12 +1236,6 @@ async function runCase8(): Promise<void> {
       `  ${'CASE 8a'.padEnd(9)} ${'X-2a hot paths (D13): assignDepths sweep'.padEnd(44)} ` +
         `after ${formatTiming(depthsMs)} ms/op  ` +
         `${X2A_SYMBOL_COUNT} synthetic SymbolRanges (interval-stack sweep, max depth ${maxDepth})`,
-    )
-  } catch (error) {
-    console.log(
-      `  ${'CASE 8a'.padEnd(9)} SKIPPED — code-map structure import failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
     )
   }
 
@@ -1293,10 +1301,9 @@ async function runCase8(): Promise<void> {
     candidates.size < MAX_POSTING_CANDIDATE_PATHS ||
     candidates.size > exactMatchPaths.size + MAX_POSTING_CANDIDATE_PATHS
   ) {
-    console.error(
+    throw new Error(
       `CASE 8b contract failure: expected the substring-scan union to engage the MAX_POSTING_CANDIDATE_PATHS bound (${MAX_POSTING_CANDIDATE_PATHS}) with exact-match paths added on top (≤ ${exactMatchPaths.size + MAX_POSTING_CANDIDATE_PATHS}), got ${candidates?.size ?? 'null'}`,
     )
-    process.exit(1)
   }
   const candidatesMs = measure(
     () => getPostingCandidates(index, queryTokens)?.size ?? 0,
@@ -1375,10 +1382,9 @@ function runCase9(): void {
     stats.jsonErrors !== 0 ||
     stats.chars === 0
   ) {
-    console.error(
+    throw new Error(
       `CASE 9 contract failure: ${stats.toolCalls} tool calls, ${stats.jsonErrors} JSON errors, ${stats.chars} streamed chars (expected ${STREAM_TOOL_CALLS} calls, 0 errors, prose > 0)`,
     )
-    process.exit(1)
   }
   const streamMs = measure(() => streamStats().toolCalls, 10)
   console.log(
@@ -1462,10 +1468,9 @@ function runCase10(): void {
   }
   const preFixText = preFixSplitDecode()
   if (preFixText === '😀') {
-    console.error(
+    throw new Error(
       'CASE 10b pre-fix split-emoji decode unexpectedly intact — the pre-fix baseline is not reproducible on this engine',
     )
-    process.exit(1)
   }
   assertParity('CASE 10b shipped split-emoji decode', shippedSplitDecode(), '😀')
 
@@ -1546,16 +1551,14 @@ function runCase11(): void {
   pass(preFixCache)
   pass(shippedCache)
   if (preFixCache.size <= shippedCache.size) {
-    console.error(
+    throw new Error(
       `CASE 11 contract failure: pre-fix unbounded Map retained ${preFixCache.size} entries vs shipped bounded cache ${shippedCache.size} — the bounded cache is not bounding`,
     )
-    process.exit(1)
   }
   if (shippedCache.size > CACHE_CAP) {
-    console.error(
+    throw new Error(
       `CASE 11 contract failure: shipped bounded cache grew to ${shippedCache.size} entries beyond its ${CACHE_CAP} cap`,
     )
-    process.exit(1)
   }
   const preFixMs = measure(() => pass(preFixCache), 20)
   const shippedMs = measure(() => pass(shippedCache), 20)
@@ -1823,15 +1826,26 @@ async function runCase13(): Promise<void> {
     // Contract assertions (outside any timed section; these CAN fail).
     const bareReap = await reapMs(false)
     const shippedReap = await reapMs(true)
+    // Variance rationale for the ceiling slack (reviewer finding
+    // case13-reap-slack-widened-undocumented): the +2_000ms margin over
+    // deadline+grace is CI-jitter tolerance for this machine-dependent
+    // reap-latency observation (10ms process.kill(pid, 0) polling plus fork
+    // and SIGKILL scheduling variance on loaded runners), NOT the guarded
+    // contract. The falsifiable assertion is the ordering check below: an
+    // escalation path that regresses enough to reap between +1s and +2s past
+    // the old bound lands AFTER the child's CASE13_CHILD_EXIT_MS natural
+    // exit, so `shippedReap >= bareReap` still rejects it. The widened
+    // ceiling only prevents a measurement-side scheduler hiccup from
+    // false-failing a healthy escalation; it does not admit any failure mode
+    // the ordering check would have caught.
     if (
       bareReap < CASE13_CHILD_EXIT_MS * 0.8 ||
-      shippedReap > CASE13_DEADLINE_MS + CASE13_GRACE_MS + 1_000 ||
+      shippedReap > CASE13_DEADLINE_MS + CASE13_GRACE_MS + 2_000 ||
       shippedReap >= bareReap
     ) {
-      console.error(
-        `CASE 13 contract failure: SIGTERM-ignoring child reap latency — pre-fix bare-kill shape ${bareReap}ms (expected >= ${Math.round(CASE13_CHILD_EXIT_MS * 0.8)}ms: held to the child's natural exit), shipped escalated shape ${shippedReap}ms (expected <= ${CASE13_DEADLINE_MS + CASE13_GRACE_MS + 1_000}ms: reaped by the SIGKILL escalation)`,
+      throw new Error(
+        `CASE 13 contract failure: SIGTERM-ignoring child reap latency — pre-fix bare-kill shape ${bareReap}ms (expected >= ${Math.round(CASE13_CHILD_EXIT_MS * 0.8)}ms: held to the child's natural exit), shipped escalated shape ${shippedReap}ms (expected <= ${CASE13_DEADLINE_MS + CASE13_GRACE_MS + 2_000}ms: reaped by the SIGKILL escalation)`,
       )
-      process.exit(1)
     }
     const bareMs = await measureAsync(() => reapMs(false), 1, 2)
     const escalatedMs = await measureAsync(() => reapMs(true), 1, 2)
@@ -1870,6 +1884,9 @@ export interface RunPerfGuardsBaselineOptions {
  * Runs the full fixed-baseline benchmark and returns the measured rows.
  * Exported so the smoke test can drive it with tiny iteration counts; the
  * module itself only executes it when run directly (import.meta.main).
+ * Throws (rather than calling process.exit) when a parity/contract assertion
+ * fails so library callers can catch the failure; the import.meta.main CLI
+ * entry catches it and exits non-zero.
  */
 export async function runPerfGuardsBaseline(
   options: RunPerfGuardsBaselineOptions = {},

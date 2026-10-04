@@ -263,21 +263,25 @@ export async function runCalibration(
   // OpenAI-family model it returns exactly OPENAI_TOKEN_FUDGE_FACTOR (1.0),
   // which is not itself exported from token-counter.ts.
   const fudgeFactor = tokenFudgeFactorForModel(ESTIMATOR_MODEL)
-  const workloads: WorkloadResult[] = []
-  for (const workload of CALIBRATION_WORKLOADS) {
-    const estimatorTokens = workload.estimate()
-    const providerTokens = await fetchProviderTokenCount(
-      workload.providerText,
-      apiKey,
-      fetchImpl,
-    )
-    workloads.push({
-      name: workload.name,
-      estimatorTokens,
-      providerTokens,
-      ratio: ratioForWorkload(estimatorTokens, providerTokens),
-    })
-  }
+  // The provider calls run in parallel (each injects its own fetch);
+  // Promise.all preserves CALIBRATION_WORKLOADS order in the resolved array,
+  // so the printed table keeps the fixed workload order.
+  const workloads: WorkloadResult[] = await Promise.all(
+    CALIBRATION_WORKLOADS.map(async (workload): Promise<WorkloadResult> => {
+      const estimatorTokens = workload.estimate()
+      const providerTokens = await fetchProviderTokenCount(
+        workload.providerText,
+        apiKey,
+        fetchImpl,
+      )
+      return {
+        name: workload.name,
+        estimatorTokens,
+        providerTokens,
+        ratio: ratioForWorkload(estimatorTokens, providerTokens),
+      }
+    }),
+  )
   const aggregateRatio = aggregateMeasuredRatio(
     workloads.map((workload) => workload.ratio),
   )
