@@ -11,6 +11,7 @@
 import {
   BRIDGE_LOGGER_MARKER,
   BRIDGE_MAX_MESSAGE_BYTES,
+  BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES,
   BRIDGE_MAX_STREAM_CHUNKS_BYTES,
   BRIDGE_METHODS,
   BRIDGE_SIGNAL_MARKER,
@@ -19,14 +20,17 @@ import {
   createBridgeWireMarker,
   BridgeProtocolError,
   createNdjsonLineReader,
+  createStreamTruncationErrorResult,
   encodeBridgeMessage,
   findNonRoundTripSafeResultPaths,
   isBridgeDateWireMarker,
+  isIncrementalStreamUnsupportedError,
   type BridgeMethod,
 } from '../bridge-protocol'
 import {
   buildSupervisedBridgeHandlers,
   MAX_CONCURRENT_BRIDGE_NOTIFIES,
+  MAX_CONCURRENT_BRIDGE_STREAMS,
   startParentBridgeServer,
   type ParentBridgeHandlers,
   type ParentBridgeServer,
@@ -359,10 +363,17 @@ describe('parent↔child bridge round-trip (P2-T8b)', () => {
   )
 
   it(
-    'promptAiSdkStream truncation: a valid stream past BRIDGE_MAX_STREAM_CHUNKS_BYTES truncates loudly (truncated: true) and still returns the result — never an oversized-reply socket destroy',
+    'LEGACY full-collection promptAiSdkStream stays BYTE-IDENTICAL (P2-T8c): a stream past BRIDGE_MAX_STREAM_CHUNKS_BYTES truncates (truncated: true) and still returns the result — driven through a PARTIAL table so the child wrapper exercises its REAL fallback',
     async () => {
       // 14 chunks of ~1 MiB each: aggregate 14 MiB > the 12 MiB budget, but
       // the single reply must still encode under the 16 MiB message cap.
+      // The REAL collectPromptStream runs UNCHANGED behind a PARTIAL handler
+      // table that supplies ONLY the legacy full-collection method (exactly
+      // the pre-incremental surface): the child wrapper first attempts the
+      // incremental start, receives the parent's structured missing-method
+      // error, and falls back through isIncrementalStreamUnsupportedError —
+      // so this one test pins BOTH the unchanged legacy truncation behavior
+      // AND the child's fallback wiring end-to-end.
       const chunkText = 'x'.repeat(1024 * 1024)
       const deps = {
         promptAiSdkStream: async function* () {
@@ -375,7 +386,12 @@ describe('parent↔child bridge round-trip (P2-T8b)', () => {
         fetch: globalThis.fetch,
         apiKey: 'test-key',
       } as unknown as SupervisedBridgeHandlerDeps
-      const bridge = await startBridge(buildSupervisedBridgeHandlers(deps))
+      const full = buildSupervisedBridgeHandlers(deps)
+      const partialTable: ParentBridgeHandlers = {
+        promptAiSdkStream: full.promptAiSdkStream,
+        trackEvent: full.trackEvent,
+      }
+      const bridge = await startBridge(partialTable)
       try {
         const childDeps = buildBridgedChildDeps(bridge.client)
         const generator = childDeps.promptAiSdkStream({} as never)
@@ -482,8 +498,18 @@ describe('parent↔child bridge round-trip (P2-T8b)', () => {
           bridgeNonce: table.bridgeNonce,
         })
         const generator = childDeps.promptAiSdkStream({} as never)
-        // Start consumption without awaiting: the bridged child stream only
-        // yields once the parent's FULL collection has returned.
+        // Drive the INCREMENTAL path: the first next() starts the stream and
+        // pulls exactly ONE provider chunk (chunk-1), suspending the provider
+        // generator at its first yield.
+        const first = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'first incremental chunk',
+        )
+        expect((first.value as { text?: string }).text).toBe('chunk-1')
+        // A second next() resumes the provider generator PAST the first yield
+        // (so consumedFirst flips) and parks it mid-chunk — this pull never
+        // resolves until close() tears the stream down.
         const pending = generator.next()
         pending.catch(() => {}) // closed-bridge rejection is expected, never unhandled
         await withTimeout(
@@ -1402,6 +1428,557 @@ describe('bridged Date params + result round-trip safety (serialization repair)'
       } finally {
         await bridge.teardown()
       }
+    },
+  )
+})
+
+describe('incremental promptAiSdkStream bridging (P2-T8c)', () => {
+  it('BRIDGE_METHODS carries the additive incremental stream methods (wire-safe append; the legacy full-collection entry is untouched)', () => {
+    expect(BRIDGE_METHODS).toContain('promptAiSdkStreamStart')
+    expect(BRIDGE_METHODS).toContain('promptAiSdkStreamNext')
+    expect(BRIDGE_METHODS).toContain('promptAiSdkStreamStop')
+    expect(BRIDGE_METHODS).toContain('promptAiSdkStream')
+    expect(BRIDGE_METHODS.indexOf('promptAiSdkStream')).toBeLessThan(
+      BRIDGE_METHODS.indexOf('promptAiSdkStreamStart'),
+    )
+  })
+
+  it('isIncrementalStreamUnsupportedError: matches ONLY the parent structured missing-method replies for promptAiSdkStreamStart/Next (the single fallback decision)', () => {
+    expect(
+      isIncrementalStreamUnsupportedError(
+        new Error(
+          'bridge method not supplied by the parent: promptAiSdkStreamStart',
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      isIncrementalStreamUnsupportedError(
+        new Error(
+          'bridge method not supplied by the parent: promptAiSdkStreamNext',
+        ),
+      ),
+    ).toBe(true)
+    // Any other structured failure is NOT a fallback trigger.
+    expect(
+      isIncrementalStreamUnsupportedError(
+        new Error(
+          'bridge method not supplied by the parent: requestToolCall',
+        ),
+      ),
+    ).toBe(false)
+    expect(
+      isIncrementalStreamUnsupportedError(
+        new Error(
+          'too many concurrent streams: the parent bridge incremental-stream registry is capped',
+        ),
+      ),
+    ).toBe(false)
+    expect(isIncrementalStreamUnsupportedError(new Error('boom'))).toBe(false)
+    expect(isIncrementalStreamUnsupportedError('raw string')).toBe(false)
+  })
+
+  it('createStreamTruncationErrorResult: a structured StreamTruncatedError-styled aborted PromptResult naming the per-reply budget (never a socket destroy)', () => {
+    const result = createStreamTruncationErrorResult('stream-1', 99)
+    expect(result).toMatchObject({ aborted: true })
+    expect((result as { reason?: string }).reason).toContain(
+      'StreamTruncatedError',
+    )
+    expect((result as { reason?: string }).reason).toContain(
+      String(BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES),
+    )
+  })
+
+  it(
+    'INCREMENTAL happy path: one start + one next per chunk — the child holds exactly ONE chunk while the parent has produced exactly one (no full collection), and the final PromptResult flows back',
+    async () => {
+      const producedOrder: string[] = []
+      let produced = 0
+      let gate: (() => void) | undefined
+      const gatePromise = new Promise<void>((resolve) => {
+        gate = resolve
+      })
+      const deps = {
+        promptAiSdkStream: async function* () {
+          produced += 1
+          producedOrder.push('chunk-1')
+          yield { type: 'text', text: 'chunk-1' }
+          // Park until the child's probe arrives: proves the provider was
+          // pulled lazily (one chunk per round trip), not fully collected
+          // the way the legacy path would.
+          await gatePromise
+          produced += 1
+          producedOrder.push('chunk-2')
+          yield { type: 'text', text: 'chunk-2' }
+          produced += 1
+          producedOrder.push('chunk-3')
+          yield { type: 'text', text: 'chunk-3' }
+          return { aborted: false, value: 'done' }
+        },
+        requestToolCall: async () => {
+          // Runs while the provider generator is parked after chunk 1.
+          expect(produced).toBe(1)
+          gate?.()
+          return null
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const bridge = await startBridge(table)
+      try {
+        const childDeps = buildBridgedChildDeps(bridge.client, {
+          bridgeNonce: table.bridgeNonce,
+        })
+        const generator = childDeps.promptAiSdkStream({} as never)
+        const chunks: string[] = []
+        for (;;) {
+          const next = await withTimeout(
+            generator.next(),
+            CALL_BUDGET_MS,
+            'incremental chunk delivery',
+          )
+          if (next.done) {
+            // The done reply carried the final PromptResult — the loop's
+            // result semantics are unchanged (never undefined).
+            expect((next.value as { value?: unknown }).value).toBe('done')
+            break
+          }
+          chunks.push((next.value as { text: string }).text)
+          if (chunks.length === 1) {
+            // While the child holds exactly ONE chunk, probe the parent: the
+            // provider must NOT have been fully collected (incremental pull).
+            await withTimeout(
+              childDeps.requestToolCall({ probe: 'incremental' } as never),
+              CALL_BUDGET_MS,
+              'incrementality probe',
+            )
+          }
+        }
+        expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+        expect(producedOrder).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+      } finally {
+        await bridge.teardown()
+      }
+    },
+  )
+
+  it(
+    'INCREMENTAL early return: the caller breaking out of the loop sends the best-effort promptAiSdkStreamStop and the parent tears the provider stream down exactly like the legacy cancelStream (finally runs + signal aborted)',
+    async () => {
+      let finallyRan = false
+      let providerSignalAborted = false
+      const deps = {
+        promptAiSdkStream: async function* (params: unknown) {
+          const signal = (params as { signal?: AbortSignal }).signal
+          signal?.addEventListener('abort', () => {
+            providerSignalAborted = true
+          })
+          try {
+            yield { type: 'text', text: 'chunk-1' }
+            yield { type: 'text', text: 'chunk-2' }
+            // Park like a provider stream blocked mid-chunk: only an
+            // explicit stop can tear this down.
+            await new Promise<never>((_, reject) => {
+              const onAbort = () => reject(new Error('provider stream aborted'))
+              if (signal?.aborted) onAbort()
+              else signal?.addEventListener('abort', onAbort, { once: true })
+            })
+            yield { type: 'text', text: 'never-delivered' }
+            return { aborted: false, value: 'done' }
+          } finally {
+            finallyRan = true
+          }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const bridge = await startBridge(table)
+      try {
+        const childDeps = buildBridgedChildDeps(bridge.client, {
+          bridgeNonce: table.bridgeNonce,
+        })
+        const generator = childDeps.promptAiSdkStream({} as never)
+        const first = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'first incremental chunk',
+        )
+        expect((first.value as { text?: string }).text).toBe('chunk-1')
+        const second = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'second incremental chunk',
+        )
+        expect((second.value as { text?: string }).text).toBe('chunk-2')
+        // The caller's early return/break: the wrapper's finally must send
+        // the best-effort stop, and the parent must tear the stream down.
+        await withTimeout(
+          generator.return(undefined as never),
+          CALL_BUDGET_MS,
+          'generator early return',
+        )
+        await withTimeout(
+          waitFor(
+            () => finallyRan && providerSignalAborted,
+            CALL_BUDGET_MS,
+            'provider teardown (finally + abort)',
+          ),
+          CALL_BUDGET_MS,
+          'provider teardown (finally + abort)',
+        )
+        expect(finallyRan).toBe(true)
+        expect(providerSignalAborted).toBe(true)
+      } finally {
+        await bridge.teardown()
+      }
+    },
+  )
+
+  it(
+    'INCREMENTAL oversized single chunk: the structured StreamTruncatedError-styled aborted result flows back and the socket stays usable — never an oversized-encode socket destroy',
+    async () => {
+      const oversizedText = 'x'.repeat(BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES + 1024)
+      const deps = {
+        promptAiSdkStream: async function* () {
+          yield { type: 'text', text: 'before-oversize' }
+          yield { type: 'text', text: oversizedText }
+          yield { type: 'text', text: 'never-delivered' }
+          return { aborted: false, value: 'done' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const bridge = await startBridge(table)
+      try {
+        const childDeps = buildBridgedChildDeps(bridge.client, {
+          bridgeNonce: table.bridgeNonce,
+        })
+        const generator = childDeps.promptAiSdkStream({} as never)
+        const first = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'chunk before oversize',
+        )
+        expect((first.value as { text?: string }).text).toBe(
+          'before-oversize',
+        )
+        const last = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'oversized chunk reply',
+        )
+        expect(last.done).toBe(true)
+        expect((last.value as { aborted?: boolean }).aborted).toBe(true)
+        expect((last.value as { reason?: string }).reason).toContain(
+          'StreamTruncatedError',
+        )
+        // The socket was never destroyed (the failure was encoded, not fatal):
+        // a fresh stream still round-trips through the SAME connection.
+        const generator2 = childDeps.promptAiSdkStream({} as never)
+        const again = await withTimeout(
+          generator2.next(),
+          CALL_BUDGET_MS,
+          'post-truncation socket health',
+        )
+        expect((again.value as { text?: string }).text).toBe('before-oversize')
+        await withTimeout(
+          generator2.return(undefined as never),
+          CALL_BUDGET_MS,
+          'post-truncation early return',
+        )
+      } finally {
+        await bridge.teardown()
+      }
+    },
+  )
+
+  it(
+    'ENVELOPE-OVERHEAD boundary: a chunk under the 16 MiB per-message cap but whose full reply line (envelope + {done:false,chunk}) would exceed it is probed as oversized and degrades to the structured StreamTruncatedError result — never an oversized-encode socket destroy',
+    async () => {
+      // The per-reply chunk cap reserves
+      // BRIDGE_STREAM_NEXT_REPLY_ENVELOPE_RESERVE_BYTES below the hard
+      // per-message cap, so a chunk sized BETWEEN the per-reply cap and the
+      // hard cap is exactly the boundary the old raw-chunk probe mishandled:
+      // it passed the probe (chunk < 16 MiB) but the full reply line
+      // (envelope + {done:false,chunk}) overflowed encodeBridgeMessage and
+      // destroyed the socket. It must now be probed oversized and degrade.
+      const boundaryText = 'x'.repeat(
+        BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES + 512,
+      )
+      // Sanity: the chunk itself still fits the hard per-message cap — the
+      // OLD probe would have admitted it (the exact divergence being fixed).
+      expect(
+        Buffer.byteLength(
+          JSON.stringify({ type: 'text', text: boundaryText }),
+          'utf8',
+        ),
+      ).toBeLessThan(BRIDGE_MAX_MESSAGE_BYTES)
+      const deps = {
+        promptAiSdkStream: async function* () {
+          yield { type: 'text', text: 'before-boundary' }
+          yield { type: 'text', text: boundaryText }
+          yield { type: 'text', text: 'never-delivered' }
+          return { aborted: false, value: 'done' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const bridge = await startBridge(table)
+      try {
+        const childDeps = buildBridgedChildDeps(bridge.client, {
+          bridgeNonce: table.bridgeNonce,
+        })
+        const generator = childDeps.promptAiSdkStream({} as never)
+        const first = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'chunk before boundary',
+        )
+        expect((first.value as { text?: string }).text).toBe('before-boundary')
+        const last = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'boundary chunk reply',
+        )
+        expect(last.done).toBe(true)
+        expect((last.value as { aborted?: boolean }).aborted).toBe(true)
+        expect((last.value as { reason?: string }).reason).toContain(
+          'StreamTruncatedError',
+        )
+        // The socket was never destroyed: a fresh stream still round-trips
+        // through the SAME connection.
+        const generator2 = childDeps.promptAiSdkStream({} as never)
+        const again = await withTimeout(
+          generator2.next(),
+          CALL_BUDGET_MS,
+          'post-boundary socket health',
+        )
+        expect((again.value as { text?: string }).text).toBe('before-boundary')
+        await withTimeout(
+          generator2.return(undefined as never),
+          CALL_BUDGET_MS,
+          'post-boundary early return',
+        )
+      } finally {
+        await bridge.teardown()
+      }
+    },
+  )
+
+  it(
+    'registry boundedness (in-process): the 257th start gets the structured too-many-concurrent-streams error, the cancelInFlightStreams drain empties the registry, and a finished stream is removed (stop reports stopped: false)',
+    async () => {
+      const deps = {
+        promptAiSdkStream: async function* () {
+          yield { type: 'text', text: 'chunk' }
+          return { aborted: false, value: 'done' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const start = table.promptAiSdkStreamStart as (
+        params: unknown,
+      ) => Promise<{ streamId: string }>
+      const next = table.promptAiSdkStreamNext as (
+        params: unknown,
+      ) => Promise<{ done: boolean; result?: unknown }>
+      const stop = table.promptAiSdkStreamStop as (
+        params: unknown,
+      ) => Promise<{ stopped: boolean }>
+      // Fill the registry to its cap: a child that keeps starting streams
+      // without consuming or stopping them cannot grow it further.
+      for (let i = 0; i < MAX_CONCURRENT_BRIDGE_STREAMS; i++) {
+        await withTimeout(start({}), CALL_BUDGET_MS, `registry fill ${i}`)
+      }
+      const outcome = await settleWithin(start({}), CALL_BUDGET_MS)
+      expect(outcome.kind).toBe('rejected')
+      if (outcome.kind !== 'rejected') return
+      expect(String((outcome.error as Error).message)).toContain(
+        'too many concurrent streams',
+      )
+      // The close()-time drain (the SAME cancelInFlightStreams hook the
+      // bridge server's close() probes structurally) empties the registry:
+      // a start succeeds again afterwards. This is the boundedness backstop
+      // for a child that never stops and never finishes its streams.
+      table.cancelInFlightStreams()
+      const revived = await withTimeout(
+        start({}),
+        CALL_BUDGET_MS,
+        'post-drain start',
+      )
+      expect(typeof revived.streamId).toBe('string')
+      // A stream consumed to done is removed from the registry (hygiene (a)):
+      // a stop afterwards reports stopped: false — nothing left to tear down.
+      await withTimeout(
+        next({ streamId: revived.streamId }),
+        CALL_BUDGET_MS,
+        'consume chunk',
+      )
+      const finished = await withTimeout(
+        next({ streamId: revived.streamId }),
+        CALL_BUDGET_MS,
+        'consume done',
+      )
+      expect(finished.done).toBe(true)
+      expect((finished.result as { value?: unknown }).value).toBe('done')
+      const stoppedAfterDone = await withTimeout(
+        stop({ streamId: revived.streamId }),
+        CALL_BUDGET_MS,
+        'stop after done',
+      )
+      expect((stoppedAfterDone as { stopped: boolean }).stopped).toBe(false)
+      // Leave nothing behind.
+      table.cancelInFlightStreams()
+    },
+  )
+
+  it(
+    'registry hygiene (in-process): an explicit stop tears the provider stream down exactly like the legacy cancelStream (abort + iterator.return), reports stopped: true once, and a second stop is a no-op',
+    async () => {
+      let finallyRan = false
+      let providerSignalAborted = false
+      const deps = {
+        promptAiSdkStream: async function* (params: unknown) {
+          const signal = (params as { signal?: AbortSignal }).signal
+          signal?.addEventListener('abort', () => {
+            providerSignalAborted = true
+          })
+          try {
+            yield { type: 'text', text: 'chunk-1' }
+            await new Promise<never>((_, reject) => {
+              const onAbort = () => reject(new Error('provider stream aborted'))
+              if (signal?.aborted) onAbort()
+              else signal?.addEventListener('abort', onAbort, { once: true })
+            })
+            yield { type: 'text', text: 'never-delivered' }
+            return { aborted: false, value: 'done' }
+          } finally {
+            finallyRan = true
+          }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const start = table.promptAiSdkStreamStart as (
+        params: unknown,
+      ) => Promise<{ streamId: string }>
+      const next = table.promptAiSdkStreamNext as (
+        params: unknown,
+      ) => Promise<{ done: boolean }>
+      const stop = table.promptAiSdkStreamStop as (
+        params: unknown,
+      ) => Promise<{ stopped: boolean }>
+      const { streamId } = await withTimeout(start({}), CALL_BUDGET_MS, 'start')
+      await withTimeout(next({ streamId }), CALL_BUDGET_MS, 'first chunk')
+      const stopped = await withTimeout(
+        stop({ streamId }),
+        CALL_BUDGET_MS,
+        'explicit stop',
+      )
+      expect((stopped as { stopped: boolean }).stopped).toBe(true)
+      await withTimeout(
+        waitFor(
+          () => finallyRan && providerSignalAborted,
+          CALL_BUDGET_MS,
+          'stop-time provider teardown',
+        ),
+        CALL_BUDGET_MS,
+        'stop-time provider teardown',
+      )
+      expect(finallyRan).toBe(true)
+      expect(providerSignalAborted).toBe(true)
+      // The entry is gone: a second stop is a no-op, never a crash.
+      const stoppedAgain = await withTimeout(
+        stop({ streamId }),
+        CALL_BUDGET_MS,
+        'second stop',
+      )
+      expect((stoppedAgain as { stopped: boolean }).stopped).toBe(false)
+    },
+  )
+
+  it(
+    'child wrapper fallback: a partial table (no incremental methods) makes the wrapper fall back to the LEGACY full-collection call — chunks + result with BYTE-IDENTICAL semantics, and no stop is ever sent',
+    async () => {
+      const calls: BridgeMethod[] = []
+      const stubClient: ChildBridgeClient = {
+        call: async (method) => {
+          calls.push(method)
+          if (method === 'promptAiSdkStreamStart') {
+            throw new Error(
+              'bridge method not supplied by the parent: promptAiSdkStreamStart',
+            )
+          }
+          if (method === 'promptAiSdkStream') {
+            return {
+              chunks: [
+                { type: 'text', text: 'legacy-1' },
+                { type: 'text', text: 'legacy-2' },
+              ],
+              result: { aborted: false, value: 'legacy-done' },
+            }
+          }
+          throw new Error(`unexpected call: ${method}`)
+        },
+        notify: () => {},
+        close: () => {},
+        onClose: () => {},
+      }
+      const deps = buildBridgedChildDeps(stubClient)
+      const generator = deps.promptAiSdkStream({} as never)
+      const chunks: string[] = []
+      for (;;) {
+        const next = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'fallback-path chunk delivery',
+        )
+        if (next.done) {
+          expect((next.value as { value?: unknown }).value).toBe('legacy-done')
+          break
+        }
+        chunks.push((next.value as { text: string }).text)
+      }
+      expect(chunks).toEqual(['legacy-1', 'legacy-2'])
+      // Exactly one start attempt + the legacy call; no stop (nothing was
+      // ever started).
+      expect(calls).toEqual(['promptAiSdkStreamStart', 'promptAiSdkStream'])
+    },
+  )
+
+  it(
+    'child wrapper fail-closed: a done reply WITHOUT a result (the unknown/stale-streamId wire marker) rejects loudly instead of returning an undefined PromptResult',
+    async () => {
+      const stubClient: ChildBridgeClient = {
+        call: async (method) => {
+          if (method === 'promptAiSdkStreamStart') return { streamId: 'stream-1' }
+          if (method === 'promptAiSdkStreamNext') return { done: true }
+          if (method === 'promptAiSdkStreamStop') return { stopped: true }
+          throw new Error(`unexpected call: ${method}`)
+        },
+        notify: () => {},
+        close: () => {},
+        onClose: () => {},
+      }
+      const deps = buildBridgedChildDeps(stubClient)
+      const generator = deps.promptAiSdkStream({} as never)
+      const outcome = await settleWithin(generator.next(), CALL_BUDGET_MS)
+      expect(outcome.kind).toBe('rejected')
+      if (outcome.kind !== 'rejected') return
+      expect(String((outcome.error as Error).message)).toContain(
+        'ended without a result',
+      )
     },
   )
 })

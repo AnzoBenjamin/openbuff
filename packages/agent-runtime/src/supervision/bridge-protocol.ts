@@ -23,7 +23,20 @@
  * are dropped and the reply carries `truncated: true`, which the child logs
  * LOUDLY on stderr — a valid long stream truncates loudly instead of
  * overflowing the reply cap and settling a 'crashed' receipt the in-process
- * path could never produce. Child→parent DISPLAY streaming still flows
+ * path could never produce.
+ *
+ * STREAMING, INCREMENTAL (P2-T8c): `promptAiSdkStreamStart` /
+ * `promptAiSdkStreamNext` / `promptAiSdkStreamStop` bridge the SAME prompt
+ * stream INCREMENTALLY — the parent keeps a bounded per-server registry of
+ * started generators and each `next` round trip carries EXACTLY ONE chunk, so
+ * no aggregation (and none of the full-collection truncation budget) is ever
+ * needed; the per-reply cap is {@link BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES} and
+ * a provably-oversized single chunk degrades into the structured
+ * StreamTruncatedError-styled abort result
+ * ({@link createStreamTruncationErrorResult}), never a socket destroy. The
+ * legacy full-collection `promptAiSdkStream` method stays BYTE-IDENTICAL and
+ * remains the fallback when a partial handler table does not supply the new
+ * methods (see {@link isIncrementalStreamUnsupportedError}). Child→parent DISPLAY streaming still flows
  * incrementally via the fire-and-forget `sendSubagentChunk` /
  * `handleStepsLogChunk` RPCs. Those notifications carry a dedicated bounded
  * budget on the parent (MAX_CONCURRENT_BRIDGE_NOTIFIES, separate from
@@ -82,6 +95,7 @@ import type {
   StreamChunk,
 } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import { promptAborted } from '@codebuff/common/util/error'
 import type { PromptResult } from '@codebuff/common/util/error'
 
 /**
@@ -134,6 +148,13 @@ export const BRIDGE_METHODS = [
   'addAgentStep',
   'fetchAgentFromDatabase',
   'consumeCreditsWithFallback',
+  // P2-T8c: INCREMENTAL promptAiSdkStream bridging. Appending to this array
+  // is wire-safe for server/client (both read the same source). The legacy
+  // full-collection `promptAiSdkStream` above stays unchanged; these new
+  // methods pull one chunk per round trip so per-reply messages stay small.
+  'promptAiSdkStreamStart',
+  'promptAiSdkStreamNext',
+  'promptAiSdkStreamStop',
 ] as const
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number]
@@ -146,6 +167,41 @@ export function isBridgeMethod(value: unknown): value is BridgeMethod {
 
 /** Per-message size cap: 16 MiB, both directions. */
 export const BRIDGE_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
+
+/**
+ * Headroom reserved for the INCREMENTAL `promptAiSdkStreamNext` reply
+ * ENVELOPE — the `{ id, ok, result }` wrapper plus the `{ done:false, chunk }`
+ * result object and the trailing newline — so the per-reply chunk budget below
+ * stays strictly UNDER {@link BRIDGE_MAX_MESSAGE_BYTES}. The real envelope is
+ * only ~70 bytes (a short `rpc-<n>` id plus fixed JSON structure); 4 KiB is a
+ * generous over-reserve that keeps the probe's accounting robust against id
+ * growth and future envelope fields while staying negligible against 16 MiB.
+ */
+export const BRIDGE_STREAM_NEXT_REPLY_ENVELOPE_RESERVE_BYTES = 4 * 1024
+
+/**
+ * Per-reply budget for the INCREMENTAL promptAiSdkStream bridging
+ * (`promptAiSdkStreamStart` / `promptAiSdkStreamNext` /
+ * `promptAiSdkStreamStop`, P2-T8c). Each `next` reply carries at most ONE
+ * chunk, so the aggregate full-collection truncation budget
+ * {@link BRIDGE_MAX_STREAM_CHUNKS_BYTES} is NOT applied here — a budget over
+ * a multi-chunk aggregate is meaningless when replies are per-chunk. This
+ * constant DOCUMENTS the per-reply cap contract: the reply LINE (the
+ * `{ id, ok, result:{ done:false, chunk } }` envelope plus newline) must fit
+ * {@link BRIDGE_MAX_MESSAGE_BYTES} (16 MiB), so the CHUNK itself is bounded by
+ * that cap MINUS {@link BRIDGE_STREAM_NEXT_REPLY_ENVELOPE_RESERVE_BYTES} — the
+ * envelope overhead the raw chunk size would otherwise ignore. A single chunk
+ * provably past this cap is answered with the structured
+ * StreamTruncatedError-styled prompt-failure result
+ * ({@link createStreamTruncationErrorResult}), never an oversized-encode
+ * socket destroy that would settle a valid run as 'crashed'. Keeping the cap
+ * strictly under the per-message cap mirrors
+ * {@link BRIDGE_MAX_STREAM_CHUNKS_BYTES}: the reply path's
+ * `encodeBridgeMessage` can never throw 'oversized' for a chunk this probe
+ * admitted.
+ */
+export const BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES =
+  BRIDGE_MAX_MESSAGE_BYTES - BRIDGE_STREAM_NEXT_REPLY_ENVELOPE_RESERVE_BYTES
 
 /**
  * Byte budget for the parent-side collected `promptAiSdkStream` chunk
@@ -307,6 +363,77 @@ export function createNdjsonLineReader(options: {
       onLine(line)
     }
   }
+}
+
+// ── Incremental promptAiSdkStream bridging (P2-T8c) ───────────────────────
+
+/** Parameters of the incremental `promptAiSdkStreamStart` bridge method. */
+export type PromptAiSdkStreamStartParams = PromptAiSdkStreamParams
+
+/** Parameters of the incremental `promptAiSdkStreamNext` bridge method. */
+export type PromptAiSdkStreamNextParams = { streamId: string }
+
+/** Parameters of the incremental `promptAiSdkStreamStop` bridge method. */
+export type PromptAiSdkStreamStopParams = { streamId: string }
+
+/** Success result of `promptAiSdkStreamStart`. */
+export type PromptAiSdkStreamStartResult = { streamId: string }
+
+/**
+ * Result of `promptAiSdkStreamNext`:
+ *  - `{ done: false, chunk }` — one chunk per round trip (small reply);
+ *  - `{ done: true, result }` — the provider finished; the PromptResult is
+ *    included and the stream is removed from the parent registry;
+ *  - `{ done: true, result: <StreamTruncatedError-styled prompt failure> }` —
+ *    a single oversized chunk could not encode (practically impossible): the
+ *    failure is a STRUCTURED error-shaped reply, never a socket destroy.
+ */
+export type PromptAiSdkStreamNextResult =
+  | { done: false; chunk: StreamChunk }
+  | { done: true; result?: PromptResult<string | null> }
+
+/**
+ * PromptResult-styled failure returned for a SINGLE incremental-stream chunk
+ * that could not encode within the per-reply cap (practically impossible for
+ * AI SDK StreamChunks; the pre-encode probe is the backstop). The wording
+ * carries the StreamTruncatedError naming convention so reviewers see the
+ * shared contract with the legacy full-collection budget: an oversized stream
+ * DEGRADES LOUDLY into a structured abort failure the child surfaces, never a
+ * silent drop and never an oversized-encode socket destroy.
+ */
+export function createStreamTruncationErrorResult(
+  streamId: string,
+  chunkBytes: number,
+): PromptResult<string | null> {
+  return promptAborted(
+    `StreamTruncatedError: incremental bridged stream ${streamId} dropped a single chunk serializing to ${chunkBytes} bytes, past the ${BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES}-byte per-message cap; the remaining chunks were not delivered`,
+  )
+}
+
+/**
+ * SELF-CONTAINED fallback-decision helper for the incremental promptAiSdkStream
+ * path (P2-T8c). The child wrapper calls `promptAiSdkStreamStart` first; when
+ * the parent's handler table is PARTIAL (it does not supply the new methods —
+ * e.g. raw dep tables in tests / the plain bridge harness), dispatch answers
+ * with the parent's structured
+ * `bridge method not supplied by the parent: <method>` failure reply, and the
+ * wrapper must fall back to the LEGACY full-collection `promptAiSdkStream`
+ * call (exact pre-incremental behavior). This helper is the single decision
+ * rule shared by both retries (start-missing and next-missing) so there is no
+ * second lookup path; exported so it is directly unit-testable against both
+ * structured reply shapes.
+ *
+ * A table that supplies start but not next is the pathological partial case:
+ * the child wrapper also stops the started stream (best-effort) before falling
+ * back, so no registry entry leaks (see child-bridge-client.ts).
+ */
+export function isIncrementalStreamUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return (
+    message.startsWith('bridge method not supplied by the parent:') &&
+    (message.includes('promptAiSdkStreamStart') ||
+      message.includes('promptAiSdkStreamNext'))
+  )
 }
 
 // ── Wire markers for non-serializable param members ────────────────────────

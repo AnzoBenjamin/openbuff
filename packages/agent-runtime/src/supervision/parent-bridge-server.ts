@@ -24,6 +24,16 @@
  * {@link SupervisedBridgeHandlerTable.cancelInFlightStreams}), kills in-flight
  * handler promises with a typed {@link BridgeClosedError} and unlinks the
  * socket file.
+ *
+ * P2-T8c INCREMENTAL streams: `promptAiSdkStreamStart` / `promptAiSdkStreamNext`
+ * / `promptAiSdkStreamStop` bridge the prompt stream chunk-by-chunk (one chunk
+ * per reply — no aggregation, none of the legacy full-collection truncation
+ * budget) through a per-server registry bounded by
+ * {@link MAX_CONCURRENT_BRIDGE_STREAMS}; every entry registers its teardown in
+ * the SAME activeStreamCancels set, so close()'s existing
+ * cancelInFlightStreams probe drains unfinished incremental streams alongside
+ * the legacy collectors (no second kill path). The legacy full-collection
+ * `promptAiSdkStream` handler is UNCHANGED.
  */
 import { unlinkSync } from 'node:fs'
 import * as net from 'node:net'
@@ -35,9 +45,11 @@ import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 import {
   BRIDGE_CLOSE_ID,
   BRIDGE_MAX_STREAM_CHUNKS_BYTES,
+  BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES,
   BridgeClosedError,
   createBridgeStderrLogger,
   createNdjsonLineReader,
+  createStreamTruncationErrorResult,
   encodeBridgeMessage,
   findNonRoundTripSafeResultPaths,
   isBridgeDateWireMarker,
@@ -51,7 +63,12 @@ import {
   type Logger,
   type PromptAiSdkFn,
   type PromptAiSdkStreamFn,
+  type PromptAiSdkStreamNextParams,
+  type PromptAiSdkStreamNextResult,
   type PromptAiSdkStreamParams,
+  type PromptAiSdkStreamStartParams,
+  type PromptAiSdkStreamStartResult,
+  type PromptAiSdkStreamStopParams,
   type PromptAiSdkStructuredFn,
   type SendActionFn,
   type TrackEventFn,
@@ -59,6 +76,8 @@ import {
 import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contracts/billing'
 import type { HandleStepsLogChunkFn, RequestFilesFn, RequestMcpToolDataFn, RequestOptionalFileFn, RequestToolCallFn, SendSubagentChunkFn } from '@codebuff/common/types/contracts/client'
 import type { AddAgentStepFn, FetchAgentFromDatabaseFn, FinishAgentRunFn, StartAgentRunFn } from '@codebuff/common/types/contracts/database'
+import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type { PromptResult as PromptResultType } from '@codebuff/common/util/error'
 
 /** Bound on concurrently in-flight REQUEST handler invocations; beyond it
  * requests get a structured 'bridge_busy' error reply (fail-closed, no
@@ -75,6 +94,38 @@ export const MAX_CONCURRENT_BRIDGE_REQUESTS = 64
  * stderr — saturation is never a silent drop of the display stream.
  */
 export const MAX_CONCURRENT_BRIDGE_NOTIFIES = 128
+
+/**
+ * Bounded cap on the per-server incremental stream registry
+ * (`promptAiSdkStreamStart`, P2-T8c). A child that keeps starting streams
+ * without consuming or stopping them cannot grow the registry past this bound:
+ * an overflow start request gets the structured 'too many concurrent streams'
+ * error reply (the child wrapper throws it through the generator). Registry
+ * entries are removed when a stream finishes (`next` → done, which includes
+ * the final PromptResult), on an explicit `promptAiSdkStreamStop` (which tears
+ * the provider iterator down exactly like the legacy cancelStream), or when
+ * the server's close() runs (close() drains this registry through
+ * cancelInFlightStreams-style teardown). A child that never calls stop and
+ * whose stream never ends must still be bounded: the cap above + forced
+ * close() (the supervisor's crash/deadline path) is that bound.
+ */
+export const MAX_CONCURRENT_BRIDGE_STREAMS = 256
+
+/** One entry of the incremental-stream registry (see
+ * MAX_CONCURRENT_BRIDGE_STREAMS). Fields are NEVER serialized. */
+export type IncrementalStreamEntry = {
+  /** Provider iterator started by the start handler. */
+  iterator: AsyncGenerator<StreamChunk, PromptResultType<string | null>, void>
+  /** Per-stream AbortController, aborted when the stream is torn down. */
+  abort: AbortController
+  /** Cancel bookkeeping for the close() drain (see cancelInFlightStreams). */
+  cancel: () => void
+  /** Reserved-bytes slot from the design's registry shape ({ id, iterator,
+   * reservedBytes }): the incremental path aggregates NOTHING (each reply is
+   * one chunk, capped by BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES), so this stays 0
+   * — the legacy full-collection budget never applies to these entries. */
+  readonly reservedBytes: number
+}
 
 /**
  * Handler table: a partial record keyed by the bridged method names, with
@@ -533,9 +584,170 @@ export function buildSupervisedBridgeHandlers(
     }
   }
 
+  // ── Incremental promptAiSdkStream bridging (P2-T8c) ──────────────────────
+  // Per-server registry of started-but-unfinished incremental streams:
+  // BOUNDED by MAX_CONCURRENT_BRIDGE_STREAMS (a child that keeps starting
+  // streams without consuming/stopping them cannot grow it past that bound —
+  // overflow starts get the structured 'too many concurrent streams' error
+  // reply), and drained ON close() by the shared cancelInFlightStreams hook
+  // below. Entries are NEVER serialized; ids come from realIdGen.uuid()
+  // (P2-T1: already the bridgeNonce source — monotonic-enough correlation ids,
+  // authority comes from the owner-only sandbox socket, not id secrecy).
+  const incrementalStreams = new Map<string, IncrementalStreamEntry>()
+
+  const tearStreamDown = (entry: IncrementalStreamEntry): void => {
+    // Exactly the legacy cancelStream teardown: abort the per-stream signal
+    // so a provider blocked mid-chunk stops producing (spend stops), and
+    // `return()` runs the generator's finally blocks exactly like the
+    // consumer's early return on the in-process path. Teardown rejections
+    // (e.g. a provider throwing in its finally) are dropped silently: the
+    // caller's reply is already settled and a bridge must never crash on
+    // teardown.
+    entry.abort.abort()
+    const returned = entry.iterator.return?.(undefined as never)
+    if (returned) returned.catch(() => {})
+  }
+
+  const buildStreamParams = (
+    params: PromptAiSdkStreamStartParams,
+    streamAbort: AbortController,
+  ): PromptAiSdkStreamStartParams =>
+    ({
+      ...(rehydrateParams(params, logger, bridgeNonce) as Record<
+        string,
+        unknown
+      >),
+      apiKey: deps.apiKey,
+      sendAction: deps.sendAction,
+      trackEvent: deps.trackEvent,
+      logger,
+      signal: streamAbort.signal,
+    } as unknown as PromptAiSdkStreamStartParams)
+
+  const handleIncrementalStreamStart = async (
+    params: PromptAiSdkStreamStartParams,
+  ): Promise<PromptAiSdkStreamStartResult> => {
+    if (incrementalStreams.size >= MAX_CONCURRENT_BRIDGE_STREAMS) {
+      throw new Error(
+        `too many concurrent streams: the parent bridge's incremental-stream registry is capped at ${MAX_CONCURRENT_BRIDGE_STREAMS} entries`,
+      )
+    }
+    const streamAbort = new AbortController()
+    const iterator = deps
+      .promptAiSdkStream(buildStreamParams(params, streamAbort))
+      [Symbol.asyncIterator]()
+    const streamId = realIdGen.uuid()
+    const cancel = (): void => {
+      incrementalStreams.delete(streamId)
+      activeStreamCancels.delete(cancel)
+      tearStreamDown({ iterator, abort: streamAbort, cancel, reservedBytes: 0 })
+    }
+    incrementalStreams.set(streamId, {
+      iterator,
+      abort: streamAbort,
+      cancel,
+      reservedBytes: 0,
+    })
+    activeStreamCancels.add(cancel)
+    return { streamId }
+  }
+
+  const handleIncrementalStreamNext = async (
+    params: PromptAiSdkStreamNextParams,
+  ): Promise<PromptAiSdkStreamNextResult> => {
+    const entry = incrementalStreams.get(params.streamId)
+    if (!entry) {
+      // Unknown stream: stale id (already finished/consumed) or a stop was
+      // already honored. A stream-finished semantic is the least surprising
+      // structured answer for a wrapper that polled once past the end.
+      return { done: true }
+    }
+    let next: IteratorResult<StreamChunk, PromptResultType<string | null>>
+    try {
+      next = await entry.iterator.next()
+    } catch (error) {
+      // The provider iterator threw: remove the entry (nothing left to
+      // consume or stop) and surface the failure as a structured error reply
+      // (never a crash, never a silent drop).
+      incrementalStreams.delete(params.streamId)
+      activeStreamCancels.delete(entry.cancel)
+      throw error instanceof Error ? error : new Error(String(error))
+    }
+    if (next.done) {
+      // The stream finished: the final reply CARRIES the PromptResult (the
+      // loop's final result flows back exactly like today — see the Risks
+      // note: never return undefined for an aborted/prompt result) and the
+      // registry entry is removed (nothing left to stop or consume).
+      incrementalStreams.delete(params.streamId)
+      activeStreamCancels.delete(entry.cancel)
+      // NOTE: unlike the legacy collectPromptStream, the incremental path
+      // never needs a truncation budget: each reply is ONE chunk.
+      return { done: true, result: next.value }
+    }
+    // Per-reply cap contract (reviewer-facing; see
+    // bridge-protocol.ts BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES): the reply is a
+    // ONE-chunk message whose FULL line is the `{ id, ok, result:{ done:false,
+    // chunk } }` envelope plus a newline. The per-reply cap is the hard
+    // BRIDGE_MAX_MESSAGE_BYTES MINUS the envelope reserve, so a chunk this
+    // probe admits always leaves room for the wrapper and the reply-path
+    // encodeBridgeMessage can never throw 'oversized'. The pre-encode probe
+    // below is the backstop: for a chunk whose JSON serialization provably
+    // exceeds the per-reply cap (practically impossible for AI SDK
+    // StreamChunks) we must NOT let encodeBridgeMessage throw in the reply
+    // path (that destroys the socket and settles a valid run as 'crashed').
+    // Instead: remove the registry entry (nothing left to consume) and answer
+    // with a structured StreamTruncatedError-styled failure reply — the
+    // socket stays usable and the degraded stream is LOUD, never a silent
+    // drop.
+    const chunk = next.value
+    let chunkBytes: number
+    try {
+      chunkBytes = Buffer.byteLength(JSON.stringify(chunk) ?? '', 'utf8')
+    } catch {
+      chunkBytes = Number.POSITIVE_INFINITY
+    }
+    if (!Number.isFinite(chunkBytes) || chunkBytes > BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES) {
+      incrementalStreams.delete(params.streamId)
+      activeStreamCancels.delete(entry.cancel)
+      // Registry hygiene: the truncated stream is ENDED from the child's
+      // perspective, so tear the provider iterator down (abort + return) —
+      // never leave a suspended generator buffering with no consumer.
+      tearStreamDown(entry)
+      return {
+        done: true,
+        result: createStreamTruncationErrorResult(
+          params.streamId,
+          Number.isFinite(chunkBytes) ? chunkBytes : -1,
+        ),
+      }
+    }
+    return { done: false, chunk }
+  }
+
+  const handleIncrementalStreamStop = (
+    params: PromptAiSdkStreamStopParams,
+  ): { stopped: boolean } => {
+    const entry = incrementalStreams.get(params.streamId)
+    if (!entry) return { stopped: false }
+    incrementalStreams.delete(params.streamId)
+    activeStreamCancels.delete(entry.cancel)
+    // Registry hygiene: STOP tears the provider stream down exactly like the
+    // legacy cancelStream (iterator.return(undefined as never) + abort) so a
+    // caller's early break/return stops provider spend like the in-process
+    // consumer-early-return teardown.
+    tearStreamDown(entry)
+    return { stopped: true }
+  }
+
   const handlers: ParentBridgeHandlers = {
     promptAiSdkStream: (params) =>
       collectPromptStream(params as PromptAiSdkStreamParams),
+    promptAiSdkStreamStart: (params) =>
+      handleIncrementalStreamStart(params as PromptAiSdkStreamStartParams),
+    promptAiSdkStreamNext: (params) =>
+      handleIncrementalStreamNext(params as PromptAiSdkStreamNextParams),
+    promptAiSdkStreamStop: (params) =>
+      handleIncrementalStreamStop(params as PromptAiSdkStreamStopParams),
     promptAiSdk: (params) =>
       deps.promptAiSdk({
         ...(rehydrateParams(params, logger, bridgeNonce) as Record<string, unknown>),
@@ -665,6 +877,15 @@ export function buildSupervisedBridgeHandlers(
   // collision-proof sentinel), and the in-flight stream cancel hook rides
   // alongside it so the bridge server's close() can tear down the provider
   // iterators a killed collector would otherwise keep consuming.
+  //
+  // INCREMENTAL streams (P2-T8c) drain through the SAME hook: every
+  // incrementalStreams entry registers its cancel in activeStreamCancels, so
+  // close()'s existing cancelInFlightStreams probe (a structural check on the
+  // returned table — no NEW kill path) tears down every unfinished incremental
+  // stream (abort + iterator.return) alongside the legacy collectors, and
+  // removes them from the registry. A pending in-flight promptAiSdkStreamNext
+  // request is a normal handler invocation: close()'s existing
+  // BridgeClosedError kill path settles its reply — no second kill path here.
   return {
     ...handlers,
     bridgeNonce,

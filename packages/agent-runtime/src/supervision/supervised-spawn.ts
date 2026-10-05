@@ -47,6 +47,50 @@
  * avoids statically importing parent-bridge-server.ts at all — the table
  * construction (and the bridge module it pulls: node:net,
  * zod-from-json-schema) is evaluated only on the flag-on spawn path.
+ *
+ * P2-T8c RESTART POLICY (optional third `options` argument): when
+ * `options.restart` is supplied, a RESTARTABLE crash — `outcome ===
+ * 'crashed'` whose `crashReason` is a transport-level failure
+ * ('spawn_failed', 'internal_error', or 'nonzero_exit' WITHOUT a valid
+ * receipt envelope) — triggers a bounded number of FULL-seam restarts with
+ * exponential backoff: each restart sleeps
+ * `backoffMs * backoffMultiplier ** (attempt - 1)` (defaults 250ms, ×2),
+ * fires the optional `onRestart({ attempt, crashReason })` observer with the
+ * 1-based restart number and the PREVIOUS attempt's crash reason, then
+ * re-runs the WHOLE seam body with the SAME original request — a FRESH
+ * mkdtemp sandbox, a FRESH bridge server on a FRESH socket, a FRESH request
+ * file. The finally (bridge close + sandbox removal) runs PER ATTEMPT, never
+ * once overall. Once `maxAttempts` restarts are exhausted, the LAST settled
+ * result is returned unchanged (it already carries the crash reason). NOT
+ * restartable — the loop ends immediately and the settled result is returned
+ * as-is:
+ *  - `timeout`: the wall-clock deadline is authoritative; restarting would
+ *    double the time budget,
+ *  - `nonzero_exit` WITH a valid receipt envelope
+ *    (`result.receipt !== undefined`): an agent-level failure, not a
+ *    transport crash,
+ *  - a free-form `crashReason` (e.g. the non-JSON-serializable request
+ *    crash below): a deterministic input bug retrying cannot fix,
+ *  - every non-crashed outcome (ok / missing_output / schema_invalid /
+ *    truncated).
+ *
+ * Honest budget note: each attempt receives a FRESH full
+ * `request.timeoutMs` deadline — the restart policy multiplies the
+ * worst-case wall-clock spend (up to maxAttempts + 1 full deadlines); it
+ * does NOT share or shave one deadline across attempts. Child-crash state
+ * note: the child may have partially applied work before crashing, but tool
+ * handlers execute PARENT-side atomically via the SDK mutation broker — the
+ * broker's journal guarantees no partial commits, so a crashed child cannot
+ * leave half-applied file edits behind.
+ *
+ * Guardrails: `maxAttempts` is REQUIRED (no default — callers opt into the
+ * bound explicitly, so nobody gets silent unbounded retries) and must be a
+ * finite number >= 0; 0 makes the policy inert (single spawn, zero
+ * restarts), and invalid values degrade to 0 rather than retrying
+ * unboundedly. `backoffMs` / `backoffMultiplier` clamp to their defaults
+ * when non-finite or negative. The backoff sleep is injectable for
+ * fault-injection tests via the TEST-ONLY `options._scheduleRestart`
+ * (default: a plain `setTimeout`-backed sleep).
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -54,8 +98,12 @@ import { join } from 'node:path'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import type { SettledSubagentResult } from '@codebuff/common/types/contracts/agent-runtime'
 import type {
+  SettledSubagentResult,
+  SupervisedRestartPolicy,
+} from '@codebuff/common/types/contracts/agent-runtime'
+import type {
+  SpawnSettledSubagentParams,
   SupervisedChildEnvSeed,
   SupervisedSpawnRequest,
 } from './process-supervisor'
@@ -64,6 +112,16 @@ import type {
   ParentBridgeServer,
   SupervisedBridgeHandlerTable,
 } from './parent-bridge-server'
+
+/**
+ * P2-T8c: the restart policy CONTRACT is declared in common's
+ * dependency-free agent-runtime contracts and merely re-exported here, so
+ * callers typing a policy against this seam never need a second import
+ * site.
+ */
+export type {
+  SupervisedRestartPolicy,
+} from '@codebuff/common/types/contracts/agent-runtime'
 
 /** The seam `SubagentContextParams.spawnSupervised` expects. */
 export type SpawnSupervisedFn = (
@@ -83,6 +141,177 @@ export type ParentBridgeHandlersSource =
   | (() => ParentBridgeHandlers | Promise<ParentBridgeHandlers>)
 
 /**
+ * P2-T8c: additive third-parameter options for
+ * {@link buildDefaultSpawnSupervised}. Everything is optional; when
+ * `restart` is omitted the seam keeps its single-spawn behavior byte for
+ * byte (one spawn, no sleeps, no restart bookkeeping, no wrapper).
+ */
+export interface SupervisedSpawnOptions {
+  /**
+   * Opt-in restart policy (P2-T8c) — the contract is
+   * {@link SupervisedRestartPolicy} in common's dependency-free agent-runtime
+   * contracts, re-exported from this module. See that type for what counts
+   * as a restartable crash; on a restartable crash the seam re-runs the
+   * WHOLE body (fresh sandbox / socket / request file) with the SAME
+   * original request and returns the LAST settled result once the budget is
+   * exhausted.
+   */
+  restart?: SupervisedRestartPolicy
+  /**
+   * P2-T8c, TEST-ONLY: injectable restart-backoff sleep, awaited with the
+   * computed delay between a restartable crash and the next attempt so a
+   * fault-injection test can prove bounded exponential backoff without real
+   * wall-clock waits. Defaults to a plain `setTimeout`-backed sleep (the
+   * Bun.sleep equivalent). Production callers must not pass it.
+   */
+  _scheduleRestart?: (delayMs: number) => Promise<void>
+  /**
+   * P2-T8c, TEST-ONLY: injectable replacement for the dynamically imported
+   * `spawnSettledSubagent` (process-supervisor.ts), used by a
+   * fault-injection test to drive the per-attempt settled-outcome SEQUENCE
+   * without spawning a real child process. Defaults to the real dynamically
+   * imported `spawnSettledSubagent`; production callers must not pass it, and
+   * when absent the per-attempt body is byte-identical to today.
+   */
+  _spawnSettledSubagent?: (
+    params: SpawnSettledSubagentParams,
+  ) => Promise<SettledSubagentResult>
+}
+
+/** P2-T8c defaults: the FIRST restart waits 250ms, growing ×2 per restart. */
+const RESTART_DEFAULT_BACKOFF_MS = 250
+const RESTART_DEFAULT_BACKOFF_MULTIPLIER = 2
+
+/**
+ * P2-T8c: the ONLY crash reasons a restart can plausibly fix — the
+ * transport-level crash names the supervisor settles with: `spawn_failed`
+ * (the child never started), `internal_error` (the parent-side transport/
+ * bridge machinery), and `nonzero_exit` WITHOUT a receipt envelope (the
+ * child process died before settling an agent-level result). Everything
+ * else settles as-is: `timeout` (the wall-clock deadline is authoritative —
+ * restarting would double the budget), any free-form `crashReason` (e.g.
+ * the non-JSON-serializable request crash — a deterministic input bug),
+ * `nonzero_exit` WITH a receipt (an agent-level, settled failure), and
+ * every non-crashed outcome.
+ */
+const RESTARTABLE_CRASH_REASONS: ReadonlySet<string> = new Set([
+  'spawn_failed',
+  'internal_error',
+  'nonzero_exit',
+])
+
+/**
+ * The caller policy with contract-optional members resolved to their
+ * defaults — or `undefined` when the policy is ABSENT or INERT (effective
+ * maxAttempts 0), in which case the seam returns its single-attempt closure
+ * directly.
+ */
+interface NormalizedRestartPolicy {
+  maxAttempts: number
+  backoffMs: number
+  backoffMultiplier: number
+  onRestart?: (info: { attempt: number; crashReason: string }) => void
+}
+
+/**
+ * P2-T8c: normalize + guard the caller-supplied policy. Fail-closed: a
+ * missing, non-finite, or negative `maxAttempts` degrades to 0 (policy
+ * inert — a single spawn, NEVER unbounded retries), fractional attempts
+ * floor, and non-finite / negative backoff scalars clamp to their defaults.
+ */
+function normalizeRestartPolicy(
+  policy: SupervisedRestartPolicy | undefined,
+): NormalizedRestartPolicy | undefined {
+  if (policy === undefined || typeof policy !== 'object') {
+    return undefined
+  }
+  const rawMaxAttempts: unknown = policy.maxAttempts
+  const maxAttempts =
+    typeof rawMaxAttempts === 'number' &&
+    Number.isFinite(rawMaxAttempts) &&
+    rawMaxAttempts >= 0
+      ? Math.floor(rawMaxAttempts)
+      : 0
+  if (maxAttempts === 0) {
+    // maxAttempts 0: policy inert — identical behavior to omitting restart.
+    return undefined
+  }
+  return {
+    maxAttempts,
+    backoffMs: clampBackoffScalar(
+      policy.backoffMs,
+      RESTART_DEFAULT_BACKOFF_MS,
+    ),
+    backoffMultiplier: clampBackoffScalar(
+      policy.backoffMultiplier,
+      RESTART_DEFAULT_BACKOFF_MULTIPLIER,
+    ),
+    onRestart:
+      typeof policy.onRestart === 'function' ? policy.onRestart : undefined,
+  }
+}
+
+/** Guards one backoff scalar against non-finite / negative junk (→ default). */
+function clampBackoffScalar(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return fallback
+  }
+  return value
+}
+
+/**
+ * P2-T8c: wall-clock delay before the `attempt`-th restart (1-based):
+ * `backoffMs * backoffMultiplier ** (attempt - 1)` — the FIRST restart
+ * waits exactly `backoffMs`. Capped at Number.MAX_SAFE_INTEGER because
+ * `setTimeout(Infinity)` fires IMMEDIATELY (a huge multiplier blowing past
+ * the safe range would silently drop the backoff; the attempt bound, not
+ * the delay, is what bounds total wall-clock cost).
+ */
+function computeRestartDelayMs(
+  policy: NormalizedRestartPolicy,
+  attempt: number,
+): number {
+  const rawDelay = policy.backoffMs * policy.backoffMultiplier ** (attempt - 1)
+  if (!Number.isFinite(rawDelay) || rawDelay > Number.MAX_SAFE_INTEGER) {
+    return Number.MAX_SAFE_INTEGER
+  }
+  return Math.max(0, rawDelay)
+}
+
+/**
+ * P2-T8c: the DEFAULT restart-backoff sleep — a plain wall-clock
+ * `setTimeout` wait (the `await Bun.sleep(delayMs)` equivalent); replaced
+ * by the test-only `options._scheduleRestart` in fault-injection tests.
+ */
+const defaultRestartSleeper = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, delayMs)
+  })
+
+/**
+ * P2-T8c: a settled result is RESTARTABLE only when it is a TRANSPORT-level
+ * crash: `outcome === 'crashed'`, NO valid receipt envelope (an envelope
+ * means the agent settled real work — that failure is agent-level, not a
+ * transport crash a respawn could fix), and a `crashReason` in
+ * {@link RESTARTABLE_CRASH_REASONS}. The predicate narrows `crashReason`
+ * to string so the restart loop can report it without a cast.
+ */
+function isRestartableCrash(
+  result: SettledSubagentResult,
+): result is SettledSubagentResult & { crashReason: string } {
+  if (result.outcome !== 'crashed') {
+    return false
+  }
+  if (result.receipt !== undefined) {
+    return false
+  }
+  return (
+    typeof result.crashReason === 'string' &&
+    RESTARTABLE_CRASH_REASONS.has(result.crashReason)
+  )
+}
+
+/**
  * Builds the default supervised-spawn seam. `seed` is the env allowlist
  * source — pass the explicitly-resolved credential values (never a wholesale
  * ambient env copy).
@@ -95,12 +324,27 @@ export type ParentBridgeHandlersSource =
  * started on a Unix socket INSIDE the sandbox before the child is spawned,
  * `rpcSocketPath` is added to the serialized request, and the server is
  * ALWAYS closed in the finally block.
+ *
+ * P2-T8c: `options` additionally carries the opt-in restart policy
+ * ({@link SupervisedSpawnOptions.restart}) and the test-only backoff seeder
+ * ({@link SupervisedSpawnOptions._scheduleRestart}); see the module
+ * docblock's P2-T8c section. Omitting `options` (or `options.restart`)
+ * preserves today's exact single-spawn behavior.
  */
 export function buildDefaultSpawnSupervised(
   seed: SupervisedChildEnvSeed = {},
   handlers?: ParentBridgeHandlersSource,
+  options?: SupervisedSpawnOptions,
 ): SpawnSupervisedFn {
-  return async (request) => {
+  // P2-T8c: ONE full seam attempt — lazy supervisor load, fresh 0700
+  // mkdtemp sandbox, (optional) bridge server on a fresh socket, fresh
+  // request file, spawn + settle — with ALL of its finally cleanup (bridge
+  // close + sandbox removal) running PER ATTEMPT, so a restart re-acquires a
+  // fresh sandbox/socket/request file and can never reuse (or leak) an
+  // earlier attempt's. This closure alone IS the flags-off seam.
+  const runSettledAttempt = async (
+    request: SupervisedSpawnRequest,
+  ): Promise<SettledSubagentResult> => {
     // Lazy on purpose: the supervisor module (Bun.spawn, the receipt schema
     // imports it pulls, and the env allowlist builder included) is evaluated
     // only when the flag is actually on — this dynamic import is the
@@ -170,6 +414,9 @@ export function buildDefaultSpawnSupervised(
       // must settle a structured 'crashed' result exactly like any other
       // spawn failure — never an uncaught throw across the spawnSupervised
       // seam (the in-process path cannot throw here).
+      // P2-T8c: this crash is intentionally NON-restartable — its
+      // crashReason is free-form (a deterministic input bug in the caller's
+      // request), so respawning with the same request could never fix it.
       let serializedRequest: string
       try {
         serializedRequest = JSON.stringify(wireRequest)
@@ -186,8 +433,13 @@ export function buildDefaultSpawnSupervised(
           stderrTail: '',
         }
       }
+      // P2-T8c TEST-ONLY: a fault-injection test may inject the spawn via
+      // options._spawnSettledSubagent; production uses the dynamically
+      // imported real one (byte-identical when the hook is absent).
+      const spawnSettled =
+        options?._spawnSettledSubagent ?? spawnSettledSubagent
       writeFileSync(requestPath, serializedRequest, { mode: 0o600 })
-      return await spawnSettledSubagent({
+      return await spawnSettled({
         childModulePath: join(
           dirname(fileURLToPath(import.meta.url)),
           'child-entry.ts',
@@ -213,5 +465,47 @@ export function buildDefaultSpawnSupervised(
       // removal cleans up both.
       rmSync(sandboxCwd, { recursive: true, force: true })
     }
+  }
+
+  // P2-T8c: the restart policy is OPT-IN — when `restart` is absent, or
+  // inert after normalization (invalid or explicit maxAttempts 0), the
+  // single-attempt closure IS the seam: one spawn, no sleeps, no loop, no
+  // wrapper overhead — byte-identical to the pre-P2-T8c behavior.
+  const policy = normalizeRestartPolicy(options?.restart)
+  if (!policy) {
+    return runSettledAttempt
+  }
+
+  // Test-injectable backoff sleep (see SupervisedSpawnOptions._scheduleRestart).
+  const scheduleRestart =
+    typeof options?._scheduleRestart === 'function'
+      ? options._scheduleRestart
+      : defaultRestartSleeper
+
+  // P2-T8c bounded RESTART loop. attemptNumber counts RESTARTS, 1-based:
+  // maxAttempts 0 never reaches this loop (inert policies normalize away),
+  // and maxAttempts 2 means up to 3 total spawns. Per restart, in order:
+  // (1) sleep `backoffMs * backoffMultiplier ** (attemptNumber - 1)` — the
+  // backoff happens BEFORE the next attempt, so the final crash within the
+  // budget settles with no trailing sleep; (2) fire the optional
+  // onRestart({ attempt, crashReason }) observer with the previous crash;
+  // (3) re-run the WHOLE seam body with the SAME original request. Any
+  // result that is not a restartable crash (or an exhausted budget) returns
+  // the LAST settled result UNCHANGED — it already carries the crash
+  // reason. An attempt that THROWS (e.g. a failed bridge bind) is not a
+  // crash: the rejection propagates exactly as in the flags-off seam.
+  return async (request) => {
+    let result = await runSettledAttempt(request)
+    let attemptNumber = 0
+    while (attemptNumber < policy.maxAttempts && isRestartableCrash(result)) {
+      attemptNumber += 1
+      await scheduleRestart(computeRestartDelayMs(policy, attemptNumber))
+      policy.onRestart?.({
+        attempt: attemptNumber,
+        crashReason: result.crashReason,
+      })
+      result = await runSettledAttempt(request)
+    }
+    return result
   }
 }

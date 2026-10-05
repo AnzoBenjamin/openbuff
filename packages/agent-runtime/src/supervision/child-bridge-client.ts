@@ -32,6 +32,7 @@ import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contra
 import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
 import type { SendActionFn } from '@codebuff/common/types/contracts/client'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
+import type { PromptResult as PromptResultType } from '@codebuff/common/util/error'
 
 import {
   BRIDGE_CLOSE_ID,
@@ -46,6 +47,7 @@ import {
   encodeBridgeMessage,
   isBridgeMarkerShaped,
   isBridgeReply,
+  isIncrementalStreamUnsupportedError,
   type BridgedFetchParams,
   type BridgedFetchResult,
   type BridgedPromptStreamResult,
@@ -53,7 +55,11 @@ import {
   type PromptAiSdkFn,
   type PromptAiSdkParams,
   type PromptAiSdkStreamFn,
+  type PromptAiSdkStreamNextResult,
   type PromptAiSdkStreamParams,
+  type PromptAiSdkStreamStartParams,
+  type PromptAiSdkStreamStartResult,
+  type PromptAiSdkStreamStopParams,
   type PromptAiSdkStructuredFn,
   type PromptAiSdkStructuredParams,
 } from './bridge-protocol'
@@ -382,10 +388,16 @@ export type BridgedChildDeps = {
  *  - prompt methods: nested `sendAction` / `trackEvent` / `logger` / `signal`
  *    are DROPPED — the parent re-injects its own live values (so provider
  *    status chunks and cost accounting flow through the real parent channel);
- *  - `promptAiSdkStream`: the parent collects the FULL chunk sequence
- *    (streaming limitation, see bridge-protocol.ts) and this wrapper
- *    reconstructs an AsyncGenerator yielding the chunks and returning the
- *    PromptResult;
+ *  - `promptAiSdkStream`: INCREMENTAL chunk-pull bridging (P2-T8c) — one
+ *    `promptAiSdkStreamStart` opens the parent-side registered generator, then
+ *    each `promptAiSdkStreamNext` round trip yields EXACTLY ONE chunk (no
+ *    aggregation; the final PromptResult rides the done reply, so the loop's
+ *    result semantics are unchanged); the caller's early return/break sends a
+ *    best-effort `promptAiSdkStreamStop` (abort + iterator.return, the
+ *    consumer-early-return teardown parity). A PARTIAL parent table (no
+ *    start/next) falls back to the LEGACY full-collection `promptAiSdkStream`
+ *    reply (chunks array + PromptResult, bounded by
+ *    BRIDGE_MAX_STREAM_CHUNKS_BYTES — truncated:true logs loudly);
  *  - `promptAiSdkStructured`: the zod schema travels as JSON Schema; an
  *    unrepresentable schema fails CLOSED child-side (the promise rejects)
  *    instead of silently widening to `{ type: 'object' }`, and the reply is
@@ -428,16 +440,37 @@ export function buildBridgedChildDeps(
   const bridgedPromptAiSdkStream = (
     params: PromptAiSdkStreamParams,
   ): ReturnType<PromptAiSdkStreamFn> => {
-    const wirePromise = client.call(
-      'promptAiSdkStream',
-      callParams(dropPromptChannelKeys(params)),
-    )
-    return (async function* () {
-      const wire = (await wirePromise) as BridgedPromptStreamResult
+    // Chunk-PULL wire params: sanitized exactly once (the incremental start
+    // and the legacy fallback share the SAME sanitized member set — channel
+    // functions/keys are dropped and the parent re-injects its live values,
+    // exactly like the pre-incremental wrapper).
+    const wireParams = callParams(
+      dropPromptChannelKeys(params),
+    ) as PromptAiSdkStreamStartParams
+
+    /**
+     * LEGACY full-collection path (P2-T8c fallback): the parent collects the
+     * FULL chunk sequence (streaming limitation, see bridge-protocol.ts) and
+     * this wrapper reconstructs an AsyncGenerator yielding the chunks and
+     * returning the PromptResult. BYTE-IDENTICAL semantics with the
+     * pre-incremental implementation — reached ONLY when a partial handler
+     * table does not supply the incremental start/next methods (the single
+     * fallback decision comes from {@link isIncrementalStreamUnsupportedError}
+     * against the parent's structured missing-method error reply).
+     */
+    const legacyFullCollectionPromptAiSdkStream = async function* (): AsyncGenerator<
+      import('@codebuff/common/types/contracts/llm').StreamChunk,
+      PromptResultType<string | null>,
+      void
+    > {
+      const wire = (await client.call(
+        'promptAiSdkStream',
+        wireParams,
+      )) as BridgedPromptStreamResult
       // A truncated reply means the parent DROPPED chunk bytes to keep the
       // single stream reply under the 16 MiB per-message cap (see
-      // bridge-protocol.ts BRIDGE_MAX_STREAM_CHUNKS_BYTES). Loud on stderr —
-      // a bounded bridge is never a silent drop.
+      // bridge-protocol.ts BRIDGE_MAX_STREAM_CHUNKS_BYTES). Loud on stderr — a
+      // bounded bridge is never a silent drop.
       if (wire.truncated) {
         createBridgeStderrLogger('child-bridge').warn(
           { deliveredChunks: wire.chunks.length },
@@ -448,6 +481,102 @@ export function buildBridgedChildDeps(
         yield chunk
       }
       return wire.result
+    }
+
+    /**
+     * INCREMENTAL path (P2-T8c): one `promptAiSdkStreamStart` call opens a
+     * parent-side registered generator, then each `promptAiSdkStreamNext`
+     * round trip yields EXACTLY ONE chunk — no aggregation, so the
+     * full-collection truncation budget never applies to this path. The
+     * caller's early return/break (the loop canceling a stream) triggers this
+     * generator's finally, which sends a best-effort
+     * `promptAiSdkStreamStop` (the parent tears the provider iterator down
+     * exactly like the in-process consumer-early-return: abort +
+     * iterator.return). The stop is BEST-EFFORT: failures (a partial table
+     * without stop, a closed socket) are caught and ignored — the client's
+     * call budget already protects the socket; the parent registry is bounded
+     * either way (MAX_CONCURRENT_BRIDGE_STREAMS + forced close()).
+     */
+    const incrementalPromptAiSdkStream = async function* (): AsyncGenerator<
+      import('@codebuff/common/types/contracts/llm').StreamChunk,
+      PromptResultType<string | null>,
+      void
+    > {
+      let streamId: string | null = null
+      let finished = false
+      try {
+        const start = (await client.call(
+          'promptAiSdkStreamStart',
+          wireParams,
+        )) as PromptAiSdkStreamStartResult
+        streamId = start.streamId
+        for (;;) {
+          // One chunk per round trip; when done, the reply INCLUDES the final
+          // PromptResult (the loop's result flows back exactly like today) and
+          // the parent's registry entry is already removed — never return
+          // undefined instead of the result (reviewer risk note). A
+          // StreamTruncatedError-styled result (an oversized single chunk,
+          // practically impossible) flows back as a structured aborted
+          // PromptResult — the loop settles its aborted path, never a
+          // socket-destroy 'crashed' receipt.
+          const reply = (await client.call('promptAiSdkStreamNext', {
+            streamId,
+          })) as PromptAiSdkStreamNextResult
+          if (reply.done) {
+            finished = true
+            // A done reply WITHOUT a result is the wire marker for an
+            // unknown/stale streamId (JSON carries no undefined): fail closed
+            // loudly instead of returning an undefined PromptResult — the
+            // loop's final result semantics are never silently degraded.
+            if (reply.result === undefined) {
+              throw new Error(
+                `incremental bridged stream ${streamId} ended without a result (the parent no longer has this stream registered)`,
+              )
+            }
+            return reply.result as PromptResultType<string | null>
+          }
+          yield reply.chunk
+        }
+      } finally {
+        // Registry hygiene (P2-T8c): only an UNFINISHED stream needs the
+        // explicit stop — after a natural done the parent already removed the
+        // entry. The stop is BEST-EFFORT: failures (a partial table without a
+        // stop method, a dying socket) are caught and ignored — the client's
+        // call budget already protects the socket; the parent's bounded
+        // registry + close() drain is the backstop.
+        if (streamId !== null && !finished) {
+          try {
+            await client.call('promptAiSdkStreamStop', {
+              streamId,
+            } satisfies PromptAiSdkStreamStopParams)
+          } catch {
+            // Best-effort stop: see the registry-hygiene note above.
+          }
+        }
+      }
+    }
+
+    return (async function* (): AsyncGenerator<
+      import('@codebuff/common/types/contracts/llm').StreamChunk,
+      PromptResultType<string | null>,
+      void
+    > {
+      try {
+        // `return yield*` threads the delegated generator's final PromptResult
+        // (the done reply's result) through as THIS wrapper's return value —
+        // the loop's result semantics are identical on both paths and the
+        // generator's TReturn is never void.
+        return yield* incrementalPromptAiSdkStream()
+      } catch (error) {
+        if (!isIncrementalStreamUnsupportedError(error)) throw error
+        // Partial handler table (no incremental start/next method supplied by
+        // the parent): fall back to the LEGACY full-collection path. Safe from
+        // duplication: the fallback decision can only fire on the FIRST
+        // incremental round trip (method presence is static per table), before
+        // any incremental chunk has been yielded; a best-effort stop for an
+        // already-started stream rode the incremental generator's finally.
+        return yield* legacyFullCollectionPromptAiSdkStream()
+      }
     })() as ReturnType<PromptAiSdkStreamFn>
   }
 

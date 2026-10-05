@@ -258,6 +258,56 @@ export type SettledSubagentResult = {
   stderrTail: string
 }
 
+/**
+ * P2-T8c: opt-in, parent-decided restart policy for the supervised-spawn
+ * seam (packages/agent-runtime supervision/supervised-spawn.ts, passed via
+ * that builder's additive third `options` parameter). When supplied, a
+ * RESTARTABLE crash — `outcome === 'crashed'` whose `crashReason` is a
+ * transport-level failure ('spawn_failed', 'internal_error', or
+ * 'nonzero_exit' WITHOUT a valid receipt envelope) — re-runs the WHOLE seam
+ * (fresh mkdtemp sandbox, fresh bridge socket, fresh request file) after an
+ * exponential backoff, at most `maxAttempts` times; the LAST settled result
+ * is returned unchanged once the budget is exhausted. Everything else
+ * settles as-is: `timeout` (the wall-clock deadline is authoritative —
+ * restarting would double the budget), every non-crashed outcome
+ * (ok / missing_output / schema_invalid / truncated), a free-form
+ * `crashReason` (a deterministic input bug retrying cannot help), and
+ * `nonzero_exit` WITH a receipt envelope (an agent-level failure, not a
+ * transport crash — `result.receipt !== undefined`). Declared structurally
+ * here, like {@link SettledSubagentResult}, so the contracts stay
+ * dependency-free; agent-runtime re-exports the type.
+ */
+export interface SupervisedRestartPolicy {
+  /**
+   * REQUIRED, deliberately with NO default: the maximum number of RESTARTS
+   * (not total spawns — `maxAttempts: 2` allows up to 3 spawns) permitted
+   * after restartable crashes. Callers must opt into the bound explicitly so
+   * no caller ever gets silent unbounded retries. Must be a finite number
+   * >= 0; 0 makes the policy inert (a single spawn, zero restarts), and an
+   * invalid value (missing/NaN/Infinity/negative) degrades to 0 — never to
+   * unbounded retries.
+   */
+  maxAttempts: number
+  /**
+   * Base wall-clock delay (ms) before the FIRST restart; restart #N waits
+   * `backoffMs * backoffMultiplier ** (N - 1)`. Default 250. A non-finite or
+   * negative value clamps to the default; 0 is honored (no backoff wait).
+   */
+  backoffMs?: number
+  /**
+   * Exponential growth factor applied per restart. Default 2. A non-finite
+   * or negative value clamps to the default.
+   */
+  backoffMultiplier?: number
+  /**
+   * P2-T8c: optional observability hook, invoked once per ACTUAL restart
+   * (between the backoff sleep and the respawn — never for the initial
+   * spawn) with the 1-based restart number (`1` = the first restart, i.e.
+   * the second spawn) and the PREVIOUS attempt's `crashReason`.
+   */
+  onRestart?: (info: { attempt: number; crashReason: string }) => void
+}
+
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
   // Environment
