@@ -742,6 +742,7 @@ export const runAgentStep = async (
         runId: agentState.runId,
         userInputId,
         agentStepId,
+        idGen,
         model,
       })
     } catch (err) {
@@ -1486,13 +1487,14 @@ export async function loopAgentSteps(
   // make the first compaction use the legacy fallback even for 500k/1M models.
   initialAgentState.contextWindowTokens = resolvedModelContextWindow
   reconcileInterruptedLedgerSpawns(initialAgentState, clock.now())
-  reconcileInterruptedPathLeases(initialAgentState)
+  reconcileInterruptedPathLeases(initialAgentState, clock.now())
   // Discovery shard claims are durable parent state too: a shard left 'active'
   // by an interrupted spawn would otherwise make claimDiscoveryShard throw for
   // that question forever, failing the whole spawn batch. Nothing of THIS run
   // is in flight yet here, so an 'active' shard belongs to a previous turn.
   initialAgentState.discoveryCoverage = reconcileInterruptedDiscoveryShards(
     initialAgentState.discoveryCoverage,
+    clock.now(),
   )
   if (
     !initialAgentState.orchestrationLedger?.events.some(
@@ -1520,7 +1522,9 @@ export async function loopAgentSteps(
   reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
   // P2-T2: when a journal reader is wired and this state carries a prior
   // runId, surface what a resume would do (own tail, children, background
-  // intents). Read-only: the replay driver that acts on it is a later slice.
+  // intents). P2-audit-fix-8: a caller-injected resumeDriver (production
+  // wiring: sdk/src/services/run-resume-driver.ts) ACTS on the report below;
+  // without one this block stays classify-and-log.
   if (params.journalReader && initialAgentState.runId) {
     const resumeReport = buildRunResumeReport({
       reader: params.journalReader,
@@ -1880,7 +1884,7 @@ export async function loopAgentSteps(
           role: 'user' as const,
           content: buildUserMessageContent(prompt, spawnParams, content),
           tags: ['USER_PROMPT'],
-          sentAt: Date.now(),
+          sentAt: clock.now(),
 
           // James: Deprecate the below, only use tags, which are not prescriptive.
           keepDuringTruncation: true,

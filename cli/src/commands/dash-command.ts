@@ -19,8 +19,9 @@ import type { JournalReader } from '@codebuff/common/types/contracts/agent-runti
  * optional explicit port (undefined = 0 = random free port), an optional
  * explicit token, and exactly one mode — `exportDir` selects the static HTML
  * otherwise the dashboard serves. `open` mirrors `--no-open` (true by
- * default: the URL is printed to stdout; with --no-open the URL is not
- * printed anywhere — no browser is auto-opened either way).
+ * default: the tokenless base URL is printed to stdout and the token-bearing
+ * URL to stderr; with --no-open neither is printed — no browser is
+ * auto-opened either way).
  */
 export type DashCommandArgs = {
   port?: number
@@ -113,11 +114,13 @@ const defaultOpenJournal: DashJournalOpener = (journalFile) => {
  * SIGINT/SIGTERM close the server AND the journal via a resolvable shutdown
  * promise; in --export mode the journal is closed in a finally.
  *
- * stdout contract: in serve mode stdout carries the dashboard URL (nothing
- * else); with --no-open the URL — which embeds the auth token as ?token=... —
- * is printed NOWHERE (neither stdout nor stderr), honoring the option's
- * documented "do not print the dashboard URL on startup" contract; in
- * --export mode stdout carries the written file paths (one per line).
+ * stdout contract: in serve mode stdout carries ONLY the tokenless base URL
+ * (http://127.0.0.1:<port>, safe to pipe/tee); the token-bearing URL — which
+ * embeds the auth token as ?token=... — goes to STDERR because stdout may
+ * be piped. With --no-open the token-bearing URL is printed NOWHERE (neither
+ * stdout nor stderr), honoring the option's documented "do not print the
+ * dashboard URL on startup" contract; in --export mode stdout carries the
+ * written file paths (one per line).
  * Everything human/diagnostic goes to stderr.
  *
  * The returned number is the process exit code (the caller owns
@@ -219,8 +222,8 @@ export async function runDashCommand(
     generatedToken = token
   }
   if (generatedToken) {
-    // stderr ONLY: stdout may be piped (the URL goes there), so the generated
-    // secret must never ride stdout.
+    // stderr ONLY: stdout may be piped, so the generated secret must never
+    // ride stdout (the token-bearing URL goes to stderr too, not stdout).
     writeStderr(
       `openbuff dash: generated dashboard token (pass --token or set OPENBUFF_DASH_TOKEN to set your own): ${generatedToken}`,
     )
@@ -234,7 +237,13 @@ export async function runDashCommand(
       data,
     })
     if (args.open) {
-      writeStdout(`${server.url}\n`)
+      // stdout may be piped/tee'd, so it carries ONLY the tokenless base URL;
+      // the token-bearing URL (which embeds the auth secret as ?token=...)
+      // goes to stderr, clearly labeled.
+      writeStdout(`${new URL(server.url).origin}\n`)
+      writeStderr(
+        `openbuff dash: serving at ${server.url} (the URL embeds the auth token; stdout carries only the tokenless base URL)`,
+      )
     }
     // --no-open contract: the URL embeds the auth token (?token=...), so with
     // --no-open it is printed NOWHERE — stderr included.

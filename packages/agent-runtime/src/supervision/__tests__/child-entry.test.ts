@@ -9,6 +9,7 @@
  *  - Real-process + default-seam end-to-end (skipIf no Bun.spawn).
  */
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
+import { createInitialWorkspaceState } from '@codebuff/common/types/workspace-state'
 
 import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -16,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  buildChildAgentState,
   buildUnsupportedDepsReceipt,
   missingChildCallbackDeps,
   runChildEntryMain,
@@ -47,8 +49,8 @@ function makeRequest(
 }
 
 describe('child-entry honest degradation (P2-T8)', () => {
-  it('every request yields a schema-valid FAILED receipt with code unsupported-deps', () => {
-    const receipt = runSupervisedChildEntry(makeRequest())
+  it('every request yields a schema-valid FAILED receipt with code unsupported-deps', async () => {
+    const receipt = await runSupervisedChildEntry(makeRequest())
     const parsed = agentReceiptSchema.safeParse(receipt)
     expect(parsed.success).toBe(true)
     expect(receipt.status).toBe('failed')
@@ -60,7 +62,7 @@ describe('child-entry honest degradation (P2-T8)', () => {
   })
 
   it('the missing-deps gate fails closed: all callback deps are reported missing', () => {
-    const missing = missingChildCallbackDeps()
+    const missing = missingChildCallbackDeps(makeRequest())
     expect(missing.length).toBeGreaterThan(0)
     expect(missing).toContain('promptAiSdkStream')
     expect(missing).toContain('sendAction')
@@ -72,6 +74,129 @@ describe('child-entry honest degradation (P2-T8)', () => {
     })
     expect(agentReceiptSchema.safeParse(receipt).success).toBe(true)
   })
+})
+
+describe('child-state rehydration validation (json-roundtrip repair)', () => {
+  it('a valid serialized child state rehydrates into the rebuilt AgentState', () => {
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        messageHistory: [
+          { role: 'user', content: [{ type: 'text', text: 'hi' }], sentAt: 1234 },
+        ],
+        systemPrompt: 'be brief',
+        taskMemory: {
+          schemaVersion: 1,
+          revision: 2,
+          updatedAt: 5,
+          checksum: 'abc123',
+        },
+        workspaceState: createInitialWorkspaceState(1000),
+        contextTokenCount: 42,
+      },
+      ancestorRunIds: ['run-1'],
+    })
+    expect(state.agentId).toBe('child-entry-agent-1')
+    expect(state.systemPrompt).toBe('be brief')
+    expect(state.contextTokenCount).toBe(42)
+    expect(state.ancestorRunIds).toEqual(['run-1'])
+    expect(state.messageHistory).toHaveLength(1)
+    expect(state.taskMemory?.revision).toBe(2)
+    expect(state.workspaceState?.revision).toBe(0)
+  })
+
+  it('a messageHistory whose sentAt was coerced to an ISO string by the JSON round trip is DROPPED, not blind-cast', () => {
+    // Simulates the wire: a live Date timestamp serialized to an ISO string.
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        messageHistory: [
+          { role: 'user', content: [], sentAt: new Date(0).toISOString() },
+        ],
+      },
+    })
+    // The fresh initial-state default stands in — the malformed field never
+    // reaches loopAgentSteps under the live Message[] type.
+    expect(state.messageHistory).toEqual([])
+  })
+
+  it('a taskMemory that fails its schema validation is DROPPED, not blind-cast', () => {
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        // Missing the required revision/updatedAt/checksum members.
+        taskMemory: { schemaVersion: 1, goal: 'x' } as unknown,
+      },
+    })
+    expect(state.taskMemory).toBeUndefined()
+  })
+
+  it('a workspaceState whose occurredAt was coerced to an ISO string is DROPPED, not blind-cast', () => {
+    const base = createInitialWorkspaceState(1000)
+    // A DROPPED field leaves the fresh initial-state default standing in
+    // (see the buildChildAgentState docblock), so assert against a baseline
+    // request that carries no workspaceState at all.
+    const baseline = buildChildAgentState({
+      ...makeRequest(),
+      child: { agentId: 'baseline-1' },
+    })
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        workspaceState: {
+          ...base,
+          updatedAt: '1970-01-01T00:00:01.000Z',
+          changes: [
+            {
+              revision: 1,
+              source: 'edit',
+              occurredAt: '1970-01-01T00:00:01.000Z',
+              actions: [],
+            },
+          ],
+        },
+      },
+    })
+    expect(state.workspaceState).toEqual(baseline.workspaceState)
+  })
+
+  it('a workspaceState with an invalid schemaVersion is DROPPED, not blind-cast', () => {
+    const baseline = buildChildAgentState({
+      ...makeRequest(),
+      child: { agentId: 'baseline-1' },
+    })
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        workspaceState: { ...createInitialWorkspaceState(1), schemaVersion: 2 },
+      },
+    })
+    expect(state.workspaceState).toEqual(baseline.workspaceState)
+  })
+
+  it.skipIf(!canSpawn)(
+    'a non-JSON-serializable request settles a structured crashed result instead of throwing across the spawnSupervised seam',
+    async () => {
+      const seam = buildDefaultSpawnSupervised({ openbuffApiKey: 'sk-test' })
+      // A circular child-state field makes the parent-side JSON.stringify
+      // throw; the seam must encode that as outcome 'crashed' — never an
+      // uncaught exception across the seam boundary.
+      const circular: Record<string, unknown> = { agentId: 'circular-1' }
+      circular.self = circular
+      const result = await seam({
+        ...makeRequest(),
+        child: circular as unknown as SupervisedSpawnRequest['child'],
+      })
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toContain('not JSON-serializable')
+      expect(result.exitCode).toBeNull()
+    },
+  )
 })
 
 describe('child-entry process contract (P2-T8)', () => {
@@ -157,6 +282,16 @@ describe('child-entry process contract (P2-T8)', () => {
     async () => {
       const seam = buildDefaultSpawnSupervised({
         openbuffApiKey: 'sk-supervised-test',
+        // The extended P2-T8 seed (provider-config override, proxy, TMPDIR,
+        // locale, ripgrep override) flows through the default seam without
+        // disturbing the child-entry contract; the supervisor forwards the
+        // built allowlist verbatim.
+        passthroughEnv: {
+          OPENBUFF_PROVIDER_CONFIG: '/tmp/openbuff-provider.json',
+          HTTPS_PROXY: 'http://proxy.test:8443',
+          TMPDIR: '/tmp/child-entry-test',
+          CODEBUFF_RG_PATH: '/opt/openbuff/vendor/rg',
+        },
       })
       const settled = await seam(makeRequest())
       // The child reported its honest degradation; the supervisor settles a

@@ -157,7 +157,14 @@ export type SupervisedSpawnRequest = {
    * default is preserved when omitted.
    */
   timeoutMs?: number
-  /** Serializable slice of the pre-allocated child AgentState. */
+  /**
+   * Serializable slice of the pre-allocated child AgentState. Must be
+   * JSON-native: the default seam persists it via JSON.stringify and the
+   * child rehydrates it with structural validation — a field that fails
+   * validation (e.g. a Date timestamp coerced to an ISO string by the round
+   * trip) is DROPPED child-side (the fresh initial-state default stands in)
+   * instead of blindly cast to the live shape.
+   */
   child?: {
     agentId: string
     messageHistory?: unknown
@@ -174,13 +181,56 @@ export type SupervisedSpawnRequest = {
   fingerprintId?: string
   ancestorRunIds?: string[]
   parentSystemPrompt?: string
-  // NOTE (P2-T8 follow-up slice): the parent→child bridge for the
-  // non-serializable callback deps (promptAiSdkStream, sendAction,
-  // requestToolCall, ...) is deliberately NOT a field here — a request with
-  // live function values could never cross the temp-file transport the
-  // default seam uses. Until that bridge lands, the child entrypoint returns
-  // the structured 'unsupported-deps' failed receipt for every request
-  // instead of half-running.
+  /**
+   * P2-T8b: path of the parent-side RPC bridge's Unix socket INSIDE the spawn
+   * sandbox (the 0700 mkdtemp dir). Present only when the parent seam started
+   * a bridge server; the child then supplies the bridged callback deps over
+   * newline-delimited JSON on that socket and runs the REAL agent loop. The
+   * bridge has landed for the bridged dep set (promptAiSdkStream, promptAiSdk,
+   * promptAiSdkStructured, sendAction, requestToolCall, requestFiles,
+   * requestOptionalFile, requestMcpToolData, handleStepsLogChunk,
+   * sendSubagentChunk, trackEvent, fetch, startAgentRun, finishAgentRun,
+   * addAgentStep, fetchAgentFromDatabase, consumeCreditsWithFallback) — live
+   * function values still never cross the temp-file transport itself; only
+   * this serializable socket path does.
+   *
+   * Typed-dep-contract note (serialization repair): the wire is JSON, so
+   * non-JSON-native param members cross as nonce-stamped wire markers
+   * rehydrated parent-side — notably `addAgentStep`'s required
+   * `startTime: Date`, which crosses as a `{ __openbuffBridge: 'date',
+   * nonce, iso }` marker and is delivered to the parent's real dep as a
+   * live `new Date(iso)` (never the `{}` a plain-object walk alone would
+   * produce); see bridge-protocol.ts `createBridgeDateWireMarker`. Results
+   * are validated ROUND-TRIP-SAFE fail-closed before crossing the wire:
+   * `fetchAgentFromDatabase`'s AgentTemplate result is rejected with a
+   * structured error naming any live `z.ZodSchema` / programmatic
+   * `handleSteps` members rather than silently degraded
+   * (bridge-protocol.ts `findNonRoundTripSafeResultPaths`). Absent ⇒ the child entrypoint still
+   * returns the structured 'unsupported-deps' failed receipt instead of
+   * half-running.
+   *
+   * Capability note: `requestFiles`' `capabilityIssuer`
+   * ({ projectId, runId }) is JSON-serializable and crosses the bridge
+   * VERBATIM, so the parent's real dep mints cap.v3 editAnchors (contentHash
+   * + line range) for complete reads; the child's read_files handler then
+   * re-mints that anchor with the CHILD's own in-process HMAC key — a cap.v3
+   * token is verifiable only in the process that minted it, so
+   * capability-bearing edits (str_replace / replace_range / rewrite_symbol /
+   * edit_transaction) work in a flag-on supervised child without ever
+   * replaying a parent-signed token across the wire.
+   */
+  rpcSocketPath?: string
+  /**
+   * P2-T8b (collision-proof bridge sentinel): the per-table bridge marker
+   * nonce minted by `buildSupervisedBridgeHandlers` and stamped into the
+   * request by the default supervised-spawn seam. The child sanitizer emits
+   * nonce-stamped wire markers (`{ __openbuffBridge, nonce }`) and the parent
+   * substitutes live Logger/AbortSignal values ONLY on an exact nonce match
+   * — agent-authored params that happen to carry the `__openbuffBridge` key
+   * cross the bridge verbatim. Absent ⇒ the child emits the legacy
+   * content-only marker shape, which no parent recognizes (data-only).
+   */
+  rpcBridgeNonce?: string
 }
 
 /**

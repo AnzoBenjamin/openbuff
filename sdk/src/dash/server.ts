@@ -133,17 +133,23 @@ function tokenMatches(provided: string, expected: string): boolean {
 }
 
 /**
- * The request's presented token: the `Authorization: Bearer` header when
- * present (the PRIMARY, preferred channel), otherwise the `?token=` query
- * parameter. Query tokens are LEGACY/less-preferred but must stay accepted:
- * the dash URL carries `?token=` and a plain browser navigation cannot set
- * headers. An absent token compares as the empty string (still
- * constant-time, still a plain 401).
+ * The request's presented token, or null when the Authorization header is
+ * present but NOT a Bearer scheme. A present-but-unrecognized header must
+ * NEVER silently downgrade to the legacy `?token=` query channel: it is an
+ * explicit signal the caller sent the wrong credential shape, so it maps to
+ * a plain 401 instead.
+ *
+ * Otherwise: the `Authorization: Bearer` header when present (the PRIMARY,
+ * preferred channel), or the `?token=` query parameter (kept LEGACY/less-
+ * preferred but accepted: the dash URL carries `?token=` and a plain browser
+ * navigation cannot set headers). No Authorization header at all leaves the
+ * query channel fully working. An absent token compares as the empty string
+ * (still constant-time, still a plain 401).
  */
-function extractProvidedToken(req: Request, url: URL): string {
+function extractProvidedToken(req: Request, url: URL): string | null {
   const auth = req.headers.get('authorization')
-  if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
-    return auth.slice('Bearer '.length)
+  if (auth !== null) {
+    return auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : null
   }
   return url.searchParams.get('token') ?? ''
 }
@@ -417,7 +423,11 @@ export async function startDashServer(
     if (pathname === '/healthz') {
       return jsonResponse({ ok: true }, 200)
     }
-    if (!tokenMatches(extractProvidedToken(req, url), token)) {
+    // A null presented token means a present-but-non-Bearer Authorization
+    // header: rejected outright instead of silently falling through to the
+    // legacy query-token channel.
+    const providedToken = extractProvidedToken(req, url)
+    if (providedToken === null || !tokenMatches(providedToken, token)) {
       return jsonResponse({ error: 'unauthorized' }, 401)
     }
     if (req.method !== 'GET') {

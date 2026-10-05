@@ -377,6 +377,7 @@ export const handleSpawnAgents = (async (
         workspaceRevision: parentAgentState.workspaceState?.revision,
         taskId,
         workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+        now: (params.clock ?? realClock).now(),
       })
       nextDiscoveryCoverage = claimed.state
       // A duplicate claim serves the existing receipt: leave the shard key
@@ -420,11 +421,16 @@ export const handleSpawnAgents = (async (
       if (wiredBackgroundAgentIds.has(validated.subAgentState.agentId)) {
         continue
       }
-      releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+      releaseWorkspacePathLease(
+        parentAgentState,
+        validated.leaseId,
+        (params.clock ?? realClock).now(),
+      )
       parentAgentState.discoveryCoverage = completeDiscoveryShard({
         existing: parentAgentState.discoveryCoverage,
         shardKey: validated.discoveryShardKey,
         status: 'interrupted',
+        now: (params.clock ?? realClock).now(),
       })
       // `interrupted` is the terminal marker reconcileInterruptedLedgerSpawns
       // recognizes, so a spawn that never launched settles in the ledger
@@ -453,6 +459,7 @@ export const handleSpawnAgents = (async (
         ownerAgentId: validated.subAgentState.agentId,
         taskId: validated.handoff?.taskId,
         paths: validated.handoff?.permissions.writablePaths ?? [],
+        clock: params.clock,
       })
     }
   } catch (error) {
@@ -717,11 +724,16 @@ export const handleSpawnAgents = (async (
                 creditsUsed: result.agentState.creditsUsed || 0,
               }
             } finally {
-              releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+              releaseWorkspacePathLease(
+                parentAgentState,
+                validated.leaseId,
+                (params.clock ?? realClock).now(),
+              )
               parentAgentState.discoveryCoverage = completeDiscoveryShard({
                 existing: parentAgentState.discoveryCoverage,
                 shardKey: validated.discoveryShardKey,
                 status: settleSucceeded ? 'completed' : 'interrupted',
+                now: (params.clock ?? realClock).now(),
               })
             }
           })
@@ -787,11 +799,16 @@ export const handleSpawnAgents = (async (
                 parentAgentState.creditsUsed += failedBackgroundCredits
               }
             } finally {
-              releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+              releaseWorkspacePathLease(
+                parentAgentState,
+                validated.leaseId,
+                (params.clock ?? realClock).now(),
+              )
               parentAgentState.discoveryCoverage = completeDiscoveryShard({
                 existing: parentAgentState.discoveryCoverage,
                 shardKey: validated.discoveryShardKey,
                 status: 'failed',
+                now: (params.clock ?? realClock).now(),
               })
             }
             throw error
@@ -1062,7 +1079,11 @@ export const handleSpawnAgents = (async (
         }
         throw error
       } finally {
-        releaseWorkspacePathLease(parentAgentState, validated.leaseId)
+        releaseWorkspacePathLease(
+          parentAgentState,
+          validated.leaseId,
+          (params.clock ?? realClock).now(),
+        )
         parentAgentState.discoveryCoverage = completeDiscoveryShard({
           existing: parentAgentState.discoveryCoverage,
           shardKey: validated.discoveryShardKey,
@@ -1072,6 +1093,7 @@ export const handleSpawnAgents = (async (
                 ? 'completed'
                 : 'interrupted'
               : 'failed',
+          now: (params.clock ?? realClock).now(),
         })
       }
     }),

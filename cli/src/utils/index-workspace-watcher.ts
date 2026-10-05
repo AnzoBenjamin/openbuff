@@ -193,8 +193,8 @@ export function ensureIndexWorkspaceWatcher(params: {
           }
         },
         onDegrade: () => {
-          // Worker crash or nonzero exit: degrade to the markStale() path
-          // instead of crashing the main process.
+          // Worker crash that survived the pool's single restart attempt:
+          // degrade to the markStale() path instead of crashing the process.
           ambiguous = true
           scheduleFlush()
         },

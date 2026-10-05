@@ -16,6 +16,7 @@ import {
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import { selectAgentAttempt } from '../../../orchestration/select-agent-attempt'
 import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   acquireWorkspacePathLease,
   releaseWorkspacePathLease,
@@ -27,6 +28,7 @@ import type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
@@ -52,6 +54,7 @@ export const handleSpawnAgentInline = (async (
     userId: string | undefined
     userInputId: string
     writeToClient: (chunk: string | PrintModeEvent) => void
+    clock?: Clock
   } & ParamsExcluding<
     typeof executeSubagent,
     | 'userInputId'
@@ -248,6 +251,7 @@ export const handleSpawnAgentInline = (async (
     ownerAgentId: childAgentState.agentId,
     taskId: handoff?.taskId,
     paths: handoff?.permissions.writablePaths ?? [],
+    clock: params.clock,
   })
 
   // Observed pruner chunks, counted only so the parent's announced compaction
@@ -453,6 +457,6 @@ export const handleSpawnAgentInline = (async (
   } finally {
     // The lease must be released on EVERY path: execute throw, settle throw,
     // and success alike.
-    releaseWorkspacePathLease(parentAgentState, leaseId)
+    releaseWorkspacePathLease(parentAgentState, leaseId, (params.clock ?? realClock).now())
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

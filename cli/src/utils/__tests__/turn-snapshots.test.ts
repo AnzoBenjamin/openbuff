@@ -1,25 +1,48 @@
-import { execFile } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test'
 
 import {
+  acquireTurnBisectionLock,
   bisectTurnsPure,
   cancelTurnBisection,
+  capturePreDispatchSnapshot,
   createTurnSnapshot,
+  isTurnBisectionLockHeld,
   isTurnBisectionRunning,
   listTurnSnapshots,
+  logTurnSnapshotFailure,
   MAX_RETAINED_SNAPSHOTS,
   prunePlanPure,
   pruneTurnSnapshots,
+  releaseTurnBisectionLock,
+  resetTurnSnapshotWarnLatch,
   restoreToTurn,
   runTurnBisection,
+  turnBisectionLockPath,
   undoLastTurn,
   TURN_SNAPSHOT_REF,
 } from '../turn-snapshots'
+import { logger } from '../logger'
 
 const execFileAsync = promisify(execFile)
 
@@ -77,6 +100,12 @@ describe('turn-snapshots', () => {
   })
 
   afterEach(() => {
+    // The cross-process bisection lock and the warn latch must never leak
+    // across tests, even when a test above failed mid-run.
+    releaseTurnBisectionLock(repoRoot)
+    releaseTurnBisectionLock(plainDir)
+    resetTurnSnapshotWarnLatch()
+    mock.restore()
     while (rootsToClean.length > 0) {
       const dir = rootsToClean.pop()
       if (dir) {
@@ -634,6 +663,291 @@ describe('turn-snapshots', () => {
         if (outcome.status !== 'error') return
         expect(outcome.message).toMatch(/empty/)
       })
+    })
+  })
+
+  describe('cross-process bisection lock (finding c, p2-c-turn-snapshots)', () => {
+    test('the lock file is keyed per repo so temp-repo tests stay isolated', () => {
+      expect(turnBisectionLockPath(repoRoot)).not.toBe(
+        turnBisectionLockPath(plainDir),
+      )
+      expect(turnBisectionLockPath(repoRoot)).toMatch(/\.lock$/)
+    })
+
+    test('a lock held by a live process fails the bisection closed', async () => {
+      for (let i = 1; i <= 3; i++) {
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+        await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+      }
+
+      expect(acquireTurnBisectionLock(repoRoot)).toBe(true)
+      expect(isTurnBisectionLockHeld(repoRoot)).toBe(true)
+
+      // The bisection refuses to start while another process holds the lock,
+      // with the same structured error shape as the in-process guard.
+      const outcome = await runTurnBisection(
+        { projectRoot: repoRoot },
+        { runTestSuite: async () => false },
+      )
+      expect(outcome.status).toBe('error')
+      if (outcome.status !== 'error') return
+      expect(outcome.message).toMatch(/another openbuff process/)
+
+      // Fail-closed did NOT consume the holder's lock: it stays held for the
+      // process that owns it.
+      expect(isTurnBisectionLockHeld(repoRoot)).toBe(true)
+    })
+
+    test('snapshots are paused while a cross-process lock is held', async () => {
+      expect(acquireTurnBisectionLock(repoRoot)).toBe(true)
+
+      const outcome = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 'mid-external-bisect',
+      })
+      expect(outcome.status).toBe('skipped')
+      if (outcome.status !== 'skipped') return
+      expect(outcome.reason).toMatch(/bisection/)
+    })
+
+    test('the lock is released in the finally block after the run ends', async () => {
+      for (let i = 1; i <= 3; i++) {
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+        await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+      }
+
+      let lockHeldDuringProbe = false
+      const outcome = await runTurnBisection(
+        { projectRoot: repoRoot },
+        {
+          runTestSuite: async () => {
+            lockHeldDuringProbe = isTurnBisectionLockHeld(repoRoot)
+            return false
+          },
+        },
+      )
+
+      expect(outcome.status).toBe('inconclusive')
+      // Held for the whole run, gone the moment it ends.
+      expect(lockHeldDuringProbe).toBe(true)
+      expect(isTurnBisectionLockHeld(repoRoot)).toBe(false)
+    })
+
+    test('the lock is released even when the run errors out mid-probe', async () => {
+      for (let i = 1; i <= 3; i++) {
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), `v${i}\n`)
+        await createTurnSnapshot({ projectRoot: repoRoot, label: `v${i}` })
+      }
+
+      const outcome = await runTurnBisection(
+        { projectRoot: repoRoot },
+        {
+          runTestSuite: async () => {
+            throw new Error('probe exploded')
+          },
+        },
+      )
+
+      expect(outcome.status).toBe('error')
+      // The finally block released the lock despite the error outcome.
+      expect(isTurnBisectionLockHeld(repoRoot)).toBe(false)
+    })
+
+    test('a stale lock left by a dead process is stolen instead of wedging the repo', async () => {
+      // A pid that is guaranteed dead: a child process that already exited.
+      let deadPid = -1
+      await new Promise<void>((resolve) => {
+        const child = spawn(process.execPath, ['-e', 'process.exit(0)'])
+        deadPid = child.pid ?? -1
+        child.on('exit', () => resolve())
+      })
+      expect(deadPid).toBeGreaterThan(0)
+
+      mkdirSync(path.dirname(turnBisectionLockPath(repoRoot)), {
+        recursive: true,
+      })
+      writeFileSync(turnBisectionLockPath(repoRoot), String(deadPid))
+      // A dead holder is not "held": the lock is stealable.
+      expect(isTurnBisectionLockHeld(repoRoot)).toBe(false)
+      expect(acquireTurnBisectionLock(repoRoot)).toBe(true)
+    })
+  })
+
+  describe('capturePreDispatchSnapshot (finding a, bounded pre-dispatch barrier)', () => {
+    test('a fast runner captures the pre-dispatch snapshot before the bound', async () => {
+      const outcome = await capturePreDispatchSnapshot({
+        projectRoot: repoRoot,
+        label: 'shell',
+        timeoutMs: 5_000,
+      })
+
+      expect(outcome.status).toBe('created')
+      expect(
+        (await listTurnSnapshots({ projectRoot: repoRoot }))[0]?.label,
+      ).toBe('shell')
+    })
+
+    test('a hung GitRunner times out bounded, logs once, and dispatch proceeds', async () => {
+      resetTurnSnapshotWarnLatch()
+      const warnSpy = spyOn(logger, 'warn').mockImplementation(() => undefined)
+      spyOn(logger, 'debug').mockImplementation(() => undefined)
+
+      const started = Date.now()
+      const outcome = await capturePreDispatchSnapshot(
+        {
+          projectRoot: repoRoot,
+          label: 'shell',
+          timeoutMs: 50,
+        },
+        {
+          // A hung git runner: never settles, like a wedged subprocess.
+          runGit: () => new Promise(() => {}),
+        },
+      )
+      const elapsedMs = Date.now() - started
+
+      // The barrier is bounded: dispatch is never stalled by a hung snapshot.
+      expect(elapsedMs).toBeLessThan(5_000)
+      expect(outcome.status).toBe('skipped')
+      if (outcome.status !== 'skipped') return
+      expect(outcome.reason).toMatch(/timed out/)
+      // The timeout miss is surfaced once (warn), not silently dropped.
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('logTurnSnapshotFailure (finding b, latched warning)', () => {
+    test('an error outcome warns once; the same failure repeats as debug only', () => {
+      resetTurnSnapshotWarnLatch()
+      const warnSpy = spyOn(logger, 'warn').mockImplementation(() => undefined)
+      const debugSpy = spyOn(logger, 'debug').mockImplementation(() => undefined)
+
+      logTurnSnapshotFailure(
+        { status: 'error', message: 'write-tree failed' },
+        'turn',
+      )
+      logTurnSnapshotFailure(
+        { status: 'error', message: 'write-tree failed' },
+        'turn',
+      )
+
+      // A persistent identical failure must not spam warn every turn.
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      expect(debugSpy).toHaveBeenCalledTimes(1)
+
+      // A DIFFERENT failure warns again (the latch is per distinct message).
+      logTurnSnapshotFailure(
+        { status: 'error', message: 'ref update denied' },
+        'shell',
+      )
+      expect(warnSpy).toHaveBeenCalledTimes(2)
+    })
+
+    test('skipped and created outcomes stay silent', () => {
+      resetTurnSnapshotWarnLatch()
+      const warnSpy = spyOn(logger, 'warn').mockImplementation(() => undefined)
+
+      logTurnSnapshotFailure(
+        { status: 'skipped', reason: 'bisection in flight' },
+        'turn',
+      )
+      logTurnSnapshotFailure(
+        { status: 'created', sha: 'a'.repeat(40), label: 'turn' },
+        'turn',
+      )
+
+      expect(warnSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('end-to-end: real bash mutation -> shell snapshot -> undo (P2-T4 audit gap)', () => {
+    // RESIDUAL (honest scope note): wiring a REAL child process through
+    // runBashCommand's actual terminal path is impractical in a unit test —
+    // runBashCommand is a TUI command that needs the chat store, the SDK
+    // terminal runner, and process.cwd(). The dispatch-ordering contract
+    // (capturePreDispatchSnapshot awaited BEFORE runTerminalCommand) is
+    // therefore pinned at the mock level in
+    // cli/src/commands/__tests__/bash-command.test.ts. This suite exercises
+    // the closest real seam instead: capturePreDispatchSnapshot (the exact
+    // function runBashCommand awaits before dispatch) around a REAL child
+    // process (`sh -c`) writing a tracked file, then the REAL git plumbing of
+    // undoLastTurn (temp GIT_INDEX_FILE + read-tree + checkout-index). Every
+    // step here is real — git plumbing, subprocess, filesystem bytes — only
+    // the TUI shell around runBashCommand is outside the test.
+
+    /**
+     * Real child process, spawned the way the module under test spawns git
+     * (execFile + promisify, argv array, no shell string in OUR code — `sh
+     * -c` is the mutation under observation, exactly what a user bash
+     * command is).
+     */
+    async function runRealShellCommand(cwd: string, command: string) {
+      await execFileAsync('sh', ['-c', command], { cwd, env: isolatedEnv })
+    }
+
+    test('undoLastTurn restores the tracked file bytes a real child process mutated', async () => {
+      // Baseline snapshot: captures the initial tracked content. undoLastTurn
+      // restores the PARENT of the newest snapshot, so the chain must be
+      // baseline snapshot -> shell snapshot -> real mutation, and undo lands
+      // on the baseline snapshot's tree (production behaves identically: the
+      // shell snapshot's parent is the previous turn's snapshot).
+      const baseline = readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')
+      expect(
+        (
+          await createTurnSnapshot({
+            projectRoot: repoRoot,
+            label: 'baseline',
+          })
+        ).status,
+      ).toBe('created')
+
+      // The shell snapshot must capture a DIFFERENT tree than the baseline
+      // snapshot or createTurnSnapshot skips it as unchanged; simulate the
+      // pre-command state as the result of an earlier turn.
+      await runRealShellCommand(repoRoot, 'echo pre-command > tracked.txt')
+      expect(
+        (
+          await capturePreDispatchSnapshot({
+            projectRoot: repoRoot,
+            label: 'shell',
+          })
+        ).status,
+      ).toBe('created')
+
+      // The real mutating child process, the same shape runBashCommand
+      // dispatches through runTerminalCommand.
+      await runRealShellCommand(repoRoot, 'echo mutated > tracked.txt')
+      expect(
+        readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
+      ).toBe('mutated\n')
+
+      const outcome = await undoLastTurn({ projectRoot: repoRoot })
+      expect(outcome.status).toBe('undone')
+
+      // The tracked file bytes are back to the baseline state: the git
+      // plumbing restored what the real subprocess destroyed.
+      expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+        baseline,
+      )
+    })
+
+    test('the real mutation path never touches HEAD, the real index, or untracked files', async () => {
+      await createTurnSnapshot({ projectRoot: repoRoot, label: 'baseline' })
+      await runRealShellCommand(repoRoot, 'echo pre-command > tracked.txt')
+      await capturePreDispatchSnapshot({ projectRoot: repoRoot, label: 'shell' })
+      await runRealShellCommand(repoRoot, 'echo mutated > tracked.txt')
+      writeFileSync(path.join(repoRoot, 'untracked.txt'), 'scratch\n')
+      const headBefore = await headSha(repoRoot)
+
+      const outcome = await undoLastTurn({ projectRoot: repoRoot })
+      expect(outcome.status).toBe('undone')
+
+      // HEAD never moves across the whole real pipeline.
+      expect(await headSha(repoRoot)).toBe(headBefore)
+      // The user's real index stays empty: nothing was ever staged.
+      expect(await stagedFiles(repoRoot)).toEqual([])
+      // Untracked files survive the tracked-tree-gated restore.
+      expect(existsSync(path.join(repoRoot, 'untracked.txt'))).toBe(true)
     })
   })
 })

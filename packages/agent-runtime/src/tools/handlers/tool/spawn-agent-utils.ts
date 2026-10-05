@@ -2963,9 +2963,12 @@ export async function executeSubagent(
   //    request is JSON-serialized; signal bridging rides the RPC-bridge
   //    slice) — it is bounded by the supervisor's wall-clock deadline
   //    (default SETTLE_DEFAULT_TIMEOUT_MS) instead;
-  //  - a supervised child that spawns shell grandchildren leaves them
-  //    running when the supervisor kills the direct child (process-group
-  //    teardown rides a later slice);
+  //  - process-group teardown IS shipped: the default seam spawns the child
+  //    as a detached group leader and the supervisor kills the WHOLE group on
+  //    deadline (supervision/supervised-spawn.ts; process-supervisor.ts
+  //    killGroup), so shell grandchildren die with the direct child. The
+  //    residual gap: no test yet exercises reaping of REAL shell
+  //    grandchildren;
   //  - the parent→child RPC bridge for the non-serializable callback deps
   //    has not landed, so the child degrades honestly with a structured
   //    'unsupported-deps' failed receipt (child-entry.ts) rather than

@@ -9,6 +9,7 @@
  *   {"kind":"tx_begin","transactionId":...,"operationId":...,"callId":...,"startedAt":...,"entries":[{"path":...,"beforeHash":...,"beforeBytes":...}]}
  *   {"kind":"tx_commit","transactionId":...,"committedAt":...}
  *   {"kind":"tx_abort","transactionId":...,"abortedAt":...,"reason":...}
+ *   {"kind":"tx_ambiguous_commit","transactionId":...,"ambiguousAt":...,"divergedPaths":[...]}
  *
  * The point is making rollback bytes DURABLE: the in-memory rollback already
  * holds pre-images, but a crash between the first and last file commit loses
@@ -37,6 +38,21 @@
  * touches the log or dies. A legacy tx_begin without a recorded token keeps
  * the old conservative skip-while-pid-alive behavior. Once the owner dies, a
  * later recovery reverts the transaction.
+ *
+ * Recovery is also LOSSLESS-AWARE: a tx_begin-only record normally means
+ * half-applied, but it is also exactly what a LOST tx_commit leaves behind —
+ * the commit-marker append (a lock timeout or IO failure) happens AFTER the
+ * files were committed, and a dead owner never blocks the revert, so a naive
+ * recovery would DESTROY applied work. Fail-open is therefore correct for
+ * tx_begin/tx_abort but LOSSY for tx_commit: the tx_commit append retries a
+ * bounded number of times on transient lock/IO failure, and before any
+ * revert each staged path's CURRENT content is compared with its recorded
+ * pre-image. Every staged path diverging from its pre-image is treated as
+ * evidence the operations actually applied: the transaction is marked with a
+ * terminal tx_ambiguous_commit event and left in place, never reverted. A
+ * mix of divergent and matching paths is the half-applied shape: only the
+ * divergent paths are restored from their pre-images and the ambiguity is
+ * reported in the outcome.
  *
  * Invariants:
  * - only before-images are stored (never after-bytes), and no cap.v3 secrets:
@@ -125,6 +141,15 @@ const TRANSACTION_INTENT_LOG_LOCK_STALE_MS = 30_000
 const TRANSACTION_INTENT_LOG_LOCK_RETRY_DELAY_MS = 25
 
 /**
+ * Bounded retry budget for the tx_commit append: the files are already
+ * committed by the time the marker is written, so a transient lock/IO
+ * failure is retried with a tiny backoff before the (then lossy) structured
+ * failure is surfaced to the caller.
+ */
+const TRANSACTION_INTENT_LOG_COMMIT_APPEND_ATTEMPTS = 3
+const TRANSACTION_INTENT_LOG_COMMIT_RETRY_DELAY_MS = 50
+
+/**
  * Per-process-lifetime identity token, stamped on this process's tx_begin
  * events and published to the `.live-<pid>` token file next to the log. Two
  * processes — and two incarnations of one recycled pid — never share a
@@ -196,10 +221,28 @@ type TransactionAbortEvent = {
   reason: string
 }
 
+/**
+ * Terminal marker for a transaction whose commit outcome is ambiguous: its
+ * tx_commit append was lost (it failed after the files were committed), yet
+ * every staged path's current content diverges from the recorded pre-image —
+ * evidence the operations actually applied. Recovery must never revert such
+ * a transaction; this event resolves it so no later pass replays the
+ * decision. Additive event kind: readers of older builds skip the unknown
+ * kind, which is safe (they simply keep the conservative revert behavior).
+ */
+type TransactionAmbiguousCommitEvent = {
+  kind: 'tx_ambiguous_commit'
+  transactionId: string
+  ambiguousAt: string
+  /** Staged paths whose current bytes diverged from the recorded pre-image. */
+  divergedPaths: string[]
+}
+
 type TransactionIntentEvent =
   | TransactionBeginEvent
   | TransactionCommitEvent
   | TransactionAbortEvent
+  | TransactionAmbiguousCommitEvent
 
 export type IntentOutcome = { ok: true } | { ok: false; error: string }
 
@@ -215,7 +258,18 @@ export type RecoveryOutcome =
   | { ok: false; error: string }
 
 export type RevertTransactionOutcome =
-  | { ok: true; status: 'reverted' | 'already_resolved'; revertedPaths: number }
+  | {
+      ok: true
+      status: 'reverted' | 'already_resolved' | 'ambiguous_committed'
+      revertedPaths: number
+      /**
+       * Staged paths whose current content diverged from the recorded
+       * pre-image when lossless-aware classification ran (a readCurrent seam
+       * was supplied). status 'ambiguous_committed' means EVERY staged path
+       * diverged — the work was left in place, never reverted.
+       */
+      divergedPaths?: string[]
+    }
   | {
       ok: false
       status: 'revert_failed'
@@ -284,6 +338,14 @@ function isIntentEvent(value: unknown): value is TransactionIntentEvent {
       isNonEmptyString(record.transactionId) &&
       typeof record.abortedAt === 'string' &&
       typeof record.reason === 'string'
+    )
+  }
+  if (record.kind === 'tx_ambiguous_commit') {
+    return (
+      isNonEmptyString(record.transactionId) &&
+      typeof record.ambiguousAt === 'string' &&
+      Array.isArray(record.divergedPaths) &&
+      record.divergedPaths.every(isNonEmptyString)
     )
   }
   return false
@@ -360,6 +422,28 @@ function boundTransactionGroups(
     bounded.splice(droppableIndex, 1)
   }
   return bounded
+}
+
+/**
+ * Lossless-aware evidence: which of a half-applied transaction's staged
+ * paths DIVERGE from their recorded pre-images right now. A path whose
+ * current content differs from its pre-image — changed or created bytes, or
+ * a pre-image path that is now absent (a delete-style operation applied) —
+ * is evidence the operation touched it; a path whose current content still
+ * EQUALS its pre-image was not applied and must be left untouched.
+ */
+const findDivergedPaths = async (
+  entries: readonly TransactionIntentEntry[],
+  readCurrent: (path: string) => Promise<string | null>,
+): Promise<string[]> => {
+  const divergedPaths: string[] = []
+  for (const entry of entries) {
+    if ((await readCurrent(entry.path)) === (entry.beforeBytes ?? null)) {
+      continue
+    }
+    divergedPaths.push(entry.path)
+  }
+  return divergedPaths
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -578,6 +662,13 @@ export type TransactionIntentLog = {
       beforeBytes: string | null,
       beforeMode?: number,
     ) => Promise<void>,
+    /**
+     * Lossless-aware recovery seam: reads a staged path's CURRENT content
+     * (null = absent) so revertTransaction can tell an applied transaction
+     * from a half-applied one before destroying anything. When omitted, the
+     * historical unconditional per-path pre-image restore runs.
+     */
+    readCurrent?: (path: string) => Promise<string | null>,
   ): Promise<RevertTransactionOutcome>
 }
 
@@ -609,6 +700,13 @@ export function createTransactionIntentLog(params: {
    * can replace the lock file with a fresh holder's in between.
    */
   lockBreakConfirmDelayMs?: number
+  /**
+   * Test seam: bounded attempts the tx_commit append makes on a transient
+   * lock/IO failure (tests shrink or count the retry budget for speed).
+   */
+  commitAppendAttempts?: number
+  /** Test seam: backoff between tx_commit append retries (ms). */
+  commitRetryDelayMs?: number
 }): TransactionIntentLog {
   const fileName = params.fileName ?? 'transaction-intents.jsonl'
   const filePath = path.join(params.stateDir, fileName)
@@ -618,6 +716,10 @@ export function createTransactionIntentLog(params: {
   const maxTransactions =
     params.maxTransactions ?? TRANSACTION_INTENT_LOG_MAX_TRANSACTIONS
   const maxBytes = params.maxBytes ?? TRANSACTION_INTENT_LOG_MAX_BYTES
+  const commitAppendAttempts =
+    params.commitAppendAttempts ?? TRANSACTION_INTENT_LOG_COMMIT_APPEND_ATTEMPTS
+  const commitRetryDelayMs =
+    params.commitRetryDelayMs ?? TRANSACTION_INTENT_LOG_COMMIT_RETRY_DELAY_MS
 
   /**
    * Token file recording the CURRENT occupant of a pid: `<log>.live-<pid>`.
@@ -948,11 +1050,35 @@ export function createTransactionIntentLog(params: {
     if (!isNonEmptyString(transactionId)) {
       return { ok: false, error: 'commitTransaction requires a transactionId' }
     }
-    return appendEvent({
-      kind: 'tx_commit',
-      transactionId,
-      committedAt: now(),
-    })
+    // LOSSY-FAIL-OPEN REPAIR: the files are already committed by the time
+    // this marker is appended, so a lost tx_commit leaves a tx_begin-only
+    // record that startup recovery would revert — destroying committed work
+    // (a dead owner never blocks the revert). A transient lock timeout or IO
+    // failure is therefore retried a bounded number of times with a tiny
+    // backoff before the structured failure is surfaced. A duplicate append
+    // after a partially-written attempt is harmless: a repeated tx_commit
+    // line for the same transaction is idempotent for recovery (the LAST
+    // event still resolves it) and for the trim.
+    let lastOutcome: IntentOutcome = {
+      ok: false,
+      error: 'commitTransaction did not run',
+    }
+    for (
+      let attempt = 1;
+      attempt <= commitAppendAttempts;
+      attempt += 1
+    ) {
+      lastOutcome = await appendEvent({
+        kind: 'tx_commit',
+        transactionId,
+        committedAt: now(),
+      })
+      if (lastOutcome.ok) return lastOutcome
+      if (attempt < commitAppendAttempts) {
+        await sleep(commitRetryDelayMs)
+      }
+    }
+    return lastOutcome
   }
 
   const abortTransaction = async (
@@ -1023,8 +1149,9 @@ export function createTransactionIntentLog(params: {
         const transactions: RecoveredInterruptedTransaction[] = []
         for (const [transactionId, begin] of begins) {
           // A transaction whose LAST event is tx_begin was interrupted between
-          // its first and last file commit (half-applied). Completed or aborted
-          // transactions are skipped. LIVENESS GUARD (see ownerBlocksRevert):
+          // its first and last file commit (half-applied). Completed, aborted,
+          // or ambiguous-committed transactions are skipped. LIVENESS GUARD
+          // (see ownerBlocksRevert):
           // the revert is deferred only while the recorded owner is provably
           // the SAME live process instance — the pid is alive AND the
           // `.live-<pid>` token file still carries the tx_begin's owner
@@ -1056,6 +1183,7 @@ export function createTransactionIntentLog(params: {
       beforeBytes: string | null,
       beforeMode?: number,
     ) => Promise<void>,
+    readCurrent?: (path: string) => Promise<string | null>,
   ): Promise<RevertTransactionOutcome> => {
     const recovery = await recoverInterruptedTransactions()
     if (!recovery.ok) {
@@ -1072,12 +1200,59 @@ export function createTransactionIntentLog(params: {
     if (!transaction) {
       return { ok: true, status: 'already_resolved', revertedPaths: 0 }
     }
+    // LOSSLESS-AWARE CLASSIFICATION: a tx_begin-only record is normally
+    // half-applied, but it is also what a LOST tx_commit leaves behind after
+    // the files were committed — reverting that would destroy applied work,
+    // because a dead owner never blocks the revert. When the caller can read
+    // the staged paths' current contents, compare them against the recorded
+    // pre-images first. A read that fails (including the containment refusal
+    // for a tampered entry path) leaves the evidence unknown: fall back to
+    // the historical unconditional per-path restore, which fails closed.
+    let divergedPaths: string[] | undefined
+    if (readCurrent !== undefined && transaction.entries.length > 0) {
+      try {
+        divergedPaths = await findDivergedPaths(
+          transaction.entries,
+          readCurrent,
+        )
+      } catch {
+        divergedPaths = undefined
+      }
+    }
+    if (
+      divergedPaths !== undefined &&
+      divergedPaths.length === transaction.entries.length
+    ) {
+      // AMBIGUOUS-COMMITTED: every staged path diverges from its pre-image —
+      // the strongest available evidence the operations actually applied.
+      // NEVER revert; mark the transaction terminally resolved (best-effort:
+      // if the marker append fails too, a later pass re-classifies the same
+      // evidence and reaches the same decision) and surface the outcome.
+      await appendEvent({
+        kind: 'tx_ambiguous_commit',
+        transactionId,
+        ambiguousAt: now(),
+        divergedPaths: [...divergedPaths],
+      })
+      return {
+        ok: true,
+        status: 'ambiguous_committed',
+        revertedPaths: 0,
+        divergedPaths: [...divergedPaths],
+      }
+    }
     // Undo in reverse commit order; a failed entry never blocks the remaining
     // undo steps, and the abort marker is always written so recovery does not
-    // retry the same half-applied transaction forever.
+    // retry the same half-applied transaction forever. When classification
+    // ran, only the DIVERGED paths are restored: a path whose current content
+    // still matches its pre-image was never applied and is left untouched.
+    const entriesToRevert = [...transaction.entries].reverse().filter(
+      (entry) =>
+        divergedPaths === undefined || divergedPaths.includes(entry.path),
+    )
     let revertedPaths = 0
     let firstError: string | undefined
-    for (const entry of [...transaction.entries].reverse()) {
+    for (const entry of entriesToRevert) {
       try {
         await revert(entry.path, entry.beforeBytes ?? null, entry.beforeMode)
         revertedPaths += 1
@@ -1105,7 +1280,15 @@ export function createTransactionIntentLog(params: {
         revertedPaths,
       }
     }
-    return { ok: true, status: 'reverted', revertedPaths }
+    if (divergedPaths === undefined) {
+      return { ok: true, status: 'reverted', revertedPaths }
+    }
+    return {
+      ok: true,
+      status: 'reverted',
+      revertedPaths,
+      divergedPaths,
+    }
   }
 
   return {
@@ -1145,19 +1328,32 @@ export function createTransactionIntentLogForWorkspace(params: {
  * delete of an already-absent path is tolerated (the undo target state). A
  * recorded beforeMode is restored through fs.setMode so a crash-restored
  * file keeps its original permission bits (e.g. an executable's +x bit).
- *
- * CONTAINMENT GUARD: persisted tx_begin entries are only validated as
- * nonempty strings at write time (the write side resolves each staged path
- * through the containment resolvers, but the persisted bytes carry no such
- * guarantee), so a buggy or tampered-but-well-formed log line must not drive
- * startup recovery to overwrite or delete files outside the workspace the
- * log guards. The entry path is therefore resolved through the canonical
- * containment resolver and REFUSED — fail closed, via a thrown error that
- * the per-entry revert loop converts into a structured revert_failed outcome
- * (the abort marker is still written so the transaction is never replayed) —
- * unless its resolved AND symlink-dereferenced location is inside cwd with
- * `scope: 'project'`.
+ * The entry path is contained through resolveContainedEntryPath (fail
+ * closed; see there).
  */
+/**
+ * Resolves a persisted intent-log entry path against the workspace its log
+ * guards. Persisted tx_begin entries are only validated as nonempty strings
+ * at write time (the write side resolves each staged path through the
+ * containment resolvers, but the persisted bytes carry no such guarantee),
+ * so a buggy or tampered-but-well-formed log line must not reach files
+ * outside the workspace: the path is resolved through the canonical
+ * containment resolver and REFUSED — fail closed, via a thrown error —
+ * unless its resolved AND symlink-dereferenced location is inside cwd with
+ * `scope: 'project'`. Shared by the revert and the lossless-aware current-
+ * content inspection, so a tampered path can neither be written nor probed
+ * outside the workspace.
+ */
+function resolveContainedEntryPath(cwd: string, entryPath: string) {
+  const resolved = resolveProjectPath(cwd, entryPath)
+  if (!resolved || resolved.scope !== 'project') {
+    throw new Error(
+      `transaction intent log entry path is not contained in the workspace; refusing: ${entryPath}`,
+    )
+  }
+  return resolved
+}
+
 export async function revertPathToPreImage(params: {
   cwd: string
   fs: Pick<CodebuffFileSystem, 'mkdir' | 'unlink' | 'writeFile' | 'setMode'>
@@ -1166,13 +1362,7 @@ export async function revertPathToPreImage(params: {
   beforeMode?: number
 }): Promise<void> {
   const { cwd, fs, entryPath, beforeBytes, beforeMode } = params
-  const resolved = resolveProjectPath(cwd, entryPath)
-  if (!resolved || resolved.scope !== 'project') {
-    throw new Error(
-      `transaction intent log entry path is not contained in the workspace; refusing to revert: ${entryPath}`,
-    )
-  }
-  const fullPath = resolved.realFullPath
+  const fullPath = resolveContainedEntryPath(cwd, entryPath).realFullPath
   await fs.mkdir(path.dirname(fullPath), { recursive: true })
   if (beforeBytes === null) {
     try {
@@ -1207,6 +1397,14 @@ export async function revertPathToPreImage(params: {
  * aborted so it is never replayed. Best-effort per transaction and never
  * throws — a failed revert is reported in the outcome and logged, never fatal
  * to startup.
+ *
+ * LOSSLESS-AWARE: before reverting, each staged path's current content is
+ * compared with its recorded pre-image. A transaction whose staged paths ALL
+ * diverge is treated as ambiguous-committed (its tx_commit append was
+ * probably lost after the files were committed): it is never reverted, is
+ * marked with a terminal tx_ambiguous_commit event, and is counted in the
+ * outcome. A mixed (half-applied) transaction has only its divergent paths
+ * restored.
  */
 export async function recoverAndRevertInterruptedTransactions(params: {
   intentLog: TransactionIntentLog
@@ -1214,7 +1412,17 @@ export async function recoverAndRevertInterruptedTransactions(params: {
   fs: Pick<CodebuffFileSystem, 'mkdir' | 'unlink' | 'writeFile' | 'setMode'>
   logger?: Pick<Logger, 'debug' | 'warn'>
 }): Promise<
-  | { ok: true; revertedTransactions: number; revertedPaths: number }
+  | {
+      ok: true
+      revertedTransactions: number
+      revertedPaths: number
+      /**
+       * Transactions whose commit outcome was ambiguous (every staged path
+       * diverged from its pre-image): left in place and marked with a
+       * terminal tx_ambiguous_commit event instead of being reverted.
+       */
+      ambiguousCommittedTransactions: number
+    }
   | {
       ok: false
       error: string
@@ -1238,12 +1446,40 @@ export async function recoverAndRevertInterruptedTransactions(params: {
   }
   let revertedTransactions = 0
   let revertedPaths = 0
+  let ambiguousCommittedTransactions = 0
   let firstError: string | undefined
+  // Inspection seam for the lossless-aware classification: reads a staged
+  // path's CURRENT content through the same containment guard the revert
+  // uses, so a tampered entry path cannot be probed outside the workspace
+  // either (a refusal throws and the revert falls back to its fail-closed
+  // per-path restore). The fs Pick above stays unchanged for backward
+  // compatibility; an adapter whose readFile is absent degrades to the
+  // legacy unconditional per-path restore (no classification).
+  const fsReadFile = (fs as Partial<CodebuffFileSystem>).readFile
+  const readCurrentAtEntry = fsReadFile
+    ? async (entryPath: string): Promise<string | null> => {
+        const fullPath = resolveContainedEntryPath(cwd, entryPath).realFullPath
+        try {
+          return await fsReadFile(fullPath, 'utf8')
+        } catch (error) {
+          if (
+            typeof error === 'object' &&
+            error !== null &&
+            'code' in error &&
+            (error as { code?: unknown }).code === 'ENOENT'
+          ) {
+            return null
+          }
+          throw error
+        }
+      }
+    : undefined
   for (const transaction of recovery.transactions) {
     const outcome = await intentLog.revertTransaction(
       transaction.transactionId,
       async (entryPath, beforeBytes, beforeMode) =>
         revertPathToPreImage({ cwd, fs, entryPath, beforeBytes, beforeMode }),
+      readCurrentAtEntry,
     )
     if (outcome.ok) {
       if (outcome.status === 'reverted') {
@@ -1256,6 +1492,17 @@ export async function recoverAndRevertInterruptedTransactions(params: {
             revertedPaths: outcome.revertedPaths,
           },
           'Reverted an interrupted multi-file transaction from the durable intent log',
+        )
+      }
+      if (outcome.status === 'ambiguous_committed') {
+        ambiguousCommittedTransactions += 1
+        logger?.warn?.(
+          {
+            transactionId: transaction.transactionId,
+            operationId: transaction.operationId,
+            divergedPaths: outcome.divergedPaths ?? [],
+          },
+          'An interrupted transaction\'s staged paths all diverge from their recorded pre-images: the work very likely committed, so it was NOT reverted and was marked ambiguous-committed',
         )
       }
       continue
@@ -1278,5 +1525,10 @@ export async function recoverAndRevertInterruptedTransactions(params: {
       revertedPaths,
     }
   }
-  return { ok: true, revertedTransactions, revertedPaths }
+  return {
+    ok: true,
+    revertedTransactions,
+    revertedPaths,
+    ambiguousCommittedTransactions,
+  }
 }

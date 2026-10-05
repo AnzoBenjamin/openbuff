@@ -366,8 +366,8 @@ export function parseCliArgs(
     // with --export. Kept off the top-level program for exactly the reason
     // the comment above names for `serve`: registering `.command('dash')`
     // there would break positional prompts. The dashboard serves on
-    // 127.0.0.1 ONLY and prints its URL to stdout; the token (when the CLI
-    // generates one) is printed to stderr because stdout may be piped.
+    // 127.0.0.1 ONLY and prints the tokenless base URL to stdout (stdout may
+    // be piped); the token-bearing URL and the generated token go to stderr.
     const dashProgram = new Command()
     dashProgram
       .name('openbuff dash')

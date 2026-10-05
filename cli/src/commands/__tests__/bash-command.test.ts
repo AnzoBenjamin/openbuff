@@ -44,9 +44,11 @@ describe('bash command', () => {
   // runBashCommand calls through the turn-snapshots module namespace, so a
   // spyOn keeps the suite hermetic (no real git snapshots from dispatch
   // tests) and mock.restore() in afterEach undoes it — no mock.module, so
-  // nothing leaks to sibling test files in the same process.
+  // nothing leaks to sibling test files in the same process. The spy targets
+  // capturePreDispatchSnapshot, the awaited bounded barrier runBashCommand
+  // now uses instead of the old fire-and-forget createTurnSnapshot call.
   beforeEach(() => {
-    spyOn(turnSnapshots, 'createTurnSnapshot').mockImplementation(() =>
+    spyOn(turnSnapshots, 'capturePreDispatchSnapshot').mockImplementation(() =>
       Promise.resolve({
         status: 'skipped',
         reason: 'test',
@@ -208,15 +210,16 @@ describe('bash command', () => {
   })
 
   describe('runBashCommand turn snapshots', () => {
-    test('fires a fire-and-forget createTurnSnapshot with label shell', async () => {
-      runBashCommand('echo openbuff-snapshot-test')
+    test('awaits the bounded pre-dispatch snapshot with label shell before dispatch', async () => {
+      await runBashCommand('echo openbuff-snapshot-test')
 
-      // The snapshot is fire-and-forget: one macrotask turn is enough for
-      // the call to have been made, and dispatch never awaits it.
-      await new Promise((resolve) => setTimeout(resolve, 0))
-
-      expect(turnSnapshots.createTurnSnapshot).toHaveBeenCalledTimes(1)
-      expect(turnSnapshots.createTurnSnapshot).toHaveBeenCalledWith({
+      // runBashCommand awaits capturePreDispatchSnapshot (the bounded
+      // barrier) before dispatching, so once it resolves the snapshot call
+      // has been made with the shell label.
+      expect(
+        turnSnapshots.capturePreDispatchSnapshot,
+      ).toHaveBeenCalledTimes(1)
+      expect(turnSnapshots.capturePreDispatchSnapshot).toHaveBeenCalledWith({
         label: 'shell',
       })
     })
@@ -258,7 +261,9 @@ describe('bash command', () => {
       )
 
       // The command was never dispatched: no pre-command shell snapshot ran.
-      expect(turnSnapshots.createTurnSnapshot).not.toHaveBeenCalled()
+      expect(
+        turnSnapshots.capturePreDispatchSnapshot,
+      ).not.toHaveBeenCalled()
 
       // The block is surfaced in chat history as a system message.
       expect(setMessages).toHaveBeenCalledTimes(1)
@@ -286,7 +291,9 @@ describe('bash command', () => {
       )
 
       // The command was never dispatched: no pre-command shell snapshot ran.
-      expect(turnSnapshots.createTurnSnapshot).not.toHaveBeenCalled()
+      expect(
+        turnSnapshots.capturePreDispatchSnapshot,
+      ).not.toHaveBeenCalled()
       // Bash mode did not stay stuck on the blocked command.
       expect(useChatStore.getState().inputMode).toBe('default')
       expect(setMessages).toHaveBeenCalledTimes(1)
@@ -297,7 +304,9 @@ describe('bash command', () => {
 
       runBashCommand('echo blocked-during-bisect')
 
-      expect(turnSnapshots.createTurnSnapshot).not.toHaveBeenCalled()
+      expect(
+        turnSnapshots.capturePreDispatchSnapshot,
+      ).not.toHaveBeenCalled()
       const messages = useChatStore.getState().messages
       expect(
         messages.some(
@@ -311,9 +320,8 @@ describe('bash command', () => {
     test('bash dispatch still proceeds when no bisection is running', async () => {
       await routeUserPrompt(createRouteParams({ inputValue: '!echo hello' }))
 
-      // The fire-and-forget pre-command snapshot is the dispatch marker.
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(turnSnapshots.createTurnSnapshot).toHaveBeenCalledWith({
+      // The awaited pre-command snapshot is the dispatch marker.
+      expect(turnSnapshots.capturePreDispatchSnapshot).toHaveBeenCalledWith({
         label: 'shell',
       })
     })
@@ -700,8 +708,10 @@ describe('bash command', () => {
 
 describe('openbuff dash command (--no-open URL contract)', () => {
   // The real URL embeds the auth token as ?token=..., which is exactly what
-  // the --no-open contract forbids printing on any channel.
+  // the --no-open contract forbids printing on any channel, and what the
+  // default mode forbids printing on the pipeable stdout channel.
   const URL_WITH_TOKEN = 'http://127.0.0.1:4567/?token=sekrit-token'
+  const URL_WITHOUT_TOKEN = 'http://127.0.0.1:4567'
 
   // A zero-arg stub is assignable to `typeof startDashServer`; the real one
   // binds a TCP port, so tests inject this hermetic seam instead.
@@ -737,10 +747,15 @@ describe('openbuff dash command (--no-open URL contract)', () => {
     return { stdout: stdout.join(''), stderr: stderr.join('') }
   }
 
-  test('default mode prints the token-bearing URL to stdout only', async () => {
+  test('default mode: stdout carries the tokenless base URL; the token-bearing URL rides stderr', async () => {
     const { stdout, stderr } = await runServingDash({ open: true })
-    expect(stdout).toBe(`${URL_WITH_TOKEN}\n`)
-    expect(stderr).not.toContain(URL_WITH_TOKEN)
+    // stdout may be piped/tee'd, so it must never carry the ?token= secret:
+    // it carries only the tokenless base URL for scripting.
+    expect(stdout).toBe(`${URL_WITHOUT_TOKEN}\n`)
+    expect(stdout).not.toContain('sekrit-token')
+    // The full token-bearing URL is on stderr, clearly labeled.
+    expect(stderr).toContain(URL_WITH_TOKEN)
+    expect(stderr).toContain('serving at')
   })
 
   test('--no-open prints the token-bearing URL nowhere (stderr included)', async () => {
@@ -749,6 +764,7 @@ describe('openbuff dash command (--no-open URL contract)', () => {
     // The URL embeds the auth token (?token=...): with --no-open it must not
     // ride ANY channel, stderr included (the old behavior leaked it there).
     expect(stderr).not.toContain(URL_WITH_TOKEN)
+    expect(stderr).not.toContain(URL_WITHOUT_TOKEN)
     expect(stderr).not.toContain('serving at')
     expect(stderr).toContain('press Ctrl+C to stop')
   })

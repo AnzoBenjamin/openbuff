@@ -3301,7 +3301,7 @@ export async function executeToolCall<T extends ToolName>(
       toolName,
       toolCallId: toolCall.toolCallId,
       content: validatedOutput,
-      sentAt: Date.now(),
+      sentAt: (params.clock ?? realClock).now(),
       ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
     }
 
@@ -3688,7 +3688,7 @@ export async function executeCustomToolCall(
         toolName,
         toolCallId: toolCall.toolCallId,
         content: result,
-        sentAt: Date.now(),
+        sentAt: (params.clock ?? realClock).now(),
         ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
       } satisfies ToolMessage
       logger.debug(

@@ -1,11 +1,22 @@
 import { execFile } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
 import { getProjectRoot } from '../project-files'
 import { getSystemProcessEnv } from './env'
+import { logger } from './logger'
 
 const execFileAsync = promisify(execFile)
 
@@ -115,6 +126,43 @@ const defaultRunGit: GitRunner = async (args, opts) => {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Finding b (p2-c-turn-snapshots): the structured TurnSnapshotOutcome union
+ * exists precisely so failures are inspectable, but fire-and-forget callers
+ * used to drop it, leaving a broken snapshot pipeline invisible until
+ * /undo-turn reported 'nothing-to-undo'. Callers route outcomes through
+ * `logTurnSnapshotFailure`, which logs ONE concise warning per distinct
+ * failure; a persistent failure repeating with the same message is downgraded
+ * to debug so it cannot spam every turn/command. `skipped` outcomes stay
+ * silent (a paused-during-bisect or unchanged-tree skip is not a failure).
+ */
+let lastWarnedSnapshotMessage: string | undefined
+
+function warnTurnSnapshotIssue(scope: string, message: string): void {
+  const line = `${scope}: ${message}`
+  if (line === lastWarnedSnapshotMessage) {
+    logger.debug({ scope, message }, line)
+    return
+  }
+  lastWarnedSnapshotMessage = line
+  logger.warn({ scope, message }, line)
+}
+
+/** Clear the warn latch (used by tests). */
+export function resetTurnSnapshotWarnLatch(): void {
+  lastWarnedSnapshotMessage = undefined
+}
+
+/** Surface an 'error' snapshot outcome as one latched warning; others are silent. */
+export function logTurnSnapshotFailure(
+  outcome: TurnSnapshotOutcome,
+  scope: 'turn' | 'shell',
+): void {
+  if (outcome.status === 'error') {
+    warnTurnSnapshotIssue(scope, outcome.message)
+  }
 }
 
 function resolveProjectRoot(opts?: { projectRoot?: string }): string | undefined {
@@ -235,8 +283,11 @@ export async function createTurnSnapshot(
   // snapshot chain. A concurrent snapshot would chain onto a temporarily
   // rolled-back probed tree (or the in-flight final restore) instead of the
   // newest state, corrupting the chain the search is walking. Fail closed:
-  // snapshots are paused until the bisection finishes.
-  if (bisectRunning) {
+  // snapshots are paused until the bisection finishes. The bisectRunning
+  // flag is process-local, so the cross-process bisection lock file is
+  // checked too: a second CLI instance's bisection must pause snapshots
+  // here just the same.
+  if (bisectRunning || isTurnBisectionLockHeld(root)) {
     return {
       status: 'skipped',
       reason:
@@ -310,6 +361,52 @@ export async function createTurnSnapshot(
 }
 
 /**
+ * Bounded pre-dispatch shell snapshot (finding a, p2-c-turn-snapshots): the
+ * shell-labeled snapshot must be CAPTURED before a mutating shell command
+ * runs, not merely started — a fire-and-forget snapshot loses the race
+ * against a fast mutating command (`rm tracked-file`) and records the
+ * post-mutation tree, so /undo-turn would restore the mutated state. Shell
+ * commands are long-lived, so awaiting a bounded capture is acceptable
+ * latency: this wrapper races createTurnSnapshot against a timeout and, on
+ * timeout, proceeds (the snapshot keeps running in the background) after
+ * logging the miss once. Implemented here — not at the call site — so the
+ * injectable GitRunner seam and the timeout bound stay testable.
+ */
+export const PRE_DISPATCH_SNAPSHOT_TIMEOUT_MS = 5_000
+
+export type PreDispatchSnapshotOpts = TurnSnapshotOpts & {
+  /** Test injection hook; production uses PRE_DISPATCH_SNAPSHOT_TIMEOUT_MS. */
+  timeoutMs?: number
+}
+
+export async function capturePreDispatchSnapshot(
+  opts?: PreDispatchSnapshotOpts,
+  deps?: TurnSnapshotDeps,
+): Promise<TurnSnapshotOutcome> {
+  const timeoutMs = opts?.timeoutMs ?? PRE_DISPATCH_SNAPSHOT_TIMEOUT_MS
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<TurnSnapshotOutcome>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      warnTurnSnapshotIssue(
+        'pre-dispatch shell snapshot',
+        `timed out after ${timeoutMs}ms - dispatching the shell command without a pre-command snapshot`,
+      )
+      resolve({
+        status: 'skipped',
+        reason: `pre-dispatch snapshot timed out after ${timeoutMs}ms`,
+      })
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([createTurnSnapshot(opts, deps), timedOut])
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle)
+    }
+  }
+}
+
+/**
  * SEC (review: snapshot-secrets-in-mirror-push): enforce the retention bound
  * on the private snapshot ref. Snapshots capture the UNCOMMITTED tracked
  * tree, which may hold secrets that were never committed; `git push
@@ -320,6 +417,17 @@ export async function createTurnSnapshot(
  * unreachable and stops growing the mirror-push surface. Snapshot
  * mechanics (chaining, restore, undo) are unchanged: only the retained
  * history length is bound. Best-effort and total: never throws.
+ *
+ * DISCLOSED REPO-GLOBAL SIDE EFFECT (audit finding, p2-c-turn-snapshots:
+ * retention pruning mutates refs/replace): the graft writes
+ * `refs/replace/<graftTarget>` — a REPO-GLOBAL namespace, NOT the private
+ * `refs/openbuff/turns` ref. Replace refs are honored by the user's own
+ * `git log`/`git diff` invocations that touch those objects and are pushed
+ * by `git push --mirror` (one refs/replace entry accumulates per prune
+ * cycle). Normal browsing is unaffected because snapshot commits sit
+ * outside HEAD history, but this mutation is outside the module's "private
+ * ref only" safety model and is disclosed here rather than hidden. The
+ * mechanism is unchanged by this disclosure.
  */
 export async function pruneTurnSnapshots(
   opts?: { projectRoot?: string; maxRetained?: number },
@@ -515,7 +623,10 @@ export async function restoreToTurn(
  *   permission denied) is a command-level error instead of a failing probe.
  * - An in-flight guard rejects a second concurrent run: only one bisection
  *   may rewrite the tracked working tree at a time, so the ALWAYS-restores
- *   contract above cannot be broken by interleaved checkouts.
+ *   contract above cannot be broken by interleaved checkouts. The guard
+ *   combines a process-local flag with a cross-process O_EXCL lock file
+ *   keyed by the repo path (acquireTurnBisectionLock), so a second
+ *   openbuff instance on the same repo fails closed as well.
  */
 
 let bisectCancelled = false
@@ -525,6 +636,8 @@ let bisectCancelled = false
  * at a time. Concurrent runs (or a bisection overlapping an agent turn)
  * would interleave checkoutSnapshotTree rewrites and break the
  * "ALWAYS restores the newest snapshot's tree when the run ends" contract.
+ * This flag is process-local; the cross-process O_EXCL lock file below
+ * (acquireTurnBisectionLock) covers second CLI instances on the same repo.
  */
 let bisectRunning = false
 
@@ -536,6 +649,109 @@ export function isTurnBisectionRunning(): boolean {
 /** Request cancellation of a running turn bisection (/bisect-turn stop). */
 export function cancelTurnBisection(): void {
   bisectCancelled = true
+}
+
+/**
+ * Cross-process bisection guard (finding c, p2-c-turn-snapshots):
+ * `bisectRunning` is process-local, so two openbuff CLI instances sharing
+ * one repo could each run a bisection and interleave checkoutSnapshotTree
+ * rewrites ACROSS processes — exactly the corruption the in-flight guard
+ * documents. The guard is an exclusive O_EXCL-created lock file keyed by
+ * the resolved repo path under os.tmpdir (per-repo keying keeps the
+ * hermetic temp-repo tests isolated; mirrors the transaction-intent-log
+ * pid+token lock pattern conceptually, no new dependencies). The file
+ * records the holder's pid so a crashed process's stale lock is detected as
+ * dead and stolen instead of wedging the repo, and runTurnBisection always
+ * releases the lock in its finally.
+ */
+
+const BISECT_LOCK_DIR = path.join(tmpdir(), 'openbuff-turn-bisect')
+
+/** The bisection lock file path for a repo (exposed for diagnostics/tests). */
+export function turnBisectionLockPath(projectRoot: string): string {
+  const key = createHash('sha1').update(path.resolve(projectRoot)).digest('hex')
+  return path.join(BISECT_LOCK_DIR, `${key}.lock`)
+}
+
+function readBisectLockPid(projectRoot: string): number | undefined {
+  try {
+    const pid = Number.parseInt(
+      readFileSync(turnBisectionLockPath(projectRoot), 'utf8').trim(),
+      10,
+    )
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+  } catch {
+    // Missing or unreadable lock file: treat as not held.
+    return undefined
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM means the process exists but signal delivery is denied.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Whether a live holder (this or another process) currently owns the lock. */
+export function isTurnBisectionLockHeld(projectRoot: string): boolean {
+  const pid = readBisectLockPid(projectRoot)
+  if (pid === undefined) {
+    return false
+  }
+  if (pid === process.pid) {
+    return true
+  }
+  return isProcessAlive(pid)
+}
+
+function createBisectLockFile(projectRoot: string): boolean {
+  try {
+    mkdirSync(BISECT_LOCK_DIR, { recursive: true })
+    const fd = openSync(turnBisectionLockPath(projectRoot), 'wx')
+    try {
+      writeSync(fd, String(process.pid))
+    } finally {
+      closeSync(fd)
+    }
+    return true
+  } catch {
+    // EEXIST (or an unwritable tmpdir): held by someone else — fail closed.
+    return false
+  }
+}
+
+/**
+ * Acquire the cross-process bisection lock for `projectRoot`. Returns false
+ * when a live holder owns it (fail closed). A lock left behind by a dead
+ * process is stolen, so a crash cannot wedge bisections on the repo forever.
+ */
+export function acquireTurnBisectionLock(projectRoot: string): boolean {
+  if (createBisectLockFile(projectRoot)) {
+    return true
+  }
+  const pid = readBisectLockPid(projectRoot)
+  if (pid === undefined || pid === process.pid || isProcessAlive(pid)) {
+    return false
+  }
+  try {
+    unlinkSync(turnBisectionLockPath(projectRoot))
+  } catch {
+    return false
+  }
+  return createBisectLockFile(projectRoot)
+}
+
+/** Release the cross-process bisection lock (best-effort, never throws). */
+export function releaseTurnBisectionLock(projectRoot: string): void {
+  try {
+    unlinkSync(turnBisectionLockPath(projectRoot))
+  } catch {
+    // Already released or never held: cleanup is best-effort.
+  }
 }
 
 class BisectCancelledError extends Error {}
@@ -727,6 +943,18 @@ export async function runTurnBisection(
   if (!root) {
     return { status: 'unavailable' }
   }
+  // Cross-process guard (finding c): the bisectRunning flag cannot see a
+  // second openbuff instance on the same repo, so a bisection also takes an
+  // exclusive O_EXCL lock file keyed by the repo path. A lock held by a live
+  // other process fails closed with the structured error shape; the lock is
+  // released in the finally below so it can never leak past the run.
+  if (!acquireTurnBisectionLock(root)) {
+    return {
+      status: 'error',
+      message:
+        'a turn bisection is already running in another openbuff process on this repository - wait for it to finish before starting another.',
+    }
+  }
   const command = opts?.command ?? 'bun test'
   const runSuite =
     deps?.runTestSuite ??
@@ -853,5 +1081,6 @@ export async function runTurnBisection(
     return { status: 'error', message: toErrorMessage(error) }
   } finally {
     bisectRunning = false
+    releaseTurnBisectionLock(root)
   }
 }

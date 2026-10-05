@@ -1,7 +1,9 @@
-import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
+import { realClock, realIdGen } from '@codebuff/common/deps/real-runtime-deps'
+
 import type { AgentState } from '@codebuff/common/types/session-state'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 
 type ActiveLease = {
   leaseId: string
@@ -38,7 +40,7 @@ function overlaps(left: string, right: string): boolean {
   )
 }
 
-function sweep(now = Date.now()): void {
+function sweep(now = realClock.now()): void {
   for (const [leaseId, lease] of activeLeases) {
     if (lease.expiresAt <= now) activeLeases.delete(leaseId)
   }
@@ -51,6 +53,8 @@ export function acquireWorkspacePathLease(params: {
   taskId?: string
   paths: string[]
   leaseMs?: number
+  /** Injectable wall-clock (P2-T1); resolves to realClock when omitted. */
+  clock?: Clock
 }): string | undefined {
   const requested = [
     ...new Set(params.paths.map(normalizePattern).filter(Boolean)),
@@ -71,8 +75,8 @@ export function acquireWorkspacePathLease(params: {
       )
     }
   }
-  const leaseId = randomUUID()
-  const now = Date.now()
+  const leaseId = realIdGen.uuid()
+  const now = (params.clock ?? realClock).now()
   const expiresAt = now + Math.max(1, params.leaseMs ?? DEFAULT_LEASE_MS)
   activeLeases.set(leaseId, {
     leaseId,
@@ -97,6 +101,7 @@ export function acquireWorkspacePathLease(params: {
 export function releaseWorkspacePathLease(
   state: AgentState,
   leaseId: string | undefined,
+  now?: number,
 ): void {
   if (!leaseId) return
   activeLeases.delete(leaseId)
@@ -105,7 +110,7 @@ export function releaseWorkspacePathLease(
   )
   if (durable && durable.status === 'active') {
     durable.status = 'released'
-    durable.releasedAt = Date.now()
+    durable.releasedAt = now ?? realClock.now()
   }
 }
 
@@ -120,6 +125,8 @@ export function extendWorkspacePathLease(params: {
   leaseId: string
   ownerAgentId: string
   leaseMs?: number
+  /** Injectable wall-clock (P2-T1); resolves to realClock when omitted. */
+  clock?: Clock
 }): { leaseId: string; expiresAt: number } {
   const lease = params.state.workspacePathLeases?.find(
     (candidate) => candidate.leaseId === params.leaseId,
@@ -140,14 +147,14 @@ export function extendWorkspacePathLease(params: {
     )
   }
   const runtime = activeLeases.get(params.leaseId)
-  if (runtime === undefined && lease.expiresAt > Date.now()) {
+  if (runtime === undefined && lease.expiresAt > (params.clock ?? realClock).now()) {
     // Durable-but-not-runtime is the interrupted/crashed-recovery shape: the
     // runtime map was lost, so the extension cannot refresh its clock.
     throw new Error(
       `Workspace path lease extension failed: lease ${params.leaseId} is no longer held in runtime memory.`,
     )
   }
-  const now = Date.now()
+  const now = (params.clock ?? realClock).now()
   const expiresAt = now + Math.max(1, params.leaseMs ?? DEFAULT_LEASE_MS)
   lease.expiresAt = expiresAt
   if (runtime !== undefined) {
@@ -156,12 +163,15 @@ export function extendWorkspacePathLease(params: {
   return { leaseId: params.leaseId, expiresAt }
 }
 
-export function reconcileInterruptedPathLeases(state: AgentState): void {
+export function reconcileInterruptedPathLeases(
+  state: AgentState,
+  now?: number,
+): void {
   for (const lease of state.workspacePathLeases ?? []) {
     if (lease.status !== 'active') continue
     if (!activeLeases.has(lease.leaseId)) {
       lease.status = 'interrupted'
-      lease.releasedAt = Date.now()
+      lease.releasedAt = now ?? realClock.now()
     }
   }
 }

@@ -42,7 +42,7 @@ const INTERACTIVE_BASH_TIMEOUT_SECONDS = 10 * 60
  * Run a bash command with automatic ghost/direct mode selection.
  * Uses ghost mode when streaming or chain in progress, otherwise adds directly to chat history.
  */
-export function runBashCommand(command: string) {
+export async function runBashCommand(command: string) {
   const {
     streamingAgents,
     isChainInProgress,
@@ -95,12 +95,22 @@ export function runBashCommand(command: string) {
     setMessages((prev) => [...prev, assistantMessage])
   }
 
-  // Fire-and-forget pre-command snapshot: captures the tracked tree
-  // immediately before arbitrary user shell mutation without delaying
-  // dispatch (single choke point covering both ghost and direct modes).
+  // Bounded pre-dispatch snapshot (finding a, p2-c-turn-snapshots): the
+  // capture is AWAITED before dispatch so a fast mutating command (`rm
+  // tracked-file`) cannot beat the snapshot's `git write-tree` and make the
+  // 'shell' snapshot record the POST-mutation tree (which /undo-turn would
+  // then restore). Shell commands are long-lived, so the bounded capture
+  // (5s timeout inside capturePreDispatchSnapshot; on timeout it logs once
+  // and the outcome is 'skipped' so dispatch proceeds) is acceptable
+  // latency. Single choke point covering both ghost and direct modes;
   // runBashCommand has no async completion seam, so the after-state is
-  // covered by the next turn's snapshot.
-  void turnSnapshots.createTurnSnapshot({ label: 'shell' }).catch(() => undefined)
+  // covered by the next turn's snapshot. Failures surface through
+  // logTurnSnapshotFailure (finding b): one latched warning per distinct
+  // error — never silent, never spammy.
+  await turnSnapshots
+    .capturePreDispatchSnapshot({ label: 'shell' })
+    .then((outcome) => turnSnapshots.logTurnSnapshotFailure(outcome, 'shell'))
+    .catch(() => undefined)
 
   runTerminalCommand({
     command,
@@ -366,7 +376,7 @@ export async function routeUserPrompt(
     setInputFocused(true)
     inputRef.current?.focus()
 
-    runBashCommand(trimmed)
+    void runBashCommand(trimmed)
     return
   }
 
@@ -407,7 +417,7 @@ export async function routeUserPrompt(
     const command = trimmed.slice(1)
     saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-    runBashCommand(command)
+    void runBashCommand(command)
     return
   }
 

@@ -169,6 +169,7 @@ import type {
   JournalReader,
   JournalWriter,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import { createRunResumeDriver } from './services/run-resume-driver'
 
 /**
  * Audit fix (D): tool calls whose receipt can contain file actions — the same
@@ -1265,11 +1266,23 @@ async function runOnce({
   // client-origin call of each (server-config, tool) pair is gated behind the
   // host approver; subsequent calls of the same tool this run run freely.
   const approvedClientMcpTools = new Set<string>()
+  // P2-audit-fix-8: production crash-resume driver. Built exactly when a
+  // journal reader is wired (the same condition under which the runtime's
+  // loop-entry block builds the resume report) and threaded additively into
+  // the agent-runtime deps so loopAgentSteps' existing not-clean branch can
+  // ACT on the report: re-drive in-flight children (best-effort; recorded)
+  // and re-issue interrupted background intents with the durable respawnOf
+  // marker. Fail-open by contract; a run with no journalReader gets no
+  // resumeDriver field at all and stays byte-identical.
+  const resumeDriver = journalReader
+    ? createRunResumeDriver({ journalWriter, journalReader, logger })
+    : undefined
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
     apiKey,
     journalWriter,
     journalReader,
+    ...(resumeDriver ? { resumeDriver } : {}),
     handleStepsLogChunk: () => {
       // Does nothing for now
     },

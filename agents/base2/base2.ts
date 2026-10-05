@@ -7386,21 +7386,35 @@ ${guideSections}
           // Hoisted once: this is serialized handleSteps code, so repeating the
           // cast per control-plane member is pure duplication.
           const controlPlane = (params as any)?.orchestrationControlPlane
-          const transition = controlPlane?.transitionBase2Gate
+          const transition = controlPlane?.transitionBase2GateSafe
           if (typeof phase === 'string' && typeof transition === 'function') {
-            // Own try/catch: base2GateWorkflowV1 THROWS on an illegal
-            // transition (e.g. 'repair_loop' from the default 'idle'). Sharing
-            // the outer catch would drop both the durable sink line and the
-            // console.info line for exactly the event most worth recording, so
-            // a rejected phase transition must not suppress telemetry.
-            try {
-              mutableAgentState.workflowStates ??= {}
-              mutableAgentState.workflowStates['base2-gate-v1'] = transition({
-                current: mutableAgentState.workflowStates['base2-gate-v1'],
-                phase,
-              })
-            } catch {
-              // Leave the previous workflow state in place and still emit below.
+            // Structured never-throw adoption (P2-T6b): transitionBase2GateSafe
+            // returns `{ ok: true, state }` | `{ ok: false, error, from,
+            // event }` instead of raising, so an illegal transition (e.g.
+            // 'repair_loop' from the default 'idle') is RECORDED — from+event
+            // land in the same telemetry channels as the phase itself — rather
+            // than silently swallowed while the prior state stays in place.
+            // The success path stays byte-identical to the pre-adoption call
+            // (same `transitionWorkflow` result written to the same key) and
+            // this branch can still never throw, so telemetry keeps blocking
+            // the loop for nothing.
+            mutableAgentState.workflowStates ??= {}
+            const outcome = transition({
+              current: mutableAgentState.workflowStates['base2-gate-v1'],
+              phase,
+            })
+            if (outcome && typeof outcome === 'object' && outcome.ok === true) {
+              mutableAgentState.workflowStates['base2-gate-v1'] = outcome.state
+            } else if (outcome && typeof outcome === 'object') {
+              // Rejected transition: keep the prior state in place (it stays
+              // authoritative), but publish the structured error alongside it
+              // under the same workflow-state key so the sink (and the console
+              // channel below) name exactly which from→event edge was illegal.
+              mutableAgentState.workflowStates['base2-gate-v1-last-error'] = {
+                error: outcome.error,
+                from: outcome.from,
+                event: outcome.event,
+              }
             }
           }
           // Built BEFORE the console emit on purpose: both channels must share

@@ -4,6 +4,8 @@ import { Database } from 'bun:sqlite'
 
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
 import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
+import type { RunResumeReport } from '@codebuff/agent-runtime/util/run-journal'
+import type { RunReplayDriverOutcome } from '@codebuff/agent-runtime/util/run-replay-driver'
 import type {
   JournalReader,
   JournalWriter,
@@ -20,6 +22,8 @@ let capturedDeps:
       journalReader?: JournalReader
       hasJournalWriter: boolean
       hasJournalReader: boolean
+      resumeDriver?: (report: RunResumeReport) => Promise<unknown>
+      hasResumeDriver: boolean
     }
   | undefined
 let callMainPromptCount = 0
@@ -36,6 +40,7 @@ const installCallMainPromptSpy = () =>
       params: Parameters<typeof mainPromptModule.callMainPrompt>[0] & {
         journalWriter?: JournalWriter
         journalReader?: JournalReader
+        resumeDriver?: (report: RunResumeReport) => Promise<unknown>
       },
     ) => {
       callMainPromptCount += 1
@@ -44,6 +49,8 @@ const installCallMainPromptSpy = () =>
         journalReader: params.journalReader,
         hasJournalWriter: 'journalWriter' in params,
         hasJournalReader: 'journalReader' in params,
+        resumeDriver: params.resumeDriver,
+        hasResumeDriver: 'resumeDriver' in params,
       }
       return {
         sessionState: params.action.sessionState,
@@ -235,6 +242,248 @@ describe('run-journal wiring (P2-T2)', () => {
       // never matches the journaled correlation — proving the §4c fix cannot
       // rely on toolCallId and must use toolResultForInput.
       expect(reader.toolResultFor(runId, 'a-brand-new-uuid')).toBeUndefined()
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('threads a production resumeDriver when a journalReader is wired (P2-audit-fix-8)', async () => {
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: { now: () => 1_000 },
+      createDatabase: (path) => new Database(path),
+    })
+    try {
+      capturedDeps = undefined
+      callMainPromptCount = 0
+      const client = new OpenbuffClient({
+        apiKey: 'test-key',
+        journalWriter: journal,
+        journalReader: journal,
+        agentDefinitions: [
+          {
+            id: 'journal-test-agent',
+            displayName: 'Journal Test Agent',
+            model: 'openai/gpt-5.1',
+            outputMode: 'last_message',
+          },
+        ],
+      })
+
+      await client.run({ agent: 'journal-test-agent', prompt: 'hi' })
+
+      const captured = await waitForCapture()
+      expect(callMainPromptCount).toBe(1)
+      // The driver rides the SAME additive-optional seam as the journal deps
+      // (getAgentRuntimeImpl → callMainPrompt), so the runtime's not-clean
+      // branch can now ACT on the resume report in production.
+      expect(captured.hasResumeDriver).toBe(true)
+      expect(typeof captured.resumeDriver).toBe('function')
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('passes NO resumeDriver when no journal is wired (byte-identical deps)', async () => {
+    capturedDeps = undefined
+    callMainPromptCount = 0
+    const client = new OpenbuffClient({
+      apiKey: 'test-key',
+      agentDefinitions: [
+        {
+          id: 'journal-test-agent',
+          displayName: 'Journal Test Agent',
+          model: 'openai/gpt-5.1',
+          outputMode: 'last_message',
+        },
+      ],
+    })
+
+    await client.run({ agent: 'journal-test-agent', prompt: 'hi' })
+
+    const captured = await waitForCapture()
+    expect(callMainPromptCount).toBe(1)
+    // Additive-optional: with no journal options, the deps carry no
+    // resumeDriver field at all, so the loop's guarded replay block cannot
+    // fire and the default path stays byte-identical.
+    expect(captured.hasResumeDriver).toBe(false)
+    expect(captured.resumeDriver).toBeUndefined()
+  })
+
+  it('the production resumeDriver journals the respawnOf marker once, records skips, and never throws', async () => {
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: { now: () => 1_000 },
+      createDatabase: (path) => new Database(path),
+    })
+    try {
+      capturedDeps = undefined
+      callMainPromptCount = 0
+      const client = new OpenbuffClient({
+        apiKey: 'test-key',
+        journalWriter: journal,
+        journalReader: journal,
+        agentDefinitions: [
+          {
+            id: 'journal-test-agent',
+            displayName: 'Journal Test Agent',
+            model: 'openai/gpt-5.1',
+            outputMode: 'last_message',
+          },
+        ],
+      })
+      await client.run({ agent: 'journal-test-agent', prompt: 'hi' })
+
+      const captured = await waitForCapture()
+      const resumeDriver = captured.resumeDriver!
+      const runId = 'run-resume-driver-1'
+      const jobId = 'bg-agent-job-respawn-test'
+      const report: RunResumeReport = {
+        runId,
+        self: { kind: 'in_flight_tool', toolCallId: 'tc-self' },
+        children: {
+          kind: 'needs_children',
+          inFlight: [
+            {
+              kind: 'child_in_flight_tool',
+              childRunId: 'child-1',
+              toolCallId: 'tc-child',
+            },
+          ],
+          awaiting: [{ childRunId: 'child-done', childLastSeq: 7 }],
+        },
+        background: [
+          { kind: 'respawn', jobId, agentType: 'librarian' },
+          { kind: 'still_running', jobId: 'bg-agent-job-live' },
+        ],
+      }
+
+      const outcome = (await resumeDriver(report)) as RunReplayDriverOutcome
+      // In-flight child handed to the (best-effort) re-drive seam, the
+      // respawn decision handed to the respawn seam, and both skippable
+      // items (completed child + still_running job) recorded as skips.
+      expect(outcome).toEqual({
+        ok: true,
+        childrenReplayed: 1,
+        backgroundRespawned: 1,
+        skipped: 2,
+      })
+
+      const respawnMarkersFor = (markerJobId: string) =>
+        journal
+          .events(runId)
+          .filter(
+            (event) =>
+              event.eventType === 'spawn' &&
+              typeof event.payload === 'object' &&
+              event.payload !== null &&
+              (event.payload as Record<string, unknown>).respawnOf ===
+                markerJobId,
+          )
+
+      // The durable respawnOf marker was journaled under the interrupted
+      // run's own runId (so the next resume's planner can see it), with the
+      // launch-time jobId correlation convention and the intent's agentType.
+      const markers = respawnMarkersFor(jobId)
+      expect(markers).toHaveLength(1)
+      expect(markers[0].correlation).toBe(jobId)
+      expect(
+        (markers[0].payload as Record<string, unknown>).agentType,
+      ).toBe('librarian')
+
+      // Idempotent journaling: a second drive does NOT append a second marker
+      // (the planner keeps re-planning the intent until a real respawned
+      // child settles, but the marker itself is journaled once per run).
+      await resumeDriver(report)
+      expect(respawnMarkersFor(jobId)).toHaveLength(1)
+
+      // A still_running decision is recorded as a skip and journals nothing.
+      expect(respawnMarkersFor('bg-agent-job-live')).toHaveLength(0)
+
+      // The best-effort child re-drive records the attempt WITHOUT journaling
+      // a phantom child spawn (planChildResume must not see one).
+      const childMarkers = journal
+        .events(runId)
+        .filter(
+          (event) =>
+            event.eventType === 'spawn' && event.correlation === 'child-1',
+        )
+      expect(childMarkers).toHaveLength(0)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('the production resumeDriver is fail-open: a throwing logger never breaks the drive', async () => {
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: { now: () => 1_000 },
+      createDatabase: (path) => new Database(path),
+    })
+    try {
+      capturedDeps = undefined
+      callMainPromptCount = 0
+      const brokenLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {
+          throw new Error('logger exploded')
+        },
+        error: () => {},
+      }
+      const client = new OpenbuffClient({
+        apiKey: 'test-key',
+        journalWriter: journal,
+        journalReader: journal,
+        logger: brokenLogger,
+        agentDefinitions: [
+          {
+            id: 'journal-test-agent',
+            displayName: 'Journal Test Agent',
+            model: 'openai/gpt-5.1',
+            outputMode: 'last_message',
+          },
+        ],
+      })
+      await client.run({ agent: 'journal-test-agent', prompt: 'hi' })
+
+      const captured = await waitForCapture()
+      const resumeDriver = captured.resumeDriver!
+      const runId = 'run-resume-driver-failopen'
+      const report: RunResumeReport = {
+        runId,
+        self: { kind: 'clean' },
+        children: {
+          kind: 'needs_children',
+          inFlight: [{ kind: 'child_in_flight_llm', childRunId: 'child-2' }],
+          awaiting: [],
+        },
+        background: [
+          {
+            kind: 'respawn',
+            jobId: 'bg-agent-job-failopen',
+            agentType: 'thinker',
+          },
+        ],
+      }
+
+      // Every logger call and every handler inside the driver is guarded: the
+      // drive resolves (never rejects) even though the host logger throws on
+      // every warn, and the respawn marker is still journaled.
+      const outcome = (await resumeDriver(report)) as RunReplayDriverOutcome
+      expect(outcome.ok).toBe(true)
+      expect(outcome.backgroundRespawned).toBe(1)
+      const markers = journal
+        .events(runId)
+        .filter(
+          (event) =>
+            event.eventType === 'spawn' &&
+            typeof event.payload === 'object' &&
+            event.payload !== null &&
+            (event.payload as Record<string, unknown>).respawnOf ===
+              'bg-agent-job-failopen',
+        )
+      expect(markers).toHaveLength(1)
     } finally {
       journal.close()
     }

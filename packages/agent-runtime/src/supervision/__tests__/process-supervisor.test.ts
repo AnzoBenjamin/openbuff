@@ -11,7 +11,7 @@ import {
   OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
 } from '@codebuff/common/constants/chatgpt-oauth'
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -20,9 +20,11 @@ import {
   SETTLE_KILL_GRACE_MS,
   SETTLE_STDOUT_CAP_BYTES,
   SUPERVISED_CHILD_ENV_ALLOWLIST,
+  SUPERVISED_CHILD_RUNTIME_ENV_KEYS,
   spawnSettledSubagent,
   type SettleChildProcess,
   type SettleSpawnSeam,
+  type SupervisedChildEnvSeed,
 } from '../process-supervisor'
 
 const canSpawn =
@@ -209,6 +211,81 @@ describe('spawnSettledSubagent', () => {
     },
   )
 
+  it.skipIf(process.platform !== 'linux')(
+    'timeout: reaps REAL shell grandchildren via the process-group kill (P2-T8 audit gap)',
+    async () => {
+      // Real-process proof of the group kill: the fixture spawns a genuine
+      // `sh -c 'sleep 30'` grandchild (pid recorded to a file, NO setsid/
+      // nohup so it stays in the fixture child's process group), the
+      // supervisor times out, and the grandchild must be DEAD once the
+      // settle completes — because the default seam spawned the child
+      // detached as a group leader and the SIGTERM→SIGKILL escalation goes
+      // to the WHOLE group via a negative-pid kill.
+      const sandbox = mkdtempSync(join(tmpdir(), 'settle-grandchild-'))
+      const pidFile = join(sandbox, 'grandchild-pid')
+      let grandchildPid: number | undefined
+      try {
+        const settlePromise = spawnSettledSubagent({
+          childModulePath: fixturePath,
+          args: ['grandchild', pidFile, '30'],
+          // PATH so the shell can resolve `sleep`; forwarded verbatim like
+          // any explicit allowlist the caller passes.
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+          // The settle timeout must stay LONGER than fixture startup (bun
+          // boot + shell fork + pid-file write): if the group kill landed
+          // first, the pid file would never be written and the poll below
+          // would race the kill instead of observing the recorded pid.
+          timeoutMs: 2_000,
+        })
+        // Wait for the fixture to record the grandchild pid (the shell
+        // writes it right after forking `sleep`; poll instead of racing).
+        // The bounded window (150 × 20ms = 3s) outlasts the 2s settle
+        // timeout so a pid written just before the kill is still observed —
+        // the pid file persists on disk after the group teardown.
+        for (let i = 0; i < 150 && grandchildPid === undefined; i++) {
+          try {
+            const parsed = Number((await Bun.file(pidFile).text()).trim())
+            if (Number.isInteger(parsed) && parsed > 0) grandchildPid = parsed
+          } catch {
+            // Pid file not written yet.
+          }
+          if (grandchildPid === undefined) await Bun.sleep(20)
+        }
+        expect(grandchildPid).toBeGreaterThan(0)
+
+        const result = await settlePromise
+        expect(result.outcome).toBe('crashed')
+        expect(result.crashReason).toBe('timeout')
+        expect(result.killed).toBe(true)
+        expect(result.durationMs).toBeLessThan(2_000 + SETTLE_KILL_GRACE_MS)
+
+        // The grandchild is reaped after the settle: poll /proc for ~3s max
+        // (SIGTERM should end it immediately; the grace window covers a
+        // slow SIGTERM handler before the supervisor's SIGKILL escalation).
+        const deadline = Date.now() + 3_000
+        let alive = true
+        while (Date.now() < deadline) {
+          alive = existsSync(`/proc/${grandchildPid}`)
+          if (!alive) break
+          await Bun.sleep(50)
+        }
+        expect(alive).toBe(false)
+      } finally {
+        // Cleanup even on failure: best-effort direct kill of the recorded
+        // grandchild (no-op when the group kill already reaped it), then
+        // remove the sandbox holding the pid file.
+        if (grandchildPid !== undefined) {
+          try {
+            process.kill(grandchildPid, 'SIGKILL')
+          } catch {
+            // Already reaped by the group kill.
+          }
+        }
+        rmSync(sandbox, { recursive: true, force: true })
+      }
+    },
+  )
+
   it(
     'timeout: falls back to the direct-pid kill (SIGTERM → SIGKILL) when the seam has no killGroup',
     async () => {
@@ -307,6 +384,44 @@ describe('spawnSettledSubagent', () => {
   )
 
   it.skipIf(!canSpawn)(
+    'env allowlist: seeded runtime passthrough keys reach a real child',
+    async () => {
+      const sandboxCwd = mkdtempSync(join(tmpdir(), 'settle-env-sandbox-'))
+      try {
+        const result = await spawnSettledSubagent({
+          childModulePath: fixturePath,
+          args: ['env'],
+          env: buildSupervisedChildEnv({
+            openbuffApiKey: 'sk-openbuff-test',
+            passthroughEnv: {
+              OPENBUFF_PROVIDER_CONFIG: '/tmp/openbuff-provider.json',
+              HTTPS_PROXY: 'http://proxy.test:8443',
+              no_proxy: 'localhost,.test',
+              TMPDIR: sandboxCwd,
+              LANG: 'en_US.UTF-8',
+              CODEBUFF_RG_PATH: '/opt/openbuff/vendor/rg',
+            },
+          }),
+          timeoutMs: 10_000,
+          cwd: sandboxCwd,
+        })
+        expect(result.outcome).toBe('ok')
+        expect(result.receipt?.requirementsAddressed).toEqual([
+          'CODEBUFF_RG_PATH',
+          'HTTPS_PROXY',
+          'LANG',
+          'OPENBUFF_API_KEY',
+          'OPENBUFF_PROVIDER_CONFIG',
+          'TMPDIR',
+          'no_proxy',
+        ])
+      } finally {
+        rmSync(sandboxCwd, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.skipIf(!canSpawn)(
     'two concurrent spawns settle independently',
     async () => {
       const [okResult, crashResult] = await Promise.all([
@@ -342,19 +457,60 @@ describe('buildSupervisedChildEnv env allowlist (P2-T8)', () => {
       nodeEnv: 'test',
       path: '/usr/bin:/bin',
       home: '/home/test',
+      passthroughEnv: {
+        OPENBUFF_PROVIDER_CONFIG: '/tmp/openbuff-provider.json',
+        HTTP_PROXY: 'http://proxy.test:8080',
+        http_proxy: 'http://proxy.test:8080',
+        HTTPS_PROXY: 'http://proxy.test:8443',
+        https_proxy: 'http://proxy.test:8443',
+        NO_PROXY: 'localhost,.test',
+        no_proxy: 'localhost,.test',
+        TMPDIR: '/tmp/child',
+        LANG: 'en_US.UTF-8',
+        LC_ALL: 'en_US.UTF-8',
+        LC_CTYPE: 'en_US.UTF-8',
+        CODEBUFF_RG_PATH: '/opt/openbuff/vendor/rg',
+      },
     })
+    // Default JS sort (UTF-16 code units): uppercase keys sort before
+    // lowercase ones; 'HOME' < 'HTTPS_PROXY' ('O' < 'T'); 'LC_ALL' <
+    // 'LC_CTYPE' ('A' < 'C'); 'NODE_ENV' < 'NO_PROXY' ('D' < '_').
     expect(Object.keys(env).sort()).toEqual([
       BYOK_OPENROUTER_ENV_VAR,
       CHATGPT_OAUTH_TOKEN_ENV_VAR,
+      'CODEBUFF_RG_PATH',
       'HOME',
+      'HTTPS_PROXY',
+      'HTTP_PROXY',
+      'LANG',
+      'LC_ALL',
+      'LC_CTYPE',
       'NODE_ENV',
+      'NO_PROXY',
       'OPENBUFF_API_KEY',
+      'OPENBUFF_PROVIDER_CONFIG',
       'PATH',
+      'TMPDIR',
+      'http_proxy',
+      'https_proxy',
+      'no_proxy',
     ])
     expect(env['OPENBUFF_API_KEY']).toBe('sk-openbuff-test')
     expect(env[BYOK_OPENROUTER_ENV_VAR]).toBe('sk-or-v1-test')
     expect(env[CHATGPT_OAUTH_TOKEN_ENV_VAR]).toBe('chatgpt-token-test')
     expect(env['NODE_ENV']).toBe('test')
+    expect(env['OPENBUFF_PROVIDER_CONFIG']).toBe('/tmp/openbuff-provider.json')
+    expect(env['HTTP_PROXY']).toBe('http://proxy.test:8080')
+    expect(env['http_proxy']).toBe('http://proxy.test:8080')
+    expect(env['HTTPS_PROXY']).toBe('http://proxy.test:8443')
+    expect(env['https_proxy']).toBe('http://proxy.test:8443')
+    expect(env['NO_PROXY']).toBe('localhost,.test')
+    expect(env['no_proxy']).toBe('localhost,.test')
+    expect(env['TMPDIR']).toBe('/tmp/child')
+    expect(env['LANG']).toBe('en_US.UTF-8')
+    expect(env['LC_ALL']).toBe('en_US.UTF-8')
+    expect(env['LC_CTYPE']).toBe('en_US.UTF-8')
+    expect(env['CODEBUFF_RG_PATH']).toBe('/opt/openbuff/vendor/rg')
   })
 
   it('falls back OPENBUFF_API_KEY → CODEBUFF_API_KEY for the legacy key', () => {
@@ -391,17 +547,54 @@ describe('buildSupervisedChildEnv env allowlist (P2-T8)', () => {
     expect(withNative['HOME']).toBe('/home/test')
   })
 
+  it('runtime passthrough keys are forwarded ONLY when seeded', () => {
+    const env = buildSupervisedChildEnv({ openbuffApiKey: 'k' })
+    for (const key of SUPERVISED_CHILD_RUNTIME_ENV_KEYS) {
+      expect(key in env).toBe(false)
+    }
+  })
+
+  it('ignores passthrough keys outside the closed runtime universe', () => {
+    const passthrough: SupervisedChildEnvSeed['passthroughEnv'] = {
+      HTTP_PROXY: 'http://proxy:1',
+    }
+    // Simulate ambient keys slipping into the seed object at runtime (the
+    // static type already prevents this; the builder must also ignore them —
+    // notably credential-named keys).
+    const withAmbient = Object.assign({}, passthrough, {
+      AMBIENT_NOT_IN_UNIVERSE: 'leak',
+      OPENAI_API_KEY: 'secret',
+    })
+    const env = buildSupervisedChildEnv({ passthroughEnv: withAmbient })
+    expect(Object.keys(env)).toEqual(['HTTP_PROXY'])
+    expect('AMBIENT_NOT_IN_UNIVERSE' in env).toBe(false)
+    expect('OPENAI_API_KEY' in env).toBe(false)
+  })
+
   it('SUPERVISED_CHILD_ENV_ALLOWLIST is the closed key universe', () => {
-    // Default JS sort (UTF-16 code units): 'OPENBUFF_CHATGPT_OAUTH_TOKEN'
-    // sorts BEFORE 'PATH' ('O' < 'P').
+    // Default JS sort (UTF-16 code units): uppercase keys sort before
+    // lowercase ones; 'HOME' < 'HTTPS_PROXY' ('O' < 'T'); 'LC_ALL' <
+    // 'LC_CTYPE' ('A' < 'C'); 'NODE_ENV' < 'NO_PROXY' ('D' < '_').
     expect([...SUPERVISED_CHILD_ENV_ALLOWLIST].sort()).toEqual([
       BYOK_OPENROUTER_ENV_VAR,
       CHATGPT_OAUTH_TOKEN_ENV_VAR,
+      'CODEBUFF_RG_PATH',
       'HOME',
+      'HTTPS_PROXY',
+      'HTTP_PROXY',
+      'LANG',
+      'LC_ALL',
+      'LC_CTYPE',
       'NODE_ENV',
+      'NO_PROXY',
       'OPENBUFF_API_KEY',
       OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
+      'OPENBUFF_PROVIDER_CONFIG',
       'PATH',
+      'TMPDIR',
+      'http_proxy',
+      'https_proxy',
+      'no_proxy',
     ])
   })
 })

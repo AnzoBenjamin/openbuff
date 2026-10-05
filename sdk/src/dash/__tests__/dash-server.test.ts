@@ -149,6 +149,30 @@ describe('startDashServer auth', () => {
     }
   })
 
+  test('401 with a present-but-non-Bearer Authorization header (no silent query-token fallback)', async () => {
+    const server = await startTestServer(staticProvider())
+    try {
+      // A malformed/non-Bearer Authorization header must NEVER silently
+      // downgrade to the legacy ?token= channel — not even when the query
+      // carries the CORRECT token. It is an explicit wrong-credential signal
+      // and maps to a plain 401.
+      for (const auth of ['Basic dXNlcjpwYXNz', `raw-token-${TOKEN}`]) {
+        const res = await server.fetch('/api/runs', {
+          headers: { Authorization: auth },
+          tokenQuery: TOKEN,
+        })
+        expect(res.status).toBe(401)
+        expect(await res.json()).toEqual({ error: 'unauthorized' })
+      }
+      // The legacy query channel itself stays intact: no header at all + the
+      // correct ?token= is still a 200.
+      const queryOnly = await server.fetch('/api/runs', { tokenQuery: TOKEN })
+      expect(queryOnly.status).toBe(200)
+    } finally {
+      await server.close()
+    }
+  })
+
   test('/healthz needs no auth and returns 200', async () => {
     const server = await startTestServer(staticProvider())
     try {

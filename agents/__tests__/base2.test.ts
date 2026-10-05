@@ -10,6 +10,7 @@ import { join } from 'node:path'
 
 import { afterAll, describe, expect, test } from 'bun:test'
 
+import { transitionBase2GateSafe } from '@codebuff/agent-runtime/orchestration/workflow-engine'
 import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
 
 import { createBaseDeep } from '../base2/base-deep'
@@ -10762,9 +10763,15 @@ describe('base2 emitGateTelemetry durable sink recorder', () => {
    * the `base2-fast` agentId allowlist, so supplying the config would turn the
    * validation/reviewer gate back ON and never reach the skip diagnostic.
    */
-  function driveDisabledGateTurn(params: Record<string, unknown>) {
+  function driveDisabledGateTurn(
+    params: Record<string, unknown>,
+    // Optional pre-seeded agent state so a test can force an illegal gate
+    // transition; the default keeps every existing call site unchanged.
+    agentState: Record<string, unknown> & {
+      workflowStates?: Record<string, unknown>
+    } = { agentId: 'base2-fast' },
+  ) {
     const base2 = createBase2('fast')
-    const agentState = { agentId: 'base2-fast' }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Make the requested change now please',
@@ -10881,6 +10888,115 @@ describe('base2 emitGateTelemetry durable sink recorder', () => {
         event: 'base2.gate',
         skipReason: 'validation-and-reviewer-gates-disabled',
       })
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
+  test('a legal transition persists the same base2-gate-v1 state as the engine', () => {
+    const originalInfo = console.info
+    console.info = () => {}
+    try {
+      const agentState: Record<string, unknown> & {
+        workflowStates?: Record<string, unknown>
+      } = { agentId: 'base2-fast' }
+      const skipDiagnostic = driveDisabledGateTurn(
+        {
+          orchestrationControlPlane: {
+            transitionBase2GateSafe,
+          },
+        },
+        agentState,
+      )
+
+      // The gate kept working: the skip diagnostic still emitted.
+      expect(skipDiagnostic.value).toMatchObject({ toolName: 'add_message' })
+      // The gate's disabled-skip event ('awaiting_validation') advanced the
+      // workflow from its 'idle' initial state, matching a direct engine call
+      // for the same event (schema, id, state, revision, and lastEvent; only
+      // the wall-clock `updatedAt` stamp may differ).
+      const expected = transitionBase2GateSafe({
+        phase: 'awaiting_validation',
+      })
+      expect(expected.ok).toBe(true)
+      if (expected.ok) {
+        expect(agentState.workflowStates!['base2-gate-v1']).toMatchObject({
+          schemaVersion: expected.state.schemaVersion,
+          workflowId: expected.state.workflowId,
+          state: expected.state.state,
+          revision: expected.state.revision,
+          lastEvent: expected.state.lastEvent,
+        })
+      }
+      // No structured error was recorded on the legal path.
+      expect(
+        agentState.workflowStates!['base2-gate-v1-last-error'],
+      ).toBeUndefined()
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
+  test('an illegal transition records the structured error and does not throw', () => {
+    const recorded: Array<Record<string, unknown>> = []
+    const logged: string[] = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        logged.push(first)
+      }
+    }
+    try {
+      // Seed the persisted workflow state so this turn's skip telemetry event
+      // ('awaiting_validation') is an ILLEGAL transition: the engine defines
+      // no awaiting_validation → awaiting_validation edge.
+      const seeded = transitionBase2GateSafe({
+        phase: 'awaiting_validation',
+      })
+      if (!seeded.ok) {
+        throw new Error('test seed transition unexpectedly rejected')
+      }
+      const agentState: Record<string, unknown> & {
+        workflowStates?: Record<string, unknown>
+      } = {
+        agentId: 'base2-fast',
+        workflowStates: { 'base2-gate-v1': seeded.state },
+      }
+      const skipDiagnostic = driveDisabledGateTurn(
+        {
+          orchestrationControlPlane: {
+            transitionBase2GateSafe,
+            recordGateTelemetry: (payload: Record<string, unknown>) => {
+              recorded.push(payload)
+            },
+          },
+        },
+        agentState,
+      )
+
+      // The gate continued to its skip diagnostic instead of surfacing the
+      // rejection, and both telemetry channels still fired exactly once.
+      expect(skipDiagnostic.value).toMatchObject({ toolName: 'add_message' })
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0]).toMatchObject({
+        event: 'base2.gate',
+        skipReason: 'validation-and-reviewer-gates-disabled',
+      })
+      expect(logged).toHaveLength(1)
+      // The rejection is RECORDED, not silently swallowed: the prior state
+      // stays in place and the structured error names the illegal from+event.
+      expect(agentState.workflowStates!['base2-gate-v1']).toEqual(seeded.state)
+      const lastError = agentState.workflowStates![
+        'base2-gate-v1-last-error'
+      ] as Record<string, unknown> | undefined
+      expect(lastError).toBeDefined()
+      expect(lastError).toMatchObject({
+        from: 'awaiting_validation',
+        event: 'awaiting_validation',
+      })
+      expect(typeof lastError?.error).toBe('string')
+      expect(String(lastError?.error)).toContain('awaiting_validation')
     } finally {
       console.info = originalInfo
     }

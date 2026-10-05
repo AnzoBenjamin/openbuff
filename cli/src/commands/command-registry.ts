@@ -508,7 +508,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
         const commandWithBang = '!' + trimmedArgs
         params.saveToHistory(commandWithBang)
         clearInput(params)
-        runBashCommand(trimmedArgs)
+        void runBashCommand(trimmedArgs)
         return
       }
 
@@ -525,7 +525,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
       try {
-        runBashCommand(buildSafeGitCommand('diff', trimmedArgs))
+        void runBashCommand(buildSafeGitCommand('diff', trimmedArgs))
       } catch (error) {
         appendLocalMessage(
           params,
@@ -541,7 +541,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
       try {
-        runBashCommand(buildSafeGitCommand('status', trimmedArgs, ['--short']))
+        void runBashCommand(buildSafeGitCommand('status', trimmedArgs, ['--short']))
       } catch (error) {
         appendLocalMessage(
           params,
@@ -752,7 +752,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
       if (!target) {
         appendLocalMessage(
           params,
-          '/restore: provide a snapshot sha or a 1-based index from /restore list.',
+          '/restore: provide a snapshot sha or a 1-based index (run /bisect-turn list to see snapshots).',
         )
         return
       }

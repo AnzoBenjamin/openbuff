@@ -1,4 +1,5 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 import {
   createStreamParserState,
@@ -10,6 +11,7 @@ import type {
   StreamParserState,
 } from './util/stream-xml-parser'
 import type { Model } from '@codebuff/common/old-constants'
+import type { IdGen } from '@codebuff/common/types/contracts/agent-runtime'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
 import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -89,6 +91,8 @@ export async function* processStreamWithTools(params: {
     agentName?: string
   }
   trackEvent: TrackEventFn
+  /** Injectable id generator (P2-T1); resolves to realIdGen when omitted. */
+  idGen?: IdGen
   executeXmlToolCall: (params: {
     toolCallId: string
     toolName: string
@@ -103,6 +107,7 @@ export async function* processStreamWithTools(params: {
     logger,
     loggerOptions,
     trackEvent,
+    idGen,
     executeXmlToolCall,
   } = params
   let autocompleted = false
@@ -213,8 +218,9 @@ export async function* processStreamWithTools(params: {
         // 8-hex-char truncation left a 32-bit id space, so long sessions or
         // eval sweeps could collide tool_call ids and pair a tool_result with
         // the wrong call. There is no size constraint on synthetic ids.
-        // TODO(P2-T1 sub-slice 2): route through injected idGen once deps are threaded here
-        const toolCallId = `xml-${crypto.randomUUID()}`
+        // P2-T1: the synthetic id mints through the injected idGen
+        // (realIdGen fallback), so a replay host can reproduce it.
+        const toolCallId = idGen?.prefixedId('xml') ?? realIdGen.prefixedId('xml')
 
         // Execute the tool immediately if callback provided, pausing the stream
         // The callback handles emitting tool_call and tool_result events

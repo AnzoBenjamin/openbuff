@@ -345,3 +345,19 @@ The P3 coherence audit (6 shards, findings in findings/p3-*.md) surfaced 5 HIGH 
 
 Validation: workspace-wide typecheck exit 0; targeted suites 0 fail (sdk 9 suites incl. lsp-multiplexer 15/15, diagnostic-delta, semgrep, symbol-enrichment; indexer 4 suites incl. scip-runner 10/10; agent-runtime token-counter 21/21 + handlers; common tools; cli components/tools incl. the new renderer suite). Known flake: token-counter LRU test failed once under parallel load, passes in isolation (5.6s timing-sensitive).
 
+
+<!-- update_plan_status:appended -->
+## P2 audit remediation wave landed — 2026-10-05 — 2026-10-05T12:39:34.421Z
+
+The P2 coherence audit (8 shards, findings in findings/p2-synthesis.md + p2-a…p2-h) surfaced ~14 MEDIUM gaps. All landed this turn with mutation receipts:
+
+- **P2-T2 crash-resume is now production-reachable:** sdk/src/services/run-resume-driver.ts wires executeRunResumeReport through the journal seam (fail-open best-effort re-drive); previously classify-and-log only.
+- **Unowned deferrals named:** P2-T8b (supervised-child RPC bridge), P2-T8c (supervised restart policy); P2-T6b (transitionBase2GateSafe base2 adoption) DONE this wave; P2-T7 parity delta accepted-as-scope.
+- **Security fixes:** dash token URL moved to stderr (tokenless stdout URL); malformed Authorization → 401; intent-log recovery is now lossless-aware (committed work never reverted); supervised-child env gained the closed runtime passthrough universe.
+- **Reliability fixes:** P2-T4 pre-dispatch snapshot bounded-await + failure warn latch + cross-process bisect lock; P2-T9 bounded warn latch + one-restart policy + separator-agnostic remove-prefix; P2-T1 remaining ambient timestamp/identity sites converted and the determinism baseline regenerated (0 findings).
+- **New tests:** Linux-only real-grandchild group-kill reaping; end-to-end ensureIndexWorkspaceWatcher (write→markPathsChanged, auto-add, dispose); bash-mutation→snapshot→undo chain.
+
+Incident note: the base2 editor shard accidentally truncated agents/base2/base2.ts to 79 lines; restored byte-identical from HEAD and the P2-T6b change re-applied cleanly (base2.test.ts 249/249).
+
+Validation: supervision 30/30, watcher 15/15, turn-snapshot suites green, sdk 77/77 (journal-wiring/intent-log/dash), agent-runtime affected suites 233/233, sdk/agents/cli typechecks clean, determinism guard 0 findings.
+

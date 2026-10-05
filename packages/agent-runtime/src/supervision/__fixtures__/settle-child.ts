@@ -15,6 +15,13 @@
  *  - crash      — process.exit(1)
  *  - slow <ms>  — sleep past the supervisor's short timeout, then emit
  *  - env        — emit a valid envelope carrying the env keys it sees
+ *  - grandchild <pidFile> [s]
+ *               — spawn a REAL long-running shell grandchild
+ *               (`sh -c 'sleep s'`, its pid recorded to <pidFile>) and then
+ *               never exit. Deliberately NO setsid/nohup/detachment: the
+ *               supervisor's timeout must reap the whole process group, and
+ *               that only works while the grandchild stays in THIS child's
+ *               process group (P2-T8 audit-gap test).
  */
 
 // Keep byte-identical with the required fields of agentReceiptSchema
@@ -84,6 +91,24 @@ async function main(): Promise<void> {
       const sleepMs = Number(process.argv[3] ?? '5000')
       await Bun.sleep(sleepMs)
       await writeLine(MINIMAL_OK_RECEIPT)
+      return
+    }
+    case 'grandchild': {
+      // Spawn a real long-running shell grandchild and record its pid so the
+      // test can poll for its death. The shell runs WITHOUT setsid/nohup (and
+      // Bun.spawn is not detached here), so the grandchild stays in THIS
+      // process's process group — the membership the supervisor's
+      // negative-pid group kill relies on.
+      const pidFile = process.argv[3]
+      const sleepSeconds = process.argv[4] ?? '30'
+      Bun.spawn([
+        'sh',
+        '-c',
+        `sleep ${sleepSeconds} & echo $! > '${pidFile}'; wait`,
+      ])
+      // Never settle on our own: the supervisor's timeout must be what ends
+      // this child (and, via the group kill, the shell grandchild too).
+      await Bun.sleep(120_000)
       return
     }
     default:

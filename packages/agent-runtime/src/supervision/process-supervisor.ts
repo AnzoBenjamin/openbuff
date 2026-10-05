@@ -46,6 +46,7 @@ import {
 } from '@codebuff/common/constants/chatgpt-oauth'
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import { SUPERVISED_CHILD_RUNTIME_ENV_KEYS } from './supervised-child-env-keys'
 import { formatValidationIssues } from '../util/format-validation-issues'
 
 // The SDK declaration build (sdk/tsconfig.build.json) transitively
@@ -458,6 +459,20 @@ export type SupervisedChildEnvSeed = {
   openbuffChatGptOauthToken?: string
   nodeEnv?: string
   /**
+   * Explicit pass-through of the closed runtime key universe
+   * {@link SUPERVISED_CHILD_RUNTIME_ENV_KEYS}: the provider-config endpoint
+   * override (`OPENBUFF_PROVIDER_CONFIG` — the provider layer resolves every
+   * baseURL/apiKeyEnv from the config file it points to), proxy configuration
+   * (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` in both cases), `TMPDIR`, the
+   * locale set (`LANG`/`LC_ALL`/`LC_CTYPE`), and the ripgrep override
+   * `CODEBUFF_RG_PATH`. Only keys in the universe are honored, and only
+   * values the caller seeded explicitly are forwarded — never ambient env
+   * wholesale.
+   */
+  passthroughEnv?: Partial<
+    Record<(typeof SUPERVISED_CHILD_RUNTIME_ENV_KEYS)[number], string>
+  >
+  /**
    * PATH/HOME are forwarded ONLY when the caller explicitly seeds them, and
    * the caller must do so ONLY when the child may run native tools (bundled
    * ripgrep, tree-sitter WASM): the default seam invokes the child through
@@ -469,6 +484,15 @@ export type SupervisedChildEnvSeed = {
   home?: string
 }
 
+/**
+ * Re-exported for the supervision test suite; the list itself lives in
+ * ./supervised-child-env-keys (a leaf module with no imports) so the SDK
+ * seam can enumerate it WITHOUT evaluating this module — supervised-spawn.ts
+ * deliberately keeps the supervisor (and the receipt-schema imports it
+ * pulls) lazy behind its dynamic import.
+ */
+export { SUPERVISED_CHILD_RUNTIME_ENV_KEYS }
+
 /** Exact env allowlist for a supervised child; asserted by tests. */
 export const SUPERVISED_CHILD_ENV_ALLOWLIST = [
   'OPENBUFF_API_KEY',
@@ -478,6 +502,7 @@ export const SUPERVISED_CHILD_ENV_ALLOWLIST = [
   'NODE_ENV',
   'PATH',
   'HOME',
+  ...SUPERVISED_CHILD_RUNTIME_ENV_KEYS,
 ] as const
 
 /**
@@ -502,6 +527,12 @@ export function buildSupervisedChildEnv(
   if (seed.nodeEnv) env['NODE_ENV'] = seed.nodeEnv
   if (seed.path) env['PATH'] = seed.path
   if (seed.home) env['HOME'] = seed.home
+  // Runtime pass-through: only the closed key universe is honored, and only
+  // values the caller seeded explicitly — never ambient env keys.
+  for (const key of SUPERVISED_CHILD_RUNTIME_ENV_KEYS) {
+    const value = seed.passthroughEnv?.[key]
+    if (value) env[key] = value
+  }
   return env
 }
 
