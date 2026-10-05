@@ -27,6 +27,13 @@ let clientConstructorError: Error | null = null
 // @opentui/core exports for later files in the same worker.
 let openTuiArmed = true
 
+// Armed at module scope too (this suite's own tests need the markdown_inline
+// assets to look missing); the same top-level afterAll disarms it so the
+// registry-wide fsMock.existsSync override delegates to the REAL existsSync
+// for later files in the same worker (mock.module('fs'/'node:fs') is
+// registry-wide).
+let hideMarkdownInlineAssets = true
+
 mock.module('@opentui/core', () => ({
   ...realOpenTuiCore,
   // The stub/real choice is read at CALL time, not factory time: bun applies
@@ -66,22 +73,38 @@ mock.module('@opentui/core', () => ({
 
 afterAll(() => {
   openTuiArmed = false
+  // Disarm the markdown_inline asset-hiding existsSync override too, so a
+  // later test file in the same worker gets the REAL filesystem answer.
+  hideMarkdownInlineAssets = false
 })
 
 // Hide one descriptor's wasm/highlights assets (markdown_inline) behind a
 // filtered existsSync double so the asset-existence filter has a skip to
 // exercise; every other path stays on the real filesystem.
 const realExistsSync = realFs.existsSync
+// Pre-captured BEFORE mock.module('fs', ...) for the same reason as
+// realExistsSync: mock.module patches the live `import * as realFs` binding
+// in place, so the statSync override must delegate to this frozen reference
+// — calling realFs.statSync from inside the override would call ITSELF (the
+// same-mock spin) and hang the suite.
+const realStatSync = realFs.statSync
 // Armed only by the foreign-ownership test below: when true, statSync reports
 // a DIFFERENT uid for the per-user tree-sitter cache dir so the ownership
 // check's fail-closed fallback can be exercised hermetically.
 let foreignTreeSitterCacheOwner = false
 const fsMock = () => ({
   ...realFs,
-  existsSync: (candidate: Parameters<typeof realExistsSync>[0]): boolean =>
-    typeof candidate === 'string' && candidate.includes('markdown_inline')
+  existsSync: (candidate: Parameters<typeof realExistsSync>[0]): boolean => {
+    // Disarmed (after this suite): delegate to the REAL existsSync so sibling
+    // files in the same worker get the real filesystem answer for
+    // markdown_inline paths instead of a lying `false`.
+    if (!hideMarkdownInlineAssets) {
+      return realExistsSync(candidate)
+    }
+    return typeof candidate === 'string' && candidate.includes('markdown_inline')
       ? false
-      : realExistsSync(candidate),
+      : realExistsSync(candidate)
+  },
   statSync: (
     candidate: string,
     options?: { throwIfNoEntry?: boolean },
@@ -97,7 +120,7 @@ const fsMock = () => ({
         isSymbolicLink: () => false,
       } as unknown as realFs.Stats
     }
-    return realFs.statSync(candidate, options)
+    return realStatSync(candidate, options)
   },
 })
 // mock.module is registry-wide for the whole test process (bun does not
@@ -301,6 +324,17 @@ describe('buildDefaultParsers', () => {
 
 describe('getTreeSitterDataPath (SEC: per-user cache isolation)', () => {
   beforeEach(() => {
+    // Mirror the getSharedTreeSitterClient suite's reset: that suite caches a
+    // client-creation failure on the shared singleton, and without this reset
+    // getSharedTreeSitterClient() short-circuits on the cached failure and
+    // returns null (with no recorded construction). Resetting the singleton
+    // and the recording state makes it build ONE fresh client bound to the
+    // per-user dataPath.
+    resetTreeSitterClientStateForTests()
+    addDefaultParsersCalls.length = 0
+    constructedClientOptions.length = 0
+    constructedClientCount = 0
+    clientConstructorError = null
     foreignTreeSitterCacheOwner = false
   })
 

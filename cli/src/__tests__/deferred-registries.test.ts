@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 /**
  * The registry initializers and the logger are mocked so the deferred
@@ -10,6 +10,15 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 const agentCalls: Array<{ trustProjectAgents: boolean }> = []
 const skillCalls: Array<{ trustProjectSkills: boolean }> = []
 const warnings: unknown[][] = []
+
+// Armed only while THIS suite's own tests run (the beforeEach below arms, the
+// afterEach below disarms). bun's mock.module is registry-wide and persists for
+// every test file sharing the worker, so the initializer overrides below must
+// record ONLY while armed and otherwise delegate to the REAL initializers —
+// a sibling suite (e.g. local-agents.test.ts) needs the real agent loader,
+// not these call-recorders. The DEFAULT is disarmed so a sibling file is safe
+// regardless of file order.
+let registriesArmed = false
 
 // Gate so a test can hold the agent load in flight across calls (a reset
 // happens while the load is still running).
@@ -35,30 +44,79 @@ const realLocalAgentRegistryModule = {
 const realSkillRegistryModule = {
   ...(await import('../utils/skill-registry')),
 }
+const realLoggerModule = {
+  ...(await import('../utils/logger')),
+}
 
 mock.module('../utils/local-agent-registry', () => ({
   ...realLocalAgentRegistryModule,
   initializeAgentRegistry: async (opts: { trustProjectAgents: boolean }) => {
+    // Disarmed (the DEFAULT): delegate to the REAL initializer frozen in the
+    // pre-mock snapshot above — reading the live namespace here would recurse
+    // into this mock. Sibling suites need the real agent loading to happen.
+    if (!registriesArmed) {
+      return realLocalAgentRegistryModule.initializeAgentRegistry(opts)
+    }
     agentCalls.push(opts)
     if (agentGate.hold) {
       await new Promise<void>((resolve) => {
         agentGate.resolvers.push(resolve)
       })
     }
+    // Explicit so noImplicitReturns stays satisfied alongside the disarmed
+    // path's return (same pattern as the @opentui/core stub in
+    // utils/__tests__/tree-sitter-client.test.ts).
+    return undefined
   },
 }))
 mock.module('../utils/skill-registry', () => ({
   ...realSkillRegistryModule,
   initializeSkillRegistry: async (opts: { trustProjectSkills: boolean }) => {
+    // Disarmed (the DEFAULT): delegate to the REAL initializer frozen in the
+    // pre-mock snapshot above (never the live namespace — that would recurse
+    // into this mock).
+    if (!registriesArmed) {
+      return realSkillRegistryModule.initializeSkillRegistry(opts)
+    }
     skillCalls.push(opts)
+    // Explicit so noImplicitReturns stays satisfied alongside the disarmed
+    // path's return.
+    return undefined
   },
 }))
 mock.module('../utils/logger', () => ({
+  ...realLoggerModule,
   logger: {
+    ...realLoggerModule.logger,
     warn: (...args: unknown[]) => {
+      // Disarmed (the DEFAULT): delegate to the REAL warn frozen in the
+      // pre-mock snapshot (never the live namespace — that would recurse into
+      // this mock). Sibling suites need the real warn output.
+      if (!registriesArmed) {
+        return Reflect.apply(
+          realLoggerModule.logger.warn,
+          realLoggerModule.logger,
+          args,
+        )
+      }
       warnings.push(args)
+      // Explicit so noImplicitReturns stays satisfied alongside the disarmed
+      // path's return.
+      return undefined
     },
-    error: () => {},
+    error: (...args: unknown[]) => {
+      // Disarmed (the DEFAULT): delegate to the REAL error frozen in the
+      // pre-mock snapshot. Sibling suites need the real error output.
+      if (!registriesArmed) {
+        return Reflect.apply(
+          realLoggerModule.logger.error,
+          realLoggerModule.logger,
+          args,
+        )
+      }
+      // Armed: this suite silences errors (it only asserts on warnings).
+      return undefined
+    },
   },
 }))
 
@@ -70,11 +128,20 @@ const {
 } = await import('../services/deferred-registries')
 
 beforeEach(() => {
+  // Arm the recording overrides for THIS suite's tests only.
+  registriesArmed = true
   resetDeferredRegistryLoads()
   agentCalls.length = 0
   skillCalls.length = 0
   warnings.length = 0
   agentGate = { hold: false, resolvers: [] }
+})
+
+afterEach(() => {
+  // Disarm after every test (not afterAll): scoped to this file's own tests
+  // and always runs, so the armed behavior can never outlive the suite and
+  // reach a sibling file sharing the worker.
+  registriesArmed = false
 })
 
 describe('deferred registries project-switch reset', () => {

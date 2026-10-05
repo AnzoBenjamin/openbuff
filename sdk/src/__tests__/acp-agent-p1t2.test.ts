@@ -23,6 +23,7 @@ import {
 } from '../services/acp/acp-agent'
 import type {
   AcpAgentOptions,
+  AcpPromptHandler,
   AcpReplayMessage,
   AcpSessionUpdateSink,
 } from '../services/acp/acp-agent'
@@ -375,31 +376,58 @@ describe('P1-T2 SEC-7 path containment (§12.5)', () => {
 describe('P1-T2 limits (§12.6)', () => {
   test('the 17th live session is rejected with limit_exceeded', async () => {
     const { connection } = makeRecordingConnection()
-    const agent = createAcpAgent({
-      promptHandler: async () => ({ stopReason: 'end_turn' }),
-      connection,
-    })
+    // Every turn stays in flight until aborted (safety timeout guards hangs),
+    // so all 16 sessions are ACTIVE and §12.6 LRU eviction has no idle victim.
+    const promptHandler: AcpPromptHandler = (input) =>
+      new Promise((resolve) => {
+        input.signal.addEventListener('abort', () =>
+          resolve({ stopReason: 'cancelled' }),
+        )
+        setTimeout(() => resolve({ stopReason: 'end_turn' }), 2_000)
+      })
+    const agent = createAcpAgent({ promptHandler, connection })
     // No projectRoot → cwd validation skipped; only the session-count cap
-    // applies. Create the full complement of 16 sessions.
-    for (let i = 0; i < 16; i += 1) {
-      await agent.newSession({ cwd: `/tmp/acp-cap-${i}`, mcpServers: [] })
-    }
-
-    let failure: unknown
+    // applies. Create the full complement of 16 sessions, each with a turn in
+    // flight (started WITHOUT awaiting) so none of them is an idle eviction
+    // victim.
+    const ids: string[] = []
+    const inFlight: Promise<unknown>[] = []
     try {
-      await agent.newSession({ cwd: '/tmp/acp-cap-overflow', mcpServers: [] })
-    } catch (error) {
-      failure = error
+      for (let i = 0; i < 16; i += 1) {
+        const { sessionId } = await agent.newSession({
+          cwd: `/tmp/acp-cap-${i}`,
+          mcpServers: [],
+        })
+        ids.push(sessionId)
+        inFlight.push(
+          Promise.resolve(
+            agent.prompt({ sessionId, prompt: [{ type: 'text', text: 'x' }] }),
+          ).catch(() => {}),
+        )
+      }
+
+      let failure: unknown
+      try {
+        await agent.newSession({ cwd: '/tmp/acp-cap-overflow', mcpServers: [] })
+      } catch (error) {
+        failure = error
+      }
+      expect(failure).toBeInstanceOf(RequestError)
+      expect((failure as RequestError).code).toBe(-32602)
+      expect(
+        (
+          (failure as RequestError).data as
+            | Record<string, Record<string, unknown>>
+            | undefined
+        )?.['openbuff.dev']?.code,
+      ).toBe('limit_exceeded')
+    } finally {
+      // Tear down the in-flight turns so the test cannot hang or leak.
+      for (const sessionId of ids) {
+        agent.cancel({ sessionId })
+      }
+      await Promise.allSettled(inFlight)
     }
-    expect(failure).toBeInstanceOf(RequestError)
-    expect((failure as RequestError).code).toBe(-32602)
-    expect(
-      (
-        (failure as RequestError).data as
-          | Record<string, Record<string, unknown>>
-          | undefined
-      )?.['openbuff.dev']?.code,
-    ).toBe('limit_exceeded')
   })
 
   test('a prompt over the 8 MiB total limit is rejected with limit_exceeded', async () => {

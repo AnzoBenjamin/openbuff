@@ -99,7 +99,21 @@ function makeAgent(sessionData: AcpSessionData) {
     promptHandler: async () => ({ stopReason: 'end_turn' }),
     connection: { sessionUpdate: async () => {} },
     sessionData,
+    loadHandler: async () => {},
   })
+}
+
+/**
+ * An agent whose connection OWNS `sessionId`: `extMethod`'s
+ * `assertOwnedSession` gate only forwards sessions this connection created
+ * (`newSession`) or restored (`loadSession`) to the ext-v1 dispatcher.
+ * `loadSession` registers the caller-supplied id and §6.1-seeds a baseline
+ * capability map when the store holds none for it yet.
+ */
+async function ownedAgent(sessionData: AcpSessionData, sessionId: string) {
+  const agent = makeAgent(sessionData)
+  await agent.loadSession({ cwd: '/tmp/acp-ext', mcpServers: [], sessionId })
+  return agent
 }
 
 /**
@@ -219,21 +233,25 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
   test('capabilities/get returns the stored map, which re-parses against the published schema', async () => {
     const sessionData = new AcpSessionData()
     sessionData.setCapabilities('s1', VALID_CAPABILITY_MAP)
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/capabilities/get',
-      { sessionId: 's1' },
-    )
+    const agent = await ownedAgent(sessionData, 's1')
+    const result = await agent.extMethod('_openbuff.dev/capabilities/get', {
+      sessionId: 's1',
+    })
     expect(capabilityMapV1Schema.parse(result)).toEqual(VALID_CAPABILITY_MAP)
   })
 
-  test('capabilities/get fails closed with -32601 for a session with no stored map', async () => {
+  // §6.1 seeds a baseline capability map for every session this connection
+  // registers (newSession/loadSession), so "registered + no stored map" is
+  // unreachable and -32601 can never fire here. The reachable fail-closed for
+  // a session this connection does not own is `assertOwnedSession`'s -32602.
+  test('capabilities/get fails closed with -32602 for a session this connection does not own', async () => {
     const sessionData = new AcpSessionData()
     const failure = await errorOf(
       makeAgent(sessionData).extMethod('_openbuff.dev/capabilities/get', {
         sessionId: 's-none',
       }),
     )
-    expect(failure.code).toBe(-32601)
+    expect(failure.code).toBe(-32602)
   })
 
   test('params are schema-validated: missing sessionId and extra keys are both -32602', async () => {
@@ -259,10 +277,11 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
       makeMutationEvent('rcpt_1'),
       'call_7',
     )
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/receipts/get',
-      { sessionId: 's1', receiptId: 'rcpt_1' },
-    )
+    const agent = await ownedAgent(sessionData, 's1')
+    const result = await agent.extMethod('_openbuff.dev/receipts/get', {
+      sessionId: 's1',
+      receiptId: 'rcpt_1',
+    })
     const receipt = receiptEnvelopeV1Schema.parse(
       (result as { receipt: unknown }).receipt,
     )
@@ -278,8 +297,9 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
 
   test('receipts/get: an unknown receipt id is -32002 with the openbuff.dev data key', async () => {
     const sessionData = new AcpSessionData()
+    const agent = await ownedAgent(sessionData, 's1')
     const failure = await errorOf(
-      makeAgent(sessionData).extMethod('_openbuff.dev/receipts/get', {
+      agent.extMethod('_openbuff.dev/receipts/get', {
         sessionId: 's1',
         receiptId: 'nope',
       }),
@@ -300,8 +320,9 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
       's1',
       makeMutationEvent('rcpt_toolless'),
     )
+    const agent = await ownedAgent(sessionData, 's1')
     const failure = await errorOf(
-      makeAgent(sessionData).extMethod('_openbuff.dev/receipts/get', {
+      agent.extMethod('_openbuff.dev/receipts/get', {
         sessionId: 's1',
         receiptId: 'rcpt_toolless',
       }),
@@ -315,7 +336,7 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
       's1',
       makeMutationEvent('rcpt_lane'),
     )
-    const agent = makeAgent(sessionData)
+    const agent = await ownedAgent(sessionData, 's1')
     const result = (await agent.extMethod('_openbuff.dev/lanes/list', {
       sessionId: 's1',
     })) as { lanes: unknown[] }
@@ -341,10 +362,10 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
 
   test('gate_state/get returns a state that re-parses against the published schema; idle before any block', async () => {
     const sessionData = new AcpSessionData()
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/gate_state/get',
-      { sessionId: 's1' },
-    )
+    const agent = await ownedAgent(sessionData, 's1')
+    const result = await agent.extMethod('_openbuff.dev/gate_state/get', {
+      sessionId: 's1',
+    })
     const state = gateStateV1Schema.parse(result)
     expect(state.status).toBe('idle')
   })
@@ -365,10 +386,11 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
     expect(fileMutationResultV1Schema.safeParse(mutation).success).toBe(true)
     sessionData.recordReceipt('s1', mutation, 'call_7')
 
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/receipts/get',
-      { sessionId: 's1', receiptId: 'rcpt_recorded' },
-    )
+    const agent = await ownedAgent(sessionData, 's1')
+    const result = await agent.extMethod('_openbuff.dev/receipts/get', {
+      sessionId: 's1',
+      receiptId: 'rcpt_recorded',
+    })
     // The recorded envelope is built with the §6.2 wire projection, so it
     // conforms to the published ext-v1 schema and IS served — not collapsed
     // to receipt_not_found by a strict re-validation the stored shape cannot
@@ -397,10 +419,11 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
     } as unknown as FileMutationResultV1
     sessionData.recordReceipt('s1', driftMutation, 'call_7')
 
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/receipts/get',
-      { sessionId: 's1', receiptId: 'rcpt_drift' },
-    )
+    const agent = await ownedAgent(sessionData, 's1')
+    const result = await agent.extMethod('_openbuff.dev/receipts/get', {
+      sessionId: 's1',
+      receiptId: 'rcpt_drift',
+    })
     const receipt = receiptEnvelopeV1Schema.parse(
       (result as { receipt: unknown }).receipt,
     )
@@ -419,10 +442,10 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
         details: 'no reviewable diff in the pending set',
       })}</gate-state>`,
     )
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/gate_state/get',
-      { sessionId: 's1' },
-    )
+    const agent = await ownedAgent(sessionData, 's1')
+    const result = await agent.extMethod('_openbuff.dev/gate_state/get', {
+      sessionId: 's1',
+    })
     const state = gateStateV1Schema.parse(result)
     expect(state.status).toBe('skipped')
     expect(state.skipReason).toBe('no reviewable diff in the pending set')
@@ -594,10 +617,12 @@ describe('journal capabilities replay is schema-validated (RF-13)', () => {
     const sessionData = new AcpSessionData({ journalDir: dir })
     await sessionData.restoreFromJournal('s-journal')
 
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/capabilities/get',
-      { sessionId: 's-journal' },
-    )
+    // Register the queried id AFTER the restore so the replayed (re-derived)
+    // map is what the dispatcher serves.
+    const agent = await ownedAgent(sessionData, 's-journal')
+    const result = await agent.extMethod('_openbuff.dev/capabilities/get', {
+      sessionId: 's-journal',
+    })
     const served = capabilityMapV1Schema.parse(result)
     // The served map is the honest P1 serve default derived from THIS
     // store's posture — not the overstated replayed bytes.
@@ -652,9 +677,12 @@ describe('journal capabilities replay is schema-validated (RF-13)', () => {
     await expect(sessionData.restoreFromJournal('s-tamper')).resolves.toBe(true)
     // The tampered envelope never entered the store...
     expect(sessionData.getReceipts('s-tamper').receipts).toEqual([])
-    // ...so it is not addressable by id on the wire either.
+    // ...so it is not addressable by id on the wire either. Register the
+    // queried id after the restore so the replayed store state is what the
+    // dispatcher sees.
+    const agent = await ownedAgent(sessionData, 's-tamper')
     const failure = await errorOf(
-      makeAgent(sessionData).extMethod('_openbuff.dev/receipts/get', {
+      agent.extMethod('_openbuff.dev/receipts/get', {
         sessionId: 's-tamper',
         receiptId: 'rcpt_tampered',
       }),
@@ -749,10 +777,13 @@ describe('journal capabilities replay is schema-validated (RF-13)', () => {
 
     // The journal-restored envelope IS addressable by id, and the served
     // wire shape re-parses against the redaction-enforcing ext-v1 schema.
-    const result = await makeAgent(sessionData).extMethod(
-      '_openbuff.dev/receipts/get',
-      { sessionId: 's-clean', receiptId: 'rcpt_clean' },
-    )
+    // Register the queried id after the restore so the replayed envelope is
+    // what the dispatcher serves.
+    const agent = await ownedAgent(sessionData, 's-clean')
+    const result = await agent.extMethod('_openbuff.dev/receipts/get', {
+      sessionId: 's-clean',
+      receiptId: 'rcpt_clean',
+    })
     const receipt = receiptEnvelopeV1Schema.parse(
       (result as { receipt: unknown }).receipt,
     )
