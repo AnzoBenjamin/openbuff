@@ -267,6 +267,17 @@ export function getAgentRuntimeImpl(
                   logger: logger ?? noopLogger,
                 })
               },
+              {
+                // P2-T8c: a BOUNDED restart policy so production callers get
+                // automatic bounded retries on transport-level child crashes.
+                // maxAttempts is passed EXPLICITLY (never a default that could
+                // silently become unbounded); on a deterministic crash the
+                // loop stops after this many restarts and returns the last
+                // settled result. This option rides INSIDE the flag-on branch
+                // only — the flag-off seam never calls buildDefaultSpawnSupervised
+                // and stays byte-identical.
+                restart: { maxAttempts: 3 },
+              },
             ),
         }
       : {}),

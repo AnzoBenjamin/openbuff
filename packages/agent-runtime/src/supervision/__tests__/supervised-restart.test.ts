@@ -353,3 +353,120 @@ describe('supervised-spawn restart policy (P2-T8c)', () => {
     },
   )
 })
+
+describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
+  // Mirrors RESTART_DEFAULT_BACKOFF_MS / RESTART_DEFAULT_BACKOFF_MULTIPLIER
+  // in supervised-spawn.ts (module-private, so asserted by value here).
+  const DEFAULT_BACKOFF_MS = 250
+  const DEFAULT_BACKOFF_MULTIPLIER = 2
+
+  const NON_FINITE_VALUES: Array<[string, number]> = [
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+  ]
+
+  for (const [label, value] of NON_FINITE_VALUES) {
+    it(`non-finite backoffMs (${label}) clamps to the default ${DEFAULT_BACKOFF_MS}ms`, async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(settledCrash('spawn_failed'), okResult)
+      const { seam, record } = buildRestartingSeam({
+        maxAttempts: 1,
+        backoffMs: value,
+        backoffMultiplier: 2,
+      })
+      const result = await settleBounded(seam, REQUEST)
+      expect(spawnCallParams).toHaveLength(2)
+      expect(result).toBe(okResult)
+      // First restart waits exactly backoffMs → the clamped default.
+      expect(record.delays).toEqual([DEFAULT_BACKOFF_MS])
+    })
+  }
+
+  it(`negative backoffMs clamps to the default ${DEFAULT_BACKOFF_MS}ms`, async () => {
+    resetSpawnQueue()
+    const okResult = settledOk()
+    queueSpawns(settledCrash('spawn_failed'), okResult)
+    const { seam, record } = buildRestartingSeam({
+      maxAttempts: 1,
+      backoffMs: -5,
+      backoffMultiplier: 2,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(2)
+    expect(result).toBe(okResult)
+    expect(record.delays).toEqual([DEFAULT_BACKOFF_MS])
+  })
+
+  for (const [label, value] of NON_FINITE_VALUES) {
+    it(`non-finite backoffMultiplier (${label}) clamps to the default ×${DEFAULT_BACKOFF_MULTIPLIER}`, async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(
+        settledCrash('spawn_failed'),
+        settledCrash('internal_error'),
+        okResult,
+      )
+      const { seam, record } = buildRestartingSeam({
+        maxAttempts: 2,
+        backoffMs: 10,
+        backoffMultiplier: value,
+      })
+      const result = await settleBounded(seam, REQUEST)
+      expect(spawnCallParams).toHaveLength(3)
+      expect(result).toBe(okResult)
+      // 10 * 2^0 = 10, 10 * 2^1 = 20 with the clamped default multiplier.
+      expect(record.delays).toEqual([10, 10 * DEFAULT_BACKOFF_MULTIPLIER])
+    })
+  }
+
+  it(`negative backoffMultiplier clamps to the default ×${DEFAULT_BACKOFF_MULTIPLIER}`, async () => {
+    resetSpawnQueue()
+    const okResult = settledOk()
+    queueSpawns(
+      settledCrash('spawn_failed'),
+      settledCrash('internal_error'),
+      okResult,
+    )
+    const { seam, record } = buildRestartingSeam({
+      maxAttempts: 2,
+      backoffMs: 10,
+      backoffMultiplier: -3,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(3)
+    expect(result).toBe(okResult)
+    expect(record.delays).toEqual([10, 10 * DEFAULT_BACKOFF_MULTIPLIER])
+  })
+
+  it('fractional maxAttempts (2.7) floors to 2 restarts — 3 total spawns', async () => {
+    resetSpawnQueue()
+    const thirdCrash = settledCrash('spawn_failed', {
+      stderrTail: 'third attempt stderr',
+    })
+    const unusedFourth = settledOk()
+    // A 4th entry is queued so that a ceil/round bug (3 restarts) would
+    // consume it and settle ok instead of returning the 3rd crash.
+    queueSpawns(
+      settledCrash('spawn_failed'),
+      settledCrash('spawn_failed'),
+      thirdCrash,
+      unusedFourth,
+    )
+    const { seam, record } = buildRestartingSeam({
+      maxAttempts: 2.7,
+      backoffMs: 10,
+      backoffMultiplier: 2,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(3)
+    expect(result).toBe(thirdCrash)
+    expect(spawnQueue).toEqual([unusedFourth])
+    expect(record.observes).toEqual([
+      { attempt: 1, crashReason: 'spawn_failed' },
+      { attempt: 2, crashReason: 'spawn_failed' },
+    ])
+    expect(record.delays).toEqual([10, 20])
+  })
+})

@@ -361,10 +361,6 @@ export function buildDefaultSpawnSupervised(
     // auth token is needed. The server starts BEFORE the child is spawned
     // and is closed in the finally below, also when the spawn throws.
     let bridge: ParentBridgeServer | undefined
-    // P2-T8b: the bridge socket lives INSIDE the 0700 sandbox (owner-only,
-    // per-spawn ephemeral — removed with the sandbox below), so no extra
-    // auth token is needed. The server starts BEFORE the child is spawned
-    // and is closed in the finally below, also when the spawn throws.
     let socketPath: string | undefined
     // P2-T8b collision-proof bridge sentinel: the per-table marker nonce
     // minted by buildSupervisedBridgeHandlers, stamped into the request
