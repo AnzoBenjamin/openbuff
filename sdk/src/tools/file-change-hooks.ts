@@ -873,6 +873,13 @@ export async function runFileChangeHooks(params: {
   // so the default hook behavior is byte-identical. Hooks observe
   // already-changed files, so the injected `diagnosticDelta` owns the
   // before/after baseline (the mutation-broker path); the broker is untouched.
+  //
+  // P3 audit note — this delta block sits AFTER the early returns for
+  // `hooks.length === 0` and `matching.length === 0`, so the preflight only
+  // runs when at least one hook matches the changed files: it is part of the
+  // hook gate, not an independent check. A repository with no matching hooks
+  // (or none configured) gets NO preflight result — no
+  // diagnostic_delta_passed/rejected entry — even when the flag is on.
   if (isDiagnosticPreflightEnabled(env) && params.diagnosticDelta) {
     const supportedFiles = supportedDiagnosticFiles(files)
     if (supportedFiles.length > 0) {

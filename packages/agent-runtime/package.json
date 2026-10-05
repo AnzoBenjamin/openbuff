@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@codebuff/common": "workspace:*",
-    "gpt-tokenizer": "^2.8.1",
+    "gpt-tokenizer": "~2.9.0",
     "zod-from-json-schema": "0.4.2",
     "lodash": "4.17.23",
     "@codebuff/code-map": "workspace:*",

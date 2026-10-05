@@ -5,7 +5,12 @@ import { join } from 'path'
 import { afterAll, describe, expect, test } from 'bun:test'
 
 import { IndexManager } from './index-manager'
-import { MAX_INDEX_AGE_MS } from './index-store'
+import { MAX_INDEX_AGE_MS, loadIndex } from './index-store'
+import {
+  mergeScipEdgesIntoIndex,
+  parseScipJson,
+  scipPreciseEdges,
+} from './scip-ingest'
 import type { EmbedFn } from './semantic'
 import type { MetadataIndex } from './types'
 
@@ -491,6 +496,52 @@ describe('IndexManager.detached holder forwarding', () => {
   })
 })
 
+describe('IndexManager.query pageRankWeight option', () => {
+  // Mirrors the queryIndex blend pin in pagerank.test.ts (P3 coherence
+  // audit): the higher-level IndexManager surface must be able to opt in to
+  // PageRank ranking the same way direct queryIndex callers can.
+  test('absent option is byte-identical to weight 0, and a nonzero weight boosts the well-connected file', async () => {
+    const root = makeProject()
+    // Hub-and-satellite fixture: both satellites reference the hub, so the
+    // hub is the best-connected file; hub and isolated both match 'common'
+    // lexically, the satellites do not.
+    writeFileSync(join(root, 'src', 'hub.ts'), 'export const common = 1\n')
+    writeFileSync(
+      join(root, 'src', 'satellite-a.ts'),
+      "import { common } from './hub'\nexport const a = common\n",
+    )
+    writeFileSync(
+      join(root, 'src', 'satellite-b.ts'),
+      "import { common } from './hub'\nexport const b = common\n",
+    )
+    writeFileSync(
+      join(root, 'src', 'isolated.ts'),
+      'export const commonUnrelated = 2\n',
+    )
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const defaultResults = mgr.query('common', { limit: 10 })
+    const zeroResults = mgr.query('common', { limit: 10, pageRankWeight: 0 })
+    // Absent option = weight 0: the results (paths + scores) are identical.
+    expect(zeroResults.results).toEqual(defaultResults.results)
+
+    const boostedResults = mgr.query('common', {
+      limit: 10,
+      pageRankWeight: 1,
+    })
+    const scoreOf = (
+      results: typeof defaultResults.results,
+      filePath: string,
+    ): number => results.find((r) => r.path === filePath)?.score ?? 0
+    // The hub is referenced by two satellites: a nonzero PageRank weight
+    // raises its blended score above the lexical-only baseline.
+    expect(scoreOf(boostedResults.results, 'src/hub.ts')).toBeGreaterThan(
+      scoreOf(defaultResults.results, 'src/hub.ts'),
+    )
+  })
+})
+
 describe('IndexManager.ingestScipDump', () => {
   test('returns the number of precise edges added, superseding heuristic duplicates', async () => {
     const root = makeProject()
@@ -543,5 +594,81 @@ describe('IndexManager.ingestScipDump', () => {
     const after = referenceEdgesBetween(internal.index)
     expect(after).toHaveLength(1)
     expect(after[0]?.confidence).toBe('precise')
+  })
+})
+
+describe('IndexManager.adoptMergedIndex', () => {
+  test('refuses a stale snapshot without mutating the live index', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const base = mgr.getSnapshot()
+    expect(base).not.toBeNull()
+
+    // A mismatched expectedSnapshotId must be refused without mutating the
+    // live snapshot (the adopt/refuse contract is unchanged by persistence).
+    await expect(
+      mgr.adoptMergedIndex(base!, 'stale-snapshot-id'),
+    ).resolves.toBe(false)
+    expect(mgr.getSnapshot()).toBe(base)
+  })
+
+  test('persists the merged snapshot so merged precise edges survive on disk', async () => {
+    const root = makeProject()
+    writeFileSync(join(root, 'src', 'util.ts'), 'export function helper() {}\n')
+    writeFileSync(
+      join(root, 'src', 'app.ts'),
+      "import { helper } from './util'\n\nexport function run() { return helper() }\n",
+    )
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const base = mgr.getSnapshot()
+    expect(base).not.toBeNull()
+    // The pre-scan snapshot identity the caller would capture (same seam the
+    // /index scip CLI path uses).
+    const snapshotId = mgr.query('helper').snapshot?.snapshotId
+    expect(snapshotId).toBeDefined()
+
+    // Derive a merged snapshot the same way runScipIngest does: precise edges
+    // parsed from a SCIP dump, merged into the captured base snapshot.
+    const symbol = 'scip-typescript npm pkg 1.0.0 src/util.ts/helper().'
+    const dump = {
+      documents: [
+        {
+          relative_path: 'src/util.ts',
+          language: 'typescript',
+          occurrences: [{ range: [0, 0, 0, 8], symbol, symbol_roles: 1 }],
+        },
+        {
+          relative_path: 'src/app.ts',
+          occurrences: [{ range: [2, 0, 2, 8], symbol }],
+        },
+      ],
+    }
+    const merged = mergeScipEdgesIntoIndex(
+      base!,
+      scipPreciseEdges(parseScipJson(dump)),
+    ).index
+
+    // The adoption now persists through _build's saveIndex CAS flow, so it is
+    // async but still reports plain adopt/refuse semantics.
+    await expect(mgr.adoptMergedIndex(merged, snapshotId!)).resolves.toBe(true)
+
+    // The merged precise edge round-trips through the persisted store: a
+    // fresh session loading the index from disk (loadIndex, the same seam a
+    // new IndexManager instance's _build uses) sees the precise edge instead
+    // of the superseded heuristic one.
+    const persisted = await loadIndex(root, '.codebuff-index')
+    expect(persisted).not.toBeNull()
+    const persistedEdges = (persisted!.graph.edges ?? []).filter(
+      (edge) =>
+        edge.type === 'references' &&
+        edge.from === 'file:src/app.ts' &&
+        edge.to === 'file:src/util.ts',
+    )
+    expect(persistedEdges).toHaveLength(1)
+    expect(persistedEdges[0]?.confidence).toBe('precise')
   })
 })

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  MAX_SCIP_LABEL_CHARS,
   mergeScipIntoIndex,
   parseScipJson,
   SCIP_MAX_MERGED_EDGES,
@@ -145,6 +146,42 @@ describe('parseScipJson', () => {
     }
     expect(caught).toBeInstanceOf(ScipIngestError)
     expect((caught as ScipIngestError).code).toBe('occurrence-limit')
+  })
+
+  test('caps a 10k-char SCIP symbol to the bounded edge label', () => {
+    // A hostile/corrupt dump can carry arbitrarily long symbols; without the
+    // cap the symbol persists verbatim as the query-facing edge `label`.
+    const longSymbol = `scip-typescript npm pkg 1.0.0 src/long.ts/x().${'y'.repeat(10_000)}`
+    const scip = parseScipJson({
+      documents: [
+        {
+          relative_path: 'src/long.ts',
+          occurrences: [
+            { range: [0, 0, 0, 1], symbol: longSymbol, symbol_roles: 1 },
+          ],
+        },
+        {
+          relative_path: 'src/user.ts',
+          occurrences: [
+            { range: [1, 0, 1, 1], symbol: longSymbol },
+            // Duplicate reference to the same over-long symbol: deduped
+            // against the capped symbol, not doubled.
+            { range: [2, 0, 2, 1], symbol: longSymbol },
+          ],
+        },
+      ],
+    })
+    // The parse boundary bounds the symbol deterministically.
+    expect(scip.documents[0].occurrences[0].symbol).toHaveLength(
+      MAX_SCIP_LABEL_CHARS,
+    )
+    const merged = mergeScipIntoIndex(makeIndex(), scip)
+    const precise = merged.graph.edges.filter(
+      (edge) => edge.confidence === 'precise',
+    )
+    expect(precise).toHaveLength(1)
+    expect(precise[0].label).toHaveLength(MAX_SCIP_LABEL_CHARS)
+    expect(precise[0].label).toBe(scip.documents[0].occurrences[0].symbol)
   })
 })
 
@@ -307,7 +344,7 @@ describe('mergeScipIntoIndex', () => {
     expect((caught as ScipIngestError).code).toBe('edge-limit')
   })
 
-  test('drops the stale persisted adjacency accelerator', () => {
+  test('drops the stale persisted query accelerator', () => {
     const index = makeIndex({
       queryData: {
         postings: {},

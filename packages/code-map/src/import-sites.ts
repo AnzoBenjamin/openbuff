@@ -10,6 +10,15 @@
  * backtracking) and never re-parses — tree-sitter already parsed the file
  * for structure/call sites. Block forms (e.g. Go `import ( ... )`) are
  * handled by matching each spec line inside the block.
+ *
+ * P3-T5 AST import-capture tier: the shared tree-sitter tags queries (the
+ * same .scm files the parse pipeline consumes) additionally emit
+ * `@import.specifier` / `@import.call` captures for five languages
+ * (TypeScript, JavaScript, Python, Go, Rust);
+ * {@link importSpecifiersFromAstCaptures} maps those captures into the exact
+ * specifier shapes this line-based extractor emits, and the indexer prefers
+ * the AST tier when captures are present, falling back here byte-identically
+ * otherwise. This extractor remains the canonical fallback and is unchanged.
  */
 
 export const TS_IMPORT_EXTENSIONS = [
@@ -293,6 +302,115 @@ export function extractImportSites(
 ): ImportSite[] {
   return extractImportSitesFromLines(content.split(/\r?\n/), filePath)
 }
+
+/** Strip the surrounding quote characters from a captured string literal. */
+function unquoteImportLiteral(text: string): string {
+  const trimmed = text.trim()
+  const quote = trimmed.charAt(0)
+  if (
+    trimmed.length >= 2 &&
+    (quote === '"' || quote === "'" || quote === '`') &&
+    trimmed.endsWith(quote)
+  ) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+/**
+ * Extensions whose tags queries emit @import.* captures this wave (P3-T5):
+ * the TypeScript/JavaScript/Python/Go/Rust tier. Every other language yields
+ * [] from {@link importSpecifiersFromAstCaptures} so its indexed imports stay
+ * byte-identical to the line-based fallback.
+ */
+const AST_IMPORT_CAPTURE_LANGUAGES = new Set<string>([
+  ...(TS_IMPORT_EXTENSIONS as readonly string[]),
+  ...(PYTHON_IMPORT_EXTENSIONS as readonly string[]),
+  '.go',
+  '.rs',
+])
+
+/**
+ * Reduce a Rust `use` declaration argument capture to its leading
+ * ::-separated path: `crate::config::Config` stays whole, brace lists
+ * (`crate::mod::{a, b}`) trim to the path prefix, glob imports keep their
+ * `*` suffix, and `use x as y` trims at the alias. Returns null for anything
+ * that is not path-shaped.
+ */
+function rustUseTreePath(capture: string): string | null {
+  let usePath = capture.trim()
+  const asIndex = usePath.search(/\s+as\s+/)
+  if (asIndex > 0) usePath = usePath.slice(0, asIndex)
+  const brace = usePath.indexOf('{')
+  if (brace > 0) usePath = usePath.slice(0, brace).replace(/:+$/, '')
+  usePath = usePath.replace(/\s+/g, '').replace(/;+$/, '')
+  return /^[\w:]*\*?$/.test(usePath) && usePath !== '' ? usePath : null
+}
+
+/**
+ * P3-T5 AST import-capture tier: normalize import specifiers captured by the
+ * tags queries' `@import.specifier` / `@import.call` captures into the exact
+ * shapes the line-based extractor emits, so AST captures can replace line
+ * output without any downstream resolution change:
+ *
+ * - TS/JS: raw source text of the quoted module string, without quotes
+ *   (`./b`, `node:fs`). require()/import() arguments are kept only when the
+ *   captured call text starts with `require(` / `import(` — the query
+ *   captures the whole call expression so no query predicates are needed,
+ *   and any other string-argument call contributes nothing.
+ * - Python: the dotted module path exactly as written (`os.path`, `.utils`,
+ *   `.` for a bare relative from-import).
+ * - Go: the import path literal without quotes (single and block forms).
+ * - Rust: the leading ::-separated path of the use declaration argument.
+ *
+ * Returns [] when there are no captures — or when the file's language is
+ * outside the five-language tier — the caller's signal to fall back to the
+ * line-based extractor. Reuses MAX_SPECIFIER_LENGTH; the result is capped at
+ * MAX_AST_IMPORT_SPECIFIERS like the line extractor's capping.
+ */
+export function importSpecifiersFromAstCaptures(
+  specifierCaptures: readonly string[],
+  callCaptures: readonly string[],
+  filePath: string,
+): string[] {
+  const ext = extensionOf(filePath)
+  if (!AST_IMPORT_CAPTURE_LANGUAGES.has(ext)) return []
+  const specifiers = new Set<string>()
+  const add = (specifier: string | null): void => {
+    if (!specifier || specifier.length > MAX_SPECIFIER_LENGTH) return
+    if (specifiers.size >= MAX_AST_IMPORT_SPECIFIERS) return
+    specifiers.add(specifier)
+  }
+
+  if (ext === '.rs') {
+    for (const capture of specifierCaptures) add(rustUseTreePath(capture))
+  } else {
+    // Python relative_import node text can carry the `from` keyword depending
+    // on grammar version; strip it so the shape matches the line extractor.
+    const isPython = (PYTHON_IMPORT_EXTENSIONS as readonly string[]).includes(
+      ext,
+    )
+    for (const capture of specifierCaptures) {
+      const cleaned = isPython
+        ? capture.replace(/^from\s+/i, '')
+        : capture
+      add(unquoteImportLiteral(cleaned))
+    }
+  }
+
+  if ((TS_IMPORT_EXTENSIONS as readonly string[]).includes(ext)) {
+    for (const call of callCaptures) {
+      const match = call.match(/^\s*(?:require|import)\s*\(\s*(['"])([^'"]+)\1/)
+      if (match?.[2]) add(match[2])
+    }
+  }
+
+  return [...specifiers]
+}
+
+const MAX_AST_IMPORT_SPECIFIERS = 100
+/** Exported so the indexer can cap the AST tier with the same bound. */
+export { MAX_AST_IMPORT_SPECIFIERS as AST_IMPORT_SPECIFIER_LIMIT }
 
 /**
  * Resolve a module specifier to a project-relative file path using the

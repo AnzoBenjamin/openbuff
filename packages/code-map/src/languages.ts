@@ -302,6 +302,74 @@ function resolveQueryPath(queryFileName: string): string {
   return fs.existsSync(cwdCandidate) ? cwdCandidate : primary
 }
 
+/**
+ * Split a tags query into top-level chunks (balanced s-expressions, aware of
+ * `"` strings and `;` line comments) so {@link stripImportCapturePatterns}
+ * can drop individual patterns without touching the rest of the query.
+ */
+function splitTopLevelQueryPatterns(content: string): string[] {
+  const patterns: string[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let inComment = false
+  for (let i = 0; i < content.length; i++) {
+    const ch = content.charAt(i)
+    if (inComment) {
+      if (ch === '\n') inComment = false
+      continue
+    }
+    if (inString) {
+      if (ch === '\\') {
+        i++
+      } else if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      if (depth === 0 && start < 0) start = i
+      continue
+    }
+    if (ch === ';') {
+      inComment = true
+      if (depth === 0 && start < 0) start = i
+      continue
+    }
+    if (ch === '(') {
+      depth++
+      if (depth === 1 && start < 0) start = i
+      continue
+    }
+    if (ch === ')') {
+      depth--
+      if (depth === 0 && start >= 0) {
+        patterns.push(content.slice(start, i + 1))
+        start = -1
+      }
+      continue
+    }
+    if (depth === 0 && start < 0 && !/\s/.test(ch)) start = i
+  }
+  if (start >= 0) patterns.push(content.slice(start))
+  return patterns
+}
+
+/**
+ * P3-T5 fail-open helper: drop every top-level pattern containing an
+ * `@import.` capture. Returns the content unchanged when no pattern contains
+ * one, so the caller can distinguish "nothing to strip" (rethrow the
+ * original compile error) from a stripped query (retry the compile).
+ */
+function stripImportCapturePatterns(queryContent: string): string {
+  const patterns = splitTopLevelQueryPatterns(queryContent)
+  if (!patterns.some((pattern) => pattern.includes('@import.'))) {
+    return queryContent
+  }
+  return patterns.filter((pattern) => !pattern.includes('@import.')).join('\n')
+}
+
 /* ------------------------------------------------------------------ */
 /* 7. One-time library init                                          */
 /* ------------------------------------------------------------------ */
@@ -417,7 +485,19 @@ export async function createLanguageConfig(
 
       cfg.language = lang
       cfg.parser = parser
-      cfg.query = new Query(lang, queryContent)
+      try {
+        cfg.query = new Query(lang, queryContent)
+      } catch (err) {
+        // P3-T5 fail-open: the tags queries now include the AST import-capture
+        // tier (@import.* patterns). A bad capture addition must degrade to
+        // "no import captures" for that language, never break ALL parsing for
+        // it — retry once with the import patterns stripped. If even the
+        // stripped query fails to compile, the original error propagates to
+        // the fail-open catch in `getLanguageConfig` exactly as before.
+        const stripped = stripImportCapturePatterns(queryContent)
+        if (stripped === queryContent) throw err
+        cfg.query = new Query(lang, stripped)
+      }
     } catch (err) {
       // Let the runtime-specific implementation handle error logging
       throw err

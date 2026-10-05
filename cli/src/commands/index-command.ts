@@ -1,4 +1,5 @@
-import { IndexManager } from '@codebuff/indexer'
+import { IndexManager, runScipIngest } from '@codebuff/indexer'
+import type { MetadataIndex } from '@codebuff/indexer'
 import { createConfiguredEmbedder, loadProviderConfigSync } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../project-files'
@@ -15,6 +16,8 @@ type IndexQueryResult = {
   totalIndexed: number
   indexAge: number
   status: IndexStatusView
+  /** Content-addressed snapshot identity (P3-T4 /index scip adopt guard). */
+  snapshot?: { snapshotId: string }
 }
 
 type IndexStatusView = {
@@ -53,6 +56,12 @@ type IndexManagerLike = {
     options?: { limit?: number; mode?: 'explain' },
   ): Promise<IndexQueryResult>
   isSemanticReady(): boolean
+  // P3-T4 production wiring: snapshot read + adopt seams for /index scip.
+  getSnapshot(): MetadataIndex | null
+  adoptMergedIndex(
+    merged: MetadataIndex,
+    expectedSnapshotId: string,
+  ): Promise<boolean>
 }
 
 type IndexCommandDeps = {
@@ -61,9 +70,14 @@ type IndexCommandDeps = {
     semanticEnabled: boolean
     manager: IndexManagerLike | null
   }
+  /** Injectable SCIP runner seam (P3-T4); defaults to the real runner. */
+  runScipIngest?: typeof runScipIngest
+  /** Injectable project-root seam (P3-T4); defaults to getProjectRoot. */
+  getRoot?: () => string
 }
 
 const defaultDeps: IndexCommandDeps = {
+  runScipIngest,
   getManager: () => {
     const config = loadProviderConfigSync().config.indexing
     if (config.enabled === false) {
@@ -195,7 +209,7 @@ export async function handleIndexCommandBlocks(
     }
   }
 
-  // For non-status subcommands (explain, etc.), fall back to string.
+  // For non-status subcommands (explain, scip, etc.), fall back to string.
   return handleIndexCommand(rawArgs, deps)
 }
 
@@ -271,7 +285,74 @@ export async function handleIndexCommand(
     ].join('\n')
   }
 
-  return 'Usage: /index [status|rebuild|explain <query>]'
+  if (normalized === 'scip') {
+    // P3-T4 production wiring: explicit opt-in SCIP ingestion — runScipIngest
+    // spawns real scip-* indexer processes and is only ever invoked when the
+    // user asks for it here, never automatically. Fail-open: a runner failure
+    // renders as a failure line, never throws into the command result.
+    await setup.manager.waitUntilReady(30_000)
+    const snapshot = setup.manager.getSnapshot()
+    if (!snapshot) {
+      return 'Index not ready; run /index rebuild first.'
+    }
+    // Capture the pre-scan snapshot identity so adoptMergedIndex can refuse a
+    // merge whose base snapshot was replaced by a concurrent rebuild.
+    const expectedSnapshotId = setup.manager.query('', {
+      limit: 1,
+    }).snapshot?.snapshotId
+    if (!expectedSnapshotId) {
+      return 'Index not ready; run /index rebuild first.'
+    }
+    const indexerSpec = rest.join(' ').trim()
+    const indexers = indexerSpec
+      ? indexerSpec.split(/[\s,]+/).filter(Boolean)
+      : undefined
+    const runIngest = deps.runScipIngest ?? runScipIngest
+    let result: Awaited<ReturnType<typeof runIngest>>
+    try {
+      result = await runIngest((deps.getRoot ?? getProjectRoot)(), {
+        index: snapshot,
+        indexers,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return `SCIP ingestion failed: ${message}`
+    }
+    const lines = result.results.map((item) => {
+      let line = `${item.indexer}: ${item.status}`
+      if (item.error) line += ` — ${item.error}`
+      if (item.edgesMerged !== undefined) {
+        line += ` (${item.edgesMerged} precise edges merged)`
+      }
+      return line
+    })
+    lines.push(
+      `SCIP ingestion: ${result.mergedTotal} precise edges merged across ${result.results.length} indexer(s).`,
+    )
+    if (
+      result.mergedTotal === 0 &&
+      result.results.length > 0 &&
+      result.results.every((item) => item.status === 'unavailable')
+    ) {
+      lines.push(
+        'Hint: install the scip-* indexer binaries (e.g. scip-typescript, scip-python) on PATH to enable precise cross-reference edges.',
+      )
+    }
+    if (result.mergedTotal > 0 && result.mergedIndex) {
+      const adopted = await setup.manager.adoptMergedIndex(
+        result.mergedIndex,
+        expectedSnapshotId,
+      )
+      lines.push(
+        adopted
+          ? 'Merged snapshot adopted; precise edges are live for queries until the next rebuild.'
+          : 'Index rebuilt during scan; merged edges discarded — rerun /index scip.',
+      )
+    }
+    return lines.join('\n')
+  }
+
+  return 'Usage: /index [status|rebuild|explain <query>|scip [typescript,python,...]]'
 }
 
 export function formatIndexStatus(

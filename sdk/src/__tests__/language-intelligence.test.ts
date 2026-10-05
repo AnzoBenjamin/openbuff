@@ -385,6 +385,69 @@ describe('language-intelligence syncMutatedFiles', () => {
     expect(syncedPaths).toEqual([path.join(root, 'small.ts')])
   })
 
+  test('forwards deleted paths as a didClose (close semantics, no disk read)', async () => {
+    // P3 audit fix: syncMutatedFiles previously dropped action === 'delete'
+    // paths entirely, so a warm language server kept stale open-document
+    // state for deleted files. closedPaths are now forwarded as
+    // syncFile({ close: true }) without ever reading the (deleted) file.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-close-'))
+    tempRoots.push(root)
+    fs.writeFileSync(path.join(root, 'live.ts'), 'export const live = 1\n')
+    const synced: Array<{ filePath: string; version: number; text: string }> = []
+    const closed: string[] = []
+    const service = createLanguageIntelligence({
+      cwd: root,
+      multiplexer: makeMultiplexer({
+        syncFile: async (params) => {
+          if (params.close) {
+            closed.push(params.filePath)
+            return
+          }
+          synced.push(params)
+        },
+      }),
+    })
+    await service.syncMutatedFiles(['live.ts'], {
+      closedPaths: ['deleted.ts', 'README.md', 'missing-dir/gone.ts'],
+    })
+    // The live path still syncs from disk; the deleted .ts path is closed;
+    // non-source paths are skipped exactly like the sync loop.
+    expect(synced).toEqual([
+      {
+        filePath: path.join(root, 'live.ts'),
+        version: 1,
+        text: 'export const live = 1\n',
+      },
+    ])
+    expect(closed).toEqual([
+      path.join(root, 'deleted.ts'),
+      path.join(root, 'missing-dir/gone.ts'),
+    ])
+  })
+
+  test('close path is fail-open per path and bounded per call', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-li-close-'))
+    tempRoots.push(root)
+    const closedPaths: string[] = []
+    const service = createLanguageIntelligence({
+      cwd: root,
+      multiplexer: makeMultiplexer({
+        syncFile: async (params) => {
+          if (!params.close) return
+          closedPaths.push(params.filePath)
+          throw new Error('server hiccup on close')
+        },
+      }),
+    })
+    // 40 deleted paths: every close failure is swallowed and the call still
+    // resolves; only the first 32 closed paths reach the multiplexer.
+    const many = Array.from({ length: 40 }, (_, index) => `gone-${index}.ts`)
+    await expect(
+      service.syncMutatedFiles([], { closedPaths: many }),
+    ).resolves.toBeUndefined()
+    expect(closedPaths).toHaveLength(32)
+  })
+
   test('no-ops when the multiplexer was never built (no cold start)', async () => {
     const service = createLanguageIntelligence({ cwd: '/repo' })
     await expect(

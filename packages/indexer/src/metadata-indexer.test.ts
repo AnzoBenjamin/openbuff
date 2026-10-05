@@ -7,11 +7,13 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import {
   buildMetadataIndex,
   DEFAULT_GRAPH_WEIGHTS,
+  extractImports,
   getParsedCacheRootCount,
   MAX_INDEXED_PROJECT_ROOTS,
   resolveGraphWeights,
   updateMetadataIndex,
 } from './metadata-indexer'
+import { extractImportSpecifiers } from './import-resolution'
 
 describe('metadata indexer', () => {
   test('builds graph nodes and content hashes', async () => {
@@ -704,6 +706,99 @@ describe('metadata indexer', () => {
     // At-most-once: two consecutive failing refreshes warn exactly once for
     // the path (the warn-once latch keys on the absolute path).
     expect(hashFailureWarns).toHaveLength(1)
+  })
+
+  test('AST import tier: multiline named import resolves; non-tier languages stay line-based', async () => {
+    const root = await makeTempProject({
+      'src/a.ts':
+        'import {\n  helper,\n  util,\n} from "./helper"\nexport const x = helper + util\n',
+      'src/helper.ts': 'export const helper = 1\nexport const util = 2\n',
+      'src/Main.java':
+        'package com.acme;\n\nimport com.acme.user.User;\n\npublic class Main {}\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+
+    // AST tier (or, without a local WASM grammar, the byte-identical line
+    // fallback): the multiline named-import specifier is indexed either way.
+    expect(index.files['src/a.ts']?.imports).toContain('./helper')
+    // Downstream resolution is untouched: the specifier resolves to a real
+    // file→file references edge.
+    expect(
+      index.graph.edges.some(
+        (edge) =>
+          edge.type === 'references' && edge.to === 'file:src/helper.ts',
+      ),
+    ).toBe(true)
+    // A language outside the five-language tier keeps the line-based
+    // extractor's output exactly.
+    expect(index.files['src/Main.java']?.imports).toEqual([
+      'com.acme.user.User',
+    ])
+  })
+
+  test('extractImports prefers non-empty AST captures and falls back byte-identically', () => {
+    const content = "import { helper } from './helper'\n"
+    // AST tier replaces the line output only when non-empty:
+    expect(extractImports(content, '.ts', ['./helper'])).toEqual(['./helper'])
+    // Empty/absent captures fall back to the line-based extractor exactly:
+    expect(extractImports(content, '.ts', [])).toEqual(
+      extractImportSpecifiers(content, '.ts'),
+    )
+    expect(extractImports(content, '.ts', undefined)).toEqual(
+      extractImportSpecifiers(content, '.ts'),
+    )
+  })
+
+  test('tsconfig project references contribute aliases from referenced configs', async () => {
+    const root = await makeTempProject({
+      'tsconfig.json': JSON.stringify({
+        references: [{ path: './packages/lib' }],
+      }),
+      'packages/lib/tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '@lib/*': ['src/*'] } },
+      }),
+      'packages/lib/src/util.ts': 'export const util = 1\n',
+      'src/a.ts': 'import { util } from "@lib/util"\nexport const a = util\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+
+    // The referenced tsconfig's paths alias resolves the bare specifier onto
+    // the referenced package's own source file (rebased to the project root).
+    expect(
+      index.graph.edges.some(
+        (edge) =>
+          edge.type === 'references' &&
+          edge.to === 'file:packages/lib/src/util.ts',
+      ),
+    ).toBe(true)
+  })
+
+  test('root tsconfig paths win over referenced tsconfig paths (closest-wins)', async () => {
+    const root = await makeTempProject({
+      'tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '@lib/*': ['src/*'] } },
+        references: [{ path: './packages/lib' }],
+      }),
+      'packages/lib/tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '@lib/*': ['other/*'] } },
+      }),
+      'src/util.ts': 'export const util = 1\n',
+      'src/a.ts': 'import { util } from "@lib/util"\nexport const a = util\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+
+    // The root config's own paths entry is closer than the referenced
+    // config's same-key entry, so '@lib/util' resolves to src/util.ts and
+    // NOT to the referenced config's other/* target.
+    expect(
+      index.graph.edges.some(
+        (edge) =>
+          edge.type === 'references' && edge.to === 'file:src/util.ts',
+      ),
+    ).toBe(true)
   })
 })
 

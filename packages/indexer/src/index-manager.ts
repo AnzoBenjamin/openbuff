@@ -399,6 +399,12 @@ export class IndexManager {
       from?: string
       to?: string
       lexicalWeights?: LexicalWeights
+      /**
+       * Blend weight for the personalized-PageRank component (P3-T9); see
+       * {@link QueryOptions.pageRankWeight}. Default: absent (= 0, opt-in) —
+       * omitting it keeps ranking byte-identical to the lexical baseline.
+       */
+      pageRankWeight?: number
     } = {},
   ): {
     results: QueryIndexResult[]
@@ -482,6 +488,12 @@ export class IndexManager {
       from?: string
       to?: string
       lexicalWeights?: LexicalWeights
+      /**
+       * Blend weight for the personalized-PageRank component (P3-T9); see
+       * {@link QueryOptions.pageRankWeight}. Default: absent (= 0, opt-in) —
+       * omitting it keeps ranking byte-identical to the lexical baseline.
+       */
+      pageRankWeight?: number
     } = {},
   ): Promise<{
     results: QueryIndexResult[]
@@ -790,6 +802,113 @@ export class IndexManager {
       this.embed &&
       this.fileVectors.length > 0,
     )
+  }
+
+  /**
+   * P3-T4 production wiring: read accessor for the manager's current index
+   * snapshot, for callers that run an out-of-band enrichment pass (e.g. the
+   * `/index scip` CLI path) against a captured snapshot and then adopt the
+   * merged result via {@link adoptMergedIndex}. Returns null until a build
+   * has produced an index.
+   */
+  getSnapshot(): MetadataIndex | null {
+    // Detached-instance gate: serve the registered singleton's snapshot,
+    // mirroring every other query/readiness seam.
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) return registered.getSnapshot()
+    return this.index
+  }
+
+  /**
+   * P3-T4 production wiring: adopt an externally merged snapshot (e.g. the
+   * merged result of `runScipIngest`) into the live manager — but only when
+   * the manager's CURRENT snapshot is still the one the caller captured,
+   * keyed by the existing content-addressed snapshotId machinery (the same
+   * {@link getSnapshotIdentity} helper the query seams and `_build`'s
+   * verification use). A concurrent rebuild between snapshot capture and
+   * adopt changes the current snapshotId, so the merge is refused (returns
+   * false) and the caller must rerun its scan against the fresh snapshot
+   * instead of silently grafting stale precise edges onto a rebuilt index.
+   *
+   * Persistence: rides the same async `saveIndex` CAS flow `_build` uses,
+   * keyed on the current snapshot's builtAt so a concurrent writer wins
+   * gracefully instead of being clobbered by the merged snapshot. When the
+   * save wins, the persisted snapshot is verified fail-closed (mirroring
+   * `_build`) and merged precise edges survive across sessions. If the
+   * save loses the CAS race, the newest on-disk index is served and the
+   * merged edges stay in memory only for this session; any persistence
+   * error degrades to the in-memory-only adoption. Persistence is an
+   * upgrade, not a correctness gate: the boolean result still only reports
+   * adopt (true) vs. stale-snapshot refusal (false) and never reflects
+   * persistence success.
+   */
+  async adoptMergedIndex(
+    merged: MetadataIndex,
+    expectedSnapshotId: string,
+  ): Promise<boolean> {
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) {
+      return registered.adoptMergedIndex(merged, expectedSnapshotId)
+    }
+    const current = this.index
+    if (!current) return false
+    if (this.getSnapshotIdentity(current).snapshotId !== expectedSnapshotId) {
+      return false
+    }
+    try {
+      const cacheDir = this.config.cacheDir ?? '.codebuff-index'
+      const persisted = await saveIndex(merged, this.projectRoot, cacheDir, {
+        expectedBuiltAt: current.builtAt,
+      })
+      if (persisted) {
+        // Fail-closed verification: only trust disk when it still holds the
+        // snapshot we just saved. Verified by comparing snapshot content
+        // directly rather than by re-deriving a content digest, so the check
+        // cannot be silently disabled if this module's identity hash and
+        // index-store's ever drift apart. A mismatch falls back to the
+        // in-memory merged index so a concurrent writer can't swap content
+        // under us.
+        let verified: MetadataIndex | null = null
+        try {
+          verified = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          verified = null
+        }
+        if (verified && !isSameIndexSnapshot(verified, merged)) {
+          verified = null
+        }
+        if (!verified) {
+          console.warn(
+            '[indexer] persisted index failed snapshot verification; serving the in-memory index.',
+          )
+        }
+        this.index = verified ?? merged
+      } else {
+        // Our save lost the CAS race: preserve concurrent-newest-wins by
+        // serving the newest on-disk index (unverified). The read is guarded
+        // so a failed read can't discard the merge entirely; the merged
+        // precise edges then stay in memory only for this session.
+        let onDisk: MetadataIndex | null = null
+        try {
+          onDisk = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          onDisk = null
+        }
+        this.index = onDisk ?? merged
+        console.debug(
+          '[indexer] merged snapshot adoption lost the saveIndex CAS race; merged precise edges stay in memory only for this session.',
+        )
+      }
+    } catch (err) {
+      // Persistence is an upgrade, not a correctness gate: any error here
+      // degrades to the previous in-memory-only adoption.
+      console.debug('[indexer] merged snapshot persistence failed:', err)
+      this.index = merged
+    }
+    // Mirror _build's snapshot swap: assign, then drop the identity cache so
+    // the adopted snapshot's identity is derived fresh on next use.
+    this.snapshotCache = undefined
+    return true
   }
 
   /**

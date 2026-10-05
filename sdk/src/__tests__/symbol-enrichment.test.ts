@@ -7,6 +7,7 @@ import {
   symbolEnrichmentCacheSizeForTest,
 } from '../services/symbol-enrichment'
 import {
+  createLspMultiplexer,
   LspServerError,
   LspServerUnavailableError,
 } from '../services/lsp-multiplexer'
@@ -15,6 +16,8 @@ import type {
   LspDocumentSymbol,
   LspHover,
   LspPosition,
+  LspMultiplexer,
+  LspSpawner,
 } from '../services/lsp-multiplexer'
 import type {
   LspInlayHint,
@@ -480,5 +483,41 @@ describe('enrichFileSymbols', () => {
     expect(result.symbols.every((s) => s.documentation === 'docs')).toBe(true)
     expect(hoverSpy).toHaveBeenCalledTimes(symbolCount)
     expect(maxInFlight).toBeGreaterThan(1)
+  })
+})
+
+describe('LspMultiplexer enrichment-seam conformance', () => {
+  // Compile-time conformance pin (P3 coherence audit): the real
+  // LspMultiplexer must stay structurally assignable to the
+  // SymbolEnrichmentMultiplexer seam so enrichment can be handed the live
+  // multiplexer directly. A future drift (e.g. a hover signature change or a
+  // removed member) fails this type assertion at compile time.
+  type SeamConformant = LspMultiplexer extends SymbolEnrichmentMultiplexer
+    ? true
+    : false
+  const seamConformant: SeamConformant = true
+
+  test('the real multiplexer satisfies the enrichment seam subset', async () => {
+    expect(seamConformant).toBe(true)
+
+    const fakeSpawner: LspSpawner = () => {
+      throw new Error('no server is spawned by the conformance test')
+    }
+    const multiplexer = createLspMultiplexer({ spawner: fakeSpawner })
+    try {
+      // Runtime subset pin: the seam's required members exist on the real
+      // multiplexer (definition/references/workspaceSymbol/syncFile are
+      // extra members the seam does not need).
+      expect(typeof multiplexer.hover).toBe('function')
+      expect(typeof multiplexer.documentSymbol).toBe('function')
+      // inlayHint remains optional-seam-only: the real multiplexer does not
+      // implement it today (it is server-capability-gated in the seam), and
+      // the seam marks it optional precisely so this gap is NOT a
+      // conformance failure. If inlayHint is ever added to the multiplexer,
+      // this assertion should be flipped to pin the fuller conformance.
+      expect('inlayHint' in multiplexer).toBe(false)
+    } finally {
+      await multiplexer.dispose()
+    }
   })
 })

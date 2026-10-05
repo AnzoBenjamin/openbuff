@@ -1,4 +1,7 @@
-import { preflightDiagnosticDelta } from './diagnostic-delta'
+import {
+  captureDiagnostics,
+  preflightDiagnosticDelta,
+} from './diagnostic-delta'
 import { getSystemProcessEnv } from '../env'
 
 import type { ChildProcess } from 'node:child_process'
@@ -8,6 +11,7 @@ import type {
   DiagnosticRunResult,
 } from './diagnostic-delta'
 import type { DiagnosticDeltaHook } from '../tools/file-change-hooks'
+import type { LanguageDiagnostic } from '../tools/language-diagnostics'
 
 /**
  * Production wiring for the diagnostic-delta preflight (audit item B).
@@ -101,10 +105,16 @@ export function createDiagnosticCommandRunner(params: {
       const stderrCapture = new BoundedStreamCapture()
       let settled = false
       let timer: ReturnType<typeof setTimeout> | undefined
+      // Tracked in the outer scope so finish() can cancel it (P3 audit): a
+      // child that exits before the SIGTERM→SIGKILL grace elapses must not
+      // leave a dangling escalation timer — the same settle() shape the
+      // sibling semgrep runner (makeSpawnRunner) enforces.
+      let escalate: ReturnType<typeof setTimeout> | undefined
       const finish = (result: DiagnosticRunResult) => {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
+        if (escalate) clearTimeout(escalate)
         resolve(result)
       }
       let child: ChildProcess
@@ -138,7 +148,7 @@ export function createDiagnosticCommandRunner(params: {
         // guard the sibling semgrep runner (makeSpawnRunner) enforces. The
         // result is already settled above, so the escalation never delays
         // callers; it only bounds the leaked child's lifetime.
-        const escalate = setTimeout(() => {
+        escalate = setTimeout(() => {
           try {
             child.kill('SIGKILL')
           } catch {
@@ -184,27 +194,57 @@ export function createDiagnosticDeltaHook(params: {
   spawn: CodebuffSpawn
   /** Injected for tests so a throwing preflight can prove the fail-open path. */
   preflight?: typeof preflightDiagnosticDelta
+  /**
+   * Optional pre-edit baseline provider (P3 audit fix D). When the caller
+   * captured diagnostics BEFORE the mutating tool ran, the provider returns
+   * that snapshot and the hook uses it as the preflight `baseline` — the
+   * after-capture then runs for real, so a NEW error in the after-state can
+   * actually produce a rejection. When the provider yields no baseline
+   * (capture failed / not supplied), today's no-op applyEdit +
+   * skipSecondCapture behavior is kept byte-identical.
+   */
+  getBaseline?: (ctx: {
+    files: string[]
+    cwd: string
+    env?: Record<string, string | undefined>
+    signal?: AbortSignal
+  }) => Promise<LanguageDiagnostic[] | undefined> | LanguageDiagnostic[] | undefined
 }): DiagnosticDeltaHook {
   const runCommand = createDiagnosticCommandRunner(params)
   const preflight = params.preflight ?? preflightDiagnosticDelta
   return async ({ files, cwd, env, signal }) => {
     try {
-      // File-change hooks observe already-changed files, so no pre-edit
-      // baseline exists on this seam: the preflight captures the current state
-      // as its own baseline with a no-op applyEdit. It therefore reports
-      // acceptance unless its capture machinery itself breaks (fail-open
-      // below) and never fabricates a rejection; a true before/after delta
-      // needs the mutation-broker path that owns the pre-edit snapshot.
+      let baseline: LanguageDiagnostic[] | undefined
+      try {
+        baseline = await params.getBaseline?.({ files, cwd, env, signal })
+      } catch {
+        // Fail-open: a broken baseline provider must degrade to today's
+        // no-baseline behavior, never break the hook.
+        baseline = undefined
+      }
+      // File-change hooks observe already-changed files. Without a pre-edit
+      // baseline the preflight captures the current state as its own baseline
+      // with a no-op applyEdit: it reports acceptance unless its capture
+      // machinery itself breaks (fail-open below) and never fabricates a
+      // rejection; a true before/after delta needs a captured baseline.
+      // WITH a baseline (P3 audit fix D), skipSecondCapture must NOT be
+      // passed — the after-capture runs for real so a genuine delta against
+      // the pre-edit snapshot can produce a rejection.
       return await preflight({
         files,
         cwd,
         runCommand,
         applyEdit: () => {},
-        // The applyEdit above is a no-op: hooks observe already-changed files,
-        // so a second full capture of the diagnostic command set (compile-scale
-        // commands like tsc --noEmit) would be guaranteed redundant work on the
-        // hot file-change path. Reuse the baseline capture instead.
-        skipSecondCapture: true,
+        ...(baseline !== undefined
+          ? { baseline }
+          : {
+              // The applyEdit above is a no-op: hooks observe already-changed
+              // files, so a second full capture of the diagnostic command set
+              // (compile-scale commands like tsc --noEmit) would be guaranteed
+              // redundant work on the hot file-change path. Reuse the baseline
+              // capture instead.
+              skipSecondCapture: true,
+            }),
         env,
         signal,
       })

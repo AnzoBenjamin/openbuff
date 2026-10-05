@@ -635,6 +635,15 @@ export type LspMultiplexer = {
   documentSymbol(params: {
     filePath: string
   }): Promise<LspDocumentSymbol[] | null>
+  /**
+   * P3 audit note: `filePath` is a reserved-for-future-use seam. Production
+   * callers (language-intelligence.ts -> run.ts) pass only a `query` today,
+   * so the filePath-aware per-language routing branch inside the
+   * implementation is unreachable and every query degrades to the
+   * context-free warm-anchor path. Activating per-language routing requires
+   * threading filePath through workspaceSymbolParams (the tool schema), this
+   * service, and the run.ts handler.
+   */
   workspaceSymbol(
     query: string,
     filePath?: string,

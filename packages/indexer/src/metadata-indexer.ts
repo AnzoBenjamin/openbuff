@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import {
   extractCodeChunks,
   getFileTokenScores,
+  AST_IMPORT_SPECIFIER_LIMIT,
   SUPPORTED_CODE_EXTENSIONS,
 } from '@codebuff/code-map'
 
@@ -13,6 +14,7 @@ import {
   resolveImportToFile,
   stripJsonComments,
 } from './import-resolution'
+import { createTsModuleResolver } from './ts-module-resolver'
 import {
   BINARY_EXTENSIONS,
   statProjectFiles,
@@ -38,6 +40,7 @@ import type {
 } from './types'
 import type { ParseCoverage, ParsedFileTokens } from '@codebuff/code-map'
 import type { WalkedFile, WalkProjectResult } from './file-walker'
+import type { TsModuleResolver } from './ts-module-resolver'
 import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
 
 const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
@@ -247,6 +250,7 @@ export async function buildMetadataIndex(
       ext: file.ext,
       asset: file.asset,
       tokenScores: tokenScores[file.relativePath] ?? {},
+      astImports: parseData[file.relativePath]?.imports,
     })
     if (indexed) indexedFiles[file.relativePath] = indexed
   }
@@ -412,24 +416,26 @@ export async function updateMetadataIndex(
     deletedPaths.size === 0 &&
     !needsParseHydration
   ) {
+    const graphFiles = metadataOnlyChange ? updatedFiles : existing.files
+    const aliases = loadTsAliases(projectRoot)
+    // One fail-open ts resolution tier per pass (null when the typescript
+    // module is unavailable).
     const graph = buildGraph(
-      metadataOnlyChange ? updatedFiles : existing.files,
+      graphFiles,
       {},
-      loadTsAliases(projectRoot),
+      aliases,
       resolveGraphWeights(config.weights?.graph),
       existing.parseData,
+      createTsModuleResolver({ projectRoot, files: graphFiles, aliases }),
     )
     return {
       ...existing,
       builtAt: Date.now(),
       // A refresh that applied changes clears any prior degraded flag (P8.1).
       parserDegraded: undefined,
-      files: metadataOnlyChange ? updatedFiles : existing.files,
+      files: graphFiles,
       graph,
-      queryData: buildIndexQueryData(
-        metadataOnlyChange ? updatedFiles : existing.files,
-        graph,
-      ),
+      queryData: buildIndexQueryData(graphFiles, graph),
       coverage: createIndexCoverage(walked, existing.coverage?.parser),
     }
   }
@@ -515,6 +521,7 @@ export async function updateMetadataIndex(
       asset: file.asset,
       hash: hashByPath.get(file.relativePath),
       tokenScores: tokenScores[file.relativePath] ?? {},
+      astImports: parseData[file.relativePath]?.imports,
       previousChunks: previous?.chunks,
       previousHash: previous?.hash,
       readFailedPaths: contentReadFailedPaths,
@@ -566,6 +573,12 @@ async function indexWalkedFile(params: {
   asset?: { kind: '3d'; format: string }
   hash?: string
   tokenScores: Record<string, number>
+  /**
+   * P3-T5 AST import-capture tier: import specifiers captured by the
+   * code-map tags query for this file's language (five tier languages).
+   * Empty/undefined keeps the line-based fallback byte-identical.
+   */
+  astImports?: string[]
   previousChunks?: IndexedFile['chunks']
   previousHash?: string
   /**
@@ -643,7 +656,7 @@ async function indexWalkedFile(params: {
   }
 
   const symbols = getTopSymbols(params.tokenScores, 30)
-  const imports = extractImports(content, params.ext)
+  const imports = extractImports(content, params.ext, params.astImports)
   const headings = DOC_EXTENSIONS.has(params.ext)
     ? extractHeadings(content)
     : []
@@ -729,6 +742,7 @@ function createMetadataIndex(
     aliases,
     resolveGraphWeights(graphWeights),
     parseData,
+    createTsModuleResolver({ projectRoot, files, aliases }),
   )
   return {
     version: '2',
@@ -846,6 +860,7 @@ function buildGraph(
   aliases: TsAliasMap | undefined,
   weights: Required<GraphWeights>,
   parseData: Record<string, ParsedFileTokens> = {},
+  tsResolver: TsModuleResolver | null = null,
 ): IndexGraph {
   const nodes: Record<string, IndexNode> = {}
   const edges: IndexEdge[] = []
@@ -896,6 +911,7 @@ function buildGraph(
         importPath,
         files,
         aliases,
+        tsResolver,
       )
       if (resolved) {
         edges.push({
@@ -993,7 +1009,13 @@ function buildGraph(
   }
 
   edges.push(
-    ...buildModuleAwareCallEdges(files, parseData, aliases, weights.calls),
+    ...buildModuleAwareCallEdges(
+      files,
+      parseData,
+      aliases,
+      weights.calls,
+      tsResolver,
+    ),
   )
 
   return { nodes, edges: dedupeEdges(edges) }
@@ -1004,6 +1026,7 @@ function buildModuleAwareCallEdges(
   parseData: Record<string, ParsedFileTokens>,
   aliases: TsAliasMap | undefined,
   weight: number,
+  tsResolver: TsModuleResolver | null = null,
 ): IndexEdge[] {
   const definitions = new Map<string, string[]>()
   for (const [filePath, parsed] of Object.entries(parseData)) {
@@ -1041,6 +1064,7 @@ function buildModuleAwareCallEdges(
             importPath,
             files,
             aliases,
+            tsResolver,
           ),
         )
         .filter((filePath): filePath is string => Boolean(filePath)),
@@ -1100,7 +1124,31 @@ function getTopSymbols(
     .map(([sym]) => sym)
 }
 
-function extractImports(content: string, extension: string): string[] {
+/**
+ * P3-T5 AST import-capture tier: prefer import specifiers captured by the
+ * code-map tree-sitter tags query (the SAME .scm query the parse pipeline
+ * runs; see `parseFile`'s @import.* capture grouping and
+ * `importSpecifiersFromAstCaptures`) when the parse pipeline produced a
+ * non-empty list for a tier language (TypeScript, JavaScript, Python, Go,
+ * Rust). AST captures are normalized in code-map to the exact specifier
+ * shapes the line-based extractor emits, so downstream resolution
+ * (resolveImportToFile / edge building) is untouched.
+ *
+ * When the parse pipeline exposes no captures — the file's language has no
+ * AST tier, the grammar failed to load, or the file produced no @import
+ * captures — this falls back byte-identically to the canonical line-based
+ * extraction (`extractImportSpecifiers`), which remains the safety net and
+ * is NOT removed. Both tiers are capped by the same bound. Exported so the
+ * seam contract is directly pinnable in tests.
+ */
+export function extractImports(
+  content: string,
+  extension: string,
+  astImports?: string[],
+): string[] {
+  if (astImports && astImports.length > 0) {
+    return astImports.slice(0, AST_IMPORT_SPECIFIER_LIMIT)
+  }
   return extractImportSpecifiers(content, extension)
 }
 
@@ -1384,50 +1432,129 @@ export type { TsAliasMap } from './import-resolution'
 import type { TsAliasMap } from './import-resolution'
 
 /**
- * Load tsconfig `compilerOptions.paths` aliases (following `extends`), so the
- * import graph can resolve workspace-internal aliases like "@codebuff/common/*".
- * Tolerant: comments/trailing commas are stripped, and any failure yields no
- * aliases (relative-import resolution still works). Cached per root.
+ * Upper bound on tsconfig project references followed per loadTsAliases walk;
+ * a hostile or accidental reference fan-out cannot grow the walk without
+ * bound (cycles are separately bounded by the shared visited set).
+ */
+const MAX_TSCONFIG_REFERENCES = 32
+
+/**
+ * Load tsconfig `compilerOptions.paths` aliases (following `extends` AND
+ * top-level `references`), so the import graph can resolve workspace-internal
+ * aliases like "@codebuff/common/*" and paths declared by project-referenced
+ * tsconfigs.
+ *
+ * Walk order: the root tsconfig.json contributes first, then its `extends`
+ * chain (each extends resolved relative to the referencing file's directory);
+ * a config's top-level `references` entries (`{ path: string }[]`, resolved
+ * relative to the referencing file's directory, with a directory reference
+ * getting `/tsconfig.json` appended, as TypeScript does) are queued behind
+ * the extends chain, and each referenced config is walked with its own
+ * extends chain too. A single visited set bounds the whole walk against
+ * cycles, and at most MAX_TSCONFIG_REFERENCES references are followed.
+ *
+ * Closest-wins precedence, matching the existing rule: a key already in the
+ * map is never overwritten, so the root config wins over its extends bases,
+ * and nearer references win over farther ones in walk order. Paths
+ * discovered through references are rebased to be project-root-relative (a
+ * referenced config's `paths` are relative to that config's own directory,
+ * but the resolver applies every alias against the project root).
+ *
+ * Tolerant/fail-open: comments/trailing commas are stripped, and malformed
+ * JSON, missing files, reference cycles, or the reference cap simply
+ * contribute nothing for that config (relative-import resolution still
+ * works). Cached per root.
  */
 function loadTsAliases(projectRoot: string): TsAliasMap {
   const cached = tsAliasCacheByRoot.get(projectRoot)
   if (cached) return cached
 
   const aliases: TsAliasMap = {}
-  try {
-    let configPath: string = path.join(projectRoot, 'tsconfig.json')
-    const visited = new Set<string>()
-    while (
-      configPath &&
-      !visited.has(configPath) &&
-      fs.existsSync(configPath)
-    ) {
-      visited.add(configPath)
+  const queue: { filePath: string; viaReference: boolean }[] = [
+    { filePath: path.join(projectRoot, 'tsconfig.json'), viaReference: false },
+  ]
+  const visited = new Set<string>()
+  let referencesFollowed = 0
+  while (queue.length > 0) {
+    const entry = queue.shift()!
+    if (visited.has(entry.filePath) || !fs.existsSync(entry.filePath)) {
+      continue
+    }
+    visited.add(entry.filePath)
+    let extendsPath: string | undefined
+    const referencePaths: { filePath: string; viaReference: boolean }[] = []
+    try {
       const raw = JSON.parse(
-        stripJsonComments(fs.readFileSync(configPath, 'utf8')),
+        stripJsonComments(fs.readFileSync(entry.filePath, 'utf8')),
       ) as {
         compilerOptions?: { paths?: unknown }
         extends?: unknown
+        references?: unknown
       }
       const paths = raw?.compilerOptions?.paths
       if (paths && typeof paths === 'object') {
+        // Paths in a config reached via `references` are relative to that
+        // config's own directory; rebase them so they resolve against the
+        // project root like every other alias.
+        const rebasePrefix = entry.viaReference
+          ? path
+              .relative(projectRoot, path.dirname(entry.filePath))
+              .split(path.sep)
+              .join('/')
+          : ''
         for (const [key, value] of Object.entries(paths)) {
           // Closest config wins; do not let a base config override.
           if (!(key in aliases) && Array.isArray(value)) {
             aliases[key] = (value as unknown[])
               .filter((t): t is string => typeof t === 'string')
-              .map((t) => t.replace(/^\.\//, '').replace(/\\/g, '/'))
+              .map((t) => {
+                const normalized = t.replace(/^\.\//, '').replace(/\\/g, '/')
+                return rebasePrefix
+                  ? `${rebasePrefix}/${normalized}`
+                  : normalized
+              })
           }
         }
       }
       const ext = raw?.extends
-      configPath =
-        typeof ext === 'string'
-          ? path.resolve(path.dirname(configPath), ext)
-          : ''
+      if (typeof ext === 'string' && ext !== '') {
+        extendsPath = path.resolve(path.dirname(entry.filePath), ext)
+      }
+      if (Array.isArray(raw?.references)) {
+        for (const reference of raw.references) {
+          const referencePath =
+            reference !== null && typeof reference === 'object'
+              ? (reference as { path?: unknown }).path
+              : undefined
+          if (typeof referencePath !== 'string') continue
+          if (referencesFollowed >= MAX_TSCONFIG_REFERENCES) break
+          referencesFollowed++
+          const resolved = path.resolve(
+            path.dirname(entry.filePath),
+            referencePath,
+          )
+          // A directory reference names the referenced project root; its
+          // tsconfig.json is the config file (mirrors TypeScript's behavior).
+          referencePaths.push({
+            filePath: /\.json$/i.test(resolved)
+              ? resolved
+              : path.join(resolved, 'tsconfig.json'),
+            viaReference: true,
+          })
+        }
+      }
+    } catch {
+      // Malformed/missing config contributes nothing; the walk continues.
     }
-  } catch {
-    // No aliases on parse/read failure.
+    // Extends chains drain before any queued reference so the root config
+    // and its bases stay closer than referenced configs.
+    if (extendsPath) {
+      queue.unshift({
+        filePath: extendsPath,
+        viaReference: entry.viaReference,
+      })
+    }
+    if (referencePaths.length > 0) queue.push(...referencePaths)
   }
 
   if (!tsAliasCacheByRoot.has(projectRoot)) {

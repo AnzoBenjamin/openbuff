@@ -29,11 +29,16 @@ export type SemgrepRunResult = {
  * in git-status.ts) so tests stay hermetic. Sync runners remain accepted for
  * compatibility, but the shipped default runner is async (`spawn`): the scan
  * must never block the SDK event loop.
+ *
+ * `signal` (P3 audit fix) is optional so existing injected runners stay
+ * source-compatible; the shipped spawn runner forwards it so an aborted
+ * caller settles the scan promptly (SIGTERM→SIGKILL escalation).
  */
 export type SemgrepRunner = (
   argv: string[],
   cwd: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ) => SemgrepRunResult | Promise<SemgrepRunResult>
 
 export type SemgrepBaselineResult =
@@ -70,23 +75,22 @@ const MAX_FINDINGS = 200
 export const SIGTERM_GRACE_MS = 5_000
 
 // Full/short hex shas, a conservative ref name (origin/main, release-1.2)
-// with an optional bounded tilde suffix (`main~1`, digits only) and an
-// optional trailing '/', or the bounded time-travel shorthand `HEAD~N`
-// (digits only). Anything else is rejected outright: the ref only ever
-// travels as a single argv token (never shell-interpolated), and this
-// whitelist keeps option-like (leading '-'), traversal-shaped ('..', e.g.
-// 'a~../../x'), and metacharacter-bearing strings out of the argv array
-// entirely. `..` anywhere is rejected explicitly, and tilde suffixes must be
-// digits only (`HEAD~~`, `HEAD~1a` fail) so '~' cannot start a traversal
-// sequence.
+// with an optional bounded tilde suffix (`main~1`, digits only), or the
+// bounded time-travel shorthand `HEAD~N` (digits only). Anything else is
+// rejected outright: the ref only ever travels as a single argv token (never
+// shell-interpolated), and this whitelist keeps option-like (leading '-'),
+// traversal-shaped ('..', e.g. 'a~../../x'), and metacharacter-bearing strings
+// out of the argv array entirely. `..` anywhere is rejected explicitly, and
+// tilde suffixes must be digits only (`HEAD~~`, `HEAD~1a` fail) so '~' cannot
+// start a traversal sequence. A trailing '/' on a ref name is rejected too:
+// refs like 'main/' are not valid git ref names.
 //
-// Compatibility: `HEAD~N` and conservative `branch~N` refs (and a trailing
-// '/' on a ref name) were accepted by the original contract for direct
-// callers of runSemgrepBaseline and remain accepted. Resolving refs to hex
-// shas (e.g. `git rev-parse <ref>`) is still preferred, which is what the
-// shipped get_change_review_bundle path does.
+// Compatibility: `HEAD~N` and conservative `branch~N` refs were accepted by
+// the original contract for direct callers of runSemgrepBaseline and remain
+// accepted. Resolving refs to hex shas (e.g. `git rev-parse <ref>`) is still
+// preferred, which is what the shipped get_change_review_bundle path does.
 const SAFE_BASELINE_REF =
-  /^[0-9a-f]{4,40}$|^HEAD~\d{1,3}$|^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9._-])?(?:~\d{1,3})?\/?$/
+  /^[0-9a-f]{4,40}$|^HEAD~\d{1,3}$|^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9._-])?(?:~\d{1,3})?$/
 
 function isSafeBaselineRef(ref: string): boolean {
   if (ref.includes('..')) return false
@@ -107,11 +111,29 @@ export function makeSpawnRunner(
   options?: { sigtermGraceMs?: number },
 ): SemgrepRunner {
   const graceMs = options?.sigtermGraceMs ?? SIGTERM_GRACE_MS
-  return (argv, cwd, timeoutMs) =>
+  return (argv, cwd, timeoutMs, signal) =>
     new Promise<SemgrepRunResult>((resolve) => {
+      // An already-aborted caller must settle promptly instead of spawning a
+      // child it will immediately have to kill (fail-open: an honest error
+      // status, not a hang).
+      if (signal?.aborted) {
+        resolve({
+          exitCode: -1,
+          stdout: '',
+          stderr: 'semgrep aborted before spawn',
+        })
+        return
+      }
       let child: ReturnType<typeof spawn>
       try {
-        child = spawn(command, argv, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+        child = spawn(command, argv, {
+          cwd,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          // Forward the caller's cancellation into the child process itself:
+          // node kills the child on abort (SIGTERM by default), which the
+          // close handler below then surfaces via the `signal` field.
+          ...(signal ? { signal } : {}),
+        })
       } catch (error) {
         resolve({
           exitCode: -1,
@@ -124,6 +146,8 @@ export function makeSpawnRunner(
       const stderrChunks: Buffer[] = []
       let bufferedBytes = 0
       let settled = false
+      // `escalate` is cleared in settle() when the child exits before the
+      // SIGTERM→SIGKILL grace elapses (the diagnostic runner's finish() shape).
       let escalate: ReturnType<typeof setTimeout> | undefined
       const settle = (result: SemgrepRunResult): void => {
         if (settled) return
@@ -210,14 +234,40 @@ export function makeSpawnRunner(
           stderr: error instanceof Error ? error.message : String(error),
         })
       })
-      child.on('close', (code, signal) => {
+      child.on('close', (code, closeSignal) => {
         settle({
           exitCode: code ?? -1,
           stdout: Buffer.concat(stdoutChunks).toString('utf8'),
           stderr: Buffer.concat(stderrChunks).toString('utf8'),
-          ...(signal ? { signal } : {}),
+          ...(closeSignal ? { signal: closeSignal } : {}),
         })
       })
+      // Caller cancellation (P3 audit fix): mirror runGitBounded's abort
+      // shape (perf: run-git-bounded-abort-no-sigkill-escalation) — SIGTERM
+      // to the child first, then a SIGKILL escalation after the grace period
+      // so a SIGTERM-ignoring child cannot keep running with live pipes after
+      // the caller cancelled. The scan's result is an honest error status
+      // (fail-open contract is unchanged); only the timing changes.
+      if (signal) {
+        const onAbort = (): void => {
+          if (settled) return
+          try {
+            child.kill('SIGTERM')
+          } catch {
+            /* already gone */
+          }
+          if (escalate) clearTimeout(escalate)
+          escalate = setTimeout(() => {
+            try {
+              child.kill('SIGKILL')
+            } catch {
+              /* already gone */
+            }
+          }, graceMs)
+          escalate.unref()
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
     })
 }
 
@@ -351,6 +401,13 @@ export async function runSemgrepBaseline(params: {
    * and return a 'skipped' status without invoking the runner.
    */
   skipScan?: boolean
+  /**
+   * Optional caller cancellation signal (P3 audit fix). Forwarded into the
+   * runner so an aborted caller settles the scan promptly instead of waiting
+   * out the full timeout. Fail-open semantics are unchanged: an aborted scan
+   * is an honest error status, never a thrown error.
+   */
+  signal?: AbortSignal
 }): Promise<SemgrepBaselineResult> {
   if (params.skipScan) {
     return { status: 'skipped', reason: 'before-bundle-skipped', findings: [] }
@@ -405,6 +462,7 @@ export async function runSemgrepBaseline(params: {
         ),
         MAX_SCAN_TIMEOUT_MS,
       ),
+      params.signal,
     )
   } catch (error) {
     return {

@@ -3,6 +3,8 @@ import * as path from 'path'
 
 import { getLanguageConfig, hasLanguageConfiguration } from './languages'
 
+import { importSpecifiersFromAstCaptures } from './import-sites'
+
 import type { LanguageConfig } from './languages'
 import type { Parser, Query } from 'web-tree-sitter'
 import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
@@ -72,6 +74,7 @@ type ParsedTokens = {
 
 type ParsedTokensForScoring = ParsedTokens & {
   bytes: number
+  imports: string[]
   skipped: boolean
   skipReason?:
     | 'file_too_large'
@@ -104,6 +107,16 @@ export interface ParsedFileTokens {
   identifiers: string[]
   calls: string[]
   numLines: number
+  /**
+   * P3-T5 AST import-capture tier: module specifiers captured by the tags
+   * query's @import.* patterns for the five tier languages (TypeScript,
+   * JavaScript, Python, Go, Rust), normalized by
+   * `importSpecifiersFromAstCaptures` into the exact shapes the line-based
+   * extractor emits. Optional so parse caches persisted before this tier
+   * stay valid; consumers must fall back to line-based extraction when the
+   * field is absent or empty.
+   */
+  imports?: string[]
 }
 
 export async function getFileTokenScores(
@@ -217,6 +230,7 @@ export async function getFileTokenScores(
         identifiers: result.identifiers,
         calls: result.calls,
         numLines: result.numLines,
+        imports: result.imports,
       }
     }
 
@@ -297,6 +311,28 @@ export function parseTokens(
     options,
   )
   return { numLines, identifiers, calls }
+}
+
+/**
+ * P3-T5 AST import-capture tier: like {@link parseTokens}, but also surfaces
+ * the import specifiers captured by the tags query's @import.* patterns
+ * (normalized to the line-based extractor's shapes — see
+ * {@link ParsedFileTokens.imports}). Exported so the tier can be pinned per
+ * language with mock parser/query configs, without a live WASM grammar.
+ */
+export function parseTokensWithImports(
+  filePath: string,
+  languageConfig: LanguageConfig,
+  readFile?: (filePath: string) => string | null,
+  options: ParseTokensOptions = {},
+): ParsedTokens & { imports: string[] } {
+  const { numLines, identifiers, calls, imports } = parseTokensWithLimits(
+    filePath,
+    languageConfig,
+    readFile,
+    options,
+  )
+  return { numLines, identifiers, calls, imports }
 }
 
 async function parseTokensForScoring(params: {
@@ -380,6 +416,15 @@ function parseTokensWithLimits(
     const parseResults = parseFile(parser, query, source.code)
     const identifiers = Array.from(new Set(parseResults.identifier))
     const calls = Array.from(new Set(parseResults['call.identifier']))
+    // P3-T5 AST import-capture tier: @import.* captures from the SAME tags
+    // query (tree-sitter-queries/*.scm), normalized to the line-based
+    // extractor's specifier shapes. Languages without import captures yield
+    // [] here, which consumers treat as "fall back to line-based".
+    const imports = importSpecifiersFromAstCaptures(
+      parseResults['import.specifier'] ?? [],
+      parseResults['import.call'] ?? [],
+      filePath,
+    )
 
     if (DEBUG_PARSING) {
       console.log(`\nParsing ${filePath}:`)
@@ -391,6 +436,7 @@ function parseTokensWithLimits(
       numLines: countLines(source.code),
       identifiers: identifiers ?? [],
       calls: calls ?? [],
+      imports,
       bytes: source.bytes,
       skipped: false,
     }
@@ -556,6 +602,7 @@ function emptyParsedTokens(
     numLines: 0,
     identifiers: [],
     calls: [],
+    imports: [],
     bytes,
     skipped: Boolean(skipReason),
     skipReason,

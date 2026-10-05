@@ -325,4 +325,67 @@ describe('Python absolute-import top-level directory guard', () => {
     expect(resolveImportToFile('main.py', '.py', 'other', files)).toBeNull()
   })
 })
+
+describe('TS module-resolution tier wiring', () => {
+  const files: Record<string, ImportResolutionFile> = {
+    'src/util.ts': { path: 'src/util.ts', ext: '.ts' },
+    'src/stub.ts': { path: 'src/stub.ts', ext: '.ts' },
+  }
+  const stubResolver = () => 'src/stub.ts'
+
+  test('the relative arm still wins before the injected ts tier', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.ts',
+        '.ts',
+        './util',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBe('src/util.ts')
+  })
+
+  test('the injected ts tier resolves what the conservative arms miss', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.ts',
+        '.ts',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBe('src/stub.ts')
+  })
+
+  test('omitting the resolver keeps conservative behavior byte-identical', () => {
+    expect(
+      resolveImportToFile('src/a.ts', '.ts', '@stub/thing', files),
+    ).toBeNull()
+  })
+
+  test('the ts tier is not consulted for non-TS/JS extensions', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.py',
+        '.py',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBeNull()
+    expect(
+      resolveImportToFile(
+        'src/main.go',
+        '.go',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBeNull()
+  })
+})
 })

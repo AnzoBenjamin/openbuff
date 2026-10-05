@@ -9,6 +9,8 @@ import {
 
 import type { ImportSite } from '@codebuff/code-map'
 
+import type { TsModuleResolver } from './ts-module-resolver'
+
 /**
  * Canonical import-specifier extraction + per-ecosystem resolution for the
  * indexer (P3-T5 / LI-08). Extraction reuses the shared line-based import
@@ -230,6 +232,7 @@ export function resolveImportToFile(
   importPath: string,
   files: Record<string, ImportResolutionFile>,
   aliases?: TsAliasMap,
+  tsResolver?: TsModuleResolver | null,
 ): string | null {
   const normalizedImport = importPath.replace(/\\/g, '/')
   const hasFile = (candidate: string) => files[candidate] !== undefined
@@ -330,6 +333,17 @@ export function resolveImportToFile(
   if (aliases) {
     const aliasResolved = resolveAliasImport(normalizedImport, aliases, files)
     if (aliasResolved) return aliasResolved
+  }
+  // TS/JS catch-all tier (P3-T5): real `ts.resolveModuleName` resolution over
+  // the indexed files map. Runs only after the cheaper relative/alias arms
+  // fail, and only when the caller injected a resolver — omitted/undefined
+  // keeps prior behavior byte-identical.
+  if (
+    tsResolver &&
+    (TS_IMPORT_EXTENSIONS as readonly string[]).includes(fromExtension)
+  ) {
+    const resolved = tsResolver(normalizedImport, fromFilePath)
+    if (resolved) return resolved
   }
   // Go module imports include a repository/module prefix. Resolve only when
   // the specifier carries the local go.mod module identity, and only via an

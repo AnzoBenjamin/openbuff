@@ -67,7 +67,8 @@ export type BuildGraphRunner = (
   cwd: string,
 ) => { exitCode: number; stdout: string; stderr: string }
 
-const maxFilesPerCall = 500
+/** Per-call cap on resolved files; callers surface truncation honestly via `truncated`. */
+export const maxFilesPerCall = 500
 const runnerTimeoutMs = 10_000
 // `cargo metadata` output is large even with --no-deps; bound it generously
 // but finitely so a runaway tool cannot exhaust memory.
@@ -574,6 +575,28 @@ const buildGraphCache = new Map<
   { expiresAt: number; targets: IndexedTarget[] }
 >()
 
+/**
+ * Stable identity for non-default runners (P3 coherence audit): the cache is
+ * keyed by root, so without a runner-identity component an injected custom
+ * runner could observe the default runner's cached results (or another fake
+ * runner's) within the TTL window. WeakMap keeps identities from leaking or
+ * growing unboundedly — a garbage-collected runner's id simply disappears.
+ * The default runner (and an absent one, which resolves to it) uses the
+ * unsuffixed key, so the live tool path's cache identity is unchanged.
+ */
+const runnerIds = new WeakMap<BuildGraphRunner, number>()
+let nextRunnerId = 0
+
+function runnerCacheKey(root: string, runner: BuildGraphRunner): string {
+  if (runner === defaultBuildGraphRunner) return root
+  let id = runnerIds.get(runner)
+  if (id === undefined) {
+    id = nextRunnerId++
+    runnerIds.set(runner, id)
+  }
+  return `${root}\0runner:${id}`
+}
+
 /** Drop every cached target index (tests, and callers that just scaffolded a workspace). */
 export function clearBuildGraphCache(): void {
   buildGraphCache.clear()
@@ -619,15 +642,16 @@ function cachedTargetIndex(
   runner: BuildGraphRunner,
 ): IndexedTarget[] {
   const now = Date.now()
-  const cached = buildGraphCache.get(root)
+  const cacheKey = runnerCacheKey(root, runner)
+  const cached = buildGraphCache.get(cacheKey)
   if (cached && cached.expiresAt > now) return cached.targets
   const targets = buildTargetIndex(root, runner)
-  buildGraphCache.delete(root)
+  buildGraphCache.delete(cacheKey)
   if (buildGraphCache.size >= buildGraphCacheMaxEntries) {
     const oldest = buildGraphCache.keys().next()
     if (!oldest.done) buildGraphCache.delete(oldest.value)
   }
-  buildGraphCache.set(root, {
+  buildGraphCache.set(cacheKey, {
     expiresAt: now + buildGraphCacheTtlMs,
     targets,
   })
@@ -666,7 +690,9 @@ const confidenceRank: Record<BuildGraphConfidence, number> = {
  * Map source files to their owning build targets. Ownership is the
  * longest-prefix match across every ecosystem's target roots; ties break
  * toward higher-confidence detections. A file no target owns resolves to
- * `{ targets: [], confidence: 'unknown' }`.
+ * `{ targets: [], confidence: 'unknown' }`. Input beyond `maxFilesPerCall`
+ * files is capped per call — compare `files.length` against the returned
+ * length (or check the tool-level `truncated` flag) to notice truncation.
  */
 export function resolveOwningTargets(params: {
   cwd: string
@@ -675,6 +701,10 @@ export function resolveOwningTargets(params: {
 }): OwningTargetResolution[] {
   const root = path.resolve(params.cwd)
   const index = cachedTargetIndex(root, params.runner ?? defaultBuildGraphRunner)
+  // Truncation honesty (P3 coherence audit): files beyond the per-call cap
+  // are silently not considered; callers surface `truncated` when that
+  // happens instead of leaving the loss invisible.
+  const truncated = params.files.length > maxFilesPerCall
   const files = toProjectRelativeFiles(
     root,
     params.files.slice(0, maxFilesPerCall),

@@ -403,6 +403,9 @@ async function resolveSecurityScan(params: {
       files: scannable,
       skipScan: params.skipScan,
       runner: params.runner,
+      // P3 audit fix: forward the caller's cancellation so an aborted scan
+      // settles promptly instead of waiting out the full timeout.
+      signal: params.signal,
     })
     if (result.status === 'ok') {
       return {

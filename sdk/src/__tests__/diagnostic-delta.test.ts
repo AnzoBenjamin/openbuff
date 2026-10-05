@@ -132,6 +132,59 @@ describe('computeDiagnosticDelta', () => {
       computeDiagnosticDelta(before, after, { mode: 'strict' }),
     ).toHaveLength(1)
   })
+
+  test('count-aware tolerant matching: a second same-code error in the same file is NEW', () => {
+    // A plain per-(file, code) Set masked a genuinely NEW error that merely
+    // shared a rule code with a pre-existing one. Multiset semantics consume
+    // the baseline count, so the second same-code error is reported.
+    const before = [makeDiagnostic({ code: 'E501' })]
+    const after = [
+      makeDiagnostic({ code: 'E501' }),
+      makeDiagnostic({ code: 'E501', message: 'second same-code error' }),
+    ]
+    const delta = computeDiagnosticDelta(before, after)
+    expect(delta).toHaveLength(1)
+    expect(delta[0].message).toBe('second same-code error')
+  })
+
+  test('count-aware tolerant matching: N pre-existing shifted errors stay tolerated', () => {
+    // Line-shifted pre-existing errors must keep matching their baseline
+    // counts (pure line shifts stay tolerated), so this edit is accepted.
+    const before = [
+      makeDiagnostic({
+        code: 'E501',
+        range: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
+      }),
+      makeDiagnostic({
+        code: 'E501',
+        range: { start: { line: 20, column: 1 }, end: { line: 20, column: 1 } },
+      }),
+    ]
+    const after = [
+      makeDiagnostic({
+        code: 'E501',
+        range: { start: { line: 3, column: 1 }, end: { line: 3, column: 1 } },
+      }),
+      makeDiagnostic({
+        code: 'E501',
+        range: { start: { line: 22, column: 1 }, end: { line: 22, column: 1 } },
+      }),
+    ]
+    expect(computeDiagnosticDelta(before, after)).toEqual([])
+  })
+
+  test('count-aware tolerant matching is per-file, not global', () => {
+    // A same-code error in a DIFFERENT file never consumes another file's
+    // baseline count.
+    const before = [makeDiagnostic({ code: 'E501', file: 'src/a.py' })]
+    const after = [
+      makeDiagnostic({ code: 'E501', file: 'src/a.py' }),
+      makeDiagnostic({ code: 'E501', file: 'src/b.py' }),
+    ]
+    const delta = computeDiagnosticDelta(before, after)
+    expect(delta).toHaveLength(1)
+    expect(delta[0].file).toBe('src/b.py')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -608,6 +661,69 @@ describe('preflightDiagnosticDelta', () => {
       expect(result.fixIts.length).toBeGreaterThanOrEqual(0)
     }
   })
+
+  test('a supplied baseline wins over skipSecondCapture: the real after-capture runs', async () => {
+    // P3 audit fix D: when a caller-supplied baseline is present, the first
+    // capture is skipped and the baseline is used as `before`. The baseline
+    // also wins over skipSecondCapture, so the after-capture runs for real:
+    // exactly ONE ruff invocation (the after-state) proves BOTH that the
+    // first capture was skipped and that the second was NOT collapsed.
+    const baseline = [makeDiagnostic()]
+    const after = JSON.stringify([ruffEntry('F401', 'unused import', 2)])
+    // With a baseline the ONLY ruff invocation is the after-capture, so the
+    // runner must serve the after-state on its first call.
+    const { run, calls } = ruffRunner(after, after)
+    const result = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: run,
+      applyEdit: () => {},
+      skipSecondCapture: true,
+      baseline,
+    })
+    expect(result.rejected).toBe(true)
+    if (result.rejected) {
+      expect(result.newDiagnostics).toHaveLength(1)
+      expect(result.newDiagnostics[0].code).toBe('F401')
+    }
+    const ruffCalls = calls.filter(
+      (command) => command === 'ruff check --output-format=json',
+    )
+    expect(ruffCalls).toHaveLength(1)
+  })
+
+  test('a supplied baseline tolerates pre-existing errors and accepts the edit', async () => {
+    const baseline = [makeDiagnostic()]
+    const after = JSON.stringify([ruffEntry('E501', 'line too long', 1)])
+    const { run } = ruffRunner('[]', after)
+    const result = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: run,
+      applyEdit: () => {},
+      baseline,
+    })
+    expect(result).toEqual({ rejected: false })
+  })
+
+  test('count-aware preflight rejects a second same-code error the edit introduced', async () => {
+    const before = JSON.stringify([ruffEntry('E501', 'line too long', 1)])
+    const after = JSON.stringify([
+      ruffEntry('E501', 'line too long', 1),
+      ruffEntry('E501', 'another line too long', 30),
+    ])
+    const { run } = ruffRunner(before, after)
+    const result = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: run,
+      applyEdit: () => {},
+    })
+    expect(result.rejected).toBe(true)
+    if (result.rejected) {
+      expect(result.newDiagnostics).toHaveLength(1)
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -860,6 +976,111 @@ describe('createDiagnosticDeltaHook', () => {
     const { spawn } = fakeSpawn({ tsc: 'error' })
     const hook = createDiagnosticDeltaHook({ spawn })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo' })
+    expect(result).toEqual({ rejected: false })
+  })
+
+  test('forwards a captured baseline and drops skipSecondCapture', async () => {
+    // P3 audit fix D: with a baseline provider, the preflight must receive the
+    // baseline and must NOT skip the after-capture, so the reject path is
+    // reachable in production.
+    const seen: Array<Record<string, unknown>> = []
+    const spyPreflight = (async (params: Record<string, unknown>) => {
+      seen.push(params)
+      return { rejected: false }
+    }) as unknown as typeof preflightDiagnosticDelta
+    const baseline = [makeDiagnostic()]
+    const hook = createDiagnosticDeltaHook({
+      spawn: fakeSpawn({}).spawn,
+      preflight: spyPreflight,
+      getBaseline: () => baseline,
+    })
+    await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
+    expect(seen).toHaveLength(1)
+    expect(seen[0].baseline).toEqual(baseline)
+    expect(seen[0].skipSecondCapture).toBeUndefined()
+  })
+
+  test('without a baseline keeps the no-op + skipSecondCapture behavior', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const spyPreflight = (async (params: Record<string, unknown>) => {
+      seen.push(params)
+      return { rejected: false }
+    }) as unknown as typeof preflightDiagnosticDelta
+    const hook = createDiagnosticDeltaHook({
+      spawn: fakeSpawn({}).spawn,
+      preflight: spyPreflight,
+      getBaseline: () => undefined,
+    })
+    await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
+    expect(seen).toHaveLength(1)
+    expect(seen[0].baseline).toBeUndefined()
+    expect(seen[0].skipSecondCapture).toBe(true)
+  })
+
+  test('is fail-open: a throwing baseline provider degrades to no baseline', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const spyPreflight = (async (params: Record<string, unknown>) => {
+      seen.push(params)
+      return { rejected: false }
+    }) as unknown as typeof preflightDiagnosticDelta
+    const hook = createDiagnosticDeltaHook({
+      spawn: fakeSpawn({}).spawn,
+      preflight: spyPreflight,
+      getBaseline: () => {
+        throw new Error('baseline capture exploded')
+      },
+    })
+    await expect(
+      hook({ files: ['src/a.ts'], cwd: '/repo', env: {} }),
+    ).resolves.toEqual({ rejected: false })
+    expect(seen[0].baseline).toBeUndefined()
+    expect(seen[0].skipSecondCapture).toBe(true)
+  })
+
+  test('with a baseline, a NEW error in the after-state produces a rejection', async () => {
+    // The previously unreachable production path: a real pre-edit baseline
+    // plus a real after-capture means a genuinely new error now rejects.
+    const { spawn } = fakeSpawn({
+      tsc: { exitCode: 2, stdout: 'src/a.ts(1,1): error TS2: brand new error' },
+    })
+    const hook = createDiagnosticDeltaHook({
+      spawn,
+      getBaseline: () => [],
+    })
+    const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
+    expect(result?.rejected).toBe(true)
+  })
+
+  test('with a baseline, pre-existing errors are still tolerated (accepted)', async () => {
+    // The baseline holds the same-code error (under both possible path
+    // spellings the parser may emit), so the identical after-state is
+    // tolerated and the edit is accepted.
+    const { spawn } = fakeSpawn({
+      tsc: {
+        exitCode: 2,
+        stdout: 'src/a.ts(1,1): error TS1: pre-existing error',
+      },
+    })
+    const hook = createDiagnosticDeltaHook({
+      spawn,
+      getBaseline: () => [
+        makeDiagnostic({ file: 'src/a.ts', code: 'TS1' }),
+        makeDiagnostic({ file: '/repo/src/a.ts', code: 'TS1' }),
+      ],
+    })
+    const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
+    expect(result).toEqual({ rejected: false })
+  })
+
+  test('without a baseline the same new error still never rejects (unchanged)', async () => {
+    // No-baseline behavior must stay byte-identical: the after-capture is
+    // skipped, the delta collapses to empty, and the hook reports acceptance
+    // even though the on-disk state contains an error.
+    const { spawn } = fakeSpawn({
+      tsc: { exitCode: 2, stdout: 'src/a.ts(1,1): error TS2: brand new error' },
+    })
+    const hook = createDiagnosticDeltaHook({ spawn })
+    const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
     expect(result).toEqual({ rejected: false })
   })
 })

@@ -41,6 +41,12 @@ export const getBuildTargetsParams = {
         .describe(
           'Best-effort per-file owning build-target resolution from the build-graph service; absent when resolution failed.',
         ),
+      truncated: z
+        .boolean()
+        .optional()
+        .describe(
+          'true when the input file list exceeded the per-call cap and some files were not considered',
+        ),
     }),
   ),
 } satisfies $ToolParams

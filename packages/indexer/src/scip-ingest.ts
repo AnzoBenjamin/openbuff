@@ -23,6 +23,22 @@ export const SCIP_MAX_MERGED_EDGES = 50_000
 /** Historical default `references` weight from metadata-indexer. */
 const SCIP_EDGE_WEIGHT = 0.9
 
+/**
+ * Edge-label cap for SCIP symbols (P3 coherence audit), mirroring
+ * metadata-indexer's 160-char concept guard: a hostile or corrupt dump can
+ * carry arbitrarily long symbols, and the symbol is copied verbatim into the
+ * query-facing edge `label`. Enforced at the parse boundary with a
+ * deterministic prefix slice, so identical (over-long) symbols still dedupe
+ * and merged output stays deterministic.
+ */
+export const MAX_SCIP_LABEL_CHARS = 160
+
+function capScipSymbol(symbol: string): string {
+  return symbol.length <= MAX_SCIP_LABEL_CHARS
+    ? symbol
+    : symbol.slice(0, MAX_SCIP_LABEL_CHARS)
+}
+
 export type ScipIngestErrorCode = 'malformed' | 'occurrence-limit' | 'edge-limit'
 
 /** Typed failure for malformed or unbounded SCIP input; ingestion fails closed. */
@@ -104,10 +120,21 @@ export function parseScipJson(json: unknown): ScipIndex {
  * Merge precise SCIP cross-reference edges into an index snapshot. Pure: the
  * input is not mutated. The returned snapshot shares every non-graph field;
  * its graph adds `confidence: 'precise'` file→file reference edges and drops
- * the persisted adjacency accelerator, whose edge indexes would be stale
- * (consumers rebuild it from `graph.edges`). Existing edges keep their
+ * the whole persisted query accelerator (`queryData`): adjacency, postings,
+ * and document frequencies are all stale after the edge change, so consumers
+ * rebuild it from `graph.edges` or fall back to the uncached query path.
+ * Existing edges keep their
  * (absent = heuristic) confidence; a precise edge replaces a heuristic
  * duplicate of the same (from, to, type) tuple instead of doubling it.
+ *
+ * @deprecated P3-T4: kept for compatibility and now delegates to
+ * {@link mergeScipEdgesIntoIndex} after deriving edges via
+ * {@link scipEdges}; prefer `scipPreciseEdges` + `mergeScipEdgesIntoIndex`
+ * (the single-pass batch merge the scip-runner uses) or `runScipIngest`
+ * directly. The exported signature and semantics are unchanged: the same
+ * 'malformed' throw on unsafe paths, the same zero-edge identity
+ * short-circuit (the input object is returned unchanged), and the same
+ * supersede/dedupe/edge-cap/queryData-drop behavior.
  */
 export function mergeScipIntoIndex(
   index: MetadataIndex,
@@ -124,41 +151,7 @@ export function mergeScipIntoIndex(
     )
   }
   if (preciseEdges.length === 0) return index
-
-  const nodes: Record<string, IndexNode> = { ...index.graph.nodes }
-  const preciseTuples = new Set(preciseEdges.map(edgeTupleKey))
-  const merged: IndexEdge[] = []
-  for (const edge of index.graph.edges) {
-    if (
-      (edge.confidence ?? 'heuristic') === 'heuristic' &&
-      preciseTuples.has(edgeTupleKey(edge))
-    ) {
-      continue
-    }
-    merged.push(edge)
-  }
-
-  const addedKeys = new Set<string>()
-  let addedCount = 0
-  for (const edge of preciseEdges) {
-    const key = edgeDedupeKey(edge)
-    if (addedKeys.has(key)) continue
-    if (addedCount >= SCIP_MAX_MERGED_EDGES) {
-      throw new ScipIngestError(
-        'edge-limit',
-        `SCIP merge exceeded the cap of ${SCIP_MAX_MERGED_EDGES} edges`,
-      )
-    }
-    addedKeys.add(key)
-    addedCount++
-    ensureFileNode(nodes, edge.from)
-    ensureFileNode(nodes, edge.to)
-    merged.push(edge)
-  }
-
-  const next: MetadataIndex = { ...index, graph: { nodes, edges: merged } }
-  delete next.queryData
-  return next
+  return mergeScipEdgesIntoIndex(index, preciseEdges).index
 }
 
 /**
@@ -182,7 +175,11 @@ export function scipPreciseEdges(scip: ScipIndex): IndexEdge[] {
 
 /**
  * Merge already-derived precise edges into an index snapshot in one pass.
- * Pure: the input is not mutated. Semantics match {@link mergeScipIntoIndex}
+ * Pure: the input is not mutated. Like {@link mergeScipIntoIndex}, the whole
+ * persisted query accelerator (`queryData` — adjacency, postings, and
+ * document frequencies) is dropped because it is stale after the edge
+ * change; consumers rebuild it from `graph.edges` or fall back. Semantics
+ * match {@link mergeScipIntoIndex}
  * (heuristic duplicates of the same (from, to, type) tuple are superseded,
  * dedupe by (from, to, type, label), edge cap enforced) but the index is
  * copied exactly once regardless of how many sources contributed edges —
@@ -362,7 +359,12 @@ function parseOccurrence(rawOccurrence: unknown): ScipOccurrence {
       'occurrence.symbol_roles must be a non-negative integer when present',
     )
   }
-  const occurrence: ScipOccurrence = { symbol }
+  // Label cap at the parse boundary (P3 coherence audit): the symbol is
+  // copied verbatim into the edge `label` downstream, so a dump carrying an
+  // arbitrarily long symbol would persist it unbounded as a query-facing
+  // label. Sliced deterministically (fixed prefix, fixed length) so identical
+  // over-long symbols still share one dedupe key.
+  const occurrence: ScipOccurrence = { symbol: capScipSymbol(symbol) }
   if (symbol_roles !== undefined) occurrence.symbolRoles = symbol_roles
   return occurrence
 }

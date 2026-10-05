@@ -65,8 +65,17 @@ export type LanguageIntelligenceService = {
    * per call), fail-open per path, and never throws. A no-op when the
    * service's multiplexer was never built (no language-intelligence tool ran
    * this run), so sync can never cold-start a server.
+   *
+   * `opts.closedPaths` (P3 audit fix): deleted paths are forwarded as a
+   * didClose (syncFile close semantics) so a warm server drops its stale
+   * open-document state for files that no longer exist. Same bounds and
+   * fail-open-per-path contract as the sync loop; never reads the (deleted)
+   * file from disk.
    */
-  syncMutatedFiles(paths: string[]): Promise<void>
+  syncMutatedFiles(
+    paths: string[],
+    opts?: { closedPaths?: string[] },
+  ): Promise<void>
   dispose(): Promise<void>
 }
 
@@ -344,7 +353,7 @@ export function createLanguageIntelligence(
       return [{ type: 'json', value: { symbols } }]
     },
 
-    async syncMutatedFiles(paths) {
+    async syncMutatedFiles(paths, opts) {
       // Sync is only meaningful for an already-built multiplexer: building one
       // here would cold-start language servers just to push updates, which the
       // sync seam must never do. Paths whose extension maps to no registered
@@ -382,6 +391,35 @@ export function createLanguageIntelligence(
           } catch {
             // Fail-open per path: a missing file or an unavailable server must
             // never fail the run that just committed the write.
+          }
+        },
+      )
+      // P3 audit fix: deleted paths are forwarded as a didClose so a warm
+      // language server drops its stale open-document state for files that no
+      // longer exist. Same bounds (per-call cap + concurrency window) and the
+      // same fail-open-per-path contract as the sync loop above; a deleted
+      // path is never read from disk, and a path the server never opened
+      // degrades to a no-op close rather than an error.
+      const closedPaths = opts?.closedPaths ?? []
+      await mapWithConcurrency(
+        closedPaths.slice(0, MAX_SYNC_FILES_PER_CALL),
+        SYNC_CONCURRENCY,
+        async (projectPath) => {
+          try {
+            const languageId = languageIdForPath(projectPath)
+            if (!languageId || !hasLanguageServerSpec(languageId)) return
+            const filePath = path.resolve(options.cwd, projectPath)
+            // The multiplexer's close branch ignores text/version; bumping
+            // keeps a later re-created file's didOpen version monotonic.
+            await activeMultiplexer.syncFile({
+              filePath,
+              version: (syncVersions.get(filePath) ?? 0) + 1,
+              text: '',
+              close: true,
+            })
+          } catch {
+            // Fail-open per path: a missing document or an unavailable server
+            // must never fail the run that just committed the delete.
           }
         },
       )

@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import { afterEach, describe, expect, test } from 'bun:test'
 
+import { maxFilesPerCall } from '../services/build-graph'
 import { getAffectedTests } from '../tools/get-affected-tests'
 import { getBuildTargets } from '../tools/get-build-targets'
 import { inspectEnvironment } from '../tools/inspect-environment'
@@ -85,6 +86,19 @@ describe('harness intelligence read tools', () => {
           },
         ],
       },
+    })
+    // Audit fix (truncation honesty): under the per-call cap, `truncated` is
+    // absent; over the cap, the tool reports honestly that files were not
+    // considered.
+    expect(
+      (buildTargets as { value: Record<string, unknown> }).value,
+    ).not.toHaveProperty('truncated')
+    const overCapFiles = Array.from(
+      { length: maxFilesPerCall + 1 },
+      (_, index) => `f-${index}.ts`,
+    )
+    expect(getBuildTargets(root, overCapFiles)[0]).toMatchObject({
+      value: { truncated: true },
     })
   }, 15_000)
 })

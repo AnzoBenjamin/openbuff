@@ -420,20 +420,26 @@ describe('runSemgrepBaseline', () => {
     expect(called).toBe(false)
   })
 
-  test('accepts a ref with a trailing slash (compat contract)', async () => {
-    let seenRef = ''
-    const runner = availableRunner((argv) => {
-      seenRef = argv[1]
-      return { exitCode: 0, stdout: EMPTY_SARIF, stderr: '' }
-    })
+  test('rejects a trailing-slash ref (refs like main/ are not valid git refs)', async () => {
+    let called = false
+    const runner: SemgrepRunner = async () => {
+      called = true
+      return versionOk
+    }
     const result = await runSemgrepBaseline({
-      cwd: '/tmp/semgrep-test-trailing-slash',
+      cwd: '/tmp/semgrep-test-trailing-slash-rejected',
       baselineCommit: 'origin/main/',
       files: ['a.py'],
       runner,
     })
-    expect(result.status).toBe('ok')
-    expect(seenRef).toBe('--baseline-commit=origin/main/')
+    // The compat trailing-'/' tolerance was dropped: a trailing slash no
+    // longer whitelists, so the ref is rejected before any runner call.
+    expect(result).toEqual({
+      status: 'error',
+      reason: 'invalid-baseline-commit',
+      findings: [],
+    })
+    expect(called).toBe(false)
   })
 
   test('accepts the documented HEAD~N shorthand (compat contract)', async () => {
@@ -632,6 +638,45 @@ describe('runSemgrepBaseline', () => {
     if (result.status !== 'error') return
     expect(result.reason).toContain('exit code 1')
     expect(result.findings).toEqual([])
+  })
+
+  test('forwards the caller signal into the runner (P3 audit fix)', async () => {
+    const controller = new AbortController()
+    let seenSignal: AbortSignal | undefined
+    const runner: SemgrepRunner = async (argv, _cwd, _timeoutMs, signal) => {
+      if (argv[0] === '--version') return versionOk
+      seenSignal = signal
+      return { exitCode: 0, stdout: EMPTY_SARIF, stderr: '' }
+    }
+    const result = await runSemgrepBaseline({
+      cwd: '/tmp/semgrep-test-signal',
+      baselineCommit: 'abc1234',
+      files: ['a.py'],
+      runner,
+      signal: controller.signal,
+    })
+    expect(result.status).toBe('ok')
+    expect(seenSignal).toBe(controller.signal)
+  })
+
+  test('an already-aborted spawn runner settles promptly without spawning', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    let spawned = 0
+    const spawnSpy = ((command: string) => {
+      spawned += 1
+      return undefined as never
+    }) as unknown as typeof import('node:child_process').spawn
+    // makeSpawnRunner closes over the module-level `spawn`; the no-spawn
+    // guarantee is asserted through the resolved shape instead.
+    void spawnSpy
+    const runner = makeSpawnRunner('semgrep')
+    const started = Date.now()
+    const result = await runner(['scan'], '/tmp', 60_000, controller.signal)
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(result.exitCode).toBe(-1)
+    expect(result.stderr).toContain('aborted')
+    expect(spawned).toBe(0)
   })
 
   test('spawn runner does not kill a healthy scan at the grace delay before the deadline', async () => {

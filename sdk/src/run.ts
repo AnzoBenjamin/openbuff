@@ -50,7 +50,14 @@ import {
 import { WorkspaceJournalService } from './services/workspace-journal'
 import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
-import { createDiagnosticDeltaHook } from './services/diagnostic-delta-runner'
+import {
+  captureDiagnostics,
+  supportedDiagnosticFiles,
+} from './services/diagnostic-delta'
+import {
+  createDiagnosticCommandRunner,
+  createDiagnosticDeltaHook,
+} from './services/diagnostic-delta-runner'
 import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
 import type { MemoryV2ClientConfig } from './services/memory-v2/types'
 import {
@@ -108,6 +115,7 @@ import {
 } from './tools/audit-intelligence'
 import { gitBranch } from './tools/git-branch'
 import {
+  isDiagnosticPreflightEnabled,
   runFileChangeHooks,
   type DiagnosticDeltaHook,
 } from './tools/file-change-hooks'
@@ -150,6 +158,7 @@ import type { JobOwner } from '@codebuff/common/util/job-registry'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { LanguageDiagnostic } from './tools/language-diagnostics'
 import { listJobs } from './tools/list-jobs'
 
 import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
@@ -160,6 +169,55 @@ import type {
   JournalReader,
   JournalWriter,
 } from '@codebuff/common/types/contracts/agent-runtime'
+
+/**
+ * Audit fix (D): tool calls whose receipt can contain file actions — the same
+ * set that reaches handleToolCall's post-commit mutation block (the
+ * change-file tools plus the compact-receipt write tool). Mirrors the
+ * toolName list the override receipt guard uses there.
+ */
+const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write_file',
+  'str_replace',
+  'create_plan',
+  'edit_transaction',
+  'replace_range',
+  'write_audit_findings',
+])
+
+/**
+ * Audit fix (D): bounded file list for the pre-edit baseline capture — the
+ * paths a mutating tool call targets, derived from its input WITHOUT any
+ * schema change. Each tool input carries at most a few paths, so the list is
+ * bounded by construction; supportedDiagnosticFiles filters it further before
+ * capture, and an empty output means no capture runs at all.
+ */
+function diagnosticBaselineFiles(toolName: string, input: unknown): string[] {
+  const record = (input ?? {}) as Record<string, unknown>
+  switch (toolName) {
+    case 'write_file':
+    case 'str_replace':
+    case 'create_plan':
+    case 'replace_range': {
+      const file = typeof record.path === 'string' ? record.path : undefined
+      return file ? [file] : []
+    }
+    case 'edit_transaction': {
+      const edits = Array.isArray(record.edits) ? record.edits : []
+      const files = new Set<string>()
+      for (const edit of edits) {
+        if (!edit || typeof edit !== 'object') continue
+        const editPath = (edit as { path?: unknown }).path
+        if (typeof editPath === 'string' && editPath !== '') {
+          files.add(editPath)
+        }
+      }
+      return [...files]
+    }
+    default:
+      return []
+  }
+}
 
 /**
  * Stable trusted background-job ownership seed for THIS client session.
@@ -864,6 +922,10 @@ async function runOnce({
   // so passing the injector unconditionally keeps flag-off behavior
   // byte-identical.
   const diagnosticDeltaHook = createDiagnosticDeltaHook({ spawn })
+  // Audit fix (D): the pre-edit baseline capture below runs through the SAME
+  // argv-array child-process seam (its own stateless adapter instance — the
+  // runner holds no state), bounded exactly like the hook's own captures.
+  const diagnosticBaselineRunner = createDiagnosticCommandRunner({ spawn })
   const preparedContent = wrapContentForUserMessage(content)
 
   // Per-run client session id (also the trusted process-job owner session).
@@ -1231,6 +1293,53 @@ async function runOnce({
           if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
         }
       }
+      // Audit fix (D): pre-edit baseline capture for the diagnostic-delta
+      // preflight. For tool calls whose receipt can contain file actions (the
+      // same set that reaches the post-commit mutation block), capture the
+      // PRE-EDIT diagnostic state ONCE so the hook can compute a real
+      // before/after delta. Bounded and fail-open: only when the
+      // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag is on, only one diagnostic-command
+      // pass per mutating tool call, and any capture error degrades to no
+      // baseline (today's exact hook behavior). The baseline is captured into
+      // this tool call's closure and consumed by the per-call hook wrapper
+      // below, so it can never leak across tool calls.
+      const isMutatingToolCall = DIAGNOSTIC_BASELINE_TOOL_NAMES.has(toolName)
+      let diagnosticBaseline: LanguageDiagnostic[] | undefined
+      if (
+        isMutatingToolCall &&
+        cwd &&
+        env &&
+        isDiagnosticPreflightEnabled(env)
+      ) {
+        try {
+          const baselineFiles = supportedDiagnosticFiles(
+            diagnosticBaselineFiles(toolName, input),
+          )
+          if (baselineFiles.length > 0) {
+            diagnosticBaseline = await captureDiagnostics({
+              files: baselineFiles,
+              cwd,
+              runCommand: diagnosticBaselineRunner,
+              env,
+              signal: runSignal,
+            })
+          }
+        } catch {
+          // Fail-open: no baseline → the hook keeps today's no-baseline path.
+          diagnosticBaseline = undefined
+        }
+      }
+      // Per-call hook wrapper: only a mutating tool call with a captured
+      // baseline supplies it (and the hook then drops skipSecondCapture so
+      // the after-capture runs for real); every other call reuses the shared
+      // hook unchanged, keeping no-baseline behavior byte-identical.
+      const diagnosticDeltaForCall: DiagnosticDeltaHook = diagnosticBaseline
+        ? (hookParams) =>
+            createDiagnosticDeltaHook({
+              spawn,
+              getBaseline: () => diagnosticBaseline,
+            })(hookParams)
+        : diagnosticDeltaHook
       const trustedCallId = callId ?? crypto.randomUUID()
       const handled = await handleToolCall({
         action: {
@@ -1246,7 +1355,7 @@ async function runOnce({
         onFilesystemMutation,
         verifyExternalMutation,
         getLanguageIntelligence,
-        diagnosticDelta: diagnosticDeltaHook,
+        diagnosticDelta: diagnosticDeltaForCall,
         customToolDefinitions: customToolDefinitions
           ? Object.fromEntries(
               customToolDefinitions.map((def) => [def.toolName, def]),
@@ -2821,9 +2930,18 @@ export async function handleToolCall({
         changed.action === 'move' ? changed.destinationPath : changed.path,
       )
       .filter((changedPath): changedPath is string => Boolean(changedPath))
-    if (syncedPaths.length > 0) {
+    // Audit fix: deleted paths are forwarded separately as a didClose so a
+    // warm language server drops its stale open-document state for files
+    // that no longer exist (they are excluded from syncedPaths above).
+    const closedPaths = changedActions
+      .filter((changed) => changed.action === 'delete')
+      .map((changed) => changed.path)
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    if (syncedPaths.length > 0 || closedPaths.length > 0) {
       try {
-        await getLanguageIntelligence?.().syncMutatedFiles(syncedPaths)
+        await getLanguageIntelligence?.().syncMutatedFiles(syncedPaths, {
+          closedPaths,
+        })
       } catch (error) {
         logger?.warn({ error }, 'Language-server document sync failed')
       }

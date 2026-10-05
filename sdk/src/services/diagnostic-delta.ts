@@ -75,13 +75,16 @@ export type DiagnosticCommandRunner = (params: {
  * How `computeDiagnosticDelta` decides whether a diagnostic in `after` already
  * existed in `before`.
  *
- * - 'tolerant' (default): match on (file, code) only, so a pre-existing
- *   diagnostic that moved lines still matches its baseline and is NOT reported
- *   as new. Tolerant is the default because the strict matcher rejected valid
- *   edits whose PRE-EXISTING errors merely shifted lines (the edit did not
- *   introduce them); tolerance is the safer failure mode for a fail-open
- *   preflight. Opt back into strict via `deltaMode: 'strict'` or the
- *   OPENBUFF_DIAGNOSTIC_DELTA_MODE=strict env var.
+ * - 'tolerant' (default): match on (file, code) with COUNT-AWARE multiset
+ *   semantics, so a pre-existing diagnostic that moved lines still matches its
+ *   baseline and is NOT reported as new, while a genuinely NEW diagnostic
+ *   sharing a (file, code) key with pre-existing ones is reported once the
+ *   baseline count for that key is exhausted. Tolerant is the default because
+ *   the strict matcher rejected valid edits whose PRE-EXISTING errors merely
+ *   shifted lines (the edit did not introduce them); tolerance is the safer
+ *   failure mode for a fail-open preflight. Opt back into strict via
+ *   `deltaMode: 'strict'` or the OPENBUFF_DIAGNOSTIC_DELTA_MODE=strict env
+ *   var.
  * - 'strict': match on (file, line, column, code/ruleId, severity). Precise,
  *   but a pre-existing diagnostic whose line merely shifted because an edit
  *   inserted/removed lines above it would be misread as NEW; two distinct
@@ -268,12 +271,20 @@ function tolerantKey(diagnostic: LanguageDiagnostic): string {
  * Pure delta: the diagnostics in `after` that have no matching diagnostic in
  * `before` under the requested match mode. Matching key (strict) is (file,
  * line, column, code/ruleId, severity); tolerant mode matches on (file, code)
- * to survive line shifts. See {@link DeltaMatchMode}.
+ * with count-aware multiset semantics to survive line shifts. See
+ * {@link DeltaMatchMode}.
  *
  * DEFAULT: 'tolerant'. The strict matcher rejected valid edits whose
  * PRE-EXISTING errors merely shifted lines, so the default flips to tolerant;
  * strict remains available via `options.mode: 'strict'` or the
  * {@link DELTA_MODE_ENV_FLAG} env var.
+ *
+ * Tolerant matching is count-aware (multiset semantics): the baseline counts
+ * per (file, code) key are consumed as `after` diagnostics match against
+ * them, so a diagnostic counts as NEW once the baseline count for its key is
+ * exhausted. A plain per-key Set would mask a genuinely NEW error that merely
+ * shares a rule code with a pre-existing one; the multiset keeps N
+ * pre-existing errors tolerated while the (N+1)th same-key error is reported.
  */
 export function computeDiagnosticDelta(
   before: readonly LanguageDiagnostic[],
@@ -281,8 +292,32 @@ export function computeDiagnosticDelta(
   options: { mode?: DeltaMatchMode } = {},
 ): LanguageDiagnostic[] {
   const keyOf = resolveDeltaKeyOf(options.mode)
-  const baseline = new Set(before.map(keyOf))
-  return after.filter((diagnostic) => !baseline.has(keyOf(diagnostic)))
+  if (keyOf !== tolerantKey) {
+    // Strict mode keeps its original exact-set semantics.
+    const baseline = new Set(before.map(keyOf))
+    return after.filter((diagnostic) => !baseline.has(keyOf(diagnostic)))
+  }
+  // Count-aware tolerant matching (multiset semantics): consume one baseline
+  // occurrence per matched after-diagnostic, so an after diagnostic sharing a
+  // pre-existing (file, code) key is only tolerated while baseline counts
+  // remain; once exhausted it is reported as NEW. Pure line shifts stay
+  // tolerated because the match key ignores positions.
+  const baselineCounts = new Map<string, number>()
+  for (const diagnostic of before) {
+    const key = tolerantKey(diagnostic)
+    baselineCounts.set(key, (baselineCounts.get(key) ?? 0) + 1)
+  }
+  const delta: LanguageDiagnostic[] = []
+  for (const diagnostic of after) {
+    const key = tolerantKey(diagnostic)
+    const remaining = baselineCounts.get(key) ?? 0
+    if (remaining > 0) {
+      baselineCounts.set(key, remaining - 1)
+      continue
+    }
+    delta.push(diagnostic)
+  }
+  return delta
 }
 
 /**
@@ -308,6 +343,14 @@ function resolveDeltaKeyOf(mode?: DeltaMatchMode): (
  * shape lets the caller decide how the edit is applied (and, on rejection,
  * rolled back via the optional `rollbackEdit`), so this module never touches
  * the mutation broker directly.
+ *
+ * `baseline` (optional, P3 audit fix D): a caller that already captured the
+ * PRE-EDIT diagnostic state (e.g. run.ts before a file-mutating tool
+ * executes) supplies it here. When present, the first capture is skipped and
+ * `baseline` is used as `before` — the real after-capture still runs (a
+ * baseline makes `skipSecondCapture` moot; when both are given, the baseline
+ * wins and the second capture runs so a genuine delta can be computed), so
+ * the reject-only-on-new-errors path becomes reachable on the hook seam.
  *
  * Rejects ONLY when the delta contains error-severity diagnostics. On
  * rejection the edit is undone when `rollbackEdit` is supplied (keeping the
@@ -346,6 +389,14 @@ export async function preflightDiagnosticDelta(params: {
    * path, whose applyEdit actually mutates, keeps both captures.
    */
   skipSecondCapture?: boolean
+  /**
+   * Pre-edit diagnostic snapshot supplied by a caller that captured the
+   * baseline BEFORE the file mutation ran (P3 audit fix D). When present the
+   * first capture is skipped and this is used as `before`; the real
+   * after-capture still runs (the baseline wins over `skipSecondCapture`),
+   * making the reject-only-on-new-errors path reachable on the hook seam.
+   */
+  baseline?: LanguageDiagnostic[]
 }): Promise<DiagnosticDeltaPreflightResult> {
   const { files, cwd, runCommand, applyEdit, rollbackEdit, env, signal } = params
   const capture = () =>
@@ -359,7 +410,10 @@ export async function preflightDiagnosticDelta(params: {
       maxFiles: params.maxFiles,
     })
 
-  const before = await capture()
+  // When a pre-edit baseline is supplied, skip the first capture and use it
+  // as `before`. The after-capture below still runs (a baseline wins over
+  // skipSecondCapture) so the preflight can compute a real delta.
+  const before = params.baseline ?? (await capture())
   // A throwing applyEdit used to leave the edit applied with no rollback and
   // crash the whole preflight. Contain it: roll back best-effort in its own
   // try/catch (a rollback failure is logged, never masked over the original
@@ -392,8 +446,13 @@ export async function preflightDiagnosticDelta(params: {
   }
   // A no-op applyEdit cannot change diagnostics, so the second capture is
   // guaranteed redundant work on the hot file-change path; reuse the baseline
-  // instead of re-running the full command set.
-  const after = params.skipSecondCapture ? before : await capture()
+  // instead of re-running the full command set. A supplied pre-edit baseline
+  // wins over this flag: the after-state must be captured for real so the
+  // delta against that baseline can be computed.
+  const after =
+    params.skipSecondCapture && params.baseline === undefined
+      ? before
+      : await capture()
 
   const delta = computeDiagnosticDelta(before, after, {
     mode: params.deltaMode,

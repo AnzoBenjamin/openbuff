@@ -261,6 +261,63 @@ describe('build graph service', () => {
     FILESYSTEM_DISCOVERY_TIMEOUT_MS,
   )
 
+  // Cache-identity regression pin (P3 coherence audit): the per-cwd cache is
+  // keyed by root + runner identity, so two different runners against the same
+  // cwd within the TTL window each observe their OWN results — an injected
+  // runner must never read the default runner's (or another fake's) cached
+  // index.
+  test('separates cached results per runner for the same cwd within the TTL window', () => {
+    const root = tempRoot()
+    writeFixture(root, 'Cargo.toml', '[package]\nname = "core"\n')
+    let firstCalls = 0
+    let secondCalls = 0
+    const firstRunner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'cargo') {
+        firstCalls++
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            packages: [
+              { name: 'first', manifest_path: path.join(root, 'Cargo.toml') },
+            ],
+          }),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    const secondRunner: BuildGraphRunner = (argv) => {
+      if (argv[0] === 'cargo') {
+        secondCalls++
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            packages: [
+              { name: 'second', manifest_path: path.join(root, 'Cargo.toml') },
+            ],
+          }),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: '' }
+    }
+    const files = ['src/lib.rs']
+
+    const [firstResolution] = resolveOwningTargets({ cwd: root, files, runner: firstRunner })
+    const [secondResolution] = resolveOwningTargets({ cwd: root, files, runner: secondRunner })
+    // Each runner built its own index (no cross-runner cache hit).
+    expect(firstCalls).toBe(1)
+    expect(secondCalls).toBe(1)
+    expect(firstResolution).toMatchObject({ targets: [{ name: 'first' }] })
+    expect(secondResolution).toMatchObject({ targets: [{ name: 'second' }] })
+
+    // Repeat calls within the TTL window stay cached per runner.
+    resolveOwningTargets({ cwd: root, files, runner: firstRunner })
+    resolveOwningTargets({ cwd: root, files, runner: secondRunner })
+    expect(firstCalls).toBe(1)
+    expect(secondCalls).toBe(1)
+  })
+
   test('caches per-cwd ecosystem detection until cleared', () => {
     const root = tempRoot()
     writeFixture(root, 'Cargo.toml', '[package]\nname = "core"\n')
