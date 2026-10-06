@@ -388,6 +388,71 @@ describe('spawnSettledSubagent', () => {
   })
 
   it(
+    'internal error: a stream error kills the child instead of orphaning it',
+    async () => {
+      const kills: Array<'SIGTERM' | 'SIGKILL'> = []
+      const spawn: SettleSpawnSeam = () => ({
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error('stdout stream blew up'))
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        // The child never exits on its own — only the supervisor's kill
+        // settles it, proving the internal-error path reaps the child.
+        exited: new Promise<number | null>(() => {}),
+        kill: (signal) => {
+          kills.push(signal ?? 'SIGTERM')
+        },
+      })
+      const result = await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        spawn,
+      })
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toBe('internal_error')
+      // The child was actually killed (never orphaned) and reported as such.
+      expect(result.killed).toBe(true)
+      expect(kills).toEqual(['SIGKILL'])
+    },
+  )
+
+  it(
+    'internal error: a rejected exited promise kills the child instead of orphaning it',
+    async () => {
+      const kills: Array<'SIGTERM' | 'SIGKILL'> = []
+      const spawn: SettleSpawnSeam = () => ({
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        exited: Promise.reject(new Error('exited promise failed')),
+        kill: (signal) => {
+          kills.push(signal ?? 'SIGTERM')
+        },
+      })
+      const result = await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        spawn,
+      })
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toBe('internal_error')
+      expect(result.killed).toBe(true)
+      expect(kills).toEqual(['SIGKILL'])
+    },
+  )
+
+  it(
     'stdout bytes with NO newline-terminated line settle as schema_invalid — never ok, never missing_output',
     async () => {
       // Security contract: only EMPTY stdout maps to missing_output. A child

@@ -447,6 +447,16 @@ export async function spawnSettledSubagent(
     return { outcome: 'ok', receipt: parsed.receipt, ...baseWithStdout }
   } catch {
     clearTimers()
+    // The child must never be orphaned when the supervisor itself fails: a
+    // stream/settle error leaves a live child (and its process group) behind,
+    // so kill it best-effort before settling — SIGKILL immediately, no grace
+    // window needed for an internal error.
+    try {
+      killChild('SIGKILL')
+      killed = true
+    } catch {
+      // Child already gone.
+    }
     // Total settle: even an unexpected supervisor-internal failure resolves
     // as a structured crash instead of throwing.
     return crashResult('internal_error', null, { killed })
