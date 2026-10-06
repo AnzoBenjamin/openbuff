@@ -9,6 +9,10 @@ import { ContentWithMarkdown } from './content-with-markdown'
 import { ImageBlock } from './image-block'
 import { UserBlockTextWithInlineCopy } from './user-content-copy'
 import { useTheme } from '../../hooks/use-theme'
+import {
+  hasMarkdown,
+  type MarkdownPalette,
+} from '../../utils/markdown-renderer'
 import { CompactionBox } from '../renderers/compaction-box'
 import { CompletionSummaryBox } from '../renderers/completion-summary-box'
 import { ContextBox } from '../renderers/context-box'
@@ -22,7 +26,6 @@ import { PlanStatusBox } from '../renderers/plan-status-box'
 import { UpdateBox } from '../renderers/update-box'
 
 import type { ContentBlock, TextContentBlock } from '../../types/chat'
-import type { MarkdownPalette } from '../../utils/markdown-renderer'
 
 interface SingleBlockProps {
   block: ContentBlock
@@ -93,6 +96,24 @@ export const SingleBlock = memo(
               marginTop={0}
               marginBottom={0}
             />
+          )
+        }
+
+        // D47 Stage 2: a renderable cannot nest inside a text element.
+        // When the content contains markdown, ContentWithMarkdown returns
+        // a native <markdown> renderable, so render it at box level
+        // (native wrapMode handles wrapping). Plain content degrades to a
+        // plain string and keeps its <text> wrapper for the fg color path.
+        if (hasMarkdown(filteredContent)) {
+          return (
+            <box key={renderKey} style={{ width: '100%' }}>
+              <ContentWithMarkdown
+                content={filteredContent}
+                isStreaming={isStreamingText}
+                codeBlockWidth={codeBlockWidth}
+                palette={markdownPalette}
+              />
+            </box>
           )
         }
 
