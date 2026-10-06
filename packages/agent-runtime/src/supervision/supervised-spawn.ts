@@ -92,7 +92,7 @@
  * fault-injection tests via the TEST-ONLY `options._scheduleRestart`
  * (default: a plain `setTimeout`-backed sleep).
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dirname } from 'node:path'
@@ -312,6 +312,68 @@ function isRestartableCrash(
 }
 
 /**
+ * P2-T8: absolute path of the supervised child entrypoint, resolved next to
+ * this module. Exported so the SDK seam checks launchability against the
+ * same path the spawn uses.
+ */
+export function resolveSupervisedChildEntryPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'child-entry.ts')
+}
+
+/**
+ * P2-T8: pure launchability rule for the default supervised seam. The child
+ * is started as `<process.execPath> run <child-entry.ts>` through Bun.spawn,
+ * so it needs:
+ *  - the Bun runtime (Node has no Bun.spawn);
+ *  - the child entry file on disk (a bundled dist does not emit it);
+ *  - a real filesystem path: inside a `bun build --compile` binary,
+ *    `import.meta.url` points into the embedded `$bunfs` filesystem
+ *    (`~BUN` on Windows) and `process.execPath` is the CLI binary itself,
+ *    not `bun`, so the child cannot be launched;
+ *  - a POSIX platform: the RPC bridge uses a Unix socket in the sandbox dir
+ *    and timeout teardown kills the child's process group by negative pid,
+ *    and the real-child tests run on Linux only, so Windows stays in-process.
+ */
+export function isSupervisedSpawnLaunchable(input: {
+  hasBunRuntime: boolean
+  platform: string
+  childEntryPath: string
+  childEntryExists: boolean
+}): boolean {
+  if (!input.hasBunRuntime || !input.childEntryExists) {
+    return false
+  }
+  if (input.platform === 'win32') {
+    return false
+  }
+  return (
+    !input.childEntryPath.includes('$bunfs') &&
+    !input.childEntryPath.includes('~BUN')
+  )
+}
+
+/**
+ * P2-T8: whether the default supervised seam can launch its child in this
+ * process (see {@link isSupervisedSpawnLaunchable}). Synchronous, cheap, and
+ * never throws (e.g. fileURLToPath on a non-file URL returns false). It does
+ * not load the supervisor or bridge modules.
+ */
+export function isSupervisedSpawnSupported(): boolean {
+  try {
+    const childEntryPath = resolveSupervisedChildEntryPath()
+    return isSupervisedSpawnLaunchable({
+      hasBunRuntime:
+        typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined',
+      platform: process.platform,
+      childEntryPath,
+      childEntryExists: existsSync(childEntryPath),
+    })
+  } catch {
+    return false
+  }
+}
+
+/**
  * Builds the default supervised-spawn seam. `seed` is the env allowlist
  * source — pass the explicitly-resolved credential values (never a wholesale
  * ambient env copy).
@@ -436,10 +498,7 @@ export function buildDefaultSpawnSupervised(
         options?._spawnSettledSubagent ?? spawnSettledSubagent
       writeFileSync(requestPath, serializedRequest, { mode: 0o600 })
       return await spawnSettled({
-        childModulePath: join(
-          dirname(fileURLToPath(import.meta.url)),
-          'child-entry.ts',
-        ),
+        childModulePath: resolveSupervisedChildEntryPath(),
         args: [requestPath],
         env: buildSupervisedChildEnv(seed),
         cwd: sandboxCwd,

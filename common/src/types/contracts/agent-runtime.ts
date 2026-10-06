@@ -363,13 +363,16 @@ export type AgentRuntimeDeps = {
    * (P2-T8). Resolved from the `OPENBUFF_PROCESS_SUPERVISION` env var at the
    * SDK impl entry seam (`sdk/src/impl/agent-runtime.ts`, via
    * `getSystemProcessEnv`) — agent-runtime production files never read
-   * ambient `process.env`. Truthiness matches the
-   * `OPENBUFF_COLLECT_FULL_FILE_CONTEXT` convention: `1`/`true`/`yes`/`on`
-   * (case-insensitive). Default undefined ⇒ off ⇒ the in-process spawn path
-   * stays byte-identical. When on, `executeSubagent` delegates to the
-   * supervised-spawn seam instead of `loopAgentSteps`; the seam itself is
-   * `spawnSupervised` below (and its env allowlist seed is built alongside
-   * it at the same seam).
+   * ambient `process.env`. At THIS contract level, `undefined` means off
+   * for direct agent-runtime consumers: a runtime handed this deps object
+   * with no `processSupervision` key keeps the in-process spawn path. The
+   * SDK entry seam resolves it to ON by default when the supervised child
+   * can be launched (Bun runtime with the child entry file on disk, not
+   * Windows), and to off under Node, inside the compiled CLI binary, or
+   * when `OPENBUFF_PROCESS_SUPERVISION` is `0`/`false`/`no`/`off`. When on,
+   * `executeSubagent` delegates to the supervised-spawn seam instead of
+   * `loopAgentSteps`; the seam itself is `spawnSupervised` below (and its
+   * env allowlist seed is built alongside it at the same seam).
    */
   processSupervision?: boolean
   /**

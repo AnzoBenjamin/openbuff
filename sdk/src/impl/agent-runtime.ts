@@ -20,7 +20,10 @@ import {
 // supervisor (and the receipt-schema imports it pulls) lazy behind its
 // dynamic import, so the flag-off hot path never touches them.
 import { SUPERVISED_CHILD_RUNTIME_ENV_KEYS } from '@codebuff/agent-runtime/supervision/supervised-child-env-keys'
-import { buildDefaultSpawnSupervised } from '@codebuff/agent-runtime/supervision/supervised-spawn'
+import {
+  buildDefaultSpawnSupervised,
+  isSupervisedSpawnSupported,
+} from '@codebuff/agent-runtime/supervision/supervised-spawn'
 
 import type { SupervisedChildEnvSeed } from '@codebuff/agent-runtime/supervision/process-supervisor'
 
@@ -46,18 +49,59 @@ import type {
 
 const databaseAgentCache: DatabaseAgentCache = new Map()
 
+const PROCESS_SUPERVISION_ON = /^(1|true|yes|on)$/i
+const PROCESS_SUPERVISION_OFF = /^(0|false|no|off)$/i
+
 /**
- * P2-T8: truthiness resolution for the `OPENBUFF_PROCESS_SUPERVISION` flag,
- * matching the `OPENBUFF_COLLECT_FULL_FILE_CONTEXT` convention in
- * packages/agent-runtime find-files.ts: `1`/`true`/`yes`/`on`
- * (case-insensitive, trimmed). Exported so tests can assert the exact
- * truthiness table.
+ * P2-T8: resolution of the `OPENBUFF_PROCESS_SUPERVISION` env var.
+ * Supervision is ON by default; the value is trimmed and matched
+ * case-insensitively against whole tokens:
+ *
+ *   unset / empty / whitespace-only  => true  (default on)
+ *   `1` / `true` / `yes` / `on`       => true
+ *   `0` / `false` / `no` / `off`      => false (opt-out)
+ *   any other value                   => true  (keeps the default)
+ *
+ * Matching is anchored, so e.g. `nothing` is not read as `no`. This only
+ * resolves the env var: when the caller passes no `processSupervision`,
+ * getAgentRuntimeImpl also requires the supervised child to be launchable
+ * (see resolveDefaultProcessSupervision), so under Node, inside the
+ * compiled CLI binary, and on Windows subagents stay in-process. Exported so
+ * tests can assert the truth table.
  */
 export const isProcessSupervisionEnabled = (
   env: Record<string, string | undefined>,
 ): boolean => {
   const raw = env.OPENBUFF_PROCESS_SUPERVISION
-  return raw !== undefined && /^(1|true|yes|on)$/i.test(raw.trim())
+  if (raw === undefined) {
+    return true
+  }
+  return !PROCESS_SUPERVISION_OFF.test(raw.trim())
+}
+
+/**
+ * P2-T8: the default when the caller passes no `processSupervision`. On when
+ * the env var allows it AND the supervised child can be launched in this
+ * runtime (isSupervisedSpawnSupported). If the env var explicitly asks for
+ * supervision (`1`/`true`/`yes`/`on`) but the child cannot be launched, a
+ * warning is logged and subagents run in-process.
+ */
+const resolveDefaultProcessSupervision = (logger: Logger): boolean => {
+  const env = getSystemProcessEnv()
+  if (!isProcessSupervisionEnabled(env)) {
+    return false
+  }
+  if (isSupervisedSpawnSupported()) {
+    return true
+  }
+  const raw = env.OPENBUFF_PROCESS_SUPERVISION
+  if (raw !== undefined && PROCESS_SUPERVISION_ON.test(raw.trim())) {
+    logger.warn(
+      { OPENBUFF_PROCESS_SUPERVISION: raw },
+      'Process supervision was requested, but the supervised child process cannot be launched in this runtime (it needs Bun with the child entry file on disk, not on Windows); subagents will run in-process.',
+    )
+  }
+  return false
 }
 
 /**
@@ -207,19 +251,21 @@ export function getAgentRuntimeImpl(
     // one, so the default run's deps carry no resumeDriver field at all.
     ...(resumeDriver ? { resumeDriver } : {}),
 
-    // Process supervision (P2-T8). Additive-optional like the journal deps
-    // above: the keys are present ONLY when the
-    // `OPENBUFF_PROCESS_SUPERVISION` flag resolves truthy (or the caller
-    // passed `processSupervision: true` explicitly), so the default run
-    // carries no supervision fields at all and the agent-runtime spawn path
-    // stays byte-identical. The seam is seeded from this SDK env seam (via
-    // getSystemProcessEnv) — never from ambient process.env inside
-    // agent-runtime. When the flag is on WITHOUT an injected seam, the
+    // Process supervision (P2-T8). The keys are present ONLY when
+    // supervision resolves on. An explicit `processSupervision: true` forces
+    // it on and `false` forces it off. When the caller passes nothing, it is
+    // ON by default wherever the supervised child can be launched (Bun
+    // runtime, child entry file on disk, not Windows), off under Node and
+    // inside the compiled CLI binary, and off when
+    // `OPENBUFF_PROCESS_SUPERVISION` is `0`/`false`/`no`/`off` (see
+    // resolveDefaultProcessSupervision). The seam is seeded from this SDK env
+    // seam (via getSystemProcessEnv) — never from ambient process.env inside
+    // agent-runtime. When supervision is on WITHOUT an injected seam, the
     // default supervisor seam (supervision/supervised-spawn.ts →
     // supervision/child-entry.ts) is built here.
     ...(processSupervision === true ||
     (processSupervision === undefined &&
-      isProcessSupervisionEnabled(getSystemProcessEnv()))
+      resolveDefaultProcessSupervision(logger ?? noopLogger))
       ? {
           processSupervision: true,
           spawnSupervised:
