@@ -35,6 +35,12 @@ const renderNativeMarkdown = (
   palette: MarkdownPalette,
 ): ReactNode => {
   try {
+    // createMarkdownSyntaxStyle memoizes one native SyntaxStyle handle per
+    // palette object (WeakMap inside opentui-syntax-style.ts), so this
+    // per-render call hits the cache during streaming re-renders instead of
+    // allocating a native handle per chunk. No useMemo is needed here: the
+    // factory is the single choke point covering every call site (this
+    // component and message-with-agents.tsx).
     const syntaxStyle = createMarkdownSyntaxStyle(palette)
     const treeSitterClient = getSharedTreeSitterClient()
     // treeSitterClient is optional on MarkdownOptions, so a null client still

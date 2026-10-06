@@ -40,6 +40,18 @@ import type { MarkdownPalette } from './markdown-renderer'
  * back to the former legacy defaults, so both
  * createMarkdownSyntaxStyle(agentPalette ?? {}) and an undefined palette work
  * without throwing.
+ *
+ * Memoization (native-handle leak fix): SyntaxStyle.fromStyles() allocates a
+ * native handle that is never GC'd and has no finalizer, so this factory is
+ * memoized: each distinct palette object yields exactly ONE SyntaxStyle
+ * handle for the process lifetime, via a module-level WeakMap. WeakMap (not
+ * Map) so call sites holding long-lived references do not pin garbage
+ * palettes. This factory is the single choke point for every call site
+ * (components/blocks/content-with-markdown.tsx — called per render, once per
+ * streaming chunk — and components/message-with-agents.tsx), so no caller
+ * needs its own memoization; the undefined-palette path is memoized once as
+ * well. Cached handles are shared across renders and are never destroyed in
+ * app code. clearMarkdownSyntaxStyleCacheForTests() resets both caches.
  */
 // Former legacy-renderer defaults (markdown-renderer.tsx before D47 Stage 2).
 const DEFAULT_HEADING_FG: Record<number, string> = {
@@ -51,7 +63,44 @@ const DEFAULT_HEADING_FG: Record<number, string> = {
   6: 'green',
 }
 
+// Module-level memoization backing createMarkdownSyntaxStyle (see its JSDoc
+// above). `let` because WeakMap has no clear(); the test-only reset swaps in
+// a fresh map. WeakMap (not Map) so dropped palettes are not pinned.
+let markdownSyntaxStyleCache = new WeakMap<
+  Partial<MarkdownPalette>,
+  SyntaxStyle
+>()
+let defaultMarkdownSyntaxStyle: SyntaxStyle | undefined
+
 export function createMarkdownSyntaxStyle(
+  palette?: Partial<MarkdownPalette>,
+): SyntaxStyle {
+  if (palette === undefined) {
+    // The undefined-palette path also allocates a native handle, so it is
+    // memoized once for the process instead of leaking one per call.
+    defaultMarkdownSyntaxStyle ??= buildMarkdownSyntaxStyle(palette)
+    return defaultMarkdownSyntaxStyle
+  }
+  let style = markdownSyntaxStyleCache.get(palette)
+  if (style === undefined) {
+    style = buildMarkdownSyntaxStyle(palette)
+    markdownSyntaxStyleCache.set(palette, style)
+  }
+  return style
+}
+
+/**
+ * TEST-ONLY reset for the createMarkdownSyntaxStyle memoization, following
+ * the repo's `*ForTests` convention (setAgentRegistryLoggerForTests,
+ * resetTreeSitterClientStateForTests). Never call from app code: cached
+ * handles are shared across renders and must live for the process lifetime.
+ */
+export function clearMarkdownSyntaxStyleCacheForTests(): void {
+  markdownSyntaxStyleCache = new WeakMap()
+  defaultMarkdownSyntaxStyle = undefined
+}
+
+function buildMarkdownSyntaxStyle(
   palette?: Partial<MarkdownPalette>,
 ): SyntaxStyle {
   const headingFg = { ...DEFAULT_HEADING_FG, ...palette?.headingFg }
