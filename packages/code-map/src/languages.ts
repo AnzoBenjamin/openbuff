@@ -257,9 +257,10 @@ function tryResolveFromPackage(wasmFileName: string): string | null {
  * layouts where the entry is `dist/index.js`), so both layouts are probed.
  *
  * Fail-closed-simple: return the first candidate whose file exists, else the
- * primary candidate — the readFileSync in `createLanguageConfig` then throws
- * and the fail-open `getLanguageConfig` catch handles it, exactly as for
- * missing WASM files.
+ * primary candidate. Nothing here throws: the caller reads the returned path
+ * inside its fail-open query block, and a missing/unreadable file only leaves
+ * that language's `query` undefined (the grammar itself stays cached — see
+ * `createLanguageConfig`).
  */
 function resolveQueryPath(queryFileName: string): string {
   // Get the directory of this module
@@ -290,6 +291,21 @@ function resolveQueryPath(queryFileName: string): string {
   )
   if (fs.existsSync(srcCandidate)) {
     return srcCandidate
+  }
+
+  // Candidate for compiled binaries: the release layout can ship the
+  // `tree-sitter-queries/` directory next to the executable, where no
+  // module-relative (bundle) nor src-relative (monorepo) layout applies.
+  // Existence-checked like the src candidate so a binary shipped without the
+  // query dir simply falls through — its grammar stays cached with `query`
+  // undefined (see createLanguageConfig).
+  const execDirCandidate = path.join(
+    path.dirname(process.execPath),
+    'tree-sitter-queries',
+    queryFileName,
+  )
+  if (fs.existsSync(execDirCandidate)) {
+    return execDirCandidate
   }
 
   // Fallback for development/monorepo layouts where the module directory
@@ -443,6 +459,14 @@ export function findLanguageConfigByExtension(
 /* ------------------------------------------------------------------ */
 /* 10. Language configuration loader                                 */
 /* ------------------------------------------------------------------ */
+
+/**
+ * One-time "tags query unavailable" debug-log latch per language (keyed by
+ * wasmFile), so a compiled binary shipped without the .scm query files logs
+ * the degradation once instead of once per parsed file.
+ */
+const loggedQueryUnavailable = new Set<string>()
+
 export async function createLanguageConfig(
   filePath: string,
   runtimeLoader: RuntimeLanguageLoader,
@@ -459,44 +483,68 @@ export async function createLanguageConfig(
       // Load the language using the runtime-specific loader
       const lang = await runtimeLoader.loadLanguage(cfg.wasmFile)
 
-      // Create parser and query
+      // Create the parser and MEMOIZE the language + parser on the shared
+      // languageTable entry BEFORE any tags-query work. The tags query is an
+      // auxiliary consumer of the loaded grammar, so a missing/unreadable
+      // .scm file or a Query compile failure must never discard an already
+      // loaded wasm grammar: in compiled binaries whose release layout omits
+      // the query files, throwing here used to leave `cfg.parser` unset and
+      // made EVERY parsed file re-run a full `Language.load` on the same
+      // grammar (observed: one grammar wasm opened 853 times in a single
+      // cold index build, ~5GB of wasm instance churn that froze boot).
       const parser = new Parser()
       parser.setLanguage(lang)
 
+      cfg.language = lang
+      cfg.parser = parser
+
       // The language table stores bare .scm file names. Normalize them to
       // absolute paths at query-load time (module load performs no fs
-      // reads), so the branch below is now always the path case: the query
-      // text is read from disk here, and a read failure propagates to the
-      // fail-open catch in `getLanguageConfig`. This removes the hard
-      // dependency on bundler/test-preload `.scm` import plugins.
-      // Resolve LOCALLY: do NOT mutate the shared languageTable entry.
-      // Table configs are module-level singletons; rewriting
+      // reads). Resolve LOCALLY: do NOT mutate the shared languageTable
+      // entry. Table configs are module-level singletons; rewriting
       // queryPathOrContent from the bare .scm filename to an absolute path
       // made repeated loads and any consumer holding a config (including
       // the table-consistency test, which joins the name onto the queries
       // dir) order-dependent on which grammar loaded first.
-      let querySource = cfg.queryPathOrContent
-      if (!path.isAbsolute(querySource)) {
-        querySource = resolveQueryPath(querySource)
-      }
-      const queryContent = path.isAbsolute(querySource)
-        ? fs.readFileSync(querySource, 'utf8')
-        : querySource
-
-      cfg.language = lang
-      cfg.parser = parser
+      //
+      // The whole query block is FAIL-OPEN: a missing/unreadable .scm file
+      // or a Query compile failure leaves `cfg.query` undefined and the
+      // cached grammar untouched. P3-T5 note: the tags queries include the
+      // AST import-capture tier (@import.* patterns), so a bad capture
+      // addition degrades to "no import captures" for that language rather
+      // than breaking all parsing for it. Unavailability is logged at most
+      // once per language (DEBUG_PARSING only)
       try {
-        cfg.query = new Query(lang, queryContent)
+        let querySource = cfg.queryPathOrContent
+        if (!path.isAbsolute(querySource)) {
+          querySource = resolveQueryPath(querySource)
+        }
+        const queryContent = path.isAbsolute(querySource)
+          ? fs.readFileSync(querySource, 'utf8')
+          : querySource
+        try {
+          cfg.query = new Query(lang, queryContent)
+        } catch {
+          // Query content rejected as written (e.g. a bad @import.* pattern):
+          // retry ONCE with the import-capture patterns stripped. If even the
+          // stripped query fails to compile, the block's catch below leaves
+          // `cfg.query` undefined without throwing away the cached grammar.
+          const stripped = stripImportCapturePatterns(queryContent)
+          if (stripped !== queryContent) {
+            cfg.query = new Query(lang, stripped)
+          }
+        }
       } catch (err) {
-        // P3-T5 fail-open: the tags queries now include the AST import-capture
-        // tier (@import.* patterns). A bad capture addition must degrade to
-        // "no import captures" for that language, never break ALL parsing for
-        // it — retry once with the import patterns stripped. If even the
-        // stripped query fails to compile, the original error propagates to
-        // the fail-open catch in `getLanguageConfig` exactly as before.
-        const stripped = stripImportCapturePatterns(queryContent)
-        if (stripped === queryContent) throw err
-        cfg.query = new Query(lang, stripped)
+        if (
+          DEBUG_PARSING &&
+          !loggedQueryUnavailable.has(cfg.wasmFile) &&
+          loggedQueryUnavailable.add(cfg.wasmFile)
+        ) {
+          console.error(
+            `[tree-sitter] Tags query unavailable for ${cfg.wasmFile} (grammar stays cached, query disabled):`,
+            err,
+          )
+        }
       }
     } catch (err) {
       // Let the runtime-specific implementation handle error logging

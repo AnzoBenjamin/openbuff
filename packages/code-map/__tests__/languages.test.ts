@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { createRequire } from 'module'
 import { describe, it, expect, mock } from 'bun:test'
 
 import {
@@ -15,6 +16,8 @@ import {
   type RuntimeLanguageLoader,
 } from '../src/languages'
 import { getDirnameDynamically } from '../src/utils'
+
+const nodeRequire = createRequire(import.meta.url)
 
 describe('languages module', () => {
   describe('languageTable', () => {
@@ -481,5 +484,64 @@ describe('languages module', () => {
       expect(cfg).toBeDefined()
       expect(cfg?.parser).toBeDefined()
     }, 15_000)
+  })
+
+  describe('missing tags query keeps the grammar cached (compiled-binary reload-storm pin)', () => {
+    it('createLanguageConfig memoizes language+parser even when the .scm query is absent', async () => {
+      // Simulate a compiled binary whose release layout omits the tags .scm
+      // files: the real typescript.tsx ngx stream of Language.load succeeds
+      // (Parser.init already ran in the cwd regression pin above) but the
+      // query path points at a nonexistent file. The OLD behavior threw
+      // AFTER the load and left cfg.parser unset, so every parsed file
+      // re-ran a full Language.load on the same grammar (observed: one
+      // grammar wasm opened 853 times in a single boot, ~5GB of instance
+      // churn). The new contract: grammar cached first, query fail-open.
+      const tsEntry = languageTable.find((c) => c.extensions.includes('.ts'))!
+      const original = {
+        parser: tsEntry.parser,
+        language: tsEntry.language,
+        query: tsEntry.query,
+        queryPathOrContent: tsEntry.queryPathOrContent,
+      }
+      tsEntry.parser = undefined
+      tsEntry.language = undefined
+      tsEntry.query = undefined
+      tsEntry.queryPathOrContent = 'definitely-not-on-disk-tags.scm'
+      try {
+        // parser.setLanguage validates its argument, so the mock must return
+        // a REAL Language instance. Prefer the one the real loader cached
+        // above (the cwd regression pin runs first); fall back to an explicit
+        // load from the monorepo's package-resolvable wasm.
+        const realLanguage =
+          original.language ??
+          (await (await import('web-tree-sitter')).Language.load(
+nodeRequire.resolve('@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm')
+          ))
+        const loadLanguage = mock(async (_wasmFile: string) => realLanguage)
+        const mockLoader: RuntimeLanguageLoader = {
+          initParser: mock(async () => {}),
+          loadLanguage,
+        }
+
+        const cfg = await createLanguageConfig('sample.ts', mockLoader)
+        expect(cfg).toBeDefined()
+        // Grammar stays cached even though the tags query is unavailable.
+        expect(cfg?.parser).toBeDefined()
+        expect(cfg?.query).toBeUndefined()
+        // Grammar loaded exactly once — no per-file reload.
+        expect(loadLanguage).toHaveBeenCalledTimes(1)
+
+        // A second call is a cheap cache hit: no re-load, same config.
+        const again = await createLanguageConfig('sample.ts', mockLoader)
+        expect(again).toBe(cfg)
+        expect(again?.parser).toBeDefined()
+        expect(loadLanguage).toHaveBeenCalledTimes(1)
+      } finally {
+        tsEntry.parser = original.parser
+        tsEntry.language = original.language
+        tsEntry.query = original.query
+        tsEntry.queryPathOrContent = original.queryPathOrContent
+      }
+    })
   })
 })
