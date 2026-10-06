@@ -37,6 +37,12 @@
  *    enforcement (a portable per-child memory cap) rides the flag-gated
  *    adoption slice because Bun.spawn exposes no portable per-child memory
  *    limit.
+ *  - P2-T8d SELF-EXEC: `SpawnSettledSubagentParams` gains an optional
+ *    `cmdOverride`. When supplied it is used VERBATIM as the spawned command
+ *    (self-exec mode: the parent binary re-executes itself as the child via
+ *    the shared `SUPERVISED_SELF_EXEC_FLAG`); when absent the default
+ *    bun-source cmd below is byte-identical to before. Everything else —
+ *    env, cwd, stdin/stdout/stderr, group kill, timeout — is unchanged.
  *  - Returns a structured outcome; never throws.
  */
 import { BYOK_OPENROUTER_ENV_VAR } from '@codebuff/common/constants/byok'
@@ -141,6 +147,14 @@ export type SettleCrashReason =
 export type SpawnSettledSubagentParams = {
   childModulePath: string
   args?: string[]
+  /**
+   * P2-T8d SELF-EXEC: when supplied, used VERBATIM as the spawn cmd
+   * (`args` is ignored) — the flag-gated default seam passes
+   * `[process.execPath, SUPERVISED_SELF_EXEC_FLAG, requestPath]` so a
+   * compiled binary re-executes ITSELF as the supervised child. Additive
+   * only: omitted means the byte-identical default bun-source cmd.
+   */
+  cmdOverride?: string[]
   timeoutMs?: number
   /** Accepted for contract completeness; enforcement rides the adoption slice (see module doc). */
   memoryLimitMb?: number
@@ -287,7 +301,9 @@ export async function spawnSettledSubagent(
   let proc: SettleChildProcess
   try {
     proc = (params.spawn ?? defaultSpawnSeam)({
-      cmd: [
+      // P2-T8d SELF-EXEC: cmdOverride is used verbatim when supplied;
+      // absent keeps the default bun-source cmd byte-identical.
+      cmd: params.cmdOverride ?? [
         process.execPath,
         'run',
         params.childModulePath,

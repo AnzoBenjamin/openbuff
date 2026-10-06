@@ -304,6 +304,75 @@ describe('spawnSettledSubagent', () => {
     },
   )
 
+  it(
+    'P2-T8d SELF-EXEC: cmdOverride is used VERBATIM and args are ignored',
+    async () => {
+      const received: string[][] = []
+      const spawn: SettleSpawnSeam = (request) => {
+        received.push(request.cmd)
+        return {
+          stdout: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.close()
+            },
+          }),
+          stderr: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.close()
+            },
+          }),
+          exited: Promise.resolve(0),
+          kill: () => {},
+        }
+      }
+      const override = [
+        '/opt/openbuff/openbuff',
+        '--supervised-child',
+        '/tmp/request.json',
+      ]
+      const result = await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        args: ['ignored'],
+        cmdOverride: override,
+        spawn,
+      })
+      // Empty stdout + exit 0 settles missing_output (transport lives
+      // elsewhere); the assertion is the COMMAND the seam received.
+      expect(result.outcome).toBe('missing_output')
+      expect(received).toEqual([override])
+    },
+  )
+
+  it(
+    'P2-T8d SELF-EXEC: without cmdOverride the default bun-source cmd is byte-identical',
+    async () => {
+      const received: string[][] = []
+      const spawn: SettleSpawnSeam = (request) => {
+        received.push(request.cmd)
+        return {
+          stdout: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.close()
+            },
+          }),
+          stderr: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.close()
+            },
+          }),
+          exited: Promise.resolve(0),
+          kill: () => {},
+        }
+      }
+      await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        args: ['ok'],
+        spawn,
+      })
+      expect(received).toEqual([[process.execPath, 'run', fixturePath, 'ok']])
+    },
+  )
+
   it('spawn failure (ENOENT via injected seam) settles as crashed spawn_failed', async () => {
     const spawn: SettleSpawnSeam = () => {
       throw Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })

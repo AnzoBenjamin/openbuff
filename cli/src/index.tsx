@@ -157,6 +157,36 @@ function installNonRendererErrorHandlers(): void {
 }
 
 async function main(): Promise<void> {
+  // P2-T8d: supervised CHILD mode FIRST — before parseCliArgs and any
+  // renderer/init work. In a compiled `bun build --compile` binary the
+  // default supervised seam cannot `bun run` a child-entry .ts file that
+  // does not exist inside $bunfs, so it re-executes the BINARY ITSELF via
+  // the dedicated argv flag: `openbuff --supervised-child /path/to.json`.
+  // Only that EXACT first-arg convention is intercepted; every other argv
+  // keeps the pre-existing CLI contract untouched. The import is a dynamic
+  // (never static) import so the normal (non-child) CLI startup does not
+  // load the supervisor/bridge modules, and child-entry's own heavy imports
+  // stay lazy the same way. Full process.argv here is
+  // [bun, binary, FLAG, requestPath]; runChildEntryMain reads argv[2] as
+  // the request path — either calling convention — so we rebuild argv with
+  // the flag stripped: [bun, binary, requestPath] (a rebuilt buffer without
+  // the request path degenerates to the existing missing-argv exit-1 path).
+  const { SUPERVISED_SELF_EXEC_FLAG } = await import(
+    '@codebuff/agent-runtime/supervision/self-exec-flag'
+  )
+  if (process.argv[2] === SUPERVISED_SELF_EXEC_FLAG) {
+    const { runChildEntryMain } = await import(
+      '@codebuff/agent-runtime/supervision/child-entry'
+    )
+    const requestPath = process.argv[3]
+    const childArgv = [
+      process.argv[0],
+      process.argv[1],
+      ...(requestPath !== undefined ? [requestPath] : []),
+    ]
+    process.exit(await runChildEntryMain(childArgv))
+  }
+
   // CI/release gate: prove that the packaged OpenTUI native library can be
   // resolved and can create a renderer without depending on terminal output.
   // Uses the OpenTUI 0.5 test renderer (createTestRenderer from

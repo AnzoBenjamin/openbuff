@@ -112,6 +112,7 @@ import type {
   ParentBridgeServer,
   SupervisedBridgeHandlerTable,
 } from './parent-bridge-server'
+import { SUPERVISED_SELF_EXEC_FLAG } from './self-exec-flag'
 
 /**
  * P2-T8c: the restart policy CONTRACT is declared in common's
@@ -328,35 +329,75 @@ export function resolveSupervisedChildEntryPath(): string {
  *  - the child entry file on disk (a bundled dist does not emit it);
  *  - a real filesystem path: inside a `bun build --compile` binary,
  *    `import.meta.url` points into the embedded `$bunfs` filesystem
- *    (`~BUN` on Windows) and `process.execPath` is the CLI binary itself,
- *    not `bun`, so the child cannot be launched;
+ *    (`~BUN` on Windows). SOURCE mode needs the entry file on disk, so a
+ *    bunfs path under the plain bun runtime (execPath ends in `bun`) is
+ *    not launchable; the binary itself launches via SELF-EXEC below;
  *  - a POSIX platform: the RPC bridge uses a Unix socket in the sandbox dir
  *    and timeout teardown kills the child's process group by negative pid,
  *    and the real-child tests run on Linux only, so Windows stays in-process.
+ *
+ * P2-T8d SELF-EXEC: `execPath` (the parent's `process.execPath`) enables
+ * compiled-binary self-exec: there the child entry is the BINARY ITSELF,
+ * re-executed via the shared {@link SUPERVISED_SELF_EXEC_FLAG}, so a
+ * `$bunfs`/`~BUN` embedded `childEntryPath` is LAUNCHABLE when it is paired
+ * with a non-bun `execPath`. Detection rule: embedded markers in
+ * `childEntryPath` AND an `execPath` that is not the bun runtime itself
+ * ({@link looksLikeBunRuntimeExecPath}) → self-exec launchable (the same
+ * Bun-runtime + non-win32 requirements apply). Embedded markers WITHOUT a
+ * usable `execPath` (absent, or the plain bun runtime) stay not launchable:
+ * a bunfs path has no on-disk `child-entry.ts` for `bun run` (or `bun
+ * run`, under the runtime itself, nothing else sits behind `$bunfs`).
  */
 export function isSupervisedSpawnLaunchable(input: {
   hasBunRuntime: boolean
   platform: string
   childEntryPath: string
   childEntryExists: boolean
+  /** P2-T8d: the parent process.execPath, for self-exec detection. */
+  execPath?: string
 }): boolean {
-  if (!input.hasBunRuntime || !input.childEntryExists) {
+  if (!input.hasBunRuntime) {
     return false
   }
   if (input.platform === 'win32') {
     return false
   }
+  const isEmbeddedEntry =
+    input.childEntryPath.includes('$bunfs') ||
+    input.childEntryPath.includes('~BUN')
+  if (!isEmbeddedEntry) {
+    // P2-T8 SOURCE mode: `<execPath> run <child-entry.ts>` — the entry file
+    // must exist on disk (a bundled dist does not emit it).
+    return input.childEntryExists
+  }
+  // P2-T8d SELF-EXEC mode: the child is the parent binary itself,
+  // re-executed via the shared flag. Launchable only when execPath proves
+  // this is a compiled binary (NOT the plain bun runtime — under plain bun
+  // a bunfs path has nothing launchable behind it).
   return (
-    !input.childEntryPath.includes('$bunfs') &&
-    !input.childEntryPath.includes('~BUN')
+    input.execPath !== undefined &&
+    !looksLikeBunRuntimeExecPath(input.execPath)
   )
+}
+
+/**
+ * P2-T8d: true when `execPath` names the bun RUNTIME binary itself
+ * (`…/bun`, `…/bun.exe`, `bun`) — i.e. NOT a compiled project binary. Used
+ * by {@link isSupervisedSpawnLaunchable} to distinguish the plain-bun
+ * bunfs case (no launchable child) from the compiled-binary self-exec case.
+ */
+export function looksLikeBunRuntimeExecPath(execPath: string): boolean {
+  return /(?:^|[\\/])bun(?:\.exe)?$/i.test(execPath)
 }
 
 /**
  * P2-T8: whether the default supervised seam can launch its child in this
  * process (see {@link isSupervisedSpawnLaunchable}). Synchronous, cheap, and
  * never throws (e.g. fileURLToPath on a non-file URL returns false). It does
- * not load the supervisor or bridge modules.
+ * not load the supervisor or bridge modules. P2-T8d: also returns true for
+ * the compiled-binary SELF-EXEC case (embedded childEntryPath + a non-bun
+ * process.execPath) — the same predicate drives the cmd choice inside the
+ * seam below.
  */
 export function isSupervisedSpawnSupported(): boolean {
   try {
@@ -367,7 +408,39 @@ export function isSupervisedSpawnSupported(): boolean {
       platform: process.platform,
       childEntryPath,
       childEntryExists: existsSync(childEntryPath),
+      // P2-T8d: enables self-exec detection for a compiled binary.
+      execPath: process.execPath,
     })
+  } catch {
+    return false
+  }
+}
+
+/**
+ * P2-T8d: whether THIS process is the compiled-binary self-exec mode, i.e.
+ * the ONLY case where the supervised seam may use the
+ * {@link SUPERVISED_SELF_EXEC_FLAG} cmdOverride instead of the default
+ * bun-source cmd. The compiled `bun build --compile` binary has an embedded
+ * filesystem: `resolveSupervisedChildEntryPath()` points into `$bunfs`
+ * (`~BUN` on Windows) and `process.execPath` is the compiled binary (NOT the
+ * bun runtime itself — that distinction is
+ * {@link looksLikeBunRuntimeExecPath}). Under plain bun (source mode),
+ * `childEntryPath` is a real on-disk file and this stays false, so the
+ * default `<execPath> run <child-entry.ts>` cmd is used byte-identical to
+ * pre-P2-T8d. Synchronous, cheap, never throws.
+ */
+export function isSupervisedSpawnSelfExecMode(): boolean {
+  try {
+    const childEntryPath = resolveSupervisedChildEntryPath()
+    const isEmbeddedEntry =
+      childEntryPath.includes('$bunfs') || childEntryPath.includes('~BUN')
+    return (
+      isEmbeddedEntry &&
+      typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined' &&
+      process.platform !== 'win32' &&
+      typeof process.execPath === 'string' &&
+      !looksLikeBunRuntimeExecPath(process.execPath)
+    )
   } catch {
     return false
   }
@@ -497,9 +570,30 @@ export function buildDefaultSpawnSupervised(
       const spawnSettled =
         options?._spawnSettledSubagent ?? spawnSettledSubagent
       writeFileSync(requestPath, serializedRequest, { mode: 0o600 })
+      // P2-T8d SELF-EXEC: in a compiled `bun build --compile` binary the
+      // child entry cannot be a file (`$bunfs`), so the child is the parent
+      // binary ITSELF, re-executed via the shared
+      // {@link SUPERVISED_SELF_EXEC_FLAG} argv flag (the CLI intercepts it
+      // before parseCliArgs and delegates to runChildEntryMain);
+      // `spawnSettledSubagent` uses the override VERBATIM. Source mode
+      // (launchable, not embedded) keeps the default bun-source cmd
+      // byte-identical. The SDK adoption gate stays on
+      // {@link isSupervisedSpawnSupported()}; the cmd choice uses ONLY the
+      // dedicated self-exec predicate below — using the launchable
+      // predicate here would invert the mode and hand the override to
+      // plain-bun source-mode spawns, which the runtime rejects.
+      const selfExec = isSupervisedSpawnSelfExecMode()
       return await spawnSettled({
         childModulePath: resolveSupervisedChildEntryPath(),
-        args: [requestPath],
+        ...(selfExec
+          ? {
+              cmdOverride: [
+                process.execPath,
+                SUPERVISED_SELF_EXEC_FLAG,
+                requestPath,
+              ],
+            }
+          : { args: [requestPath] }),
         env: buildSupervisedChildEnv(seed),
         cwd: sandboxCwd,
         timeoutMs: request.timeoutMs,
