@@ -211,12 +211,12 @@ export class IndexManager {
    * Advance this holder's epoch after forwarding a mutation signal to the
    * registered singleton (see {@link markStale}). The pre-forward epoch is
    * read exactly once and the write is derived from that single captured
-   * value, so the read-modify-write on the shared field is one atomic step:
-   * two concurrent forwarded signals (or a forwarded signal racing a local
-   * mutation) can never both read the same pre-forward epoch and collapse
-   * two distinct mutation signals into a single advance of the documented
-   * strictly-monotonic per-instance epoch (reliability finding
-   * detached-epoch-forward-not-atomic).
+   * value in one synchronous expression — this method is single-threaded
+   * synchronous JS (not lock-atomic), but two forwarded signals (or a
+   * forwarded signal racing a local mutation) can never both read the same
+   * pre-forward epoch and collapse two distinct mutation signals into a
+   * single advance of the documented strictly-monotonic per-instance epoch
+   * (reliability finding detached-epoch-forward-not-atomic).
    */
   private advanceEpochAfterForward(singletonEpoch: number): void {
     const epochBeforeForward = this.mutationEpoch
@@ -835,12 +835,12 @@ export class IndexManager {
    * gracefully instead of being clobbered by the merged snapshot. When the
    * save wins, the persisted snapshot is verified fail-closed (mirroring
    * `_build`) and merged precise edges survive across sessions. If the
-   * save loses the CAS race, the newest on-disk index is served and the
-   * merged edges stay in memory only for this session; any persistence
-   * error degrades to the in-memory-only adoption. Persistence is an
-   * upgrade, not a correctness gate: the boolean result still only reports
-   * adopt (true) vs. stale-snapshot refusal (false) and never reflects
-   * persistence success.
+   * merged edges stay in memory only until the next successful adopt (the
+   * lost-CAS branch serves the concurrent on-disk snapshot, discarding the
+   * adopter's merged edges); any persistence error degrades to the
+   * in-memory-only adoption. Persistence is an upgrade, not a correctness
+   * gate: the boolean result still only reports adopt (true) vs.
+   * stale-snapshot refusal (false) and never reflects persistence success.
    */
   async adoptMergedIndex(
     merged: MetadataIndex,
