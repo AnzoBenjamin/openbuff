@@ -946,7 +946,14 @@ export class IndexManager {
   }
 
   getStatus(): IndexStatus {
-    this.scheduleRefreshIfNeeded()
+    // READ-ONLY status peek: no build-loop side effects here. The 2s UI chip
+    // poll (peekIndexStatus in cli/src/utils/index-status.ts) calls this
+    // method synchronously; scheduling ensureBuilt() from a poll tick made
+    // UI reads mutate build-loop state (sticky forceRefresh + the 30s retry
+    // window can pin 'idx stale'/'idx refreshing' with zero CPU activity).
+    // Refresh scheduling belongs to awaiter/query paths that already call
+    // scheduleRefreshIfNeeded() explicitly (waitUntilReady, query,
+    // queryBlended).
     const indexAge = this.index ? Date.now() - this.index.builtAt : 0
     const refreshing = Boolean(this.buildPromise || this.staleRefreshPending)
     const stale = Boolean(
