@@ -29,6 +29,163 @@ const MAX_TOTAL_PARSE_BYTES = getPositiveIntegerEnv(
   DEFAULT_MAX_TOTAL_PARSE_BYTES,
 )
 
+/**
+ * Default time slice (ms) of synchronous work between event-loop yields. The
+ * gate is awaited at every scheduling seam — once per file-loop iteration AND
+ * at the intra-file seams around each dominant synchronous block (source
+ * load, tree-sitter parse entry) — so the slice bounds synchronous work
+ * between consecutive yields across the whole run, not merely per file. The
+ * residual exception is a single atomic native call (a whole-file tree-sitter
+ * parse): it cannot be split, so it alone can overshoot the slice, and the
+ * gate then suspends at the immediately following seam. Recorded baseline:
+ * see the 'tunables cost baselines' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts.
+ */
+const DEFAULT_YIELD_INTERVAL_MS = 8
+/**
+ * Production yield interval, overridable via CODEBUFF_YIELD_INTERVAL_MS so the
+ * 8ms default can be tuned and later regression-tracked against quantitative
+ * before/after evidence (event-loop lag via perf_hooks.monitorEventLoopDelay,
+ * cold-parse throughput) without a code change per experiment; the measured
+ * gate-on/gate-off evidence harness lives in the 'yield-gate throughput and
+ * event-loop-lag evidence' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts. The default
+ * stays put until such evidence justifies moving it. Recorded baseline for
+ * the cost this knob introduces (one macrotask suspension per elapsed slice
+ * during cold parse; at interval 0, one per yield-gate call — pinned in the
+ * 'tunables cost baselines' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts).
+ */
+let yieldIntervalMs = getPositiveIntegerEnv(
+  'CODEBUFF_YIELD_INTERVAL_MS',
+  DEFAULT_YIELD_INTERVAL_MS,
+)
+/**
+ * Completed macrotask suspensions across every yield gate, incremented only
+ * AFTER the awaited `setImmediate` resolves so a count > 0 proves the await
+ * actually suspended through the macrotask queue. Read (and reset) via the
+ * TEST-ONLY hooks below.
+ */
+let macrotaskYieldCount = 0
+
+/**
+ * Create an independent macrotask-yield gate for ONE loop invocation. Every
+ * getFileTokenScores call (and any nested invocation) gets its own gate
+ * state, so concurrent parse loops each receive a full time slice instead of
+ * sharing one module-level "last yield" timestamp.
+ *
+ * The gate measures elapsed time with performance.now(), NOT Date.now(): the
+ * slice measures elapsed work time and must be immune to wall-clock steps
+ * (NTP corrections, manual clock adjustment), which could otherwise suppress
+ * or spuriously force yields during a long parse run.
+ *
+ * A plain `await` inside the loop resumes via the MICROTASK queue, which the
+ * event loop drains fully before it can process I/O or UI input — so
+ * per-file awaits never unblock the TUI during a cold parse of a large repo.
+ * Awaiting a `setImmediate` schedules a MACROTASK, which lets the event loop
+ * event loop interleave pending I/O and keystrokes between parse batches. Called at every
+ * scheduling seam — the top of each file-loop iteration AND the intra-file
+ * seams around each dominant synchronous block (source load, tree-sitter
+ * parse entry) — so the slice bounds synchronous work between consecutive
+ * yields across the whole run, not merely per file; a cheap no-op until the
+ * time slice has elapsed. The invocation's first slice starts when its gate
+ * is created, so an invocation whose total work stays below one slice never
+ * suspends.
+ *
+ * Regression-pinned: the macrotask-yield regression tests assert that (a)
+ * awaiting a gate lets a pending macrotask I/O callback run BEFORE the await
+ * resumes, (b) the macrotaskYields counter increments only across an actual
+ * suspension, (c) concurrent gates slice independently, and (d) the gate
+ * factory remains an exported, awaitable seam via createYieldGateForTests /
+ * forceEventLoopYieldForTests. Replacing the awaited `setImmediate` with a
+ * plain await/microtask, dropping the awaited suspension, or inlining the
+ * loop body so the gate disappears fails those tests.
+ */
+function createEventLoopYieldGate(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  // The invocation's first slice starts at gate CREATION, not at epoch 0: a
+  // lastYield of 0 sits infinitely outside every slice, so the old default
+  // forced the first gate call of EVERY invocation through a setImmediate
+  // macrotask even when the whole invocation's work is far below one slice
+  // (small incremental updateMetadataIndex/getFileTokenScores calls paid
+  // ~1ms+ latency each). An explicit initialLastYieldMs (TEST-ONLY) still
+  // pins the stale-gate semantics.
+  const firstSliceStart = initialLastYieldMs ?? performance.now()
+  let lastYield = firstSliceStart
+  return async () => {
+    const now = performance.now()
+    if (now - lastYield < yieldIntervalMs) return
+    lastYield = now
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    macrotaskYieldCount += 1
+  }
+}
+
+/**
+ * TEST-ONLY yield-seam hooks (repo `*ForTests` convention) backing the
+ * macrotask-yield regression pins described on
+ * {@link createEventLoopYieldGate}. Never call from app code: they override
+ * the production time slice.
+ */
+
+/** TEST-ONLY: override the yield interval (0 forces a yield on every call). */
+export function setYieldIntervalForTests(intervalMs: number): void {
+  if (Number.isFinite(intervalMs) && intervalMs >= 0) {
+    yieldIntervalMs = intervalMs
+  }
+}
+
+/** TEST-ONLY: restore the production yield interval and zero the counters. */
+export function resetYieldStateForTests(): void {
+  yieldIntervalMs = getPositiveIntegerEnv(
+    'CODEBUFF_YIELD_INTERVAL_MS',
+    DEFAULT_YIELD_INTERVAL_MS,
+  )
+  macrotaskYieldCount = 0
+}
+
+/** TEST-ONLY: yield-seam counters for regression assertions. */
+export function getYieldStatsForTests(): { macrotaskYields: number } {
+  return { macrotaskYields: macrotaskYieldCount }
+}
+
+/**
+ * TEST-ONLY: the effective production yield interval (ms), so the 8ms
+ * DEFAULT_YIELD_INTERVAL_MS default itself is pinnable in tests — a default
+ * change must fail the interval pin and re-record the quantitative
+ * before/after baseline it deltas against (see the 'tunables cost baselines'
+ * and 'yield-gate throughput and event-loop-lag evidence' blocks in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts).
+ */
+export function getYieldIntervalForTests(): number {
+  return yieldIntervalMs
+}
+
+/**
+ * TEST-ONLY: create an independent yield gate exactly like the per-invocation
+ * gates the parse loop awaits, so the per-invocation slice semantics and the
+ * macrotask mechanism are pinnable without running a full parse. Omit the
+ * argument for the production semantics (first slice starts at creation);
+ * pass 0 explicitly for a stale gate whose first call always suspends.
+ */
+export function createYieldGateForTests(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  return createEventLoopYieldGate(initialLastYieldMs)
+}
+
+/**
+ * TEST-ONLY: await a gate from the same factory the parse loop awaits, so a
+ * refactor that removes, renames, or inlines the gate fails the regression
+ * tests instead of silently dropping the macrotask yield. Pinned to the
+ * stale-gate semantics (lastYield = 0) so the FIRST call always suspends,
+ * independent of the production interval.
+ */
+export async function forceEventLoopYieldForTests(): Promise<void> {
+  await createEventLoopYieldGate(0)()
+}
+
 export interface ParseDiagnostic {
   filePath: string
   stage: 'language' | 'read' | 'parse'
@@ -133,6 +290,10 @@ export async function getFileTokenScores(
   }
 > {
   const startTime = Date.now()
+  // One yield gate per invocation: concurrent getFileTokenScores calls each
+  // get their own time slice instead of sharing one (see
+  // createEventLoopYieldGate).
+  const yieldToEventLoop = createEventLoopYieldGate()
   const tokenScores: Record<string, Record<string, number>> = {}
   const externalCalls: Record<string, number> = {}
   const fileCallsMap = new Map<string, string[]>()
@@ -156,6 +317,11 @@ export async function getFileTokenScores(
   // Round-robin top-level-prefix/language buckets so a tight parse budget does
   // not erase every symbol from directories that happen to sort last.
   for (const filePath of fairParseOrder(filePaths)) {
+    // Macrotask yield so a long cold parse does not starve the event loop
+    // (see yieldToEventLoop): the yield precedes all work/continue paths so
+    // every iteration is covered uniformly and loop-carried state below is
+    // untouched.
+    await yieldToEventLoop()
     // Path-traversal guard (mirrors file-walker statProjectFiles): caller- or
     // cache-supplied paths must never be joined onto projectRoot unchecked, or
     // a corrupted index cache could point statSync/readFileSync at arbitrary
@@ -214,6 +380,7 @@ export async function getFileTokenScores(
         maxFileBytes: budget.maxFileBytes,
         remainingBytes: budget.maxTotalBytes - totalParsedBytes,
         diagnostics,
+        yieldToEventLoop,
       })
       if (result.skipped) {
         skippedPaths.push(filePath)
@@ -335,6 +502,14 @@ export function parseTokensWithImports(
   return { numLines, identifiers, calls, imports }
 }
 
+/**
+ * Async per-file parse entry for {@link getFileTokenScores}: awaits the
+ * invocation's yield gate at the intra-file seams (before the source load
+ * and again before the tree-sitter parse block) so each schedulable
+ * synchronous block stays within one time slice even for a single large
+ * file (see {@link createEventLoopYieldGate}). The tree-sitter parse itself
+ * is one atomic native call — the documented residual exception.
+ */
 async function parseTokensForScoring(params: {
   filePath: string
   fullPath: string
@@ -343,6 +518,8 @@ async function parseTokensForScoring(params: {
   maxFileBytes: number
   remainingBytes: number
   diagnostics: ParseDiagnostic[]
+  /** Macrotask yield gate owned by the calling getFileTokenScores run. */
+  yieldToEventLoop: () => Promise<void>
 }): Promise<ParsedTokensForScoring> {
   const {
     filePath,
@@ -352,23 +529,71 @@ async function parseTokensForScoring(params: {
     maxFileBytes,
     remainingBytes,
     diagnostics,
+    yieldToEventLoop,
   } = params
+  const limits = {
+    maxBytes: maxFileBytes,
+    remainingBytes,
+    diagnostics,
+  }
+
+  if (remainingBytes <= 0) {
+    return emptyParsedTokens('total_byte_budget')
+  }
 
   if (!readFile) {
-    return parseTokensWithLimits(fullPath, languageConfig, undefined, {
-      maxBytes: maxFileBytes,
-      remainingBytes,
-      diagnostics,
-    })
+    try {
+      await yieldToEventLoop()
+      const loaded = loadSourceWithinLimits({
+        filePath: fullPath,
+        maxBytes: maxFileBytes,
+        remainingBytes,
+      })
+      if (!loaded.source) {
+        return emptyParsedTokens(loaded.skipReason, loaded.bytes)
+      }
+      // Intra-file seam: the synchronous stat/read block above and the
+      // tree-sitter parse block below each stay within one time slice (the
+      // parse itself is one atomic native call — the documented exception).
+      await yieldToEventLoop()
+      return parseTokensFromLoadedSource(
+        fullPath,
+        languageConfig,
+        loaded.source,
+        limits,
+      )
+    } catch (e) {
+      diagnostics.push({
+        filePath,
+        stage: 'parse',
+        message: getErrorMessage(e),
+      })
+      return emptyParsedTokens('parse_error')
+    }
   }
 
   try {
+    await yieldToEventLoop()
     const source = await readFile(filePath)
-    return parseTokensWithLimits(filePath, languageConfig, () => source, {
+    const loaded = loadSourceWithinLimits({
+      filePath,
+      readFile: () => source,
       maxBytes: maxFileBytes,
       remainingBytes,
-      diagnostics,
     })
+    if (!loaded.source) {
+      return emptyParsedTokens(loaded.skipReason, loaded.bytes)
+    }
+    // Intra-file seam: the synchronous budget accounting above and the
+    // tree-sitter parse block below each stay within one time slice (the
+    // parse itself is one atomic native call — the documented exception).
+    await yieldToEventLoop()
+    return parseTokensFromLoadedSource(
+      filePath,
+      languageConfig,
+      loaded.source,
+      limits,
+    )
   } catch (e) {
     diagnostics.push({
       filePath,
@@ -389,11 +614,9 @@ function parseTokensWithLimits(
   readFile: ((filePath: string) => string | null) | undefined,
   options: ParseTokensOptions,
 ): ParsedTokensForScoring {
-  const { parser, query } = languageConfig
-
+  const maxBytes = options.maxBytes ?? MAX_PARSE_FILE_BYTES
+  const remainingBytes = options.remainingBytes ?? MAX_TOTAL_PARSE_BYTES
   try {
-    const maxBytes = options.maxBytes ?? MAX_PARSE_FILE_BYTES
-    const remainingBytes = options.remainingBytes ?? MAX_TOTAL_PARSE_BYTES
     if (remainingBytes <= 0) {
       return emptyParsedTokens('total_byte_budget')
     }
@@ -407,8 +630,44 @@ function parseTokensWithLimits(
     if (!loaded.source) {
       return emptyParsedTokens(loaded.skipReason, loaded.bytes)
     }
-    const source = loaded.source
 
+    return parseTokensFromLoadedSource(
+      filePath,
+      languageConfig,
+      loaded.source,
+      options,
+    )
+  } catch (e) {
+    options.diagnostics?.push({
+      filePath,
+      stage: 'parse',
+      message: getErrorMessage(e),
+    })
+    if (DEBUG_PARSING) {
+      console.error(`Error parsing query: ${e}`)
+      console.log(filePath)
+    }
+    return emptyParsedTokens('parse_error')
+  }
+}
+
+/**
+ * Parse + capture half of {@link parseTokensWithLimits}: runs the tree-sitter
+ * parse, the @import.* capture normalization, and the token de-duplication on
+ * an already budget-checked source. Split out so the async parse path
+ * ({@link parseTokensForScoring}) can open a yield gate seam between the
+ * source load and this block, bounding the synchronous work between
+ * consecutive yields across the whole run rather than merely per file.
+ */
+function parseTokensFromLoadedSource(
+  filePath: string,
+  languageConfig: LanguageConfig,
+  source: { code: string; bytes: number },
+  options: ParseTokensOptions,
+): ParsedTokensForScoring {
+  const { parser, query } = languageConfig
+
+  try {
     if (!parser || !query) {
       throw new Error('Parser or query not found')
     }

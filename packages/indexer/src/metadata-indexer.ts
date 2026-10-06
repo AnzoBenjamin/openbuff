@@ -48,6 +48,197 @@ const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
 const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst'])
 const CONFIG_EXTENSIONS = new Set(['.json', '.jsonc', '.yaml', '.yml', '.toml'])
 
+/**
+ * Default time slice (ms) of synchronous work between event-loop yields. The
+ * gate is awaited at every scheduling seam — once per file-loop iteration AND
+ * at the intra-file seams around each dominant synchronous block (stat/hash
+ * pass, content extraction vs. tree-sitter chunk extraction) — so the slice
+ * bounds synchronous work between consecutive yields across the whole run,
+ * not merely per file. The residual exception is a single atomic native call
+ * (a whole-content SHA-256 or a whole-file tree-sitter parse): it cannot be
+ * split, so it alone can overshoot the slice, and the gate then suspends at
+ * the immediately following seam. Recorded baseline: see the 'tunables cost
+ * baselines' block in cli/src/utils/__tests__/opentui-syntax-style.test.ts.
+ */
+const DEFAULT_YIELD_INTERVAL_MS = 8
+/**
+ * Production yield interval, overridable via CODEBUFF_YIELD_INTERVAL_MS so the
+ * 8ms default can be tuned and later regression-tracked against quantitative
+ * before/after evidence (event-loop lag via perf_hooks.monitorEventLoopDelay,
+ * cold-index throughput) without a code change per experiment; the measured
+ * gate-on/gate-off evidence harness lives in the 'yield-gate throughput and
+ * event-loop-lag evidence' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts, which measures BOTH
+ * packages' loops against fixed recorded baselines: the code-map cold parse
+ * (RECORDED_YIELD_GATE_BASELINE) and this package's cold buildMetadataIndex
+ * over the same shared fixture (RECORDED_INDEXER_YIELD_GATE_BASELINE — its
+ * mechanism assertions read the indexer module's OWN suspension counter, so
+ * they cover the indexer's yield-gated loops independently of the embedded
+ * code-map parse counter). The default
+ * stays put until such evidence justifies moving it. Recorded baseline for
+ * the cost this knob introduces (one macrotask suspension per elapsed slice
+ * during cold index; at interval 0, one per yield-gate call — pinned in the
+ * 'tunables cost baselines' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts and by the indexer
+ * cold-build suspension pin in
+ * packages/indexer/src/metadata-indexer.test.ts).
+ */
+let yieldIntervalMs = getPositiveIntegerEnv(
+  'CODEBUFF_YIELD_INTERVAL_MS',
+  DEFAULT_YIELD_INTERVAL_MS,
+)
+/**
+ * Completed macrotask suspensions across every yield gate, incremented only
+ * AFTER the awaited `setImmediate` resolves so a count > 0 proves the await
+ * actually suspended through the macrotask queue. Read (and reset) via the
+ * TEST-ONLY hooks below.
+ */
+let macrotaskYieldCount = 0
+
+/**
+ * Create an independent macrotask-yield gate for ONE indexing invocation.
+ * Every buildMetadataIndex / updateMetadataIndex call gets its own gate
+ * state, so concurrent index builds (e.g. index-manager refreshing two
+ * roots) each receive a full time slice instead of sharing one module-level
+ * "last yield" timestamp.
+ *
+ * The gate measures elapsed time with performance.now(), NOT Date.now(): the
+ * slice measures elapsed work time and must be immune to wall-clock steps
+ * (NTP corrections, manual clock adjustment), which could otherwise suppress
+ * or spuriously force yields during a long index run.
+ *
+ * A plain `await` inside a loop resumes via the MICROTASK queue, which the
+ * event loop drains fully before it can process I/O or UI input — so
+ * per-file awaits never unblock the TUI during a cold index build on a large
+ * repo. Awaiting a `setImmediate` schedules a MACROTASK, which lets the
+ * event loop interleave pending I/O and keystrokes between file batches.
+ * (Local helper instead of importing from code-map keeps the packages
+ * decoupled; duplicating the helper and its TEST-ONLY hooks across the two
+ * packages is acceptable.) Called at every scheduling seam — the top of each
+ * file-loop iteration AND the intra-file seams around each dominant
+ * synchronous block (stat/hash, content vs. chunk extraction) — so the slice
+ * bounds synchronous work between consecutive yields across the whole run,
+ * not merely per file; a cheap no-op until the time slice has elapsed. The
+ * invocation's first slice starts when its gate is created, so an invocation
+ * whose total work stays below one slice never suspends.
+ *
+ * Regression-pinned: the macrotask-yield regression tests assert that (a)
+ * awaiting a gate lets a pending macrotask I/O callback run BEFORE the await
+ * resumes, (b) the macrotaskYields counter increments only across an actual
+ * suspension, (c) concurrent gates slice independently, and (d) the gate
+ * factory remains an exported, awaitable seam via createYieldGateForTests /
+ * forceEventLoopYieldForTests. Replacing the awaited `setImmediate` with a
+ * plain await/microtask, dropping the awaited suspension, or inlining the
+ * loop body so the gate disappears fails those tests.
+ */
+function createEventLoopYieldGate(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  // The invocation's first slice starts at gate CREATION, not at epoch 0: a
+  // lastYield of 0 sits infinitely outside every slice, so the old default
+  // forced the first gate call of EVERY invocation through a setImmediate
+  // macrotask even when the whole invocation's work is far below one slice
+  // (small incremental updateMetadataIndex/getFileTokenScores calls paid
+  // ~1ms+ latency each). An explicit initialLastYieldMs (TEST-ONLY) still
+  // pins the stale-gate semantics.
+  const firstSliceStart = initialLastYieldMs ?? performance.now()
+  let lastYield = firstSliceStart
+  return async () => {
+    const now = performance.now()
+    if (now - lastYield < yieldIntervalMs) return
+    lastYield = now
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    macrotaskYieldCount += 1
+  }
+}
+
+/** Positive-int env override with fallback (mirrors code-map's parse.ts). */
+function getPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
+ * TEST-ONLY yield-seam hooks (repo `*ForTests` convention) backing the
+ * macrotask-yield regression pins described on
+ * {@link createEventLoopYieldGate}. Never call from app code: they override
+ * the production time slice.
+ */
+
+/** TEST-ONLY: override the yield interval (0 forces a yield on every call). */
+export function setYieldIntervalForTests(intervalMs: number): void {
+  if (Number.isFinite(intervalMs) && intervalMs >= 0) {
+    yieldIntervalMs = intervalMs
+  }
+}
+
+/** TEST-ONLY: restore the production yield interval and zero the counters. */
+export function resetYieldStateForTests(): void {
+  yieldIntervalMs = getPositiveIntegerEnv(
+    'CODEBUFF_YIELD_INTERVAL_MS',
+    DEFAULT_YIELD_INTERVAL_MS,
+  )
+  macrotaskYieldCount = 0
+}
+
+/** TEST-ONLY: yield-seam counters for regression assertions. */
+export function getYieldStatsForTests(): { macrotaskYields: number } {
+  return { macrotaskYields: macrotaskYieldCount }
+}
+
+/**
+ * TEST-ONLY: the effective production yield interval (ms), so the 8ms
+ * DEFAULT_YIELD_INTERVAL_MS default itself is pinnable in tests — a default
+ * change must fail the interval pin and re-record the quantitative
+ * before/after baseline it deltas against (see the 'tunables cost baselines'
+ * and 'yield-gate throughput and event-loop-lag evidence' blocks in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts).
+ */
+export function getYieldIntervalForTests(): number {
+  return yieldIntervalMs
+}
+
+/**
+ * TEST-ONLY: create an independent yield gate exactly like the per-invocation
+ * gates the indexing loops await, so the per-invocation slice semantics and
+ * the macrotask mechanism are pinnable without running a full index build.
+ * Omit the argument for the production semantics (first slice starts at
+ * creation); pass 0 explicitly for a stale gate whose first call always
+ * suspends.
+ */
+export function createYieldGateForTests(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  return createEventLoopYieldGate(initialLastYieldMs)
+}
+
+/**
+ * TEST-ONLY: await a gate from the same factory the indexing loops await, so
+ * a refactor that removes, renames, or inlines the gate fails the regression
+ * tests instead of silently dropping the macrotask yield. Pinned to the
+ * stale-gate semantics (lastYield = 0) so the FIRST call always suspends,
+ * independent of the production interval.
+ */
+export async function forceEventLoopYieldForTests(): Promise<void> {
+  await createEventLoopYieldGate(0)()
+}
+
+/**
+ * TEST-ONLY re-export namespace: code-map's parse-loop yield hooks, exposed
+ * through this module so dependents that declare only @codebuff/indexer
+ * (e.g. @codebuff/cli, whose yield-gate regression pins in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts cover BOTH packages'
+ * loops) can reach them without importing '@codebuff/code-map/parse'
+ * directly. @codebuff/cli does not declare @codebuff/code-map, so a direct
+ * import there would be a phantom dependency resolved only via hoisting and
+ * would break if this package dropped its code-map dependency. The namespace
+ * carries the same module instance the '@codebuff/code-map/parse' specifier
+ * resolves to, so the module-level yield state is shared, not duplicated.
+ */
+export * as codeMapParseYieldHooks from '@codebuff/code-map/parse'
+
 /** Historical hardcoded graph edge weights — the ranking baseline. */
 export const DEFAULT_GRAPH_WEIGHTS: Required<GraphWeights> = {
   defines: 1,
@@ -128,16 +319,37 @@ const tsAliasCacheByRoot = new Map<string, TsAliasMap>()
  * Upper bound on the number of distinct project roots whose parse/alias
  * caches we retain in-process. Eviction is FIFO (Map insertion order). A
  * long-lived process that indexes many distinct roots can't grow these
- * without bound; the oldest root's cache is dropped on overflow. Exported
- * so tests can assert the bound is enforced on every write path.
+ * without bound; the oldest root's cache is dropped on overflow. Each of
+ * the two per-root maps is bounded INDEPENDENTLY: a doc-only root (no code
+ * files) gets a tsAliasCacheByRoot entry without any parsedCacheByRoot
+ * insert, so bounding only the parse-cache size would let the alias cache
+ * grow without bound. Exported so tests can assert the bound is enforced
+ * on every write path.
  */
 export const MAX_INDEXED_PROJECT_ROOTS = 8
 
+/**
+ * FIFO eviction guard shared by every insert path into either per-root
+ * cache. Both maps must be bounded independently: a doc-only root (no code
+ * files) gets a tsAliasCacheByRoot entry via loadTsAliases WITHOUT any
+ * parsedCacheByRoot insert, so gating eviction on the parse-cache size
+ * alone lets the alias cache grow without bound in a long-lived process
+ * indexing many distinct doc-only roots. Each map evicts its own oldest
+ * root on overflow; evicting a parse-cache root also drops that root's
+ * alias entry, and evicting an alias-only root leaves any parse cache it
+ * may still hold intact (aliases are recomputable on the next load).
+ */
 function evictOldestRootCacheIfNeeded(): void {
   if (parsedCacheByRoot.size >= MAX_INDEXED_PROJECT_ROOTS) {
     const oldestRoot = parsedCacheByRoot.keys().next().value
     if (oldestRoot !== undefined) {
       parsedCacheByRoot.delete(oldestRoot)
+      tsAliasCacheByRoot.delete(oldestRoot)
+    }
+  }
+  if (tsAliasCacheByRoot.size >= MAX_INDEXED_PROJECT_ROOTS) {
+    const oldestRoot = tsAliasCacheByRoot.keys().next().value
+    if (oldestRoot !== undefined) {
       tsAliasCacheByRoot.delete(oldestRoot)
     }
   }
@@ -163,6 +375,11 @@ function setParsedCache(
 /** Test hook: number of roots currently holding parse caches. */
 export function getParsedCacheRootCount(): number {
   return parsedCacheByRoot.size
+}
+
+/** Test hook: number of roots currently holding tsconfig alias caches. */
+export function getTsAliasCacheRootCount(): number {
+  return tsAliasCacheByRoot.size
 }
 
 /**
@@ -240,7 +457,16 @@ export async function buildMetadataIndex(
 
   const indexedFiles: Record<string, IndexedFile> = {}
 
+  // One yield gate per invocation: concurrent buildMetadataIndex calls each
+  // get their own time slice instead of sharing one (see
+  // createEventLoopYieldGate).
+  const yieldToEventLoop = createEventLoopYieldGate()
+
   for (const file of files) {
+    // Macrotask yield so a cold build does not starve the TUI (see
+    // createEventLoopYieldGate). Precedes all per-file work; loop-carried state
+    // (indexedFiles) is mutated only below the yield.
+    await yieldToEventLoop()
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
       projectRoot,
@@ -251,6 +477,7 @@ export async function buildMetadataIndex(
       asset: file.asset,
       tokenScores: tokenScores[file.relativePath] ?? {},
       astImports: parseData[file.relativePath]?.imports,
+      yieldToEventLoop,
     })
     if (indexed) indexedFiles[file.relativePath] = indexed
   }
@@ -295,6 +522,11 @@ export async function updateMetadataIndex(
         config.maxFiles,
       )
   const files = walked.files
+  // One yield gate per invocation: concurrent updateMetadataIndex calls each
+  // get their own time slice instead of sharing one (see
+  // createEventLoopYieldGate). Both loops in this invocation share the gate —
+  // the gate bounds time-between-yields, not per-loop yield counts.
+  const yieldToEventLoop = createEventLoopYieldGate()
   const currentByPath = new Map(files.map((f) => [f.relativePath, f]))
   const changedDeltaPaths = new Set(
     (mutationDelta?.changedPaths ?? []).map(normalizeMutationPath),
@@ -329,6 +561,10 @@ export async function updateMetadataIndex(
   let metadataOnlyChange = false
 
   for (const file of files) {
+    // Macrotask yield so the stat/hash pass does not starve the TUI (see
+    // createEventLoopYieldGate). Precedes all per-file work/continue paths so every
+    // iteration is covered uniformly.
+    await yieldToEventLoop()
     const indexed = existing.files[file.relativePath]
     if (preciseDelta && !changedDeltaPaths.has(file.relativePath)) {
       continue
@@ -379,6 +615,12 @@ export async function updateMetadataIndex(
         continue
       }
     }
+    // Intra-file yield seam: the stat/hash pass above and the derived-metadata
+    // stat + change-classification block below each stay within one time
+    // slice (a single whole-content SHA-256 is one atomic native call — the
+    // documented residual exception that cannot be split; see
+    // createEventLoopYieldGate).
+    await yieldToEventLoop()
     hashByPath.set(file.relativePath, hash)
     const derivedMetadataPath = file.asset
       ? `.openbuff/artifacts/3d/metadata/${hash}.json`
@@ -510,6 +752,10 @@ export async function updateMetadataIndex(
   }
 
   for (const file of changedFiles) {
+    // Macrotask yield so re-indexing many changed files does not starve the
+    // TUI (see createEventLoopYieldGate). Precedes per-file work; updatedFiles is
+    // mutated only below the yield.
+    await yieldToEventLoop()
     const previous = existing.files[file.relativePath]
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
@@ -525,6 +771,7 @@ export async function updateMetadataIndex(
       previousChunks: previous?.chunks,
       previousHash: previous?.hash,
       readFailedPaths: contentReadFailedPaths,
+      yieldToEventLoop,
     })
     if (indexed) {
       updatedFiles[file.relativePath] = indexed
@@ -587,6 +834,8 @@ async function indexWalkedFile(params: {
    * indexed entry instead of dropping a still-existing file.
    */
   readFailedPaths?: Set<string>
+  /** Macrotask yield gate owned by the calling index build/update run. */
+  yieldToEventLoop: () => Promise<void>
 }): Promise<IndexedFile | null> {
   // Skip binary files entirely — they cannot be parsed as UTF-8 text and
   // reading them would corrupt the index with garbage imports/symbols.
@@ -682,12 +931,25 @@ async function indexWalkedFile(params: {
   // Godot .tscn/.tres, Unreal .uproject, Bevy configs). Returns [] for non-asset files.
   const assetRefs = extractAssetRefs(content, params.ext, params.relativePath)
 
+  // Intra-file yield seam: the content read / imports / headings / concepts /
+  // content-sample extraction block above and the tree-sitter chunk
+  // extraction block below each stay within one time slice (a single
+  // whole-file tree-sitter chunk parse is one atomic native call — the
+  // documented residual exception; see createEventLoopYieldGate).
+  await params.yieldToEventLoop()
+
   // Phase A2 (additive): chunk summaries for code files only. Reuses the
   // already-read `content`; never re-reads disk. Errors or empty results
   // leave `chunks` undefined to keep the cache compact.
   let chunks: IndexedFile['chunks']
+  // Content hash, computed AT MOST once per file: on the cold-build path
+  // buildMetadataIndex passes no `hash`, and this full synchronous SHA-256
+  // over the entire content used to run twice per code file (once for
+  // chunk freshness here and once for the indexed record below) inside the
+  // yield-seam-bounded block. Non-code files hash lazily at the return.
+  let contentHash: string | undefined
   if (CODE_EXTENSIONS.has(params.ext)) {
-    const contentHash = params.hash ?? hashContent(content)
+    contentHash = params.hash ?? hashContent(content)
     if (params.previousChunks && params.previousHash && contentHash === params.previousHash) {
       chunks = params.previousChunks.slice(0, 100)
       if (chunks.length === 0) chunks = undefined
@@ -715,7 +977,7 @@ async function indexWalkedFile(params: {
     path: params.relativePath,
     mtime: params.mtime,
     size: params.size,
-    hash: params.hash ?? hashContent(content),
+    hash: params.hash ?? contentHash ?? hashContent(content),
     ext: params.ext,
     symbols,
     imports,
@@ -1557,6 +1819,10 @@ function loadTsAliases(projectRoot: string): TsAliasMap {
     if (referencePaths.length > 0) queue.push(...referencePaths)
   }
 
+  // Every alias-cache insert routes through the evicting helper so
+  // MAX_INDEXED_PROJECT_ROOTS bounds this map too — including doc-only
+  // roots whose project has no code files, for which no parsedCacheByRoot
+  // insert ever happens (see evictOldestRootCacheIfNeeded).
   if (!tsAliasCacheByRoot.has(projectRoot)) {
     evictOldestRootCacheIfNeeded()
   }
