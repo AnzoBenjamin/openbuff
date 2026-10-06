@@ -530,3 +530,82 @@ describe('buildDefaultSpawnSupervised request-file permissions', () => {
     }
   })
 })
+
+// P2-T8 pruner carve-out routing: under the SAME flag-on deps, a
+// context-pruner child is DELIBERATELY in-process — its pruned history
+// must land on the parent's in-memory AgentState, which a supervised
+// serialized copy can never deliver (see the carve-out in
+// spawn-agent-utils.ts executeSubagent). The identity check is
+// agent-id-based (isContextPrunerAgentId), so the publisher-qualified +
+// version-pinned spelling used here carves out exactly like a bare
+// spelling. Contrast test: a non-pruner child routes to the seam under
+// identical deps.
+describe('context-pruner supervision carve-out routing (P2-T8)', () => {
+  it('a context-pruner child runs loopAgentSteps in-process even when supervision is on', async () => {
+    const loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async (options) => ({
+        agentState: options.agentState,
+        output: { type: 'lastMessage', value: [] },
+      }),
+    )
+    try {
+      const warnCalls: unknown[] = []
+      const result = await executeSubagent(
+        buildExecuteParams({
+          agentTemplate: makeTemplate('acme/context-pruner@1.2.3'),
+          processSupervision: true,
+          spawnSupervised: async () => {
+            throw new Error(
+              'supervised seam must not run for pruner children',
+            )
+          },
+          logger: {
+            debug: () => {},
+            info: () => {},
+            warn: (data: unknown, msg?: string) => {
+              warnCalls.push(msg)
+            },
+            error: () => {},
+          },
+        }),
+      )
+      expect(loopSpy).toHaveBeenCalledTimes(1)
+      expect('supervisedReceipt' in result).toBe(false)
+      expect(result.output).toEqual({ type: 'lastMessage', value: [] })
+      // In-process pruner routing is DELIBERATE, not a misconfiguration:
+      // the genuinely-unwired warn must NOT fire for a pruner child,
+      // otherwise it would emit once per compaction pass.
+      expect(
+        warnCalls.some((msg) => String(msg).includes('spawnSupervised')),
+      ).toBe(false)
+    } finally {
+      loopSpy.mockRestore()
+    }
+  })
+
+  it(
+    'a non-pruner child still routes to the supervised seam under the same deps (contrast)',
+    async () => {
+      const loopSpy = spyOn(
+        runAgentStep,
+        'loopAgentSteps',
+      ).mockImplementation(async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      })
+      try {
+        const result = await executeSubagent(
+          buildExecuteParams({
+            agentTemplate: makeTemplate('thinker'),
+            processSupervision: true,
+            spawnSupervised: async () => settledOk(OK_RECEIPT),
+          }),
+        )
+        expect(loopSpy).not.toHaveBeenCalled()
+        expect('supervisedReceipt' in result).toBe(true)
+        expect(result.supervisedReceipt).toEqual(OK_RECEIPT)
+      } finally {
+        loopSpy.mockRestore()
+      }
+    },
+  )
+})

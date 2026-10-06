@@ -28,6 +28,7 @@ import { join } from 'node:path'
 
 import { loopAgentSteps } from '../../../run-agent-step'
 import { getAgentTemplate } from '../../../templates/agent-registry'
+import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
 import { formatValidationIssues } from '../../../util/format-validation-issues'
 import { formatValueForError } from '../../../util/format-value'
 import { getEffectiveAgentToolNames } from '../../../util/agent-tool-names'
@@ -2970,20 +2971,48 @@ export async function executeSubagent(
   //    residual gap: no test yet exercises reaping of REAL shell
   //    grandchildren;
   //  - the parent→child RPC bridge for the non-serializable callback deps
-  //    has not landed, so the child degrades honestly with a structured
-  //    'unsupported-deps' failed receipt (child-entry.ts) rather than
-  //    half-running.
-  const spawnSupervised =
+  //    HAS landed in this same series (P2-T8b): the bridged dep set —
+  //    including the LLM prompt methods (promptAiSdk /
+  //    promptAiSdkStream / promptAiSdkStructured) — is proxied to the
+  //    supervised child over the parent-owned socket carried by the
+  //    serialized request's rpcSocketPath, so supported children run real
+  //    steps; only deps outside the bridged set degrade honestly with a
+  //    structured 'unsupported-deps' failed receipt (child-entry.ts)
+  //    rather than half-running.
+  let spawnSupervised =
     withDefaults.processSupervision === true
       ? withDefaults.spawnSupervised
       : undefined
+  /**
+   * Context-pruner carve-out (P2-T8 supervision routing): even under
+   * flag-on supervision a context-pruner child NEVER routes to the
+   * supervised seam. The context-pruner's contract is to copy its PRUNED
+   * history back onto the parent's IN-MEMORY AgentState; a supervised
+   * child prunes a serialized COPY of that state inside its subprocess,
+   * so the pruned history can never reach the parent and supervised
+   * pruning silently no-ops. Verified empirically:
+   * agents/e2e/context-pruner.e2e.test.ts +
+   * context-pruning-threshold.e2e.test.ts settle wasPruned === false under
+   * the default-on seam, and pass 5/0 with supervision opted out.
+   *
+   * Identity is agent-id-based via isContextPrunerAgentId: bare,
+   * publisher-qualified, and version-pinned spellings of the pruner agent
+   * id all match — never string-compare the template id here.
+   */
+  const isPrunerChild = isContextPrunerAgentId(agentTemplate.id)
+  if (spawnSupervised !== undefined && isPrunerChild) {
+    spawnSupervised = undefined
+  }
   if (
     spawnSupervised === undefined &&
-    withDefaults.processSupervision === true
+    withDefaults.processSupervision === true &&
+    !isPrunerChild
   ) {
     // Flag on without a wired seam (tests, or a host that disabled the seam):
     // fail open to the in-process path rather than crashing the spawn, with a
-    // warn so the misconfiguration is visible.
+    // warn so the misconfiguration is visible. A pruner child running
+    // in-process is DELIBERATE (see the carve-out above), not a
+    // misconfiguration — it must not warn on every compaction pass.
     withDefaults.logger.warn(
       { agentType: agentTemplate.id },
       'processSupervision is enabled but no spawnSupervised seam is wired; running the subagent in-process',
