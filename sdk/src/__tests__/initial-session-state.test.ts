@@ -4,13 +4,21 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { describe, expect, test, beforeEach } from 'bun:test'
+import {
+  describe,
+  expect,
+  test,
+  beforeEach,
+  mock,
+} from 'bun:test'
+import { getFileTokenScores } from '@codebuff/code-map/parse'
 import { z } from 'zod/v4'
 
 import {
   applyOverridesToSessionState,
   generateInitialRunState,
   initialSessionState,
+  SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
 } from '../run-state'
 import { saveMergedTaskMemory } from '../services/task-memory-store'
 
@@ -770,5 +778,102 @@ describe('Initial Session State', () => {
     expect(serialized).not.toContain('[Openbuff truncated')
     expect(serialized).not.toContain('[REDACTED]')
     expect(serialized).toContain('refreshTokenCount')
+  })
+
+  test('bounds session-boot parse with a maxTotalBytes budget override', async () => {
+    // The session-boot budget is a hard constant, not an indexer-grade
+    // default: it must stay small enough that cold start cannot spend
+    // unbounded wall-clock time in the tree-sitter pass.
+    expect(SESSION_STATE_MAX_TOTAL_PARSE_BYTES).toBe(64_000_000)
+
+    const realGetFileTokenScores = getFileTokenScores
+    const calls: unknown[][] = []
+    mock.module('@codebuff/code-map/parse', () => ({
+      getFileTokenScores: async (...callArgs: unknown[]) => {
+        calls.push(callArgs)
+        return {
+          tokenScores: {},
+          tokenCallers: {},
+          coverage: {
+            truncated: false,
+            fileBudgetExceeded: false,
+            byteBudgetExceeded: false,
+            parsedFiles: 1,
+            skippedFiles: 0,
+          },
+        }
+      },
+    }))
+    try {
+      const sessionState = await initialSessionState({
+        cwd: '/test-project',
+        projectFiles: { 'src/index.ts': 'console.log("Hello world");' },
+        fs: mockFs,
+        logger: mockLogger,
+      })
+
+      // The budget override must reach getFileTokenScores as its 5th
+      // positional argument, after the unused reuseParsed slot.
+      expect(calls.length).toBeGreaterThan(0)
+      expect(calls[0]?.[3]).toBeUndefined()
+      expect(calls[0]?.[4]).toEqual({
+        maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
+      })
+      expect(sessionState.fileContext.fileTokenScores).toBeDefined()
+    } finally {
+      mock.module('@codebuff/code-map/parse', () => ({
+        getFileTokenScores: realGetFileTokenScores,
+      }))
+    }
+  })
+
+  test('logs debug when session-state parse budget truncates token scoring', async () => {
+    const realGetFileTokenScores = getFileTokenScores
+    const debugCalls: Array<{ payload: unknown; message?: string }> = []
+    const capturingLogger: Logger = {
+      ...mockLogger,
+      debug: (payload: unknown, message?: string) => {
+        debugCalls.push({ payload, message })
+      },
+    }
+    mock.module('@codebuff/code-map/parse', () => ({
+      getFileTokenScores: async () => ({
+        tokenScores: {},
+        tokenCallers: {},
+        coverage: {
+          truncated: true,
+          fileBudgetExceeded: false,
+          byteBudgetExceeded: true,
+          parsedFiles: 3,
+          skippedFiles: 2,
+        },
+      }),
+    }))
+    try {
+      await initialSessionState({
+        cwd: '/test-project',
+        projectFiles: { 'src/index.ts': 'console.log("Hello world");' },
+        fs: mockFs,
+        logger: capturingLogger,
+      })
+
+      // Truncation is surfaced at debug level only, with coverage counts and
+      // the budget that triggered it.
+      const truncationLog = debugCalls.find(
+        (call) =>
+          call.message ===
+          'Session-state parse budget truncated token scoring',
+      )
+      expect(truncationLog).toBeDefined()
+      expect(truncationLog?.payload).toEqual({
+        parsedFiles: 3,
+        skippedFiles: 2,
+        maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
+      })
+    } finally {
+      mock.module('@codebuff/code-map/parse', () => ({
+        getFileTokenScores: realGetFileTokenScores,
+      }))
+    }
   })
 })

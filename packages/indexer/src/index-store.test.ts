@@ -14,7 +14,10 @@ import {
   loadIndex,
   loadSemanticVectors,
   MAX_CARRIED_SEMANTIC_VECTORS,
+  MAX_CHUNK_SIDECAR_BYTES,
+  MAX_METADATA_INDEX_BYTES,
   reclaimStaleLock,
+  reduceIndexForByteCap,
   releaseOwnedLock,
   sanitizeIndexCacheDir,
   saveChunkSidecar,
@@ -22,6 +25,7 @@ import {
   saveSemanticVectors,
   setWriteGitExclude,
 } from './index-store'
+import type { MetadataIndex } from './types'
 
 describe('index cache ownership', () => {
   test('accepts only a single hidden cache directory name', () => {
@@ -759,13 +763,16 @@ describe('index cache ownership', () => {
     )
     const dir = getIndexDir(root)
     await fs.promises.mkdir(dir, { recursive: true })
-    // Content is intentionally not valid JSON: the stat-first byte cap (the
-    // same MAX_CHUNK_SIDECAR_BYTES bound the chunk sidecar has always had)
-    // must reject the artifact before any read+JSON.parse happens.
-    await fs.promises.writeFile(
+    // Content is intentionally invalid JSON: the stat-first byte cap (the
+    // generous MAX_METADATA_INDEX_BYTES for the metadata core, NOT the 8MB
+    // sidecar bound) must reject the artifact before any read+JSON.parse
+    // happens. Sparse via truncate so the test never materializes 64MB.
+    const handle = await fs.promises.open(
       path.join(dir, 'metadata.json'),
-      'x'.repeat(8_000_001),
+      'w',
     )
+    await handle.truncate(MAX_METADATA_INDEX_BYTES + 1)
+    await handle.close()
     expect(await loadIndex(root)).toBeNull()
   })
 
@@ -780,6 +787,22 @@ describe('index cache ownership', () => {
       'x'.repeat(8_000_001),
     )
     expect(await loadSemanticVectors(root, 'model')).toEqual([])
+  })
+
+  test('refuses to load an oversized chunks.json sidecar before reading it', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-sidecar-overload-'),
+    )
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir, { recursive: true })
+    // Content is intentionally invalid JSON: the stat-first byte cap
+    // (MAX_CHUNK_SIDECAR_BYTES) must reject the sidecar before any
+    // read+JSON.parse happens, treating the oversized artifact as a safe
+    // miss. Sparse via truncate so the test never materializes 8MB.
+    const handle = await fs.promises.open(path.join(dir, 'chunks.json'), 'w')
+    await handle.truncate(MAX_CHUNK_SIDECAR_BYTES + 1)
+    await handle.close()
+    expect(await loadChunkSidecar(root)).toBeNull()
   })
 
   test('writes documents over the compact-write threshold with a single compact serialization', async () => {
@@ -827,6 +850,232 @@ describe('index cache ownership', () => {
     expect((await loadIndex(root))?.files['src/huge.ts']?.hash).toBe(
       'hash-huge',
     )
+  })
+
+  test('loads a valid metadata.json larger than the 8MB sidecar cap', async () => {
+    // The caps are split: metadata.json uses the generous
+    // MAX_METADATA_INDEX_BYTES while the sidecars keep the historical 8MB
+    // bound. A valid artifact between the two bounds must LOAD — under the
+    // old shared cap it fed the skip→full-rebuild→rewrite-oversized loop.
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-split-cap-'),
+    )
+    const bigSample = 'x'.repeat(8_500_000)
+    await fs.promises.mkdir(getIndexDir(root), { recursive: true })
+    await fs.promises.writeFile(
+      path.join(getIndexDir(root), 'metadata.json'),
+      JSON.stringify({
+        version: '2',
+        projectRoot: root,
+        builtAt: 1,
+        fileCount: 1,
+        files: {
+          'src/big.ts': {
+            path: 'src/big.ts',
+            mtime: 1,
+            size: bigSample.length,
+            hash: 'hash-big',
+            ext: '.ts',
+            symbols: [],
+            imports: [],
+            headings: [],
+            concepts: [],
+            contentSample: bigSample,
+          },
+        },
+        graph: { nodes: {}, edges: [] },
+      }),
+    )
+    const loaded = await loadIndex(root)
+    expect(loaded?.files['src/big.ts']?.hash).toBe('hash-big')
+    expect(loaded?.files['src/big.ts']?.contentSample).toBe(bigSample)
+  })
+
+  test('warns once for identical consecutive oversized-skip loads', async () => {
+    // index-manager calls loadIndex twice per build cycle (initial load +
+    // post-save verification); the skip warning must not print twice for
+    // the same artifact.
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-warn-dedupe-'),
+    )
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir, { recursive: true })
+    // Sparse file via truncate: the stat-first cap fires on stat.size
+    // without materializing 64MB of bytes.
+    const handle = await fs.promises.open(path.join(dir, 'metadata.json'), 'w')
+    await handle.truncate(MAX_METADATA_INDEX_BYTES + 1)
+    await handle.close()
+    const warnings: string[] = []
+    const originalWarn = console.warn
+    console.warn = (message: string) => {
+      warnings.push(message)
+    }
+    try {
+      await loadIndex(root)
+      await loadIndex(root)
+    } finally {
+      console.warn = originalWarn
+    }
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('skipping oversized index artifact')
+  })
+})
+
+describe('reduceIndexForByteCap', () => {
+  const makeIndex = (projectRoot = 'root'): MetadataIndex => {
+    const file = {
+      path: 'src/a.ts',
+      mtime: 1,
+      size: 10,
+      hash: 'hash-a',
+      ext: '.ts',
+      symbols: ['a'],
+      imports: [],
+      headings: [],
+      concepts: [],
+      contentSample: 'x'.repeat(600),
+      chunks: [
+        {
+          chunkId: 'c1',
+          qualifiedName: 'a',
+          kind: 'function',
+          startLine: 1,
+          endLine: 2,
+          hash: 'chunk-hash',
+        },
+      ],
+    }
+    return {
+      version: '2',
+      projectRoot,
+      builtAt: 1,
+      fileCount: 1,
+      files: { 'src/a.ts': file },
+      graph: { nodes: {}, edges: [] },
+      queryData: {
+        postings: { a: ['src/a.ts'] },
+        documentFrequencies: { a: 1 },
+        adjacency: {},
+      },
+      parseData: {},
+    }
+  }
+
+  test('returns the original doc untouched when under the cap', () => {
+    const index = makeIndex()
+    const result = reduceIndexForByteCap(index, JSON.stringify(index).length)
+    expect(result.reduced).toBe(false)
+    expect(result.tiers).toEqual([])
+    // Identity, not a copy: nothing was stripped, so nothing was allocated.
+    expect(result.index).toBe(index)
+    expect(result.size).toBe(JSON.stringify(index).length)
+  })
+
+  test('tier 1 drops queryData/parseData first', () => {
+    const index = makeIndex()
+    const tier1Size = JSON.stringify({
+      ...index,
+      queryData: undefined,
+      parseData: undefined,
+    }).length
+    const result = reduceIndexForByteCap(index, tier1Size)
+    expect(result.reduced).toBe(true)
+    expect(result.tiers).toEqual(['queryData/parseData'])
+    expect(result.size).toBe(tier1Size)
+    expect(result.index.queryData).toBeUndefined()
+    expect(result.index.parseData).toBeUndefined()
+    // Later tiers did not fire: contentSample and chunks survive tier 1.
+    expect(result.index.files['src/a.ts']?.contentSample).toHaveLength(600)
+    expect(result.index.files['src/a.ts']?.chunks).toHaveLength(1)
+  })
+
+  test('tier 2 strips contentSample without mutating the caller index', () => {
+    const index = makeIndex()
+    index.queryData = undefined
+    index.parseData = undefined
+    const tier2Size = JSON.stringify({
+      ...index,
+      files: {
+        'src/a.ts': { ...index.files['src/a.ts']!, contentSample: undefined },
+      },
+    }).length
+    const result = reduceIndexForByteCap(index, tier2Size)
+    expect(result.tiers).toEqual(['contentSample'])
+    expect(result.size).toBe(tier2Size)
+    expect(result.index.files['src/a.ts']?.contentSample).toBeUndefined()
+    // The caller's in-memory entry keeps its contentSample: the stripped
+    // entry is a fresh copy, never a delete on the shared object.
+    expect(index.files['src/a.ts']?.contentSample).toHaveLength(600)
+    expect(index.files['src/a.ts']?.chunks).toHaveLength(1)
+    expect(result.index).not.toBe(index)
+  })
+
+  test('tier 3 strips chunks after contentSample', () => {
+    const index = makeIndex()
+    index.queryData = undefined
+    index.parseData = undefined
+    const tier2Size = JSON.stringify({
+      ...index,
+      files: {
+        'src/a.ts': { ...index.files['src/a.ts']!, contentSample: undefined },
+      },
+    }).length
+    const tier3Size = JSON.stringify({
+      ...index,
+      files: {
+        'src/a.ts': {
+          ...index.files['src/a.ts']!,
+          contentSample: undefined,
+          chunks: undefined,
+        },
+      },
+    }).length
+    const result = reduceIndexForByteCap(index, tier2Size - 1)
+    expect(result.tiers).toEqual(['contentSample', 'chunks'])
+    expect(result.size).toBe(tier3Size)
+    expect(result.index.files['src/a.ts']?.chunks).toBeUndefined()
+    // The original file entry still holds its chunks.
+    expect(index.files['src/a.ts']?.chunks).toHaveLength(1)
+  })
+
+  test('reports a size still over the cap when nothing more can be dropped', () => {
+    const index = makeIndex()
+    const result = reduceIndexForByteCap(index, 16)
+    expect(result.tiers).toEqual([
+      'queryData/parseData',
+      'contentSample',
+      'chunks',
+    ])
+    // saveIndex treats size > maxBytes at this point as tier 4: skip
+    // persisting and keep serving the in-memory index.
+    expect(result.size).toBeGreaterThan(16)
+  })
+
+  test('a fully reduced document still loads with queryData rebuilt', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-reduced-load-'),
+    )
+    const index = makeIndex(root)
+    const result = reduceIndexForByteCap(index, 1)
+    expect(result.tiers).toEqual([
+      'queryData/parseData',
+      'contentSample',
+      'chunks',
+    ])
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir, { recursive: true })
+    await fs.promises.writeFile(
+      path.join(dir, 'metadata.json'),
+      JSON.stringify(result.index),
+    )
+    const loaded = await loadIndex(root)
+    // Rebuildable fields come back: the authoritative file data survives...
+    expect(loaded?.files['src/a.ts']?.hash).toBe('hash-a')
+    // ...queryData is rebuilt at load when missing...
+    expect(loaded?.queryData).toBeDefined()
+    // ...and the stripped fields stay absent.
+    expect(loaded?.files['src/a.ts']?.contentSample).toBeUndefined()
+    expect(loaded?.files['src/a.ts']?.chunks).toBeUndefined()
   })
 })
 

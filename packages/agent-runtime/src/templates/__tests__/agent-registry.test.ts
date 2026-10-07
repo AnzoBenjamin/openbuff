@@ -554,6 +554,83 @@ describe('Agent Registry', () => {
       // Should return some agent templates (static ones from our mock)
       expect(Object.keys(result.agentTemplates).length).toBeGreaterThan(0)
     })
+
+    it('returns templates whose schema members are zod schemas, not the raw JSON-Schema configs', () => {
+      // Regression test for the silent-spawn bug: bundled agents in the
+      // compiled binary arrive in fileContext with plain JSON-Schema schema
+      // members. validateAgents' zod re-parse converts them, but the
+      // registry previously returned the raw dynamicTemplates map, so
+      // consumers that index localAgentTemplates[id] directly (the spawn
+      // path, set-output, prompts) got plain objects instead of zod schemas
+      // and never passed through getAgentTemplate's coercion backstop.
+      validateAgentsBehavior = ({ agentTemplates = {} }) => {
+        const dynamicTemplates: Record<string, DynamicAgentTemplate> = {}
+        const templates: Record<string, AgentTemplate> = {}
+        for (const template of Object.values(agentTemplates)) {
+          dynamicTemplates[template.id] = template
+          templates[template.id] =
+            validationModule.ensureAgentTemplateZodSchemas(
+              template as AgentTemplate,
+            )
+        }
+        return { templates, dynamicTemplates, validationErrors: [] }
+      }
+
+      const fileContext: ProjectFileContext = {
+        ...mockFileContext,
+        agentTemplates: {
+          'bundled-like-agent.ts': {
+            id: 'bundled-like-agent',
+            displayName: 'Bundled Like Agent',
+            systemPrompt: 'Test',
+            instructionsPrompt: 'Test',
+            stepPrompt: 'Test',
+            toolNames: ['end_turn'],
+            spawnableAgents: [],
+            outputMode: 'structured_output',
+            includeMessageHistory: true,
+            model: 'anthropic/claude-4-sonnet-20250522',
+            spawnerPrompt: 'Test',
+            inputSchema: {
+              prompt: { type: 'string' },
+              params: {
+                type: 'object',
+                properties: { q: { type: 'string' } },
+              },
+            },
+            outputSchema: {
+              type: 'object',
+              properties: { answer: { type: 'string' } },
+            },
+          } as unknown as DynamicAgentTemplate,
+        },
+      }
+
+      const result = assembleLocalAgentTemplates({
+        ...agentRuntimeImpl,
+        fileContext,
+      })
+
+      const template = result.agentTemplates['bundled-like-agent']
+      expect(template).toBeDefined()
+      const promptSchema = template.inputSchema.prompt as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      const paramsSchema = template.inputSchema.params as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      const outputSchema = template.outputSchema as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      expect(typeof promptSchema.safeParse).toBe('function')
+      expect(typeof paramsSchema.safeParse).toBe('function')
+      expect(typeof outputSchema.safeParse).toBe('function')
+      // The converted schemas accept the same payloads the plain JSON
+      // schemas described.
+      expect(promptSchema.safeParse('hello').success).toBe(true)
+      expect(paramsSchema.safeParse({ q: 'x' }).success).toBe(true)
+      expect(outputSchema.safeParse({ answer: 'x' }).success).toBe(true)
+    })
   })
 
   describe('clearDatabaseCache', () => {

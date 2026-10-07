@@ -132,8 +132,11 @@ export function assembleLocalAgentTemplates(params: {
   validationErrors: DynamicAgentValidationError[]
 } {
   const { fileContext, logger } = params
-  // Load dynamic agents using the service
-  const { templates: dynamicTemplates, validationErrors } = validateAgents({
+  // Load dynamic agents using the service. validateAgents returns two maps
+  // of the same validated content: `templates` holds validateSingleAgent's
+  // zod-converted re-parse, while `dynamicTemplates` holds the raw validated
+  // configs whose schema members are still plain JSON-Schema objects.
+  const { templates, dynamicTemplates, validationErrors } = validateAgents({
     agentTemplates: fileContext.agentTemplates,
     logger,
   })
@@ -168,7 +171,7 @@ export function assembleLocalAgentTemplates(params: {
   for (const rawTemplate of Object.values(fileContext.agentTemplates ?? {})) {
     const validated =
       rawTemplate && typeof rawTemplate.id === 'string'
-        ? dynamicTemplates[rawTemplate.id]
+        ? templates[rawTemplate.id]
         : undefined
     if (!validated) {
       continue
@@ -184,9 +187,16 @@ export function assembleLocalAgentTemplates(params: {
     }
   }
 
-  // Use dynamic templates only
-
-  const agentTemplates = { ...dynamicTemplates }
+  // Return the zod-converted templates: the same validated content as
+  // dynamicTemplates, but with inputSchema.prompt / inputSchema.params /
+  // outputSchema converted to zod by validateSingleAgent's re-parse. Every
+  // consumer of localAgentTemplates must receive schemas that actually parse:
+  // the spawn path (validateAndGetAgentTemplate, buildAgentToolSet),
+  // set-output, and prompts index localAgentTemplates[id] directly and never
+  // pass through getAgentTemplate's coercion backstop, so handing them the
+  // raw JSON-Schema configs leaves agents that spawn but silently produce no
+  // output. The origin marks above landed on these same converted objects.
+  const agentTemplates = { ...templates }
   return { agentTemplates, validationErrors }
 }
 

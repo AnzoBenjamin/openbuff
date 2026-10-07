@@ -2,6 +2,7 @@ import {
   MAX_AGENT_STEPS_DEFAULT,
   MAX_SPAWN_DEPTH_DEFAULT,
 } from '@codebuff/common/constants/agents'
+import { serializeAgentTemplatesForTransport } from '@codebuff/common/templates/agent-validation'
 import { toolNames } from '@codebuff/common/tools/constants'
 import {
   normalizeAgentIdForLookup,
@@ -2794,7 +2795,10 @@ async function runSupervisedSubagent(params: {
         : {}),
     },
     fileContext: params.fileContext,
-    localAgentTemplates: params.localAgentTemplates,
+    localAgentTemplates:
+      // The JSON request file is a transport boundary: schemas/handleSteps
+      // must cross in round-trip-safe form (child re-coerces/materializes).
+      serializeAgentTemplatesForTransport(params.localAgentTemplates),
     userId: params.userId,
     clientSessionId: params.clientSessionId,
     userInputId: params.userInputId,

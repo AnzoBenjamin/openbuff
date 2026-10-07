@@ -2,7 +2,10 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { toolParams } from '@codebuff/common/tools/list'
 import { describe, test, expect, mock } from 'bun:test'
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
-import { ensureAgentTemplateZodSchemas } from '@codebuff/common/templates/agent-validation'
+import {
+  ensureAgentTemplateZodSchemas,
+  serializeAgentTemplatesForTransport,
+} from '@codebuff/common/templates/agent-validation'
 import { z } from 'zod/v4'
 
 import { additionalSystemPrompts } from '../system-prompt/prompts'
@@ -1012,6 +1015,169 @@ describe('Schema handling error recovery', () => {
       // Should produce valid output without throwing
       expect(description).toContain('async_tool')
       expect(description).toContain('An async tool')
+    })
+  })
+
+  describe('serializeAgentTemplatesForTransport (supervised spawn transport boundary)', () => {
+    const makeTransportTemplate = (
+      overrides: Record<string, unknown>,
+    ): AgentTemplate =>
+      ({
+        id: 'transport-agent',
+        displayName: 'Transport Agent',
+        spawnerPrompt: 'Transport test prompt',
+        model: 'gpt-4o-mini',
+        outputMode: 'last_message',
+        includeMessageHistory: false,
+        inheritParentSystemPrompt: false,
+        mcpServers: {},
+        toolNames: [],
+        spawnableAgents: [],
+        systemPrompt: '',
+        instructionsPrompt: '',
+        stepPrompt: '',
+        ...overrides,
+      }) as unknown as AgentTemplate
+
+    test('converts live zod schema members to round-trip-safe JSON Schema', () => {
+      const template = makeTransportTemplate({
+        inputSchema: {
+          prompt: z.string().describe('Task prompt'),
+          params: z.object({ command: z.string() }),
+        },
+        outputSchema: z.object({ answer: z.string() }),
+      })
+
+      const transported = serializeAgentTemplatesForTransport({
+        'transport-agent': template,
+      })['transport-agent']
+
+      const promptSchema = transported.inputSchema?.prompt as unknown as Record<
+        string,
+        unknown
+      >
+      expect(promptSchema).toMatchObject({
+        type: 'string',
+        description: 'Task prompt',
+      })
+      expect(promptSchema._zod).toBeUndefined()
+      expect(typeof promptSchema.safeParse).not.toBe('function')
+
+      const paramsSchema = transported.inputSchema?.params as unknown as Record<
+        string,
+        unknown
+      >
+      expect(paramsSchema).toMatchObject({
+        type: 'object',
+        properties: { command: { type: 'string' } },
+      })
+
+      const outputSchema = transported.outputSchema as unknown as Record<
+        string,
+        unknown
+      >
+      expect(outputSchema).toMatchObject({
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+      })
+
+      // The serialized request file carries the schema structure, not the
+      // empty husk JSON.stringify makes of a live zod instance.
+      const serialized = JSON.stringify(
+        serializeAgentTemplatesForTransport({ 'transport-agent': template }),
+      )
+      expect(serialized).toContain('"type":"object"')
+      expect(serialized).toContain('"type":"string"')
+    })
+
+    test('stringifies function-valued handleSteps and passes strings through', () => {
+      const handleStepsFn = function* () {
+        yield
+      }
+      const functionTemplate = makeTransportTemplate({
+        handleSteps: handleStepsFn as unknown as AgentTemplate['handleSteps'],
+      })
+      const transportedFn = serializeAgentTemplatesForTransport({
+        'transport-agent': functionTemplate,
+      })['transport-agent']
+
+      expect(transportedFn.handleSteps).toBe(handleStepsFn.toString())
+      expect(transportedFn.handleSteps as string).toContain('function*')
+
+      const stringHandleSteps = 'function* (params) { yield }'
+      const stringTemplate = makeTransportTemplate({
+        handleSteps: stringHandleSteps,
+      })
+      const transportedString = serializeAgentTemplatesForTransport({
+        'transport-agent': stringTemplate,
+      })['transport-agent']
+
+      expect(transportedString.handleSteps).toBe(stringHandleSteps)
+    })
+
+    test('returns the original template object when nothing needs conversion', () => {
+      const plain = makeTransportTemplate({
+        inputSchema: { prompt: { type: 'string' } },
+        handleSteps: 'function* (params) { yield }',
+      })
+
+      const transported = serializeAgentTemplatesForTransport({
+        'transport-agent': plain,
+      })
+
+      expect(transported['transport-agent']).toBe(plain)
+    })
+
+    test('output resolves back through ensureAgentTemplateZodSchemas in the child', () => {
+      const template = makeTransportTemplate({
+        inputSchema: {
+          prompt: z.string(),
+          params: z.object({ command: z.string() }),
+        },
+        outputSchema: z.object({ answer: z.string() }),
+      })
+
+      const transported = serializeAgentTemplatesForTransport({
+        'transport-agent': template,
+      })['transport-agent']
+      const resolved = ensureAgentTemplateZodSchemas(transported)
+
+      expect(typeof resolved.inputSchema?.prompt?.safeParse).toBe('function')
+      expect(typeof resolved.inputSchema?.params?.safeParse).toBe('function')
+      expect(typeof resolved.outputSchema?.safeParse).toBe('function')
+      expect(resolved.inputSchema.prompt!.safeParse('hello').success).toBe(true)
+      expect(
+        resolved.inputSchema.params!.safeParse({ command: 'pwd' }).success,
+      ).toBe(true)
+      expect(resolved.outputSchema!.safeParse({ answer: 'ok' }).success).toBe(
+        true,
+      )
+    })
+
+    test('leaves non-JSON-expressible zod schemas untouched instead of throwing', () => {
+      const problematicParams = z.function()
+      const problematicOutput = z.function()
+      const template = makeTransportTemplate({
+        inputSchema: {
+          params:
+            problematicParams as unknown as AgentTemplate['inputSchema']['params'],
+        },
+        outputSchema:
+          problematicOutput as unknown as AgentTemplate['outputSchema'],
+      })
+
+      const transported = serializeAgentTemplatesForTransport({
+        'transport-agent': template,
+      })
+
+      // The try/catch fallback keeps the original member so behavior is
+      // never worse than the status quo.
+      expect(transported['transport-agent'].inputSchema?.params).toBe(
+        problematicParams,
+      )
+      expect(transported['transport-agent'].outputSchema).toBe(
+        problematicOutput,
+      )
     })
   })
 })

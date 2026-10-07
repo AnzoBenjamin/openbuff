@@ -1,4 +1,5 @@
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
+import { z } from 'zod/v4'
 
 import {
   DynamicAgentDefinitionSchema,
@@ -450,4 +451,86 @@ export function ensureAgentTemplateZodSchemas(
     },
     ...(outputSchema !== undefined ? { outputSchema } : {}),
   }
+}
+
+function isLiveZodSchema(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const record = value as { _zod?: unknown; safeParse?: unknown }
+  return record._zod !== undefined || typeof record.safeParse === 'function'
+}
+
+function serializeSchemaMemberForTransport(
+  value: unknown,
+  io: 'input' | 'output',
+): unknown {
+  if (!isLiveZodSchema(value)) {
+    return value
+  }
+  try {
+    return z.toJSONSchema(value as z.ZodType, { io })
+  } catch {
+    // z.toJSONSchema throws on non-JSON-expressible zod types (e.g.
+    // z.function()); leaving the original member is no worse than the
+    // status quo and never crashes the spawn.
+    return value
+  }
+}
+
+/**
+ * Serialize agent templates into the round-trip-safe form the supervised
+ * spawn request file needs. That file is a JSON boundary: JSON.stringify
+ * silently degrades live zod schemas into degenerate husks (their internals
+ * are not own-enumerable) and silently drops function-valued members such as
+ * handleSteps. The child re-coerces plain JSON-Schema members back to zod
+ * (ensureAgentTemplateZodSchemas via coerceJsonSchemaMember) and materializes
+ * string handleSteps via new Function for trusted executionSources, so the
+ * transport form is JSON-Schema objects plus string handleSteps. Members that
+ * cannot be expressed as JSON Schema are left untouched — no worse than the
+ * status quo, and never crashes the spawn. Templates that need no conversion
+ * are returned by reference so large bundled catalogs stay identity-stable.
+ */
+export function serializeAgentTemplatesForTransport(
+  templates: Record<string, AgentTemplate>,
+): Record<string, AgentTemplate> {
+  const transported: Record<string, AgentTemplate> = {}
+  for (const [id, template] of Object.entries(templates)) {
+    const inputSchema = template.inputSchema
+    const prompt = serializeSchemaMemberForTransport(
+      inputSchema?.prompt,
+      'input',
+    ) as AgentTemplate['inputSchema']['prompt']
+    const params = serializeSchemaMemberForTransport(
+      inputSchema?.params,
+      'input',
+    ) as AgentTemplate['inputSchema']['params']
+    const outputSchema = serializeSchemaMemberForTransport(
+      template.outputSchema,
+      'output',
+    ) as AgentTemplate['outputSchema']
+    const handleSteps =
+      typeof template.handleSteps === 'function'
+        ? template.handleSteps.toString()
+        : template.handleSteps
+    const changed =
+      prompt !== inputSchema?.prompt ||
+      params !== inputSchema?.params ||
+      outputSchema !== template.outputSchema ||
+      handleSteps !== template.handleSteps
+    if (!changed) {
+      transported[id] = template
+      continue
+    }
+    transported[id] = {
+      ...template,
+      inputSchema: {
+        ...(prompt !== undefined ? { prompt } : {}),
+        ...(params !== undefined ? { params } : {}),
+      },
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
+      ...(handleSteps !== undefined ? { handleSteps } : {}),
+    }
+  }
+  return transported
 }

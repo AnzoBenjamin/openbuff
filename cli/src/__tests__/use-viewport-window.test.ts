@@ -37,6 +37,7 @@ import {
   foldAnimationVerifyDesired,
   readCanonicalScrollPosition,
   SCROLL_NEAR_BOTTOM_THRESHOLD,
+  shouldSkipAutoScrollWrite,
   VERIFY_SETTLED_BOTTOM,
 } from '../hooks/use-scroll-management'
 
@@ -1803,6 +1804,70 @@ describe('computeAutoScrollTarget', () => {
   })
 })
 
+describe('shouldSkipAutoScrollWrite', () => {
+  // The auto-scroll effect's epsilon guard (ANCHOR_VERIFY_EPSILON = 0.5 in
+  // use-scroll-management): a non-null computeAutoScrollTarget whose target
+  // is already within epsilon of the current position must not be written.
+  const EPSILON = 0.5
+
+  test('a pin target within epsilon of the position is skipped (no write, no snap cycle)', () => {
+    // The scroll-to-latest snap-back regression: during streaming the last
+    // message's measured height grows the TRANSIENT maxScroll a fraction of
+    // a row above the integer-rounded position (e.g. 600.4 vs 600), so
+    // computeAutoScrollTarget returns a pin target on every messages change
+    // even though the viewport already sits at the visual bottom. Writing it
+    // pins the position to the transient bottom; when the layout settles at
+    // a LOWER maxScroll (estimate-to-real transition, bottom-spacer
+    // collapse) the re-clamp snaps the viewport back up. The within-epsilon
+    // write is skipped so the position is never clamped to the transient
+    // value.
+    expect(shouldSkipAutoScrollWrite(600, 600.4, 600.4, EPSILON)).toBe(true)
+  })
+
+  test('a pin target beyond epsilon of the position still writes', () => {
+    // A genuinely growing bottom (a new message arrived) moves maxScroll
+    // well past epsilon: the pin write must still fire so follow keeps the
+    // viewport pinned. The sub-row case (599.6 vs 600) is within epsilon and
+    // correctly skipped — the viewport is already at the visual bottom.
+    expect(shouldSkipAutoScrollWrite(540, 600, 600, EPSILON)).toBe(false)
+    expect(shouldSkipAutoScrollWrite(599.6, 600, 600, EPSILON)).toBe(true)
+  })
+
+  test('the boundary at exactly epsilon is skipped; beyond it writes', () => {
+    expect(shouldSkipAutoScrollWrite(600, 600.5, 600.5, EPSILON)).toBe(true)
+    expect(shouldSkipAutoScrollWrite(600, 600.6, 600.6, EPSILON)).toBe(false)
+  })
+
+  test('the clamp path is never skipped, even within epsilon', () => {
+    // A position above maxScroll is outside the box's valid range: the
+    // clamp back into range is a legitimate safety write that must fire
+    // even when the clamp distance is within epsilon.
+    expect(shouldSkipAutoScrollWrite(600.4, 600, 600, EPSILON)).toBe(false)
+  })
+
+  test('composes with computeAutoScrollTarget: a sub-row streaming bump needs no write', () => {
+    // End-to-end shape of one auto-scroll effect pass during streaming:
+    // follow is on and the scrollbar position (600) sits a fraction of a
+    // row below the transient maxScroll (600.4), so the target is the
+    // transient bottom — but the position is already within epsilon of it,
+    // so the effect writes nothing and the pending anchor-verify chain is
+    // left to its own pass.
+    const target = computeAutoScrollTarget(makeBox(600), 600.4, true, false)
+    expect(target).toBe(600.4)
+    expect(shouldSkipAutoScrollWrite(600, target ?? 0, 600.4, EPSILON)).toBe(
+      true,
+    )
+  })
+
+  test('composes with computeAutoScrollTarget: a real pin still writes', () => {
+    const target = computeAutoScrollTarget(makeBox(540), 600, true, false)
+    expect(target).toBe(600)
+    expect(shouldSkipAutoScrollWrite(540, target ?? 0, 600, EPSILON)).toBe(
+      false,
+    )
+  })
+})
+
 describe('animation entry points read the canonical scroll position', () => {
   test('the ease start reads the canonical scrollbar position while scrollTop diverges', () => {
     // The regression case the animation-entry fix closes: an animation
@@ -1882,12 +1947,44 @@ describe('VERIFY_SETTLED_BOTTOM composes with the deferred verify pass', () => {
   })
 
   test('a position already at the settled bottom needs no corrective write', () => {
-    // When the layout had NOT landed by the final tick, the position still
+    // When the layout had not landed by the final tick, the position still
     // matches the then-current maxScroll: no write (and no programmatic-flag
     // arming) — the chain simply finds nothing to correct.
     expect(
       computeAnchorVerifyCorrection(VERIFY_SETTLED_BOTTOM, 600, 600, 0.5),
     ).toBeNull()
+  })
+
+  test('a settled bottom ABOVE the current position needs no corrective write (never pull down)', () => {
+    // The scroll-to-latest snap-back regression: the ease pinned the
+    // position to a TRANSIENT bottom (610, produced while streaming growth
+    // bumped maxScroll), then the layout settled at a LOWER maxScroll (600)
+    // — the estimate-to-real transition and bottom-spacer collapse. A
+    // direction-blind re-clamp would pull the position down to 600, the
+    // visible snap-up glitch; the settled-bottom desired is one-directional
+    // and only ever pushes UP toward a bottom below the position.
+    expect(
+      computeAnchorVerifyCorrection(VERIFY_SETTLED_BOTTOM, 610, 600, 0.5),
+    ).toBeNull()
+  })
+
+  test('the width-change re-pin still pushes up when the settled bottom is below the position', () => {
+    // The direction guard must not weaken the re-pin path the sentinel
+    // exists for: after a zoom the re-wrapped layout grows the settled
+    // maxScroll past the position the ease landed at, and the corrective
+    // write still pushes the position up to it.
+    expect(
+      computeAnchorVerifyCorrection(VERIFY_SETTLED_BOTTOM, 540, 600, 0.5),
+    ).toBe(600)
+    expect(
+      computeAnchorVerifyCorrection(VERIFY_SETTLED_BOTTOM, 550, 600, 0.5),
+    ).toBe(600)
+  })
+
+  test('the direction guard applies only to the settled-bottom sentinel', () => {
+    // A numeric desired keeps the direction-blind re-clamp: a finite anchor
+    // destination above the settled maxScroll still clamps down to it.
+    expect(computeAnchorVerifyCorrection(610, 610, 600, 0.5)).toBe(600)
   })
 
   test('the movement guard proceeds on a landed short final tick', () => {

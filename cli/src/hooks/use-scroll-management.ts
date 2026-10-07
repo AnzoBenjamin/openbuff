@@ -42,6 +42,33 @@ export const computeAutoScrollTarget = (
   return null
 }
 
+/**
+ * Whether the auto-scroll effect may skip a non-null computeAutoScrollTarget
+ * write (see the messages effect in useChatScrollbox): skip when the current
+ * position is already within `epsilon` of the target. computeAutoScrollTarget
+ * only returns null on EXACT equality (position === maxScroll), but during
+ * streaming the transient maxScroll can sit a fraction of a row above the
+ * integer-rounded position, so the effect re-wrote the same visual position
+ * on every messages change; when the layout settled at a LOWER maxScroll the
+ * clamped-then-re-clamped position snapped the viewport back up. Skipping
+ * the within-epsilon write breaks that transient-clamp-then-snap cycle.
+ *
+ * The clamp path is exempt: a position ABOVE maxScroll is outside the box's
+ * valid range, so the clamp is a legitimate safety write that must still
+ * fire even within epsilon. Exported for direct unit testing.
+ */
+export const shouldSkipAutoScrollWrite = (
+  position: number,
+  target: number,
+  maxScroll: number,
+  epsilon: number,
+): boolean => {
+  // The clamp path (a position above maxScroll) is a legitimate safety
+  // write: it must fire even when the clamp distance is within epsilon.
+  if (position > maxScroll) return false
+  return Math.abs(position - target) <= epsilon
+}
+
 // Animation constants
 const ANIMATION_FRAME_INTERVAL_MS = 16 // ~60fps
 const DEFAULT_SCROLL_ANIMATION_DURATION_MS = 200
@@ -129,6 +156,14 @@ export const clampScrollValue = (value: number, maxScroll: number): number => {
 }
 
 /**
+ * Desired destination for an anchor-verification chain whose goal is the
+ * SETTLED bottom rather than a fixed offset (the width-change re-pin path:
+ * see scrollToLatest and completionVerifyDesired); it re-clamps to whatever
+ * the settled maxScroll is once the re-wrapped child layout commits.
+ */
+export const VERIFY_SETTLED_BOTTOM = Number.POSITIVE_INFINITY
+
+/**
  * One deferred anchor-verification pass (see adjustScrollTop): re-clamp the
  * anchor's desired scroll position against the CURRENT maxScroll and return
  * the scrollTop to write, or null when the settled position already matches
@@ -141,18 +176,23 @@ export const computeAnchorVerifyCorrection = (
   maxScroll: number,
   epsilon: number,
 ): number | null => {
+  // The settled-bottom desired (VERIFY_SETTLED_BOTTOM) is one-directional:
+  // it only ever pushes the position UP toward a settled bottom that lies
+  // below the current position (the width-change re-pin path, where the
+  // re-wrapped layout landed after the ease started and the final tick
+  // stopped short of the grown bottom). When the settled maxScroll is
+  // BELOW the position, the position overshot a transient bottom the ease
+  // pinned it to (streaming growth bumped maxScroll, then the
+  // estimate-to-real transition collapsed it back); pulling the position
+  // down to the settled maxScroll is the visible snap-back-up glitch, so
+  // no correction is applied — the box's own re-clamp settles it.
+  if (desired === VERIFY_SETTLED_BOTTOM && maxScroll < scrollTop) {
+    return null
+  }
   const target = clampScrollValue(desired, maxScroll)
   if (Math.abs(scrollTop - target) <= epsilon) return null
   return target
 }
-
-/**
- * Desired destination for an anchor-verification chain whose goal is the
- * SETTLED bottom rather than a fixed offset (the width-change re-pin path:
- * see scrollToLatest and completionVerifyDesired); it re-clamps to whatever
- * the settled maxScroll is once the re-wrapped child layout commits.
- */
-export const VERIFY_SETTLED_BOTTOM = Number.POSITIVE_INFINITY
 
 /** Verdict of the anchor-verify movement guard for one deferred pass. */
 export type AnchorVerifyGuardVerdict =
@@ -1347,7 +1387,25 @@ export const useChatScrollbox = (
           autoScrollEnabledRef.current,
           isUserCollapsing(),
         )
-        if (target !== null) {
+        // Skip the write when the position is already within epsilon of
+        // the target (see shouldSkipAutoScrollWrite):
+        // computeAutoScrollTarget only returns null on exact equality, and
+        // re-writing the same visual position on every messages change pins
+        // the position to a TRANSIENT maxScroll — when the layout settles
+        // lower, the re-clamp snaps the viewport back up. The clamp path
+        // (position > maxScroll) is a legitimate safety write and is never
+        // skipped. Skipping also leaves the pending anchor-verify chain
+        // untouched, which is correct: its own pass handles any residual.
+        const position = scrollbox.verticalScrollBar.scrollPosition
+        if (
+          target !== null &&
+          !shouldSkipAutoScrollWrite(
+            position,
+            target,
+            maxScroll,
+            ANCHOR_VERIFY_EPSILON,
+          )
+        ) {
           // The write helper keeps the flag armed only when the write moves
           // the position: a no-op assignment emits no 'change' event, which
           // would leave the flag armed and misattribute the next genuine user
