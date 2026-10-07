@@ -516,20 +516,30 @@ function serializeSchemaMemberForTransport(
     return value
   }
   try {
-    return z.toJSONSchema(value as z.ZodType, { io })
+    // unrepresentable: 'any' — convertJsonSchemaToZod builds a base union
+    // containing a z.custom(...) object-branch for type-less members under
+    // anyOf (e.g. the bundled code-reviewer outputSchema's
+    // findings.items.anyOf), and zod-v4's JSON-Schema generator throws on
+    // custom types by default ("Custom types cannot be represented in JSON
+    // Schema"). 'any' emits `{}` for exactly those degenerate branches while
+    // preserving every representable part of the schema (properties,
+    // required, anyOf/allOf structure), so the transported member keeps its
+    // validation strictness instead of collapsing to a permissive husk. The
+    // degenerate `{}` branch sits under the parent's allOf object branch, so
+    // objectness is still enforced by the surrounding structure.
+    return z.toJSONSchema(value as z.ZodType, {
+      io,
+      unrepresentable: 'any',
+    })
   } catch {
-    // z.toJSONSchema throws on non-JSON-expressible zod types (e.g.
-    // z.function(), or the z.intersection(...) that convertJsonSchemaToZod
-    // produces for the bundled code-reviewer outputSchema and
-    // context-pruner params). Leaving the original member in place is NOT
-    // safe here: this request crosses the JSON.stringify spawn boundary and
-    // zod internals are not own-enumerable, so stringify degrades the live
-    // schema into a husk that crashes asSchema in the child. Return a
-    // permissive JSON-Schema fallback for both io modes instead — the child
-    // re-coerces it through coerceJsonSchemaMember into a valid, live zod
-    // schema. This loses member-specific validation strictness (spawnParams
-    // accept more than the original schema allowed), but a working agent
-    // beats a crashed one.
+    // Last-resort guard for schemas even 'any' cannot express. Returning the
+    // live zod member is NOT safe: this request crosses the JSON.stringify
+    // spawn boundary and zod internals are not own-enumerable, so stringify
+    // degrades the live schema into a husk that crashes asSchema in the
+    // child. A permissive JSON-Schema fallback keeps the spawn alive — the
+    // child re-coerces it through coerceJsonSchemaMember into a valid, live
+    // zod schema — at the cost of losing member-specific validation
+    // strictness. A working agent beats a crashed one.
     return { type: 'object' }
   }
 }
@@ -542,11 +552,13 @@ function serializeSchemaMemberForTransport(
  * handleSteps. The child re-coerces plain JSON-Schema members back to zod
  * (ensureAgentTemplateZodSchemas via coerceJsonSchemaMember) and materializes
  * string handleSteps via new Function for trusted executionSources, so the
- * transport form is JSON-Schema objects plus string handleSteps. Members that
- * cannot be expressed as JSON Schema are replaced with a permissive
- * `{ type: 'object' }` fallback — leaving the live zod member in place would
- * let JSON.stringify degrade it into a husk that crashes the child's
- * asSchema. Templates that need no conversion
+ * transport form is JSON-Schema objects plus string handleSteps. Live zod
+ * members serialize through z.toJSONSchema with `unrepresentable: 'any'` so
+ * pipeline-produced schemas (including the z.custom base-union branches
+ * convertJsonSchemaToZod emits) keep their full structure; schemas even that
+ * cannot express fall back to a permissive `{ type: 'object' }` — leaving
+ * the live zod member in place would let JSON.stringify degrade it into a
+ * husk that crashes the child's asSchema. Templates that need no conversion
  * are returned by reference so large bundled catalogs stay identity-stable.
  */
 export function serializeAgentTemplatesForTransport(

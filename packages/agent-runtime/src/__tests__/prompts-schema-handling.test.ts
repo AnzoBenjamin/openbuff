@@ -1190,16 +1190,15 @@ describe('Schema handling error recovery', () => {
       )
     })
 
-    test('non-JSON-expressible zod schemas transport as a permissive JSON-Schema fallback, not a crash husk', () => {
+    test('pipeline intersection schemas transport with full structure, not a permissive husk', () => {
       // The bundled code-reviewer outputSchema hits exactly this shape after
-      // convertJsonSchemaToZod (z.intersection over an anyOf), which zod-v4
-      // z.toJSONSchema rejects. Guard the setup so the test stays honest
-      // about which schemas take the fallback path.
-      // Build the non-expressible schema exactly the way the pipeline does:
-      // convertJsonSchemaToZod turns the code-reviewer findings anyOf into a
-      // z.intersection that zod-v4 z.toJSONSchema rejects. A DIRECT
-      // z.intersection(...) serializes fine, so the honesty guard must use
-      // the real pipeline output.
+      // convertJsonSchemaToZod: a base union containing a z.custom object
+      // branch intersected with the anyOf union. Plain z.toJSONSchema options
+      // throw on the custom branch ("Custom types cannot be represented in
+      // JSON Schema"), which is the honesty guard below — the transport
+      // serializer passes unrepresentable:'any' so the full structure
+      // (properties/required/anyOf/allOf) survives the spawn boundary and
+      // only the degenerate custom branch degrades to {}.
       const nonExpressible = convertJsonSchemaToZod({
         type: 'object',
         properties: {
@@ -1229,8 +1228,9 @@ describe('Schema handling error recovery', () => {
         'transport-agent': template,
       })['transport-agent']
 
-      // Never the live zod member: JSON.stringify would degrade it into the
-      // husk shape that crashes asSchema in the child.
+      // The transported members keep their validation structure: never the
+      // bare permissive { type: 'object' } husk, and never the live zod
+      // member (whose JSON.stringify would crash asSchema in the child).
       const transportedParams = transported.inputSchema?.params as unknown as Record<
         string,
         unknown
@@ -1239,8 +1239,17 @@ describe('Schema handling error recovery', () => {
         string,
         unknown
       >
-      expect(transportedParams).toEqual({ type: 'object' })
-      expect(transportedOutput).toEqual({ type: 'object' })
+      expect(transportedParams).not.toEqual({ type: 'object' })
+      expect(transportedOutput).not.toEqual({ type: 'object' })
+      expect(transportedOutput).toMatchObject({
+        type: 'object',
+        required: ['findings'],
+      })
+      const findings = (transportedOutput.properties as Record<
+        string,
+        unknown
+      >).findings as Record<string, unknown>
+      expect(findings.type).toBe('array')
 
       // Both members are plain JSON-Schema objects that round-trip the
       // JSON.stringify spawn boundary unchanged.
