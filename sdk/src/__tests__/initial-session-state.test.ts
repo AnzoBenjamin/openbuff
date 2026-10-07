@@ -11,7 +11,7 @@ import {
   beforeEach,
   mock,
 } from 'bun:test'
-import { getFileTokenScores } from '@codebuff/code-map/parse'
+import * as codeMapParse from '@codebuff/code-map/parse'
 import { z } from 'zod/v4'
 
 import {
@@ -786,9 +786,10 @@ describe('Initial Session State', () => {
     // unbounded wall-clock time in the tree-sitter pass.
     expect(SESSION_STATE_MAX_TOTAL_PARSE_BYTES).toBe(64_000_000)
 
-    const realGetFileTokenScores = getFileTokenScores
+    const realParse = { ...codeMapParse }
     const calls: unknown[][] = []
     mock.module('@codebuff/code-map/parse', () => ({
+      ...realParse,
       getFileTokenScores: async (...callArgs: unknown[]) => {
         calls.push(callArgs)
         return {
@@ -821,14 +822,12 @@ describe('Initial Session State', () => {
       })
       expect(sessionState.fileContext.fileTokenScores).toBeDefined()
     } finally {
-      mock.module('@codebuff/code-map/parse', () => ({
-        getFileTokenScores: realGetFileTokenScores,
-      }))
+      mock.module('@codebuff/code-map/parse', () => ({ ...realParse }))
     }
   })
 
   test('logs debug when session-state parse budget truncates token scoring', async () => {
-    const realGetFileTokenScores = getFileTokenScores
+    const realParse = { ...codeMapParse }
     const debugCalls: Array<{ payload: unknown; message?: string }> = []
     const capturingLogger: Logger = {
       ...mockLogger,
@@ -837,6 +836,7 @@ describe('Initial Session State', () => {
       },
     }
     mock.module('@codebuff/code-map/parse', () => ({
+      ...realParse,
       getFileTokenScores: async () => ({
         tokenScores: {},
         tokenCallers: {},
@@ -871,9 +871,7 @@ describe('Initial Session State', () => {
         maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
       })
     } finally {
-      mock.module('@codebuff/code-map/parse', () => ({
-        getFileTokenScores: realGetFileTokenScores,
-      }))
+      mock.module('@codebuff/code-map/parse', () => ({ ...realParse }))
     }
   })
 })
