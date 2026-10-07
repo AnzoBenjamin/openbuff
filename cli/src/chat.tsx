@@ -279,6 +279,8 @@ export const Chat = ({
     scrollToLatest,
     scrollUp,
     scrollDown,
+    adjustScrollTop,
+    isAtBottomNow,
     appliedScrollboxProps,
     isAtBottom,
     hasOverflow,
@@ -1879,6 +1881,9 @@ export const Chat = ({
           scrollRef={scrollRef}
           availableWidth={messageAvailableWidth}
           hasLoadPrevious={hiddenMessageCount > 0}
+          adjustScrollTop={adjustScrollTop}
+          isAtBottomNow={isAtBottomNow}
+          scrollToLatest={scrollToLatest}
         />
         {/* Pending bash messages as ghost messages (only show those not already in history) */}
         {pendingBashMessages

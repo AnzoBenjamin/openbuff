@@ -1,10 +1,10 @@
-import { memo, useMemo } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { MessageWithAgents } from './message-with-agents'
 import { useViewportWindow } from '../hooks/use-viewport-window'
 
 import type { ChatMessage } from '../types/chat'
-import type { ScrollBoxRenderable } from '@opentui/core'
+import type { BoxRenderable, ScrollBoxRenderable } from '@opentui/core'
 
 interface MessageListWindowProps {
   /** Paginated/collapsed top-level messages, in render order. */
@@ -15,6 +15,12 @@ interface MessageListWindowProps {
   availableWidth: number
   /** Whether the LoadPreviousButton row is rendered above the list. */
   hasLoadPrevious: boolean
+  /** Compensating scroll writer for above-viewport height changes. */
+  adjustScrollTop: (delta: number, opts?: { follow?: boolean }) => void
+  /** Imperative at-bottom probe (drives width-change re-pinning). */
+  isAtBottomNow: () => boolean
+  /** Re-pin to the bottom after a width change when at bottom. */
+  scrollToLatest: () => void
 }
 
 /**
@@ -39,15 +45,65 @@ export const MessageListWindow = memo(
     scrollRef,
     availableWidth,
     hasLoadPrevious,
+    adjustScrollTop,
+    isAtBottomNow,
+    scrollToLatest,
   }: MessageListWindowProps) => {
-    const { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight } =
-      useViewportWindow({
-        scrollRef,
-        messages,
-        availableWidth,
-        headerHeight: 1,
-        hasLoadPrevious,
-      })
+    const {
+      startIndex,
+      endIndex,
+      topSpacerHeight,
+      bottomSpacerHeight,
+      registerMeasurement,
+    } = useViewportWindow({
+      scrollRef,
+      messages,
+      availableWidth,
+      headerHeight: 1,
+      hasLoadPrevious,
+      adjustScrollTop,
+      isAtBottomNow,
+      scrollToLatest,
+    })
+
+    // Stable per-message ref callbacks for the measurement wrappers. An
+    // inline arrow inside the map gets a new identity on every render, so
+    // React detaches (null) and re-attaches (node) every wrapper's ref on
+    // each parent render — under streaming that churn re-runs the
+    // measurement attach path on a re-render cadence and (in the hook's
+    // registerMeasurement) resets the bounded zero-height retry budget, so
+    // the 'bounded' retry chain never exhausts. Cache one callback per
+    // message id; the cached closure reads only the latest
+    // registerMeasurement through a ref so its identity never goes stale
+    // (the capture itself reads the live width at capture time — see
+    // createMeasurementCapture — so re-measures after a terminal width
+    // change are tagged with the new width even though the ref callback is
+    // never re-created), and entries are pruned for messages that leave the
+    // list.
+    const registerMeasurementRef = useRef(registerMeasurement)
+    registerMeasurementRef.current = registerMeasurement
+    const measurementRefsRef = useRef(
+      new Map<string, (node: BoxRenderable | null) => void>(),
+    )
+    const getMeasurementRef = useCallback(
+      (id: string): ((node: BoxRenderable | null) => void) => {
+        let refCallback = measurementRefsRef.current.get(id)
+        if (!refCallback) {
+          refCallback = (node: BoxRenderable | null) => {
+            registerMeasurementRef.current(id, node)
+          }
+          measurementRefsRef.current.set(id, refCallback)
+        }
+        return refCallback
+      },
+      [],
+    )
+    useEffect(() => {
+      const liveIds = new Set(messages.map((message) => message.id))
+      for (const id of measurementRefsRef.current.keys()) {
+        if (!liveIds.has(id)) measurementRefsRef.current.delete(id)
+      }
+    }, [messages])
 
     const windowedMessages = useMemo(
       () => messages.slice(startIndex, endIndex + 1),
@@ -57,7 +113,8 @@ export const MessageListWindow = memo(
     return (
       <>
         {/* Spacer preserving the scroll height of the windowed-out messages
-            above the viewport. */}
+            above the viewport (relative to the content area; the fixed header
+            is already excluded by the hook). */}
         {topSpacerHeight > 0 && (
           <box style={{ height: topSpacerHeight, flexShrink: 0 }} />
         )}
@@ -65,13 +122,22 @@ export const MessageListWindow = memo(
           const absoluteIdx = startIndex + windowedIdx
           const isLast = absoluteIdx === messages.length - 1
           return (
-            <MessageWithAgents
+            // Measurable host wrapper: captures the message's real rendered
+            // height (and re-measures on resize) so off-screen spacers use
+            // real heights instead of estimates. flexShrink: 0 keeps the
+            // wrapper at its natural height inside the column scrollbox.
+            <box
               key={message.id}
-              message={message}
-              depth={0}
-              isLastMessage={isLast}
-              availableWidth={availableWidth}
-            />
+              style={{ flexShrink: 0 }}
+              ref={getMeasurementRef(message.id)}
+            >
+              <MessageWithAgents
+                message={message}
+                depth={0}
+                isLastMessage={isLast}
+                availableWidth={availableWidth}
+              />
+            </box>
           )
         })}
         {/* Spacer preserving the scroll height of the windowed-out messages
