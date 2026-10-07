@@ -386,6 +386,35 @@ function convertInputSchema(
 }
 
 /**
+ * Detect a degraded zod-v4 "husk": an object that crossed a JSON.stringify
+ * boundary carrying zod's `~standard` standard-schema interface marker but
+ * none of the live internals (`_zod`, `safeParse`). `~standard` is zod-v4's
+ * runtime interface marker, not a JSON-Schema keyword, so a plain
+ * JSON-Schema object never carries it — keying detection on `~standard`
+ * (never on `def`, which legitimate JSON Schemas may contain) keeps real
+ * JSON Schema out of this path. A husk is neither a live schema nor
+ * trustworthy JSON Schema, and feeding it to the AI SDK's `asSchema` routes
+ * it to the zod-v3 converter, which reads `def.typeName` on undefined and
+ * crashes the spawn with "undefined is not an object (evaluating
+ * 'H.typeName')".
+ */
+function isDegradedZodHusk(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const record = value as {
+    '~standard'?: unknown
+    _zod?: unknown
+    safeParse?: unknown
+  }
+  return (
+    Object.prototype.hasOwnProperty.call(record, '~standard') &&
+    record._zod === undefined &&
+    typeof record.safeParse !== 'function'
+  )
+}
+
+/**
  * Coerce a single agent-template schema member into a zod schema.
  *
  * Templates that cross a JSON serialization boundary — bundled agents built
@@ -395,7 +424,11 @@ function convertInputSchema(
  * `asSchema` routes it to the zod-v3 converter, which reads
  * `schema._def.typeName` on undefined and crashes the run. Values that are
  * already zod (v4 `_zod` marker, or a `safeParse` function) are returned
- * unchanged so zod members are never double-converted.
+ * unchanged so zod members are never double-converted. Degraded zod-v4 husks
+ * (see isDegradedZodHusk) are neither live zod nor trustworthy JSON Schema:
+ * they are re-converted from their own shape when possible, falling back to
+ * a permissive `{ type: 'object' }` conversion so a husk NEVER survives to
+ * the model surface as a non-zod object.
  */
 export function coerceJsonSchemaMember(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -404,6 +437,20 @@ export function coerceJsonSchemaMember(value: unknown): unknown {
   const record = value as { _zod?: unknown; safeParse?: unknown }
   if (record._zod !== undefined || typeof record.safeParse === 'function') {
     return value
+  }
+  if (isDegradedZodHusk(value)) {
+    try {
+      const converted = convertJsonSchemaToZod(
+        value as Record<string, unknown>,
+      )
+      if (converted && typeof converted === 'object') {
+        return converted
+      }
+    } catch {
+      // The husk shape is not valid JSON Schema — fall through to the
+      // permissive fallback below.
+    }
+    return convertJsonSchemaToZod({ type: 'object' })
   }
   return convertJsonSchemaToZod(value as Record<string, unknown>)
 }
@@ -472,9 +519,18 @@ function serializeSchemaMemberForTransport(
     return z.toJSONSchema(value as z.ZodType, { io })
   } catch {
     // z.toJSONSchema throws on non-JSON-expressible zod types (e.g.
-    // z.function()); leaving the original member is no worse than the
-    // status quo and never crashes the spawn.
-    return value
+    // z.function(), or the z.intersection(...) that convertJsonSchemaToZod
+    // produces for the bundled code-reviewer outputSchema and
+    // context-pruner params). Leaving the original member in place is NOT
+    // safe here: this request crosses the JSON.stringify spawn boundary and
+    // zod internals are not own-enumerable, so stringify degrades the live
+    // schema into a husk that crashes asSchema in the child. Return a
+    // permissive JSON-Schema fallback for both io modes instead — the child
+    // re-coerces it through coerceJsonSchemaMember into a valid, live zod
+    // schema. This loses member-specific validation strictness (spawnParams
+    // accept more than the original schema allowed), but a working agent
+    // beats a crashed one.
+    return { type: 'object' }
   }
 }
 
@@ -487,8 +543,10 @@ function serializeSchemaMemberForTransport(
  * (ensureAgentTemplateZodSchemas via coerceJsonSchemaMember) and materializes
  * string handleSteps via new Function for trusted executionSources, so the
  * transport form is JSON-Schema objects plus string handleSteps. Members that
- * cannot be expressed as JSON Schema are left untouched — no worse than the
- * status quo, and never crashes the spawn. Templates that need no conversion
+ * cannot be expressed as JSON Schema are replaced with a permissive
+ * `{ type: 'object' }` fallback — leaving the live zod member in place would
+ * let JSON.stringify degrade it into a husk that crashes the child's
+ * asSchema. Templates that need no conversion
  * are returned by reference so large bundled catalogs stay identity-stable.
  */
 export function serializeAgentTemplatesForTransport(

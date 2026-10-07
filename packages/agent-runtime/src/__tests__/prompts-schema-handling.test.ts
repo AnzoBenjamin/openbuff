@@ -326,6 +326,42 @@ describe('Schema handling error recovery', () => {
       )
       expect(result.outputSchema!.safeParse({ answer: 'x' }).success).toBe(true)
     })
+
+    test('ensureAgentTemplateZodSchemas re-coerces degraded zod-v4 husks into live zod schemas', () => {
+      // Shape JSON.stringify produces when a live zod-v4 schema is left on
+      // the spawn transport boundary: the ~standard standard-schema marker
+      // survives as an own property, but the non-enumerable _zod internals
+      // and safeParse are gone. Such a husk is neither live zod nor valid
+      // JSON Schema, and feeding it to asSchema crashes on def.typeName.
+      const husk = {
+        '~standard': { validate: () => {} },
+        def: {},
+        type: 'string',
+      }
+      const template = {
+        id: 'husk-agent',
+        inputSchema: { prompt: { ...husk }, params: { ...husk } },
+        outputSchema: { ...husk },
+      } as unknown as AgentTemplate
+
+      const result = ensureAgentTemplateZodSchemas(template)
+
+      const isLiveZod = (member: unknown) => {
+        const record = member as
+          | { _zod?: unknown; safeParse?: unknown }
+          | undefined
+        return (
+          !!record &&
+          (record._zod !== undefined || typeof record.safeParse === 'function')
+        )
+      }
+      // The husk never survives to the model surface as a non-zod object.
+      expect(isLiveZod(result.inputSchema?.prompt)).toBe(true)
+      expect(isLiveZod(result.inputSchema?.params)).toBe(true)
+      expect(isLiveZod(result.outputSchema)).toBe(true)
+      expect(result.inputSchema?.prompt).not.toBe(husk)
+      expect(result.outputSchema).not.toBe(husk)
+    })
   })
 
   describe('direct agent control envelope', () => {
@@ -1154,30 +1190,155 @@ describe('Schema handling error recovery', () => {
       )
     })
 
-    test('leaves non-JSON-expressible zod schemas untouched instead of throwing', () => {
-      const problematicParams = z.function()
-      const problematicOutput = z.function()
+    test('non-JSON-expressible zod schemas transport as a permissive JSON-Schema fallback, not a crash husk', () => {
+      // The bundled code-reviewer outputSchema hits exactly this shape after
+      // convertJsonSchemaToZod (z.intersection over an anyOf), which zod-v4
+      // z.toJSONSchema rejects. Guard the setup so the test stays honest
+      // about which schemas take the fallback path.
+      // Build the non-expressible schema exactly the way the pipeline does:
+      // convertJsonSchemaToZod turns the code-reviewer findings anyOf into a
+      // z.intersection that zod-v4 z.toJSONSchema rejects. A DIRECT
+      // z.intersection(...) serializes fine, so the honesty guard must use
+      // the real pipeline output.
+      const nonExpressible = convertJsonSchemaToZod({
+        type: 'object',
+        properties: {
+          findings: {
+            type: 'array',
+            items: {
+              anyOf: [{ type: 'string' }, { type: 'object' }],
+            },
+          },
+        },
+        required: ['findings'],
+      })
+      expect(() =>
+        z.toJSONSchema(nonExpressible as z.ZodType, { io: 'output' }),
+      ).toThrow()
+
       const template = makeTransportTemplate({
         inputSchema: {
           params:
-            problematicParams as unknown as AgentTemplate['inputSchema']['params'],
+            nonExpressible as unknown as AgentTemplate['inputSchema']['params'],
         },
         outputSchema:
-          problematicOutput as unknown as AgentTemplate['outputSchema'],
+          nonExpressible as unknown as AgentTemplate['outputSchema'],
       })
 
       const transported = serializeAgentTemplatesForTransport({
         'transport-agent': template,
+      })['transport-agent']
+
+      // Never the live zod member: JSON.stringify would degrade it into the
+      // husk shape that crashes asSchema in the child.
+      const transportedParams = transported.inputSchema?.params as unknown as Record<
+        string,
+        unknown
+      >
+      const transportedOutput = transported.outputSchema as unknown as Record<
+        string,
+        unknown
+      >
+      expect(transportedParams).toEqual({ type: 'object' })
+      expect(transportedOutput).toEqual({ type: 'object' })
+
+      // Both members are plain JSON-Schema objects that round-trip the
+      // JSON.stringify spawn boundary unchanged.
+      expect(JSON.parse(JSON.stringify(transportedParams))).toEqual(
+        transportedParams,
+      )
+      expect(JSON.parse(JSON.stringify(transportedOutput))).toEqual(
+        transportedOutput,
+      )
+    })
+
+    test('code-reviewer-shaped template survives the full JSON round-trip with asSchema-live members', async () => {
+      // Reproduces the real crash: the bundled code-reviewer outputSchema
+      // (findings.items anyOf [string, object]) converts to an intersection
+      // that z.toJSONSchema rejects, and context-pruner-shaped params (anyOf
+      // over optional fields) hit the same throw. Before the fix the live
+      // zod member was left in place, degraded into a husk by JSON.stringify
+      // across the spawn boundary, and crashed asSchema in the child with
+      // "undefined is not an object (evaluating 'H.typeName')".
+      const findingsJsonSchema = {
+        type: 'object',
+        properties: {
+          findings: {
+            type: 'array',
+            items: {
+              anyOf: [{ type: 'string' }, { type: 'object' }],
+            },
+          },
+        },
+        required: ['findings'],
+      }
+      const paramsJsonSchema = {
+        type: 'object',
+        properties: {
+          instructions: {
+            anyOf: [{ type: 'string' }, { type: 'null' }],
+          },
+        },
+      }
+      const outputZod = convertJsonSchemaToZod(
+        findingsJsonSchema as Parameters<typeof convertJsonSchemaToZod>[0],
+      )
+      expect(() => z.toJSONSchema(outputZod, { io: 'output' })).toThrow()
+
+      const template = makeTransportTemplate({
+        inputSchema: {
+          prompt: convertJsonSchemaToZod({ type: 'string' }),
+          params: convertJsonSchemaToZod(
+            paramsJsonSchema as Parameters<typeof convertJsonSchemaToZod>[0],
+          ),
+        },
+        outputSchema: outputZod as unknown as AgentTemplate['outputSchema'],
       })
 
-      // The try/catch fallback keeps the original member so behavior is
-      // never worse than the status quo.
-      expect(transported['transport-agent'].inputSchema?.params).toBe(
-        problematicParams,
-      )
-      expect(transported['transport-agent'].outputSchema).toBe(
-        problematicOutput,
-      )
+      const transportedRecord = serializeAgentTemplatesForTransport({
+        'code-reviewer': template,
+      })
+      // The exact spawn boundary: JSON.stringify → JSON.parse. The REQUEST
+      // RECORD is stringified and the template looked up by id afterwards.
+      const roundTripped = JSON.parse(
+        JSON.stringify(transportedRecord),
+      )['code-reviewer']
+      const resolved = ensureAgentTemplateZodSchemas(roundTripped)
+
+      const isLiveZod = (member: unknown) => {
+        const record = member as
+          | { _zod?: unknown; safeParse?: unknown }
+          | undefined
+        return (
+          !!record &&
+          (record._zod !== undefined || typeof record.safeParse === 'function')
+        )
+      }
+      // Every schema member reaches the child as a live zod schema.
+      expect(isLiveZod(resolved.inputSchema?.prompt)).toBe(true)
+      expect(isLiveZod(resolved.inputSchema?.params)).toBe(true)
+      expect(isLiveZod(resolved.outputSchema)).toBe(true)
+
+      // asSchema (imported by sdk/src/impl/llm.ts from
+      // @ai-sdk/provider-utils) is what crashed on the husk. Skip the
+      // sub-assertion when the module is not resolvable from this package's
+      // tests — the live-zod assertions above still pin the regression.
+      let asSchemaFn: ((schema: unknown) => unknown) | undefined
+      try {
+        const mod = await import('@ai-sdk/provider-utils')
+        asSchemaFn = mod.asSchema as (schema: unknown) => unknown
+      } catch {
+        // Module not resolvable from agent-runtime tests.
+      }
+      if (asSchemaFn) {
+        expect(() =>
+          asSchemaFn(resolved.inputSchema?.prompt as unknown),
+        ).not.toThrow()
+        expect(() =>
+          asSchemaFn(resolved.inputSchema?.params as unknown),
+        ).not.toThrow()
+        expect(() => asSchemaFn(resolved.outputSchema as unknown)).not.toThrow()
+      }
     })
   })
 })
