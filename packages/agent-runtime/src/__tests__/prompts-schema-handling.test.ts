@@ -2,6 +2,7 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { toolParams } from '@codebuff/common/tools/list'
 import { describe, test, expect, mock } from 'bun:test'
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
+import { ensureAgentTemplateZodSchemas } from '@codebuff/common/templates/agent-validation'
 import { z } from 'zod/v4'
 
 import { additionalSystemPrompts } from '../system-prompt/prompts'
@@ -229,6 +230,98 @@ describe('Schema handling error recovery', () => {
 
       // Should return a valid schema
       expect(() => z.toJSONSchema(inputSchema, { io: 'input' })).not.toThrow()
+    })
+
+    test('buildAgentToolInputSchema coerces plain JSON-Schema members across the JSON boundary', () => {
+      // Bundled/bridged templates lose their zod prototype in a
+      // JSON.stringify round-trip and arrive as plain JSON-Schema objects;
+      // feeding those to asSchema crashes on schema._def.typeName.
+      const agentTemplate: AgentTemplate = {
+        id: 'bridged-agent',
+        displayName: 'Bridged Agent',
+        spawnerPrompt: 'Run a bridged task',
+        model: 'gpt-4o-mini',
+        inputSchema: {
+          prompt: { type: 'string', description: 'The task prompt' },
+          params: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+          },
+        } as unknown as AgentTemplate['inputSchema'],
+        outputMode: 'last_message',
+        includeMessageHistory: false,
+        inheritParentSystemPrompt: false,
+        mcpServers: {},
+        toolNames: [],
+        spawnableAgents: [],
+        systemPrompt: '',
+        instructionsPrompt: '',
+        stepPrompt: '',
+      }
+
+      const inputSchema = buildAgentToolInputSchema(agentTemplate)
+
+      // asSchema-safe: the members were converted to zod, and the same
+      // payloads the plain JSON schema described still parse.
+      expect(() => z.toJSONSchema(inputSchema, { io: 'input' })).not.toThrow()
+      expect(
+        inputSchema.safeParse({
+          prompt: 'Run it',
+          params: { command: 'pwd' },
+        }).success,
+      ).toBe(true)
+    })
+
+    test('ensureAgentTemplateZodSchemas leaves zod members untouched (no double conversion)', () => {
+      const promptSchema = z.string()
+      const paramsSchema = z.object({ command: z.string() })
+      const outputSchema = z.object({ answer: z.string() })
+      const template = {
+        id: 'zod-agent',
+        inputSchema: { prompt: promptSchema, params: paramsSchema },
+        outputSchema,
+      } as unknown as AgentTemplate
+
+      const result = ensureAgentTemplateZodSchemas(template)
+
+      // Identity-preserving: already-zod members are never re-wrapped.
+      expect(result).toBe(template)
+      expect(result.inputSchema.prompt).toBe(promptSchema)
+      expect(result.inputSchema.params).toBe(paramsSchema)
+      expect(result.outputSchema).toBe(outputSchema)
+    })
+
+    test('ensureAgentTemplateZodSchemas converts plain JSON-Schema members and preserves payloads', () => {
+      const template = {
+        id: 'json-agent',
+        inputSchema: {
+          prompt: { type: 'string' },
+          params: {
+            type: 'object',
+            properties: { q: { type: 'string' } },
+            required: ['q'],
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+          required: ['answer'],
+        },
+      } as unknown as AgentTemplate
+
+      const result = ensureAgentTemplateZodSchemas(template)
+
+      expect(typeof result.inputSchema.prompt?.safeParse).toBe('function')
+      expect(typeof result.inputSchema.params?.safeParse).toBe('function')
+      expect(typeof result.outputSchema?.safeParse).toBe('function')
+      // The converted schemas accept the same payloads the plain JSON schema
+      // described.
+      expect(result.inputSchema.prompt!.safeParse('hello').success).toBe(true)
+      expect(result.inputSchema.params!.safeParse({ q: 'x' }).success).toBe(
+        true,
+      )
+      expect(result.outputSchema!.safeParse({ answer: 'x' }).success).toBe(true)
     })
   })
 

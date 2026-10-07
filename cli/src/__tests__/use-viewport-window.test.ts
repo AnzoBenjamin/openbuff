@@ -23,6 +23,7 @@ import {
   classifyAnchorVerifyStepGate,
   classifyAnimationFoldGate,
   classifyAnimationRearmGate,
+  classifyScrollChangeMovement,
   clampScrollValue,
   coalesceAnchorVerifyDesired,
   computeAnimationFrameScroll,
@@ -766,6 +767,44 @@ const makeQuantizedBox = (before: number, landed: number): FakeScrollbox => {
     },
   }
 }
+
+describe('classifyScrollChangeMovement', () => {
+  // The same epsilon every other position comparison in this data flow uses
+  // (ANCHOR_VERIFY_EPSILON = 0.5 in use-scroll-management).
+  const EPSILON = 0.5
+
+  test('a real position movement is moved (keeps genuine-scroll re-arm behavior)', () => {
+    // The 'moved' verdict is what drives the handler's existing genuine-user-
+    // scroll behavior: cancel animation + anchor-verify chain, re-arm follow
+    // = isNearBottom. Both directions of real movement classify as moved.
+    expect(classifyScrollChangeMovement(500, 300, EPSILON)).toBe('moved')
+    expect(classifyScrollChangeMovement(300, 500, EPSILON)).toBe('moved')
+  })
+
+  test('a movement-less change event (transient reflow geometry) is geometry-only', () => {
+    // The regression case: during message-append reflow the geometry is
+    // transient and a 'change' event can fire without the position moving;
+    // re-arming follow on it would snap a scrolled-up user back to the
+    // bottom. The guard classifies it as geometry-only so no re-arm happens.
+    expect(classifyScrollChangeMovement(500, 500, EPSILON)).toBe(
+      'geometry-only',
+    )
+    // Sub-row float drift from the scrollbar source also counts as un-moved
+    // (the same tolerance the other position guards use).
+    expect(classifyScrollChangeMovement(500.4, 500, EPSILON)).toBe(
+      'geometry-only',
+    )
+  })
+
+  test('the boundary at exactly epsilon is geometry-only; beyond it is moved', () => {
+    // |current - lastObserved| == epsilon is within the <= epsilon tolerance
+    // every other position guard in this data flow uses.
+    expect(classifyScrollChangeMovement(500.5, 500, EPSILON)).toBe(
+      'geometry-only',
+    )
+    expect(classifyScrollChangeMovement(500.6, 500, EPSILON)).toBe('moved')
+  })
+})
 
 describe('applyProgrammaticScrollTop', () => {
   const makeFlags = () => ({

@@ -2,6 +2,7 @@ import { coerceToObject } from '@codebuff/common/tools/params/utils'
 import { agentHandoffSchema } from '@codebuff/common/tools/params/tool/spawn-agents'
 import { buildArray } from '@codebuff/common/util/array'
 import { schemaToJsonStr } from '@codebuff/common/util/zod-schema'
+import { coerceJsonSchemaMember } from '@codebuff/common/templates/agent-validation'
 import { z } from 'zod/v4'
 
 import { getAgentTemplate } from './agent-registry'
@@ -169,11 +170,22 @@ export function buildAgentToolInputSchema(
   let schemaFields: Record<string, z.ZodType> = {}
 
   if (inputSchema?.prompt) {
-    schemaFields.prompt = inputSchema.prompt
+    // Defensive: a template that crossed a JSON boundary (bundled agents,
+    // parent→child bridge) can still carry a plain JSON-Schema object here;
+    // asSchema would route it to the zod-v3 converter and crash, so coerce
+    // before wrapping.
+    schemaFields.prompt = coerceJsonSchemaMember(
+      inputSchema.prompt,
+    ) as z.ZodType
   }
 
   if (inputSchema?.params) {
-    schemaFields.params = z.preprocess(coerceToObject, inputSchema.params)
+    // Same JSON-boundary hazard as `prompt` above: the inner schema must be
+    // zod before z.preprocess wraps it.
+    schemaFields.params = z.preprocess(
+      coerceToObject,
+      coerceJsonSchemaMember(inputSchema.params) as z.ZodType,
+    )
   }
 
   schemaFields.handoff = agentHandoffSchema

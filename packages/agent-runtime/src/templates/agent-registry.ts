@@ -1,4 +1,7 @@
-import { validateAgents } from '@codebuff/common/templates/agent-validation'
+import {
+  ensureAgentTemplateZodSchemas,
+  validateAgents,
+} from '@codebuff/common/templates/agent-validation'
 import {
   normalizeAgentIdForLookup,
   parsePublishedAgentId,
@@ -40,12 +43,15 @@ export async function getAgentTemplate(
   } = params
   const normalizedAgentId = normalizeAgentIdForLookup(agentId)
 
-  // 1. Check localAgentTemplates first (dynamic agents + static templates)
+  // 1. Check localAgentTemplates first (dynamic agents + static templates).
+  // Coerce at resolution: templates that crossed a JSON boundary (bundled
+  // agents, parent→child bridge round-trip) arrive with plain JSON-Schema
+  // schema members that crash asSchema on the model surface.
   if (localAgentTemplates[agentId]) {
-    return localAgentTemplates[agentId]
+    return ensureAgentTemplateZodSchemas(localAgentTemplates[agentId])
   }
   if (normalizedAgentId !== agentId && localAgentTemplates[normalizedAgentId]) {
-    return localAgentTemplates[normalizedAgentId]
+    return ensureAgentTemplateZodSchemas(localAgentTemplates[normalizedAgentId])
   }
 
   // 2. Check database cache
@@ -71,12 +77,21 @@ export async function getAgentTemplate(
         parsedAgentId: codebuffParsed,
       })
       if (dbAgent) {
+        // Coerce at resolution (see the local-template branch): database
+        // templates cross a JSON boundary and arrive with plain schema members.
+        const coercedAgent = ensureAgentTemplateZodSchemas(dbAgent)
         // Database agents are untrusted protocol content: mark their MCP
         // configs 'client' so $VAR references are never expanded. The cache
         // stores this same object, so cached copies keep the mark.
-        markAllMCPConfigOrigins(dbAgent.mcpServers, 'client')
-        databaseAgentCache.set(dbAgent.id, dbAgent)
-        return dbAgent
+        markAllMCPConfigOrigins(coercedAgent.mcpServers, 'client')
+        // Cache only specific versions to avoid stale 'latest' results, the
+        // same policy as the main database branch below: an unversioned
+        // fallback lookup resolves 'latest' and must not be pinned in the
+        // cache for the process lifetime.
+        if (codebuffParsed.version && codebuffParsed.version !== 'latest') {
+          databaseAgentCache.set(coercedAgent.id, coercedAgent)
+        }
+        return coercedAgent
       }
     }
     logger.debug({ agentId }, 'getAgentTemplate: Failed to parse agent ID')
@@ -88,17 +103,22 @@ export async function getAgentTemplate(
     ...params,
     parsedAgentId: parsed,
   })
-  if (dbAgent) {
+  // Coerce at resolution (see the local-template branch): database templates
+  // cross a JSON boundary and arrive with plain schema members.
+  const coercedAgent = dbAgent
+    ? ensureAgentTemplateZodSchemas(dbAgent)
+    : dbAgent
+  if (coercedAgent) {
     // Database agents are untrusted protocol content: mark their MCP
     // configs 'client' so $VAR references are never expanded. The cache
     // stores this same object, so cached copies keep the mark.
-    markAllMCPConfigOrigins(dbAgent.mcpServers, 'client')
+    markAllMCPConfigOrigins(coercedAgent.mcpServers, 'client')
   }
-  if (dbAgent && parsed.version && parsed.version !== 'latest') {
+  if (coercedAgent && parsed.version && parsed.version !== 'latest') {
     // Cache only specific versions to avoid stale 'latest' results
-    databaseAgentCache.set(dbAgent.id, dbAgent)
+    databaseAgentCache.set(coercedAgent.id, coercedAgent)
   }
-  return dbAgent
+  return coercedAgent
 }
 
 /**

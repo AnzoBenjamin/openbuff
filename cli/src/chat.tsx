@@ -1827,7 +1827,15 @@ export const Chat = ({
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
-          visible: !isStreaming && !isWaitingForResponse && hasOverflow,
+          // Visibility depends only on hasOverflow: the scrollbar track is a
+          // layout SIBLING of the message content column, so toggling
+          // visibility with streaming state would shift the message wrap
+          // width on every agent-response start AND end while availableWidth
+          // (terminal-derived) stays fixed — silently staling every
+          // width-tagged measured height exactly when a response completes.
+          // Keeping the track in layout whenever content overflows keeps the
+          // content width stable for those measurements.
+          visible: hasOverflow,
           trackOptions: { width: 1 },
         }}
         {...appliedScrollboxProps}

@@ -1909,6 +1909,40 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     supervisedOutcomeRaw === 'truncated'
       ? supervisedOutcomeRaw
       : undefined
+  // Empty-output guard (receipt regression): a child that never called
+  // set_output and produced no harvested answer must never settle as
+  // 'completed' with null output. The empty placeholder
+  // normalizeSpawnedAgentOutput emits — and a blank lastMessage wrapper —
+  // used to read as outcome 'ok' here, so the final status fallback resolved
+  // 'completed' and the parent saw completed-with-null instead of a
+  // retryable failure.
+  const endedWithoutSetOutputOrHarvest =
+    harvestedOutput === undefined || harvestedOutput.noHarvestedAnswer === true
+  const normalizedOutputIsEmptyPlaceholder =
+    normalizedOutputRecord?.partial === true &&
+    normalizedOutputRecord.summary === ''
+  const blankLastMessageOutput =
+    rawOutputRecord?.type === 'lastMessage' &&
+    Array.isArray(rawOutputRecord.value) &&
+    (rawOutputRecord.value as unknown[]).every((message) => {
+      if (!message || typeof message !== 'object') return false
+      const content = (message as Record<string, unknown>).content
+      return (
+        Array.isArray(content) &&
+        content.every((part) => {
+          if (!part || typeof part !== 'object') return false
+          const text = (part as Record<string, unknown>).text
+          return (
+            (part as Record<string, unknown>).type === 'text' &&
+            (typeof text !== 'string' || text.trim().length === 0)
+          )
+        })
+      )
+    })
+  const missingOutputEvidence =
+    rawOutputMissing ||
+    (endedWithoutSetOutputOrHarvest &&
+      (normalizedOutputIsEmptyPlaceholder || blankLastMessageOutput))
   // schema_invalid diagnostic detail: the set_output rejection when one was
   // recorded, else the supervised crash-envelope message that carries the
   // schema_invalid settle detail.
@@ -1927,7 +1961,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
       : (supervisedOutcome ??
         (crashEnvelopeMessage
           ? 'crashed'
-          : rawOutputMissing
+          : missingOutputEvidence
             ? 'missing_output'
             : lastSetOutputErrorText
               ? 'schema_invalid'

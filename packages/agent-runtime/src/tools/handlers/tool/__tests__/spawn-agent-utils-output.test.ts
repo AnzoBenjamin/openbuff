@@ -1071,4 +1071,67 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.status).toBe('failed')
     expect(receipt.errors).toEqual([{ message: 'genuine crash', retryable: false }])
   })
+
+  test('downgrades a round-tripped empty-output placeholder to partial with outcome missing_output', () => {
+    // A null child output normalized parent-side (or across the supervision
+    // bridge) arrives as the empty placeholder; previously its outcome read
+    // 'ok' and the final fallback resolved 'completed' — completed-with-null.
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'file-picker',
+      agentId: 'fp-empty-placeholder',
+      output: {
+        summary: '',
+        partial: true,
+        errorMessage: 'file-picker ended without calling set_output',
+      },
+    })
+    expect(receipt.outcome).toBe('missing_output')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "file-picker receipt outcome 'missing_output': file-picker ended without calling set_output",
+        retryable: true,
+      },
+    ])
+  })
+
+  test('downgrades a blank lastMessage settle to partial with outcome missing_output', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'file-picker',
+      agentId: 'fp-blank-last-message',
+      output: {
+        type: 'lastMessage',
+        value: [{ role: 'assistant', content: [{ type: 'text', text: '   ' }] }],
+      },
+    })
+    expect(receipt.outcome).toBe('missing_output')
+    expect(receipt.status).toBe('partial')
+    expect(
+      receipt.errors.some(
+        (error) =>
+          error.retryable === true && error.message.includes('set_output'),
+      ),
+    ).toBe(true)
+  })
+
+  test('keeps a real set_output value from being downgraded by an empty output envelope', () => {
+    // The empty-output guard keys on the child state having no set_output
+    // value and no harvested answer; a state-backed output is authoritative.
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'file-picker',
+      agentId: 'fp-real-output',
+      output: {
+        summary: '',
+        partial: true,
+        errorMessage: 'stale envelope',
+      },
+      agentState: {
+        messageHistory: [],
+        output: { summary: 'real answer' },
+      } as any,
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+  })
 })

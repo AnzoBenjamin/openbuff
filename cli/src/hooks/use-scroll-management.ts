@@ -274,6 +274,30 @@ export const classifyAnimationRearmGate = (
   return 'owns-loop'
 }
 
+/** Verdict of the scrollbar 'change' movement guard. */
+export type ScrollChangeMovement = 'moved' | 'geometry-only'
+
+/**
+ * Classify a scrollbar 'change' event by how far the position moved since the
+ * last observed event (see handleScrollChange in useChatScrollbox):
+ * 'geometry-only' when the position sits within `epsilon` of the previously
+ * observed value — during message-append reflow the geometry is transient and
+ * a movement-less 'change' event can momentarily report a position within
+ * SCROLL_NEAR_BOTTOM_THRESHOLD of a transient maxScroll; re-arming follow on
+ * such an event would snap a scrolled-up user back to the bottom via the
+ * auto-scroll effect. A real position movement beyond epsilon is 'moved' and
+ * keeps the exact genuine-user-scroll behavior (cancel animation + anchor
+ * verify, re-arm follow = isNearBottom). Exported for direct unit testing.
+ */
+export const classifyScrollChangeMovement = (
+  current: number,
+  lastObserved: number,
+  epsilon: number,
+): ScrollChangeMovement => {
+  if (Math.abs(current - lastObserved) <= epsilon) return 'geometry-only'
+  return 'moved'
+}
+
 /**
  * The desired destination an animation's final tick defers re-verification
  * for (see animateScrollTo in useChatScrollbox): a folded anchor
@@ -547,6 +571,11 @@ export const useChatScrollbox = (
   isUserCollapsing: () => boolean,
 ) => {
   const autoScrollEnabledRef = useRef<boolean>(true)
+  // The last scrollbar position the 'change' handler observed, seeded at
+  // subscribe time with the live position: a movement-less 'change' event
+  // (transient reflow geometry during message-append) must be classifiable
+  // as geometry-only from the very first event after subscription.
+  const lastObservedScrollRef = useRef<number | null>(null)
   const programmaticScrollRef = useRef<boolean>(false)
   const programmaticFollowRef = useRef<boolean>(false)
   const animationFrameRef = useRef<number | null>(null)
@@ -1198,6 +1227,11 @@ export const useChatScrollbox = (
       // event consumed.
       programmaticScrollRef.current = false
       programmaticFollowRef.current = autoScrollEnabledRef.current
+      // Seed the movement guard with the LIVE position: the first post-
+      // subscribe 'change' event must be judged against the position the
+      // subscription attached at, not a stale default, or that first
+      // geometry-only event would be misread as user movement.
+      lastObservedScrollRef.current = scrollbox.verticalScrollBar.scrollPosition
       handleScrollChange = () => {
         const maxScroll = Math.max(
           0,
@@ -1211,9 +1245,32 @@ export const useChatScrollbox = (
           autoScrollEnabledRef.current =
             programmaticFollowRef.current && isNearBottom
           setIsAtBottom(isNearBottom)
+          lastObservedScrollRef.current = current
           return
         }
 
+        // Movement guard: a 'change' event not preceded by a programmatic
+        // write is only a genuine user scroll when the position actually
+        // moved since the last observed event. During message-append reflow
+        // the geometry is transient — the position can momentarily sit within
+        // SCROLL_NEAR_BOTTOM_THRESHOLD of a transient maxScroll — so re-arming
+        // follow on a movement-less event would let the 50ms auto-scroll
+        // effect snap a scrolled-up user back to the bottom. A sub-row user
+        // scroll (<= epsilon) is indistinguishable from geometry-only; that
+        // is accepted.
+        const lastObserved = lastObservedScrollRef.current
+        if (
+          lastObserved !== null &&
+          classifyScrollChangeMovement(
+            current,
+            lastObserved,
+            ANCHOR_VERIFY_EPSILON,
+          ) === 'geometry-only'
+        ) {
+          lastObservedScrollRef.current = current
+          return
+        }
+        lastObservedScrollRef.current = current
         cancelAnimation()
         // A genuine user scroll is a newer scroll intent: cancel the pending
         // anchor-verify chain alongside the animation — a surviving chain

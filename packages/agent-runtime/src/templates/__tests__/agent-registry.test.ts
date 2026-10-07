@@ -29,6 +29,7 @@ import type {
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { DynamicAgentTemplate } from '@codebuff/common/types/dynamic-agent-template'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
+import { DEFAULT_ORG_PREFIX } from '@codebuff/common/util/agent-name-normalization'
 
 let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 
@@ -249,6 +250,149 @@ describe('Agent Registry', () => {
       })
       expect(result).toBeTruthy()
       expect(result?.id).toBe('test-publisher/test-agent@1.0.0')
+    })
+
+    it('coerces plain JSON-Schema schema members on database-resolved templates', async () => {
+      // Templates that cross a JSON boundary (database fetch, parent→child
+      // bridge) arrive with plain JSON-Schema members; asSchema crashes on
+      // them, so resolution must hand back zod schemas.
+      const mockAgentData = {
+        id: 'test-publisher/json-boundary-agent@1.0.0',
+        displayName: 'JSON Boundary Agent',
+        systemPrompt: 'Test system prompt',
+        instructionsPrompt: 'Test instructions',
+        stepPrompt: 'Test step prompt',
+        toolNames: ['end_turn'],
+        mcpServers: {},
+        inputSchema: {
+          prompt: { type: 'string' },
+          params: {
+            type: 'object',
+            properties: { q: { type: 'string' } },
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+        },
+        spawnableAgents: [],
+        outputMode: 'structured_output',
+        includeMessageHistory: true,
+        inheritParentSystemPrompt: false,
+      } as unknown as AgentTemplate
+
+      agentRuntimeImpl = {
+        ...agentRuntimeImpl,
+        fetchAgentFromDatabase: async () => mockAgentData,
+      }
+
+      const result = await getAgentTemplate({
+        ...agentRuntimeImpl,
+        agentId: 'test-publisher/json-boundary-agent@1.0.0',
+        localAgentTemplates: {},
+      })
+
+      expect(result).toBeTruthy()
+      const promptSchema = result!.inputSchema.prompt as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      const outputSchema = result!.outputSchema as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      expect(typeof promptSchema.safeParse).toBe('function')
+      expect(typeof outputSchema.safeParse).toBe('function')
+      // The converted schemas accept the same payloads the plain JSON schema
+      // described.
+      expect(promptSchema.safeParse('hello').success).toBe(true)
+      expect(outputSchema.safeParse({ answer: 'x' }).success).toBe(true)
+    })
+
+    it(
+      'does not cache an unversioned (latest-resolved) template fetched via the codebuff-defaulted fallback',
+      async () => {
+        // The fallback branch (unversioned id -> codebuff/<id>) resolves
+        // 'latest'; caching it would pin a stale template for the process
+        // lifetime, contradicting the specific-version-only cache policy.
+        const mockAgentData: AgentTemplate = {
+          id: `${DEFAULT_ORG_PREFIX}fallback-agent`,
+          displayName: 'Fallback Agent',
+          systemPrompt: 'Test system prompt',
+          instructionsPrompt: 'Test instructions',
+          stepPrompt: 'Test step prompt',
+          toolNames: ['end_turn'],
+          mcpServers: {},
+          inputSchema: {},
+          spawnableAgents: [],
+          outputMode: 'last_message',
+          includeMessageHistory: true,
+          inheritParentSystemPrompt: false,
+          model: 'anthropic/claude-4-sonnet-20250522',
+          spawnerPrompt: 'Test',
+        }
+        const spy = mock(async () => mockAgentData)
+        agentRuntimeImpl = {
+          ...agentRuntimeImpl,
+          fetchAgentFromDatabase: spy,
+        }
+
+        // First call resolves via the codebuff-defaulted fallback branch.
+        const result1 = await getAgentTemplate({
+          ...agentRuntimeImpl,
+          agentId: 'fallback-agent',
+          localAgentTemplates: {},
+        })
+        expect(result1).toBeTruthy()
+        expect(spy).toHaveBeenCalledTimes(1)
+
+        // The unversioned lookup must not be cached: a repeat lookup re-fetches
+        // so a newly published 'latest' template is served.
+        expect(agentRuntimeImpl.databaseAgentCache.size).toBe(0)
+        const result2 = await getAgentTemplate({
+          ...agentRuntimeImpl,
+          agentId: 'fallback-agent',
+          localAgentTemplates: {},
+        })
+        expect(result2).toBeTruthy()
+        expect(spy).toHaveBeenCalledTimes(2)
+      },
+    )
+
+    it('caches a specific-version template fetched via the codebuff-defaulted fallback', async () => {
+      // A versioned fallback lookup (publisher-less id with an explicit
+      // version) follows the same cache policy as the main database branch:
+      // specific versions are cached, 'latest' is not.
+      const mockAgentData: AgentTemplate = {
+        id: `${DEFAULT_ORG_PREFIX}fallback-agent@1.0.0`,
+        displayName: 'Fallback Agent',
+        systemPrompt: 'Test system prompt',
+        instructionsPrompt: 'Test instructions',
+        stepPrompt: 'Test step prompt',
+        toolNames: ['end_turn'],
+        mcpServers: {},
+        inputSchema: {},
+        spawnableAgents: [],
+        outputMode: 'last_message',
+        includeMessageHistory: true,
+        inheritParentSystemPrompt: false,
+        model: 'anthropic/claude-4-sonnet-20250522',
+        spawnerPrompt: 'Test',
+      }
+      const spy = mock(async () => mockAgentData)
+      agentRuntimeImpl = {
+        ...agentRuntimeImpl,
+        fetchAgentFromDatabase: spy,
+      }
+
+      const result1 = await getAgentTemplate({
+        ...agentRuntimeImpl,
+        agentId: 'fallback-agent@1.0.0',
+        localAgentTemplates: {},
+      })
+      expect(result1).toBeTruthy()
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      // The specific version is stored in the cache under the resolved id.
+      expect(agentRuntimeImpl.databaseAgentCache.size).toBe(1)
     })
   })
 

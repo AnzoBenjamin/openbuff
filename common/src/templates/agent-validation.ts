@@ -383,3 +383,71 @@ function convertInputSchema(
   }
   return result
 }
+
+/**
+ * Coerce a single agent-template schema member into a zod schema.
+ *
+ * Templates that cross a JSON serialization boundary — bundled agents built
+ * by cli/scripts/prebuild-agents.ts (JSON.stringify) and templates bridged
+ * parent→child through the supervision bridge — lose their zod prototype and
+ * arrive as plain JSON-Schema objects. Feeding such an object to the AI SDK's
+ * `asSchema` routes it to the zod-v3 converter, which reads
+ * `schema._def.typeName` on undefined and crashes the run. Values that are
+ * already zod (v4 `_zod` marker, or a `safeParse` function) are returned
+ * unchanged so zod members are never double-converted.
+ */
+export function coerceJsonSchemaMember(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value
+  }
+  const record = value as { _zod?: unknown; safeParse?: unknown }
+  if (record._zod !== undefined || typeof record.safeParse === 'function') {
+    return value
+  }
+  return convertJsonSchemaToZod(value as Record<string, unknown>)
+}
+
+/**
+ * Ensure every schema member of a resolved agent template is a zod schema
+ * (see coerceJsonSchemaMember). Runtime template resolution applies this so
+ * bundled, database, and bridged templates all reach the model surface with
+ * zod inputSchema.prompt / inputSchema.params / outputSchema members — the
+ * spawn tool input schema, structured output, and set-output parsing all read
+ * these members. Returns the original template when no member needs coercion.
+ */
+export function ensureAgentTemplateZodSchemas(
+  template: AgentTemplate,
+): AgentTemplate {
+  const inputSchema = template.inputSchema
+  const prompt =
+    inputSchema?.prompt !== undefined
+      ? (coerceJsonSchemaMember(
+          inputSchema.prompt,
+        ) as AgentTemplate['inputSchema']['prompt'])
+      : undefined
+  const params =
+    inputSchema?.params !== undefined
+      ? (coerceJsonSchemaMember(
+          inputSchema.params,
+        ) as AgentTemplate['inputSchema']['params'])
+      : undefined
+  const outputSchema =
+    template.outputSchema !== undefined
+      ? (coerceJsonSchemaMember(template.outputSchema) as AgentTemplate['outputSchema'])
+      : undefined
+  if (
+    prompt === inputSchema?.prompt &&
+    params === inputSchema?.params &&
+    outputSchema === template.outputSchema
+  ) {
+    return template
+  }
+  return {
+    ...template,
+    inputSchema: {
+      ...(prompt !== undefined ? { prompt } : {}),
+      ...(params !== undefined ? { params } : {}),
+    },
+    ...(outputSchema !== undefined ? { outputSchema } : {}),
+  }
+}
