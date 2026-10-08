@@ -415,6 +415,57 @@ function isDegradedZodHusk(value: unknown): boolean {
 }
 
 /**
+ * Whether a converted zod schema is REPRESENTABLE in JSON Schema — the
+ * empirical proxy for asSchema compatibility: the AI SDK's `asSchema` (used
+ * for every bridged tool inputSchema) throws exactly when `z.toJSONSchema`
+ * throws. Converted DEGENERATE shapes fail this probe: for `{ type:
+ * 'object' }` with no properties — and for real degraded husks, whose wire
+ * form is zod's serialized INTERNALS (def/shape), not JSON Schema —
+ * convertJsonSchemaToZod wraps its output in a base union containing a
+ * z.custom(...) branch, which zod-v4's JSON-Schema generator rejects with
+ * "Custom types cannot be represented in JSON Schema".
+ */
+function isRepresentableZodSchema(value: unknown): boolean {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  try {
+    z.toJSONSchema(value as z.ZodType, { io: 'input' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Native zod fallback for degenerate/unrepresentable JSON-Schema inputs,
+ * selected by the source JSON-Schema `type` field when it is a string (a
+ * husk's `type` is a heuristic at best, so missing/undefined degrades to a
+ * loose object). Native zod schemas are representable under BOTH io modes
+ * of z.toJSONSchema (z.any(), z.object({}).loose(), z.string(), z.number(),
+ * z.boolean(), z.array(z.any()), ...), so a fallback built here can never
+ * reproduce the "Custom types cannot be represented in JSON Schema" crash —
+ * which a converted `{ type: 'object' }` WOULD: that conversion itself
+ * carries the poisoned z.custom base-union branch, so it must never be the
+ * fallback either.
+ */
+function buildNativeFallbackSchema(jsonSchemaType: unknown): z.ZodType {
+  switch (jsonSchemaType) {
+    case 'string':
+      return z.string()
+    case 'number':
+    case 'integer':
+      return z.number()
+    case 'boolean':
+      return z.boolean()
+    case 'array':
+      return z.array(z.any())
+    default:
+      return z.object({}).loose()
+  }
+}
+
+/**
  * Coerce a single agent-template schema member into a zod schema.
  *
  * Templates that cross a JSON serialization boundary — bundled agents built
@@ -426,33 +477,55 @@ function isDegradedZodHusk(value: unknown): boolean {
  * already zod (v4 `_zod` marker, or a `safeParse` function) are returned
  * unchanged so zod members are never double-converted. Degraded zod-v4 husks
  * (see isDegradedZodHusk) are neither live zod nor trustworthy JSON Schema:
- * they are re-converted from their own shape when possible, falling back to
- * a permissive `{ type: 'object' }` conversion so a husk NEVER survives to
- * the model surface as a non-zod object.
+ * they are re-converted from their own shape when possible.
+ *
+ * Representability guarantee: for any object input the returned value is a
+ * live zod schema whose `z.toJSONSchema(result, { io: 'input' })` does NOT
+ * throw. Every convertJsonSchemaToZod result is probed for representability
+ * (asSchema throws exactly when z.toJSONSchema throws) and an unrepresentable
+ * conversion degrades to the type-faithful NATIVE fallback
+ * (buildNativeFallbackSchema) — never to another poisoned conversion — so a
+ * coerced member can never crash the spawn with "Custom types cannot be
+ * represented in JSON Schema".
  */
 export function coerceJsonSchemaMember(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return value
   }
-  const record = value as { _zod?: unknown; safeParse?: unknown }
+  const record = value as {
+    _zod?: unknown
+    safeParse?: unknown
+    type?: unknown
+  }
   if (record._zod !== undefined || typeof record.safeParse === 'function') {
     return value
   }
   if (isDegradedZodHusk(value)) {
+    let converted: unknown
     try {
-      const converted = convertJsonSchemaToZod(
-        value as Record<string, unknown>,
-      )
-      if (converted && typeof converted === 'object') {
-        return converted
-      }
+      converted = convertJsonSchemaToZod(value as Record<string, unknown>)
     } catch {
       // The husk shape is not valid JSON Schema — fall through to the
-      // permissive fallback below.
+      // type-faithful native fallback below.
     }
-    return convertJsonSchemaToZod({ type: 'object' })
+    if (
+      converted &&
+      typeof converted === 'object' &&
+      isRepresentableZodSchema(converted)
+    ) {
+      return converted
+    }
+    return buildNativeFallbackSchema(record.type)
   }
-  return convertJsonSchemaToZod(value as Record<string, unknown>)
+  const converted = convertJsonSchemaToZod(value as Record<string, unknown>)
+  if (
+    converted &&
+    typeof converted === 'object' &&
+    isRepresentableZodSchema(converted)
+  ) {
+    return converted
+  }
+  return buildNativeFallbackSchema(record.type)
 }
 
 /**

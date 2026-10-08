@@ -3,6 +3,7 @@ import { toolParams } from '@codebuff/common/tools/list'
 import { describe, test, expect, mock } from 'bun:test'
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 import {
+  coerceJsonSchemaMember,
   ensureAgentTemplateZodSchemas,
   serializeAgentTemplatesForTransport,
 } from '@codebuff/common/templates/agent-validation'
@@ -361,6 +362,56 @@ describe('Schema handling error recovery', () => {
       expect(isLiveZod(result.outputSchema)).toBe(true)
       expect(result.inputSchema?.prompt).not.toBe(husk)
       expect(result.outputSchema).not.toBe(husk)
+    })
+
+    test('coerceJsonSchemaMember: degenerate { type: "object" } input coerces into a REPRESENTABLE native schema (both io modes)', () => {
+      // convertJsonSchemaToZod({ type: 'object' }) itself is poisoned: its
+      // output carries a z.custom(...) base-union branch that z.toJSONSchema
+      // rejects with "Custom types cannot be represented in JSON Schema" —
+      // the crash that surfaced as "Agent run error" on every spawn. The
+      // coercion must guarantee representable output instead, so it degrades
+      // to the type-faithful NATIVE fallback (a loose object for the
+      // object/absent type branch).
+      const coerced = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
+      const safeParse = (
+        coerced as unknown as { safeParse: (v: unknown) => { success: boolean } }
+      ).safeParse
+      expect(typeof safeParse).toBe('function')
+      expect(safeParse({ any: 'object' }).success).toBe(true)
+      expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
+      expect(() => z.toJSONSchema(coerced, { io: 'output' })).not.toThrow()
+    })
+
+    test('coerceJsonSchemaMember: a REAL degraded husk (JSON.stringify of a live zod schema) coerces into a representable live zod schema', () => {
+      // The husk wire form is zod's serialized INTERNALS (def/shape), not
+      // JSON Schema. Converting it previously produced an unrepresentable
+      // schema (z.custom base-union branch) that crashed asSchema downstream.
+      const husk = JSON.parse(
+        JSON.stringify(z.object({ prompt: z.string() })),
+      ) as Record<string, unknown>
+      const coerced = coerceJsonSchemaMember(husk) as z.ZodType
+      const safeParse = (
+        coerced as unknown as { safeParse: (v: unknown) => { success: boolean } }
+      ).safeParse
+      expect(typeof safeParse).toBe('function')
+      expect(safeParse({ prompt: 'x' }).success).toBe(true)
+      expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
+      expect(() => z.toJSONSchema(coerced, { io: 'output' })).not.toThrow()
+    })
+
+    test('coerceJsonSchemaMember: rich shapes keep their converted structured schema', () => {
+      const coerced = coerceJsonSchemaMember({
+        type: 'object',
+        properties: { q: { type: 'string' } },
+        required: ['q'],
+      }) as unknown as { safeParse: (v: unknown) => { success: boolean } }
+      // The converted structure is preserved: it accepts the payloads the
+      // JSON schema described and rejects non-objects.
+      expect(coerced.safeParse({ q: 'x' }).success).toBe(true)
+      expect(coerced.safeParse('not-an-object').success).toBe(false)
+      expect(() =>
+        z.toJSONSchema(coerced as unknown as z.ZodType, { io: 'input' }),
+      ).not.toThrow()
     })
   })
 

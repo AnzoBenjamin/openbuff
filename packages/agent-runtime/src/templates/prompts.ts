@@ -103,6 +103,82 @@ function formatRequiredSpawnContractHint(
   return `Required params: ${missing.map((key) => '`' + key + '`').join(', ')}.`
 }
 
+/**
+ * Upper bound on the optional-params summary (before the ` Optional params: `
+ * wrapper) so one exotic schema cannot bloat the compact catalog line.
+ */
+const OPTIONAL_PARAMS_SUMMARY_MAX_LENGTH = 240
+
+/**
+ * One-key summary of an optional param: enum values inline when present
+ * (`depth (enum: "shallow"|"deep")`), otherwise the schema type name
+ * (`outputSchemaHint (string)`). Enum values are JSON.stringify'd so string
+ * values stay quoted and non-string values render readably.
+ */
+function formatOptionalParamSummary(
+  memberSchema: unknown,
+  key: string,
+): string {
+  if (!memberSchema || typeof memberSchema !== 'object') return key
+  const { type, enum: enumValues } = memberSchema as {
+    type?: unknown
+    enum?: unknown
+  }
+  if (Array.isArray(enumValues) && enumValues.length > 0) {
+    return `${key} (enum: ${enumValues
+      .map((value) => JSON.stringify(value))
+      .join('|')})`
+  }
+  if (typeof type === 'string') return `${key} (${type})`
+  return key
+}
+
+/**
+ * Compact hint for a child's OPTIONAL `inputSchema.params` members that the
+ * spawnerPrompt does not already name (e.g. thinker's `depth` enum), so the
+ * parent stops guessing param shapes and burning a failed spawn + retry.
+ * Additive to and separate from the required-params hint. Mirrors
+ * getRequiredAgentParamKeys' dual handling: runtime templates store zod
+ * (`z.toJSONSchema(..., { io: 'input' })`), agent definitions use plain
+ * JSON-Schema objects. Any conversion failure yields '' so catalog rendering
+ * can never throw.
+ */
+function formatOptionalParamsHint(agentTemplate: AgentTemplate): string {
+  const prompt = agentTemplate.spawnerPrompt ?? ''
+  const paramsSchema = agentTemplate.inputSchema?.params
+  if (!paramsSchema) return ''
+
+  let jsonSchema: unknown = paramsSchema
+  if (paramsSchema instanceof z.ZodType) {
+    try {
+      jsonSchema = z.toJSONSchema(paramsSchema, { io: 'input' })
+    } catch {
+      return ''
+    }
+  }
+  if (!jsonSchema || typeof jsonSchema !== 'object') return ''
+  const properties = (jsonSchema as { properties?: unknown }).properties
+  if (!properties || typeof properties !== 'object') return ''
+
+  const required = new Set(getRequiredAgentParamKeys(paramsSchema))
+  const optionalSummaries = Object.keys(properties)
+    .filter((key) => !required.has(key) && !promptNamesParamKey(prompt, key))
+    .map((key) =>
+      formatOptionalParamSummary(
+        (properties as Record<string, unknown>)[key],
+        key,
+      ),
+    )
+  if (optionalSummaries.length === 0) return ''
+
+  const summary = optionalSummaries.join(', ')
+  const bounded =
+    summary.length > OPTIONAL_PARAMS_SUMMARY_MAX_LENGTH
+      ? `${summary.slice(0, OPTIONAL_PARAMS_SUMMARY_MAX_LENGTH - 1)}…`
+      : summary
+  return ` Optional params: ${bounded}.`
+}
+
 /** Compact token rendering for catalog lines: `200_000` -> `200k`. */
 function formatContextWindowTokens(tokens: number): string {
   return tokens >= 1_000
@@ -113,7 +189,9 @@ function formatContextWindowTokens(tokens: number): string {
 /**
  * Compact catalog line for the "You can spawn the following agents" addendum.
  * Appends a one-line required-params/handoff hint when the child's contract
- * is not already named in `spawnerPrompt`, then the child's context window as
+ * is not already named in `spawnerPrompt`, plus a one-line optional-params
+ * hint for optional params the prompt does not name (so the parent stops
+ * guessing param shapes), then the child's context window as
  * ` [context ~200k]` when the caller resolved one, so the parent can size
  * delegated work. An unknown window appends nothing, keeping the catalog
  * byte-identical for callers that inject no resolver.
@@ -133,13 +211,15 @@ export function formatCompactAgentCatalogLine(
 
   const prompt = agentTemplate.spawnerPrompt
   const hint = formatRequiredSpawnContractHint(agentType, agentTemplate)
-  if (prompt) {
-    return hint
-      ? `- ${agentType}: ${prompt} ${hint}${windowSuffix}`
-      : `- ${agentType}: ${prompt}${windowSuffix}`
-  }
-  if (hint) return `- ${agentType}: ${hint}${windowSuffix}`
-  return `- ${agentType}${windowSuffix}`
+  const optionalHint = formatOptionalParamsHint(agentTemplate)
+  const base = prompt
+    ? hint
+      ? `- ${agentType}: ${prompt} ${hint}`
+      : `- ${agentType}: ${prompt}`
+    : hint
+      ? `- ${agentType}: ${hint}`
+      : `- ${agentType}`
+  return `${base}${optionalHint}${windowSuffix}`
 }
 
 /**

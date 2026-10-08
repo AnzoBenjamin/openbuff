@@ -39,8 +39,14 @@ import { unlinkSync } from 'node:fs'
 import * as net from 'node:net'
 
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
+import { z } from 'zod/v4'
 
 import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
+
+import {
+  coerceJsonSchemaMember,
+  ensureAgentTemplateZodSchemas,
+} from '@codebuff/common/templates/agent-validation'
 
 import {
   BRIDGE_CLOSE_ID,
@@ -73,6 +79,7 @@ import {
   type SendActionFn,
   type TrackEventFn,
 } from './bridge-protocol'
+import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contracts/billing'
 import type { HandleStepsLogChunkFn, RequestFilesFn, RequestMcpToolDataFn, RequestOptionalFileFn, RequestToolCallFn, SendSubagentChunkFn } from '@codebuff/common/types/contracts/client'
 import type { AddAgentStepFn, FetchAgentFromDatabaseFn, FinishAgentRunFn, StartAgentRunFn } from '@codebuff/common/types/contracts/database'
@@ -451,6 +458,287 @@ function rehydrateParams(
 }
 
 /**
+ * Whether a value is a LIVE zod schema — the exact passthrough predicate
+ * coerceJsonSchemaMember applies (v4 `_zod` internals present, or a
+ * `safeParse` function), so a stashed member can never bypass coercion that
+ * the coercion step itself would have applied.
+ */
+function isLiveZodSchemaValue(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const record = value as { _zod?: unknown; safeParse?: unknown }
+  return record._zod !== undefined || typeof record.safeParse === 'function'
+}
+
+/** Live zod schema members stashed from the RAW wire params before
+ * rehydrateParams' plain-object walk (see rehydratePromptParamsForBridge
+ * for why the stash exists). */
+type LivePromptSchemaStash = {
+  toolSchemas: Map<string, { inputSchema?: unknown; outputSchema?: unknown }>
+  templateSchemas: Map<
+    string,
+    { prompt?: unknown; params?: unknown; outputSchema?: unknown }
+  >
+}
+
+/** Stashes every LIVE zod schema member from the raw wire params:
+ * tools[name].inputSchema / .outputSchema and each localAgentTemplates
+ * value's inputSchema.prompt / .params / outputSchema. Non-object entries
+ * are skipped defensively, never thrown on. */
+function stashLivePromptSchemaMembers(params: unknown): LivePromptSchemaStash {
+  const stash: LivePromptSchemaStash = {
+    toolSchemas: new Map(),
+    templateSchemas: new Map(),
+  }
+  const record = (params ?? {}) as Record<string, unknown>
+  const tools = record.tools
+  if (tools && typeof tools === 'object' && !Array.isArray(tools)) {
+    const toolMap = tools as Record<string, unknown>
+    for (const [name, tool] of Object.entries(toolMap)) {
+      if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue
+      const toolRecord = tool as Record<string, unknown>
+      const entry: { inputSchema?: unknown; outputSchema?: unknown } = {}
+      if (isLiveZodSchemaValue(toolRecord.inputSchema)) {
+        entry.inputSchema = toolRecord.inputSchema
+      }
+      if (isLiveZodSchemaValue(toolRecord.outputSchema)) {
+        entry.outputSchema = toolRecord.outputSchema
+      }
+      if (entry.inputSchema !== undefined || entry.outputSchema !== undefined) {
+        stash.toolSchemas.set(name, entry)
+      }
+    }
+  }
+  const localAgentTemplates = record.localAgentTemplates
+  if (
+    localAgentTemplates &&
+    typeof localAgentTemplates === 'object' &&
+    !Array.isArray(localAgentTemplates)
+  ) {
+    const templateMap = localAgentTemplates as Record<string, unknown>
+    for (const [id, template] of Object.entries(templateMap)) {
+      if (!template || typeof template !== 'object' || Array.isArray(template)) {
+        continue
+      }
+      const templateRecord = template as Record<string, unknown>
+      const inputSchema = templateRecord.inputSchema as
+        | Record<string, unknown>
+        | undefined
+      const entry: {
+        prompt?: unknown
+        params?: unknown
+        outputSchema?: unknown
+      } = {}
+      if (isLiveZodSchemaValue(inputSchema?.prompt)) {
+        entry.prompt = inputSchema?.prompt
+      }
+      if (isLiveZodSchemaValue(inputSchema?.params)) {
+        entry.params = inputSchema?.params
+      }
+      if (isLiveZodSchemaValue(templateRecord.outputSchema)) {
+        entry.outputSchema = templateRecord.outputSchema
+      }
+      if (
+        entry.prompt !== undefined ||
+        entry.params !== undefined ||
+        entry.outputSchema !== undefined
+      ) {
+        stash.templateSchemas.set(id, entry)
+      }
+    }
+  }
+  return stash
+}
+
+/** Splices the stashed live members back into the rehydrated params so
+ * their identity survives the walk (coerceJsonSchemaMember's by-reference
+ * contract — never double-convert a live schema). */
+function spliceLivePromptSchemaMembers(
+  rehydrated: Record<string, unknown>,
+  stash: LivePromptSchemaStash,
+): void {
+  if (stash.toolSchemas.size === 0 && stash.templateSchemas.size === 0) {
+    return
+  }
+  const tools = rehydrated.tools
+  if (tools && typeof tools === 'object' && !Array.isArray(tools)) {
+    const toolMap = tools as Record<string, unknown>
+    for (const [name, entry] of stash.toolSchemas) {
+      const tool = toolMap[name]
+      if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue
+      const toolRecord = tool as Record<string, unknown>
+      if (entry.inputSchema !== undefined) {
+        toolRecord.inputSchema = entry.inputSchema
+      }
+      if (entry.outputSchema !== undefined) {
+        toolRecord.outputSchema = entry.outputSchema
+      }
+    }
+  }
+  const templates = rehydrated.localAgentTemplates
+  if (templates && typeof templates === 'object' && !Array.isArray(templates)) {
+    const templateMap = templates as Record<string, unknown>
+    for (const [id, entry] of stash.templateSchemas) {
+      const template = templateMap[id]
+      if (!template || typeof template !== 'object' || Array.isArray(template)) {
+        continue
+      }
+      const templateRecord = template as Record<string, unknown>
+      const rawInputSchema = templateRecord.inputSchema
+      const inputSchema: Record<string, unknown> =
+        rawInputSchema &&
+        typeof rawInputSchema === 'object' &&
+        !Array.isArray(rawInputSchema)
+          ? { ...(rawInputSchema as Record<string, unknown>) }
+          : {}
+      if (entry.prompt !== undefined) inputSchema.prompt = entry.prompt
+      if (entry.params !== undefined) inputSchema.params = entry.params
+      templateRecord.inputSchema = inputSchema
+      if (entry.outputSchema !== undefined) {
+        templateRecord.outputSchema = entry.outputSchema
+      }
+    }
+  }
+}
+
+/** Coerces ONE schema member for the bridged prompt params. A failing
+ * coercion degrades to a NATIVE permissive loose-object zod schema — the
+ * same "a working agent beats a crashed one" policy
+ * serializeSchemaMemberForTransport applies — instead of crashing the
+ * handler. The fallback MUST be native: convertJsonSchemaToZod's output for
+ * degenerate shapes carries a z.custom(...) base-union branch that
+ * z.toJSONSchema rejects ("Custom types cannot be represented in JSON
+ * Schema"), so a poisoned conversion can never serve as the fallback. */
+function coerceBridgeSchemaMember(value: unknown): unknown {
+  try {
+    return coerceJsonSchemaMember(value)
+  } catch {
+    return z.object({}).loose()
+  }
+}
+
+/** Coerces ONE localAgentTemplates value through the established template
+ * coercion (ensureAgentTemplateZodSchemas); on failure the template is
+ * rebuilt with per-member coercion so one malformed member can never crash
+ * the handler. */
+function coerceBridgeAgentTemplate(template: unknown): unknown {
+  if (!template || typeof template !== 'object' || Array.isArray(template)) {
+    return template
+  }
+  const record = template as Record<string, unknown>
+  try {
+    return ensureAgentTemplateZodSchemas(record as unknown as AgentTemplate)
+  } catch {
+    const rawInputSchema = record.inputSchema
+    const inputSchema =
+      rawInputSchema &&
+      typeof rawInputSchema === 'object' &&
+      !Array.isArray(rawInputSchema)
+        ? (rawInputSchema as Record<string, unknown>)
+        : {}
+    return {
+      ...record,
+      inputSchema: {
+        ...(inputSchema.prompt !== undefined
+          ? { prompt: coerceBridgeSchemaMember(inputSchema.prompt) }
+          : {}),
+        ...(inputSchema.params !== undefined
+          ? { params: coerceBridgeSchemaMember(inputSchema.params) }
+          : {}),
+      },
+      ...(record.outputSchema !== undefined
+        ? { outputSchema: coerceBridgeSchemaMember(record.outputSchema) }
+        : {}),
+    }
+  }
+}
+
+/** Applies the schema coercion to the rehydrated params IN PLACE. ONLY the
+ * schema-bearing members are touched — messages, providerOptions and every
+ * other member cross verbatim. */
+function coerceBridgePromptSchemaMembers(
+  rehydrated: Record<string, unknown>,
+): void {
+  const tools = rehydrated.tools
+  if (tools && typeof tools === 'object' && !Array.isArray(tools)) {
+    const toolMap = tools as Record<string, unknown>
+    for (const tool of Object.values(toolMap)) {
+      if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue
+      const toolRecord = tool as Record<string, unknown>
+      if (toolRecord.inputSchema !== undefined) {
+        toolRecord.inputSchema = coerceBridgeSchemaMember(toolRecord.inputSchema)
+      }
+      if (toolRecord.outputSchema !== undefined) {
+        toolRecord.outputSchema = coerceBridgeSchemaMember(
+          toolRecord.outputSchema,
+        )
+      }
+    }
+  }
+  const templates = rehydrated.localAgentTemplates
+  if (templates && typeof templates === 'object' && !Array.isArray(templates)) {
+    const templateMap = templates as Record<string, unknown>
+    for (const [id, template] of Object.entries(templateMap)) {
+      if (!template || typeof template !== 'object' || Array.isArray(template)) {
+        continue
+      }
+      templateMap[id] = coerceBridgeAgentTemplate(template)
+    }
+  }
+}
+
+/**
+ * Rehydrates bridged prompt params and re-coerces the schema-bearing
+ * members into live zod before the REAL prompt deps run. Shared by the
+ * three prompt handlers (the legacy collectPromptStream, the incremental
+ * buildStreamParams path, and promptAiSdk). promptAiSdkStructured is
+ * deliberately NOT routed through this helper: its schema crosses the
+ * bridge as JSON Schema by design and is converted back explicitly.
+ *
+ * WHY (the H.typeName crash): the child's loopAgentSteps builds a live-zod
+ * ToolSet and streams it through the bridge, but the child-side sanitize
+ * walk degrades every zod schema into a husk that retains zod v4's
+ * own-enumerable `~standard` marker while losing the prototype methods and
+ * non-enumerable internals (`_zod`, `safeParse`). rehydrateParams restores
+ * only the logger/signal/date markers, so a husk reaches
+ * deps.promptAiSdkStream — whose streamText runs every
+ * tools[name].inputSchema through the AI SDK's asSchema, routing the husk
+ * to the zod-v3 converter, which reads `_def.typeName` on undefined and
+ * crashes the spawn with "undefined is not an object (evaluating
+ * 'H.typeName')". Every child LLM step passes at least the end_turn tool
+ * through the bridge, so every spawn crashed.
+ *
+ * Coercion contract (coerceJsonSchemaMember): degraded husks and plain
+ * JSON-Schema members are re-converted to live zod; already-live members
+ * pass through BY REFERENCE (the request-file rehydrate path relies on the
+ * by-reference contract — never double-convert); a member that cannot be
+ * coerced degrades to a permissive `{ type: 'object' }` zod schema instead
+ * of crashing the handler.
+ *
+ * Live members are stashed from the RAW wire params BEFORE rehydrateParams'
+ * plain-object walk and spliced back in afterwards: the walk rebuilds every
+ * object entry-by-entry, which would destroy a live schema's identity (and
+ * with it the by-reference contract).
+ */
+function rehydratePromptParamsForBridge(
+  params: unknown,
+  logger: Logger,
+  bridgeNonce: string,
+): Record<string, unknown> {
+  const stash = stashLivePromptSchemaMembers(params)
+  const rehydrated = {
+    ...(rehydrateParams(params, logger, bridgeNonce) as Record<
+      string,
+      unknown
+    >),
+  }
+  spliceLivePromptSchemaMembers(rehydrated, stash)
+  coerceBridgePromptSchemaMembers(rehydrated)
+  return rehydrated
+}
+
+/**
  * Builds the full parent-side handler table for the bridged dep set.
  *
  * Rehydration rules (see child-bridge-client.ts for the sanitize side):
@@ -517,7 +805,10 @@ export function buildSupervisedBridgeHandlers(
     // (provider spend stops) even though no consumer will read the tail.
     const streamAbort = new AbortController()
     const rehydrated = {
-      ...(rehydrateParams(params, logger, bridgeNonce) as Record<string, unknown>),
+      ...(rehydratePromptParamsForBridge(params, logger, bridgeNonce) as Record<
+        string,
+        unknown
+      >),
       apiKey: deps.apiKey,
       sendAction: deps.sendAction,
       trackEvent: deps.trackEvent,
@@ -613,7 +904,7 @@ export function buildSupervisedBridgeHandlers(
     streamAbort: AbortController,
   ): PromptAiSdkStreamStartParams =>
     ({
-      ...(rehydrateParams(params, logger, bridgeNonce) as Record<
+      ...(rehydratePromptParamsForBridge(params, logger, bridgeNonce) as Record<
         string,
         unknown
       >),
@@ -750,7 +1041,11 @@ export function buildSupervisedBridgeHandlers(
       handleIncrementalStreamStop(params as PromptAiSdkStreamStopParams),
     promptAiSdk: (params) =>
       deps.promptAiSdk({
-        ...(rehydrateParams(params, logger, bridgeNonce) as Record<string, unknown>),
+        ...(rehydratePromptParamsForBridge(
+          params,
+          logger,
+          bridgeNonce,
+        ) as Record<string, unknown>),
         apiKey: deps.apiKey,
         sendAction: deps.sendAction,
         trackEvent: deps.trackEvent,

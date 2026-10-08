@@ -54,15 +54,21 @@ export async function getAgentTemplate(
     return ensureAgentTemplateZodSchemas(localAgentTemplates[normalizedAgentId])
   }
 
-  // 2. Check database cache
+  // 2. Check database cache. Coerce on EVERY cache-hit branch (see the
+  // local-template branch): the cache can be seeded by another seam with
+  // templates whose schema members still carry plain JSON-Schema or degraded
+  // bridge-husk shapes, so a hit must re-coerce before the template reaches
+  // the model surface (asSchema reads _def.typeName on a husk and crashes).
   if (databaseAgentCache.has(agentId)) {
-    return databaseAgentCache.get(agentId) || null
+    const cached = databaseAgentCache.get(agentId)
+    return cached ? ensureAgentTemplateZodSchemas(cached) : null
   }
   if (
     normalizedAgentId !== agentId &&
     databaseAgentCache.has(normalizedAgentId)
   ) {
-    return databaseAgentCache.get(normalizedAgentId) || null
+    const cached = databaseAgentCache.get(normalizedAgentId)
+    return cached ? ensureAgentTemplateZodSchemas(cached) : null
   }
 
   const parsed = parsePublishedAgentId(normalizedAgentId)

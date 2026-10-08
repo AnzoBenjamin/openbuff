@@ -44,7 +44,8 @@ import {
 } from '../child-bridge-client'
 import { missingChildCallbackDeps } from '../child-entry'
 
-import { describe, expect, it } from 'bun:test'
+import * as validationModule from '@codebuff/common/templates/agent-validation'
+import { describe, expect, it, spyOn } from 'bun:test'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1979,6 +1980,342 @@ describe('incremental promptAiSdkStream bridging (P2-T8c)', () => {
       expect(String((outcome.error as Error).message)).toContain(
         'ended without a result',
       )
+    },
+  )
+})
+
+describe('bridged prompt params schema re-coercion (H.typeName repair)', () => {
+  type ZodLike = {
+    safeParse: (value: unknown) => { success: boolean }
+  }
+
+  /**
+   * A degraded zod-v4 husk: the shape the child-side sanitize walk delivers
+   * after JSON.stringify strips a live zod schema's prototype and
+   * non-enumerable internals while retaining the own-enumerable `~standard`
+   * v4 marker. Feeding it to the AI SDK's asSchema routes it to the zod-v3
+   * converter, which reads _def.typeName on undefined and crashes the spawn
+   * — the parent bridge must re-coerce it before the real dep runs.
+   */
+  const makeHusk = (schema: Record<string, unknown>): Record<string, unknown> => ({
+    ...schema,
+    '~standard': { validate: () => ({ value: undefined }) },
+  })
+
+  /**
+   * A REAL degraded husk: the exact JSON.parse(JSON.stringify(liveZod)) wire
+   * form — zod's serialized INTERNALS (def/shape) plus the own-enumerable
+   * `~standard` marker, which is NOT valid JSON Schema. (makeHusk above
+   * appends `~standard` onto a REAL JSON Schema shape — a different degraded
+   * shape.) Feeding this husk to the AI SDK's asSchema routes it to the
+   * zod-v3 converter, and converting it back with convertJsonSchemaToZod
+   * previously produced an UNREPRESENTABLE schema whose z.toJSONSchema
+   * throws "Custom types cannot be represented in JSON Schema" — crashing
+   * every spawn.
+   */
+  const makeRealHusk = (schema: z.ZodType): Record<string, unknown> =>
+    JSON.parse(JSON.stringify(schema)) as Record<string, unknown>
+
+  /** deps stub whose promptAiSdkStream captures its params synchronously
+   * (the generator body runs lazily, so the capture must happen in the
+   * outer call) and yields nothing. */
+  const makeStreamCaptureDeps = (
+    capture: (params: unknown) => void,
+  ): SupervisedBridgeHandlerDeps =>
+    ({
+      promptAiSdkStream: (params: unknown) => {
+        capture(params)
+        return (async function* () {
+          return { aborted: false, value: 'done' }
+        })()
+      },
+      trackEvent: async () => null,
+      fetch: globalThis.fetch,
+      apiKey: 'test-key',
+    }) as unknown as SupervisedBridgeHandlerDeps
+
+  it(
+    'parent handler (legacy collectPromptStream): tools members that are degraded husks reach deps.promptAiSdkStream as LIVE zod schemas (safeParse functions, never husks)',
+    async () => {
+      let captured: unknown
+      const handlers = buildSupervisedBridgeHandlers(
+        makeStreamCaptureDeps((params) => {
+          captured = params
+        }),
+      )
+      const huskInput = makeHusk({
+        type: 'object',
+        properties: { q: { type: 'string' } },
+        required: ['q'],
+      })
+      const huskOutput = makeHusk({
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+      })
+      const result = (await withTimeout(
+        (handlers.promptAiSdkStream as (p: unknown) => Promise<unknown>)({
+          tools: {
+            end_turn: { inputSchema: huskInput, outputSchema: huskOutput },
+          },
+        }),
+        CALL_BUDGET_MS,
+        'legacy stream coercion handler',
+      )) as { chunks: unknown[] }
+      expect(result.chunks).toEqual([])
+      const tool = (
+        captured as {
+          tools: Record<
+            string,
+            { inputSchema?: unknown; outputSchema?: unknown }
+          >
+        }
+      ).tools.end_turn
+      const inputSchema = tool.inputSchema as ZodLike
+      const outputSchema = tool.outputSchema as ZodLike
+      expect(typeof inputSchema.safeParse).toBe('function')
+      expect(typeof outputSchema.safeParse).toBe('function')
+      // Not the raw husk: the degraded member was re-coerced, and the
+      // converted schema accepts the payloads the original described.
+      expect(tool.inputSchema).not.toBe(huskInput)
+      expect(inputSchema.safeParse({ q: 'x' }).success).toBe(true)
+      expect(outputSchema.safeParse({ answer: 'ok' }).success).toBe(true)
+    },
+  )
+
+  it(
+    'parent handler: a REAL degraded husk (JSON.stringify of a live zod schema) re-coerces into a REPRESENTABLE live zod schema (no "Custom types cannot be represented in JSON Schema" crash downstream)',
+    async () => {
+      let captured: unknown
+      const handlers = buildSupervisedBridgeHandlers(
+        makeStreamCaptureDeps((params) => {
+          captured = params
+        }),
+      )
+      const realHuskInput = makeRealHusk(z.object({ prompt: z.string() }))
+      await withTimeout(
+        (handlers.promptAiSdkStream as (p: unknown) => Promise<unknown>)({
+          tools: {
+            end_turn: { inputSchema: realHuskInput },
+          },
+        }),
+        CALL_BUDGET_MS,
+        'real-husk coercion handler',
+      )
+      const inputSchema = (
+        captured as { tools: Record<string, { inputSchema?: unknown }> }
+      ).tools.end_turn.inputSchema as unknown as ZodLike
+      // Live zod, not the raw husk.
+      expect(typeof inputSchema.safeParse).toBe('function')
+      expect(inputSchema.safeParse({ prompt: 'x' }).success).toBe(true)
+      // REPRESENTABLE: asSchema throws exactly when z.toJSONSchema throws —
+      // the degraded husk previously coerced into an unrepresentable schema
+      // carrying a z.custom base-union branch, crashing every spawn with
+      // "Custom types cannot be represented in JSON Schema".
+      expect(() =>
+        z.toJSONSchema(inputSchema as unknown as z.ZodType, { io: 'input' }),
+      ).not.toThrow()
+    },
+  )
+
+  it(
+    'parent handler (incremental promptAiSdkStreamStart): tools husk members reach deps.promptAiSdkStream as live zod schemas (the SECOND coercion site is covered)',
+    async () => {
+      let captured: unknown
+      const handlers = buildSupervisedBridgeHandlers(
+        makeStreamCaptureDeps((params) => {
+          captured = params
+        }),
+      )
+      const start = handlers.promptAiSdkStreamStart as (
+        p: unknown,
+      ) => Promise<{ streamId: string }>
+      const stop = handlers.promptAiSdkStreamStop as (
+        p: unknown,
+      ) => Promise<{ stopped: boolean }>
+      const { streamId } = await withTimeout(
+        start({
+          tools: {
+            end_turn: {
+              inputSchema: makeHusk({ type: 'string' }),
+            },
+          },
+        }),
+        CALL_BUDGET_MS,
+        'incremental start coercion handler',
+      )
+      expect(typeof streamId).toBe('string')
+      const tool = (
+        captured as {
+          tools: Record<string, { inputSchema?: unknown }>
+        }
+      ).tools.end_turn
+      expect(typeof (tool.inputSchema as ZodLike).safeParse).toBe('function')
+      // Registry hygiene: leave nothing in-flight behind.
+      await withTimeout(stop({ streamId }), CALL_BUDGET_MS, 'stop probe stream')
+    },
+  )
+
+  it(
+    'parent handler (promptAiSdk): localAgentTemplates husk members reach deps.promptAiSdk as live zod schemas',
+    async () => {
+      let captured: unknown
+      const deps = {
+        promptAiSdk: async (params: unknown) => {
+          captured = params
+          return { aborted: false, value: {} }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const handlers = buildSupervisedBridgeHandlers(deps)
+      await withTimeout(
+        (handlers.promptAiSdk as (p: unknown) => Promise<unknown>)({
+          localAgentTemplates: {
+            'child/agent': {
+              id: 'child/agent',
+              inputSchema: {
+                prompt: makeHusk({ type: 'string' }),
+                params: makeHusk({
+                  type: 'object',
+                  properties: { q: { type: 'string' } },
+                }),
+              },
+              outputSchema: makeHusk({
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+              }),
+            },
+          },
+        }),
+        CALL_BUDGET_MS,
+        'promptAiSdk template coercion handler',
+      )
+      const template = (
+        captured as {
+          localAgentTemplates: Record<
+            string,
+            {
+              inputSchema: { prompt?: unknown; params?: unknown }
+              outputSchema?: unknown
+            }
+          >
+        }
+      ).localAgentTemplates['child/agent']
+      expect(typeof (template.inputSchema.prompt as ZodLike).safeParse).toBe(
+        'function',
+      )
+      expect(typeof (template.inputSchema.params as ZodLike).safeParse).toBe(
+        'function',
+      )
+      expect(typeof (template.outputSchema as ZodLike).safeParse).toBe(
+        'function',
+      )
+      expect(
+        (template.inputSchema.prompt as ZodLike).safeParse('hello').success,
+      ).toBe(true)
+      expect(
+        (template.inputSchema.params as ZodLike).safeParse({ q: 'x' }).success,
+      ).toBe(true)
+      expect(
+        (template.outputSchema as ZodLike).safeParse({ answer: 'ok' }).success,
+      ).toBe(true)
+    },
+  )
+
+  it(
+    'parent handler: already-live zod members pass through BY REFERENCE (never double-converted)',
+    async () => {
+      let captured: unknown
+      const liveInput = z.object({ q: z.string() })
+      const liveTemplatePrompt = z.string()
+      const handlers = buildSupervisedBridgeHandlers(
+        makeStreamCaptureDeps((params) => {
+          captured = params
+        }),
+      )
+      await withTimeout(
+        (handlers.promptAiSdkStream as (p: unknown) => Promise<unknown>)({
+          tools: {
+            end_turn: { inputSchema: liveInput },
+          },
+          localAgentTemplates: {
+            'child/agent': {
+              id: 'child/agent',
+              inputSchema: { prompt: liveTemplatePrompt },
+            },
+          },
+        }),
+        CALL_BUDGET_MS,
+        'live-member identity handler',
+      )
+      const rec = captured as {
+        tools: Record<string, { inputSchema?: unknown }>
+        localAgentTemplates: Record<
+          string,
+          { inputSchema: { prompt?: unknown } }
+        >
+      }
+      // The request-file rehydrate path relies on the by-reference contract:
+      // the exact live schema object must survive, not a re-converted copy.
+      expect(rec.tools.end_turn.inputSchema).toBe(liveInput)
+      expect(
+        rec.localAgentTemplates['child/agent'].inputSchema.prompt,
+      ).toBe(liveTemplatePrompt)
+    },
+  )
+
+  it(
+    'parent handler: a member whose coercion THROWS degrades to a permissive { type: "object" } zod schema without crashing the handler (a working agent beats a crashed one)',
+    async () => {
+      const coerceSpy = spyOn(
+        validationModule,
+        'coerceJsonSchemaMember',
+      ).mockImplementation(() => {
+        throw new Error('boom-coerce')
+      })
+      try {
+        let captured: unknown
+        const handlers = buildSupervisedBridgeHandlers(
+          makeStreamCaptureDeps((params) => {
+            captured = params
+          }),
+        )
+        const result = (await withTimeout(
+          (handlers.promptAiSdkStream as (p: unknown) => Promise<unknown>)({
+            tools: {
+              end_turn: {
+                inputSchema: {
+                  type: 'object',
+                  properties: { q: { type: 'string' } },
+                },
+              },
+            },
+          }),
+          CALL_BUDGET_MS,
+          'throwing-coercion handler',
+        )) as { chunks: unknown[] }
+        // The handler did not crash: the reply settled normally.
+        expect(result.chunks).toEqual([])
+        expect(coerceSpy).toHaveBeenCalled()
+        const inputSchema = (
+          captured as {
+            tools: Record<string, { inputSchema?: unknown }>
+          }
+        ).tools.end_turn.inputSchema as ZodLike
+        // The permissive fallback is still a live zod schema that accepts
+        // anything object-shaped — never the crashed husk. It is now NATIVE
+        // zod, so it is also REPRESENTABLE: asSchema throws exactly when
+        // z.toJSONSchema throws, and an unrepresentable fallback would crash
+        // the spawn downstream.
+        expect(typeof inputSchema.safeParse).toBe('function')
+        expect(inputSchema.safeParse({ anything: 'goes' }).success).toBe(true)
+        expect(() =>
+          z.toJSONSchema(inputSchema as unknown as z.ZodType, { io: 'input' }),
+        ).not.toThrow()
+      } finally {
+        coerceSpy.mockRestore()
+      }
     },
   )
 })

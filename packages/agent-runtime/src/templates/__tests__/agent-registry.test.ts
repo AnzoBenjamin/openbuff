@@ -394,6 +394,77 @@ describe('Agent Registry', () => {
       // The specific version is stored in the cache under the resolved id.
       expect(agentRuntimeImpl.databaseAgentCache.size).toBe(1)
     })
+
+    it('coerces schema members on BOTH database cache-hit branches (exact id and normalized underscore-alias id)', async () => {
+      // The cache-hit branches returned the cached template verbatim, so a
+      // template seeded by another seam with plain JSON-Schema (or degraded
+      // bridge-husk) members reached the model surface uncoerced and crashed
+      // asSchema — the same class of failure the fetch branches already
+      // coerce against.
+      const cachedAgent = {
+        id: 'test-publisher/cache-coerce-agent@1.0.0',
+        displayName: 'Cache Coerce Agent',
+        systemPrompt: 'Test system prompt',
+        instructionsPrompt: 'Test instructions',
+        stepPrompt: 'Test step prompt',
+        toolNames: ['end_turn'],
+        mcpServers: {},
+        inputSchema: {
+          prompt: { type: 'string' },
+          params: {
+            type: 'object',
+            properties: { q: { type: 'string' } },
+          },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+        },
+        spawnableAgents: [],
+        outputMode: 'structured_output',
+        includeMessageHistory: true,
+        inheritParentSystemPrompt: false,
+      } as unknown as AgentTemplate
+
+      // (1) Exact-id cache hit.
+      agentRuntimeImpl.databaseAgentCache.set(cachedAgent.id, cachedAgent)
+      const exactHit = await getAgentTemplate({
+        ...agentRuntimeImpl,
+        agentId: cachedAgent.id,
+        localAgentTemplates: {},
+      })
+      const exactPrompt = exactHit!.inputSchema.prompt as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      const exactOutput = exactHit!.outputSchema as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      expect(typeof exactPrompt.safeParse).toBe('function')
+      expect(typeof exactOutput.safeParse).toBe('function')
+      expect(exactPrompt.safeParse('hello').success).toBe(true)
+      expect(exactOutput.safeParse({ answer: 'x' }).success).toBe(true)
+
+      // (2) Normalized (underscore-alias) id cache hit: the cache is keyed by
+      // the normalized agent id while the lookup id carries the underscore.
+      agentRuntimeImpl.databaseAgentCache.clear()
+      agentRuntimeImpl.databaseAgentCache.set(cachedAgent.id, cachedAgent)
+      const normalizedHit = await getAgentTemplate({
+        ...agentRuntimeImpl,
+        agentId: 'test-publisher/cache_coerce_agent@1.0.0',
+        localAgentTemplates: {},
+      })
+      expect(normalizedHit).toBeTruthy()
+      const normalizedPrompt = normalizedHit!.inputSchema.prompt as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      const normalizedParams = normalizedHit!.inputSchema.params as {
+        safeParse: (value: unknown) => { success: boolean }
+      }
+      expect(typeof normalizedPrompt.safeParse).toBe('function')
+      expect(typeof normalizedParams.safeParse).toBe('function')
+      expect(normalizedPrompt.safeParse('hello').success).toBe(true)
+      expect(normalizedParams.safeParse({ q: 'x' }).success).toBe(true)
+    })
   })
 
   describe('getAgentTemplate priority order', () => {
