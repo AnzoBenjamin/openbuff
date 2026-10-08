@@ -918,6 +918,170 @@ const formatReviewerStructuredOutput = (
   return truncated ? `${output}\n…[truncated]` : output
 }
 
+const formatFilePickerStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  if (!Array.isArray(value.files)) return undefined
+  const files = value.files
+  // Validate at least the first item has path/summary string fields before committing
+  if (files.length > 0) {
+    const first = files[0]
+    if (
+      !isRecordValue(first) ||
+      typeof first.path !== 'string' ||
+      typeof first.summary !== 'string'
+    ) {
+      return undefined
+    }
+  }
+  if (files.length === 0) return 'No files found.'
+  const lines = [`Files found (${files.length}):`]
+  for (const item of files) {
+    if (!isRecordValue(item)) continue
+    const path = getStringField(item, 'path')
+    const summary = getStringField(item, 'summary')
+    if (path !== undefined && summary !== undefined) {
+      lines.push(`- ${path} — ${summary}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+const formatBasherStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const command = getStringField(value, 'command')
+  if (command === undefined) return undefined
+  const hasStdout = typeof value.stdout === 'string'
+  const hasExitCode = typeof value.exitCode === 'number'
+  // Require BOTH command AND (exitCode or stdout) to avoid false-positives on
+  // unrelated records that happen to have a command field.
+  if (!hasStdout && !hasExitCode) return undefined
+
+  const STDOUT_CAP = 2000
+  const STDERR_CAP = 500
+
+  const lines: string[] = [`$ ${command}`]
+
+  if (hasExitCode) {
+    lines.push(`exitCode: ${value.exitCode}`)
+  }
+
+  const stdout = getStringField(value, 'stdout')
+  if (stdout && stdout.trim()) {
+    lines.push('')
+    lines.push(
+      stdout.length > STDOUT_CAP
+        ? stdout.slice(0, STDOUT_CAP) + '…[truncated]'
+        : stdout,
+    )
+  }
+
+  const stderr = getStringField(value, 'stderr')
+  if (stderr && stderr.trim() && stderr !== stdout) {
+    const capped =
+      stderr.length > STDERR_CAP
+        ? stderr.slice(0, STDERR_CAP) + '…[truncated]'
+        : stderr
+    lines.push(`stderr: ${capped}`)
+  }
+
+  return lines.join('\n')
+}
+
+const formatGeneralAgentReceiptStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const status = getStringField(value, 'status')
+  if (status === undefined) return undefined
+  if (!Array.isArray(value.changedFiles)) return undefined
+  // Defer to formatEditorNestedOutput when value.output carries a message transcript.
+  const outputRecord = isRecordValue(value.output) ? value.output : undefined
+  if (outputRecord && Array.isArray(outputRecord.messages)) return undefined
+
+  const lines: string[] = [`Status: ${status}`]
+
+  const changedFiles = value.changedFiles.filter(
+    (entry): entry is string => typeof entry === 'string',
+  )
+  if (changedFiles.length > 0) {
+    lines.push('Changed files:')
+    for (const file of changedFiles) lines.push(`- ${file}`)
+  }
+
+  const requirementsAddressed = Array.isArray(value.requirementsAddressed)
+    ? value.requirementsAddressed.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  if (requirementsAddressed.length > 0) {
+    lines.push(`Requirements addressed: ${requirementsAddressed.join(', ')}`)
+  }
+
+  const unresolved = Array.isArray(value.unresolved)
+    ? value.unresolved.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  if (unresolved.length > 0) {
+    lines.push(`Unresolved: ${unresolved.join(', ')}`)
+  }
+
+  return lines.join('\n')
+}
+
+const formatGeneralAgentSummaryStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  // Defer to formatReviewerStructuredOutput: reviewer/advisory shapes have a family field.
+  if (typeof value.family === 'string') return undefined
+  // Defer to formatGeneralAgentReceiptStructuredOutput: receipt shape has changedFiles.
+  if (Array.isArray(value.changedFiles)) return undefined
+  // Defer to formatFilePickerStructuredOutput: file-picker shape has files.
+  if (Array.isArray(value.files)) return undefined
+
+  const summary = getStringField(value, 'summary')
+  if (summary === undefined) return undefined
+
+  const SUMMARY_CAP = 4000
+  const cappedSummary =
+    summary.length > SUMMARY_CAP
+      ? summary.slice(0, SUMMARY_CAP) + '\u2026[truncated]'
+      : summary
+
+  const lines: string[] = [cappedSummary]
+
+  const artifacts = Array.isArray(value.artifacts)
+    ? value.artifacts.filter((e): e is string => typeof e === 'string')
+    : []
+  if (artifacts.length > 0) {
+    lines.push(`[Artifacts: ${artifacts.join(', ')}]`)
+  }
+
+  const coveredSubsystems = Array.isArray(value.coveredSubsystems)
+    ? value.coveredSubsystems.filter((e): e is string => typeof e === 'string')
+    : []
+  if (coveredSubsystems.length > 0) {
+    lines.push(`[Systems: ${coveredSubsystems.join(', ')}]`)
+  }
+
+  const coveredFeatures = Array.isArray(value.coveredFeatures)
+    ? value.coveredFeatures.filter((e): e is string => typeof e === 'string')
+    : []
+  if (coveredFeatures.length > 0) {
+    lines.push(`[Features: ${coveredFeatures.join(', ')}]`)
+  }
+
+  const unresolved = Array.isArray(value.unresolved)
+    ? value.unresolved.filter((e): e is string => typeof e === 'string')
+    : []
+  if (unresolved.length > 0) {
+    lines.push(`[Unresolved: ${unresolved.join(', ')}]`)
+  }
+
+  return lines.join('\n')
+}
+
 /**
  * Formats an editor agent's nested structured output (a value whose `output`
  * carries the agent's message transcript) as plain-text lines. Returns
@@ -1230,6 +1394,22 @@ export const extractSpawnAgentResultContent = (
     const value = obj.value
     // Check for message field in structured output
     if (isRecordValue(value)) {
+      const filePickerSummary = formatFilePickerStructuredOutput(value)
+      if (filePickerSummary) {
+        return { content: filePickerSummary, hasError: false }
+      }
+      const basherSummary = formatBasherStructuredOutput(value)
+      if (basherSummary) {
+        return { content: basherSummary, hasError: false }
+      }
+      const generalReceiptSummary = formatGeneralAgentReceiptStructuredOutput(value)
+      if (generalReceiptSummary) {
+        return { content: generalReceiptSummary, hasError: false }
+      }
+      const generalSummarySummary = formatGeneralAgentSummaryStructuredOutput(value)
+      if (generalSummarySummary) {
+        return { content: generalSummarySummary, hasError: false }
+      }
       const externalCliSummary = formatExternalCliStructuredOutput(value)
       if (externalCliSummary) {
         return { content: externalCliSummary, hasError: false }
