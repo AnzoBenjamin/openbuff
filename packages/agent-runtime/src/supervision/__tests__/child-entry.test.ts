@@ -16,10 +16,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { convertJsonSchemaToZod } from 'zod-from-json-schema'
+
 import {
   buildChildAgentState,
   buildUnsupportedDepsReceipt,
   missingChildCallbackDeps,
+  rehydrateLocalAgentTemplates,
   runChildEntryMain,
   runSupervisedChildEntry,
 } from '../child-entry'
@@ -197,6 +200,90 @@ describe('child-state rehydration validation (json-roundtrip repair)', () => {
       expect(result.exitCode).toBeNull()
     },
   )
+})
+
+describe('rehydrateLocalAgentTemplates (transport-boundary zod repair)', () => {
+  it('re-coerces plain JSON-Schema schema members back to live zod schemas', () => {
+    // Simulates the JSON.stringify transport boundary: a live zod schema
+    // member arrives in the request file as a plain JSON-Schema object.
+    const rehydrated = rehydrateLocalAgentTemplates({
+      'test-agent': {
+        id: 'test-agent',
+        inputSchema: {
+          prompt: { type: 'string' },
+          params: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+          },
+        },
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+      } as never,
+    })
+    const template = rehydrated['test-agent']
+    expect(template).toBeDefined()
+    // Every schema member must now be a live zod schema: it carries a
+    // callable safeParse, so asSchema no longer routes to the zod-v3
+    // converter that crashes on schema._def.typeName.
+    expect(typeof (template.inputSchema?.prompt as { safeParse?: unknown })?.safeParse).toBe('function')
+    expect(typeof (template.inputSchema?.params as { safeParse?: unknown })?.safeParse).toBe('function')
+    expect(typeof (template.outputSchema as { safeParse?: unknown })?.safeParse).toBe('function')
+    // And the coerced schemas still VALIDATE correctly (structure preserved).
+    expect(
+      (template.inputSchema?.prompt as { safeParse: (v: unknown) => { success: boolean } }).safeParse('hello').success,
+    ).toBe(true)
+    expect(
+      (template.inputSchema?.params as { safeParse: (v: unknown) => { success: boolean } }).safeParse({ command: 'ls' }).success,
+    ).toBe(true)
+  })
+
+  it('repairs a degraded zod-v4 husk (~standard marker, no live internals) instead of crashing asSchema', () => {
+    // The worst case: a husk that still carries zod-v4's `~standard` marker
+    // but lost its live internals across JSON.stringify. Left unrepaired it
+    // reaches asSchema, which reads schema._def.typeName on undefined.
+    const husk = { '~standard': { version: 1, vendor: 'zod' } }
+    const rehydrated = rehydrateLocalAgentTemplates({
+      'husk-agent': {
+        id: 'husk-agent',
+        inputSchema: { prompt: husk, params: husk },
+        outputSchema: husk,
+      } as never,
+    })
+    const template = rehydrated['husk-agent']
+    for (const member of [
+      template.inputSchema?.prompt,
+      template.inputSchema?.params,
+      template.outputSchema,
+    ]) {
+      expect(typeof (member as { safeParse?: unknown })?.safeParse).toBe('function')
+    }
+  })
+
+  it('passes through templates whose members are already live zod schemas unchanged', () => {
+    const livePrompt = convertJsonSchemaToZod({ type: 'string' })
+    const liveOutput = convertJsonSchemaToZod({
+      type: 'object',
+      properties: { ok: { type: 'boolean' } },
+    })
+    const rehydrated = rehydrateLocalAgentTemplates({
+      'live-agent': {
+        id: 'live-agent',
+        inputSchema: { prompt: livePrompt },
+        outputSchema: liveOutput,
+      } as never,
+    })
+    const template = rehydrated['live-agent']
+    // Identity: an already-live member is returned untouched (no double
+    // conversion). Compare as unknown — convertJsonSchemaToZod's inferred
+    // generic differs from the template member's declared ZodType, so a bare
+    // toBe hits a spurious overload mismatch without changing the assertion.
+    expect(template.inputSchema?.prompt as unknown).toBe(livePrompt as unknown)
+    expect(template.outputSchema as unknown).toBe(liveOutput as unknown)
+  })
+
+  it('returns an empty record for an absent localAgentTemplates field', () => {
+    expect(rehydrateLocalAgentTemplates(undefined)).toEqual({})
+  })
 })
 
 describe('child-entry process contract (P2-T8)', () => {

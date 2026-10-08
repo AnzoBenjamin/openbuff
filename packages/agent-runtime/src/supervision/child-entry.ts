@@ -79,8 +79,10 @@
  * (util/context-consolidation-runner.ts, util/runtime-semantic-compaction.ts)
  * are subject to the same flag — deliberately no second gate.
  */
+import { ensureAgentTemplateZodSchemas } from '@codebuff/common/templates/agent-validation'
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import { getCiEnv } from '@codebuff/common/env-ci'
 import { clientProcessEnv } from '@codebuff/common/env-schema'
 import { getInitialAgentState } from '@codebuff/common/types/session-state'
@@ -335,6 +337,45 @@ export function buildChildAgentState(request: SupervisedSpawnRequest) {
 }
 
 /**
+ * Re-coerce every schema member of the transported localAgentTemplates back
+ * to a live zod schema. The request file is a JSON.stringify transport
+ * boundary: live zod schemas degrade to plain JSON-Schema objects (or, worse,
+ * degraded zod-v4 husks that still carry the `~standard` marker but no live
+ * internals). loopAgentSteps indexes localAgentTemplates[id] directly (tool
+ * set construction, set_output schema, prompts) without passing through the
+ * getAgentTemplate coercion backstop, so an uncoerced husk reaches the AI
+ * SDK's asSchema, which reads schema._def.typeName on undefined and crashes
+ * the child run. Exported so this transport-boundary repair is directly
+ * testable.
+ */
+export function rehydrateLocalAgentTemplates(
+  templates: SupervisedSpawnRequest['localAgentTemplates'],
+): Record<string, AgentTemplate> {
+  const source = templates ?? {}
+  // Degradation signal: ensureAgentTemplateZodSchemas returns the original
+  // template BY REFERENCE when no member needs coercion, so an identity
+  // change reliably marks a template whose schema members arrived degraded.
+  const reCoercedIds: string[] = []
+  const result = Object.fromEntries(
+    Object.entries(source).map(([id, template]) => {
+      const coerced = ensureAgentTemplateZodSchemas(template as AgentTemplate)
+      if (coerced !== template) reCoercedIds.push(id)
+      return [id, coerced]
+    }),
+  )
+  if (reCoercedIds.length > 0) {
+    // Diagnostics go to stderr only (never parsed into the receipt) — the
+    // same contract as logStateFieldDropped above. This is the one place
+    // binary users can see WHICH bundled/transported agents arrived with
+    // degraded schemas if the silent-spawn failure mode ever resurfaces.
+    process.stderr.write(
+      `child-entry: re-coerced degraded schema members on ${reCoercedIds.length} transported template(s): ${reCoercedIds.join(', ')}\n`,
+    )
+  }
+  return result
+}
+
+/**
  * Deps the child reconstructs LOCALLY (never bridged — see the module
  * docblock): a fresh per-run databaseAgentCache Map and a null-failing
  * getUserInfoFromApiKey. The bridged fetchAgentFromDatabase populates the
@@ -505,7 +546,9 @@ export async function runSupervisedChildEntry(
       prompt: request.prompt,
       spawnParams: request.spawnParams,
       fileContext,
-      localAgentTemplates: request.localAgentTemplates ?? {},
+      localAgentTemplates: rehydrateLocalAgentTemplates(
+        request.localAgentTemplates,
+      ),
       userId: request.userId,
       clientSessionId: request.clientSessionId ?? '',
       userInputId: request.userInputId ?? '',
