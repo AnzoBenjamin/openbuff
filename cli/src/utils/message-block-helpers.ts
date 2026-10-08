@@ -1082,6 +1082,40 @@ const formatGeneralAgentSummaryStructuredOutput = (
   return lines.join('\n')
 }
 
+const formatLibrarianStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const status = getStringField(value, 'status')
+  const answer = getStringField(value, 'answer')
+  if (status === undefined || answer === undefined) return undefined
+  if (!Array.isArray(value.relevantFiles)) return undefined
+
+  const ANSWER_CAP = 3000
+  const cappedAnswer =
+    answer.length > ANSWER_CAP
+      ? answer.slice(0, ANSWER_CAP) + '\u2026[truncated]'
+      : answer
+
+  const lines: string[] = [`Status: ${status}`, cappedAnswer]
+
+  const relevantFiles = value.relevantFiles.filter(
+    (e): e is string => typeof e === 'string',
+  )
+  if (relevantFiles.length > 0) {
+    lines.push('', `Relevant files (${relevantFiles.length}):`)
+    for (const file of relevantFiles) {
+      lines.push(`- ${file}`)
+    }
+  }
+
+  const error = getStringField(value, 'error')
+  if (error) {
+    lines.push(`Error: ${error}`)
+  }
+
+  return lines.join('\n')
+}
+
 /**
  * Formats an editor agent's nested structured output (a value whose `output`
  * carries the agent's message transcript) as plain-text lines. Returns
@@ -1410,6 +1444,10 @@ export const extractSpawnAgentResultContent = (
       if (generalSummarySummary) {
         return { content: generalSummarySummary, hasError: false }
       }
+      const librarianSummary = formatLibrarianStructuredOutput(value)
+      if (librarianSummary) {
+        return { content: librarianSummary, hasError: false }
+      }
       const externalCliSummary = formatExternalCliStructuredOutput(value)
       if (externalCliSummary) {
         return { content: externalCliSummary, hasError: false }
@@ -1736,28 +1774,6 @@ const findBlockInChildren = (
   return false
 }
 
-/**
- * Checks if a block with the given agentId is already nested under the specified parent.
- */
-const checkBlockIsUnderParent = (
-  blocks: ContentBlock[],
-  targetAgentId: string,
-  parentAgentId: string,
-  _depth = 0,
-): boolean => {
-  for (const block of blocks) {
-    if (block.type === 'agent' && block.agentId === parentAgentId) {
-      // Found the parent, check if target is anywhere in its children
-      return findBlockInChildren(block.blocks || [], targetAgentId)
-    } else if (block.type === 'agent' && block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
-      // Recurse into other agent blocks to find the parent
-      if (checkBlockIsUnderParent(block.blocks, targetAgentId, parentAgentId, _depth + 1)) {
-        return true
-      }
-    }
-  }
-  return false
-}
 
 /**
  * Extracts a block with given agentId from nested blocks structure.
@@ -1879,8 +1895,9 @@ export const transformAskUserBlocks = (
       block.toolCallId === toolCallId &&
       block.toolName === 'ask_user'
     ) {
-      const skipped = (resultValue as any)?.skipped
-      const answers = (resultValue as any)?.answers
+      const record = isRecordValue(resultValue) ? resultValue : undefined
+      const skipped = record?.skipped
+      const answers = record?.answers
       const questions = block.input.questions
 
       if (answers || skipped) {
