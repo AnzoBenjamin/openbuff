@@ -977,3 +977,5 @@ Streaming markdown renders as plain text until the message or agent finishes. Th
 ## 2026-10 tree-sitter grammar memoization
 
 - packages/code-map/src/languages.ts memoizes Language+Parser on the shared languageTable entry BEFORE tags-query work; query resolution is fail-open (missing .scm leaves cfg.query undefined, grammar stays cached). In compiled binaries, throwing after Language.load caused every parsed file to reload the same grammar wasm (observed 853x opens, ~5GB churn, boot freeze). resolveQueryPath checks dirname(process.execPath)/tree-sitter-queries/ for the binary release layout; ship that dir next to the binary.
+
+- _Knowledge refresh 2026-10-08 (harness audit remediation staleness guard touch): commits on `feat/polyglot-reaudit-roadmap` touched `cli/src` — `cli/src/chat.tsx` gained a null guard before `customEvent.detail` destructuring in `handleFollowupClick`, `cli/src/utils/message-block-helpers.ts` was hardened, and `cli/src/utils/mention-helpers.ts` / `cli/src/components/blocks/user-content-copy.tsx` received performance fixes. This entry keeps `cli/knowledge.md` newer than its sibling `src/` for the pre-push memory-drift guard._
