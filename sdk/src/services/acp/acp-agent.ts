@@ -260,6 +260,17 @@ export type AcpAgentOptions = {
    * list is rejected (-32602), never silently admitted.
    */
   allowedAdditionalDirectories?: string[]
+  /**
+   * GV-18 (§12.3 transport gating): whether client-supplied `mcpServers`
+   * are accepted at `session/new`. Unset/true is PERMISSIVE (in-process
+   * embeddings and the stdio transport keep today's behavior); the socket
+   * transport passes `false` so a same-uid peer cannot make the serve
+   * process spawn client-directed MCP server processes. When `false` and
+   * the request carries any `mcpServers` entry, `newSession` fails closed
+   * with -32602 and `data['openbuff.dev'].code = 'client_mcp_disabled'`
+   * BEFORE any session record is created or process spawned (GV-18).
+   */
+  allowClientMcpServers?: boolean
 }
 
 /** Per-session state kept for later phases (P1-T2 core-run wiring). */
@@ -390,6 +401,121 @@ function makeLimitExceeded(message: string): RequestError {
     { [OPENBUFF_ACP_NS]: { code: 'limit_exceeded' } },
     message,
   )
+}
+
+/**
+ * GV-18/GV-20 (§12.3): the -32602 error bodies the golden vectors pin. Built
+ * with the RAW RequestError constructor because the SDK's `invalidParams`
+ * static prepends "Invalid params: " to the message — the fixtures require
+ * the message field EXACTLY ('Client-supplied MCP servers are disabled on
+ * this transport' / 'MCP server URL host is a private/loopback address').
+ */
+function makeMcpGateError(
+  code: 'client_mcp_disabled' | 'mcp_url_blocked',
+  message: string,
+): RequestError {
+  return new RequestError(-32602, message, {
+    [OPENBUFF_ACP_NS]: { code },
+  })
+}
+
+/**
+ * GV-20 (§12.3 SSRF): the literal private/loopback/link-local IPv4 ranges a
+ * client-supplied MCP URL host is refused for (CIDR network + mask).
+ */
+const PRIVATE_IPV4_RANGES: ReadonlyArray<{ network: number; mask: number }> = [
+  { network: 0x7f000000, mask: 0xff000000 }, // 127.0.0.0/8 (loopback)
+  { network: 0x0a000000, mask: 0xff000000 }, // 10.0.0.0/8 (private)
+  { network: 0xac100000, mask: 0xfff00000 }, // 172.16.0.0/12 (private)
+  { network: 0xc0a80000, mask: 0xffff0000 }, // 192.168.0.0/16 (private)
+  { network: 0xa9fe0000, mask: 0xffff0000 }, // 169.254.0.0/16 (link-local)
+]
+
+/** Parses a dotted-quad IPv4 literal into its 32-bit value, else null. */
+function parseIpv4Literal(host: string): number | null {
+  const parts = host.split('.')
+  if (parts.length !== 4) return null
+  let value = 0
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null
+    const octet = Number(part)
+    if (octet > 255) return null
+    value = (value << 8) | octet
+  }
+  return value >>> 0
+}
+
+/**
+ * Expands an IPv6 literal (no brackets, no zone id) to its eight 16-bit
+ * groups, handling one `::` compression. Returns null for anything that is
+ * not a plain hex-group IPv6 literal (including IPv4-embedded forms, which
+ * stay the connect-time DNS pinning layer's job).
+ */
+function expandIpv6Groups(host: string): number[] | null {
+  const doubleColon = host.indexOf('::')
+  let parts: string[]
+  if (doubleColon !== -1) {
+    if (host.indexOf('::', doubleColon + 1) !== -1) return null
+    const head = doubleColon > 0 ? host.slice(0, doubleColon).split(':') : []
+    const tail =
+      doubleColon + 2 < host.length
+        ? host.slice(doubleColon + 2).split(':')
+        : []
+    const fill = 8 - head.length - tail.length
+    if (fill < 1) return null
+    parts = [
+      ...head,
+      ...Array<string>(fill).fill('0'),
+      ...tail,
+    ]
+  } else {
+    parts = host.split(':')
+    if (parts.length !== 8) return null
+  }
+  const groups: number[] = []
+  for (const part of parts) {
+    if (part.includes('.')) return null
+    if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return null
+    groups.push(parseInt(part, 16))
+  }
+  return groups
+}
+
+/**
+ * GV-20: true for a URL hostname that is the literal `localhost` or a
+ * literal private/loopback/link-local IP address. Non-literal hostnames
+ * (names that are neither dotted-quad IPv4 nor IPv6 literals) pass through —
+ * the connect-time DNS pinning (`common/src/mcp/dns-pinning.ts`) stays the
+ * second layer.
+ */
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  // A zone id (`fe80::1%eth0`) never reaches this gate through WHATWG URL
+  // parsing, but stripping keeps the predicate honest if a raw host arrives.
+  const host = hostname.toLowerCase().replace(/%[0-9a-z]+$/, '')
+  const unbracketed =
+    host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host
+  if (unbracketed === 'localhost') return true
+  const ipv4 = parseIpv4Literal(unbracketed)
+  if (ipv4 !== null) {
+    // `>>> 0` is REQUIRED on the whole comparison: `&` coerces to signed
+    // int32, so for hosts >= 2^31 (172.16/12, 192.168/16, 169.254/16) the
+    // masked left side goes negative while `range.network` stays a positive
+    // double and the ranges would never match. Do not drop the unsigned
+    // conversion in a refactor.
+    return PRIVATE_IPV4_RANGES.some(
+      (range) => ((ipv4 & range.mask) >>> 0) === range.network,
+    )
+  }
+  const groups = expandIpv6Groups(unbracketed)
+  if (groups === null) return false
+  // ::1 (loopback).
+  if (groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1) {
+    return true
+  }
+  // fe80::/10 (link-local) and fc00::/7 (unique local).
+  if ((groups[0]! & 0xffc0) === 0xfe80) return true
+  if ((groups[0]! & 0xfe00) === 0xfc00) return true
+  return false
 }
 
 /**
@@ -807,6 +933,41 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       // allowlist BEFORE any session record is created.
       const resolvedCwd = rejectUncontainedCwd(params.cwd)
       rejectUnallowedAdditionalDirectories(params.additionalDirectories)
+      // GV-18 (§12.3 transport gating): a transport that disabled client MCP
+      // refuses any request carrying mcpServers BEFORE any session record is
+      // created or process spawned (the GV-18 fixture expects exactly
+      // -32602 + 'client_mcp_disabled' + zero spawned processes).
+      if (
+        options.allowClientMcpServers === false &&
+        params.mcpServers.length > 0
+      ) {
+        throw makeMcpGateError(
+          'client_mcp_disabled',
+          'Client-supplied MCP servers are disabled on this transport',
+        )
+      }
+      // GV-20 (§12.3 SSRF): every client-supplied MCP server entry carrying
+      // an http/sse URL has its literal host checked BEFORE any connection
+      // is attempted. Literal private/loopback/link-local hosts are refused;
+      // non-literal hostnames pass through (connect-time DNS pinning in
+      // common/src/mcp/dns-pinning.ts stays the second layer).
+      for (const server of params.mcpServers) {
+        if (!('url' in server) || typeof server.url !== 'string') continue
+        let hostname: string
+        try {
+          hostname = new URL(server.url).hostname
+        } catch {
+          // An unparseable URL carries no literal host to reject here; the
+          // connect-time DNS pinning stays the second layer.
+          continue
+        }
+        if (isPrivateOrLoopbackHost(hostname)) {
+          throw makeMcpGateError(
+            'mcp_url_blocked',
+            'MCP server URL host is a private/loopback address',
+          )
+        }
+      }
       const sessionId = randomUUID()
       insertSessionBounded(sessionId, {
         cwd: resolvedCwd,
@@ -849,16 +1010,15 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       // REPLACED the in-flight AbortController here, which left the first
       // turn uncancellable (its cancel signal was dropped on the floor).
       // Fail closed instead: a concurrent prompt on the same session is
-      // rejected with the protocol's invalid-params error (carrying an
-      // `openbuff.dev` `session_busy` conflict marker in the data) and may
-      // be retried once the in-flight turn settles.
+      // rejected and may be retried once the in-flight turn settles. The
+      // wire shape is pinned BYTE-FOR-BYTE by the GV-14 golden fixture:
+      // JSON-RPC -32600, message 'A prompt is already running for this
+      // session', data { 'openbuff.dev': { code: 'prompt_in_flight' } }.
       if (session.abortController !== null) {
-        throw RequestError.invalidParams(
-          {
-            sessionId: params.sessionId,
-            [OPENBUFF_ACP_NS]: { code: 'session_busy' },
-          },
-          `A prompt turn is already in flight for ACP session '${params.sessionId}'.`,
+        throw new RequestError(
+          -32600,
+          'A prompt is already running for this session',
+          { [OPENBUFF_ACP_NS]: { code: 'prompt_in_flight' } },
         )
       }
       // §12.6: prompt-total and per-image limits, enforced before any handler

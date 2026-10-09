@@ -12,6 +12,7 @@ import {
 import type {
   AnyMessage,
   Client,
+  McpServer,
   SessionNotification,
   Stream,
 } from '@agentclientprotocol/sdk'
@@ -740,5 +741,146 @@ describe('P1-T2 session/load chat-history replay (§4.1, GV-26)', () => {
       'user_message_chunk',
       'agent_message_chunk',
     ])
+  })
+})
+
+describe('GV-18/GV-20 client-MCP gates at newSession (§12.3, §12.7)', () => {
+  /** The GV-18 fixture's client stdio mcpServers entry. */
+  const CLIENT_STDIO_MCP_SERVER: McpServer = {
+    name: 'peer-tools',
+    command: 'node',
+    args: ['server.js'],
+    env: [],
+  }
+  /** The GV-20 fixture's client http mcpServers entry (metadata IP). */
+  const METADATA_HTTP_MCP_SERVER: McpServer = {
+    type: 'http',
+    name: 'metadata',
+    url: 'http://169.254.169.254/',
+    headers: [],
+  }
+
+  // Accepts `unknown` because Agent.newSession returns
+  // `MaybePromise<NewSessionResponse>`; `await` handles both thenables and
+  // already-resolved values.
+  async function expectGvError(
+    promise: unknown,
+    code: string,
+    message: string,
+  ): Promise<void> {
+    let failure: unknown
+    try {
+      await promise
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(RequestError)
+    const requestError = failure as RequestError
+    // Fixture-pinned wire shape: exactly -32602, the exact message, and
+    // data['openbuff.dev'].code exactly the fixture code.
+    expect(requestError.code).toBe(-32602)
+    expect(requestError.message).toBe(message)
+    expect(
+      (
+        requestError.data as Record<string, Record<string, unknown>> | undefined
+      )?.['openbuff.dev']?.code,
+    ).toBe(code)
+  }
+
+  test('GV-18: a gated agent refuses client mcpServers with the fixture error shape and spawns nothing', async () => {
+    const { connection } = makeRecordingConnection()
+    const agent = createAcpAgent({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      connection,
+      allowClientMcpServers: false,
+    })
+
+    await expectGvError(
+      agent.newSession({
+        cwd: '/tmp/gv18-refused',
+        mcpServers: [CLIENT_STDIO_MCP_SERVER],
+      }),
+      'client_mcp_disabled',
+      'Client-supplied MCP servers are disabled on this transport',
+    )
+  })
+
+  test('GV-18 default: WITHOUT the gate (stdio posture) client mcpServers are still accepted', async () => {
+    const { connection } = makeRecordingConnection()
+    const agent = createAcpAgent({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      connection,
+      // allowClientMcpServers unset: today's permissive behavior (stdio).
+    })
+
+    const session = await agent.newSession({
+      cwd: '/tmp/gv18-stdio-permissive',
+      mcpServers: [CLIENT_STDIO_MCP_SERVER],
+    })
+    expect(typeof session.sessionId).toBe('string')
+  })
+
+  test('GV-20: a private/loopback http/sse URL host is refused with the fixture error shape before any connection', async () => {
+    const { connection } = makeRecordingConnection()
+    const agent = createAcpAgent({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      connection,
+    })
+
+    // The GV-20 fixture entry: the link-local metadata address.
+    await expectGvError(
+      agent.newSession({
+        cwd: '/tmp/gv20-metadata',
+        mcpServers: [METADATA_HTTP_MCP_SERVER],
+      }),
+      'mcp_url_blocked',
+      'MCP server URL host is a private/loopback address',
+    )
+
+    // The other pinned literal ranges are refused the same way.
+    for (const url of [
+      'http://127.0.0.1:8080/mcp',
+      'http://10.1.2.3/mcp',
+      'http://172.16.0.9/mcp',
+      'http://192.168.1.4/mcp',
+      'http://localhost/mcp',
+      'http://[::1]/mcp',
+      'http://[fe80::1]/mcp',
+      'http://[fc00::2]/mcp',
+    ]) {
+      await expectGvError(
+        agent.newSession({
+          cwd: '/tmp/gv20-ranges',
+          mcpServers: [{ type: 'http', name: 'm', url, headers: [] }],
+        }),
+        'mcp_url_blocked',
+        'MCP server URL host is a private/loopback address',
+      )
+    }
+  })
+
+  test('GV-20 pass-through: non-literal hostnames and public literal IPs are NOT gated at ingest', async () => {
+    const { connection } = makeRecordingConnection()
+    const agent = createAcpAgent({
+      promptHandler: async () => ({ stopReason: 'end_turn' }),
+      connection,
+    })
+
+    // A public literal IP and a non-literal hostname pass the ingest gate
+    // (connect-time DNS pinning stays the second layer).
+    const publicSession = await agent.newSession({
+      cwd: '/tmp/gv20-public',
+      mcpServers: [
+        { type: 'http', name: 'm', url: 'http://93.184.216.34/mcp', headers: [] },
+      ],
+    })
+    expect(typeof publicSession.sessionId).toBe('string')
+    const namedSession = await agent.newSession({
+      cwd: '/tmp/gv20-named',
+      mcpServers: [
+        { type: 'sse', name: 'm', url: 'https://mcp.example.com/sse', headers: [] },
+      ],
+    })
+    expect(typeof namedSession.sessionId).toBe('string')
   })
 })

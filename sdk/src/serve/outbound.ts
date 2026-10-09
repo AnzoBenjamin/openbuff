@@ -32,9 +32,17 @@
  * session's run with `stopReason: 'cancelled'` so memory stays bounded
  * instead of letting a stalled reader grow the queue without limit.
  *
- * WIRING STATUS (§12.6 wire-or-mark audit): transports currently write
- * directly to the writable — {@link OutboundQueue} is implemented and
- * tested but not yet wired into any transport path.
+ * WIRING STATUS (§12.6): the queue is wired into the SOCKET transport —
+ * `createOutboundQueueWritable` in `./socket-listener` interposes a
+ * per-connection {@link OutboundQueue} between the sanitize chokepoint and
+ * the authenticated socket, so every outbound frame is enqueued and drained
+ * respecting the writable's backpressure (writes pause while
+ * `writable.write()` reports a full buffer and resume on 'drain'); an
+ * overflow-abort destroys the connection, which the existing
+ * owner-disconnect path turns into an in-flight-turn abort (§12.6 'run
+ * cancelled' at the transport level). stdio remains UNWIRED deliberately:
+ * it is a process-lifetime transport whose single peer is the host process
+ * reading stdout, so there is no per-connection backpressure boundary.
  */
 
 import { loadProviderConfigSync } from '../provider-config'
@@ -678,12 +686,16 @@ type QueueEntry = {
  * already-sanitized serializable objects; the queue tracks their serialized
  * UTF-8 byte size against {@link OUTBOUND_QUEUE_MAX_BYTES}.
  *
- * LATER-WAVE SEAM — NOT YET WIRED (§12.6 wire-or-mark audit): this queue is
- * implemented and unit-tested but no transport currently routes outbound
- * frames through it; every transport writes directly to the writable. It
- * stays exported so the §12.6 contract and its tests remain pinned — wire
- * it in the later backpressure wave; do not remove it and do not assume a
- * production caller exists.
+ * WIRED (§12.6): the SOCKET transport routes every outbound NDJSON frame
+ * through one instance of this queue per connection
+ * (`createOutboundQueueWritable` in `./socket-listener`): frames enqueue,
+ * coalesce, and drain to the socket respecting the writable's backpressure,
+ * and the `abort` enqueue decision destroys the connection (fail closed;
+ * the existing owner-disconnect path aborts the in-flight turn and cancels
+ * pending reverse requests, realizing §12.6's 'run cancelled' semantics).
+ * stdio is NOT wired — it is a process-lifetime transport whose single peer
+ * is the host process reading stdout, so there is no per-connection
+ * backpressure boundary to protect.
  * Overflow handling is two-stage, in the order §12.6 prescribes:
  * 1. Coalesce: walk the queue and merge consecutive
  *    `agent_message_chunk`/`tool_call_update` frames that share an id. This

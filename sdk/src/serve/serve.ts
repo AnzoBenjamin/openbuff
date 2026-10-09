@@ -59,6 +59,15 @@ export type RunServeOptions = {
    * this list is rejected (-32602), never silently admitted.
    */
   allowedAdditionalDirectories?: string[]
+  /**
+   * GV-18 opt-in (additive, default false): when set, the SOCKET transport
+   * accepts client-supplied `mcpServers` in `session/new` like stdio does.
+   * Unset (the default) keeps client MCP servers DISABLED on the socket
+   * transport — a session/new carrying mcpServers is rejected -32602 with
+   * data['openbuff.dev'].code = 'client_mcp_disabled' before any process is
+   * spawned. stdio is unaffected: it keeps today's permissive behavior.
+   */
+  allowClientMcp?: boolean
 }
 
 /**
@@ -107,10 +116,14 @@ export function runServe(options: RunServeOptions): {
   if (transport.kind === 'stdio') {
     // serveAcpOverStdio applies resolveAcpServeOptions internally (confirmed in
     // acp-agent.ts), so the journal-backed session/load restore is wired.
+    // stdio keeps the PERMISSIVE GV-18 posture: allowClientMcpServers is left
+    // unset so client-supplied mcpServers are still accepted (the default).
     serveAcpOverStdio({ promptHandler, sessionData, ...containmentOptions })
     return { close: async () => {} }
   }
 
+  // GV-18: the socket transport REFUSES client-supplied mcpServers unless
+  // the host explicitly opted in with allowClientMcp.
   return serveAcpOverSocket({
     promptHandler,
     sessionData,
@@ -118,6 +131,7 @@ export function runServe(options: RunServeOptions): {
     token: transport.token,
     signal,
     ...containmentOptions,
+    allowClientMcpServers: options.allowClientMcp === true,
   })
 }
 

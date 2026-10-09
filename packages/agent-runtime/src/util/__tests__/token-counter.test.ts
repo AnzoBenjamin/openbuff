@@ -374,3 +374,65 @@ describe('exact token counter seam (P3-T10)', () => {
     expect(getTokenizerForModel('anthropic/claude-opus-4.7')).toBe('anthropic')
   })
 })
+
+describe(
+  'IncrementalTokenCounter model threading (audit: fudge factors dead on hot path)',
+  () => {
+    // Sized for a fast, deterministic BPE count: >100 chars so it follows the
+    // same cacheable path the hot path uses, well under the 8k cache bound.
+    const probeText = 'hot path pricing coverage message '.repeat(30)
+
+    test("model 'openai/gpt-4o' yields LOWER counts than the no-model default (factor 1.0 vs 1.35)", () => {
+      const noModel = new IncrementalTokenCounter()
+      const openai = new IncrementalTokenCounter('openai/gpt-4o')
+      const message = { role: 'user', content: probeText }
+      const baseline = noModel.messageTokens(message)
+      const threaded = openai.messageTokens(message)
+      expect(threaded).toBeLessThan(baseline)
+      // Exact external contract: each path equals countTokensJson with the
+      // corresponding model argument (legacy 1.35 sentinel vs the 1.0 factor).
+      expect(baseline).toBe(countTokensJson(message))
+      expect(threaded).toBe(countTokensJson(message, 'openai/gpt-4o'))
+      // messagesTokens delegates to messageTokens, so the sum prices with the
+      // threaded model too.
+      expect(openai.messagesTokens([message])).toBe(threaded)
+    })
+
+    test("model 'anthropic/claude-...' is identical to the no-model default", () => {
+      const noModel = new IncrementalTokenCounter()
+      const anthropic = new IncrementalTokenCounter(
+        'anthropic/claude-sonnet-4-5',
+      )
+      const message = { role: 'user', content: probeText }
+      // Both resolve to the Anthropic 1.35 factor (the sentinel default), so
+      // threading a Claude model must not change any count.
+      expect(anthropic.messageTokens(message)).toBe(
+        noModel.messageTokens(message),
+      )
+    })
+
+    test('setModel switches pricing for subsequently-counted NEW messages', () => {
+      // WeakMap memoization caveat (documented on setModel): already-counted
+      // message objects keep their memoized count after setModel — only NEW
+      // message objects are priced with the new model's factor. That is
+      // acceptable because counts are comparable-within-iteration estimates;
+      // evicting the memo on setModel would change the pinned reset/eviction
+      // behavior instead.
+      const counter = new IncrementalTokenCounter()
+      const beforeMessage = { role: 'user', content: probeText }
+      const beforeCount = counter.messageTokens(beforeMessage)
+      expect(beforeCount).toBe(countTokensJson(beforeMessage))
+
+      counter.setModel('openai/gpt-4o')
+
+      // The already-counted object keeps its memoized (legacy-default) count.
+      expect(counter.messageTokens(beforeMessage)).toBe(beforeCount)
+      // A NEW message object is priced with the new model's factor.
+      const afterMessage = { role: 'user', content: probeText }
+      expect(counter.messageTokens(afterMessage)).toBe(
+        countTokensJson(afterMessage, 'openai/gpt-4o'),
+      )
+      expect(counter.messageTokens(afterMessage)).toBeLessThan(beforeCount)
+    })
+  },
+)

@@ -9,6 +9,7 @@ import {
 import { z } from 'zod'
 import { parseFileStructure } from '@codebuff/code-map'
 import { MemoryRetrievalRequestSchema } from '@codebuff/common/types/memory-v2'
+import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
 
 import { codeSearch } from '../tools/code-search'
 import { getFilesStructured } from '../tools/read-files'
@@ -284,6 +285,12 @@ const APPLY_EDITS_INPUT_SCHEMA = {
             maxLength: MAX_APPLY_EDIT_CONTENT_CHARS,
             description: 'The complete new file content.',
           },
+          expectedHash: {
+            type: ['string', 'null'],
+            maxLength: 128,
+            description:
+              'sha256 hex (optionally "sha256:"-prefixed) of the CURRENT file content, as reported by read_files. REQUIRED to overwrite an existing file; null or absent creates a new file.',
+          },
         },
         required: ['path', 'content'],
         additionalProperties: false,
@@ -508,6 +515,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) return error.message
   return typeof error === 'string' && error.length > 0 ? error : 'Unknown error'
+}
+
+/** The Node errno code carried by an fs error, when one is present. */
+function errnoCode(error: unknown): string | undefined {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as { code?: unknown }).code === 'string'
+  ) {
+    return (error as { code: string }).code
+  }
+  return undefined
 }
 
 function optionalString(
@@ -1200,9 +1220,42 @@ async function callMemorySearch(
   )
 }
 
+/**
+ * The sha256 hex forms the read surfaces mint: bare 64-char hex or the
+ * `sha256:`-prefixed exact-content hash. Both are accepted so a client can
+ * echo whichever hash its read produced; anything else is invalid.
+ */
+function normalizeSha256Hex(value: string): string | null {
+  const hex = value.startsWith('sha256:') ? value.slice('sha256:'.length) : value
+  return /^[0-9a-fA-F]{64}$/.test(hex) ? hex.toLowerCase() : null
+}
+
+/**
+ * Resolves a project-relative apply_edits target with the SAME lexical
+ * containment the mutation broker applies; returns null when the path
+ * escapes the project root so the gate can refuse before any write.
+ */
+function resolveEditsTarget(
+  projectRoot: string,
+  relativePath: string,
+): string | null {
+  const absolute = path.resolve(projectRoot, relativePath)
+  const relative = path.relative(projectRoot, absolute)
+  if (
+    relative === '' ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    return null
+  }
+  return absolute
+}
+
 async function callApplyEdits(
   sessionData: McpSessionData,
   getBroker: () => Promise<WorkspaceMutationBroker>,
+  fileSystem: CodebuffFileSystem,
   args: unknown,
 ): Promise<CallToolResult> {
   if (!isRecord(args)) return invalid('arguments must be an object.')
@@ -1213,7 +1266,11 @@ async function callApplyEdits(
   if (rawEdits.length > MAX_APPLY_EDITS) {
     return invalid(`edits supports at most ${MAX_APPLY_EDITS} entries.`)
   }
-  const edits: { path: string; content: string }[] = []
+  const edits: {
+    path: string
+    content: string
+    expectedHash?: string | null
+  }[] = []
   for (const entry of rawEdits) {
     if (!isRecord(entry)) return invalid('edits entries must be objects.')
     const pathArg = optionalString(entry.path, 'edits[].path', MAX_PATH_CHARS)
@@ -1228,7 +1285,92 @@ async function callApplyEdits(
         `edits[].content exceeds the ${MAX_APPLY_EDIT_CONTENT_CHARS}-character limit.`,
       )
     }
-    edits.push({ path: pathArg.value, content: entry.content })
+    const rawHash = entry.expectedHash
+    if (
+      rawHash !== undefined &&
+      rawHash !== null &&
+      typeof rawHash !== 'string'
+    ) {
+      return invalid('edits[].expectedHash must be a string or null.')
+    }
+    edits.push({
+      path: pathArg.value,
+      content: entry.content,
+      ...(rawHash === undefined ? {} : { expectedHash: rawHash }),
+    })
+  }
+  // AUDIT HIGH (blind-overwrite gate): every edit is gated on a verified
+  // snapshot of the CURRENT file BEFORE anything is written. A sensitive
+  // path, an escaping path, a missing/mismatched expectedHash on an
+  // existing file, or a non-null expectedHash on a create ALL reject the
+  // whole batch as a structured McpError — fail closed, no partial writes.
+  // The broker's compare-and-swap re-verifies the hash atomically at commit
+  // time; this gate adds the presence requirement, the sensitive-path
+  // refusal, and the structured rejections the broker cannot express.
+  const planned: {
+    path: string
+    content: string
+    expectedHash: string | null
+  }[] = []
+  for (const edit of edits) {
+    if (isMandatorySensitiveReadPath(edit.path)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Refusing apply_edits write to sensitive path '${edit.path}': credential and key material are never writable through this tool.`,
+      )
+    }
+    const absolute = resolveEditsTarget(sessionData.projectRoot, edit.path)
+    if (absolute === null) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `apply_edits path '${edit.path}' resolves outside the project root.`,
+      )
+    }
+    // Existence snapshot FIRST: the gate decides create-vs-overwrite from
+    // the CURRENT file state. A read failure other than ENOENT is a real
+    // tool error, never a silently-permissive write.
+    let current: string | Buffer | undefined
+    try {
+      current = await fileSystem.readFile(absolute)
+    } catch (error) {
+      if (errnoCode(error) !== 'ENOENT') throw error
+    }
+    if (current === undefined) {
+      // Create-only path: the file does not exist, so expectedHash MUST be
+      // null/absent (a non-null hash claims knowledge of content that
+      // cannot exist — a stale client view).
+      if (edit.expectedHash != null) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `expectedHash must be null (or omitted) to create the new file '${edit.path}': the file does not exist.`,
+        )
+      }
+      planned.push({
+        path: edit.path,
+        content: edit.content,
+        expectedHash: null,
+      })
+      continue
+    }
+    // Overwrite path: expectedHash is REQUIRED and must equal the hash of
+    // the current content — a missing/null/mismatched hash is a structured
+    // invalid-params rejection (fail closed, no partial writes).
+    if (edit.expectedHash == null) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `expectedHash is required to overwrite the existing file '${edit.path}': pass the sha256 hex of the current content (a full read_files call reports it).`,
+      )
+    }
+    const expectedHex = normalizeSha256Hex(edit.expectedHash)
+    const actualHex = createHash('sha256').update(current).digest('hex')
+    if (expectedHex === null || expectedHex !== actualHex) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `expectedHash does not match the current content of '${edit.path}': the file changed since it was read; re-read and retry.`,
+      )
+    }
+    planned.push({ ...edit, expectedHash: `sha256:${actualHex}` })
+    continue
   }
   // A broker-construction failure (lock/state-dir unavailable, identity
   // unresolvable) surfaces as a tool error, never a crashed server.
@@ -1241,9 +1383,14 @@ async function callApplyEdits(
     )
   }
   const results: { path: string; applied: boolean; actualHash?: string }[] = []
-  for (const edit of edits) {
-    // v1 is a full-file write: `expectedHash: null` is a create/overwrite.
-    const commit = await broker.conditionalCommit(edit.path, edit.content, null)
+  for (const edit of planned) {
+    // v1 is a full-file write: `null` is a create (the broker's create path
+    // is exclusive), a hash is a guarded overwrite re-verified atomically.
+    const commit = await broker.conditionalCommit(
+      edit.path,
+      edit.content,
+      edit.expectedHash,
+    )
     results.push({
       path: edit.path,
       applied: commit.applied,
@@ -1360,7 +1507,12 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
           case 'memory_search':
             return await callMemorySearch(sessionData, args)
           case 'apply_edits':
-            return await callApplyEdits(sessionData, getMutationBroker, args)
+            return await callApplyEdits(
+              sessionData,
+              getMutationBroker,
+              fs,
+              args,
+            )
           default:
             // Unreachable given the toolNames gate; kept so a registry edit
             // that forgets a case still fails closed.
@@ -1370,8 +1522,14 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
             )
         }
       } catch (error) {
-        // A handler failure is a TOOL error: the MCP client gets isError:true
-        // content, never a crashed server or a dropped JSON-RPC response.
+        // A structured McpError raised BY a handler (the apply_edits
+        // overwrite/sensitive-path gate) IS the response: rethrow it so the
+        // client receives the JSON-RPC invalid-params error instead of an
+        // isError tool result that would flatten the structured code.
+        if (error instanceof McpError) throw error
+        // Any other handler failure is a TOOL error: the MCP client gets
+        // isError:true content, never a crashed server or a dropped
+        // JSON-RPC response.
         return errorResult(`Tool ${name} failed: ${errorMessage(error)}`)
       }
     },

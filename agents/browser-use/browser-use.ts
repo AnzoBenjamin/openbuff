@@ -43,9 +43,9 @@ const definition: AgentDefinition = {
         interactionPolicy: {
           type: 'string' as const,
           enum: ['read-only', 'allow-interactions'],
-          default: 'read-only',
+          default: 'allow-interactions',
           description:
-            'External-action policy. Defaults to read-only inspection. Set allow-interactions only when clicks, typing, uploads, storage/cookie mutation, or other site interactions are authorized.',
+            'External-action policy. Defaults to allow-interactions. Set read-only to restrict the agent to non-mutating actions only (navigate, snapshot, screenshot, wait, scroll, pdf, pixel_diff).',
         },
       },
     },
@@ -160,7 +160,7 @@ const definition: AgentDefinition = {
     'browser_logs',
     'add_message',
   ],
-  terminalPermissionProfile: 'read-only',
+  terminalPermissionProfile: 'workspace-write',
 
   systemPrompt: `You are an expert browser automation agent. You use the browser_logs tool to navigate web pages, interact with elements, capture screenshots, record sessions, and verify application behavior.
 

@@ -211,4 +211,84 @@ describeUnix('runServe SEC-7 containment wiring', () => {
       expect(typeof session.sessionId).toBe('string')
     },
   )
+
+  test(
+    'GV-18: the socket transport refuses client mcpServers by default ' +
+      "(fixture error shape) and admits them when allowClientMcp opts in",
+    async () => {
+      const socketDir = makeTempDir('serve-gv18-sock-')
+      const projectRoot = makeTempDir('serve-gv18-root-')
+      const clientMcpServer = {
+        name: 'peer-tools',
+        command: 'node',
+        args: ['server.js'],
+        env: [],
+      }
+
+      // Default (no allowClientMcp): the socket transport passes
+      // allowClientMcpServers: false, so a session/new carrying mcpServers
+      // is rejected -32602 with the GV-18 fixture data code BEFORE any
+      // process is spawned.
+      const { socketPath, token } = startServe({ socketDir, projectRoot })
+      await waitFor(() => existsSync(socketPath))
+      const client = connectAuthedClient(socketPath, token)
+      await client.initialize({ protocolVersion: PROTOCOL_VERSION })
+
+      let failure: unknown
+      try {
+        await client.newSession({
+          cwd: projectRoot,
+          mcpServers: [clientMcpServer],
+        })
+      } catch (error) {
+        failure = error
+      }
+      expect(failure).toBeInstanceOf(Error)
+      const wireError = failure as {
+        code?: number
+        message?: string
+        data?: Record<string, Record<string, unknown>>
+      }
+      expect(wireError.code).toBe(-32602)
+      expect(wireError.message).toBe(
+        'Client-supplied MCP servers are disabled on this transport',
+      )
+      expect(wireError.data?.['openbuff.dev']?.code).toBe('client_mcp_disabled')
+
+      // A session WITHOUT mcpServers still works on the gated transport.
+      const plain = await client.newSession({ cwd: projectRoot, mcpServers: [] })
+      expect(typeof plain.sessionId).toBe('string')
+    },
+  )
+
+  test(
+    'GV-18 opt-in: allowClientMcp admits client mcpServers on the socket ' +
+      'transport',
+    async () => {
+      const socketDir = makeTempDir('serve-gv18-opt-sock-')
+      const projectRoot = makeTempDir('serve-gv18-opt-root-')
+      const socketPath = join(socketDir, 'serve.sock')
+      const token = 'gv18-opt-token'
+      servers.push(
+        runServe({
+          client: fakeServeClient(),
+          sessionData: new AcpSessionData(),
+          transport: { kind: 'socket', socketPath, token },
+          projectRoot,
+          allowClientMcp: true,
+        }),
+      )
+      await waitFor(() => existsSync(socketPath))
+
+      const client = connectAuthedClient(socketPath, token)
+      await client.initialize({ protocolVersion: PROTOCOL_VERSION })
+      const session = await client.newSession({
+        cwd: projectRoot,
+        mcpServers: [
+          { name: 'peer-tools', command: 'node', args: ['server.js'], env: [] },
+        ],
+      })
+      expect(typeof session.sessionId).toBe('string')
+    },
+  )
 })

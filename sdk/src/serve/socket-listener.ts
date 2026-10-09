@@ -10,7 +10,7 @@ import {
 import { createServer } from 'node:net'
 import type { Socket } from 'node:net'
 import { dirname } from 'node:path'
-import { Readable, Writable } from 'node:stream'
+import { Readable } from 'node:stream'
 
 import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk'
 
@@ -19,7 +19,11 @@ import {
   resolveAcpServeOptions,
 } from '../services/acp/acp-agent'
 import type { AcpAgentOptions } from '../services/acp/acp-agent'
-import { sanitizeOutboundStream } from './outbound'
+import {
+  OutboundQueue,
+  OUTBOUND_QUEUE_MAX_BYTES,
+  sanitizeOutboundStream,
+} from './outbound'
 
 /**
  * Options for {@link serveAcpOverSocket}. Everything the ACP agent needs
@@ -324,10 +328,13 @@ function handleConnection(
     // NEW-4 chokepoint (§12.8): every serialized frame — including
     // SDK-generated JSON-RPC errors and agent→client requests — crosses
     // sanitizeOutbound before the wire; clean frames stay byte-identical.
+    // §12.6 (OutboundQueue wiring): the sanitized frames then flow through
+    // a per-connection queue that coalesces and drains respecting the
+    // socket's backpressure; an overflow abort destroys the connection
+    // (fail closed), which cancels the in-flight turn via the normal
+    // owner-disconnect path.
     const stream = ndJsonStream(
-      sanitizeOutboundStream(
-        Writable.toWeb(socket) as unknown as WritableStream<Uint8Array>,
-      ),
+      sanitizeOutboundStream(createOutboundQueueWritable(socket)),
       Readable.toWeb(socket) as unknown as ReadableStream<Uint8Array>,
     )
     // A fresh AgentSideConnection per socket: the session map inside
@@ -369,4 +376,136 @@ function verifyAuthLine(line: string, expectedToken: string): boolean {
   // Fail closed on length mismatch before timingSafeEqual (which throws).
   if (providedBuf.length !== expectedBuf.length) return false
   return timingSafeEqual(providedBuf, expectedBuf)
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The node writable the queued outbound path writes to. Structurally
+ * satisfied by a net `Socket` (and by test fakes), so the §12.6 wiring stays
+ * testable without real sockets.
+ */
+export type OutboundQueueWritableTarget = {
+  /** Returns false when the writable's buffer is full (backpressure). */
+  write: (chunk: Uint8Array) => boolean
+  once: (event: 'drain', listener: () => void) => unknown
+  destroy: () => void
+  end?: () => unknown
+}
+
+/**
+ * §12.6 outbound backpressure wiring (per connection): wraps the socket the
+ * authenticated connection writes to so every outbound NDJSON frame is
+ * enqueued into a per-connection {@link OutboundQueue} (which coalesces
+ * consecutive chunk/update frames) and drained respecting the writable's
+ * backpressure — writes continue while `write()` reports buffered capacity
+ * and PAUSE the moment it returns false, resuming on 'drain'. A client that
+ * keeps up therefore takes the immediate-write fast path; the queue only
+ * grows while the client is genuinely stalled. When the queue's overflow
+ * decision is `abort` (coalescing could not bring it back under its byte
+ * cap) the connection is DESTROYED — fail closed. The existing
+ * owner-disconnect path already aborts the in-flight turn and cancels
+ * pending reverse requests on a destroyed socket, realizing §12.6's 'run
+ * cancelled' semantics at the transport level.
+ *
+ * Frames are re-serialized as `JSON.stringify(frame) + '\n'` after the
+ * round-trip through the queue; the sanitize chokepoint runs BEFORE this
+ * wrapper (see handleConnection), so no unsanitized text can reach the wire.
+ *
+ * stdio stays UNWIRED deliberately: it is a process-lifetime transport whose
+ * single peer is the host process reading our stdout, so there is no
+ * per-connection backpressure boundary to protect.
+ */
+export function createOutboundQueueWritable(
+  target: OutboundQueueWritableTarget,
+  options?: { maxBytes?: number },
+): WritableStream<Uint8Array> {
+  const queue = new OutboundQueue(options?.maxBytes ?? OUTBOUND_QUEUE_MAX_BYTES)
+  const decoder = new TextDecoder('utf8', { fatal: false })
+  const encoder = new TextEncoder()
+  let lineBuffer = ''
+  let stalled = false
+  let aborted = false
+
+  const flushQueue = (): void => {
+    if (stalled || aborted) return
+    for (;;) {
+      const frame = queue.dequeue()
+      if (frame === undefined) return
+      if (!target.write(encoder.encode(`${JSON.stringify(frame)}\n`))) {
+        // Backpressure: the socket's buffer is full (the frame just handed
+        // to write() is already buffered by the socket). Pause the drain and
+        // resume on 'drain'; frames enqueued meanwhile stay queued.
+        stalled = true
+        target.once('drain', () => {
+          stalled = false
+          flushQueue()
+        })
+        return
+      }
+    }
+  }
+
+  /**
+   * Fails closed: clears the queue, destroys the connection, errors the
+   * stream. Declared `never` — it ALWAYS throws, so the compiler knows calls
+   * terminate control flow and downstream narrowing survives.
+   */
+  // Variable-level `(reason: string) => never` annotation: TS's
+  // never-return call analysis (which makes the guards below terminate
+  // control flow so `parsed` narrows to Record<string, unknown>) only
+  // applies when the const CARRIES an explicit never-typed signature, not
+  // merely an inline arrow return type.
+  const failClosed: (reason: string) => never = (reason) => {
+    aborted = true
+    queue.clear()
+    target.destroy()
+    throw new Error(reason)
+  }
+
+  return new WritableStream<Uint8Array>({
+    write(chunk) {
+      if (aborted) return
+      lineBuffer += decoder.decode(chunk, { stream: true })
+      for (;;) {
+        const newlineIndex = lineBuffer.indexOf('\n')
+        if (newlineIndex === -1) break
+        const line = lineBuffer.slice(0, newlineIndex).trim()
+        lineBuffer = lineBuffer.slice(newlineIndex + 1)
+        if (line.length === 0) continue
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(line)
+        } catch {
+          failClosed(
+            'outbound frame was not valid JSON; closing connection (fail closed).',
+          )
+        }
+        if (!isJsonObject(parsed)) {
+          failClosed(
+            'outbound frame was not a JSON object; closing connection (fail closed).',
+          )
+        }
+        const result = queue.enqueue(parsed)
+        if (result.status === 'abort') {
+          failClosed(
+            'outbound queue overflow could not be coalesced; closing connection.',
+          )
+        }
+      }
+      flushQueue()
+    },
+    close() {
+      lineBuffer = ''
+      queue.clear()
+      target.end?.()
+    },
+    abort() {
+      aborted = true
+      queue.clear()
+      target.destroy()
+    },
+  })
 }

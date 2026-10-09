@@ -290,10 +290,13 @@ function classifySingleSegment(
 
 /**
  * Option flags of transparent wrappers that consume a separate value token
- * (e.g. `sudo -u root git push` strips `sudo -u root `).
+ * (e.g. `sudo -u root git push` strips `sudo -u root `, `nice -n 5 npm
+ * install` strips `nice -n 5 `, `timeout -k 5 30 git push` strips `-k 5 `).
  */
 const WRAPPER_OPTION_VALUES: Record<string, ReadonlySet<string>> = {
   env: new Set(['u']),
+  timeout: new Set(['k', 's']),
+  nice: new Set(['n']),
   sudo: new Set([
     'u',
     'g',
@@ -314,21 +317,32 @@ const WRAPPER_OPTION_VALUES: Record<string, ReadonlySet<string>> = {
 }
 
 /**
+ * Deepest shell-interpreter/`eval` unwrapping recursion allowed before
+ * classification fails closed to `arbitrary-code`. Bounds the work an
+ * adversarially nested `bash -c "bash -c ..."` payload can force.
+ */
+const MAX_WRAPPER_DEPTH = 3
+
+/**
  * Normalizes one command segment (stripping grouping braces, env assignments,
- * and transparent wrapper prefixes such as `sudo`/`env`) and classifies it.
- * `nohup`/`setsid` are deliberately NOT stripped: they run arbitrary code.
+ * and transparent wrapper prefixes such as `sudo`/`env`/`timeout`/`nice`, and
+ * classifying through shell-interpreter wrappers like `bash -c`/`eval`) and
+ * classifies it. `nohup`/`setsid` are deliberately NOT stripped: they run
+ * arbitrary code.
  */
 function classifySegment(
   segment: string,
+  depth = 0,
 ): Omit<ClassifiedHarnessAction, 'commandHash'> | undefined {
-  let normalized = segment.trim()
+  const wrappedCommand = segment.trim()
+  let normalized = wrappedCommand
   while (normalized.startsWith('(') || normalized.startsWith('{')) {
     normalized = normalized.slice(1).trim()
   }
   normalized = stripLeadingEnvAssignments(normalized)
   for (;;) {
     const wrapper = normalized.match(
-      /^(command|exec|time|env|sudo|doas|xargs)\s+/,
+      /^(command|exec|time|env|sudo|doas|xargs|timeout|nice)\s+/,
     )
     if (!wrapper) break
     const word = wrapper[1]
@@ -337,7 +351,9 @@ function classifySegment(
       word === 'sudo' ||
       word === 'doas' ||
       word === 'xargs' ||
-      word === 'env'
+      word === 'env' ||
+      word === 'timeout' ||
+      word === 'nice'
     ) {
       const valueFlags = WRAPPER_OPTION_VALUES[word] ?? new Set<string>()
       for (;;) {
@@ -357,11 +373,66 @@ function classifySegment(
         normalized = normalized.slice(option[0].length)
       }
     }
+    if (word === 'timeout') {
+      // `timeout DURATION cmd` consumes a mandatory duration token (`30`,
+      // `30s`, `1m`, ...) before the wrapped command.
+      const duration = normalized.match(/^[^\s]+\s+/)
+      if (duration) normalized = normalized.slice(duration[0].length)
+    }
     if (word === 'env') {
       normalized = stripLeadingEnvAssignments(normalized)
     }
   }
+  // Shell interpreters and `eval` are NOT transparent wrappers: their argument
+  // is a code payload, so classification must descend INTO the payload rather
+  // than stop at the wrapper word (a payload like `bash -c "git push"` used to
+  // execute unclassified). If the payload classifies, use that action but bind
+  // the target to the full wrapped command so the approval names the exact
+  // command (the commandHash already hashes the full original command). If the
+  // payload does NOT classify, fail closed to `arbitrary-code`: a shell
+  // interpreter wrapping an unrecognized command is exactly the arbitrary-code
+  // shape, and leaving it unclassified would let it run without approval.
+  const shellWrapper = normalized.match(
+    /^(?:(?:bash|zsh|dash|ksh|sh)\s+-[A-Za-z]*c|eval)\s+([\s\S]+)$/i,
+  )
+  if (shellWrapper) {
+    if (depth >= MAX_WRAPPER_DEPTH) {
+      return { action: 'arbitrary-code', target: wrappedCommand }
+    }
+    let payload = shellWrapper[1].trim()
+    const doubleQuoted = payload.match(/^"([\s\S]*)"$/)
+    const singleQuoted = payload.match(/^'([\s\S]*)'$/)
+    if (doubleQuoted) {
+      // Model the shell's own unescaping of a double-quoted argv word so a
+      // nested `bash -c "bash -c \"git push\""` payload classifies through.
+      payload = doubleQuoted[1].replace(/\\([$`"\\])/g, '$1')
+    } else if (singleQuoted) {
+      payload = singleQuoted[1]
+    }
+    const payloadClass = classifySegmentsLikeCommand(payload, depth + 1)
+    if (payloadClass) return { ...payloadClass, target: wrappedCommand }
+    return { action: 'arbitrary-code', target: wrappedCommand }
+  }
   return classifySingleSegment(normalized)
+}
+
+/**
+ * Classifies a command string the way `classifyTerminalHarnessAction`
+ * classifies a top-level command: split into segments first, then classify
+ * each segment. `depth` bounds recursive shell-wrapper unwrapping so nested
+ * `bash -c "bash -c ..."` payloads cannot recurse without bound.
+ */
+function classifySegmentsLikeCommand(
+  command: string,
+  depth: number,
+): Omit<ClassifiedHarnessAction, 'commandHash'> | undefined {
+  const segments = splitCommandSegments(command)
+  if (!segments) return classifySegment(command, depth)
+  for (const segment of segments) {
+    const result = classifySegment(segment, depth)
+    if (result) return result
+  }
+  return undefined
 }
 
 function stripLeadingEnvAssignments(segment: string): string {
@@ -579,15 +650,7 @@ export function classifyTerminalHarnessAction(
   const commandHash = hashCommand(rawCommand)
   const classify = ():
     | Omit<ClassifiedHarnessAction, 'commandHash'>
-    | undefined => {
-    const segments = splitCommandSegments(command)
-    if (!segments) return classifySegment(command)
-    for (const segment of segments) {
-      const result = classifySegment(segment)
-      if (result) return result
-    }
-    return undefined
-  }
+    | undefined => classifySegmentsLikeCommand(command, 0)
   const result = classify()
   return result ? { ...result, commandHash } : undefined
 }

@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -516,6 +517,186 @@ describe('createMcpServer', () => {
         expect(readFileSync(join(projectRoot, 'note.txt'), 'utf8')).toBe(
           'hello from apply_edits\n',
         )
+      } finally {
+        await close()
+      }
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('apply_edits overwrite gate: an existing file REQUIRES the current content hash', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-server-gate-'))
+    try {
+      writeFileSync(join(projectRoot, 'tracked.ts'), 'export const a = 1\n')
+      const server = createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+        mutations: true,
+      })
+      const { client, close } = await connectPair(server)
+      try {
+        // (a) Overwrite WITHOUT expectedHash → structured invalid-params
+        // rejection, nothing written.
+        let caught: unknown
+        try {
+          await client.callTool({
+            name: 'apply_edits',
+            arguments: {
+              edits: [{ path: 'tracked.ts', content: 'export const a = 2\n' }],
+            },
+          })
+        } catch (error) {
+          caught = error
+        }
+        expect(caught).toBeInstanceOf(McpError)
+        expect((caught as McpError).message).toContain('expectedHash is required')
+        expect(readFileSync(join(projectRoot, 'tracked.ts'), 'utf8')).toBe(
+          'export const a = 1\n',
+        )
+
+        // (b) WRONG hash → rejected, file untouched.
+        const staleHash = createHash('sha256')
+          .update('stale content the client imagined')
+          .digest('hex')
+        caught = undefined
+        try {
+          await client.callTool({
+            name: 'apply_edits',
+            arguments: {
+              edits: [
+                {
+                  path: 'tracked.ts',
+                  content: 'export const a = 2\n',
+                  expectedHash: staleHash,
+                },
+              ],
+            },
+          })
+        } catch (error) {
+          caught = error
+        }
+        expect(caught).toBeInstanceOf(McpError)
+        expect((caught as McpError).message).toContain(
+          'does not match the current content',
+        )
+        expect(readFileSync(join(projectRoot, 'tracked.ts'), 'utf8')).toBe(
+          'export const a = 1\n',
+        )
+
+        // (c) CORRECT hash → the overwrite succeeds.
+        const correctHash = createHash('sha256')
+          .update('export const a = 1\n')
+          .digest('hex')
+        const result = await client.callTool({
+          name: 'apply_edits',
+          arguments: {
+            edits: [
+              {
+                path: 'tracked.ts',
+                content: 'export const a = 2\n',
+                expectedHash: correctHash,
+              },
+            ],
+          },
+        })
+        expect(result.isError).toBeUndefined()
+        expect(readFileSync(join(projectRoot, 'tracked.ts'), 'utf8')).toBe(
+          'export const a = 2\n',
+        )
+      } finally {
+        await close()
+      }
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('apply_edits create path: a null/absent hash creates the file; a non-null hash on a create is rejected', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-server-create-'))
+    try {
+      const server = createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+        mutations: true,
+      })
+      const { client, close } = await connectPair(server)
+      try {
+        // A null expectedHash is a create.
+        const created = await client.callTool({
+          name: 'apply_edits',
+          arguments: {
+            edits: [
+              {
+                path: 'fresh.ts',
+                content: 'export const fresh = true\n',
+                expectedHash: null,
+              },
+            ],
+          },
+        })
+        expect(created.isError).toBeUndefined()
+        expect(readFileSync(join(projectRoot, 'fresh.ts'), 'utf8')).toBe(
+          'export const fresh = true\n',
+        )
+
+        // A non-null hash on a file that does not exist claims knowledge of
+        // content that cannot exist → structured rejection, nothing created.
+        let caught: unknown
+        try {
+          await client.callTool({
+            name: 'apply_edits',
+            arguments: {
+              edits: [
+                {
+                  path: 'never-existed.ts',
+                  content: 'export const nope = 1\n',
+                  expectedHash: createHash('sha256').update('ghost').digest('hex'),
+                },
+              ],
+            },
+          })
+        } catch (error) {
+          caught = error
+        }
+        expect(caught).toBeInstanceOf(McpError)
+        expect((caught as McpError).message).toContain('must be null')
+        expect(existsSync(join(projectRoot, 'never-existed.ts'))).toBe(false)
+      } finally {
+        await close()
+      }
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('apply_edits refuses sensitive paths with a structured error naming the refusal', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-server-sensitive-'))
+    try {
+      const server = createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+        mutations: true,
+      })
+      const { client, close } = await connectPair(server)
+      try {
+        for (const target of ['.env', 'id_rsa', '.npmrc']) {
+          let caught: unknown
+          try {
+            await client.callTool({
+              name: 'apply_edits',
+              arguments: {
+                edits: [{ path: target, content: 'SECRET=leak\n' }],
+              },
+            })
+          } catch (error) {
+            caught = error
+          }
+          expect(caught).toBeInstanceOf(McpError)
+          expect((caught as McpError).message).toContain('sensitive path')
+          expect((caught as McpError).message).toContain(target)
+          expect(existsSync(join(projectRoot, target))).toBe(false)
+        }
       } finally {
         await close()
       }

@@ -14,6 +14,10 @@ import {
 import type { Client, Stream } from '@agentclientprotocol/sdk'
 
 import { serveAcpOverSocket } from '../serve/socket-listener'
+import {
+  createOutboundQueueWritable,
+  type OutboundQueueWritableTarget,
+} from '../serve/socket-listener'
 import type { ServeAcpOverSocketOptions } from '../serve/socket-listener'
 import { createServeBridge } from '../serve/bridge'
 import type { ServeBridgeClient } from '../serve/bridge'
@@ -356,5 +360,160 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
 
     // Idempotent: a second close is a no-op and never throws.
     await server.close()
+  })
+})
+
+/**
+ * A bounded fake writable standing in for the authenticated net Socket (no
+ * real sockets needed): `stalled` makes `write()` report a full buffer, so
+ * the queue wiring must pause and only resume when the test fires 'drain'.
+ */
+function makeFakeWritableTarget(): {
+  target: OutboundQueueWritableTarget
+  written: string[]
+  setStalled: (stalled: boolean) => void
+  fireDrain: () => void
+  destroyCalls: () => number
+} {
+  const written: string[] = []
+  const drainListeners: Array<() => void> = []
+  let stalled = false
+  let destroyed = 0
+  const target: OutboundQueueWritableTarget = {
+    write: (chunk) => {
+      // Node semantics: a stalled writable still ACCEPTS (buffers) the chunk
+      // whose write() returned false; only the boolean reports backpressure.
+      written.push(new TextDecoder().decode(chunk))
+      return !stalled
+    },
+    once: (event, listener) => {
+      if (event === 'drain') drainListeners.push(listener)
+      return target
+    },
+    destroy: () => {
+      destroyed += 1
+    },
+  }
+  return {
+    target,
+    written,
+    setStalled: (value) => {
+      stalled = value
+    },
+    fireDrain: () => {
+      while (drainListeners.length > 0) drainListeners.shift()!()
+    },
+    destroyCalls: () => destroyed,
+  }
+}
+
+/** Writes one NDJSON line into the queue-wrapped writable. */
+async function writeFrame(
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  frame: Record<string, unknown>,
+): Promise<void> {
+  await writer.write(
+    new TextEncoder().encode(`${JSON.stringify(frame)}\n`),
+  )
+}
+
+describe('createOutboundQueueWritable (§12.6 OutboundQueue wiring)', () => {
+  test('a stalled writable accumulates queued frames and drain flushes them in order', async () => {
+    const fake = makeFakeWritableTarget()
+    fake.setStalled(true)
+    const writable = createOutboundQueueWritable(fake.target)
+    const writer = writable.getWriter()
+
+    // Three distinct (non-coalesceable) frames while the fake socket is
+    // stalled: the FIRST frame is accepted-and-buffered (write() returned
+    // false, which is exactly the backpressure signal), and everything after
+    // it must stay QUEUED, not handed to the socket.
+    await writeFrame(writer, { msg: 'one' })
+    await writeFrame(writer, { msg: 'two' })
+    await writeFrame(writer, { msg: 'three' })
+    expect(fake.written).toEqual(['{"msg":"one"}\n'])
+
+    // The client keeps up again: 'drain' resumes the drain and the queued
+    // frames flush IN ORDER.
+    fake.setStalled(false)
+    fake.fireDrain()
+    expect(fake.written).toEqual([
+      '{"msg":"one"}\n',
+      '{"msg":"two"}\n',
+      '{"msg":"three"}\n',
+    ])
+  })
+
+  test('a client that keeps up takes the immediate-write fast path (no queueing)', async () => {
+    const fake = makeFakeWritableTarget()
+    const writable = createOutboundQueueWritable(fake.target)
+    const writer = writable.getWriter()
+
+    await writeFrame(writer, { msg: 'a' })
+    await writeFrame(writer, { msg: 'b' })
+    // No drain was ever needed: every frame was written synchronously.
+    expect(fake.written).toEqual([
+      '{"msg":"a"}\n',
+      '{"msg":"b"}\n',
+    ])
+  })
+
+  test('coalescing merges consecutive chunk frames for one messageId before the drain', async () => {
+    const fake = makeFakeWritableTarget()
+    const writable = createOutboundQueueWritable(fake.target)
+    const writer = writable.getWriter()
+
+    const chunk = (text: string): Record<string, unknown> => ({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: 's1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'm1',
+          content: { type: 'text', text },
+        },
+      },
+    })
+    // The socket is stalled from the start: the first frame still takes the
+    // fast path — it is handed to the (stalled) socket, accepted and
+    // buffered, write() returning false — and leaves the queue. The NEXT two
+    // frames of the same chunk stream enqueue while the queue is stalled and
+    // COALESCE into one queued frame.
+    fake.setStalled(true)
+    await writeFrame(writer, chunk('hello '))
+    expect(fake.written).toHaveLength(1)
+    await writeFrame(writer, chunk('world'))
+    await writeFrame(writer, chunk('again'))
+
+    fake.fireDrain()
+    expect(fake.written).toHaveLength(2)
+    const coalesced = JSON.parse(
+      fake.written[1]!.trim(),
+    ) as {
+      params: { update: { content: { text: string } } }
+    }
+    expect(coalesced.params.update.content.text).toBe('worldagain')
+  })
+
+  test('an overflow abort destroys the connection (fail closed)', async () => {
+    // maxBytes: 1 → any non-coalesceable frame overflows immediately; the
+    // queue returns the abort decision and the wiring must destroy the
+    // connection instead of growing without bound.
+    const fake = makeFakeWritableTarget()
+    const writable = createOutboundQueueWritable(fake.target, { maxBytes: 1 })
+    const writer = writable.getWriter()
+
+    let writeError: unknown
+    try {
+      await writeFrame(writer, { jsonrpc: '2.0', method: 'session/update', params: {} })
+    } catch (error) {
+      writeError = error
+    }
+    expect(writeError).toBeInstanceOf(Error)
+    expect((writeError as Error).message).toContain('overflow')
+    // Fail closed: the connection was destroyed BEFORE anything was written.
+    expect(fake.destroyCalls()).toBe(1)
+    expect(fake.written).toEqual([])
   })
 })

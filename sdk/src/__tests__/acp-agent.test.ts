@@ -718,9 +718,11 @@ describe('acp agent skeleton', () => {
     })
 
     // A second concurrent prompt on the SAME session is rejected with the
-    // protocol's invalid-params error (an `openbuff.dev` `session_busy`
-    // conflict marker in the data) — it must NOT replace the first turn's
-    // AbortController, which would leave the first turn uncancellable.
+    // GV-14 golden-fixture shape — JSON-RPC -32600, message
+    // 'A prompt is already running for this session', data
+    // { 'openbuff.dev': { code: 'prompt_in_flight' } } — and must NOT
+    // replace the first turn's AbortController, which would leave the first
+    // turn uncancellable.
     let failure: unknown
     try {
       await agent.prompt({
@@ -731,14 +733,17 @@ describe('acp agent skeleton', () => {
       failure = error
     }
     expect(failure).toBeInstanceOf(RequestError)
-    expect((failure as RequestError).code).toBe(-32602)
+    expect((failure as RequestError).code).toBe(-32600)
+    expect((failure as RequestError).message).toBe(
+      'A prompt is already running for this session',
+    )
     expect(
       (
         (failure as RequestError).data as
           | Record<string, Record<string, unknown>>
           | undefined
       )?.['openbuff.dev']?.code,
-    ).toBe('session_busy')
+    ).toBe('prompt_in_flight')
 
     // The FIRST turn remains cancellable: cancel still reaches its signal.
     agent.cancel({ sessionId })

@@ -71,7 +71,8 @@ function win32NormalizeSegments(value: string): string {
  * policy to catch them later.
  *
  * This is now the ONLY defense against a file-changing tool staging a script
- * anywhere under an OS temp root for a later command to execute. Containment
+ * or natively-executable binary anywhere under an OS temp root for a later
+ * command to execute. Containment
  * in `common/src/util/project-path-containment.ts` admits the whole temp root
  * and no longer excludes any name — including the chmod +x'd tmux helper
  * script `tmux-helper-<session>.sh`, which run_terminal_command executes.
@@ -110,6 +111,19 @@ const OWNED_TEMP_REFUSED_EXTENSIONS = new Set([
   '.r',
   '.jl',
   '.tcl',
+  // Natively-executable binaries and loadable images need no interpreter
+  // invocation step for a policy to catch: direct exec, `java -jar`,
+  // `dlopen`, and wasm runtimes all execute a staged file of one of these
+  // shapes.
+  '.exe',
+  '.dll',
+  '.so',
+  '.dylib',
+  '.com',
+  '.msi',
+  '.jar',
+  '.wasm',
+  '.appimage',
 ])
 
 /**

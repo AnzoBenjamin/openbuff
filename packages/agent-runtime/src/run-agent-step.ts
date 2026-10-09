@@ -2152,7 +2152,18 @@ export async function loopAgentSteps(
     // pin anything. One full recount (reset + fresh sum) runs only after a
     // history-rewriting compaction/trim, whose sites below call
     // invalidateHistoryAggregate.
-    const incrementalTokenCounter = new IncrementalTokenCounter()
+    // Audit MEDIUM (token fudge factors dead on the hot path): thread the
+    // routed model so the incremental counter prices NEW messages with the
+    // per-family fudgeFactorForModel factor instead of the Anthropic 1.35
+    // sentinel default. agentTemplate.model is resolved at loop entry — the
+    // same source the model_selected event above records — and may be
+    // undefined when the route is deferred to openbuff.json; undefined keeps
+    // the exact legacy behavior, so this is additive and safe. Every agent
+    // path (root turn, foreground subagents, inline agents) runs through this
+    // single loop entry, so no secondary construction site needs threading.
+    const incrementalTokenCounter = new IncrementalTokenCounter(
+      agentTemplate.model,
+    )
     const invalidateHistoryAggregate = () => {
       // History was rewritten (compaction/trim): the next estimate must
       // recount fully rather than trusting stale per-message memoized counts.

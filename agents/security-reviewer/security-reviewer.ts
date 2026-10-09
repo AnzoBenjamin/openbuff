@@ -37,6 +37,7 @@ const definition: SecretAgentDefinition = {
     type: 'object',
     properties: {
       schemaVersion: { type: 'number', enum: [1] },
+      family: { type: 'string', enum: ['reviewer'] },
       snapshotFingerprint: { type: 'string' },
       reviewedFiles: { type: 'array', items: { type: 'string' } },
       verdict: {
@@ -111,6 +112,7 @@ const definition: SecretAgentDefinition = {
     },
     required: [
       'schemaVersion',
+      'family',
       'snapshotFingerprint',
       'reviewedFiles',
       'verdict',
@@ -138,6 +140,7 @@ Return only the required structured output with schemaVersion 1. Echo params.sna
 Output example (call set_output exactly once with this NATIVE JSON object — never a string, never a markdown fence). Minimal clean shape when nothing exploitable was found:
 {
   "schemaVersion": 1,
+  "family": "reviewer",
   "snapshotFingerprint": "<echo params.snapshot_fingerprint exactly>",
   "reviewedFiles": ["<every params.changed_files entry>"],
   "verdict": "LOOKS_GOOD",
