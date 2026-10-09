@@ -1,4 +1,3 @@
-import { shouldCollapseByDefault, shouldCollapseForParent } from './constants'
 import { sanitizeMediaForUiState } from './payload-sanitizer'
 
 import type {
@@ -1659,11 +1658,11 @@ export const createAgentBlock = (
     params,
     spawnToolCallId,
     spawnIndex,
-    parentAgentType,
   } = options
-  const shouldCollapse =
-    shouldCollapseByDefault(agentType || '') ||
-    shouldCollapseForParent(agentType || '', parentAgentType)
+  // Subagents start EXPANDED so their full live stream is visible by default.
+  // Grid-row sizing still uses shouldCollapseByDefault (see block-processor's
+  // splitByAgentSize); that layout grouping is intentionally decoupled from
+  // the initial expand/collapse state. The user can still collapse manually.
   return {
     type: 'agent',
     agentId,
@@ -1676,7 +1675,6 @@ export const createAgentBlock = (
     ...(params && { params }),
     ...(spawnToolCallId && { spawnToolCallId }),
     ...(spawnIndex !== undefined && { spawnIndex }),
-    ...(shouldCollapse && { isCollapsed: true }),
   }
 }
 

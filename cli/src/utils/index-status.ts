@@ -11,6 +11,11 @@ export type IndexStatusChip = {
 export type IndexStatusPeek = {
   state: string
   refreshing: boolean
+  // Optional, additive: the number of parse diagnostics reported by
+  // getStatus(). Threaded through so formatIndexStatusChip can surface a
+  // concise reason on the 'idx degraded' chip. Existing callers that omit it
+  // keep the backward-compatible plain label.
+  diagnosticsCount?: number
 } | null
 
 // Track the project root used when the IndexManager singleton was first
@@ -60,10 +65,16 @@ let _lastPeekAt = 0
 type GetStatusFn = (
   root: string,
   indexing: Parameters<typeof IndexManager.getInstance>[1],
-) => { state: string; refreshing: boolean }
+) => { state: string; refreshing: boolean; diagnosticsCount: number }
 
-const _defaultGetIndexStatus: GetStatusFn = (root, indexing) =>
-  IndexManager.getInstance(root, indexing).getStatus()
+const _defaultGetIndexStatus: GetStatusFn = (root, indexing) => {
+  const status = IndexManager.getInstance(root, indexing).getStatus()
+  return {
+    state: status.state,
+    refreshing: status.refreshing,
+    diagnosticsCount: status.diagnostics.length,
+  }
+}
 
 type IndexStatusTestOverrides = {
   /** Virtual clock replacing Date.now() on the peek path. */
@@ -168,10 +179,21 @@ function _computePeekIndexStatus(): IndexStatusPeek {
     // suppressed by the stale-root guard above.
     _indexManagerRoot = currentRoot
     if (status.state === 'disabled') return null
-    return {
-      state: status.state,
-      refreshing: status.refreshing,
-    }
+    // diagnosticsCount is an optional, additive field consumed only by
+    // formatIndexStatusChip for the 'degraded' chip reason. Omit it when there
+    // are no diagnostics so a healthy peek result stays the minimal
+    // { state, refreshing } shape and the field remains truly optional for
+    // callers (and comparisons) that never surface a parse-diagnostic count.
+    return status.diagnosticsCount > 0
+      ? {
+          state: status.state,
+          refreshing: status.refreshing,
+          diagnosticsCount: status.diagnosticsCount,
+        }
+      : {
+          state: status.state,
+          refreshing: status.refreshing,
+        }
   } catch {
     // While the cache is still undefined, the only throwing operation on this
     // path is loadProviderConfigSync() above (the normalization and the
@@ -200,7 +222,11 @@ export function peekIndexStatus(): IndexStatusPeek {
 }
 
 export function formatIndexStatusChip(
-  status: { state: string; refreshing: boolean } | null,
+  status: {
+    state: string
+    refreshing: boolean
+    diagnosticsCount?: number
+  } | null,
 ): IndexStatusChip {
   if (!status) return null
   if (status.state === 'disabled' || status.state === 'empty') return null
@@ -217,7 +243,12 @@ export function formatIndexStatusChip(
     return { label: 'idx stale', tone: 'warning' }
   }
   if (status.state === 'degraded') {
-    return { label: 'idx degraded', tone: 'warning' }
+    const { diagnosticsCount } = status
+    const label =
+      diagnosticsCount && diagnosticsCount > 0
+        ? `idx degraded · ${diagnosticsCount} parse err`
+        : 'idx degraded'
+    return { label, tone: 'warning' }
   }
   // Healthy snapshots are silent; only building / refreshing / stale / failed / degraded show.
   return null

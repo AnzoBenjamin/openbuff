@@ -964,6 +964,22 @@ export class IndexManager {
         isIndexStale(this.index)),
     )
     const diagnostics = this.index?.parseDiagnostics ?? []
+    // Whole-index 'degraded' should reflect a genuine build-level failure or a
+    // non-negligible number of per-file parse failures — NOT budget-driven
+    // coverage truncation (the expected outcome for a large healthy repo,
+    // already surfaced via coverageNotice) and NOT a handful of diagnostics
+    // out of thousands of files. Small repos degrade on a single failure;
+    // large repos tolerate a bounded handful. coverage.parser.truncated is
+    // intentionally excluded from this trigger: budget truncation is a notice,
+    // and failure-driven skips are already counted through `diagnostics`.
+    const corpusSize =
+      this.index?.fileCount || Object.keys(this.index?.files ?? {}).length
+    const parseFailureFloor = Math.min(
+      10,
+      Math.max(1, Math.ceil(corpusSize * 0.05)),
+    )
+    const indexDegraded =
+      Boolean(this.lastBuildError) || diagnostics.length >= parseFailureFloor
     const state: IndexStatus['state'] =
       this.config.enabled === false
         ? 'disabled'
@@ -973,9 +989,7 @@ export class IndexManager {
             : this.lastBuildError
               ? 'failed'
               : 'empty'
-          : diagnostics.length > 0 ||
-              this.lastBuildError ||
-              this.index.coverage?.parser?.truncated
+          : indexDegraded
             ? 'degraded'
             : stale
               ? 'stale'

@@ -86,6 +86,43 @@ describe('formatIndexStatusChip', () => {
       tone: 'warning',
     })
   })
+
+  test('appends a parse-diagnostic reason to the degraded chip when a count is present', () => {
+    expect(
+      formatIndexStatusChip({
+        state: 'degraded',
+        refreshing: false,
+        diagnosticsCount: 4,
+      }),
+    ).toEqual({
+      label: 'idx degraded \u00b7 4 parse err',
+      tone: 'warning',
+    })
+    // A zero count keeps the backward-compatible plain label.
+    expect(
+      formatIndexStatusChip({
+        state: 'degraded',
+        refreshing: false,
+        diagnosticsCount: 0,
+      }),
+    ).toEqual({
+      label: 'idx degraded',
+      tone: 'warning',
+    })
+  })
+
+  test('a refreshing degraded chip keeps the refreshing label and never shows the reason suffix', () => {
+    expect(
+      formatIndexStatusChip({
+        state: 'degraded',
+        refreshing: true,
+        diagnosticsCount: 7,
+      }),
+    ).toEqual({
+      label: 'idx refreshing',
+      tone: 'warning',
+    })
+  })
 })
 
 describe('shouldForceStatusLineForIndex', () => {
@@ -392,7 +429,7 @@ describe('peekIndexStatus caching', () => {
       getRoot: () => ROOT,
       getStatus: () => {
         getStatusCalls += 1
-        return { state: 'ready', refreshing: false }
+        return { state: 'ready', refreshing: false, diagnosticsCount: 0 }
       },
     })
 
@@ -420,7 +457,7 @@ describe('peekIndexStatus caching', () => {
       getRoot: () => ROOT,
       getStatus: () => {
         getStatusCalls += 1
-        return { state: 'ready', refreshing: false }
+        return { state: 'ready', refreshing: false, diagnosticsCount: 0 }
       },
     })
 
@@ -449,7 +486,7 @@ describe('peekIndexStatus caching', () => {
         // Busy-wait ~0.1ms per call to stand in for the real singleton
         // lookup + status computation.
       }
-      return { state: 'ready' as const, refreshing: false }
+      return { state: 'ready' as const, refreshing: false, diagnosticsCount: 0 }
     }
 
     // "before" arm: the clock jumps 1s per peek, so every peek is past the
@@ -501,7 +538,7 @@ describe('peekIndexStatus caching', () => {
       getRoot: () => ROOT,
       getStatus: () => {
         getStatusCalls += 1
-        return { state: 'ready', refreshing: false }
+        return { state: 'ready', refreshing: false, diagnosticsCount: 0 }
       },
     })
 
@@ -543,7 +580,7 @@ describe('peekIndexStatus caching', () => {
       getRoot: () => ROOT,
       getStatus: () => {
         getStatusCalls += 1
-        return { state: 'ready', refreshing: false }
+        return { state: 'ready', refreshing: false, diagnosticsCount: 0 }
       },
     })
 

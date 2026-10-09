@@ -761,3 +761,100 @@ describe('IndexManager cross-root index isolation', () => {
     ).toBe(true)
   })
 })
+
+describe('IndexManager.getStatus degraded classifier', () => {
+  // The degraded trigger is a parse-diagnostic floor scaled to corpus size
+  // (ceil(fileCount * 0.05), clamped to [1, 10]) OR a recorded build error;
+  // coverage.parser.truncated is NOT a degraded trigger. getStatus reads the
+  // injected in-memory index synchronously, so the mutation and the
+  // getStatus() read happen with no await between them (a lingering
+  // background refresh must not overwrite the injected fields first).
+  test('a handful of parse diagnostics on a large corpus stays ready', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.fileCount = 2000
+    internal.index.parseDiagnostics = Array.from({ length: 6 }, (_, i) => ({
+      filePath: `src/f${i}.ts`,
+      stage: 'parse' as const,
+      message: 'Parser or query not found',
+    }))
+    // 6 diagnostics is below the floor (ceil(2000 * 0.05) clamped to 10), so
+    // the large corpus stays ready.
+    expect(mgr.getStatus().state).toBe('ready')
+  })
+
+  test('enough diagnostics to cross the floor degrades', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.fileCount = 2000
+    internal.index.parseDiagnostics = Array.from({ length: 10 }, (_, i) => ({
+      filePath: `src/f${i}.ts`,
+      stage: 'parse' as const,
+      message: 'Parser or query not found',
+    }))
+    // 10 diagnostics meets the clamped floor of 10, so the corpus degrades.
+    expect(mgr.getStatus().state).toBe('degraded')
+  })
+
+  test('a single diagnostic on a tiny corpus degrades', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.fileCount = 1
+    internal.index.parseDiagnostics = [
+      {
+        filePath: 'src/f0.ts',
+        stage: 'parse' as const,
+        message: 'Parser or query not found',
+      },
+    ]
+    // The floor clamps to 1 for a tiny repo, so a single diagnostic degrades.
+    expect(mgr.getStatus().state).toBe('degraded')
+  })
+
+  test('budget-driven parser truncation alone stays ready', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.parseDiagnostics = []
+    internal.index.coverage = {
+      truncated: true,
+      maxFiles: 10,
+      skippedFiles: 5,
+      skippedPrefixes: ['vendor'],
+      parser: {
+        truncated: true,
+        fileBudgetExceeded: true,
+        skippedFiles: 5,
+        requestedFiles: 15,
+        parsedFiles: 10,
+        reusedFiles: 0,
+        freshParsedFiles: 10,
+        parsedBytes: 100,
+        skippedKnownBytes: 50,
+        skippedPrefixes: ['vendor'],
+        skippedLanguages: ['.ts'],
+        byteBudgetExceeded: false,
+        oversizedFiles: 0,
+        maxFiles: 10,
+        maxFileBytes: 1000,
+        maxTotalBytes: 10000,
+      },
+    }
+    // Budget-driven truncation is no longer a degraded trigger: with no parse
+    // diagnostics the index stays ready, but the coverage notice still fires.
+    const status = mgr.getStatus()
+    expect(status.state).toBe('ready')
+    expect(status.message).toContain('Index coverage is partial')
+  })
+})

@@ -926,6 +926,71 @@ describe('metadata indexer', () => {
   })
 })
 
+describe('updateMetadataIndex self-heals stale parse diagnostics', () => {
+  // The no-change early-return branch now re-parses previously-diagnosed
+  // files that are still walked and uncached, recomputes parseDiagnostics +
+  // coverage.parser from the result, and drops diagnostics for files no
+  // longer walked. A successful re-parse clears the diagnostic and clears
+  // coverage.parser.truncated (when no budget flags remain).
+  test('clears a stale diagnostic for a now-parseable file on the no-change path', async () => {
+    const root = await makeTempProject({ 'src/a.ts': 'export const a = 1\n' })
+    const first = await buildMetadataIndex(root)
+
+    // Simulate a stale regression: carry a stale diagnostic for src/a.ts,
+    // drop it from parseData, and mark parser coverage truncated.
+    const stale = {
+      ...first,
+      parseDiagnostics: [
+        {
+          filePath: 'src/a.ts',
+          stage: 'parse' as const,
+          message: 'Parser or query not found',
+        },
+      ],
+      parseData: Object.fromEntries(
+        Object.entries(first.parseData ?? {}).filter(
+          ([p]) => p !== 'src/a.ts',
+        ),
+      ),
+      coverage: first.coverage
+        ? {
+            ...first.coverage,
+            parser: first.coverage.parser
+              ? {
+                  ...first.coverage.parser,
+                  truncated: true,
+                  skippedFiles: 1,
+                }
+              : undefined,
+          }
+        : undefined,
+    }
+
+    // No file changes on disk → the no-change path, which re-parses the
+    // still-walked uncached src/a.ts and clears its stale diagnostic.
+    const healed = await updateMetadataIndex(stale, root)
+    expect(healed.parseDiagnostics).toEqual([])
+    expect(healed.coverage?.parser?.truncated).toBe(false)
+  })
+
+  test('drops a stale diagnostic for a file that no longer exists', async () => {
+    const root = await makeTempProject({ 'src/a.ts': 'export const a = 1\n' })
+    const first = await buildMetadataIndex(root)
+
+    const stale = {
+      ...first,
+      parseDiagnostics: [
+        { filePath: 'src/ghost.ts', stage: 'parse' as const, message: 'gone' },
+      ],
+    }
+
+    // src/ghost.ts is not in the walked set, so its stale diagnostic is
+    // dropped on the no-change path.
+    const healed = await updateMetadataIndex(stale, root)
+    expect(healed.parseDiagnostics).toEqual([])
+  })
+})
+
 async function makeTempProject(files: Record<string, string>): Promise<string> {
   const root = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'codebuff-indexer-'),

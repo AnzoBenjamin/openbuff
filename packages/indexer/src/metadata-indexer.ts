@@ -658,6 +658,82 @@ export async function updateMetadataIndex(
     deletedPaths.size === 0 &&
     !needsParseHydration
   ) {
+    // Self-heal stale parse failures on the no-change path. Failed-parse files
+    // are never written to parseData (getFileTokenScores `continue`s on a
+    // diagnostic), so an idle session with no code changes would otherwise
+    // carry stale parseDiagnostics + stale coverage.parser.truncated forever
+    // (the symptom: a persistent 'idx degraded' chip after a transient parser
+    // regression that has since been fixed). Re-attempt ONLY the
+    // previously-diagnosed files that are still present and uncached — a small
+    // set — and recompute diagnostics/coverage from the result. On success
+    // they enter the parse cache and drop out of the diagnostic set, so the
+    // NEXT no-change tick re-attempts nothing (steady-state cost = 0). A
+    // genuinely-still-failing file stays diagnosed and uncached, so it is
+    // re-tested each tick (bounded by the small failing-set size) and never
+    // hidden.
+    const walkedPaths = new Set(files.map((f) => f.relativePath))
+    const priorDiagnostics = existing.parseDiagnostics ?? []
+    // Drop diagnostics for files that are no longer walked (deleted/renamed)
+    // so stale coverage never references vanished files.
+    let parseDiagnostics = priorDiagnostics.filter((d) =>
+      walkedPaths.has(d.filePath),
+    )
+    let parseData = existing.parseData
+    let parserCoverage = existing.coverage?.parser
+
+    const retryPaths = parseDiagnostics
+      .map((d) => d.filePath)
+      .filter(
+        (p) =>
+          CODE_EXTENSIONS.has(path.extname(p)) &&
+          existing.parseData?.[p] === undefined,
+      )
+
+    if (retryPaths.length > 0) {
+      const reheal = await getFileTokenScores(
+        projectRoot,
+        retryPaths,
+        undefined,
+        {},
+      )
+      parseData = { ...(existing.parseData ?? {}), ...reheal.parsed }
+      setParsedCache(projectRoot, parseData)
+      const retrySet = new Set(retryPaths)
+      // The only files that can still be failing on this path are the ones we
+      // just re-tested (everything else is cached-success), so the post-reheal
+      // diagnostics fully characterize failure-driven coverage.
+      parseDiagnostics = [
+        ...parseDiagnostics.filter((d) => !retrySet.has(d.filePath)),
+        ...reheal.diagnostics,
+      ]
+      const budgetTruncated = Boolean(
+        existing.coverage?.parser?.fileBudgetExceeded ||
+          existing.coverage?.parser?.byteBudgetExceeded,
+      )
+      const failureSkipPaths = parseDiagnostics.map((d) => d.filePath)
+      parserCoverage = existing.coverage?.parser
+        ? {
+            ...existing.coverage.parser,
+            skippedFiles: failureSkipPaths.length,
+            truncated: budgetTruncated || failureSkipPaths.length > 0,
+            skippedPrefixes: Array.from(
+              new Set(
+                failureSkipPaths.map((p) => {
+                  const normalized = p.replace(/\\/g, '/')
+                  const slash = normalized.indexOf('/')
+                  return slash === -1 ? '.' : normalized.slice(0, slash)
+                }),
+              ),
+            ).sort(),
+            skippedLanguages: Array.from(
+              new Set(
+                failureSkipPaths.map((p) => path.extname(p) || 'unknown'),
+              ),
+            ).sort(),
+          }
+        : undefined
+    }
+
     const graphFiles = metadataOnlyChange ? updatedFiles : existing.files
     const aliases = loadTsAliases(projectRoot)
     // One fail-open ts resolution tier per pass (null when the typescript
@@ -667,7 +743,7 @@ export async function updateMetadataIndex(
       {},
       aliases,
       resolveGraphWeights(config.weights?.graph),
-      existing.parseData,
+      parseData,
       createTsModuleResolver({ projectRoot, files: graphFiles, aliases }),
     )
     return {
@@ -678,7 +754,11 @@ export async function updateMetadataIndex(
       files: graphFiles,
       graph,
       queryData: buildIndexQueryData(graphFiles, graph),
-      coverage: createIndexCoverage(walked, existing.coverage?.parser),
+      // Carry the RECOMPUTED parse evidence, not the (possibly stale) spread
+      // from `existing`, so a self-healed failure clears here.
+      parseData,
+      parseDiagnostics,
+      coverage: createIndexCoverage(walked, parserCoverage),
     }
   }
 
