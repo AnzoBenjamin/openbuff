@@ -1,0 +1,34 @@
+{
+  "_note": "Semantic vector (§12.7 GV-22, §12.4 resolution): only optionId 'allow_once' resolves an approval true. 'allow_always' (never offered), 'proceed_always' and 'reject_once' each resolve false. The bridge checks optionId because the ACP SDK does not.",
+  "allowAlwaysResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow_always"
+      }
+    }
+  },
+  "proceedAlwaysResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "proceed_always"
+      }
+    }
+  },
+  "rejectOnceResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "reject_once"
+      }
+    }
+  },
+  "expectedResolution": false
+}

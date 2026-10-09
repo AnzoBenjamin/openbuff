@@ -9,9 +9,12 @@ import {
 import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
 import {
   getMCPClient,
+  getMCPClientCacheKey,
   listMCPTools,
   callMCPTool,
+  resolveMCPConfigOrigin,
 } from '@codebuff/common/mcp/client'
+import type { MCPConfig } from '@codebuff/common/types/mcp'
 import { toolNames } from '@codebuff/common/tools/constants'
 import {
   fileMutationResultV1Schema,
@@ -47,11 +50,20 @@ import {
 import { WorkspaceJournalService } from './services/workspace-journal'
 import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
+import {
+  captureDiagnostics,
+  supportedDiagnosticFiles,
+} from './services/diagnostic-delta'
+import {
+  createDiagnosticCommandRunner,
+  createDiagnosticDeltaHook,
+} from './services/diagnostic-delta-runner'
 import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
 import type { MemoryV2ClientConfig } from './services/memory-v2/types'
 import {
   HarnessApprovalService,
   evaluateHarnessActionPolicy,
+  hashCommand,
 } from './services/harness-enforcement'
 import type {
   HarnessApprovalMode,
@@ -88,18 +100,35 @@ import { runTargetedValidation } from './tools/run-targeted-validation'
 import { inspectEnvironment } from './tools/inspect-environment'
 import { getAffectedTests } from './tools/get-affected-tests'
 import { getBuildTargets } from './tools/get-build-targets'
+import { findReferences } from './tools/find-references'
+import { goToDefinition } from './tools/go-to-definition'
+import { hoverType } from './tools/hover-type'
+import { workspaceSymbol } from './tools/workspace-symbol'
+import {
+  createLanguageIntelligence,
+  type LanguageIntelligenceService,
+} from './services/language-intelligence'
 import {
   evaluateAuditCoverageTool,
   inspectCodebaseStructureTool,
   inspectFeatureCompletenessTool,
 } from './tools/audit-intelligence'
 import { gitBranch } from './tools/git-branch'
-import { runFileChangeHooks } from './tools/file-change-hooks'
+import {
+  isDiagnosticPreflightEnabled,
+  runFileChangeHooks,
+  type DiagnosticDeltaHook,
+} from './tools/file-change-hooks'
 import {
   findFileMutationResult,
   writeAuditFindings,
 } from './tools/write-audit-findings'
 import { createNodeFileSystem } from './tools/node-filesystem'
+import {
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  type TransactionIntentLog,
+} from './tools/transaction-intent-log'
 import type { FilesystemAuthorityPolicy } from './tools/filesystem-authority'
 
 import type { CustomToolDefinition } from './custom-tool'
@@ -129,12 +158,67 @@ import type { JobOwner } from '@codebuff/common/util/job-registry'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { LanguageDiagnostic } from './tools/language-diagnostics'
 import { listJobs } from './tools/list-jobs'
 
 import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
 import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
 import { getSystemProcessEnv } from './env'
 import { spawn as nodeSpawn } from 'node:child_process'
+import type {
+  JournalReader,
+  JournalWriter,
+} from '@codebuff/common/types/contracts/agent-runtime'
+import { createRunResumeDriver } from './services/run-resume-driver'
+
+/**
+ * Audit fix (D): tool calls whose receipt can contain file actions — the same
+ * set that reaches handleToolCall's post-commit mutation block (the
+ * change-file tools plus the compact-receipt write tool). Mirrors the
+ * toolName list the override receipt guard uses there.
+ */
+const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write_file',
+  'str_replace',
+  'create_plan',
+  'edit_transaction',
+  'replace_range',
+  'write_audit_findings',
+])
+
+/**
+ * Audit fix (D): bounded file list for the pre-edit baseline capture — the
+ * paths a mutating tool call targets, derived from its input WITHOUT any
+ * schema change. Each tool input carries at most a few paths, so the list is
+ * bounded by construction; supportedDiagnosticFiles filters it further before
+ * capture, and an empty output means no capture runs at all.
+ */
+function diagnosticBaselineFiles(toolName: string, input: unknown): string[] {
+  const record = (input ?? {}) as Record<string, unknown>
+  switch (toolName) {
+    case 'write_file':
+    case 'str_replace':
+    case 'create_plan':
+    case 'replace_range': {
+      const file = typeof record.path === 'string' ? record.path : undefined
+      return file ? [file] : []
+    }
+    case 'edit_transaction': {
+      const edits = Array.isArray(record.edits) ? record.edits : []
+      const files = new Set<string>()
+      for (const edit of edits) {
+        if (!edit || typeof edit !== 'object') continue
+        const editPath = (edit as { path?: unknown }).path
+        if (typeof editPath === 'string' && editPath !== '') {
+          files.add(editPath)
+        }
+      }
+      return [...files]
+    }
+    default:
+      return []
+  }
+}
 
 /**
  * Stable trusted background-job ownership seed for THIS client session.
@@ -227,6 +311,17 @@ export type OpenbuffClientOptions = {
   projectFiles?: Record<string, string>
   knowledgeFiles?: Record<string, string>
   agentDefinitions?: AgentDefinition[]
+  /**
+   * Host-supplied MCP servers to attach to the agent being run. They are
+   * merged (by object REFERENCE, never cloned) into the resolved agent
+   * template's `mcpServers` after the session state is built, so the run
+   * loop's getMCPToolData picks them up. Callers that need these treated as
+   * untrusted (e.g. the serve bridge, for client-advertised servers) mark them
+   * with markAllMCPConfigOrigins BEFORE passing them here; run() never
+   * re-marks or clones them, so the identity-keyed origin marks survive to
+   * resolveMCPConfigOrigin.
+   */
+  mcpServers?: Record<string, MCPConfig>
   maxAgentSteps?: number
   env?: Record<string, string>
   /** Harness control-plane state root. Defaults to the Openbuff config directory. */
@@ -299,6 +394,29 @@ export type OpenbuffClientOptions = {
    *  unref'd so it won't keep a host process alive on its own; it still fires
    *  while the event loop is busy with the active run. */
   runTimeoutMs?: number
+
+  /**
+   * P1-T3 backend seam. Optional pluggable execution backend for
+   * `OpenbuffClient.run()`. When omitted, the in-process backend (today's
+   * `run()`) is used and behavior is byte-identical to before. Supplying a
+   * backend (e.g. `AcpRemoteBackend`) routes the run through it instead, so a
+   * host can attach to a live `openbuff serve` session. Additive-optional.
+   */
+  backend?: import('./client/backend').ClientBackend
+
+  /** P2-T2: append-only run-journal writer (see createRunJournal in
+   *  @codebuff/agent-runtime/util/run-journal). Threaded into the agent
+   *  runtime deps so the run loop journals tool_call/tool_result/step
+   *  boundaries for crash-safe resume. Additive-optional: a run without it
+   *  is byte-identical to today (no journaling occurs). */
+  journalWriter?: JournalWriter
+
+  /** P2-T2: run-journal reader threaded into the agent runtime deps so the
+   *  existing guarded block in runAgentStep classifies/replays interrupted
+   *  prior work, and so the §4c replay short-circuit reuses journaled tool
+   *  results (keyed deterministically by toolName+input per P2-T2-DESIGN §5,
+   *  never by the freshly-minted toolCallId). Additive-optional. */
+  journalReader?: JournalReader
 }
 
 export type FilesystemMutationEvent = {
@@ -565,6 +683,13 @@ type RunExecutionOptions = RunOptions &
   }
 type RunReturnType = RunState
 
+/**
+ * P2-T5: guards the once-per-process startup recovery of interrupted
+ * multi-file transactions, keyed by state dir + intent-log file so two
+ * concurrent projects in one process each recover exactly once.
+ */
+const transactionRecoveryPerformed = new Set<string>()
+
 export async function run(options: RunExecutionOptions): Promise<RunState> {
   const { signal } = options
 
@@ -591,6 +716,7 @@ async function runOnce({
   projectFiles,
   knowledgeFiles,
   agentDefinitions,
+  mcpServers,
   maxAgentSteps = MAX_AGENT_STEPS_DEFAULT,
   env,
   harnessStateDir,
@@ -614,6 +740,8 @@ async function runOnce({
   spawnSource,
   logger,
   memoryV2,
+  journalWriter,
+  journalReader,
 
   agent,
   prompt,
@@ -752,6 +880,35 @@ async function runOnce({
   } else {
     fs = createNodeFileSystem()
   }
+
+  // P2-T5: startup recovery of interrupted multi-file transactions. The
+  // intent log is colocated with the harness state dir (outside the project
+  // tree it guards) and scoped to this workspace. Best-effort and
+  // once-per-process: failures are logged and never crash startup.
+  let intentLog: TransactionIntentLog | undefined
+  if (cwd) {
+    intentLog = createTransactionIntentLogForWorkspace({
+      stateDir: resolvedHarnessStateDir,
+      cwd,
+    })
+    const recoveryKey = `${resolvedHarnessStateDir}\u0000${intentLog.filePath}`
+    if (!transactionRecoveryPerformed.has(recoveryKey)) {
+      transactionRecoveryPerformed.add(recoveryKey)
+      try {
+        await recoverAndRevertInterruptedTransactions({
+          intentLog,
+          cwd,
+          fs,
+          logger,
+        })
+      } catch (error) {
+        logger?.warn(
+          { error },
+          'Transaction intent recovery failed; startup continues',
+        )
+      }
+    }
+  }
   let spawn: CodebuffSpawn
   if (spawnSource) {
     const spawnSourceValue = await spawnSource
@@ -759,6 +916,17 @@ async function runOnce({
   } else {
     spawn = nodeSpawn as CodebuffSpawn
   }
+  // Audit fix (B): production diagnostic-delta preflight wiring. The runner
+  // executes diagnostic commands as argv arrays over this run's child-process
+  // seam (never a shell), and the injector is fail-open. The
+  // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check lives inside runFileChangeHooks,
+  // so passing the injector unconditionally keeps flag-off behavior
+  // byte-identical.
+  const diagnosticDeltaHook = createDiagnosticDeltaHook({ spawn })
+  // Audit fix (D): the pre-edit baseline capture below runs through the SAME
+  // argv-array child-process seam (its own stateless adapter instance — the
+  // runner holds no state), bounded exactly like the hook's own captures.
+  const diagnosticBaselineRunner = createDiagnosticCommandRunner({ spawn })
   const preparedContent = wrapContentForUserMessage(content)
 
   // Per-run client session id (also the trusted process-job owner session).
@@ -814,6 +982,26 @@ async function runOnce({
       workspaceMoves: persistedWorkspaceMoves,
     })
   }
+  // Attach host-supplied MCP servers to the RESOLVED agent template so the run
+  // loop's getMCPToolData reads them. This runs AFTER sessionState is fully
+  // built (post initialSessionState / applyOverridesToSessionState, both of
+  // which JSON-clone), so merging the SAME MCPConfig object references here is
+  // never cloned again. Object identity MUST be preserved: origin marks are
+  // recorded in the mcpConfigOrigins WeakMap keyed by config object identity,
+  // so cloning would strip the caller's 'client' marks and
+  // getMCPToolData / resolveMCPConfigOrigin would no longer see them. run()
+  // never re-marks or re-origins them — it only merges references. Scoped to
+  // the single resolved agentId's template; if that template is missing this
+  // no-ops safely.
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    const targetTemplate = sessionState.fileContext.agentTemplates?.[agentId]
+    if (targetTemplate) {
+      targetTemplate.mcpServers = {
+        ...targetTemplate.mcpServers,
+        ...mcpServers,
+      }
+    }
+  }
   // Snapshot the hydrated task memory so post-run persistence can merge the
   // final memory into it. The runtime replaces this property rather than
   // mutating it in place, so holding the reference is sufficient.
@@ -850,6 +1038,17 @@ async function runOnce({
   const approvalService = new HarnessApprovalService(
     new LocalHarnessStore(resolvedHarnessStateDir),
   )
+  // P3-T2 (LI-01): lazily-built language-intelligence service shared across the
+  // four LSP read tools. Only constructed when a language-intelligence client
+  // tool actually fires, so a run that never uses them never spawns a server.
+  let languageIntelligenceService: LanguageIntelligenceService | undefined
+  const getLanguageIntelligence = (): LanguageIntelligenceService => {
+    languageIntelligenceService ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+      spawn,
+    })
+    return languageIntelligenceService
+  }
   if (workspaceJournal) {
     try {
       const persistedWorkspace = workspaceJournal.read()
@@ -1061,9 +1260,29 @@ async function runOnce({
   // means no git_status observation has been emitted yet this turn, so the
   // first call always returns the full observation.
   let lastGitStatusFingerprint: string | null = null
+  // Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+  // Declared in this run closure (not module scope) so every run() call starts
+  // with a fresh approval scope and concurrent runs never share it. The FIRST
+  // client-origin call of each (server-config, tool) pair is gated behind the
+  // host approver; subsequent calls of the same tool this run run freely.
+  const approvedClientMcpTools = new Set<string>()
+  // P2-audit-fix-8: production crash-resume driver. Built exactly when a
+  // journal reader is wired (the same condition under which the runtime's
+  // loop-entry block builds the resume report) and threaded additively into
+  // the agent-runtime deps so loopAgentSteps' existing not-clean branch can
+  // ACT on the report: re-drive in-flight children (best-effort; recorded)
+  // and re-issue interrupted background intents with the durable respawnOf
+  // marker. Fail-open by contract; a run with no journalReader gets no
+  // resumeDriver field at all and stays byte-identical.
+  const resumeDriver = journalReader
+    ? createRunResumeDriver({ journalWriter, journalReader, logger })
+    : undefined
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
     apiKey,
+    journalWriter,
+    journalReader,
+    ...(resumeDriver ? { resumeDriver } : {}),
     handleStepsLogChunk: () => {
       // Does nothing for now
     },
@@ -1087,6 +1306,53 @@ async function runOnce({
           if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
         }
       }
+      // Audit fix (D): pre-edit baseline capture for the diagnostic-delta
+      // preflight. For tool calls whose receipt can contain file actions (the
+      // same set that reaches the post-commit mutation block), capture the
+      // PRE-EDIT diagnostic state ONCE so the hook can compute a real
+      // before/after delta. Bounded and fail-open: only when the
+      // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag is on, only one diagnostic-command
+      // pass per mutating tool call, and any capture error degrades to no
+      // baseline (today's exact hook behavior). The baseline is captured into
+      // this tool call's closure and consumed by the per-call hook wrapper
+      // below, so it can never leak across tool calls.
+      const isMutatingToolCall = DIAGNOSTIC_BASELINE_TOOL_NAMES.has(toolName)
+      let diagnosticBaseline: LanguageDiagnostic[] | undefined
+      if (
+        isMutatingToolCall &&
+        cwd &&
+        env &&
+        isDiagnosticPreflightEnabled(env)
+      ) {
+        try {
+          const baselineFiles = supportedDiagnosticFiles(
+            diagnosticBaselineFiles(toolName, input),
+          )
+          if (baselineFiles.length > 0) {
+            diagnosticBaseline = await captureDiagnostics({
+              files: baselineFiles,
+              cwd,
+              runCommand: diagnosticBaselineRunner,
+              env,
+              signal: runSignal,
+            })
+          }
+        } catch {
+          // Fail-open: no baseline → the hook keeps today's no-baseline path.
+          diagnosticBaseline = undefined
+        }
+      }
+      // Per-call hook wrapper: only a mutating tool call with a captured
+      // baseline supplies it (and the hook then drops skipSecondCapture so
+      // the after-capture runs for real); every other call reuses the shared
+      // hook unchanged, keeping no-baseline behavior byte-identical.
+      const diagnosticDeltaForCall: DiagnosticDeltaHook = diagnosticBaseline
+        ? (hookParams) =>
+            createDiagnosticDeltaHook({
+              spawn,
+              getBaseline: () => diagnosticBaseline,
+            })(hookParams)
+        : diagnosticDeltaHook
       const trustedCallId = callId ?? crypto.randomUUID()
       const handled = await handleToolCall({
         action: {
@@ -1101,6 +1367,8 @@ async function runOnce({
         onFilesChanged,
         onFilesystemMutation,
         verifyExternalMutation,
+        getLanguageIntelligence,
+        diagnosticDelta: diagnosticDeltaForCall,
         customToolDefinitions: customToolDefinitions
           ? Object.fromEntries(
               customToolDefinitions.map((def) => [def.toolName, def]),
@@ -1110,6 +1378,7 @@ async function runOnce({
         fs,
         fileFilter,
         filesystemPolicy,
+        intentLog,
         trustedJobOwner,
         logger,
         capabilityIssuer: cwd
@@ -1125,6 +1394,7 @@ async function runOnce({
         approvalReceiptIds,
         approvalMode,
         requestApproval,
+        approvedClientMcpTools,
         approvalService,
         harnessWorkspaceIdentity: workspaceJournal
           ? {
@@ -1468,6 +1738,12 @@ async function runOnce({
     // browses opened this run are still owned next turn until stopped here.
     clientSessionId: trustedJobOwner.clientSessionId,
   })
+  // Dispose warm language servers; no-op when no language-intelligence tool ran.
+  try {
+    await languageIntelligenceService?.dispose()
+  } catch {
+    // best-effort
+  }
   const cleanupLibrarianClone = (cloneDir: string) => {
     try {
       rmSync(cloneDir, { recursive: true, force: true })
@@ -1746,6 +2022,7 @@ export async function handleToolCall({
   fs,
   fileFilter,
   filesystemPolicy,
+  intentLog,
   trustedJobOwner,
   capabilityIssuer,
   logger,
@@ -1754,6 +2031,7 @@ export async function handleToolCall({
   approvalReceiptIds,
   approvalMode,
   requestApproval,
+  approvedClientMcpTools,
   approvalService,
   harnessWorkspaceIdentity,
   getWorkspaceState,
@@ -1762,6 +2040,8 @@ export async function handleToolCall({
   onFilesChanged,
   onFilesystemMutation,
   verifyExternalMutation,
+  getLanguageIntelligence,
+  diagnosticDelta,
   signal,
 }: {
   action: ServerAction<'tool-call-request'>
@@ -1771,6 +2051,8 @@ export async function handleToolCall({
   fs: CodebuffFileSystem
   fileFilter?: FileFilter
   filesystemPolicy?: FilesystemAuthorityPolicy
+  /** P2-T5: durable transaction-intent log for multi-file commit loops. */
+  intentLog?: TransactionIntentLog
   /** Trusted owner injected into every process-job op; never model-derived. */
   trustedJobOwner: JobOwner
   capabilityIssuer?: ReadCapabilityIssuer
@@ -1780,6 +2062,10 @@ export async function handleToolCall({
   approvalReceiptIds: string[]
   approvalMode: HarnessApprovalMode
   requestApproval?: OpenbuffClientOptions['requestApproval']
+  /** Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+   * Optional so existing direct callers/tests keep working; when absent, the
+   * gate still enforces approval but with a fresh local set for this call. */
+  approvedClientMcpTools?: Set<string>
   approvalService: HarnessApprovalService
   harnessWorkspaceIdentity?: {
     repositoryId: string
@@ -1796,12 +2082,37 @@ export async function handleToolCall({
   onFilesChanged?: OpenbuffClientOptions['onFilesChanged']
   onFilesystemMutation?: OpenbuffClientOptions['onFilesystemMutation']
   verifyExternalMutation?: OpenbuffClientOptions['verifyExternalMutation']
+  /**
+   * P3-T2 (LI-01): lazily builds/returns this run's shared language-intelligence
+   * service. Optional so existing direct `handleToolCall` callers keep working;
+   * when absent the four LSP read tools fall back to a spawner-less service that
+   * degrades each query into a structured result instead of throwing.
+   */
+  getLanguageIntelligence?: () => LanguageIntelligenceService
+  /** Audit fix (B): fail-open diagnostic-delta preflight injector threaded
+   * into run_file_change_hooks (and forwarded to run_targeted_validation).
+   * Optional so existing direct callers/tests keep working; absent means the
+   * preflight seam stays off. The OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check
+   * lives inside runFileChangeHooks. */
+  diagnosticDelta?: DiagnosticDeltaHook
   signal?: AbortSignal
 }): Promise<{
   output: ToolResultOutput[]
   canonicalReceipt?: CommitReceiptV1
 }> {
   const toolName = action.toolName
+  // P3-T2 (LI-01): resolve the shared language-intelligence service. runOnce
+  // injects a getter closing over this run's spawn/cwd; direct handleToolCall
+  // callers (tests) fall back to a spawner-less service whose queries degrade
+  // into a structured errorMessage result rather than throwing.
+  let fallbackLanguageIntelligence: LanguageIntelligenceService | undefined
+  const resolveLanguageIntelligence = (): LanguageIntelligenceService => {
+    if (getLanguageIntelligence) return getLanguageIntelligence()
+    fallbackLanguageIntelligence ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+    })
+    return fallbackLanguageIntelligence
+  }
   const input =
     typeof action.input === 'string'
       ? parseJsonBounded(action.input)
@@ -1815,6 +2126,63 @@ export async function handleToolCall({
 
   // Handle MCP tool calls when mcpConfig is present
   if (action.mcpConfig) {
+    // P1-T2: gate the FIRST call of each tool from a `client`-origin MCP
+    // config behind the host approval callback. Trusted origins
+    // (`user`/`project`, and any explicitly trusted mark) proceed unchanged
+    // with no approval. `resolveMCPConfigOrigin` fails closed to `client` for
+    // unmarked configs, so an unmarked config is gated too — matching every
+    // other origin consumer.
+    if (resolveMCPConfigOrigin(action.mcpConfig) === 'client') {
+      // Stable per-(server-config, tool) key. `getMCPClientCacheKey` is the
+      // same identity `getMCPClient` computes downstream, so computing it here
+      // first is safe. If it can ever throw for a malformed config, fall back
+      // to a JSON key so a key failure never bypasses the gate.
+      let cacheKey: string
+      try {
+        cacheKey = getMCPClientCacheKey(action.mcpConfig, { origin: 'client' })
+      } catch {
+        cacheKey = JSON.stringify(action.mcpConfig)
+      }
+      const approvalKey = `${cacheKey}\u0000${toolName}`
+      // When no per-run set is threaded in, use a fresh local set so behavior
+      // is defined (the gate still enforces approval for this call).
+      const approvedTools = approvedClientMcpTools ?? new Set<string>()
+      if (!approvedTools.has(approvalKey)) {
+        if (requestApproval) {
+          // NUL-free, human-readable approval target derived from the config.
+          const serverLabel =
+            action.mcpConfig.type === 'stdio'
+              ? action.mcpConfig.command
+              : action.mcpConfig.url
+          const approved = await requestApproval({
+            action: 'mcp-tool',
+            target: `${serverLabel} ${toolName}`,
+            commandHash: hashCommand(approvalKey),
+            reason: `MCP tool '${toolName}' comes from a client-supplied (untrusted) MCP server and is running for the first time this run.`,
+            risk: 'high',
+          })
+          if (!approved) {
+            // Denied: do NOT call the tool. Return the same error-output shape
+            // the branch uses for a thrown MCP error so callers parse it
+            // identically to a failed call.
+            return {
+              output: [
+                {
+                  type: 'json',
+                  value: {
+                    errorMessage: `Client MCP tool '${toolName}' was denied approval.`,
+                  },
+                },
+              ],
+            }
+          }
+        }
+        // Approved by the host, or fail-open when no host approver exists
+        // (headless/CI). Record the key so subsequent calls of this same tool
+        // this run run freely.
+        approvedTools.add(approvalKey)
+      }
+    }
     try {
       const mcpClientId = await getMCPClient(action.mcpConfig)
       const result = await callMCPTool(
@@ -2031,6 +2399,7 @@ export async function handleToolCall({
         signal,
         fileFilter,
         filesystemPolicy,
+        intentLog,
         capabilityIssuer,
         callId: action.requestId,
         logger,
@@ -2132,6 +2501,7 @@ export async function handleToolCall({
                 approvalId,
                 action: classified.action,
                 target: classified.target,
+                commandHash: classified.commandHash,
                 snapshotId,
               })
               const approvedDecision = evaluateHarnessActionPolicy({
@@ -2167,7 +2537,11 @@ export async function handleToolCall({
                   runId: rootRunId,
                   snapshotId,
                 },
-                { action: classified.action, target: classified.target },
+                {
+                  action: classified.action,
+                  target: classified.target,
+                  commandHash: classified.commandHash,
+                },
               )
               const receipt = approvalService.consume({
                 ...harnessWorkspaceIdentity,
@@ -2176,6 +2550,7 @@ export async function handleToolCall({
                 approvalId: grant.id,
                 action: classified.action,
                 target: classified.target,
+                commandHash: classified.commandHash,
               })
               const approvedDecision = evaluateHarnessActionPolicy({
                 ...classified,
@@ -2340,6 +2715,7 @@ export async function handleToolCall({
         env,
         signal,
         fileSystem: fs,
+        diagnosticDelta,
       })
     } else if (toolName === 'check_job') {
       // The trusted owner overrides any model-supplied owner in the input.
@@ -2415,6 +2791,7 @@ export async function handleToolCall({
         env,
         signal,
         fileSystem: fs,
+        diagnosticDelta,
         workspaceState: getWorkspaceState(),
       })
     } else if (toolName === 'inspect_environment') {
@@ -2423,6 +2800,26 @@ export async function handleToolCall({
       result = getAffectedTests(
         requireCwd(cwd, 'get_affected_tests'),
         (input as { files: string[] }).files,
+      )
+    } else if (toolName === 'go_to_definition') {
+      result = await goToDefinition(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'find_references') {
+      result = await findReferences(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'hover_type') {
+      result = await hoverType(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'workspace_symbol') {
+      result = await workspaceSymbol(
+        resolveLanguageIntelligence(),
+        input as { query: string },
       )
     } else if (toolName === 'get_build_targets') {
       result = getBuildTargets(
@@ -2535,6 +2932,33 @@ export async function handleToolCall({
       ? advanceWorkspaceJournal(workspaceChange)
       : advanceWorkspaceState(getWorkspaceState(), workspaceChange)
     setWorkspaceState(workspaceState)
+    // Audit fix (C): push the committed files into any already-running
+    // language server so post-edit LSP answers are not stale. Guarded and
+    // fail-open: sync can never fail the run that just committed the write.
+    // Only successfully-written project-relative paths are synced; a move
+    // syncs its destination path.
+    const syncedPaths = changedActions
+      .filter((changed) => changed.action !== 'delete')
+      .map((changed) =>
+        changed.action === 'move' ? changed.destinationPath : changed.path,
+      )
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    // Audit fix: deleted paths are forwarded separately as a didClose so a
+    // warm language server drops its stale open-document state for files
+    // that no longer exist (they are excluded from syncedPaths above).
+    const closedPaths = changedActions
+      .filter((changed) => changed.action === 'delete')
+      .map((changed) => changed.path)
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    if (syncedPaths.length > 0 || closedPaths.length > 0) {
+      try {
+        await getLanguageIntelligence?.().syncMutatedFiles(syncedPaths, {
+          closedPaths,
+        })
+      } catch (error) {
+        logger?.warn({ error }, 'Language-server document sync failed')
+      }
+    }
     // Only a mutation that was actually part of `result` can be enriched in
     // place. Tools whose declared output is a compact receipt reach this block
     // through `compactReceiptMutation`; their receipt schema declares no

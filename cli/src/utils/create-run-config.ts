@@ -6,6 +6,8 @@ import { IndexManager } from '@codebuff/indexer'
 import { loadProviderConfigSync } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../project-files'
+import { notifyTerminal } from './terminal-notify'
+import { writeToTty } from './terminal-title'
 import {
   createEventHandler,
   createStreamChunkHandler,
@@ -222,6 +224,14 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     resumeInterruptedTurn,
     approvalMode,
     requestApproval: async (request: HarnessApprovalRequest) => {
+      // P1-T7: Fire-and-forget terminal notification so the user knows the
+      // run is paused awaiting approval. Never blocks the approval flow.
+      notifyTerminal(
+        { body: `Approval needed: ${request.target.slice(0, 80)}` },
+        { write: (sequence) => {
+            writeToTty(sequence)
+          } },
+      )
       const response = (await AskUserBridge.request('harness-approval', [
         buildHarnessApprovalPrompt(request),
       ])) as {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 
+import { extractImportSitesFromLines } from './import-sites'
 import { hasLanguageConfiguration } from './languages'
 import {
   buildQualifiedName,
@@ -93,6 +94,23 @@ export interface ChunkImportRef {
   line: number
   col: number
   names?: string[]
+}
+
+/**
+ * Per-chunk import extraction delegates to the canonical line-based
+ * implementation in `import-sites.ts`; chunks.ts keeps only the
+ * ChunkImportRef-shaped projection it has always exposed.
+ */
+function extractChunkImportSites(
+  lines: string[],
+  filePath: string,
+): ChunkImportRef[] {
+  return extractImportSitesFromLines(lines, filePath).map((site) => ({
+    specifier: site.specifier,
+    line: site.line,
+    col: site.col,
+    ...(site.names && site.names.length > 0 ? { names: site.names } : {}),
+  }))
 }
 
 export interface ChunkReference {
@@ -337,141 +355,6 @@ function lastNameSegment(qualifiedName: string): string {
   return parts[parts.length - 1] ?? qualifiedName
 }
 
-function extractImportSites(
-  lines: string[],
-  filePath: string,
-): ChunkImportRef[] {
-  const dot = filePath.lastIndexOf('.')
-  const ext = dot >= 0 ? filePath.slice(dot).toLowerCase() : ''
-  const sites: ChunkImportRef[] = []
-  const push = (
-    specifier: string,
-    line: number,
-    col: number,
-    names?: string[],
-  ) => {
-    const spec = specifier.trim()
-    if (!spec || spec.length > 512) return
-    sites.push({
-      specifier: spec,
-      line,
-      col,
-      ...(names && names.length > 0 ? { names: names.slice(0, 25) } : {}),
-    })
-  }
-  lines.forEach((rawLine, idx) => {
-    const lineNo = idx + 1
-    const line = rawLine
-    if (
-      ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'].includes(
-        ext,
-      )
-    ) {
-      const fromMatch = line.match(
-        /\b(?:import|export)\b[^'\"]*\bfrom\s+['\"]([^'\"]+)['\"]/,
-      )
-      if (fromMatch?.[1]) {
-        const brace = line.match(/\{([^}]*)\}/)
-        const names = brace?.[1]
-          ? brace[1]
-              .split(',')
-              .map((s) => s.trim().split(/\s+/).pop()!)
-              .filter(Boolean)
-          : undefined
-        push(fromMatch[1], lineNo, line.indexOf(fromMatch[1]) + 1 || 1, names)
-        return
-      }
-      const sideMatch = line.match(/^\s*import\s+['\"]([^'\"]+)['\"]/)
-      if (sideMatch?.[1]) {
-        push(sideMatch[1], lineNo, line.indexOf(sideMatch[1]) + 1 || 1)
-        return
-      }
-      const reqMatch = line.match(
-        /\b(?:require|import)\s*\(\s*['\"]([^'\"]+)['\"]\s*\)/,
-      )
-      if (reqMatch?.[1]) {
-        push(reqMatch[1], lineNo, line.indexOf(reqMatch[1]) + 1 || 1)
-        return
-      }
-      return
-    }
-    if (['.py', '.pyi'].includes(ext)) {
-      const fromMatch = line.match(/^\s*from\s+([.\w]+)\s+import\s+(.+)$/)
-      if (fromMatch) {
-        const names = (fromMatch[2] ?? '')
-          .split(',')
-          .map((s) => s.trim().split(/\s+/)[0]!)
-          .filter(Boolean)
-        push(fromMatch[1], lineNo, line.indexOf(fromMatch[1]) + 1 || 1, names)
-        return
-      }
-      const impMatch = line.match(/^\s*import\s+([\w.]+)/)
-      if (impMatch?.[1]) {
-        push(impMatch[1], lineNo, line.indexOf(impMatch[1]) + 1 || 1, [
-          impMatch[1].split('.').pop()!,
-        ])
-        return
-      }
-      return
-    }
-    if (ext === '.rs') {
-      const m = line.match(/^\s*(?:pub\s+)?(?:use|mod)\s+([\w:]+)/)
-      if (m?.[1])
-        push(m[1].replace(/::/g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (ext === '.go') {
-      const m = line.match(/^\s*import\s+(?:[\w.]+\s+)?["`]([^"`]+)["`]/)
-      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (['.java', '.kt', '.kts'].includes(ext)) {
-      const m = line.match(/^\s*import\s+(?:static\s+)?([\w.]+)/)
-      if (m?.[1])
-        push(m[1].replace(/\./g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (
-      ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(ext)
-    ) {
-      const m = line.match(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/)
-      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (ext === '.cs') {
-      const m = line.match(
-        /^\s*(?:global\s+)?using\s+(?:[\w]+\s*=\s*)?([\w.]+)\s*;/,
-      )
-      if (m?.[1])
-        push(m[1].replace(/\./g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (ext === '.rb') {
-      const m = line.match(/^\s*require(?:_relative)?\s*[('" ]+([^'"\s)]+)/)
-      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (ext === '.php') {
-      const m = line.match(/^\s*use\s+([\w\\]+)/)
-      if (m?.[1])
-        push(m[1].replace(/\\/g, '/'), lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (ext === '.swift') {
-      const m = line.match(/^\s*import\s+(?:\w+\s+)?([\w.]+)/)
-      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-    if (ext === '.gd') {
-      const m = line.match(
-        /\b(?:preload|load)\s*\(\s*["'](?:res:\/\/)?([^"']+)/,
-      )
-      if (m?.[1]) push(m[1], lineNo, line.indexOf(m[1]) + 1 || 1)
-      return
-    }
-  })
-  return sites.slice(0, 100)
-}
 
 async function buildChunks(
   content: string,
@@ -497,7 +380,7 @@ async function buildChunks(
   const lines = content.split(/\r?\n/)
   const language = getLanguageTag(filePath)
   const callSites: ChunkCallSite[] = rawCallSites
-  const importSites = extractImportSites(lines, filePath)
+  const importSites = extractChunkImportSites(lines, filePath)
 
   const chunks: CodeChunk[] = symbols.map((sym) => {
     const qualifiedName = buildQualifiedName(symbols, sym)

@@ -1,0 +1,11 @@
+[package]
+name = "openbuff-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Workspace-internal path dependency (NOT an external crate): the `version`
+# probe cross-checks the sidecar handshake protocol version against the
+# harness crate so a drift between the two fails loudly in CI, not silently
+# at handshake time.
+openbuff-workspace-harness = { path = "../openbuff-workspace-harness" }

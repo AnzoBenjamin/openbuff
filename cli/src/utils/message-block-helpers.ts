@@ -1,6 +1,3 @@
-import { isDeepStrictEqual } from 'node:util'
-
-import { shouldCollapseByDefault, shouldCollapseForParent } from './constants'
 import { sanitizeMediaForUiState } from './payload-sanitizer'
 
 import type {
@@ -28,6 +25,8 @@ export const getAgentBaseName = (type: string): string => {
 }
 
 const GATE_STATE_BLOCK_RE = /<gate-state>\s*([\s\S]*?)\s*<\/gate-state>/i
+
+const SCRUB_GATE_STATE_TAGS_RE = new RegExp(GATE_STATE_BLOCK_RE.source, 'gi')
 
 const GATE_STATE_STATUSES: ReadonlySet<GateStateStatus> =
   new Set<GateStateStatus>(['pending', 'passed', 'failed', 'skipped'])
@@ -165,7 +164,7 @@ const buildGateStateFromJson = (
     typeof payload.details === 'string'
       ? sanitizeGateStateText(payload.details)
       : ''
-  const origin = typeof payload.origin === 'string' ? payload.origin.trim() : ''
+  const origin = typeof payload.origin === 'string' ? sanitizeGateStateText(payload.origin) : ''
   const advisories = parseGateStateAdvisories(payload.advisories)
   const workflow = parseGateStateWorkflow(payload.workflow)
 
@@ -282,8 +281,8 @@ export const parseGateStateBlock = (
     type: 'gate-state',
     gate,
     gateStatus: statusRaw,
-    ...(fields.details ? { details: fields.details } : {}),
-    origin: fields.origin || 'Base2',
+    ...(fields.details ? { details: sanitizeGateStateText(fields.details) } : {}),
+    origin: (fields.origin ? sanitizeGateStateText(fields.origin) : '') || 'Base2',
   }
 }
 
@@ -294,7 +293,7 @@ export const parseGateStateBlock = (
  */
 export const scrubGateStateTags = (s: string): string =>
   s
-    .replace(new RegExp(GATE_STATE_BLOCK_RE.source, 'gi'), '')
+    .replace(SCRUB_GATE_STATE_TAGS_RE, '')
     .replace(/\n{3,}/g, '\n\n')
 
 /**
@@ -310,13 +309,11 @@ export const extractPlanFromBuffer = (buffer: string): string | null => {
   return null
 }
 
-export const scrubPlanTags = (s: string): string => {
-  // Support both the canonical </PLAN> tag and the legacy </cb_plan> tag.
-  const closingTagPattern = '(?:<\\/PLAN>|<\\/cb_plan>)'
-  return s
-    .replace(new RegExp(`<PLAN>[\\s\\S]*?${closingTagPattern}`, 'g'), '')
-    .replace(/<PLAN>[\s\S]*$/g, '')
-}
+const SCRUB_PLAN_COMPLETE_RE = /<PLAN>[\s\S]*?(?:<\/PLAN>|<\/cb_plan>)/g
+const SCRUB_PLAN_OPEN_RE = /<PLAN>[\s\S]*$/g
+
+export const scrubPlanTags = (s: string): string =>
+  s.replace(SCRUB_PLAN_COMPLETE_RE, '').replace(SCRUB_PLAN_OPEN_RE, '')
 
 export const scrubPlanTagsInBlocks = (
   blocks: ContentBlock[],
@@ -327,6 +324,7 @@ export const scrubPlanTagsInBlocks = (
         return block
       }
       const newContent = scrubPlanTags(block.content)
+      if (newContent === block.content) return block
       return { ...block, content: newContent }
     })
     .filter((block) => block.type !== 'text' || block.content.trim() !== '')
@@ -477,10 +475,10 @@ export const extractPlanMetadata = (
       if (isCustomArtifactPathValue(normalizedValue)) {
         const customLabel = stripPlanMetadataLabelFormatting(bulletMatch[1])
         if (customLabel) {
-          metadata.customArtifacts = [
-            ...(metadata.customArtifacts ?? []),
-            { label: customLabel, path: normalizedValue },
-          ]
+          if (!metadata.customArtifacts) {
+            metadata.customArtifacts = []
+          }
+          metadata.customArtifacts.push({ label: customLabel, path: normalizedValue })
         }
       }
       continue
@@ -523,47 +521,78 @@ export const insertPlanBlock = (
   ]
 }
 
+const MAX_AUTO_COLLAPSE_DEPTH = 20
+
+// Structural rewrites (tempId->realId migration, nesting, extraction) must
+// reach their target at any depth: silently skipping them would strand a
+// spawn-agent block in its temp-id state, so later events matched by the
+// real id never find it and there is no signal that anything went wrong.
+// This cap only guards against pathological recursion (for example a cyclic
+// block graph) and sits far above any legitimate agent nesting depth —
+// unlike MAX_AUTO_COLLAPSE_DEPTH, which bounds render-time collapse work
+// where skipping a deeper block is benign.
+const MAX_BLOCK_UPDATE_DEPTH = 200
+
 /**
  * Recursively collapses blocks that weren't manually opened by the user.
  * Preserves user intent by keeping blocks open if userOpened is true.
+ *
+ * Agent blocks only auto-collapse once their run has reached a terminal
+ * status ('complete' | 'partial' | 'failed' | 'cancelled'; an absent status
+ * is treated as terminal for legacy/persisted blocks). A still-'running'
+ * agent block is left untouched so its live output stays visible. Nested
+ * agent blocks follow the same terminal-status rule through the recursion.
  */
-export const autoCollapseBlocks = (blocks: ContentBlock[]): ContentBlock[] => {
-  return blocks.map((block) => {
+export const autoCollapseBlocks = (blocks: ContentBlock[], _depth = 0): ContentBlock[] => {
+  let result: ContentBlock[] | null = null
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    let newBlock: ContentBlock
+
     // Handle thinking blocks (grouped text blocks)
     if (block.type === 'text' && block.thinkingId) {
-      return block.userOpened
+      newBlock = block.userOpened
         ? block
         : { ...block, thinkingCollapseState: 'hidden' as const }
-    }
-
-    // Handle agent blocks
-    if (block.type === 'agent') {
-      const updatedBlock = block.userOpened
-        ? block
-        : { ...block, isCollapsed: true }
+    } else if (block.type === 'agent') {
+      // Handle agent blocks: collapse only terminal (non-running) blocks the
+      // user has not explicitly opened; running agents stay visible.
+      const isTerminal = block.status !== 'running'
+      let updatedBlock: typeof block =
+        isTerminal && !block.userOpened
+          ? { ...block, isCollapsed: true }
+          : block
 
       // Recursively update nested blocks
-      if (updatedBlock.blocks) {
-        return {
-          ...updatedBlock,
-          blocks: autoCollapseBlocks(updatedBlock.blocks),
+      if (updatedBlock.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
+        const newBlocks = autoCollapseBlocks(updatedBlock.blocks, _depth + 1)
+        if (newBlocks !== updatedBlock.blocks) {
+          updatedBlock = { ...updatedBlock, blocks: newBlocks }
         }
       }
-      return updatedBlock
+      newBlock = updatedBlock
+    } else if (block.type === 'tool') {
+      // Handle tool blocks
+      newBlock = block.userOpened ? block : { ...block, isCollapsed: true }
+    } else if (block.type === 'agent-list') {
+      // Handle agent-list blocks
+      newBlock = block.userOpened ? block : { ...block, isCollapsed: true }
+    } else {
+      newBlock = block
     }
 
-    // Handle tool blocks
-    if (block.type === 'tool') {
-      return block.userOpened ? block : { ...block, isCollapsed: true }
+    if (newBlock !== block) {
+      if (result === null) {
+        result = blocks.slice(0, i)
+      }
+      result.push(newBlock)
+    } else if (result !== null) {
+      result.push(block)
     }
+  }
 
-    // Handle agent-list blocks
-    if (block.type === 'agent-list') {
-      return block.userOpened ? block : { ...block, isCollapsed: true }
-    }
-
-    return block
-  })
+  return result ?? blocks
 }
 
 /**
@@ -734,6 +763,454 @@ const formatResearcherDocsStructuredOutput = (
 }
 
 /**
+ * Returns the text of a message content field only when it is text-only:
+ * either a plain string, or an array whose every part is a text part with a
+ * string `text`. Returns undefined for any other shape (missing content,
+ * non-text parts) so callers can treat the entry as "not displayable text".
+ */
+const getTextOnlyMessageContent = (content: unknown): string | undefined => {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return undefined
+  const parts: string[] = []
+  for (const part of content) {
+    if (
+      !isRecordValue(part) ||
+      part.type !== 'text' ||
+      typeof part.text !== 'string'
+    ) {
+      return undefined
+    }
+    parts.push(part.text)
+  }
+  return parts.join('')
+}
+
+// Display bounds for the reviewer structured-output formatter, mirroring the
+// siblings in the same dispatch chain (formatEditorNestedOutput's DISPLAY_CAP
+// and cappedJsonStringify's STRINGIFY_CAP, both 4000): a spawn result with
+// very large reviewedFiles/findings/advisories arrays must not allocate an
+// unbounded display string on the render path.
+const REVIEWER_DISPLAY_CAP = 4000
+const REVIEWER_CONTENT_CAP = 3800
+
+/**
+ * Formats a reviewer/advisory agent's structured output as plain-text lines.
+ * Returns undefined when the value is not reviewer-shaped (no reviewer/
+ * advisory family and no verdict) or carries none of the structured
+ * sections, so the caller can fall through to the next formatter.
+ *
+ * Output is capped like its siblings: lines stop being pushed once the
+ * accumulated total passes REVIEWER_DISPLAY_CAP, so peak allocation on the
+ * render path stays proportional to the cap rather than to the payload size.
+ * The `totalChars > 0` guard lets the very first line through even when it
+ * alone exceeds the cap (so a single oversized field cannot blank the block),
+ * and the final slice below bounds that case, reusing the shared
+ * '…[truncated]' token.
+ */
+const formatReviewerStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const family = getStringField(value, 'family')
+  const verdict = getStringField(value, 'verdict')
+  const isReviewerShaped =
+    family === 'reviewer' || family === 'advisory' || verdict !== undefined
+  if (!isReviewerShaped) return undefined
+
+  const hasStructuredSections =
+    value.reviewedFiles !== undefined ||
+    value.dimensions !== undefined ||
+    value.findings !== undefined ||
+    value.requirementCoverage !== undefined
+  if (verdict === undefined && !hasStructuredSections) return undefined
+
+  const lines: string[] = []
+  let totalChars = 0
+  let truncated = false
+  const pushCappedLine = (line: string): boolean => {
+    if (totalChars > 0 && totalChars + line.length + 1 > REVIEWER_DISPLAY_CAP) {
+      truncated = true
+      return false
+    }
+    lines.push(line)
+    totalChars += line.length + 1
+    return true
+  }
+
+  if (family === 'advisory') {
+    pushCappedLine('Advisory review')
+  } else if (verdict !== undefined) {
+    pushCappedLine(`Verdict: ${verdict}`)
+  }
+
+  const reviewedFiles = Array.isArray(value.reviewedFiles)
+    ? value.reviewedFiles.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  if (reviewedFiles.length > 0 && pushCappedLine('Reviewed files:')) {
+    for (const file of reviewedFiles) {
+      if (truncated) break
+      if (!pushCappedLine(`- ${file}`)) break
+    }
+  }
+
+  const dimensions = isRecordValue(value.dimensions) ? value.dimensions : {}
+  for (const [key, dimensionValue] of Object.entries(dimensions)) {
+    if (truncated) break
+    if (typeof dimensionValue === 'string') {
+      if (!pushCappedLine(`- ${key}: ${dimensionValue}`)) break
+    }
+  }
+
+  const findings = Array.isArray(value.findings) ? value.findings : []
+  for (const finding of findings) {
+    if (truncated) break
+    if (typeof finding === 'string') {
+      if (!pushCappedLine(`- ${finding}`)) break
+      continue
+    }
+    if (!isRecordValue(finding)) continue
+    const summary = getStringField(finding, 'summary')
+    if (summary === undefined) continue
+    const severity = getStringField(finding, 'severity')
+    if (!pushCappedLine(`- ${severity ? `[${severity}] ` : ''}${summary}`)) {
+      break
+    }
+    const correction = getStringField(finding, 'correction')
+    if (correction !== undefined && !pushCappedLine(`  Fix: ${correction}`)) {
+      break
+    }
+  }
+
+  const requirementCoverage = Array.isArray(value.requirementCoverage)
+    ? value.requirementCoverage
+    : []
+  for (const item of requirementCoverage) {
+    if (truncated) break
+    if (!isRecordValue(item)) continue
+    const requirement = getStringField(item, 'requirement')
+    const status = getStringField(item, 'status')
+    if (requirement === undefined || status === undefined) continue
+    if (!pushCappedLine(`- ${status}: ${requirement}`)) break
+  }
+
+  const advisories = Array.isArray(value.advisories)
+    ? value.advisories.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  if (
+    advisories.length > 0 &&
+    pushCappedLine('') &&
+    pushCappedLine('Advisories:')
+  ) {
+    for (const advisory of advisories) {
+      if (truncated) break
+      if (!pushCappedLine(`- ${advisory}`)) break
+    }
+  }
+
+  const output = lines.join('\n')
+  if (output.length > REVIEWER_DISPLAY_CAP) {
+    return `${output.slice(0, REVIEWER_CONTENT_CAP)}\n…[truncated]`
+  }
+  return truncated ? `${output}\n…[truncated]` : output
+}
+
+const formatFilePickerStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  if (!Array.isArray(value.files)) return undefined
+  const files = value.files
+  // Validate at least the first item has path/summary string fields before committing
+  if (files.length > 0) {
+    const first = files[0]
+    if (
+      !isRecordValue(first) ||
+      typeof first.path !== 'string' ||
+      typeof first.summary !== 'string'
+    ) {
+      return undefined
+    }
+  }
+  if (files.length === 0) return 'No files found.'
+  const lines = [`Files found (${files.length}):`]
+  for (const item of files) {
+    if (!isRecordValue(item)) continue
+    const path = getStringField(item, 'path')
+    const summary = getStringField(item, 'summary')
+    if (path !== undefined && summary !== undefined) {
+      lines.push(`- ${path} — ${summary}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+const formatBasherStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const command = getStringField(value, 'command')
+  if (command === undefined) return undefined
+  const hasStdout = typeof value.stdout === 'string'
+  const hasExitCode = typeof value.exitCode === 'number'
+  // Require BOTH command AND (exitCode or stdout) to avoid false-positives on
+  // unrelated records that happen to have a command field.
+  if (!hasStdout && !hasExitCode) return undefined
+
+  const STDOUT_CAP = 2000
+  const STDERR_CAP = 500
+
+  const lines: string[] = [`$ ${command}`]
+
+  if (hasExitCode) {
+    lines.push(`exitCode: ${value.exitCode}`)
+  }
+
+  const stdout = getStringField(value, 'stdout')
+  if (stdout && stdout.trim()) {
+    lines.push('')
+    lines.push(
+      stdout.length > STDOUT_CAP
+        ? stdout.slice(0, STDOUT_CAP) + '…[truncated]'
+        : stdout,
+    )
+  }
+
+  const stderr = getStringField(value, 'stderr')
+  if (stderr && stderr.trim() && stderr !== stdout) {
+    const capped =
+      stderr.length > STDERR_CAP
+        ? stderr.slice(0, STDERR_CAP) + '…[truncated]'
+        : stderr
+    lines.push(`stderr: ${capped}`)
+  }
+
+  return lines.join('\n')
+}
+
+const formatGeneralAgentReceiptStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const status = getStringField(value, 'status')
+  if (status === undefined) return undefined
+  if (!Array.isArray(value.changedFiles)) return undefined
+  // Defer to formatEditorNestedOutput when value.output carries a message transcript.
+  const outputRecord = isRecordValue(value.output) ? value.output : undefined
+  if (outputRecord && Array.isArray(outputRecord.messages)) return undefined
+
+  const lines: string[] = [`Status: ${status}`]
+
+  const changedFiles = value.changedFiles.filter(
+    (entry): entry is string => typeof entry === 'string',
+  )
+  if (changedFiles.length > 0) {
+    lines.push('Changed files:')
+    for (const file of changedFiles) lines.push(`- ${file}`)
+  }
+
+  const requirementsAddressed = Array.isArray(value.requirementsAddressed)
+    ? value.requirementsAddressed.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  if (requirementsAddressed.length > 0) {
+    lines.push(`Requirements addressed: ${requirementsAddressed.join(', ')}`)
+  }
+
+  const unresolved = Array.isArray(value.unresolved)
+    ? value.unresolved.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  if (unresolved.length > 0) {
+    lines.push(`Unresolved: ${unresolved.join(', ')}`)
+  }
+
+  return lines.join('\n')
+}
+
+const formatGeneralAgentSummaryStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  // Defer to formatReviewerStructuredOutput: reviewer/advisory shapes have a family field.
+  if (typeof value.family === 'string') return undefined
+  // Defer to formatGeneralAgentReceiptStructuredOutput: receipt shape has changedFiles.
+  if (Array.isArray(value.changedFiles)) return undefined
+  // Defer to formatFilePickerStructuredOutput: file-picker shape has files.
+  if (Array.isArray(value.files)) return undefined
+  // Defer to formatBrowserUseStructuredOutput: browser-use output has outputKind = 'browser-use'.
+  if (value.outputKind === 'browser-use') return undefined
+  // Defer to formatExternalCliStructuredOutput: external CLI output has outputKind = 'external-cli'.
+  if (value.outputKind === 'external-cli') return undefined
+  // Defer to JSON fallback: overallStatus signals a structured results payload (reviewer, agent
+  // status) that either has its own formatter or should render as JSON — not a bare summary string.
+  if (typeof value.overallStatus === 'string') return undefined
+
+  const summary = getStringField(value, 'summary')
+  if (summary === undefined) return undefined
+
+  const SUMMARY_CAP = 4000
+  const cappedSummary =
+    summary.length > SUMMARY_CAP
+      ? summary.slice(0, SUMMARY_CAP) + '\u2026[truncated]'
+      : summary
+
+  const lines: string[] = [cappedSummary]
+
+  const artifacts = Array.isArray(value.artifacts)
+    ? value.artifacts.filter((e): e is string => typeof e === 'string')
+    : []
+  if (artifacts.length > 0) {
+    lines.push(`[Artifacts: ${artifacts.join(', ')}]`)
+  }
+
+  const coveredSubsystems = Array.isArray(value.coveredSubsystems)
+    ? value.coveredSubsystems.filter((e): e is string => typeof e === 'string')
+    : []
+  if (coveredSubsystems.length > 0) {
+    lines.push(`[Systems: ${coveredSubsystems.join(', ')}]`)
+  }
+
+  const coveredFeatures = Array.isArray(value.coveredFeatures)
+    ? value.coveredFeatures.filter((e): e is string => typeof e === 'string')
+    : []
+  if (coveredFeatures.length > 0) {
+    lines.push(`[Features: ${coveredFeatures.join(', ')}]`)
+  }
+
+  const unresolved = Array.isArray(value.unresolved)
+    ? value.unresolved.filter((e): e is string => typeof e === 'string')
+    : []
+  if (unresolved.length > 0) {
+    lines.push(`[Unresolved: ${unresolved.join(', ')}]`)
+  }
+
+  return lines.join('\n')
+}
+
+const formatLibrarianStructuredOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const status = getStringField(value, 'status')
+  const answer = getStringField(value, 'answer')
+  if (status === undefined || answer === undefined) return undefined
+  if (!Array.isArray(value.relevantFiles)) return undefined
+
+  const ANSWER_CAP = 3000
+  const cappedAnswer =
+    answer.length > ANSWER_CAP
+      ? answer.slice(0, ANSWER_CAP) + '\u2026[truncated]'
+      : answer
+
+  const lines: string[] = [`Status: ${status}`, cappedAnswer]
+
+  const relevantFiles = value.relevantFiles.filter(
+    (e): e is string => typeof e === 'string',
+  )
+  if (relevantFiles.length > 0) {
+    lines.push('', `Relevant files (${relevantFiles.length}):`)
+    for (const file of relevantFiles) {
+      lines.push(`- ${file}`)
+    }
+  }
+
+  const error = getStringField(value, 'error')
+  if (error) {
+    lines.push(`Error: ${error}`)
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * Formats an editor agent's nested structured output (a value whose `output`
+ * carries the agent's message transcript) as plain-text lines. Returns
+ * undefined when the value is not editor-shaped so the caller can fall
+ * through to the next formatter.
+ */
+const formatEditorNestedOutput = (
+  value: UnknownRecord,
+): string | undefined => {
+  const output = isRecordValue(value.output) ? value.output : undefined
+  if (!output || !Array.isArray(output.messages)) return undefined
+
+  const lines: string[] = []
+  const status = getStringField(value, 'status')
+  if (status !== undefined) {
+    lines.push(`Status: ${status}`)
+  }
+
+  const changedFiles = Array.isArray(value.changedFiles)
+    ? value.changedFiles.filter(
+        (entry): entry is string => typeof entry === 'string',
+      )
+    : []
+  if (changedFiles.length > 0) {
+    lines.push('Changed files:')
+    for (const file of changedFiles) lines.push(`- ${file}`)
+  } else {
+    lines.push('Changed files: none')
+  }
+
+  // Reconstruct the editor's final report: walk backwards over the message
+  // transcript collecting the trailing run of consecutive assistant messages
+  // whose content is text-only. Text fragments are per-delta and can split
+  // mid-word, so they are joined with '' (no separator). Fragments are
+  // collected into an array and joined once at the end: prepending each
+  // fragment to an accumulated string would copy the whole report per
+  // message, making the walk quadratic in the transcript's total size.
+  //
+  // Early-exit: stop before allocating a fragment that would push the
+  // accumulated total past the display cap. We already have more than enough
+  // content at that point, so the overshoot fragment is never pushed. The
+  // guard `totalChars > 0` ensures the very first (last) fragment is always
+  // collected even when it alone exceeds the cap. This keeps peak allocation
+  // proportional to the cap rather than to the full transcript length.
+  //
+  // When the early exit actually skips an older, non-empty assistant
+  // fragment, the collected text is only the tail of the report. Mark that
+  // explicitly — reusing the single-message path's '…[truncated]' token — so
+  // a long multi-fragment report cannot render as a mid-report excerpt that
+  // looks complete.
+  const DISPLAY_CAP = 4000
+  const messages = output.messages as unknown[]
+  const fragments: string[] = []
+  let totalChars = 0
+  let droppedHead = false
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (!isRecordValue(message) || message.role !== 'assistant') break
+    const text = getTextOnlyMessageContent(message.content)
+    if (text === undefined) break
+    // Zero-length fragments contribute nothing to the report; skipping them
+    // prevents a run of empty assistant messages from bypassing the cap guard
+    // and forcing an unbounded walk of the entire transcript.
+    if (text.length === 0) continue
+    if (totalChars > 0 && totalChars + text.length > DISPLAY_CAP) {
+      droppedHead = true
+      break
+    }
+    fragments.push(text)
+    totalChars += text.length
+  }
+  const report = fragments.reverse().join('')
+
+  const trimmedReport = report.trim()
+  if (trimmedReport) {
+    if (droppedHead) {
+      lines.push('', '…[truncated]')
+    }
+    const cappedReport =
+      trimmedReport.length > DISPLAY_CAP
+        ? `${trimmedReport.slice(0, 3800)}\n…[truncated]`
+        : trimmedReport
+    lines.push('', cappedReport)
+  }
+
+  return lines.join('\n')
+}
+
+/**
  * Extracts text content from a Message object's content array.
  * Handles assistant messages with TextPart content.
  */
@@ -750,6 +1227,131 @@ const extractTextFromMessageContent = (content: unknown): string => {
     )
     .map((part) => part.text)
     .join('')
+}
+
+const STRINGIFY_CAP = 4000
+const STRINGIFY_CONTENT_CAP = 3800
+
+// Hard recursion bound for _trimJsonValue, mirroring MAX_SANITIZE_DEPTH in
+// payload-sanitizer.ts: a pathologically deep agent result degrades to a
+// truncation marker instead of overflowing the stack inside first-party code.
+const MAX_JSON_TRIM_DEPTH = 32
+
+const TRIM_JSON_DEPTH_MARKER = `[Openbuff omitted payload nested deeper than ${MAX_JSON_TRIM_DEPTH} levels.]`
+const TRIM_JSON_CYCLE_MARKER = '[Circular]'
+
+/**
+ * Lower-bound estimate of the characters a non-string leaf contributes to
+ * JSON.stringify output. Strings are budgeted exactly by the caller; numbers,
+ * booleans and null are estimated from their literal length, and leaves that
+ * serialize to nothing (undefined, functions, symbols) charge a minimal cost
+ * so enumerating a container full of them still terminates. Together with the
+ * fixed per-container bracket cost this keeps traversal work proportional to
+ * the budget instead of to the full input size for shapes made of non-string
+ * leaves (e.g. a large numeric/boolean array or a wide object of numbers).
+ */
+const estimateJsonLeafCost = (v: unknown): number => {
+  if (v === null) return 4
+  switch (typeof v) {
+    case 'number':
+    case 'bigint':
+      return String(v).length
+    case 'boolean':
+      return v ? 4 : 5
+    default:
+      return 1
+  }
+}
+
+/**
+ * Recursive traversal helper for `cappedJsonStringify`. Declared at module
+ * scope so `cappedJsonStringify` never allocates a new function object per
+ * call. `budget` is a single-element mutable ref that threads the remaining
+ * character allowance through the recursion without closure capture. `seen`
+ * detects self-referential values and `depth` bounds the recursion, so
+ * pathological agent result shapes degrade to markers instead of throwing a
+ * RangeError from first-party code.
+ */
+const _trimJsonValue = (
+  v: unknown,
+  budget: { remaining: number },
+  seen: WeakSet<object>,
+  depth: number,
+): unknown => {
+  if (typeof v === 'string') {
+    if (budget.remaining <= 0) return ''
+    if (v.length <= budget.remaining) {
+      budget.remaining -= v.length
+      return v
+    }
+    const truncated = v.slice(0, budget.remaining)
+    budget.remaining = 0
+    return truncated
+  }
+  if (budget.remaining <= 0) return null
+  if (v === null || typeof v !== 'object') {
+    // Charge non-string leaves against the budget too, so wide arrays or
+    // objects of numbers/booleans stop being enumerated once it is spent.
+    budget.remaining -= estimateJsonLeafCost(v)
+    return v
+  }
+  if (depth >= MAX_JSON_TRIM_DEPTH) return TRIM_JSON_DEPTH_MARKER
+  if (seen.has(v)) return TRIM_JSON_CYCLE_MARKER
+  seen.add(v)
+  try {
+    if (Array.isArray(v)) {
+      budget.remaining -= 2
+      const out: unknown[] = []
+      for (const item of v) {
+        if (budget.remaining <= 0) break
+        out.push(_trimJsonValue(item, budget, seen, depth + 1))
+      }
+      return out
+    }
+    const record = v as Record<string, unknown>
+    budget.remaining -= 2
+    const out: Record<string, unknown> = {}
+    const proto = Object.getPrototypeOf(record)
+    if (proto === Object.prototype || proto === null) {
+      // Lazy for-in instead of Object.entries for plain JSON-shaped objects:
+      // entries materializes the full key/value list up front, which alone is
+      // O(all keys) even after the budget is spent. for-in enumerates lazily
+      // and, restricted to Object.prototype/null receivers, enumerates exactly
+      // the own enumerable keys JSON.stringify would serialize.
+      for (const k in record) {
+        if (budget.remaining <= 0) break
+        out[k] = _trimJsonValue(record[k], budget, seen, depth + 1)
+      }
+    } else {
+      for (const [k, item] of Object.entries(record)) {
+        if (budget.remaining <= 0) break
+        out[k] = _trimJsonValue(item, budget, seen, depth + 1)
+      }
+    }
+    return out
+  } finally {
+    seen.delete(v)
+  }
+}
+
+/**
+ * Serialize `value` to indented JSON capped at STRINGIFY_CAP characters.
+ * A pre-processing traversal charges every visited value a lower bound of
+ * its serialized size — exact for strings, estimated for non-string leaves
+ * plus a fixed bracket cost for containers — and stops enumerating the
+ * moment the budget is spent, so wide flat objects and large arrays of
+ * primitives pay no per-sibling cost after budget exhaustion. A final slice
+ * guard covers structural overhead (keys, whitespace) that the traversal
+ * cannot predict in advance. Depth and cycle guards keep pathological shapes
+ * serializable instead of throwing.
+ */
+const cappedJsonStringify = (value: unknown): string => {
+  const budget = { remaining: STRINGIFY_CONTENT_CAP }
+  const trimmed = _trimJsonValue(value, budget, new WeakSet(), 0)
+  const raw = JSON.stringify(trimmed, null, 2)
+  return raw.length > STRINGIFY_CAP
+    ? raw.slice(0, STRINGIFY_CONTENT_CAP) + '\n\u2026[truncated]'
+    : raw
 }
 
 /**
@@ -817,11 +1419,13 @@ export const extractSpawnAgentResultContent = (
     Array.isArray(obj.value)
   ) {
     const messages = obj.value as Array<{ role?: string; content?: unknown }>
-    const textContent = messages
-      .filter((msg) => msg?.role === 'assistant')
-      .map((msg) => extractTextFromMessageContent(msg?.content))
-      .filter(Boolean)
-      .join('\n')
+    const parts: string[] = []
+    for (const msg of messages) {
+      if (msg?.role !== 'assistant') continue
+      const text = extractTextFromMessageContent(msg?.content)
+      if (text) parts.push(text)
+    }
+    const textContent = parts.join('\n')
     return { content: textContent, hasError: false }
   }
 
@@ -830,6 +1434,26 @@ export const extractSpawnAgentResultContent = (
     const value = obj.value
     // Check for message field in structured output
     if (isRecordValue(value)) {
+      const filePickerSummary = formatFilePickerStructuredOutput(value)
+      if (filePickerSummary) {
+        return { content: filePickerSummary, hasError: false }
+      }
+      const basherSummary = formatBasherStructuredOutput(value)
+      if (basherSummary) {
+        return { content: basherSummary, hasError: false }
+      }
+      const generalReceiptSummary = formatGeneralAgentReceiptStructuredOutput(value)
+      if (generalReceiptSummary) {
+        return { content: generalReceiptSummary, hasError: false }
+      }
+      const generalSummarySummary = formatGeneralAgentSummaryStructuredOutput(value)
+      if (generalSummarySummary) {
+        return { content: generalSummarySummary, hasError: false }
+      }
+      const librarianSummary = formatLibrarianStructuredOutput(value)
+      if (librarianSummary) {
+        return { content: librarianSummary, hasError: false }
+      }
       const externalCliSummary = formatExternalCliStructuredOutput(value)
       if (externalCliSummary) {
         return { content: externalCliSummary, hasError: false }
@@ -846,6 +1470,14 @@ export const extractSpawnAgentResultContent = (
       if (docsResearchSummary) {
         return { content: docsResearchSummary, hasError: false }
       }
+      const reviewerSummary = formatReviewerStructuredOutput(value)
+      if (reviewerSummary) {
+        return { content: reviewerSummary, hasError: false }
+      }
+      const editorSummary = formatEditorNestedOutput(value)
+      if (editorSummary) {
+        return { content: editorSummary, hasError: false }
+      }
       if (typeof value.message === 'string') {
         return { content: value.message, hasError: false }
       }
@@ -860,9 +1492,10 @@ export const extractSpawnAgentResultContent = (
         return { content: value.data.message, hasError: false }
       }
     }
-    // Fall through to format as JSON
+    // Fall through to format as JSON. Fenced so the markdown renderer shows
+    // it verbatim instead of conceal-eating the JSON syntax.
     return {
-      content: JSON.stringify(obj.value, null, 2),
+      content: "```json\n" + cappedJsonStringify(obj.value) + "\n```",
       hasError: false,
     }
   }
@@ -880,9 +1513,10 @@ export const extractSpawnAgentResultContent = (
     return { content: String(nestedValue.message), hasError: false }
   }
 
-  // Fallback to formatted output
+  // Fallback to formatted output. Fenced so the markdown renderer shows it
+  // verbatim instead of conceal-eating the JSON syntax.
   return {
-    content: JSON.stringify(resultValue, null, 2),
+    content: "```json\n" + cappedJsonStringify(resultValue) + "\n```",
     hasError: false,
   }
 }
@@ -925,16 +1559,20 @@ export const appendInterruptionNotice = (
 export const markPendingCompactionInterrupted = (
   blocks: ContentBlock[],
 ): ContentBlock[] => {
-  let changed = false
-  const next = blocks.map((block) => {
-    if (block.type !== 'compaction' || block.status !== 'pending') {
-      return block
+  let result: ContentBlock[] | undefined
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    let updated: ContentBlock = block
+    if (block.type === 'compaction' && block.status === 'pending') {
+      const { liveSessionId: _liveSessionId, ...rest } = block
+      updated = { ...rest, status: 'interrupted' as const }
     }
-    changed = true
-    const { liveSessionId: _liveSessionId, ...rest } = block
-    return { ...rest, status: 'interrupted' as const }
-  })
-  return changed ? next : blocks
+    if (updated !== block) {
+      if (!result) result = blocks.slice(0, i)
+    }
+    if (result) result.push(updated)
+  }
+  return result ?? blocks
 }
 
 /**
@@ -954,10 +1592,16 @@ export const markPendingCompactionInterrupted = (
 export const dropTransientCompactionBlocks = (
   blocks: ContentBlock[],
 ): ContentBlock[] => {
-  const next = blocks.filter(
-    (block) => !(block.type === 'compaction' && block.transient === true),
-  )
-  return next.length === blocks.length ? blocks : next
+  let result: ContentBlock[] | undefined
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    if (block.type === 'compaction' && block.transient === true) {
+      if (!result) result = blocks.slice(0, i)
+    } else if (result) {
+      result.push(block)
+    }
+  }
+  return result ?? blocks
 }
 
 /**
@@ -967,14 +1611,15 @@ export const dropTransientCompactionBlocks = (
 export const findAgentTypeById = (
   blocks: ContentBlock[],
   agentId: string,
+  _depth = 0,
 ): string | undefined => {
   for (const block of blocks) {
     if (block.type === 'agent') {
       if (block.agentId === agentId) {
         return block.agentType
       }
-      if (block.blocks) {
-        const found = findAgentTypeById(block.blocks, agentId)
+      if (block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
+        const found = findAgentTypeById(block.blocks, agentId, _depth + 1)
         if (found) {
           return found
         }
@@ -1013,11 +1658,11 @@ export const createAgentBlock = (
     params,
     spawnToolCallId,
     spawnIndex,
-    parentAgentType,
   } = options
-  const shouldCollapse =
-    shouldCollapseByDefault(agentType || '') ||
-    shouldCollapseForParent(agentType || '', parentAgentType)
+  // Subagents start EXPANDED so their full live stream is visible by default.
+  // Grid-row sizing still uses shouldCollapseByDefault (see block-processor's
+  // splitByAgentSize); that layout grouping is intentionally decoupled from
+  // the initial expand/collapse state. The user can still collapse manually.
   return {
     type: 'agent',
     agentId,
@@ -1030,7 +1675,6 @@ export const createAgentBlock = (
     ...(params && { params }),
     ...(spawnToolCallId && { spawnToolCallId }),
     ...(spawnIndex !== undefined && { spawnIndex }),
-    ...(shouldCollapse && { isCollapsed: true }),
   }
 }
 
@@ -1041,31 +1685,42 @@ export const updateBlocksRecursively = (
   blocks: ContentBlock[],
   targetAgentId: string,
   updateFn: (block: ContentBlock) => ContentBlock,
+  _depth = 0,
 ): ContentBlock[] => {
-  let foundTarget = false
-  const result = blocks.map((block) => {
+  let result: ContentBlock[] | null = null
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    let newBlock: ContentBlock
+
     if (block.type === 'agent' && block.agentId === targetAgentId) {
-      foundTarget = true
-      return updateFn(block)
-    }
-    if (block.type === 'agent' && block.blocks) {
+      newBlock = updateFn(block)
+    } else if (block.type === 'agent' && block.blocks && _depth < MAX_BLOCK_UPDATE_DEPTH) {
       const updatedBlocks = updateBlocksRecursively(
         block.blocks,
         targetAgentId,
         updateFn,
+        _depth + 1,
       )
-      if (updatedBlocks !== block.blocks) {
-        foundTarget = true
-        return {
-          ...block,
-          blocks: updatedBlocks,
-        }
-      }
+      newBlock =
+        updatedBlocks !== block.blocks
+          ? { ...block, blocks: updatedBlocks }
+          : block
+    } else {
+      newBlock = block
     }
-    return block
-  })
 
-  return foundTarget ? result : blocks
+    if (newBlock !== block) {
+      if (result === null) {
+        result = blocks.slice(0, i)
+      }
+      result.push(newBlock)
+    } else if (result !== null) {
+      result.push(block)
+    }
+  }
+
+  return result ?? blocks
 }
 
 /**
@@ -1109,13 +1764,14 @@ export const nestBlockUnderParent = (
 const findBlockInChildren = (
   blocks: ContentBlock[],
   targetId: string,
+  _depth = 0,
 ): boolean => {
   for (const block of blocks) {
     if (block.type === 'agent' && block.agentId === targetId) {
       return true
     }
-    if (block.type === 'agent' && block.blocks) {
-      if (findBlockInChildren(block.blocks, targetId)) {
+    if (block.type === 'agent' && block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
+      if (findBlockInChildren(block.blocks, targetId, _depth + 1)) {
         return true
       }
     }
@@ -1123,27 +1779,6 @@ const findBlockInChildren = (
   return false
 }
 
-/**
- * Checks if a block with the given agentId is already nested under the specified parent.
- */
-const checkBlockIsUnderParent = (
-  blocks: ContentBlock[],
-  targetAgentId: string,
-  parentAgentId: string,
-): boolean => {
-  for (const block of blocks) {
-    if (block.type === 'agent' && block.agentId === parentAgentId) {
-      // Found the parent, check if target is anywhere in its children
-      return findBlockInChildren(block.blocks || [], targetAgentId)
-    } else if (block.type === 'agent' && block.blocks) {
-      // Recurse into other agent blocks to find the parent
-      if (checkBlockIsUnderParent(block.blocks, targetAgentId, parentAgentId)) {
-        return true
-      }
-    }
-  }
-  return false
-}
 
 /**
  * Extracts a block with given agentId from nested blocks structure.
@@ -1155,16 +1790,17 @@ export const extractBlockById = (
 ): { remainingBlocks: ContentBlock[]; extractedBlock: ContentBlock | null } => {
   let extractedBlock: ContentBlock | null = null
 
-  const extractRecursively = (blocks: ContentBlock[]): ContentBlock[] => {
+  const extractRecursively = (blocks: ContentBlock[], _depth = 0): ContentBlock[] => {
     const result: ContentBlock[] = []
     for (const block of blocks) {
       if (block.type === 'agent' && block.agentId === targetAgentId) {
         extractedBlock = block
         // Don't add to result - we're extracting it
-      } else if (block.type === 'agent' && block.blocks) {
+      } else if (extractedBlock === null && block.type === 'agent' && block.blocks && _depth < MAX_BLOCK_UPDATE_DEPTH) {
+        // Only recurse into agent children if the target hasn't been found yet
         result.push({
           ...block,
-          blocks: extractRecursively(block.blocks),
+          blocks: extractRecursively(block.blocks, _depth + 1),
         })
       } else {
         result.push(block)
@@ -1212,19 +1848,10 @@ export const moveSpawnAgentBlock = (
   }
 
   // If there's a parentId, we need to move the block under the parent.
-  // First check if the block is already under the correct parent.
+  // Extract then nest in two passes rather than three: skipping the
+  // checkBlockIsUnderParent pre-check lets extractBlockById + nestBlockUnderParent
+  // handle both the already-nested and needs-reparent cases correctly.
   if (parentId) {
-    const isAlreadyUnderParent = checkBlockIsUnderParent(
-      blocks,
-      tempId,
-      parentId,
-    )
-    if (isAlreadyUnderParent) {
-      // Block is already under the correct parent, just update it in place
-      return updateBlocksRecursively(blocks, tempId, updateAgentBlock)
-    }
-
-    // Block needs to be moved under the parent - extract and nest
     const { remainingBlocks, extractedBlock } = extractBlockById(blocks, tempId)
     if (extractedBlock && extractedBlock.type === 'agent') {
       const blockToMove = updateAgentBlock(extractedBlock)
@@ -1260,41 +1887,46 @@ export interface TransformAskUserOptions {
 export const transformAskUserBlocks = (
   blocks: ContentBlock[],
   options: TransformAskUserOptions,
+  _depth = 0,
 ): ContentBlock[] => {
   const { toolCallId, resultValue } = options
 
-  return blocks.map((block) => {
+  let result: ContentBlock[] | undefined
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    let updated: ContentBlock = block
     if (
       block.type === 'tool' &&
       block.toolCallId === toolCallId &&
       block.toolName === 'ask_user'
     ) {
-      const skipped = (resultValue as any)?.skipped
-      const answers = (resultValue as any)?.answers
+      const record = isRecordValue(resultValue) ? resultValue : undefined
+      const skipped = record?.skipped
+      const answers = record?.answers
       const questions = block.input.questions
 
-      if (!answers && !skipped) {
-        // If no result data, keep as tool block (fallback)
-        return block
+      if (answers || skipped) {
+        updated = {
+          type: 'ask-user',
+          toolCallId,
+          questions,
+          answers,
+          skipped,
+        } as AskUserContentBlock
       }
-
-      return {
-        type: 'ask-user',
-        toolCallId,
-        questions,
-        answers,
-        skipped,
-      } as AskUserContentBlock
-    }
-
-    if (block.type === 'agent' && block.blocks) {
-      const updatedBlocks = transformAskUserBlocks(block.blocks, options)
+      // If no result data, keep as tool block (fallback)
+    } else if (block.type === 'agent' && block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
+      const updatedBlocks = transformAskUserBlocks(block.blocks, options, _depth + 1)
       if (updatedBlocks !== block.blocks) {
-        return { ...block, blocks: updatedBlocks }
+        updated = { ...block, blocks: updatedBlocks }
       }
     }
-    return block
-  })
+    if (updated !== block) {
+      if (!result) result = blocks.slice(0, i)
+    }
+    if (result) result.push(updated)
+  }
+  return result ?? blocks
 }
 
 /**
@@ -1416,17 +2048,46 @@ const formatToolOutput = (
   return JSON.stringify(toolOutput, null, 2)
 }
 
-const hasMediaPayload = (
+// hasMediaPayload must reach every media payload that sanitizeMediaForUiState
+// could redact. It is depth-capped (mirroring MAX_SANITIZE_DEPTH, which the
+// sanitizer applies to the same walk) so a pathologically deep tool output
+// cannot overflow the stack inside this hot pre-check. Hitting the cap
+// returns true — "media possibly present" — so the caller still runs
+// sanitizeMediaForUiState, whose own depth cap replaces anything nested
+// deeper with a truncation marker; no unsanitized media payload can bypass
+// redaction by hiding below the cap.
+//
+// The memo maps each visited object to the shallowest entry depth from which
+// its reachable subtree has already been fully explored without finding
+// media. The subtree hanging off a shared object is identical on every path,
+// and the depth cap truncates at the same absolute depth regardless of entry
+// depth, so a revisit at an equal-or-deeper entry depth cannot discover
+// anything the first visit missed and reuses that false; a revisit at a
+// shallower depth is re-explored. An add-only visited set would suppress even
+// the shallower revisit, so it can never be proven safe here; tracking the
+// shallowest explored entry depth keeps the memo sound for any reference
+// shape. Cycles stay bounded because a node on the current path always finds
+// a recorded depth <= its own, and each node is re-explored at most
+// MAX_HAS_MEDIA_DEPTH times, so the walk stays bounded on shared or cyclic
+// inputs.
+const MAX_HAS_MEDIA_DEPTH = 32
+
+const _hasMediaPayloadImpl = (
   value: unknown,
-  seen = new WeakSet<object>(),
+  explored: Map<object, number>,
+  depth: number,
 ): boolean => {
   if (typeof value !== 'object' || value === null) {
     return false
   }
-  if (seen.has(value)) {
+  const exploredAtDepth = explored.get(value)
+  if (exploredAtDepth !== undefined && depth >= exploredAtDepth) {
     return false
   }
-  seen.add(value)
+  if (depth >= MAX_HAS_MEDIA_DEPTH) {
+    return true
+  }
+  explored.set(value, depth)
 
   if (!Array.isArray(value)) {
     const record = value as Record<string, unknown>
@@ -1441,8 +2102,17 @@ const hasMediaPayload = (
     }
   }
 
-  return Object.values(value).some((child) => hasMediaPayload(child, seen))
+  const obj = value as Record<string, unknown>
+  for (const key of Object.keys(obj)) {
+    if (_hasMediaPayloadImpl(obj[key], explored, depth + 1)) {
+      return true
+    }
+  }
+  return false
 }
+
+const hasMediaPayload = (value: unknown): boolean =>
+  _hasMediaPayloadImpl(value, new Map<object, number>(), 0)
 
 /**
  * Updates tool blocks with their output when tool results arrive.
@@ -1452,16 +2122,20 @@ const hasMediaPayload = (
 export const updateToolBlockWithOutput = (
   blocks: ContentBlock[],
   options: UpdateToolBlockOptions,
+  _depth = 0,
 ): ContentBlock[] => {
   const { toolCallId, toolOutput } = options
   const backgroundJobId = getBackgroundShellJobIdFromToolOutput(toolOutput)
 
-  return blocks.map((block) => {
+  let result: ContentBlock[] | undefined
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    let updated: ContentBlock = block
     if (block.type === 'tool' && block.toolCallId === toolCallId) {
       const displayToolOutput = hasMediaPayload(toolOutput)
         ? sanitizeMediaForUiState(toolOutput)
         : toolOutput
-      return {
+      updated = {
         ...block,
         output: formatToolOutput(block.toolName, displayToolOutput),
         outputRaw: displayToolOutput,
@@ -1473,14 +2147,16 @@ export const updateToolBlockWithOutput = (
           ? { backgroundJobId }
           : {}),
       }
-    } else if (block.type === 'agent' && block.blocks) {
-      const updatedBlocks = updateToolBlockWithOutput(block.blocks, options)
-      // Avoid creating new block if nested blocks didn't change
-      if (isDeepStrictEqual(block.blocks, updatedBlocks)) {
-        return block
+    } else if (block.type === 'agent' && block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
+      const updatedBlocks = updateToolBlockWithOutput(block.blocks, options, _depth + 1)
+      if (updatedBlocks !== block.blocks) {
+        updated = { ...block, blocks: updatedBlocks }
       }
-      return { ...block, blocks: updatedBlocks }
     }
-    return block
-  })
+    if (updated !== block) {
+      if (!result) result = blocks.slice(0, i)
+    }
+    if (result) result.push(updated)
+  }
+  return result ?? blocks
 }

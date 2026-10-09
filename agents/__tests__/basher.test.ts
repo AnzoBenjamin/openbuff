@@ -161,13 +161,14 @@ describe('commander agent', () => {
 
       const result = generator.next()
 
-      // M3-T1: an explicitly omitted timeout falls back to the documented
-      // finite default cap.
+      // No default timeout: agent tasks can take arbitrarily long. An
+      // omitted timeout_seconds passes -1 (no timeout) to the underlying
+      // run_terminal_command tool.
       expect(result.value).toEqual({
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
-          timeout_seconds: 300,
+          timeout_seconds: -1,
         },
       })
     })
@@ -198,7 +199,7 @@ describe('commander agent', () => {
       })
     })
 
-    test('defaults to a finite timeout and keeps explicit callers winning', () => {
+    test('defaults to no timeout and keeps explicit callers winning', () => {
       const mockAgentState = createMockAgentState()
       const mockLogger = {
         debug: () => {},
@@ -214,7 +215,7 @@ describe('commander agent', () => {
       })
       expect(defaulted.next().value).toEqual({
         toolName: 'run_terminal_command',
-        input: { command: 'sleep 10', timeout_seconds: 300 },
+        input: { command: 'sleep 10', timeout_seconds: -1 },
       })
 
       // An explicitly passed timeout — including -1 (no timeout) — always
@@ -327,7 +328,7 @@ describe('commander agent', () => {
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
-          timeout_seconds: 300,
+          timeout_seconds: -1,
         },
         includeToolCall: false,
       })
@@ -450,7 +451,7 @@ describe('commander agent', () => {
         input: {
           command: 'bun dev',
           process_type: 'BACKGROUND',
-          timeout_seconds: 300,
+          timeout_seconds: -1,
         },
         includeToolCall: false,
       })

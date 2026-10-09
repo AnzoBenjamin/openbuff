@@ -648,6 +648,55 @@ describe('terminal command permission policy', () => {
     expect(decision).toEqual({ allowed: true })
   })
 
+  it('denies sudo, package managers, and force pushes composed after separators', () => {
+    // Deny patterns match at any command-segment boundary (`;`, `&&`, `|`,
+    // `(`, `$(`), not only at the start of the whole command, so composed
+    // privilege escalation and package mutation cannot hide behind a
+    // harmless leading fragment.
+    for (const command of [
+      'true && sudo ls',
+      'echo hi; apt-get install x',
+      'cd a && git push --force origin main',
+      'echo "$(sudo -v)"',
+      'sudo ls',
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }).allowed,
+      ).toBe(false)
+    }
+    // Merely mentioning the words mid-segment stays allowed: the segment
+    // boundary class excludes plain whitespace, quoted 'sudo' is inert
+    // data, and `sudoers` fails both `sudo\b` and `su\b` word boundaries.
+    for (const command of [
+      'rg --files | grep sudoers',
+      "echo 'sudo is a word'",
+    ]) {
+      expect(
+        evaluateTerminalCommandPolicy({
+          command,
+          mode: 'assistant',
+          permissionProfile: 'workspace-write',
+          projectRoot,
+        }).allowed,
+      ).toBe(true)
+    }
+    // A plain non-force push under git-commit stays allowed: it carries no
+    // --force/-f/--delete for the un-anchored force-push pattern to match.
+    expect(
+      evaluateTerminalCommandPolicy({
+        command: 'git push -u origin feature/safe-change',
+        mode: 'assistant',
+        permissionProfile: 'git-commit',
+        projectRoot,
+      }).allowed,
+    ).toBe(true)
+  })
+
   it('allows only isolated package mutations in dependency-mutation mode', () => {
     for (const command of [
       'npm install -w server',

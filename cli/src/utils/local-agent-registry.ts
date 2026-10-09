@@ -17,6 +17,24 @@ import * as bundledAgentsModule from '../agents/bundled-agents.generated'
 
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 
+// TEST-ONLY logger injection seam: lets tests replace the module logger
+// without mock.module (which is registry-wide for the whole bun test worker
+// and cannot be unregistered). Production behavior is unchanged when no
+// logger is injected.
+let injectedLogger: typeof logger | null = null
+
+/**
+ * TEST-ONLY: replace the module logger used by this registry for the
+ * duration of a test; pass null to restore the production logger.
+ */
+export function setAgentRegistryLoggerForTests(
+  value: typeof logger | null,
+): void {
+  injectedLogger = value
+}
+
+const activeLogger = (): typeof logger => injectedLogger ?? logger
+
 // ============================================================================
 // Constants and types
 // ============================================================================
@@ -78,7 +96,7 @@ export async function initializeAgentRegistry(options?: {
     agentRegistryDiagnostics = loaded.validationErrors
   } catch (error) {
     // Keep the last known-good definitions on catastrophic refresh failure.
-    logger.warn(
+    activeLogger().warn(
       { error },
       'Failed to load user agents from .agents directories',
     )
@@ -99,7 +117,7 @@ export async function initializeAgentRegistry(options?: {
     })
     mcpServersCache = mcpConfig.mcpServers
     if (Object.keys(mcpServersCache).length > 0) {
-      logger.debug(
+      activeLogger().debug(
         {
           mcpServers: Object.keys(mcpServersCache),
           source: mcpConfig._sourceFilePath,
@@ -108,7 +126,7 @@ export async function initializeAgentRegistry(options?: {
       )
     }
   } catch (error) {
-    logger.warn({ error }, 'Failed to load MCP config from .agents directories')
+    activeLogger().warn({ error }, 'Failed to load MCP config from .agents directories')
   }
 }
 
@@ -352,12 +370,12 @@ export const announceLoadedAgents = (): void => {
   const agentsDir = findAgentsDirectory()
 
   if (!agentsDir) {
-    logger.debug('[agents] No .agents directory found in this project.')
+    activeLogger().debug('[agents] No .agents directory found in this project.')
     return
   }
 
   if (!agents.length) {
-    logger.debug({ agentsDir }, '[agents] No agent files found')
+    activeLogger().debug({ agentsDir }, '[agents] No agent files found')
     return
   }
 
@@ -367,7 +385,7 @@ export const announceLoadedAgents = (): void => {
       : agent.displayName || agent.id,
   )
 
-  logger.debug(
+  activeLogger().debug(
     { agentsDir, agents: agentIdentifiers },
     `[agents] Loaded ${pluralize(agents.length, 'local agent')}`,
   )

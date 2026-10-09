@@ -28,6 +28,20 @@ export type Base2ReviewReceipt = {
   snapshotFingerprint: string
   reviewedFiles: string[]
   reviewedFileCount?: number
+  /**
+   * PR-T5 (D23) Slice 1 — per-file content bindings for the reviewed files.
+   * One entry per reviewed file whose `readGateFileContentMarker` is a
+   * creditable content marker (`sha256:<hex>:<length>` for a present file,
+   * `missing` for a stable deletion); files whose marker is not creditable
+   * (`unreadable:*`, ...) are skipped entirely rather than storing error
+   * strings. `hash` is the full content marker captured at receipt time, so a
+   * downstream consumer (e.g. the memory-drift-guard review receipt) can
+   * verify the exact reviewed bytes. ADDITIVE and optional: legacy receipts
+   * without this field stay valid, and `fitReceiptToStorageBound` bounds the
+   * list (slices to 4 entries on compaction, clean-drops it at the extreme
+   * bound) so a wide review cannot break the serialized-size invariant.
+   */
+  reviewedFileHashes?: Array<{ path: string; hash: string }>
   coverage?: 'covered' | 'missing' | 'n/a'
   dimensions: Record<string, string>
   findings: Array<{
@@ -219,46 +233,6 @@ export type Base2GateState = {
    * JSON-serializable record (never a Map/Set).
    */
   gatePassedFileMarkers?: Record<string, string>
-  /**
-   * Content fingerprint of the reviewable-source subset the last time the
-   * final code-reviewer gate passed.
-   *
-   * SOFT-DEPRECATED and WRITE-ONLY as of the receipt-driven reviewer skip.
-   *
-   * Readers: NONE. There is no production reader of this field anywhere —
-   * base2.ts only writes it on the gate-pass path and defaults it to `''` when
-   * hydrating serialized state, and no CLI/renderer/telemetry surface reads it
-   * (the pinned active-work message and the gate telemetry payload are built
-   * from `gatePassedFingerprint`, `gatePassedFiles`, `pendingGateFiles`,
-   * `currentPhase`, and `reviewReceipts`). It is referenced only by test
-   * fixtures that seed serialized state.
-   *
-   * Why it lost its reader: it used to be a required conjunct of the reviewer
-   * skip, but a single scalar is overwritten on every gate pass, so an earlier
-   * wave's reviewable set re-arming produced false misses. That decision now
-   * reads the durable `reviewReceipts` ledger, matching a LOOKS_GOOD receipt by
-   * its GATE-COMPUTED `gateId` (`${reviewer}:${expectedFingerprint}`) plus the
-   * reviewed file set, and an attestability check on the current fingerprint.
-   * The reviewer-reported `snapshotFingerprint` on a receipt is drift-tolerated
-   * and is deliberately NOT used as content evidence.
-   *
-   * Migration/removal path for consumers:
-   * 1. Do not add new readers. Anything that needs "was this reviewable set
-   *    already reviewed?" must match a `reviewReceipts` entry on `gateId` +
-   *    `reviewedFiles`, exactly like base2's reviewer-skip rule.
-   * 2. The field stays written for one deprecation window so a session
-   *    serialized by an older base2 keeps round-tripping unchanged (no
-   *    migration step, no rollback risk: it is additive and optional).
-   * 3. Removal: once no serialized state in circulation is read by a base2 that
-   *    still declares it, drop the write in base2.ts's gate-pass path, drop the
-   *    `??= ''` default, drop this field, and drop the test-fixture seeds. Older
-   *    serialized state stays loadable because unknown persisted keys are
-   *    ignored.
-   *
-   * Backward-compatible: older serialized state lacks this field (treated as
-   * unset).
-   */
-  reviewedReviewableFingerprint?: string
   lastReviewerGateSkipReason: string
   /**
    * Durable one-line mid-turn gate-progress note (e.g. "gate: validation

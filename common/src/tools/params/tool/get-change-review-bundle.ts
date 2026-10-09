@@ -31,6 +31,21 @@ export const getChangeReviewBundleParams = {
         ownership: z.array(z.record(z.string(), z.any())),
         validation: z.array(z.record(z.string(), z.any())),
         findings: z.array(z.record(z.string(), z.any())),
+        // P3-T11 (LI-10): additive Semgrep --baseline-commit layer. Optional
+        // so existing consumers parse unchanged; a soft status, never an
+        // error, when the sidecar is absent/slow/failing.
+        securityScan: z
+          .object({
+            status: z.enum(['ok', 'unavailable', 'error', 'skipped']),
+            findings: z.array(z.record(z.string(), z.any())),
+            reason: z.string().optional(),
+            toolVersion: z.string().optional(),
+            // Additive: set when the scan's file cap (MAX_SEMGREP_FILES)
+            // truncated the scanned file list; optional so existing
+            // consumers parse unchanged.
+            truncated: z.boolean().optional(),
+          })
+          .optional(),
       }),
       z.object({ errorMessage: z.string() }),
     ]),

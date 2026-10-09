@@ -8,6 +8,7 @@ import {
   normalizeReplacementList,
   normalizeTransactionEditList,
 } from '../utils'
+import { areEditBlocksEnabled, parseEditBlocks } from '../edit-blocks'
 import { basedOnReadSchema, canonicalBasedOnReadSchema } from '../based-on-read'
 import { fileMutationResultV1Schema } from '../../results/filesystem'
 import { decodeReadCapabilityToken } from '../../../util/content-hash'
@@ -563,11 +564,47 @@ export const editTransactionResultSchema = z.union([
 
 const toolName = 'edit_transaction'
 const endsAgentStep = false
+
+// PR-T4 (D22) wave 2: plain-text SEARCH/REPLACE edit blocks for `edits`,
+// gated behind the default-off OPENBUFF_EDIT_BLOCKS flag. The flag is
+// evaluated at access time on the exported params (via getters below), not
+// captured once at module load, so a process that imports this module with
+// the flag off and later enables it (tests) sees the flag-on surface. Both
+// the description text and providerInputSchema are precomputed as flag-on and
+// flag-off constants; the getters just select between them, so the flag-off
+// artifacts (description text, JSON schemas, generated TS definitions, golden
+// vectors) stay byte-identical to the pre-feature surface. The wave-1
+// preprocess (normalizeTransactionEditList) re-reads the flag per parse, so a
+// module built with the flag off still translates valid block payloads if the
+// flag is enabled later in-process. The string arms below additionally
+// re-check the flag at parse time so the surface fail-closes on blocks as soon
+// as the runtime flag is disabled again.
+
+// Only fires for strings the preprocess did not translate into an edits
+// array, i.e. invalid block payloads: the arm rejects them with a
+// block-specific diagnostic instead of a generic array-type error, and the
+// runtime flag re-check keeps the flag authoritative at parse time.
+const editBlockStringSchema = z.string().refine(
+  (value) => areEditBlocksEnabled() && !('error' in parseEditBlocks(value)),
+  { message: 'Not valid edit blocks' },
+)
+
+const providerEditsSchema = z
+  .array(providerTransactionEditSchema)
+  .min(1)
+  .max(MAX_FILE_CHANGES_PER_TRANSACTION)
+
 const inputSchema = z
   .object({
     edits: z
       .preprocess(
         normalizeTransactionEditList,
+        // No string arm here on purpose: the preprocess above already
+        // translates valid block payloads into edit objects BEFORE this schema
+        // evaluates, so this schema only ever sees arrays. Keeping the type
+        // narrow keeps z.infer/CodebuffToolCall edits as an edit-object array —
+        // the string arm lives on providerInputSchema only (provider-side +
+        // SDK re-validation), where a raw block string must parse.
         boundedTransactionEditListSchema,
       )
       .describe(
@@ -577,14 +614,14 @@ const inputSchema = z
   .describe(
     'Preflight related edits together, then apply them in one coordinated client-side transaction with deterministic order and explicit rollback outcomes.',
   )
-const providerInputSchema = z.object({
-  edits: z
-    .array(providerTransactionEditSchema)
-    .min(1)
-    .max(MAX_FILE_CHANGES_PER_TRANSACTION),
+const providerInputSchemaFlagOn = z.object({
+  edits: z.union([editBlockStringSchema, providerEditsSchema]),
+})
+const providerInputSchemaFlagOff = z.object({
+  edits: providerEditsSchema,
 })
 
-const description = `
+const baseDescription = `
 Use this tool when related edits across one or more files should be preflighted together before applying, such as updating a utility and its tests together.
 
 Important:
@@ -634,13 +671,50 @@ ${$getNativeToolCallExampleString({
   },
   endsAgentStep,
 })}
+
 `.trim()
+
+// PR-T4 (D22) wave 2: the block-format usage section is appended to the tool
+// description only when the flag was enabled at module load; the flag-off
+// description string stays byte-identical to the pre-feature surface. The
+// section is honest about scope: blocks cover str_replace-style replacements
+// only; every other edit type still uses the JSON array form.
+const editBlocksDescriptionSection = `
+Edit blocks (plain-text SEARCH/REPLACE format):
+
+When every edit in the transaction is a str_replace-style replacement, the entire edits payload may be sent as one plain-text string of edit blocks instead of a JSON array:
+
+src/helper.ts
+  <<<<<<< SEARCH
+  export const value = 1
+  =======
+  export const value = 2
+  >>>>>>> REPLACE
+
+(Example shown indented so VCS conflict-marker scanners do not flag this file; real payloads must NOT indent the marker lines — see the exact-marker rule below.)
+
+Rules:
+- The marker lines must be exactly "<<<<<<< SEARCH", "=======" and ">>>>>>> REPLACE": no variants, no leading or trailing whitespace.
+- Each block is preceded by a path line naming the file it edits. Consecutive blocks for the same path coalesce into one str_replace edit with ordered replacements.
+- The SEARCH body must be exact current file content (the same exact-match rules as str_replace oldString). An empty REPLACE body deletes the SEARCH text.
+- The payload must be 100% blocks: path lines and blocks only, with blank lines allowed between blocks. Any prose, code fence, or other text outside the blocks makes the whole payload invalid.
+- Blocks cover str_replace-style replacements only; other edit types (create, delete, move, patch, replace_range, rewrite_symbol, structured, write_file) still require the JSON array form.
+`.trim()
+
+const descriptionFlagOn = `${baseDescription}\n\n${editBlocksDescriptionSection}`
+const descriptionFlagOff = baseDescription
 
 export const editTransactionParams = {
   toolName,
   endsAgentStep,
-  description,
+  get description() {
+    return areEditBlocksEnabled() ? descriptionFlagOn : descriptionFlagOff
+  },
   inputSchema,
-  providerInputSchema,
+  get providerInputSchema() {
+    return areEditBlocksEnabled()
+      ? providerInputSchemaFlagOn
+      : providerInputSchemaFlagOff
+  },
   outputSchema: jsonToolResultSchema(editTransactionResultSchema),
 } satisfies $ToolParams

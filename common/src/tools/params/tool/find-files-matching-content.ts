@@ -6,6 +6,96 @@ import type { $ToolParams } from '../../constants'
 
 const toolName = 'find_files_matching_content'
 const endsAgentStep = true
+/**
+ * Hard cap on the output schema's `count` field. The tool returns at most
+ * `maxFiles` (default 100) unique files plus its own internal safety limit,
+ * so a serialized result can never claim an unbounded match count.
+ */
+const MAX_MATCH_COUNT = 500
+/**
+ * The documented safe-ripgrep-flag allowlist, declared structurally so the
+ * `flags` schema and the tool description prose cannot drift apart. Value
+ * flags (-g/--glob, -t/--type, -T/--type-not) take a following value token;
+ * -n/--line-number are accepted and ignored (the tool forces line numbers
+ * itself).
+ */
+const FLAG_ALLOWLIST = [
+  '-i',
+  '--ignore-case',
+  '-S',
+  '--smart-case',
+  '-s',
+  '--case-sensitive',
+  '-w',
+  '--word-regexp',
+  '-F',
+  '--fixed-strings',
+  '-U',
+  '--multiline',
+  '--multiline-dotall',
+  '-g',
+  '--glob',
+  '-t',
+  '--type',
+  '-T',
+  '--type-not',
+  '-n',
+  '--line-number',
+] as const
+const VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-g',
+  '--glob',
+  '-t',
+  '--type',
+  '-T',
+  '--type-not',
+])
+
+/**
+ * True when `token` is a valid `flags` entry: an allowlisted flag, a value
+ * token for a preceding value flag (any token not starting with `-`), or a
+ * `flag=value` compound whose flag is allowlisted.
+ */
+const isAllowedFlagToken = (token: string, prevFlag?: string): boolean => {
+  if (prevFlag !== undefined && VALUE_FLAGS.has(prevFlag)) {
+    return !token.startsWith('-')
+  }
+  const allowlist = FLAG_ALLOWLIST as readonly string[]
+  if (allowlist.includes(token)) return true
+  const eq = token.indexOf('=')
+  return eq > 0 && allowlist.includes(token.slice(0, eq))
+}
+
+const flagsSchema = z
+  .preprocess(
+    (value) => {
+      // Split a single-string flags payload into argv tokens so the structural
+      // allowlist validates both encodings uniformly ("-g *.ts -g *.tsx" and
+      // ["-g", "*.ts", "-g", "*.tsx"] are the same input). Array payloads
+      // are already argv-shaped and pass through untouched.
+      if (typeof value === 'string') return value.split(/\s+/).filter(Boolean)
+      return value
+    },
+    z
+      .array(z.string())
+      .superRefine((tokens, ctx) => {
+        let prevFlag: string | undefined
+        for (const [index, token] of tokens.entries()) {
+          if (isAllowedFlagToken(token, prevFlag)) {
+            prevFlag = token.startsWith('-') ? token : undefined
+            continue
+          }
+          ctx.addIssue({
+            code: 'custom',
+            path: [index],
+            message: `Flag "${token}" is not on the allowed ripgrep flag allowlist (allowed: ${(FLAG_ALLOWLIST as readonly string[]).join(', ')}, plus values for ${[...VALUE_FLAGS].join(', ')}).`,
+          })
+          prevFlag = token.startsWith('-') ? token : undefined
+        }
+      }),
+  )
+  .optional()
+
 const inputSchema = z
   .object({
     pattern: z
@@ -14,10 +104,7 @@ const inputSchema = z
       .describe(
         `Regex pattern (ripgrep syntax) to match file content against.`,
       ),
-    flags: z
-      .union([z.string(), z.array(z.string())])
-      .optional()
-      .describe(
+    flags: flagsSchema.describe(
         `Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored.`,
       ),
     cwd: z
@@ -117,7 +204,12 @@ export const findFilesMatchingContentParams = {
         files: z
           .array(z.string())
           .describe('Unique file paths matching the pattern'),
-        count: z.number().describe('Number of unique files matched'),
+        count: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_MATCH_COUNT)
+          .describe('Number of unique files matched'),
         truncated: z
           .boolean()
           .optional()

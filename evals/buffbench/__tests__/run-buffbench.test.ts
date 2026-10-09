@@ -1362,3 +1362,141 @@ describe('summarizeAgentRuns', () => {
     expect(summary.measuredRuns).toEqual([measuredRun])
   })
 })
+
+describe(
+  'runTask proposal promotion gate (audit: gate never invoked in the live pipeline)',
+  () => {
+    test('fires the promotion gate once per run with proposals and persists the decision', async () => {
+      const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'buffbench-test-'))
+      const client = {
+        run: async (input: { agent?: string; prompt?: string }) => {
+          if (input.agent === 'buffbench-lessons-extractor') {
+            return {
+              output: {
+                type: 'structuredOutput' as const,
+                value: {
+                  lessons: [
+                    {
+                      whatWentWrong: 'Edited Python without reading idioms.',
+                      whatShouldHaveBeenDone:
+                        'Read agents/idioms/python.md first.',
+                    },
+                  ],
+                  proposals: [
+                    {
+                      kind: 'append_system_prompt_guidance',
+                      target: { agentId: 'agent-a' },
+                      guidance:
+                        'Before non-trivial Python edits, read agents/idioms/python.md.',
+                      rationale: 'Addresses the missing idiom-read lesson.',
+                    },
+                  ],
+                },
+              },
+            }
+          }
+
+          return {
+            output: {
+              type: 'structuredOutput' as const,
+              value: {
+                analysis: 'ok',
+                strengths: [],
+                weaknesses: [],
+                completionScore: 6,
+                codeQualityScore: 6,
+                overallScore: 6,
+              },
+            },
+          }
+        },
+      } as unknown as OpenbuffClient
+
+      try {
+        const { agentResults, commitTraces } = await runTask({
+          client,
+          commit: {
+            id: 'promotion-gate-task',
+            sha: 'abcdef1234567890',
+            parentSha: 'parent',
+            spec: 'Use Python idioms.',
+            prompt: 'Make Python file handling idiomatic.',
+            supplementalFiles: [],
+            fileDiffs: [],
+          },
+          agents: ['agent-a'],
+          repoUrl: 'https://example.com/repo.git',
+          logsDir,
+          index: 0,
+          totalTasks: 1,
+          analyzerContext: {
+            agentDefinitions: [],
+            agentTypeDefinition: '',
+            testedAgentIds: ['agent-a'],
+          },
+          localAgentDefinitions: [
+            {
+              id: 'agent-a',
+              displayName: 'Agent A',
+              systemPrompt: 'You are agent A.',
+            },
+          ],
+          extractLessons: true,
+          printEvents: false,
+          disableAnalysis: true,
+          runAgentOnCommitImpl: async () => ({
+            diff: 'diff --git a/tool.py b/tool.py',
+            contextFiles: {},
+            durationMs: 10,
+            cost: 0,
+            trace: [],
+            retrievalFlow: {
+              queryCallCount: 0,
+              queryResultPaths: [],
+              successfulReadPaths: [],
+              relevantReadPaths: [],
+              irrelevantReadPaths: [],
+            },
+          }),
+        })
+
+        // One agent with proposals for this run → the gate fired exactly once.
+        expect(commitTraces).toHaveLength(1)
+        const decision =
+          agentResults[0]?.evalRun.proposalDryRun?.promotionDecision
+        expect(decision).toBeDefined()
+        expect(decision?.accepted).toBe(false)
+        // Fail-closed: paired per-task before/after scores do not exist inside
+        // a single live run, so the gate's own significance reason must be
+        // recorded — proving the gate FIRED rather than being skipped.
+        expect(decision?.reasons).toContain(
+          'significance required but no paired per-task scores provided',
+        )
+        // The comparison is constructed from this run's own scores with
+        // before == after, so the zero-delta reason is recorded too.
+        expect(
+          decision?.reasons.some((reason) =>
+            reason.startsWith('score delta'),
+          ),
+        ).toBe(true)
+
+        // The decision is persisted into the run's trace artifact.
+        const traceFiles = fs
+          .readdirSync(logsDir)
+          .filter(
+            (file) => file.endsWith('.json') && !file.includes('ANALYSIS'),
+          )
+        const traceJson = JSON.parse(
+          fs.readFileSync(path.join(logsDir, traceFiles[0]!), 'utf8'),
+        )
+        expect(traceJson.proposalDryRun.promotionDecision).toEqual(decision)
+      } finally {
+        fs.rmSync(logsDir, { recursive: true, force: true })
+        fs.rmSync(path.join(__dirname, '..', 'agent-lessons'), {
+          recursive: true,
+          force: true,
+        })
+      }
+    })
+  },
+)

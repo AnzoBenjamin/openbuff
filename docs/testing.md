@@ -18,6 +18,79 @@ This applies to `typecheck`, `test`, `build`, etc.
 
 CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer integration tests via components for hook behavior.
 
+## Test-infra notes (bun)
+
+- **Pinned bun for OpenTUI tsx render tests.** Local bun >= 1.3.14 cannot initialize
+  the OpenTUI FFI renderer (`Failed to initialize OpenTUI render library: Cannot
+  access 'default' before initialization`). bun 1.3.14 is Bun's Rust-rewrite release
+  (1.3.13 is the last Zig build) with confirmed FFI/TDZ regressions
+  (oven-sh/bun#30651, oven-sh/bun#30717 — the latter confirmed for `@opentui/core`
+  and fixed only in 1.4.x). Run tsx suites under the pinned version:
+
+  ```bash
+  cd cli && bunx --bun bun@1.3.5 test --isolate $(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f -name '*.test.tsx' -print)
+  ```
+
+  CI runs tests under bun 1.3.5 (the `setup-bun` pin in `.github/workflows/ci.yml`).
+
+- **Run the exact CI discovery+invocation before pushing.** `bun test --isolate`
+  does NOT give each file its own process — files share a pool of worker processes,
+  so which files cohabit a module registry depends on the machine's core count and
+  cross-file mock-leak scheduling differs between machines. Local isolated-file or
+  small-pair runs cannot prove CI-schedule correctness, so run CI's own discovery
+  and invocation locally first:
+
+  ```bash
+  cd cli && TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ') && bunx --bun bun@1.3.5 test --isolate $TEST_FILES
+  ```
+
+  This matches the test discovery command in `.github/workflows/ci.yml` exactly
+  (it collects both `*.test.ts` and `*.test.tsx`, excluding
+  `*.integration.test.ts`).
+
+- **`mock.module` hygiene.** Prefer `spyOn(ns, 'fn')` + `mock.restore()` over
+  `mock.module`. If `mock.module` is required:
+
+  - Capture the real module BEFORE registering, as a plain-object snapshot:
+    `const real = { ...(await import('spec')) }` — the module namespace is a live
+    binding that `mock.module` patches in place, so a static namespace import is
+    not a safe capture.
+  - Spread the captured exports in the factory, and make every override
+    delegate-unless-armed (armed flag set in `beforeEach`, cleared in `afterAll`).
+    A registry-wide override that replaces exports unconditionally leaks into
+    sibling suites.
+  - Never capture the real module via `createRequire` — it bridges the CJS/ESM
+    registries and can busy-spin sibling suites.
+
+  The shared helpers `mockModule()` / `clearMockedModules()` from
+  `@codebuff/common/testing/mock-modules` have a sharp resolution contract:
+  `modulePath` is resolved relative to `common/src/testing/mock-modules.ts`
+  ITSELF, not the calling test file, so caller-relative paths throw 'Cannot
+  find module'. Only use them for specifiers resolvable from common/src/testing
+  (existing consumers use bare package names).
+
+  `createRequire` captures have one sanctioned exception: when a workspace
+  package's ESM `import` condition resolves to a build artifact that may be
+  stale or broken under `bun test` (e.g. `@openbuff/sdk` resolves to the sdk
+  package's dist bundle output, not its source),
+  capture the real exports via `createRequire` (the `require` condition),
+  spread them EAGERLY into the factory, and never read the capture lazily —
+  lazy delegation through a require-captured binding is the CJS/ESM bridge
+  trap itself (the guard's first check).
+
+  Restore factories must also spread:
+  `mock.module(spec, () => ({ ...realSnapshot }))` — a factory returning the
+  snapshot directly contains no spread and is flagged as a full replacement.
+  Before pushing, run `bun --cwd=scripts run guard:mock-module` (wired into
+  check:ci-local Step F); it flags lazy live-binding delegation and first-party
+  full-replacement factories (exempt with a `mock-module-guard: intentional
+  full replacement` comment).
+
+- **OAuth callback tests use per-test ports.** `setChatGptOAuthRedirectUriForTests()`
+  (`cli/src/utils/chatgpt-oauth.ts`) redirects the callback server to a unique
+  per-test port; production keeps the provider-registered fixed port (1455). Do
+  not re-add fixed-port bind assumptions in new OAuth tests.
+
 ## Coding harness experiments
 
 - `bun run --cwd scripts harness:lsp -- <diagnostic-command> <file...>` runs an
@@ -36,7 +109,7 @@ Retrieval runs can append local-only JSONL metrics under
 
 ## CLI tmux Testing
 
-For testing CLI behavior via tmux, use the helper scripts in `scripts/tmux/`. These handle bracketed paste mode and session logging automatically. Session data is saved to `debug/tmux-sessions/` in YAML format and can be viewed with `bun scripts/tmux/tmux-viewer/index.tsx`. See `scripts/tmux/README.md` for details.
+For testing CLI behavior via tmux, use the helper scripts in `scripts/tmux/`. These handle bracketed paste mode and session logging automatically. Session data is saved to `debug/tmux-sessions/` in YAML format and can be viewed with `bun scripts/tmux/tmux-viewer/index.tsx` (the @cli-tester capture harness — not the user-facing run viewer). To inspect an agent RUN's journaled steps, use `openbuff dash` (`cli/src/commands/dash-command.ts`), which reads the live P2-T2 run journal; tmux-viewer remains the capture-tooling viewer only. See `scripts/tmux/README.md` for details.
 
 Useful workflow for agents:
 

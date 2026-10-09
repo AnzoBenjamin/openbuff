@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
+import * as mcpClientModule from '@codebuff/common/mcp/client'
+import { markMCPConfigOrigin } from '@codebuff/common/mcp/client'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import {
@@ -29,6 +31,8 @@ import { LocalHarnessStore } from '../services/local-harness-store'
 
 import type { FilesystemMutationEvent, OpenbuffClientOptions } from '../run'
 import type { CommitReceiptV1 } from '@codebuff/common/tools/results/filesystem'
+import type { HarnessApprovalRequest } from '../services/harness-enforcement'
+import type { MCPConfig } from '@codebuff/common/types/mcp'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
@@ -590,5 +594,190 @@ describe('handleToolCall compact-receipt mutation wiring', () => {
     expect(await fs.readFile(`/repo/${auditArtifactPath}`, 'utf8')).toBe(
       'existing\n',
     )
+  })
+})
+
+describe('client-origin MCP tool approval gate (P1-T2)', () => {
+  afterEach(() => {
+    mock.restore()
+  })
+
+  /**
+   * Drives `handleToolCall` directly for an MCP tool call, mocking the shared
+   * MCP client so `getMCPClient`/`callMCPTool` never hit the network. Returns
+   * whether the tool actually ran alongside the tool output.
+   */
+  async function dispatchMcpToolCall(params: {
+    mcpConfig: MCPConfig
+    toolName: string
+    requestApproval?: (request: HarnessApprovalRequest) => Promise<boolean>
+    approvedClientMcpTools?: Set<string>
+  }): Promise<{ output: ToolResultOutput[]; callMcpToolCalls: number }> {
+    // Reset any prior spies so `callToolSpy.mock.calls.length` reflects only
+    // THIS dispatch. Without this, a second dispatchMcpToolCall in the same
+    // test (e.g. the same-tool re-call case) re-wraps an already-spied module
+    // method and the call count reads cumulatively across both dispatches.
+    mock.restore()
+    const getClientSpy = spyOn(
+      mcpClientModule,
+      'getMCPClient',
+    ).mockResolvedValue('mock-client-id')
+    const callToolSpy = spyOn(mcpClientModule, 'callMCPTool').mockResolvedValue([
+      { type: 'json', value: { ok: true } },
+    ])
+
+    const handled = await handleToolCall({
+      action: {
+        type: 'tool-call-request',
+        requestId: 'call-mcp-1',
+        userInputId: 'input-1',
+        toolName: params.toolName,
+        input: { arg: 1 },
+        mcpConfig: params.mcpConfig,
+      },
+      overrides: {},
+      customToolDefinitions: {},
+      cwd: '/repo',
+      fs: createMockFs(),
+      trustedJobOwner: {
+        clientSessionId: 'session-1',
+        rootRunId: 'run-1',
+        parentRunId: 'run-1',
+        parentAgentId: 'agent-1',
+      },
+      harnessStateDir,
+      approvalReceiptIds: [],
+      approvalMode: 'balanced',
+      requestApproval: params.requestApproval,
+      approvedClientMcpTools: params.approvedClientMcpTools,
+      approvalService: new HarnessApprovalService(
+        new LocalHarnessStore(harnessStateDir),
+      ),
+      getWorkspaceState: () => undefined,
+      setWorkspaceState: () => {},
+    })
+
+    void getClientSpy
+    return { output: handled.output, callMcpToolCalls: callToolSpy.mock.calls.length }
+  }
+
+  function clientConfig(): MCPConfig {
+    const config: MCPConfig = {
+      type: 'stdio',
+      command: 'untrusted-server',
+      args: [],
+      env: {},
+    }
+    markMCPConfigOrigin(config, 'client')
+    return config
+  }
+
+  it('(a) prompts and runs the tool on the first client-origin call, recording the key', async () => {
+    const requests: HarnessApprovalRequest[] = []
+    const approvedClientMcpTools = new Set<string>()
+    const { output, callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: clientConfig(),
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: async (request) => {
+        requests.push(request)
+        return true
+      },
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      action: 'mcp-tool',
+      risk: 'high',
+    })
+    expect(requests[0]?.target).toContain('search')
+    expect(requests[0]?.reason).toContain('search')
+    expect(callMcpToolCalls).toBe(1)
+    expect(jsonValue([output[0]])).toEqual({ ok: true })
+    // The approved key is recorded so subsequent same-tool calls run freely.
+    expect(approvedClientMcpTools.size).toBe(1)
+  })
+
+  it('(b) does not re-prompt on the second call of the same tool this run', async () => {
+    const approvedClientMcpTools = new Set<string>()
+    const config = clientConfig()
+    let prompts = 0
+    const requestApproval = async () => {
+      prompts++
+      return true
+    }
+
+    const first = await dispatchMcpToolCall({
+      mcpConfig: config,
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval,
+    })
+    const second = await dispatchMcpToolCall({
+      mcpConfig: config,
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval,
+    })
+
+    expect(prompts).toBe(1)
+    expect(first.callMcpToolCalls).toBe(1)
+    expect(second.callMcpToolCalls).toBe(1)
+  })
+
+  it('(c) returns an error output and never calls the tool when denied', async () => {
+    const approvedClientMcpTools = new Set<string>()
+    const { output, callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: clientConfig(),
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: async () => false,
+    })
+
+    expect(callMcpToolCalls).toBe(0)
+    expect(jsonValue([output[0]])).toMatchObject({
+      errorMessage: "Client MCP tool 'search' was denied approval.",
+    })
+    // Nothing recorded, so a later approved retry can still gate.
+    expect(approvedClientMcpTools.size).toBe(0)
+  })
+
+  it('(d) fails open and runs when no approver is present', async () => {
+    const approvedClientMcpTools = new Set<string>()
+    const { callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: clientConfig(),
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: undefined,
+    })
+
+    expect(callMcpToolCalls).toBe(1)
+    // Fail-open still records the key so subsequent calls run freely.
+    expect(approvedClientMcpTools.size).toBe(1)
+  })
+
+  it('(e) never prompts for a trusted (project) origin config', async () => {
+    const trustedConfig: MCPConfig = {
+      type: 'stdio',
+      command: 'trusted-server',
+      args: [],
+      env: {},
+    }
+    markMCPConfigOrigin(trustedConfig, 'project')
+    let prompts = 0
+    const approvedClientMcpTools = new Set<string>()
+    const { callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: trustedConfig,
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: async () => {
+        prompts++
+        return true
+      },
+    })
+
+    expect(prompts).toBe(0)
+    expect(callMcpToolCalls).toBe(1)
+    expect(approvedClientMcpTools.size).toBe(0)
   })
 })

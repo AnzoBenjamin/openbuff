@@ -34,8 +34,10 @@ const READ_TOOLS = new Set<ToolName>([
   'code_search',
   'find_files',
   'find_files_matching_content',
+  'find_references',
   'git_status',
   'get_task',
+  'go_to_definition',
   'get_change_review_bundle',
   'inspect_workspace',
   'inspect_environment',
@@ -49,6 +51,7 @@ const READ_TOOLS = new Set<ToolName>([
   'list_directory',
   'list_jobs',
   'query_index',
+  'hover_type',
   'read_docs',
   'read_files',
   'read_image',
@@ -56,6 +59,7 @@ const READ_TOOLS = new Set<ToolName>([
   'read_logs',
   'read_outline',
   'read_subtree',
+  'workspace_symbol',
 ])
 const MUTATION_TOOLS = new Set<ToolName>([
   'create_plan',
@@ -112,6 +116,9 @@ const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
   edit_3d_asset: ['path'],
   inspect_3d_asset: ['path'],
   render_3d_preview: ['path'],
+  go_to_definition: ['path'],
+  find_references: ['path'],
+  hover_type: ['path'],
   read_files: [
     'paths[]',
     'ranges[].path',

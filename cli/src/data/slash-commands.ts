@@ -199,7 +199,7 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'image',
     label: 'image',
     description: 'Attach an image file (or Ctrl+V to paste from clipboard)',
-    aliases: ['img', 'attach'],
+    aliases: ['img'],
   },
   ...MODE_COMMANDS,
   // {
@@ -216,6 +216,36 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'theme:toggle',
     label: 'theme:toggle',
     description: 'Toggle between light and dark mode',
+  },
+  {
+    id: 'detach',
+    label: 'detach',
+    description:
+      'Detach from the attached session (it keeps running); /attach reattaches',
+  },
+  {
+    id: 'attach',
+    label: 'attach',
+    description: 'Reattach to the last detached session',
+    aliases: ['attach'],
+  },
+  {
+    id: 'undo-turn',
+    label: 'undo-turn',
+    description:
+      'Restore tracked files to the previous turn snapshot (git-based)',
+  },
+  {
+    id: 'restore',
+    label: 'restore',
+    description:
+      'Restore tracked files to a specific turn snapshot (git-based)',
+  },
+  {
+    id: 'bisect-turn',
+    label: 'bisect-turn',
+    description:
+      'Find the first turn snapshot that breaks the test suite (git-based)',
   },
   {
     id: 'exit',

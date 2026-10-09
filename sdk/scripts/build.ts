@@ -108,6 +108,18 @@ async function build() {
       [
         {
           filePath: 'src/index.ts',
+          libraries: {
+            // Keep @modelcontextprotocol/sdk's types as external imports in the
+            // public .d.ts instead of inlining them. Its bundled Server class
+            // types reference zod-v3-only symbols (`objectOutputType`,
+            // `objectInputType`, …) that do not exist under this workspace's
+            // hoisted zod 4.x, so inlining them makes declaration bundling fail
+            // with `Cannot find symbol for node "objectOutputType"` and breaks
+            // the CI `cd sdk && bun run build` step (P1-T4 follow-up). The
+            // public MCP surface (createMcpServer/runMcp/options types) keeps
+            // working; the Server's own zod-typed internals stay external.
+            importedLibraries: ['@modelcontextprotocol/sdk'],
+          },
           output: {
             exportReferencedTypes: false,
           },

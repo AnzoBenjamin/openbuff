@@ -27,6 +27,13 @@ being dropped.
 | S4  | A trailing instruction after a long pasted diagnostic survives in the pinned goal              |
 | S5  | An open reviewer blocker and the review receipt fingerprint both survive a pass                |
 
+Multi-pass drift sweep (CQ-T4/D25): S10 runs three consecutive small-window
+compaction cycles and S11 alternates the baseline and small-window budgets
+across two cycles, feeding each pass's real `set_messages` output back in as
+the next pass's input. Both scenarios assert after every pass that the open
+blocker and the review receipt fingerprint survive — the former single-pass-only
+measurement gap documented below is closed.
+
 ## Metrics
 
 Each scenario records named metrics into a module-level `metrics` record and the
@@ -61,5 +68,3 @@ any `**/*.test.ts` under `evals/`) and `evals/tsconfig.json` includes `**/*.ts`.
   `evals/memory-retention/` eval and the runtime task-memory suite.
 - Model-quality questions (does the model _act_ on retained evidence) — needs an
   LLM-in-the-loop eval and is intentionally excluded here.
-- Retention under repeated compaction cycles at each window size (multi-pass
-  drift), which would extend S1–S3 into a cycle-count sweep.

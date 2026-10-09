@@ -34,6 +34,13 @@ import { additionalSystemPrompts } from './system-prompt/prompts'
 import { getAgentTemplate } from './templates/agent-registry'
 import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
+  buildRunResumeReport,
+  executeReplayActions,
+  isRunResumeReportClean,
+  planReplayActions,
+} from './util/run-journal'
+import type { RunResumeReport } from './util/run-journal'
+import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
 } from './templates/prompts'
@@ -86,7 +93,10 @@ import {
   evictStaleToolResults,
   EVICTION_KEEP_RECENT_STEPS,
 } from './util/tool-result-eviction'
-import { archivePreCompaction } from './util/context-archive'
+import {
+  archiveEvictedToolResults,
+  archivePreCompaction,
+} from './util/context-archive'
 import { maybeRunBackgroundConsolidation } from './util/context-consolidation-runner'
 import { verifyExtractionCoverage } from './util/compaction-verification'
 import {
@@ -144,6 +154,7 @@ import type {
   CustomToolDefinitions,
   ProjectFileContext,
 } from '@codebuff/common/util/file'
+import { realClock, realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * M1-T5: redact secrets from a message before it reaches a log sink. Handles
@@ -394,17 +405,23 @@ async function additionalToolDefinitions(
     agentState,
   )
 
+  // `customToolDefinitions` is schema-defaulted, but hand-rolled fileContext
+  // objects (test fixtures, programmatic hosts, new spawn paths) may omit it;
+  // guard locally instead of relying on callers (see the defaulting in
+  // supervision/child-entry.ts, which exists because of this exact site).
   const defs = cloneDeep(
     Object.fromEntries(
-      Object.entries(fileContext.customToolDefinitions).filter(([toolName]) =>
-        effectiveToolNames.includes(toolName),
+      Object.entries(fileContext.customToolDefinitions ?? {}).filter(
+        ([toolName]) => effectiveToolNames.includes(toolName),
       ),
     ),
   )
   return getMCPToolData({
     ...params,
     toolNames: effectiveToolNames,
-    mcpServers: agentTemplate!.mcpServers,
+    // `agentTemplate` is a required non-optional param and `mcpServers` is a
+    // required, schema-defaulted field on AgentTemplate — no assertion needed.
+    mcpServers: agentTemplate.mcpServers,
     writeTo: defs,
   })
 }
@@ -455,6 +472,11 @@ export const runAgentStep = async (
     spawnParams: Record<string, any> | undefined
     system: string
     n?: number
+
+    // P2-T2: 1-based step index within the agent loop (loopAgentSteps passes
+    // totalSteps). Optional and additive: omitted → journal stepNumber 0 exactly
+    // as pre-P2-T2, so other callers are unchanged.
+    stepNumber?: number
 
     trackEvent: TrackEventFn
     promptAiSdk: PromptAiSdkFn
@@ -530,9 +552,14 @@ export const runAgentStep = async (
 
   const startTime = Date.now()
 
+  // Resolve the injectable id generator once at the runtime entry so replay
+  // (P2-T2) can reproduce identity ids deterministically.
+  const idGen = params.idGen ?? realIdGen
+  const clock = params.clock ?? realClock
+
   // Generates a unique ID for each main prompt run (ie: a step of the agent loop)
   // This is used to link logs within a single agent loop
-  const agentStepId = crypto.randomUUID()
+  const agentStepId = idGen.uuid()
   trackEvent({
     event: AnalyticsEvent.AGENT_STEP,
     userId: userId ?? '',
@@ -721,6 +748,7 @@ export const runAgentStep = async (
         runId: agentState.runId,
         userInputId,
         agentStepId,
+        idGen,
         model,
       })
     } catch (err) {
@@ -909,6 +937,37 @@ export const runAgentStep = async (
   let fullResponse = ''
   const toolResults: ToolMessage[] = []
 
+  // P2-T2: journal the LLM request BEFORE the stream so a crash mid-stream is
+  // classifiable as an in-flight LLM call on resume (P2-T2-DESIGN §2/§4a).
+  // Slice 1 kept the payload bounded; the journal now stores the FULL request
+  // payload per §8 ('the journal stores FULL payloads ... bound via retention,
+  // not truncation') since replay re-issues recorded requests.
+  if (agentState.runId && params.journalWriter) {
+    // Fail-open like every other journal write point (the step_boundary and
+    // spawn appends are guarded the same way): a journaling outage — e.g. a
+    // closed connection raced by a detached background child that outlived
+    // the turn which closed the journal — must never fail the agent step
+    // itself. The event is simply not journaled.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_request',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: {
+          model: agentTemplate?.model,
+          system,
+          n: params.n ?? null,
+          messages: agentState.messageHistory,
+        },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_request to run journal (non-fatal)',
+      )
+    }
+  }
+
   // Raw stream from AI SDK
   const stream = getAgentStreamFromTemplate({
     ...params,
@@ -960,6 +1019,29 @@ export const runAgentStep = async (
   toolResults.push(...newToolResults)
 
   fullResponse = fullResponseAfterStream
+
+  // P2-T2: journal the LLM response, closing the llm_request boundary. The
+  // journaled request/response pair defaults to re-issuing the recorded
+  // request from the prior agentState checkpoint — messageId is for telemetry
+  // correlation for body-bearing providers.
+  if (agentState.runId && params.journalWriter) {
+    // Fail-open like every other journal write point: a journaling outage
+    // (e.g. the closed-connection race with a detached background child)
+    // must never fail the agent step itself.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_response',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: { messageId: messageId ?? null, fullResponse },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_response to run journal (non-fatal)',
+      )
+    }
+  }
 
   // Credit broker/owned mutations for concurrent-instance gate isolation.
   // processStream mutates agentState.messageHistory in its finally, but the
@@ -1062,6 +1144,7 @@ export const runAgentStep = async (
       current: agentState.taskMemory,
       draft: compactedMemoryDraft,
       expectedRevision: agentState.taskMemory?.revision ?? -1,
+      now: clock.now(),
     })
     agentState.messageHistory = [
       userMessage({
@@ -1153,7 +1236,8 @@ export const runAgentStep = async (
     shouldEndTurn = true
   }
 
-agentState = {    ...agentState,
+  agentState = {
+    ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
         ? agentState.stepsRemaining - 1
@@ -1293,6 +1377,14 @@ export async function loopAgentSteps(
       agentId?: string
       model?: string
     }) => number | undefined
+    // P2-T2 replay-driver slice: when wired, ACTS on the resume report built
+    // at loop entry (re-drive children whose journals require live execution,
+    // respawn interrupted background intents). Typically
+    // `(report) => executeRunResumeReport({ report, ... })` from
+    // ./util/run-replay-driver. Additive-optional: undefined (the default)
+    // leaves this path byte-identical; the driver never throws, so a failing
+    // handler is reported in its outcome rather than aborting the loop.
+    resumeDriver?: (report: RunResumeReport) => Promise<unknown>
   } & ParamsExcluding<typeof additionalToolDefinitions, 'agentTemplate'> &
     ParamsExcluding<
       typeof runProgrammaticStep,
@@ -1390,6 +1482,9 @@ export async function loopAgentSteps(
   if (!agentTemplate) {
     throw new Error(`Agent template not found for type: ${agentType}`)
   }
+  // Resolve the injectable clock once at the loop entry (mirrors runAgentStep)
+  // so replay (P2-T2) can reproduce persisted-state timestamps deterministically.
+  const clock = params.clock ?? realClock
   const resolvedModelContextWindow = resolveModelContextWindow?.({
     agentId: agentTemplate.id,
     model: agentTemplate.model,
@@ -1398,14 +1493,15 @@ export async function loopAgentSteps(
   // before the first LLM request, so waiting for the streaming callback would
   // make the first compaction use the legacy fallback even for 500k/1M models.
   initialAgentState.contextWindowTokens = resolvedModelContextWindow
-  reconcileInterruptedLedgerSpawns(initialAgentState)
-  reconcileInterruptedPathLeases(initialAgentState)
+  reconcileInterruptedLedgerSpawns(initialAgentState, clock.now())
+  reconcileInterruptedPathLeases(initialAgentState, clock.now())
   // Discovery shard claims are durable parent state too: a shard left 'active'
   // by an interrupted spawn would otherwise make claimDiscoveryShard throw for
   // that question forever, failing the whole spawn batch. Nothing of THIS run
   // is in flight yet here, so an 'active' shard belongs to a previous turn.
   initialAgentState.discoveryCoverage = reconcileInterruptedDiscoveryShards(
     initialAgentState.discoveryCoverage,
+    clock.now(),
   )
   if (
     !initialAgentState.orchestrationLedger?.events.some(
@@ -1416,6 +1512,7 @@ export async function loopAgentSteps(
   ) {
     appendOrchestrationEvent({
       state: initialAgentState,
+      now: clock.now(),
       event: {
         type: 'model_selected',
         runId: initialAgentState.runId ?? initialAgentState.agentId,
@@ -1429,7 +1526,73 @@ export async function loopAgentSteps(
       },
     })
   }
-  reconcileInterruptedBackgroundAgentIntents(initialAgentState)
+  reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
+  // P2-T2: when a journal reader is wired and this state carries a prior
+  // runId, surface what a resume would do (own tail, children, background
+  // intents). P2-audit-fix-8: a caller-injected resumeDriver (production
+  // wiring: sdk/src/services/run-resume-driver.ts) ACTS on the report below;
+  // without one this block stays classify-and-log.
+  if (params.journalReader && initialAgentState.runId) {
+    const resumeReport = buildRunResumeReport({
+      reader: params.journalReader,
+      runId: initialAgentState.runId,
+      intents: initialAgentState.backgroundAgentJobs,
+    })
+    if (!isRunResumeReportClean(resumeReport)) {
+      logger.warn(
+        { resumeReport },
+        'Run journal shows interrupted work from a previous run',
+      )
+      // P2-T2 final REPLAY SLICE: the report is now ACTED ON structurally —
+      // planned (bounded) and executed through caller-injected seams. These
+      // seams are LOGGING-ONLY: replayChild records the child's disposition
+      // and respawnBackground records the intended respawn without touching
+      // live state. They must NOT re-drive children or respawn background
+      // jobs here: reconcileInterruptedBackgroundAgentIntents above already
+      // reconciled the intents, so a real respawn in the seam would
+      // double-respawn, and P2-T8 upgrades these seams without touching the
+      // planner. Unwired/confirmed seams skip, so a clean report fires no
+      // actions and this wiring stays byte-identical for fresh runs.
+      const replayPlan = planReplayActions(resumeReport)
+      if (replayPlan.actions.length > 0) {
+        const replayResult = await executeReplayActions(replayPlan.actions, {
+          logger,
+          replayChild: async (childRunId, verdict) => {
+            logger.debug(
+              { runId: initialAgentState.runId, childRunId, verdict },
+              'Journal replay: child disposition planned (logging-only seam)',
+            )
+          },
+          respawnBackground: async (jobId, agentType) => {
+            logger.debug(
+              { runId: initialAgentState.runId, jobId, agentType },
+              'Journal replay: background respawn intended (logging-only seam; intents already reconciled)',
+            )
+          },
+        })
+        logger.debug(
+          {
+            runId: initialAgentState.runId,
+            plannedActions: replayPlan.actions.length,
+            truncated: replayPlan.truncated,
+            attempted: replayResult.attempted,
+            succeeded: replayResult.succeeded,
+            failed: replayResult.failed,
+          },
+          'Journal replay actions executed',
+        )
+      }
+      // P2-T2 replay-driver slice: when a resumeDriver is wired, ACT on the
+      // report — re-drive children and respawn background intents — before
+      // the loop continues. Additive-optional: undefined (the default) keeps
+      // this path byte-identical; executeRunResumeReport never throws, so a
+      // failing handler is reported in its outcome rather than aborting the
+      // loop.
+      if (params.resumeDriver) {
+        await params.resumeDriver(resumeReport)
+      }
+    }
+  }
 
   if (signal.aborted) {
     return {
@@ -1728,7 +1891,7 @@ export async function loopAgentSteps(
           role: 'user' as const,
           content: buildUserMessageContent(prompt, spawnParams, content),
           tags: ['USER_PROMPT'],
-          sentAt: Date.now(),
+          sentAt: clock.now(),
 
           // James: Deprecate the below, only use tags, which are not prescriptive.
           keepDuringTruncation: true,
@@ -1742,7 +1905,6 @@ export async function loopAgentSteps(
               ],
             ),
           ),
-        ,
       ],
 
       instructionsPrompt &&
@@ -1996,7 +2158,18 @@ export async function loopAgentSteps(
     // pin anything. One full recount (reset + fresh sum) runs only after a
     // history-rewriting compaction/trim, whose sites below call
     // invalidateHistoryAggregate.
-    const incrementalTokenCounter = new IncrementalTokenCounter()
+    // Audit MEDIUM (token fudge factors dead on the hot path): thread the
+    // routed model so the incremental counter prices NEW messages with the
+    // per-family fudgeFactorForModel factor instead of the Anthropic 1.35
+    // sentinel default. agentTemplate.model is resolved at loop entry — the
+    // same source the model_selected event above records — and may be
+    // undefined when the route is deferred to openbuff.json; undefined keeps
+    // the exact legacy behavior, so this is additive and safe. Every agent
+    // path (root turn, foreground subagents, inline agents) runs through this
+    // single loop entry, so no secondary construction site needs threading.
+    const incrementalTokenCounter = new IncrementalTokenCounter(
+      agentTemplate.model,
+    )
     const invalidateHistoryAggregate = () => {
       // History was rewritten (compaction/trim): the next estimate must
       // recount fully rather than trusting stale per-message memoized counts.
@@ -2152,6 +2325,19 @@ export async function loopAgentSteps(
             // mechanical-trim branches: previously read paths require a
             // fresh read before the next edit.
             revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
+            // D26: archive the evicted segments' full content BEFORE the
+            // tombstoned history replaces the originals, so recall_context can
+            // still recover the detail. Cheap in-memory append on agentState;
+            // a no-op when the evictor reported nothing (its `evicted` field is
+            // omitted on the no-op paths).
+            const evictedCandidates = evictionResult.evicted
+            if (evictedCandidates && evictedCandidates.length > 0) {
+              archiveEvictedToolResults(
+                currentAgentState,
+                evictedCandidates,
+                clock.now(),
+              )
+            }
             currentAgentState.messageHistory = evictionResult.messages
             evictedTokensThisIteration = evictionResult.tokensSaved
             evictedCountThisIteration = evictionResult.evictedCount
@@ -2291,6 +2477,7 @@ export async function loopAgentSteps(
             historyBeforeProgrammatic,
             'semantic_compaction',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
         }
         // M3-T2: incremental accounting — heap allocation for every message in
@@ -2613,6 +2800,7 @@ export async function loopAgentSteps(
             currentAgentState.messageHistory,
             'mechanical_trim',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages
@@ -2794,6 +2982,7 @@ export async function loopAgentSteps(
           n,
           prompt: currentPrompt,
           runId,
+          stepNumber: totalSteps,
           spawnParams: currentParams,
           system,
           tools,
@@ -2869,6 +3058,32 @@ export async function loopAgentSteps(
           currentAgentState.messageHistory,
           'userPrompt',
         )
+      }
+
+      // P2-T2-DESIGN §4d: journal ONE terminal step_boundary on NORMAL exit
+      // so the tail of a completed run proves completion. Without it the tail
+      // is the final step's llm_response and classifyChildRun reports
+      // child_incomplete_tail for a child that actually finished. Error/abort
+      // exits return through the catch blocks below and deliberately do NOT
+      // append this marker: a non-terminal tail is what keeps an interrupted
+      // run classifying as resumable/incomplete rather than falsely complete.
+      // Fail-open like every other write point: a journal append failure must
+      // never fail the completed run (and run-journal.test.ts proves a
+      // step_boundary tail classifies as clean/child_completed).
+      if (currentAgentState.runId && params.journalWriter) {
+        try {
+          params.journalWriter.append(currentAgentState.runId, {
+            eventType: 'step_boundary',
+            stepNumber: totalSteps,
+            correlation: runId,
+            payload: { status: 'completed', terminal: true },
+          })
+        } catch (journalError) {
+          logger.debug(
+            { error: journalError, runId },
+            'Failed to append terminal step_boundary to run journal (non-fatal)',
+          )
+        }
       }
 
       try {

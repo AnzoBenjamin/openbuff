@@ -4,19 +4,28 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { describe, expect, test, beforeEach } from 'bun:test'
+import {
+  describe,
+  expect,
+  test,
+  beforeEach,
+  mock,
+} from 'bun:test'
+import * as codeMapParse from '@codebuff/code-map/parse'
 import { z } from 'zod/v4'
 
 import {
   applyOverridesToSessionState,
   generateInitialRunState,
   initialSessionState,
+  SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
 } from '../run-state'
 import { saveMergedTaskMemory } from '../services/task-memory-store'
 
 import type { MockStatResult } from '@codebuff/common/testing/mock-types'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { SessionState } from '@codebuff/common/types/session-state'
 
 describe('Initial Session State', () => {
   let mockFs: CodebuffFileSystem
@@ -676,6 +685,193 @@ describe('Initial Session State', () => {
       expect(sessionState.mainAgentState.taskMemory).toBeUndefined()
     } finally {
       rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('applyOverridesToSessionState preserves compactionArchive and contextConsolidations', async () => {
+    // P2-T2 slice 1: the wholesale JSON clone in applyOverridesToSessionState
+    // is the existing restore contract — it must PRESERVE unknown/optional
+    // AgentState fields so a resumed run can recall archived pre-compaction
+    // facts (recall_context) from a previous session's archive, including a
+    // D26 `tool_result_eviction` snapshot and background consolidations.
+    // Tool content legitimately contains token-like keys; inside the
+    // archived json STRING body `refreshTokenCount` is ordinary data.
+    const compactionArchive = [
+      {
+        archivedAt: 4_000,
+        action: 'tool_result_eviction',
+        keepRecentSteps: 0,
+        steps: [9],
+        reason: 'deterministic tool-result eviction (stale recency)',
+        messages: [
+          {
+            role: 'tool',
+            toolCallId: 'call-3',
+            toolName: 'read_files',
+            content: [
+              {
+                type: 'json',
+                value:
+                  JSON.stringify({
+                    note: 'evicted body',
+                    refreshTokenCount: 3,
+                  }) + '='.repeat(1_500),
+              },
+            ],
+          },
+        ],
+      },
+    ]
+    const contextConsolidations = [
+      {
+        consolidatedAt: 4_100,
+        sourceArchivedAts: [4_000],
+        action: 'semantic_compaction',
+        summary: 'Compacted read of src/auth.ts; refreshTokenCount=3 verbatim.',
+        coveredMessages: 1,
+      },
+    ]
+    const baseSessionState = {
+      mainAgentState: {
+        agentId: 'main',
+        agentType: null,
+        agentContext: {},
+        subagents: [],
+        messageHistory: [],
+        stepsRemaining: 5,
+        compactionArchive,
+        contextConsolidations,
+      },
+      fileContext: {
+        fileTreeSource: 'live',
+        fileTree: [],
+        fileTokenScores: {},
+        tokenCallers: {},
+        knowledgeFiles: {},
+        userKnowledgeFiles: {},
+        agentTemplates: {},
+        customToolDefinitions: {},
+        skills: [],
+        systemInfo: {},
+      },
+    } as unknown as SessionState
+
+    const restored = await applyOverridesToSessionState(
+      undefined,
+      baseSessionState,
+      {},
+      { logger: mockLogger },
+    )
+    const restoredMainAgentState = restored.mainAgentState as unknown as {
+      compactionArchive?: unknown[]
+      contextConsolidations?: unknown[]
+    }
+
+    // Both optional fields survive the restore clone deep-equal.
+    expect(restoredMainAgentState.compactionArchive).toEqual(compactionArchive)
+    expect(restoredMainAgentState.contextConsolidations).toEqual(
+      contextConsolidations,
+    )
+
+    // No sanitizer corruption markers in the restored archive subtree.
+    const serialized = JSON.stringify(restoredMainAgentState.compactionArchive)
+    expect(serialized).not.toContain('[Openbuff truncated')
+    expect(serialized).not.toContain('[REDACTED]')
+    expect(serialized).toContain('refreshTokenCount')
+  })
+
+  test('bounds session-boot parse with a maxTotalBytes budget override', async () => {
+    // The session-boot budget is a hard constant, not an indexer-grade
+    // default: it must stay small enough that cold start cannot spend
+    // unbounded wall-clock time in the tree-sitter pass.
+    expect(SESSION_STATE_MAX_TOTAL_PARSE_BYTES).toBe(64_000_000)
+
+    const realParse = { ...codeMapParse }
+    const calls: unknown[][] = []
+    mock.module('@codebuff/code-map/parse', () => ({
+      ...realParse,
+      getFileTokenScores: async (...callArgs: unknown[]) => {
+        calls.push(callArgs)
+        return {
+          tokenScores: {},
+          tokenCallers: {},
+          coverage: {
+            truncated: false,
+            fileBudgetExceeded: false,
+            byteBudgetExceeded: false,
+            parsedFiles: 1,
+            skippedFiles: 0,
+          },
+        }
+      },
+    }))
+    try {
+      const sessionState = await initialSessionState({
+        cwd: '/test-project',
+        projectFiles: { 'src/index.ts': 'console.log("Hello world");' },
+        fs: mockFs,
+        logger: mockLogger,
+      })
+
+      // The budget override must reach getFileTokenScores as its 5th
+      // positional argument, after the unused reuseParsed slot.
+      expect(calls.length).toBeGreaterThan(0)
+      expect(calls[0]?.[3]).toBeUndefined()
+      expect(calls[0]?.[4]).toEqual({
+        maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
+      })
+      expect(sessionState.fileContext.fileTokenScores).toBeDefined()
+    } finally {
+      mock.module('@codebuff/code-map/parse', () => ({ ...realParse }))
+    }
+  })
+
+  test('logs debug when session-state parse budget truncates token scoring', async () => {
+    const realParse = { ...codeMapParse }
+    const debugCalls: Array<{ payload: unknown; message?: string }> = []
+    const capturingLogger: Logger = {
+      ...mockLogger,
+      debug: (payload: unknown, message?: string) => {
+        debugCalls.push({ payload, message })
+      },
+    }
+    mock.module('@codebuff/code-map/parse', () => ({
+      ...realParse,
+      getFileTokenScores: async () => ({
+        tokenScores: {},
+        tokenCallers: {},
+        coverage: {
+          truncated: true,
+          fileBudgetExceeded: false,
+          byteBudgetExceeded: true,
+          parsedFiles: 3,
+          skippedFiles: 2,
+        },
+      }),
+    }))
+    try {
+      await initialSessionState({
+        cwd: '/test-project',
+        projectFiles: { 'src/index.ts': 'console.log("Hello world");' },
+        fs: mockFs,
+        logger: capturingLogger,
+      })
+
+      // Truncation is surfaced at debug level only, with coverage counts and
+      // the budget that triggered it.
+      const truncationLog = debugCalls.find(
+        (call) =>
+          call.message ===
+          'Session-state parse budget truncated token scoring',
+      )
+      expect(truncationLog).toBeDefined()
+      expect(truncationLog?.payload).toEqual({
+        parsedFiles: 3,
+        skippedFiles: 2,
+        maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
+      })
+    } finally {
+      mock.module('@codebuff/code-map/parse', () => ({ ...realParse }))
     }
   })
 })

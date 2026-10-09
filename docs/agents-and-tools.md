@@ -1624,7 +1624,16 @@ persisted before the field existed parse without it). The registered
 `recall_context` tool (granted to base2 CORE) searches those archived tool
 bodies with bounded case-insensitive AND-match snippets and returns
 provenance, so pre-compaction content is always marked stale-until-verified;
-the archive itself never enters the model context. Eviction is deliberately
+the archive itself never enters the model context. As of P2-T2 slice 1, this
+archive — including D26 `tool_result_eviction` snapshots — persists across
+sessions via the CLI chat-state restore path (`saveChatState` /
+`loadMostRecentChatState`) and the P2-3 mid-turn checkpoint
+(`saveCheckpoint` / `loadCheckpoint`), and the SDK's
+`applyOverridesToSessionState` restore clone preserves it wholesale, with
+regression tests in `cli/src/utils/__tests__/run-state-storage.test.ts`,
+`cli/src/utils/__tests__/turn-checkpoint.test.ts`, and
+`sdk/src/__tests__/initial-session-state.test.ts` proving deep-equal restore
+over which recall operates unchanged. Eviction is deliberately
 NOT archived: tombstones already instruct a re-run, and a fresh read of live
 files is more faithful than a stale body. After a semantic pass, the runtime
 verifies the extraction

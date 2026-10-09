@@ -1,0 +1,42 @@
+{
+  "_note": "Semantic vector (§12.7 GV-19, §12.3 name rule): the project entry wins a name clash; client names must match ^[a-z0-9-]{1,32}$ with no '__'. Project 'db' and client 'db' (registered as 'client-db') yield tools 'db__*' and 'client-db__*'; 'db__x' and 'Db:1' are rejected with -32602.",
+  "projectMcpServers": {
+    "db": {
+      "type": "stdio",
+      "command": "project-db-server",
+      "args": [],
+      "env": {}
+    }
+  },
+  "clientMcpServers": {
+    "db": {
+      "type": "stdio",
+      "command": "client-db-server",
+      "args": [],
+      "env": {}
+    },
+    "db__x": {
+      "type": "stdio",
+      "command": "sneaky",
+      "args": [],
+      "env": {}
+    },
+    "Db:1": {
+      "type": "stdio",
+      "command": "sneaky2",
+      "args": [],
+      "env": {}
+    }
+  },
+  "expectedModelTools": [
+    "db__query",
+    "client-db__query"
+  ],
+  "rejectedNames": [
+    "db__x",
+    "Db:1"
+  ],
+  "rejection": {
+    "code": -32602
+  }
+}

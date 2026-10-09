@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type { FileVector } from './semantic'
-import type { ChunkSidecar, MetadataIndex } from './types'
+import type { ChunkSidecar, IndexedFile, MetadataIndex } from './types'
 import { buildIndexQueryData } from './query-data'
 import { buildChunkSidecar } from './chunk-freshness'
 
@@ -99,6 +99,24 @@ export function getIndexDir(
   return path.join(projectRoot, sanitizeIndexCacheDir(cacheDir))
 }
 
+/**
+ * Dedupes loadIndex's oversized-skip warning: index-manager calls loadIndex
+ * twice per build cycle (initial load + post-save verification), so an
+ * undeduped warning printed twice for the same artifact. Only an identical
+ * consecutive (path, size) skip is suppressed; a different artifact or a
+ * size change warns again.
+ */
+let lastSkipWarnKey: string | null = null
+
+function warnOversizedIndexSkip(indexPath: string, size: number): void {
+  const key = `${indexPath}:${size}`
+  if (key === lastSkipWarnKey) return
+  lastSkipWarnKey = key
+  console.warn(
+    `[index-store] skipping oversized index artifact ${indexPath} (${size} bytes > ${MAX_METADATA_INDEX_BYTES} byte load cap)`,
+  )
+}
+
 export async function loadIndex(
   projectRoot: string,
   cacheDir = '.codebuff-index',
@@ -106,6 +124,17 @@ export async function loadIndex(
 ): Promise<MetadataIndex | null> {
   const indexPath = path.join(getIndexDir(projectRoot, cacheDir), INDEX_FILE)
   try {
+    // Stat-first byte cap (MAX_METADATA_INDEX_BYTES, reliability finding
+    // index-load-unbounded-read): refuse to read+parse an oversized
+    // metadata.json. The index is rebuild-worthy, and stat-first keeps the
+    // read+JSON.parse cost bounded instead of parsing unbounded bytes. The
+    // cap is the generous metadata one (not the sidecar bound) so the
+    // authoritative index loads instead of tripping a full rebuild.
+    const stat = await fs.promises.stat(indexPath)
+    if (stat.size > MAX_METADATA_INDEX_BYTES) {
+      warnOversizedIndexSkip(indexPath, stat.size)
+      return null
+    }
     const content = await fs.promises.readFile(indexPath, 'utf8')
     let parsed: unknown
     try {
@@ -164,7 +193,7 @@ export async function saveIndex(
   await writeOwnerFile(dir)
   const indexPath = path.join(dir, INDEX_FILE)
   return await withCacheLock(dir, async () => {
-    const current = await readJsonFile(indexPath)
+    const current = await readCurrentIndexForCas(indexPath)
     const currentBuiltAt =
       isRecord(current) &&
       current.projectRoot === projectRoot &&
@@ -182,9 +211,33 @@ export async function saveIndex(
       // older snapshot that began before the winning process.
       return false
     }
-    await atomicWriteJson(indexPath, index)
+    // Write-side cap: measure the serialized doc and, when over
+    // MAX_METADATA_INDEX_BYTES, persist a REDUCED snapshot instead of an
+    // artifact loadIndex would refuse (the
+    // skip→full-rebuild→rewrite-oversized loop). Tiers drop only data that
+    // is rebuildable at load, in increasing cost order (see
+    // reduceIndexForByteCap). The reduction never mutates the caller's
+    // in-memory index, which index-manager keeps serving.
+    const reduced = reduceIndexForByteCap(index, MAX_METADATA_INDEX_BYTES)
+    if (reduced.size > MAX_METADATA_INDEX_BYTES) {
+      // Tier 4: even the fully reduced doc does not fit — skip persisting
+      // entirely (metadata AND sidecar; the sidecar must never describe a
+      // snapshot metadata.json does not contain) and keep the in-memory
+      // index serving.
+      console.warn(
+        `[index-store] metadata index exceeds the write cap even after reduction (${reduced.size} bytes); serving in-memory only`,
+      )
+      return true
+    }
+    if (reduced.reduced) {
+      console.warn(
+        `[index-store] metadata index over write cap; persisting without ${reduced.tiers.join('/')} (${reduced.size} bytes)`,
+      )
+    }
+    await atomicWriteJson(indexPath, reduced.index)
     // Sidecar shares the same lock txn + CAS/newest-wins gate above so it
-    // can never describe a snapshot that lost the race. Best-effort: a
+    // can never describe a snapshot that lost the race, and is built from
+    // the ORIGINAL full index — not the reduced doc. Best-effort: a
     // sidecar write failure must not fail the metadata persist.
     try {
       await atomicWriteJson(
@@ -196,6 +249,107 @@ export async function saveIndex(
     }
     return true
   })
+}
+
+/**
+ * CAS read for saveIndex, bounded by MAX_METADATA_INDEX_BYTES: the gate only
+ * needs `builtAt`, so an over-cap current artifact is treated as "no prior
+ * artifact" (null) instead of JSON.parsing unbounded bytes on EVERY save
+ * (a 47MB metadata.json would otherwise be re-parsed per save).
+ */
+async function readCurrentIndexForCas(indexPath: string): Promise<unknown> {
+  try {
+    const stat = await fs.promises.stat(indexPath)
+    if (stat.size > MAX_METADATA_INDEX_BYTES) return null
+  } catch {
+    // Missing/unreadable: readJsonFile would also have returned null.
+    return null
+  }
+  return readJsonFile(indexPath)
+}
+
+/**
+ * Per-file fields saveIndex may strip when the serialized doc exceeds the
+ * metadata write cap. Both are optional and rebuildable/tolerated-missing.
+ */
+type ReducibleFileField = 'contentSample' | 'chunks'
+
+/**
+ * Shallow-copy `files`, setting `field` to undefined on every entry that has
+ * it (JSON.stringify drops undefined-valued keys on write). Entries without
+ * the field keep their ORIGINAL object reference; entries with it get a
+ * fresh copy, so the caller's in-memory index never loses data.
+ */
+function stripFileField(
+  files: MetadataIndex['files'],
+  field: ReducibleFileField,
+): MetadataIndex['files'] {
+  let stripped: MetadataIndex['files'] | null = null
+  for (const [filePath, entry] of Object.entries(files)) {
+    if (entry[field] === undefined) continue
+    stripped ??= { ...files }
+    const copy: IndexedFile = { ...entry }
+    if (field === 'contentSample') copy.contentSample = undefined
+    else copy.chunks = undefined
+    stripped[filePath] = copy
+  }
+  return stripped ?? files
+}
+
+/**
+ * Pure tiered reduction of an index document for saveIndex's write cap
+ * (MAX_METADATA_INDEX_BYTES). Persisting a doc over the cap would write an
+ * artifact loadIndex refuses, feeding the
+ * skip→full-rebuild→rewrite-oversized loop, so saveIndex persists a reduced
+ * snapshot instead. Each tier drops only rebuildable or non-authoritative
+ * data, in increasing cost order:
+ *
+ * 1. queryData (loadIndex rebuilds it via buildIndexQueryData when
+ *    missing/invalid) and parseData (a per-file parse cache whose absence
+ *    metadata-indexer's needsParseHydration tolerates).
+ * 2. per-file contentSample (bounded rebuildable text used only by semantic
+ *    indexing).
+ * 3. per-file chunks arrays (the chunks.json sidecar, written from the
+ *    ORIGINAL index, remains the durable chunk source).
+ *
+ * Tier 4 is the caller's decision: when even the fully reduced `size`
+ * exceeds `maxBytes`, saveIndex skips persisting and serves in-memory.
+ *
+ * Pure: the input index is never mutated — reduced docs are shallow copies
+ * and stripped per-file entries are fresh objects.
+ */
+export function reduceIndexForByteCap(
+  index: MetadataIndex,
+  maxBytes: number,
+): { index: MetadataIndex; reduced: boolean; tiers: string[]; size: number } {
+  let doc = index
+  let size = JSON.stringify(doc).length
+  const tiers: string[] = []
+  if (
+    size > maxBytes &&
+    (doc.queryData !== undefined || doc.parseData !== undefined)
+  ) {
+    doc = { ...doc, queryData: undefined, parseData: undefined }
+    size = JSON.stringify(doc).length
+    tiers.push('queryData/parseData')
+  }
+  if (size > maxBytes) {
+    const files = stripFileField(doc.files, 'contentSample')
+    if (files !== doc.files) {
+      doc = { ...doc, files }
+      size = JSON.stringify(doc).length
+      tiers.push('contentSample')
+    }
+  }
+  if (size > maxBytes) {
+    const files = stripFileField(doc.files, 'chunks')
+    if (files !== doc.files) {
+      doc = { ...doc, files }
+      size = JSON.stringify(doc).length
+      tiers.push('chunks')
+    }
+  }
+  return { index: doc, reduced: tiers.length > 0, tiers, size }
 }
 
 export interface CachedSemanticVector {
@@ -385,6 +539,15 @@ async function readSemanticVectorCache(
     SEMANTIC_VECTOR_FILE,
   )
   try {
+    // Same stat-first byte cap as loadIndex/loadChunkSidecar: refuse to
+    // read+parse an oversized vector cache and treat it as a safe miss.
+    const stat = await fs.promises.stat(cachePath)
+    if (stat.size > MAX_CHUNK_SIDECAR_BYTES) {
+      console.warn(
+        `[index-store] skipping oversized vector cache ${cachePath} (${stat.size} bytes > ${MAX_CHUNK_SIDECAR_BYTES} byte load cap)`,
+      )
+      return null
+    }
     const parsed: unknown = JSON.parse(
       await fs.promises.readFile(cachePath, 'utf8'),
     )
@@ -464,7 +627,22 @@ export function computeIndexSnapshotId(index: MetadataIndex): string {
 }
 
 const MAX_CHUNK_SIDECAR_ENTRIES = 200_000
-const MAX_CHUNK_SIDECAR_BYTES = 8_000_000
+/**
+ * Byte caps for JSON artifacts read back from the cache directory
+ * (reliability finding index-load-unbounded-read): stat-first size checks
+ * refuse to read+JSON.parse oversized files and treat the artifact as a safe
+ * miss. The caps are SPLIT because the artifacts have different legitimate
+ * sizes: metadata.json is the authoritative index and its files+graph core
+ * is genuinely large (measured 47.4MB on this repo), so
+ * MAX_METADATA_INDEX_BYTES is generous enough that real artifacts load
+ * instead of tripping the skip→full-rebuild→rewrite-oversized loop (a null
+ * load triggers a full walk+parse rebuild whose save rewrites an oversized
+ * artifact that loads as null again). The derived sidecars (chunks.json,
+ * semantic-vectors.json) stay tightly bounded at the historical 8MB because
+ * they are rebuildable from metadata.json.
+ */
+export const MAX_METADATA_INDEX_BYTES = 64_000_000
+export const MAX_CHUNK_SIDECAR_BYTES = 8_000_000
 
 /**
  * Pure derived sidecar document builder. Deterministic (sorted keys via
@@ -576,7 +754,8 @@ function normalizeChunkSidecar(
 /**
  * Best-effort sidecar load. Missing/invalid/foreign files return null and
  * never fail the metadata load; callers fall back to chunkId/inline chunks.
- * Bounded: refuses oversized payloads without parsing the full metadata.json.
+ * Bounded: stat-first byte cap refuses an oversized sidecar before any
+ * read+parse happens, matching loadIndex and readSemanticVectorCache.
  */
 export async function loadChunkSidecar(
   projectRoot: string,
@@ -584,8 +763,17 @@ export async function loadChunkSidecar(
 ): Promise<ChunkSidecar | null> {
   const sidecarPath = path.join(getIndexDir(projectRoot, cacheDir), CHUNKS_FILE)
   try {
+    // Stat-first byte cap (MAX_CHUNK_SIDECAR_BYTES): refuse to read+parse an
+    // oversized chunks.json. A crash- or attacker-grown sidecar is treated as
+    // a safe miss without materializing unbounded bytes.
+    const stat = await fs.promises.stat(sidecarPath)
+    if (stat.size > MAX_CHUNK_SIDECAR_BYTES) {
+      console.warn(
+        `[index-store] skipping oversized chunk sidecar ${sidecarPath} (${stat.size} bytes > ${MAX_CHUNK_SIDECAR_BYTES} byte load cap)`,
+      )
+      return null
+    }
     const content = await fs.promises.readFile(sidecarPath, 'utf8')
-    if (content.length > MAX_CHUNK_SIDECAR_BYTES) return null
     let parsed: unknown
     try {
       parsed = JSON.parse(content)
@@ -1071,14 +1259,39 @@ export async function releaseOwnedLock(
  */
 const PRETTY_PRINT_MAX_CHARS = 4_096
 
+/**
+ * Compact-write threshold (reliability finding
+ * atomicwritejson-double-serializes-large-docs): documents whose compact JSON
+ * exceeds COMPACT_WRITE_THRESHOLD_CHARS (1 MiB) are written straight from
+ * their single compact JSON.stringify pass — previously the pretty form was
+ * always materialized first and then discarded for large documents, roughly
+ * doubling peak memory and CPU on every refresh. Documents at or below the
+ * threshold keep the historical pretty-vs-compact decision
+ * (PRETTY_PRINT_MAX_CHARS), so byte-sensitive fixtures and golden snapshotId
+ * round-trips are unaffected: for those documents the written bytes are
+ * identical to the previous behavior.
+ */
+const COMPACT_WRITE_THRESHOLD_CHARS = 1_048_576
+
 async function atomicWriteJson(
   filePath: string,
   value: unknown,
 ): Promise<void> {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  const pretty = JSON.stringify(value, null, 2)
-  const payload =
-    pretty.length > PRETTY_PRINT_MAX_CHARS ? JSON.stringify(value) : pretty
+  const compact = JSON.stringify(value)
+  let payload: string
+  if (compact.length > COMPACT_WRITE_THRESHOLD_CHARS) {
+    // Oversized document: a single compact serialization, written directly.
+    // (Compact length lower-bounds pretty length, so the previous
+    // pretty-first path would have materialized and discarded an even
+    // larger string for these documents.)
+    payload = compact
+  } else {
+    // Small/medium document: keep the historical pretty-vs-compact decision
+    // so byte-sensitive fixtures are unaffected.
+    const pretty = JSON.stringify(value, null, 2)
+    payload = pretty.length > PRETTY_PRINT_MAX_CHARS ? compact : pretty
+  }
   let handle: fs.promises.FileHandle | undefined
   try {
     handle = await fs.promises.open(temporaryPath, 'wx')

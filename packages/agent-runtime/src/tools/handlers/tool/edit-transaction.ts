@@ -349,6 +349,11 @@ export const handleEditTransaction = (async (
     requestClientToolCall,
     requestOptionalFile,
   } = params
+  // D22/PR-T4: with the edit-blocks flag enabled the provider schema accepts
+  // a raw block payload string, but the preprocess translates it into edit
+  // objects before this handler runs — a string can never reach here, and the
+  // runtime inputSchema deliberately has no string arm so this stays typed as
+  // the edit-object array.
   const edits = toolCall.input.edits.map((edit) => ({
     ...edit,
     path: normalizeToolPath(edit.path),
@@ -1143,7 +1148,10 @@ export const handleEditTransaction = (async (
   // (Bun.Transpiler), Python (structural validation), and Go (structural
   // validation). In Node.js, JS/TS validation is gracefully skipped.
   for (const file of transactionResult.files) {
-    const syntaxValidation = preflightValidateSyntax(file.path, file.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      file.path,
+      file.content,
+    )
     if (!syntaxValidation.valid) {
       // A preflight syntax failure is NOT a stale-anchor failure: the edits
       // were structurally applied but the resulting content has a syntax
@@ -1193,7 +1201,10 @@ export const handleEditTransaction = (async (
 
   for (const edit of edits) {
     if (edit.type !== 'create') continue
-    const syntaxValidation = preflightValidateSyntax(edit.path, edit.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      edit.path,
+      edit.content,
+    )
     if (!syntaxValidation.valid) {
       const truncated = looksLikeTruncatedEditContent(
         edit,

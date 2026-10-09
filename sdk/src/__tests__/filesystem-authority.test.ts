@@ -556,6 +556,37 @@ describe('FilesystemAuthority owned-temp namespace permits CRUD except live job 
   )
 
   test.each([
+    ['.exe'],
+    ['.dll'],
+    ['.so'],
+    ['.dylib'],
+    ['.com'],
+    ['.msi'],
+    ['.jar'],
+    ['.wasm'],
+    ['.appimage'],
+  ] as const)(
+    'refuses staging a natively-executable %s binary in owned temp',
+    async (extension) => {
+      // Natively-executable binaries and loadable images need no interpreter
+      // invocation for a policy to catch: direct exec, `java -jar`, `dlopen`,
+      // and wasm runtimes all execute a staged file of one of these shapes,
+      // so every staging operation gets the same refusal as interpreter
+      // scripts (`delete` keeps its cleanup carve-out).
+      for (const operation of ['create', 'overwrite', 'move'] as const) {
+        const result = await authority.authorizePath(
+          path.join(ownedTempRoot, `payload-${uniqueSuffix()}${extension}`),
+          operation,
+        )
+        expect(result).toEqual({
+          allowed: false,
+          code: 'owned_temp_executable_extension_refused',
+        })
+      }
+    },
+  )
+
+  test.each([
     ['create', '.sh '],
     ['move', '.sh '],
     ['create', '.py.'],

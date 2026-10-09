@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, test } from 'bun:test'
 
-import { validateAgents } from '../templates/agent-validation'
+import { z } from 'zod/v4'
+
+import {
+  coerceJsonSchemaMember,
+  isDegradedZodHusk,
+  isRepresentableZodSchema,
+  serializeSchemaMemberForTransport,
+  validateAgents,
+} from '../templates/agent-validation'
 import { DynamicAgentDefinitionSchema } from '../types/dynamic-agent-template'
 import { getStubProjectFileContext } from '../util/file'
 
@@ -844,5 +852,161 @@ describe('Agent Validation', () => {
       )
       expect(typeof result.templates['test-agent'].handleSteps).toBe('string')
     })
+  })
+})
+
+// Crash-hardening coverage for the agent-template schema-member transport
+// boundary (P2-T8 supervision bridge + bundled prebuilt agents). These
+// members cross JSON.stringify in both directions and must survive as live
+// zod schemas whose z.toJSONSchema does not throw — the empirical proxy for
+// the AI SDK's asSchema compatibility.
+describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
+  it('serializes a live zod member over the JSON boundary and coerces it back to a live zod schema', () => {
+    const live = z.object({ name: z.string() })
+    const transported = serializeSchemaMemberForTransport(live, 'input')
+    // The transported form must be plain JSON (the spawn request file's wire
+    // format): stringify → parse round-trips byte-identically.
+    const json = JSON.parse(JSON.stringify(transported)) as unknown
+    const coerced = coerceJsonSchemaMember(json)
+    expect(typeof (coerced as { safeParse?: unknown }).safeParse).toBe(
+      'function',
+    )
+    expect(
+      (coerced as z.ZodType).safeParse({ name: 'x' }).success,
+    ).toBe(true)
+    expect(
+      (coerced as z.ZodType).safeParse({ name: 42 }).success,
+    ).toBe(false)
+  })
+
+  it('isDegradedZodHusk detects a ~standard-only husk and rejects plain JSON Schema', () => {
+    // zod-v4's serialized wire form carries the ~standard interface marker
+    // but no live internals (_zod/safeParse) — the crash shape for asSchema.
+    expect(isDegradedZodHusk({ '~standard': { validate: () => {} } })).toBe(
+      true,
+    )
+    // Plain JSON Schema never carries ~standard (it is not a JSON-Schema
+    // keyword), so it must NOT be classified as a husk.
+    expect(isDegradedZodHusk({ type: 'string' })).toBe(false)
+    expect(isDegradedZodHusk({ type: 'object', properties: {} })).toBe(false)
+    // A live zod member (real internals present) is not a husk either.
+    expect(isDegradedZodHusk({ '~standard': {}, _zod: {} })).toBe(false)
+    expect(
+      isDegradedZodHusk({ '~standard': {}, safeParse: () => ({}) }),
+    ).toBe(false)
+    // Non-objects are never husks.
+    expect(isDegradedZodHusk(null)).toBe(false)
+    expect(isDegradedZodHusk('string')).toBe(false)
+    expect(isDegradedZodHusk([])).toBe(false)
+  })
+
+  it('coerceJsonSchemaMember degrades an unrepresentable/degenerate {type:object} member to the native loose-object fallback', () => {
+    const coerced = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
+    // The result is a live zod schema regardless of the degenerate input.
+    expect(typeof coerced.safeParse).toBe('function')
+    // And it is REPRESENTABLE: z.toJSONSchema must not throw (asSchema's
+    // exact crash condition).
+    expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
+    // Loose object semantics: objectness is still enforced.
+    expect(coerced.safeParse({ a: 1 }).success).toBe(true)
+    expect(coerced.safeParse('not an object').success).toBe(false)
+    // A husk input (zod's degraded wire form) also lands on a live,
+    // representable result — it must never reach asSchema as a husk.
+    const husk = {
+      '~standard': { validate: () => undefined },
+    } as unknown
+    const huskCoerced = coerceJsonSchemaMember(husk) as z.ZodType
+    expect(typeof huskCoerced.safeParse).toBe('function')
+    expect(() =>
+      z.toJSONSchema(huskCoerced, { io: 'input' }),
+    ).not.toThrow()
+  })
+
+  it('serializeSchemaMemberForTransport falls back to {type:object} for a live member even unrepresentable-any cannot express', () => {
+    // A _zod-marked fake satisfies isLiveZodSchema but z.toJSONSchema reads
+    // its internals and throws — the last-resort branch of the serializer.
+    const fake = { _zod: {}, safeParse: () => ({ success: true }) }
+    const transported = serializeSchemaMemberForTransport(fake, 'input')
+    expect(transported).toEqual({ type: 'object' })
+    // The fallback must survive the JSON boundary it exists for.
+    expect(() => JSON.stringify(transported)).not.toThrow()
+    // And the child re-coercion lands on a live, representable zod schema.
+    const coerced = coerceJsonSchemaMember(transported) as z.ZodType
+    expect(typeof coerced.safeParse).toBe('function')
+    expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
+  })
+
+  it("transports even unrepresentable-emission members verbatim; child hardening owns unrepresentability", () => {
+    // z.never() is the canonical live-but-UNREPRESENTABLE re-conversion: its
+    // 'any' emission is degenerate `{}`, which re-converts to a live zod
+    // schema carrying the z.custom base-union branch (not representable under
+    // BOTH io modes). The serializer transports it VERBATIM — the child's
+    // coerceJsonSchemaMember is hardened (try/catch + representability guard
+    // → native fallback), so unrepresentability is handled child-side and
+    // degrading here would only lose the emission's structure. The serializer
+    // degrades ONLY when the emission's JSON form is not parseable JSON
+    // Schema (convertJsonSchemaToZod throws) — that branch is defensive and
+    // not naturally reachable from a zod emission.
+    expect(
+      serializeSchemaMemberForTransport(z.never(), 'input'),
+    ).not.toEqual({ type: 'object' })
+    // The same class: formerly-gap shapes (z.record(z.string(), z.date()),
+    // z.map) emit degenerate-but-parseable schemas and transport verbatim
+    // with their structure intact.
+    const record = z.record(z.string(), z.date()) as unknown
+    const recordOut = serializeSchemaMemberForTransport(record, 'input') as {
+      type?: string
+      propertyNames?: unknown
+    }
+    expect(recordOut.type).toBe('object')
+    expect(recordOut.propertyNames).toBeDefined()
+    expect(recordOut).not.toEqual({ type: 'object' })
+    const map = z.map(z.string(), z.string()) as unknown
+    expect(
+      serializeSchemaMemberForTransport(map, 'input'),
+    ).not.toEqual({ type: 'object' })
+    // The degraded form remains available for genuinely unparseable
+    // emissions: the child re-coerces {type:object} into a live,
+    // representable loose-object schema — the spawn survives either way.
+    const fallback = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
+    expect(typeof fallback.safeParse).toBe('function')
+    expect(() => z.toJSONSchema(fallback, { io: 'input' })).not.toThrow()
+  })
+
+  it("keeps a representable live member's full structure", () => {
+    const transported = serializeSchemaMemberForTransport(
+      z.object({ name: z.string() }),
+      'input',
+    ) as { properties?: { name?: { type?: string } } }
+    // Containment (not deep-equal): zod's exact emission details (required,
+    // additionalProperties, ...) must not make this brittle — the point is
+    // that a representable member does NOT degrade to { type: 'object' }.
+    expect(transported.properties?.name?.type).toBe('string')
+    expect(transported).not.toEqual({ type: 'object' })
+  })
+
+  it('isRepresentableZodSchema requires BOTH io modes to succeed', () => {
+    // z.string().transform(...) is the canonical dual-mode divergence: the
+    // input side is a plain string, but the output side is a Date, which zod
+    // cannot represent in JSON Schema. The inline probes document the
+    // divergence the assertion relies on — the AI SDK consumes coerced
+    // members in both modes (tool inputSchema input-mode;
+    // set_output/structuredOutput output-mode), so an input-only probe
+    // would let this shape through and crash later in output mode.
+    const transformSchema = z.string().transform((s) => new Date(s))
+    expect(() =>
+      z.toJSONSchema(transformSchema, { io: 'input' }),
+    ).not.toThrow()
+    expect(() => z.toJSONSchema(transformSchema, { io: 'output' })).toThrow()
+    expect(isRepresentableZodSchema(transformSchema)).toBe(false)
+    // A schema representable in both modes passes the probe.
+    expect(isRepresentableZodSchema(z.object({ name: z.string() }))).toBe(
+      true,
+    )
+    // z.map already throws in input mode, so the dual-mode probe rejects it
+    // as well.
+    expect(isRepresentableZodSchema(z.map(z.string(), z.string()))).toBe(
+      false,
+    )
   })
 })

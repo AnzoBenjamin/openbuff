@@ -143,4 +143,64 @@ describe('turn checkpoint (P2-3)', () => {
     expect(second!.mainAgentState.agentId).toBe('main-5b')
     expect(second!.checkpointTurnId).toBe('turn-overwrite')
   })
+
+  test('compactionArchive incl. D26 eviction snapshot round-trips saveCheckpoint → loadCheckpoint deep-equal', () => {
+    // P2-T2 slice 1: the mid-turn checkpoint persists the FULL sanitized
+    // mainAgentState (saveCheckpoint wraps it in
+    // sanitizeForChatPersistence), so the compaction archive — including D26
+    // `tool_result_eviction` snapshots — must survive a crash mid-turn
+    // byte-identically. Archive bodies are ≤ 4k chars
+    // (MAX_ARCHIVE_MESSAGE_CHARS), far under the 8k
+    // CHAT_STATE_MAX_STRING_LENGTH, and the chat-persistence object/array
+    // caps are unlimited, so nothing is truncated or key-redacted in transit.
+    const compactionArchive = [
+      {
+        archivedAt: 3_000,
+        action: 'tool_result_eviction',
+        keepRecentSteps: 0,
+        steps: [9],
+        reason: 'deterministic tool-result eviction (stale recency)',
+        messages: [
+          {
+            role: 'tool',
+            toolCallId: 'call-3',
+            toolName: 'read_files',
+            content: [
+              {
+                type: 'json',
+                value:
+                  JSON.stringify({
+                    note: 'evicted body',
+                    refreshTokenCount: 3,
+                  }) + '='.repeat(1_500),
+              },
+            ],
+          },
+        ],
+      },
+    ]
+    const agentState = {
+      ...makeAgentState('main-archive'),
+      compactionArchive,
+    } as unknown as AgentState
+
+    saveCheckpoint('turn-archive', agentState)
+    const loaded = loadCheckpoint()
+
+    expect(loaded).not.toBeNull()
+    const restoredMainAgentState = loaded!.mainAgentState as unknown as {
+      compactionArchive?: Array<Record<string, unknown>>
+    }
+    expect(restoredMainAgentState.compactionArchive).toEqual(compactionArchive)
+
+    // No truncation or redaction markers in the restored archive subtree.
+    const serialized = JSON.stringify(restoredMainAgentState.compactionArchive)
+    expect(serialized).not.toContain('[Openbuff truncated')
+    expect(serialized).not.toContain('[REDACTED]')
+    expect(serialized).toContain('refreshTokenCount')
+    expect(restoredMainAgentState.compactionArchive![0]['steps']).toEqual([9])
+    expect(restoredMainAgentState.compactionArchive![0]['reason']).toBe(
+      'deterministic tool-result eviction (stale recency)',
+    )
+  })
 })

@@ -21,8 +21,8 @@ import {
   type ProviderPickerSelection,
 } from './components/provider-picker-screen'
 import { LoadPreviousButton } from './components/load-previous-button'
+import { MessageListWindow } from './components/message-list-window'
 import { ReviewScreen } from './components/review-screen'
-import { MessageWithAgents } from './components/message-with-agents'
 import { PendingBashMessage } from './components/pending-bash-message'
 import { StatusBar } from './components/status-bar'
 import { TopBanner } from './components/top-banner'
@@ -67,7 +67,7 @@ import {
   resolveModelNameForAgent,
   setupOpenbuffProviderFromArgs,
 } from './utils/openbuff-provider'
-import { getDiffStats, type DiffStats } from './utils/git'
+import { getDiffStatsAsync, type DiffStats } from './utils/git'
 import {
   peekIndexStatus,
   shouldForceStatusLineForIndex,
@@ -111,6 +111,32 @@ import {
   setQueuedPromptDrain,
 } from './hooks/use-exit-handler'
 import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
+import { whenRegistriesReady } from './services/deferred-registries'
+
+import {
+  type MentionReplacement,
+  resolveMentionReplacement,
+  buildMentionReplacement,
+} from './utils/mention-helpers'
+
+/**
+ * Policy for when the status-bar git diff-stats refresh may fork a git
+ * subprocess across an isStreaming transition (wasStreaming → isStreaming).
+ *
+ * Pins the streaming hot-path invariant documented on the diff-stats effects
+ * below: a stream never spawns git from this component. The steady-stream
+ * half is enforced by the 10s interval poller gating on
+ * `!isStreamingRef.current`; the falling edge applies this predicate
+ * directly and refreshes exactly once. A regression that re-introduces
+ * spawns during streaming must change this predicate's truth table or
+ * bypass it, both reviewable in isolation.
+ */
+export function shouldSpawnDiffStatsForStreamingTransition(
+  wasStreaming: boolean,
+  isStreaming: boolean,
+): boolean {
+  return wasStreaming && !isStreaming
+}
 
 export const Chat = ({
   headerContent,
@@ -212,6 +238,8 @@ export const Chat = ({
     scrollToLatest,
     scrollUp,
     scrollDown,
+    adjustScrollTop,
+    isAtBottomNow,
     appliedScrollboxProps,
     isAtBottom,
     hasOverflow,
@@ -225,13 +253,33 @@ export const Chat = ({
     markdownPalette,
   } = useChatUI({ messages, isUserCollapsing })
 
-  const localAgents = useMemo(() => loadLocalAgents(agentMode), [agentMode])
+  // P1-T9: the agent/skill registries load asynchronously after startup
+  // (services/deferred-registries). The reads below happen once at mount, so
+  // re-run them when the deferred loads settle — without this gate the
+  // slash-command skill suggestions and the local agent list would observe
+  // the (still-empty) registries and stay empty for the whole session.
+  const [registriesLoaded, setRegistriesLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void whenRegistriesReady().then(() => {
+      if (!cancelled) setRegistriesLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const localAgents = useMemo(
+    () => loadLocalAgents(agentMode),
+    [agentMode, registriesLoaded],
+  )
   const inputMode = useChatStore((state) => state.inputMode)
   const setInputMode = useChatStore((state) => state.setInputMode)
   const askUserState = useChatStore((state) => state.askUserState)
 
-  // Get loaded skills for slash commands
-  const loadedSkills = useMemo(() => getLoadedSkills(), [])
+  // Get loaded skills for slash commands (re-read once the deferred
+  // registry loads settle — see the registriesLoaded gate above).
+  const loadedSkills = useMemo(() => getLoadedSkills(), [registriesLoaded])
 
   // Merge skill commands and game-dev preset commands into the slash command list
   const filteredSlashCommands = useMemo(() => {
@@ -414,7 +462,7 @@ export const Chat = ({
       setExitStreamSignal(undefined)
       setQueuedPromptDrain(undefined)
     }
-  }, [clearQueue, saveToHistory, addToQueue, abortControllerRef])
+  }, [clearQueue, saveToHistory, abortControllerRef])
 
   // M4.3: Context-window usage for the status bar (updated via context_window
   // PrintModeEvent from the agent runtime).
@@ -442,31 +490,81 @@ export const Chat = ({
     return agentId ? resolveModelNameForAgent(agentId) : null
   }, [agentMode])
 
-  // Poll git diff stats: on mount, after streaming ends, and periodically
-  // while idle (cheap `git status --short` call).
+  // Current isStreaming value, readable from the effects below so they do
+  // not have to re-subscribe when it changes.
+  const isStreamingRef = useRef(false)
+
+  // Poll git diff stats: on mount and periodically while idle. The git call
+  // runs off the render thread (getDiffStatsAsync). A per-effect AbortController
+  // + cancelled flag ensures a late-resolving result after unmount does not
+  // call setState, and only the latest in-flight refresh wins. The interval
+  // callback is a no-op while isStreaming is true, so no git subprocess is
+  // forked on the streaming hot path; the falling-edge effect below refreshes
+  // exactly once when the stream completes.
+  //
+  // Streaming-path spawn count, before → after (the streaming half is
+  // pinned by shouldSpawnDiffStatsForStreamingTransition below; counting
+  // getDiffStatsAsync invocations while a stream is active verifies the
+  // rest): a stream that holds isStreaming true for T seconds previously
+  // forked floor(T / 10) extra git subprocesses from this interval, on top
+  // of the one per falling edge — e.g. a 60s stream forked ≥6 spawns during
+  // streaming plus 1 after, vs exactly 1 spawn (after) now. The index-status
+  // poller below applies the same pause.
   useEffect(() => {
     const cwd = getProjectRoot() ?? process.cwd()
-    const refresh = () => setDiffStats(getDiffStats({ cwd }))
+    let cancelled = false
+    const controller = new AbortController()
+    const refresh = () => {
+      if (isStreamingRef.current) return
+      getDiffStatsAsync({ cwd, signal: controller.signal })
+        .then((stats) => {
+          if (!cancelled) setDiffStats(stats)
+        })
+        .catch(() => {})
+    }
     refresh()
     const interval = setInterval(refresh, 10_000)
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(interval)
+    }
   }, [])
-  // Refresh diff stats when streaming completes (files may have changed).
+  // Refresh diff stats only on the falling edge of isStreaming (stream just
+  // completed) via the pinned shouldSpawnDiffStatsForStreamingTransition
+  // predicate. The shared ref doubles as the previous-value tracker, so the
+  // rising edge still does not spawn — and then immediately abort — a
+  // subprocess.
   useEffect(() => {
-    if (!isStreaming) {
-      const cwd = getProjectRoot() ?? process.cwd()
-      setDiffStats(getDiffStats({ cwd }))
+    const wasStreaming = isStreamingRef.current
+    isStreamingRef.current = isStreaming
+    if (!shouldSpawnDiffStatsForStreamingTransition(wasStreaming, isStreaming)) {
+      return
+    }
+    const cwd = getProjectRoot() ?? process.cwd()
+    let cancelled = false
+    const controller = new AbortController()
+    getDiffStatsAsync({ cwd, signal: controller.signal })
+      .then((stats) => {
+        if (!cancelled) setDiffStats(stats)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+      controller.abort()
     }
   }, [isStreaming])
 
   // Peek index status from the existing singleton (~2s). getStatus() may
   // schedule an age-stale refresh; do not call ensureBuilt() from the UI.
+  // Pause polling while streaming to avoid unnecessary work on the hot path.
   useEffect(() => {
+    if (isStreaming) return
     const refresh = () => setIndexStatus(peekIndexStatus())
     refresh()
     const interval = setInterval(refresh, 2_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [isStreaming])
 
   // When streaming completes, flush any pending bash commands into history (ghost mode only)
   // Non-ghost mode commands are already in history and will be cleared when user sends next message
@@ -647,45 +745,54 @@ export const Chat = ({
   // Handle followup suggestion clicks
   useEffect(() => {
     const handleFollowupClick = (event: Event) => {
-      const customEvent = event as CustomEvent<{
-        prompt: string
-        index: number
-        toolCallId: string
-      }>
-      const { prompt, index, toolCallId } = customEvent.detail
+      try {
+        const customEvent = event as CustomEvent<{
+          prompt: string
+          index: number
+          toolCallId: string
+        }>
+        if (!customEvent.detail || typeof customEvent.detail !== 'object') {
+          logger.warn({ event }, '[followup-click] Received malformed event without detail')
+          return
+        }
+        const { prompt, index, toolCallId } = customEvent.detail
 
-      logger.info(
-        { promptLength: prompt.length, index, toolCallId, agentMode },
-        '[followup-click] Followup clicked',
-      )
+        logger.info(
+          { promptLength: prompt.length, index, toolCallId, agentMode },
+          '[followup-click] Followup clicked',
+        )
 
-      // Track analytics event
-      trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
-        promptLength: prompt.length,
-        index,
-        agentMode,
-      })
-
-      // Mark this followup as clicked (persisted per toolCallId)
-      useChatStore.getState().markFollowupClicked(toolCallId, index)
-
-      // Send the followup prompt directly, preserving the user's current input
-      onSubmitPrompt(prompt, agentMode, {
-        preserveInputValue: true,
-      })
-        .then((result) => {
-          logger.info(
-            { hasResult: !!result },
-            '[followup-click] onSubmitPrompt completed',
-          )
+        // Track analytics event
+        trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
+          promptLength: prompt.length,
+          index,
+          agentMode,
         })
-        .catch((error) => {
-          logger.error(
-            { error },
-            '[followup-click] onSubmitPrompt failed with error',
-          )
-          showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+
+        // Mark this followup as clicked (persisted per toolCallId)
+        useChatStore.getState().markFollowupClicked(toolCallId, index)
+
+        // Send the followup prompt directly, preserving the user's current input
+        onSubmitPrompt(prompt, agentMode, {
+          preserveInputValue: true,
         })
+          .then((result) => {
+            logger.info(
+              { hasResult: !!result },
+              '[followup-click] onSubmitPrompt completed',
+            )
+          })
+          .catch((error) => {
+            logger.error(
+              { error },
+              '[followup-click] onSubmitPrompt failed with error',
+            )
+            showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+          })
+      } catch (error) {
+        logger.error({ error }, '[followup-click] Synchronous error in followup handler')
+        showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+      }
     }
 
     globalThis.addEventListener('codebuff:send-followup', handleFollowupClick)
@@ -703,31 +810,27 @@ export const Chat = ({
     (index: number) => {
       if (mentionContext.startIndex < 0) return
 
-      let replacement: string
-      if (index < agentMatches.length) {
-        const selected = agentMatches[index]
-        if (!selected) return
-        replacement = `@${selected.id} `
-      } else {
-        const fileIndex = index - agentMatches.length
-        const selectedFile = fileMatches[fileIndex]
-        if (!selectedFile) return
+      const resolved = resolveMentionReplacement(
+        index,
+        agentMatches,
+        fileMatches,
+        false,
+      )
+      if (!resolved) return
+      if (resolved.selectedFile) {
         addPendingFileMention(
-          selectedFile.filePath,
-          selectedFile.isDirectory,
+          resolved.selectedFile.filePath,
+          resolved.selectedFile.isDirectory,
           getProjectRoot(),
         )
-        replacement = `@${selectedFile.filePath} `
       }
-      const before = inputValue.slice(0, mentionContext.startIndex)
-      const after = inputValue.slice(
-        mentionContext.startIndex + 1 + mentionContext.query.length,
+      const { text, cursorPosition } = buildMentionReplacement(
+        inputValue,
+        mentionContext.startIndex,
+        mentionContext.query,
+        resolved.replacement,
       )
-      setInputValue({
-        text: before + replacement + after,
-        cursorPosition: before.length + replacement.length,
-        lastEditDueToNav: false,
-      })
+      setInputValue({ text, cursorPosition, lastEditDueToNav: false })
       setAgentSelectedIndex(0)
     },
     [
@@ -898,13 +1001,10 @@ export const Chat = ({
 
   const inputValueRef = useRef(inputValue)
   const cursorPositionRef = useRef(cursorPosition)
-  useEffect(() => {
-    inputValueRef.current = inputValue
-  }, [inputValue])
-
-  useEffect(() => {
-    cursorPositionRef.current = cursorPosition
-  }, [cursorPosition])
+  // Sync refs synchronously during render — no useEffect needed, avoids
+  // scheduling overhead on the hot keystroke path.
+  inputValueRef.current = inputValue
+  cursorPositionRef.current = cursorPosition
 
   const handleOpenFeedbackForMessage = useCallback(
     (
@@ -1218,31 +1318,27 @@ export const Chat = ({
         if (mentionContext.startIndex < 0) return
 
         const trySelectAtIndex = (index: number): boolean => {
-          let replacement: string
-          if (index < agentMatches.length) {
-            const selected = agentMatches[index]
-            if (!selected) return false
-            replacement = `@${selected.id} `
-          } else {
-            const fileIndex = index - agentMatches.length
-            const selectedFile = fileMatches[fileIndex]
-            if (!selectedFile) return false
+          const resolved = resolveMentionReplacement(
+            index,
+            agentMatches,
+            fileMatches,
+            false,
+          )
+          if (!resolved) return false
+          if (resolved.selectedFile) {
             addPendingFileMention(
-              selectedFile.filePath,
-              selectedFile.isDirectory,
+              resolved.selectedFile.filePath,
+              resolved.selectedFile.isDirectory,
               getProjectRoot(),
             )
-            replacement = `@${selectedFile.filePath} `
           }
-          const before = inputValue.slice(0, mentionContext.startIndex)
-          const after = inputValue.slice(
-            mentionContext.startIndex + 1 + mentionContext.query.length,
+          const { text, cursorPosition } = buildMentionReplacement(
+            inputValue,
+            mentionContext.startIndex,
+            mentionContext.query,
+            resolved.replacement,
           )
-          setInputValue({
-            text: before + replacement + after,
-            cursorPosition: before.length + replacement.length,
-            lastEditDueToNav: false,
-          })
+          setInputValue({ text, cursorPosition, lastEditDueToNav: false })
           setAgentSelectedIndex(0)
           return true
         }
@@ -1254,38 +1350,27 @@ export const Chat = ({
         // Complete the word without executing - same as select for mentions
         if (mentionContext.startIndex < 0) return
 
-        let replacement: string
-        const index = agentSelectedIndex
-        if (index < agentMatches.length) {
-          const selected =
-            agentMatches.length > 0
-              ? agentMatches[index] || agentMatches[0]
-              : undefined
-          if (!selected) return
-          replacement = `@${selected.id} `
-        } else {
-          const fileIndex = index - agentMatches.length
-          const selectedFile =
-            fileMatches.length > 0
-              ? fileMatches[fileIndex] || fileMatches[0]
-              : undefined
-          if (!selectedFile) return
+        const resolved = resolveMentionReplacement(
+          agentSelectedIndex,
+          agentMatches,
+          fileMatches,
+          true,
+        )
+        if (!resolved) return
+        if (resolved.selectedFile) {
           addPendingFileMention(
-            selectedFile.filePath,
-            selectedFile.isDirectory,
+            resolved.selectedFile.filePath,
+            resolved.selectedFile.isDirectory,
             getProjectRoot(),
           )
-          replacement = `@${selectedFile.filePath} `
         }
-        const before = inputValue.slice(0, mentionContext.startIndex)
-        const after = inputValue.slice(
-          mentionContext.startIndex + 1 + mentionContext.query.length,
+        const { text, cursorPosition } = buildMentionReplacement(
+          inputValue,
+          mentionContext.startIndex,
+          mentionContext.query,
+          resolved.replacement,
         )
-        setInputValue({
-          text: before + replacement + after,
-          cursorPosition: before.length + replacement.length,
-          lastEditDueToNav: false,
-        })
+        setInputValue({ text, cursorPosition, lastEditDueToNav: false })
         setAgentSelectedIndex(0)
       },
       onOpenFileMenuWithTab: () => {
@@ -1714,14 +1799,35 @@ export const Chat = ({
         flexGrow: 1,
       }}
     >
+      {/* D47 Stage 1: OpenTUI 0.5's native stickyScroll/stickyStart is
+          deliberately NOT enabled here. With stickyScroll live, OpenTUI's
+          native code re-pins scrollTop to the bottom on every content
+          growth, so it would be a SECOND independent writer of scrollTop on
+          this scrollbox alongside use-scroll-management's auto-scroll
+          effect — two writers with no evidence they cooperate (e.g. a user
+          scrolling up during streaming: native stickyScroll re-pins on the
+          next content growth while the JS effect may also force
+          scrollTop = maxScroll, fighting the user's scroll intent or
+          resurrecting auto-follow after they deliberately scrolled away).
+          use-scroll-management remains the single validated scrollTop
+          writer: its auto-scroll effect follows new content only while the
+          user is at/near the bottom (autoScrollEnabledRef), and
+          scrollUp/scrollDown/scrollToLatest stay available for keyboard
+          paging and the jump-to-latest control. */}
       <scrollbox
         ref={scrollRef as React.Ref<ScrollBoxRenderable>}
-        stickyScroll
-        stickyStart="bottom"
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
-          visible: !isStreaming && !isWaitingForResponse && hasOverflow,
+          // Visibility depends only on hasOverflow: the scrollbar track is a
+          // layout SIBLING of the message content column, so toggling
+          // visibility with streaming state would shift the message wrap
+          // width on every agent-response start AND end while availableWidth
+          // (terminal-derived) stays fixed — silently staling every
+          // width-tagged measured height exactly when a response completes.
+          // Keeping the track in layout whenever content overflows keeps the
+          // content width stable for those measurements.
+          visible: hasOverflow,
           trackOptions: { width: 1 },
         }}
         {...appliedScrollboxProps}
@@ -1762,18 +1868,23 @@ export const Chat = ({
             onLoadMore={handleLoadPreviousMessages}
           />
         )}
-        {visibleTopLevelMessages.map((message, idx) => {
-          const isLast = idx === visibleTopLevelMessages.length - 1
-          return (
-            <MessageWithAgents
-              key={message.id}
-              message={message}
-              depth={0}
-              isLastMessage={isLast}
-              availableWidth={messageAvailableWidth}
-            />
-          )
-        })}
+        {/* P1-T10: viewport-windowed message list. Only the messages
+            intersecting the current scroll viewport (plus a small overscan)
+            mount real MessageWithAgents components; off-screen messages
+            collapse into fixed spacer boxes that preserve total scroll height
+            and scroll position. Keys stay on the message ids so per-message
+            state survives the window moving as the user scrolls. The scroll
+            subscription is confined to MessageListWindow so scrolling does not
+            re-render the rest of the chat screen. */}
+        <MessageListWindow
+          messages={visibleTopLevelMessages}
+          scrollRef={scrollRef}
+          availableWidth={messageAvailableWidth}
+          hasLoadPrevious={hiddenMessageCount > 0}
+          adjustScrollTop={adjustScrollTop}
+          isAtBottomNow={isAtBottomNow}
+          scrollToLatest={scrollToLatest}
+        />
         {/* Pending bash messages as ghost messages (only show those not already in history) */}
         {pendingBashMessages
           .filter((msg) => !msg.addedToHistory)

@@ -620,7 +620,7 @@ export const handleWriteFile = (async (
         toolCallId: toolCall.toolCallId,
       }
       if (!('error' in fileProcessingResult)) {
-        const syntaxValidation = preflightValidateSyntax(
+        const syntaxValidation = await preflightValidateSyntax(
           path,
           fileProcessingResult.content,
         )

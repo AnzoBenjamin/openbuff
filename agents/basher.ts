@@ -50,7 +50,7 @@ const basher: AgentDefinition = {
         timeout_seconds: {
           type: 'number',
           description:
-            'Optional wall-clock bound in seconds. Defaults to a finite 300s cap; pass -1 explicitly for no timeout.',
+            'Optional wall-clock bound in seconds. Omit or use -1 for no timeout (the default). Set a positive value to cap long-running commands.',
         },
         process_type: {
           type: 'string',
@@ -142,10 +142,13 @@ Do not use any tools! Only report the output of the command.`,
       numericMaxFailureLines === undefined
         ? DEFAULT_MAX_FAILURE_LINES
         : Math.min(MAX_FAILURE_LINES, Math.max(1, numericMaxFailureLines))
-    // M3-T1: finite default wall-clock cap so a hung command cannot wedge the
-    // agent step indefinitely. An explicitly passed timeout_seconds —
-    // including -1 (no timeout) — always wins over this default.
-    const DEFAULT_TIMEOUT_SECONDS = 300
+    // No default timeout cap: agent tasks can take arbitrarily long, and a
+    // hard wall-clock limit kills legitimate long-running work (test suites,
+    // builds, editor think-time). Callers that want a cap pass timeout_seconds
+    // explicitly; -1 (or omit) means no timeout, which is the right default
+    // for agentic use. The underlying run_terminal_command schema already
+    // documents -1 as "no timeout".
+    const DEFAULT_TIMEOUT_SECONDS = -1
     const effectiveTimeoutSeconds =
       timeout_seconds !== undefined ? timeout_seconds : DEFAULT_TIMEOUT_SECONDS
     const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`

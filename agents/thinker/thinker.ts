@@ -73,28 +73,83 @@ If the caller passed params.outputSchemaHint, format your final message content 
     // consumed here because the model reads them during generation.
     void params
 
-    // Shared local helper: extract assistant text (string or text parts) and
-    // remove text within <think> tags (including the tags themselves).
-    // Matches run-agent-step: strip closed pairs, then any unclosed <think>
-    // tail so truncated thinking is not harvested as the answer. Kept as a
-    // closure inside handleSteps so the generator stays serializable for
-    // sandbox execution.
-    const cleanedTextFromContent = (content: unknown): string => {
-      let text = ''
-      if (typeof content === 'string') {
-        text = content
-      } else if (Array.isArray(content)) {
-        text = content
-          .filter(
-            (part) => part && typeof part === 'object' && part.type === 'text',
-          )
-          .map((part) => part.text)
-          .join('')
-      }
-      return text
+    // Streamed text lands in messageHistory as many tiny per-delta assistant
+    // fragments with no merge in the history write path; harvesting only the
+    // LAST assistant message returns a tail fragment (observed live: the
+    // thinker's answer was {"message":"ranking."} — the final two words of
+    // its report). Anchor on the LAST assistant message anywhere in history
+    // (unchanged from before: it skips trailing tool-result messages and its
+    // text survives even when mixed with a set_output tool-call), then extend
+    // BACKWARDS over consecutive text-only assistant fragments. Fragments
+    // split mid-word (" the" + " thinker"), so join with '' RAW and apply the
+    // think-tag strip + trim once on the joined whole — never per fragment.
+    const extractRawText = (content: unknown): string => {
+      if (typeof content === 'string') return content
+      if (!Array.isArray(content)) return ''
+      return content
+        .filter(
+          (part) => part && typeof part === 'object' && part.type === 'text',
+        )
+        .map((part) => part.text)
+        .join('')
+    }
+    const isTextOnlyMessage = (message: unknown): boolean => {
+      if (!message || typeof message !== 'object') return false
+      const content = (message as { content?: unknown }).content
+      if (typeof content === 'string') return true
+      if (!Array.isArray(content)) return false
+      return content.every(
+        (part) => part && typeof part === 'object' && part.type === 'text',
+      )
+    }
+    const stripThinkTags = (text: string): string =>
+      text
         .replace(/<think>[\s\S]*?<\/think>/g, '')
         .replace(/<think>[\s\S]*$/, '')
         .trim()
+    const trailingAssistantTextFromHistory = (
+      history: readonly unknown[] | undefined,
+    ): string => {
+      if (!Array.isArray(history) || history.length === 0) return ''
+      const assistantIndex = (() => {
+        for (let i = history.length - 1; i >= 0; i--) {
+          const message = history[i]
+          if (
+            message &&
+            typeof message === 'object' &&
+            (message as { role?: unknown }).role === 'assistant'
+          ) {
+            return i
+          }
+        }
+        return -1
+      })()
+      if (assistantIndex === -1) return ''
+      // The anchored (last) assistant message always contributes its text —
+      // even when it mixes text with a set_output tool-call (the
+      // mixed-text-wins-over-set_output contract). Extension over earlier
+      // fragments only includes text-only messages, so a SEPARATE
+      // tool-call-only assistant message stays a boundary.
+      const fragments: string[] = [
+        extractRawText(
+          (history[assistantIndex] as { content?: unknown }).content,
+        ),
+      ]
+      for (let index = assistantIndex - 1; index >= 0; index--) {
+        const message = history[index]
+        if (
+          !message ||
+          typeof message !== 'object' ||
+          (message as { role?: unknown }).role !== 'assistant' ||
+          !isTextOnlyMessage(message)
+        ) {
+          break
+        }
+        fragments.unshift(
+          extractRawText((message as { content?: unknown }).content),
+        )
+      }
+      return stripThinkTags(fragments.join(''))
     }
 
     // A read_files call is endsAgentStep=true, so the step can end on a
@@ -126,7 +181,12 @@ If the caller passed params.outputSchemaHint, format your final message content 
       }
 
       const stepContent = lastAssistantMessage?.content
-      const stepCleanedText = cleanedTextFromContent(stepContent)
+      // Anchor-extend merge: same break condition as before (the last
+      // assistant message's text), but the merged trailing run so a report
+      // streamed as per-delta fragments does not harvest a tail fragment.
+      const stepCleanedText = trailingAssistantTextFromHistory(
+        agentState.messageHistory,
+      )
       const hasPendingToolCall =
         Array.isArray(stepContent) &&
         stepContent.some(
@@ -216,8 +276,12 @@ If the caller passed params.outputSchemaHint, format your final message content 
       }
     }
 
-    // Remove text within <think> tags (including the tags themselves)
-    const cleanedText = cleanedTextFromContent(content)
+    // Harvest the anchored merge (last assistant message extended backwards
+    // over its consecutive text-only fragment predecessors), so a report
+    // streamed as per-delta fragments yields the full text, not the tail.
+    const cleanedText = trailingAssistantTextFromHistory(
+      agentState.messageHistory,
+    )
 
     if (cleanedText) {
       yield {

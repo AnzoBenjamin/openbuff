@@ -25,13 +25,16 @@ const PREVIEW_ENTRIES = 3
 
 /**
  * Map a discovery status string to a colored status glyph. Errors keep their
- * full detail text elsewhere; the glyph is the glanceable signal.
+ * full detail text elsewhere; the glyph is the glanceable signal. A settled
+ * 'unavailable' result maps to a muted dash instead of the in-progress
+ * spinner glyph, so an absent language server does not read as still running.
  */
 export function statusGlyph(
   status: string,
   theme: ChatTheme,
 ): { glyph: string; color: string } {
   if (status === 'failed') return { glyph: '✗', color: theme.error }
+  if (status === 'unavailable') return { glyph: '–', color: theme.muted }
   if (status.startsWith('complete') || status.startsWith('ready')) {
     return { glyph: '✓', color: theme.success }
   }

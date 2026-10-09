@@ -12,8 +12,10 @@ export type ToolName =
   | 'edit_3d_asset'
   | 'find_files'
   | 'find_files_matching_content'
+  | 'find_references'
   | 'git_status'
   | 'git_branch'
+  | 'go_to_definition'
   | 'get_task'
   | 'get_change_review_bundle'
   | 'inspect_workspace'
@@ -30,6 +32,7 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
+  | 'hover_type'
   | 'recall_context'
   | 'record_decision'
   | 'read_docs'
@@ -55,6 +58,7 @@ export type ToolName =
   | 'think_deeply'
   | 'update_plan_status'
   | 'web_search'
+  | 'workspace_symbol'
   | 'write_file'
   | 'write_audit_findings'
   | 'write_todos'
@@ -73,8 +77,10 @@ export interface ToolParamsMap {
   edit_3d_asset: Edit3dAssetParams
   find_files: FindFilesParams
   find_files_matching_content: FindFilesMatchingContentParams
+  find_references: FindReferencesParams
   git_status: GitStatusParams
   git_branch: GitBranchParams
+  go_to_definition: GoToDefinitionParams
   get_task: GetTaskParams
   get_change_review_bundle: GetChangeReviewBundleParams
   inspect_workspace: InspectWorkspaceParams
@@ -91,6 +97,7 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
+  hover_type: HoverTypeParams
   recall_context: RecallContextParams
   record_decision: RecordDecisionParams
   read_docs: ReadDocsParams
@@ -116,6 +123,7 @@ export interface ToolParamsMap {
   think_deeply: ThinkDeeplyParams
   update_plan_status: UpdatePlanStatusParams
   web_search: WebSearchParams
+  workspace_symbol: WorkspaceSymbolParams
   write_file: WriteFileParams
   write_audit_findings: WriteAuditFindingsParams
   write_todos: WriteTodosParams
@@ -361,9 +369,9 @@ export interface Edit3dAssetParams {
     | {
         type: 'set_object_transform'
         object: string
-        location?: any[]
-        rotation_degrees?: any[]
-        scale?: any[]
+        location?: [number, number, number]
+        rotation_degrees?: [number, number, number]
+        scale?: [number, number, number]
       }
     | {
         type: 'set_render_resolution'
@@ -394,7 +402,7 @@ export interface FindFilesMatchingContentParams {
   /** Regex pattern (ripgrep syntax) to match file content against. */
   pattern: string
   /** Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored. */
-  flags?: string | string[]
+  flags?: string[]
   /** Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to the project root. */
   cwd?: string
   /** Maximum number of unique files to return. Defaults to 100. */
@@ -403,6 +411,18 @@ export interface FindFilesMatchingContentParams {
   groupBySymbol?: boolean
   /** Maximum seconds to let ripgrep run before returning partial results. Defaults to 15. */
   timeoutSeconds?: number
+}
+
+/**
+ * Parameters for find_references tool
+ */
+export interface FindReferencesParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -429,6 +449,18 @@ export interface GitBranchParams {
   switch?: boolean
   /** When true, skip the dirty-tree refusal check. Defaults to false — the tool refuses to branch when the working tree has uncommitted changes. */
   allow_dirty?: boolean
+}
+
+/**
+ * Parameters for go_to_definition tool
+ */
+export interface GoToDefinitionParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -596,6 +628,18 @@ export interface QueryIndexParams {
   from?: string
   /** Optional target file path for path mode. Also used as the seed file for references mode when from is omitted or not indexed. */
   to?: string
+}
+
+/**
+ * Parameters for hover_type tool
+ */
+export interface HoverTypeParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -1155,6 +1199,14 @@ export interface WebSearchParams {
   include_links?: boolean
   /** Maximum number of links to extract when include_links is true. Default: 40. */
   max_links?: number
+}
+
+/**
+ * Parameters for workspace_symbol tool
+ */
+export interface WorkspaceSymbolParams {
+  /** Symbol name (or substring) to search for, e.g. "createUser". */
+  query: string
 }
 
 /**

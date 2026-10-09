@@ -8,10 +8,12 @@ import pLimit from 'p-limit'
 import { z } from 'zod/v4'
 
 import { runAgentOnCommit, type ExternalAgentType } from './agent-runner'
+import type { ComparisonResult } from './compare-runs'
 import { formatTaskResults } from './format-output'
 import { judgeCommitResult, type JudgingResult } from './judge'
 import { extractAgentLessons, saveAgentLessons } from './lessons-extractor'
-import { applyProposals } from './proposals'
+import { applyProposals, decideProposalPromotion } from './proposals'
+import { standardError } from './statistics'
 import { analyzeAgentTraces, type AgentTraceData } from './trace-analyzer'
 import { logger } from '../logger'
 import { analyzeAllTasks } from './meta-analyzer'
@@ -245,12 +247,67 @@ export async function runTask(options: {
             agentDefinitions: localAgentDefinitions,
             dryRun: true,
           })
+          // Audit MEDIUM (promotion gate never invoked in the live pipeline):
+          // decideProposalPromotion previously ran only in unit tests. Fire it
+          // here on every live dry-run and RECORD the decision — never
+          // auto-apply (actual promotion belongs to the P8-T5 candidate
+          // channel). No before/after ComparisonResult exists inside a single
+          // live run, so the comparison is constructed from this run's own
+          // scores with before == after (== judgeResult.overallScore): the
+          // zero delta fails the gate's minTotalScoreDelta check instead of
+          // inventing an improvement. Paired per-task before/after scores are
+          // likewise unavailable in a single run, so they are omitted and
+          // requireSignificance blocks promotion with the gate's own
+          // 'significance required but no paired per-task scores provided'
+          // reason — the gate must FIRE, fail-closed, not be skipped.
+          const gateComparison: ComparisonResult = {
+            agentDeltas: [
+              {
+                agentId,
+                scoreDelta: 0,
+                scoreExcludingFailuresDelta: 0,
+                costDelta: 0,
+                durationDelta: 0,
+                errorCountDelta: 0,
+                beforeRunCount: 1,
+                afterRunCount: 1,
+                regression: false,
+                summary:
+                  'single-run promotion gate check: no before run to compare against',
+              },
+            ],
+            overall: {
+              totalScoreDelta: 0,
+              totalCostDelta: 0,
+              totalDurationDelta: 0,
+              totalErrorDelta: 0,
+              totalBeforeRuns: 1,
+              totalAfterRuns: 1,
+              regressedAgentIds: [],
+              improvedAgentIds: [],
+            },
+            hasRegressions: false,
+          }
+          const promotionDecision = decideProposalPromotion({
+            dryRun,
+            comparison: gateComparison,
+            policy: { requireSignificance: true, maxPValue: 0.05 },
+          })
+          logger.info(
+            {
+              agentId,
+              commitId: commit.id,
+              accepted: promotionDecision.accepted,
+            },
+            `Proposal promotion gate: ${promotionDecision.accepted ? 'PROMOTE' : 'REJECT'} — ${promotionDecision.reasons[0]}`,
+          )
           proposalDryRun = {
             proposals,
             appliedCount: dryRun.appliedCount,
             skippedCount: dryRun.skippedCount,
             summary: dryRun.summary,
             perProposal: dryRun.perProposal,
+            promotionDecision,
           }
         }
 
@@ -666,6 +723,8 @@ export async function runBuffBench(options: {
   extractLessons?: boolean
   disableAnalysis?: boolean
   saveTraces?: boolean
+  repeats?: number
+  seed?: number
 }) {
   const {
     evalDataPaths,
@@ -675,6 +734,8 @@ export async function runBuffBench(options: {
     extractLessons = false,
     disableAnalysis = false,
     saveTraces = false,
+    repeats = 1,
+    seed = 1,
   } = options
 
   if (evalDataPaths.length === 0) {
@@ -817,6 +878,16 @@ export async function runBuffBench(options: {
 
   const commitLimit = pLimit(taskConcurrency)
 
+  // P0-T6: repeat each task N times for variance estimation. The seed is
+  // recorded/logged for reproducibility (and passed to bootstrap callers); it
+  // does not alter agent execution.
+  if (repeats > 1) {
+    commitsToRun = commitsToRun.flatMap((c) =>
+      Array.from({ length: repeats }, () => c),
+    )
+    console.log(`Repeats: ${repeats} (seed ${seed})`)
+  }
+
   const commitPromises = commitsToRun.map(({ commit, evalData }, index) => {
     // Merge binaries env with this eval's env
     const mergedEnv = { ...binsEnv, ...evalData.env }
@@ -870,6 +941,12 @@ export async function runBuffBench(options: {
           measuredRuns.length
         : 0
 
+    // P0-T6: mean±SE + score-per-dollar over the measured runs.
+    agentData.measuredRunCount = measuredRuns.length
+    agentData.scoreStandardError = standardError(
+      measuredRuns.map((r) => r.judging.overallScore),
+    )
+
     // Average over valid (non-agent-error) runs. The old ">1.0 score" trim is
     // gone: genuine low measured scores are real data, not failures.
     agentData.averageScoreExcludingFailures =
@@ -898,6 +975,12 @@ export async function runBuffBench(options: {
     agentData.averageDuration =
       validRuns.length > 0
         ? validRuns.reduce((sum, r) => sum + r.durationMs, 0) / validRuns.length
+        : 0
+
+    // Score per unit cost, using the same cost unit as averageCost.
+    agentData.scorePerDollar =
+      agentData.averageCost > 0
+        ? agentData.averageScore / agentData.averageCost
         : 0
   }
 
@@ -958,6 +1041,8 @@ export async function runBuffBench(options: {
       totalDuration: Date.now() - startTime,
       logsDirectory: logsDir,
       files: logFiles,
+      repeats,
+      seed,
     },
     metaAnalysis,
     // M5-T7: agent results are namespaced under `agents` so an agent id of
@@ -986,6 +1071,10 @@ export async function runBuffBench(options: {
     const errorCount = data.runs.length - validRuns.length
     console.log(`\n${agentId}:`)
     console.log(`  Average Score: ${data.averageScore.toFixed(2)}/10`)
+    console.log(
+      `  Score: ${data.averageScore.toFixed(2)} ± ${(data.scoreStandardError ?? 0).toFixed(2)} SE (${data.measuredRunCount ?? 0} measured)`,
+    )
+    console.log(`  Score/Cost: ${(data.scorePerDollar ?? 0).toFixed(2)}`)
     console.log(
       `  Average Score (measured, excluding failed judges): ${data.averageScoreExcludingFailures.toFixed(2)}/10 (${measuredRuns.length}/${validRuns.length} runs)`,
     )

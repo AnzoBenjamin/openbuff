@@ -3,6 +3,7 @@ export type {
   IndexingConfig,
   MetadataIndex,
   QueryIndexResult,
+  EdgeConfidence,
   IndexNodeType,
   IndexNode,
   IndexEdgeType,
@@ -14,6 +15,7 @@ export type {
   IndexBuildError,
   IndexMutationDelta,
   IndexSnapshotIdentity,
+  PageRankOptions,
   QueryIndexMode,
   RelatedFile,
 } from './types'
@@ -39,8 +41,10 @@ export {
   compareRetrievalStrategies,
   formatRetrievalComparisonReport,
   queryRepoMap,
+  rankedRepoMap,
 } from './repo-map'
 export type {
+  RankedRepoMapEntry,
   RepoMapEntry,
   RepoMapOptions,
   RepoMapResult,
@@ -48,6 +52,8 @@ export type {
   RetrievalComparisonReport,
   RetrievalStrategyMetrics,
 } from './repo-map'
+export { getPageRankAdjacency, personalizedPageRank } from './pagerank'
+export type { PageRankEdge, PersonalizedPageRankParams } from './pagerank'
 export { walkProject } from './file-walker'
 export type { WalkedFile } from './file-walker'
 export { extractAssetRefs, extractGodotScriptRefs } from './asset-refs'
@@ -76,3 +82,35 @@ export type {
   RetrievalQualityEvaluationOptions,
   RetrievalQualityMetrics,
 } from './retrieval-quality'
+export {
+  mergeScipEdgesIntoIndex,
+  mergeScipIntoIndex,
+  parseScipJson,
+  scipPreciseEdges,
+  SCIP_MAX_MERGED_EDGES,
+  SCIP_MAX_OCCURRENCES_PER_DOCUMENT,
+  ScipIngestError,
+} from './scip-ingest'
+export type {
+  ScipDocument,
+  ScipIndex,
+  ScipIngestErrorCode,
+  ScipOccurrence,
+} from './scip-ingest'
+export {
+  MAX_SCIP_INDEXERS_PER_CALL,
+  SCIP_INDEXER_COMMANDS,
+  detectAvailableScipIndexers,
+  runScipIngest,
+} from './scip-runner'
+export type {
+  AsyncScipRunner,
+  ScipIndexerCommand,
+  ScipIndexerRunResult,
+  ScipIndexerStatus,
+  ScipIngestRunOptions,
+  ScipIngestRunResult,
+  ScipRunner,
+  ScipRunnerInvocation,
+  ScipRunnerResult,
+} from './scip-runner'

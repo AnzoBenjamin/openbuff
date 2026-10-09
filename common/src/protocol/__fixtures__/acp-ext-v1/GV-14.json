@@ -1,0 +1,15 @@
+{
+  "error": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "error": {
+      "code": -32600,
+      "message": "A prompt is already running for this session",
+      "data": {
+        "openbuff.dev": {
+          "code": "prompt_in_flight"
+        }
+      }
+    }
+  }
+}

@@ -156,6 +156,17 @@ type ProjectIndexInput = {
 
 const MAX_DISCOVERED_PROJECT_READ_BYTES = 1_000_000
 
+/**
+ * Session-boot parse budget: computeProjectIndex runs before the first LLM
+ * call, so its tree-sitter pass must stay bounded regardless of repository
+ * size. The indexer's own build keeps the generous library defaults; this
+ * budget bounds only the synchronous-feeling cold-start pass. 64MB covers
+ * every repository the file-tree discovery (gitignore-aware) can yield in
+ * practice without truncating, while capping pathological workspaces.
+ * Exported for testing.
+ */
+export const SESSION_STATE_MAX_TOTAL_PARSE_BYTES = 64_000_000
+
 async function computeProjectIndex(params: ProjectIndexInput): Promise<{
   fileTree: FileTreeNode[]
   fileTokenScores: Record<string, any>
@@ -167,9 +178,25 @@ async function computeProjectIndex(params: ProjectIndexInput): Promise<{
 
   if (filePaths.length > 0) {
     try {
-      const tokenData = await getFileTokenScores(cwd, filePaths, readFile)
+      const tokenData = await getFileTokenScores(
+        cwd,
+        filePaths,
+        readFile,
+        undefined,
+        { maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES },
+      )
       fileTokenScores = tokenData.tokenScores
       tokenCallers = tokenData.tokenCallers
+      if (tokenData.coverage?.truncated) {
+        logger?.debug?.(
+          {
+            parsedFiles: tokenData.coverage.parsedFiles,
+            skippedFiles: tokenData.coverage.skippedFiles,
+            maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
+          },
+          'Session-state parse budget truncated token scoring',
+        )
+      }
     } catch (error) {
       // If token scoring fails, continue with empty scores
       logger?.debug?.(

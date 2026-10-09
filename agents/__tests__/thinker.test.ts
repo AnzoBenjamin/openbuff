@@ -539,6 +539,117 @@ Actual response here`,
       expect(toolCall.input.message).toBe('Final answer')
     })
 
+    // Regression: streamed text lands in history as per-delta assistant
+    // fragments with no merge in the write path; the harvest must join the
+    // trailing run (mid-word fragments, ' the' + ' thinker') instead of
+    // returning only the last fragment (observed live: {"message":"ranking."}).
+    test('harvests the full report when the last assistant message is fragmented per-delta', () => {
+      const messages: Message[] = [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'decision packet' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Root cause: the' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: ' bridge strips' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: ' live zod.' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'ranking.' }],
+        },
+      ]
+
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: createMockAgentState(messages),
+        logger: mockLogger as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next({
+        agentState: createMockAgentState(messages),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect(result.value).toEqual({
+        toolName: 'set_output',
+        input: { message: 'Root cause: the bridge strips live zod.ranking.' },
+        includeToolCall: false,
+      })
+    })
+
+    test('the trailing-run merge stops at a tool-call boundary (never harvests pre-call text)', () => {
+      const messages: Message[] = [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'early exploration text' }],
+        },
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: '1',
+              toolName: 'read_files',
+              input: { paths: ['src/index.ts'] },
+            },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'read_files result here' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Final ' }],
+        },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'answer.' }],
+        },
+      ]
+
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = thinker.handleSteps!({
+        agentState: createMockAgentState(messages),
+        logger: mockLogger as any,
+        params: {},
+      })
+      generator.next()
+      const result = generator.next({
+        agentState: createMockAgentState(messages),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+
+      expect(result.value).toEqual({
+        toolName: 'set_output',
+        input: { message: 'Final answer.' },
+        includeToolCall: false,
+      })
+    })
+
     test('handleSteps can be serialized for sandbox execution', () => {
       const handleStepsString = thinker.handleSteps!.toString()
 

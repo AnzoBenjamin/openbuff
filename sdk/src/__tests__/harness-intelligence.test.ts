@@ -10,8 +10,10 @@ import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containmen
 import {
   VerifiedKnowledgeService,
   WorkspaceLeaseService,
+  analyzeTestImpact,
   classifyConnectorOperation,
   clearHarnessDiscoveryCache,
+  clearHarnessToolsCache,
   createContextPacket,
   getAffectedTestTargets,
   getBuildTargets,
@@ -25,6 +27,7 @@ const CROSS_PROCESS_TIMEOUT_MS = 30_000
 const CROSS_PROCESS_READY_TIMEOUT_MS = 20_000
 afterEach(() => {
   clearHarnessDiscoveryCache()
+  clearHarnessToolsCache()
   for (const root of roots.splice(0))
     fs.rmSync(root, { recursive: true, force: true })
 })
@@ -83,6 +86,222 @@ describe('harness intelligence services', () => {
     },
     FILESYSTEM_DISCOVERY_TIMEOUT_MS,
   )
+
+  test(
+    'tiers test impact by convention, injected graph deps, and build tool commands',
+    () => {
+      const root = tempRoot()
+      fs.mkdirSync(path.join(root, 'packages/api/src/__tests__'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(root, 'packages/api/package.json'),
+        JSON.stringify({
+          scripts: { 'test:unit': 'bun test', build: 'tsc' },
+        }),
+      )
+      fs.writeFileSync(
+        path.join(root, 'packages/api/src/user.test.ts'),
+        '',
+      )
+      fs.writeFileSync(
+        path.join(root, 'packages/api/src/__tests__/user.test.ts'),
+        '',
+      )
+
+      const [impact] = analyzeTestImpact(
+        root,
+        ['packages/api/src/user.ts'],
+        {
+          reverseDeps: (file) =>
+            file === 'packages/api/src/user.ts'
+              ? [
+                  // Duplicate and non-test dependents exercise dedupe + filtering.
+                  'packages/api/src/__tests__/user.test.ts',
+                  'packages/api/src/__tests__/user.test.ts',
+                  'packages/api/src/routes.ts',
+                  'packages/api/e2e/user.spec.ts',
+                ]
+              : [],
+        },
+      )
+      // Convention tier is unchanged: only existing files, same paths the
+      // flat getAffectedTestTargets convention candidates report.
+      expect(impact.tiers.convention).toEqual(
+        getAffectedTestTargets(root, ['packages/api/src/user.ts'])[0]
+          .candidates,
+      )
+      expect(impact.tiers.convention).toEqual([
+        'packages/api/src/user.test.ts',
+        'packages/api/src/__tests__/user.test.ts',
+      ])
+      // Graph tier keeps only test-like reverse deps, deduped and sorted.
+      expect(impact.tiers.graph).toEqual([
+        'packages/api/e2e/user.spec.ts',
+        'packages/api/src/__tests__/user.test.ts',
+      ])
+      // Confirmed nested package: medium-confidence build-tool commands.
+      expect(impact.tiers.buildTool).toEqual(['npm run test:unit'])
+      // Coverage maps land later; the tier is an honest empty placeholder.
+      expect(impact.tiers.coverage).toEqual([])
+      // Every candidate is confidence-labelled, and the path seen by both
+      // convention and graph tiers keeps the higher-confidence convention one.
+      expect(impact.candidates).toEqual([
+        {
+          path: 'packages/api/src/user.test.ts',
+          tier: 'convention',
+          confidence: 'high',
+        },
+        {
+          path: 'packages/api/src/__tests__/user.test.ts',
+          tier: 'convention',
+          confidence: 'high',
+        },
+        {
+          path: 'packages/api/e2e/user.spec.ts',
+          tier: 'graph',
+          confidence: 'medium',
+        },
+        {
+          path: 'npm run test:unit',
+          tier: 'build-tool',
+          confidence: 'medium',
+        },
+      ])
+      for (const candidate of impact.candidates) {
+        expect(['high', 'medium', 'low']).toContain(candidate.confidence)
+      }
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
+  test('build-tool tier falls back to low confidence for unconfirmed owners', () => {
+    const root = tempRoot()
+    fs.writeFileSync(
+      path.join(root, 'package.json'),
+      JSON.stringify({ scripts: { test: 'bun test' } }),
+    )
+    fs.mkdirSync(path.join(root, 'pkg'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'pkg/package.json'),
+      JSON.stringify({ scripts: { test: 'bun test' } }),
+    )
+    fs.mkdirSync(path.join(root, 'crates', 'core'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'crates', 'core', 'Cargo.toml'),
+      '[package]\nname="core"',
+    )
+
+    const [cargoImpact, rootJsImpact, nestedJsImpact] = analyzeTestImpact(root, [
+      'crates/core/src/lib.rs',
+      'top-level.ts',
+      'pkg/widget.ts',
+    ])
+    // Cargo ownership is manifest-derived, so the command is confirmed...
+    expect(cargoImpact.tiers.buildTool).toEqual(['cargo test -p core'])
+    expect(cargoImpact.candidates).toEqual([
+      { path: 'cargo test -p core', tier: 'build-tool', confidence: 'medium' },
+    ])
+    // ...while a root package.json only implicitly owns top-level files, so
+    // the same command drops to low confidence...
+    expect(rootJsImpact.tiers.buildTool).toEqual(['npm run test'])
+    expect(rootJsImpact.candidates).toEqual([
+      { path: 'npm run test', tier: 'build-tool', confidence: 'low' },
+    ])
+    // ...and a nested package.json confirms ownership with medium confidence.
+    expect(nestedJsImpact.tiers.buildTool).toEqual(['npm run test'])
+    expect(nestedJsImpact.candidates).toEqual([
+      { path: 'npm run test', tier: 'build-tool', confidence: 'medium' },
+    ])
+  })
+
+  test(
+    'bounds the discovery walk (depth cap) instead of recursing unboundedly',
+    () => {
+      // F3 hardening ported from build-graph: the walk must not follow a deep
+      // chain forever. MAX_WALK_DEPTH is 12, so a manifest nested deeper than
+      // that is simply not discovered (and the walk terminates quickly).
+      const root = tempRoot()
+      const segments = Array.from({ length: 15 }, (_, i) => `d${i}`)
+      const deep = path.join(root, ...segments)
+      fs.mkdirSync(deep, { recursive: true })
+      fs.writeFileSync(path.join(deep, 'package.json'), '{}')
+      const shallowDir = path.join(root, ...segments.slice(0, 5))
+      fs.writeFileSync(path.join(shallowDir, 'package.json'), '{}')
+
+      const manifests = inspectHarnessEnvironment(root).manifests
+      // Within the cap: found. Beyond MAX_WALK_DEPTH: not fabricated.
+      expect(manifests).toEqual([
+        `${segments.slice(0, 5).join('/')}/package.json`,
+      ])
+    },
+    FILESYSTEM_DISCOVERY_TIMEOUT_MS,
+  )
+
+  test('discovery skips symlinked directories entirely', () => {
+    // Symlinks are skipped during the walk, so a manifest reachable only
+    // through a symlink is never reported (symlink loops cannot hang it).
+    const root = tempRoot()
+    const outside = tempRoot()
+    fs.writeFileSync(path.join(outside, 'package.json'), '{}')
+    fs.symlinkSync(outside, path.join(root, 'linked'))
+
+    expect(inspectHarnessEnvironment(root).manifests).toEqual([])
+  })
+
+  test('caches the tool probes behind a TTL reset seam', () => {
+    // The 14 spawnSync --version probes must not re-run per inspect call.
+    // Observable proof of the cache: consecutive inspections return the SAME
+    // frozen tools record, and only clearHarnessToolsCache() drops it.
+    const root = tempRoot()
+    fs.writeFileSync(path.join(root, 'package.json'), '{}')
+    const first = inspectHarnessEnvironment(root)
+    const second = inspectHarnessEnvironment(root)
+    expect(second.tools).toBe(first.tools)
+    expect(Object.isFrozen(first.tools)).toBe(true)
+
+    clearHarnessToolsCache()
+    const third = inspectHarnessEnvironment(root)
+    expect(third.tools).not.toBe(first.tools)
+    // The probes stay honest: git is really installed in this environment,
+    // and the probe records the version it actually observed (no fabricated
+    // availability, and the version string is not invented).
+    expect(first.tools.git?.available).toBe(true)
+    expect(typeof first.tools.git?.version).toBe('string')
+    expect((first.tools.git?.version ?? '').length).toBeGreaterThan(0)
+    expect(third.tools.git).toMatchObject({ available: true })
+  })
+
+  test('cargo test -p uses the Cargo.toml package name, not the directory name', () => {
+    // `cargo test -p <dir-basename>` was bogus: -p takes the crate's package
+    // id, which lives in Cargo.toml and can differ from the directory name.
+    const root = tempRoot()
+    fs.mkdirSync(path.join(root, 'crates', 'core'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'crates', 'core', 'Cargo.toml'),
+      '[package]\nname = "core-crate"\n',
+    )
+    const [impact] = analyzeTestImpact(root, ['crates/core/src/lib.rs'])
+    expect(impact.tiers.buildTool).toEqual(['cargo test -p core-crate'])
+  })
+
+  test('omits -p when the Cargo.toml package name is unparseable', () => {
+    const root = tempRoot()
+    fs.mkdirSync(path.join(root, 'crates', 'broken'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'crates', 'broken', 'Cargo.toml'), 'nope')
+    const [impact] = analyzeTestImpact(root, ['crates/broken/src/lib.rs'])
+    expect(impact.tiers.buildTool).toEqual(['cargo test'])
+  })
+
+  test('unknown-manager workspaces emit no build-tool command instead of junk', () => {
+    // `unknown run <script>` is not a runnable command; an ecosystem whose
+    // manager could not be identified yields no build-tool query at all.
+    const root = tempRoot()
+    fs.writeFileSync(path.join(root, 'package.json'), '{not-json')
+    const [impact] = analyzeTestImpact(root, ['src/app.ts'])
+    expect(impact.tiers.buildTool).toEqual([])
+    expect(impact.candidates).toEqual([])
+  })
 
   test(
     'discovers nested multi-language workspaces and manager-specific targets',

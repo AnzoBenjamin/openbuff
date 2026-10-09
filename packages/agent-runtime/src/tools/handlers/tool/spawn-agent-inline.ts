@@ -16,6 +16,7 @@ import {
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import { selectAgentAttempt } from '../../../orchestration/select-agent-attempt'
 import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   acquireWorkspacePathLease,
   releaseWorkspacePathLease,
@@ -27,6 +28,7 @@ import type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
@@ -52,6 +54,7 @@ export const handleSpawnAgentInline = (async (
     userId: string | undefined
     userInputId: string
     writeToClient: (chunk: string | PrintModeEvent) => void
+    clock?: Clock
   } & ParamsExcluding<
     typeof executeSubagent,
     | 'userInputId'
@@ -248,6 +251,7 @@ export const handleSpawnAgentInline = (async (
     ownerAgentId: childAgentState.agentId,
     taskId: handoff?.taskId,
     paths: handoff?.permissions.writablePaths ?? [],
+    clock: params.clock,
   })
 
   // Observed pruner chunks, counted only so the parent's announced compaction
@@ -256,10 +260,14 @@ export const handleSpawnAgentInline = (async (
   let prunerChunks = 0
 
   // Exception-safe settle bookkeeping: `receiptReconciled` flips only after
-  // `reconcileAgentReceiptIntoParent` returns, so the catch below can tell an
-  // execute throw from a settle throw, and the lease release in the finally
+  // `reconcileAgentReceiptIntoParent` returns, and `spawnStartedEmitted` only
+  // after the `spawn_started` ledger event lands, so the catch below can tell
+  // an execute throw from a settle throw and never closes a ledger pair that
+  // was never opened (a `spawn_started` emission that throws must not leave a
+  // dangling `interrupted` event behind), and the lease release in the finally
   // below runs on every path.
   let receiptReconciled = false
+  let spawnStartedEmitted = false
   let result: Awaited<ReturnType<typeof executeSubagent>>
   try {
     // Emitted only once the lease is held: any throw after this point —
@@ -279,6 +287,7 @@ export const handleSpawnAgentInline = (async (
         workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
       },
     })
+    spawnStartedEmitted = true
     // Extract common context params to avoid bugs from spreading all params
     const contextParams = extractSubagentContextParams(params)
 
@@ -382,19 +391,29 @@ export const handleSpawnAgentInline = (async (
     if (editsParentMessageHistory) {
       parentAgentState.messageHistory = result.agentState.messageHistory
     }
-    const receipt = buildRuntimeAgentReceipt({
-      agentType,
-      agentId: result.agentState.agentId,
-      handoff,
-      spawnParams: runtimeSpawnParams,
-      output: result.output,
-      agentState: result.agentState,
-    })
+    // P2-T8: prefer a supervised spawn's own validated receipt verbatim;
+    // the in-process path keeps building the receipt here exactly as before.
+    const receipt =
+      result.supervisedReceipt ??
+      buildRuntimeAgentReceipt({
+        agentType,
+        agentId: result.agentState.agentId,
+        handoff,
+        spawnParams: runtimeSpawnParams,
+        output: result.output,
+        agentState: result.agentState,
+      })
     reconcileAgentReceiptIntoParent({
       parentAgentState,
       receipt,
       agentType,
       objective: handoff?.objective,
+      // The ledger pairing keys on the PARENT-side spawn id recorded by the
+      // `spawn_started` event. A supervised receipt carries the child's own
+      // self-declared agentId, so pass the parent-side id explicitly (the
+      // in-process path's receipt.agentId is this same value, so the flag-off
+      // path is unchanged).
+      spawnId: childAgentState.agentId,
     })
     receiptReconciled = true
 
@@ -415,7 +434,9 @@ export const handleSpawnAgentInline = (async (
     // A settle throw (receipt build or receipt reconcile) must not leave the
     // `spawn_started` ledger event dangling: close the pair with an
     // `interrupted` event unless the terminal receipt was already reconciled.
-    if (!receiptReconciled) {
+    // A `spawn_started` emission that itself threw opened no pair, so no
+    // `interrupted` closure is emitted for it either.
+    if (spawnStartedEmitted && !receiptReconciled) {
       appendOrchestrationEvent({
         state: parentAgentState,
         event: {
@@ -436,6 +457,6 @@ export const handleSpawnAgentInline = (async (
   } finally {
     // The lease must be released on EVERY path: execute throw, settle throw,
     // and success alike.
-    releaseWorkspacePathLease(parentAgentState, leaseId)
+    releaseWorkspacePathLease(parentAgentState, leaseId, (params.clock ?? realClock).now())
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

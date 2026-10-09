@@ -23,6 +23,10 @@ const wasms = (remoteFile: string, sha256: string): PinnedGrammarAsset => ({
 export const PINNED_GRAMMAR_ASSETS: Readonly<
   Record<string, PinnedGrammarAsset>
 > = {
+  'tree-sitter-c.wasm': wasms(
+    'tree-sitter-c.wasm',
+    '056b25072382f72deee2c64ec238ffc4bb8cf42844ef21502c0e70f03a8a0d66',
+  ),
   'tree-sitter-c-sharp.wasm': wasms(
     'tree-sitter-c_sharp.wasm',
     '6266a7e32d68a3459104d994dc848df15d5672b0ea8e86d327274b694f8e6991',

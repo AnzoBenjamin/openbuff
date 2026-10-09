@@ -133,6 +133,55 @@ describe('slash-commands module', () => {
       expect(agent).toBeDefined()
       expect(agent!.insertText).toBe('@general-agent ')
     })
+
+    test('registers /detach and /attach for autocomplete and the palette', () => {
+      const detach = SLASH_COMMANDS.find((cmd) => cmd.id === 'detach')
+      expect(detach).toBeDefined()
+      expect(detach!.label).toBe('detach')
+      expect(detach!.description).toContain('/attach')
+
+      const attach = SLASH_COMMANDS.find((cmd) => cmd.id === 'attach')
+      expect(attach).toBeDefined()
+      expect(attach!.description).toContain('detached')
+
+      // Stateful commands: must not fire without an explicit leading slash.
+      expect(detach!.implicitCommand).toBeUndefined()
+      expect(attach!.implicitCommand).toBeUndefined()
+    })
+
+    test('/image gave up its attach alias so /attach reaches the new command', () => {
+      expect(
+        SLASH_COMMANDS.filter((cmd) => cmd.aliases?.includes('attach')).map(
+          (cmd) => cmd.id,
+        ),
+      ).toEqual(['attach'])
+    })
+
+    test('registers /undo-turn and /restore for autocomplete and the palette', () => {
+      const undoTurn = SLASH_COMMANDS.find((cmd) => cmd.id === 'undo-turn')
+      expect(undoTurn).toBeDefined()
+      expect(undoTurn!.label).toBe('undo-turn')
+      expect(undoTurn!.description).toContain('snapshot')
+
+      const restore = SLASH_COMMANDS.find((cmd) => cmd.id === 'restore')
+      expect(restore).toBeDefined()
+      expect(restore!.label).toBe('restore')
+      expect(restore!.description).toContain('snapshot')
+
+      // Stateful commands: must not fire without an explicit leading slash.
+      expect(undoTurn!.implicitCommand).toBeUndefined()
+      expect(restore!.implicitCommand).toBeUndefined()
+      // No aliases in this slice.
+      expect(undoTurn!.aliases).toBeUndefined()
+      expect(restore!.aliases).toBeUndefined()
+
+      const bisectTurn = SLASH_COMMANDS.find((cmd) => cmd.id === 'bisect-turn')
+      expect(bisectTurn).toBeDefined()
+      expect(bisectTurn!.label).toBe('bisect-turn')
+      expect(bisectTurn!.description).toContain('snapshot')
+      expect(bisectTurn!.implicitCommand).toBeUndefined()
+      expect(bisectTurn!.aliases).toBeUndefined()
+    })
   })
 
   describe('SLASHLESS_COMMAND_IDS', () => {

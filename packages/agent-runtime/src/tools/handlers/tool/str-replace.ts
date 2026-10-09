@@ -375,13 +375,13 @@ export const handleStrReplace = (async (
         preflightSyntaxError: false,
       }
     })
-    .then((fileProcessingResult) => {
+    .then(async (fileProcessingResult) => {
       const result = {
         ...fileProcessingResult,
         toolCallId: toolCall.toolCallId,
       }
       if (!('error' in fileProcessingResult)) {
-        const syntaxValidation = preflightValidateSyntax(
+        const syntaxValidation = await preflightValidateSyntax(
           path,
           fileProcessingResult.content,
         )

@@ -6,6 +6,10 @@ import { afterAll, describe, expect, test } from 'bun:test'
 
 import { buildMetadataIndex } from './metadata-indexer'
 
+import { resolveImportToFile } from './import-resolution'
+
+import type { ImportResolutionFile } from './import-resolution'
+
 const roots: string[] = []
 afterAll(() => {
   for (const r of roots) {
@@ -243,4 +247,145 @@ describe('import graph: alias + re-export resolution', () => {
     expect(index.files['service.csproj'].concepts).toContain('dotnet test')
     expect(index.files['project.godot'].concepts).toContain('godot test')
   })
+
+  test('does not resolve Python absolute imports against loose same-named files', async () => {
+    const root = project({
+      'json.py': 'value = 1\n',
+      'main.py': 'import json\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+    // A bare `import json` with only a loose local json.py must stay
+    // unresolved (conservative-unresolved contract).
+    expect(hasReferenceEdge(index.graph, 'main.py', 'json.py')).toBe(false)
+  })
+
+  test('resolves Python absolute imports under indexed top-level package dirs', async () => {
+    const root = project({
+      'mypkg/__init__.py': '',
+      'mypkg/mod.py': 'def run():\n    pass\n',
+      'main.py': 'import mypkg.mod\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+    expect(hasReferenceEdge(index.graph, 'main.py', 'mypkg/mod.py')).toBe(true)
+  })
+
+  test('does not resolve Rust bare imports across directories', async () => {
+    const root = project({
+      'src/config.rs': 'pub struct Config;\n',
+      'src/bin/tool.rs': 'mod config;\n',
+      'src/bin/other.rs': 'use crate::config;\n',
+    })
+
+    const index = await buildMetadataIndex(root)
+    // A bare `mod config;` must not match a same-named module in another
+    // directory; only the importing file's own directory counts.
+    expect(
+      hasReferenceEdge(index.graph, 'src/bin/tool.rs', 'src/config.rs'),
+    ).toBe(false)
+    // An explicit crate:: path from the same directory still reaches the
+    // crate-root module structure.
+    expect(
+      hasReferenceEdge(index.graph, 'src/bin/other.rs', 'src/config.rs'),
+    ).toBe(true)
+  })
+
+describe('Python absolute-import top-level directory guard', () => {
+  test('resolves repeatedly against one files snapshot via the memoized top-level set', () => {
+    const files: Record<string, ImportResolutionFile> = {
+      'pkg/__init__.py': { path: 'pkg/__init__.py', ext: '.py' },
+      'pkg/mod.py': { path: 'pkg/mod.py', ext: '.py' },
+      'loose.py': { path: 'loose.py', ext: '.py' },
+    }
+    // The index-build shape: one files snapshot resolved for every import
+    // site. Results must be stable across repeated calls on the same snapshot
+    // (the memoized top-level-directory set serves every lookup).
+    expect(resolveImportToFile('main.py', '.py', 'pkg.mod', files)).toBe(
+      'pkg/mod.py',
+    )
+    expect(resolveImportToFile('main.py', '.py', 'pkg.mod', files)).toBe(
+      'pkg/mod.py',
+    )
+    // A loose same-named top-level file never satisfies an absolute import
+    // (conservative-unresolved contract), memoized or not.
+    expect(resolveImportToFile('main.py', '.py', 'loose', files)).toBeNull()
+  })
+
+  test('does not re-derive the top-level set when the record is mutated in place (documented memoization contract)', () => {
+    const files: Record<string, ImportResolutionFile> = {
+      'pkg/__init__.py': { path: 'pkg/__init__.py', ext: '.py' },
+    }
+    expect(resolveImportToFile('main.py', '.py', 'other', files)).toBeNull()
+    // Documented on resolveImportToFile: the top-level-directory set is
+    // memoized per `files` record object identity; mutating the same record
+    // in place between calls is NOT reflected, so a caller that mutates the
+    // record must pass a fresh record to see the mutation.
+    files['other/__init__.py'] = { path: 'other/__init__.py', ext: '.py' }
+    expect(resolveImportToFile('main.py', '.py', 'other', files)).toBeNull()
+  })
+})
+
+describe('TS module-resolution tier wiring', () => {
+  const files: Record<string, ImportResolutionFile> = {
+    'src/util.ts': { path: 'src/util.ts', ext: '.ts' },
+    'src/stub.ts': { path: 'src/stub.ts', ext: '.ts' },
+  }
+  const stubResolver = () => 'src/stub.ts'
+
+  test('the relative arm still wins before the injected ts tier', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.ts',
+        '.ts',
+        './util',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBe('src/util.ts')
+  })
+
+  test('the injected ts tier resolves what the conservative arms miss', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.ts',
+        '.ts',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBe('src/stub.ts')
+  })
+
+  test('omitting the resolver keeps conservative behavior byte-identical', () => {
+    expect(
+      resolveImportToFile('src/a.ts', '.ts', '@stub/thing', files),
+    ).toBeNull()
+  })
+
+  test('the ts tier is not consulted for non-TS/JS extensions', () => {
+    expect(
+      resolveImportToFile(
+        'src/a.py',
+        '.py',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBeNull()
+    expect(
+      resolveImportToFile(
+        'src/main.go',
+        '.go',
+        '@stub/thing',
+        files,
+        undefined,
+        stubResolver,
+      ),
+    ).toBeNull()
+  })
+})
 })

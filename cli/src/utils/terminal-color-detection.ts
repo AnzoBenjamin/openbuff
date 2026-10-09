@@ -20,6 +20,18 @@ const OSC_QUERY_TIMEOUT_MS = 250 // Keep startup probes below perceptible half-s
 const GLOBAL_OSC_TIMEOUT_MS = 600 // Bounds both sequential fallback probes
 
 /**
+ * Safety margin subtracted from the remaining global detection budget when
+ * clamping a probe's internal timeout: the probe's cleanup (setRawMode
+ * restore + stdin.pause) must complete STRICTLY before the global race
+ * resolves, because main() creates the OpenTUI renderer immediately after
+ * resolution and the renderer claims stdin raw mode. A cleanup firing after
+ * renderer creation silently disables the renderer's raw mode (input-deaf
+ * TUI): the abandoned probe's timer must never be able to land in that
+ * window, even when startup timing shifts between builds.
+ */
+const OSC_QUERY_DEADLINE_GUARD_MS = 50
+
+/**
  * Wrap a promise with a timeout
  * @param promise - The promise to wrap
  * @param timeoutMs - Timeout in milliseconds
@@ -79,6 +91,30 @@ export function withTimeout<T>(
 }
 
 /**
+ * Compute the internal timeout for a single OSC probe.
+ *
+ * @internal Exported for testing
+ *
+ * WHY: an `undefined` deadline keeps the legacy unbounded path (the bare
+ * OSC_QUERY_TIMEOUT_MS). When a global deadline is supplied, the probe's
+ * internal timer is clamped to the remaining budget minus
+ * OSC_QUERY_DEADLINE_GUARD_MS so the probe's own cleanup (setRawMode restore
+ * + stdin.pause) always completes strictly before the global race resolves
+ * and the renderer claims stdin raw mode. The 1ms floor keeps the timer
+ * firing so the probe's cleanup still runs — removing its listener and
+ * closing the fd — instead of leaking them.
+ */
+export function computeQueryTimeoutMs(
+  deadlineMs: number | undefined,
+  now: number,
+): number {
+  if (deadlineMs === undefined) return OSC_QUERY_TIMEOUT_MS
+  const remaining = deadlineMs - now - OSC_QUERY_DEADLINE_GUARD_MS
+  if (remaining <= 0) return 1
+  return Math.min(OSC_QUERY_TIMEOUT_MS, remaining)
+}
+
+/**
  * Check if the current terminal supports OSC color queries
  */
 export function terminalSupportsOSC(env: CliEnv = getCliEnv()): boolean {
@@ -134,11 +170,15 @@ function buildOscQuery(oscCode: number): string {
  *
  * @param ttyPath - Path to TTY for writing the query
  * @param query - The OSC query string to send
+ * @param options - Optional `deadlineMs`: the shared global detection
+ *   deadline used to clamp this probe's internal timeout so its cleanup
+ *   cannot fire after the global race resolves
  * @returns The raw response string or null if query failed
  */
 async function sendOscQuery(
   ttyPath: string,
   query: string,
+  options?: { deadlineMs?: number },
 ): Promise<string | null> {
   return new Promise((resolve) => {
     // Guard: Must have TTY for both reading and writing
@@ -223,10 +263,12 @@ async function sendOscQuery(
         }
       }
 
-      // Set up timeout
+      // Set up timeout. The duration is clamped to the shared global
+      // deadline (minus the guard) so this probe's cleanup lands strictly
+      // before the global race resolves and the renderer claims stdin.
       timeoutId = setTimeout(() => {
         resolveWith(response.length > 0 ? response : null)
-      }, OSC_QUERY_TIMEOUT_MS)
+      }, computeQueryTimeoutMs(options?.deadlineMs, Date.now()))
 
       // Set up event-based reading from stdin.
       // OSC responses come through the PTY which appears on stdin.
@@ -272,10 +314,11 @@ async function sendOscQuery(
  */
 export async function queryTerminalOSC(
   oscCode: number,
+  options?: { deadlineMs?: number },
 ): Promise<string | null> {
   const ttyPath = process.platform === 'win32' ? 'CON' : '/dev/tty'
   const query = buildOscQuery(oscCode)
-  return sendOscQuery(ttyPath, query)
+  return sendOscQuery(ttyPath, query, options)
 }
 
 /**
@@ -440,6 +483,7 @@ export function themeFromFgColor(
  */
 async function detectTerminalThemeCore(
   env: CliEnv = getCliEnv(),
+  deadlineMs?: number,
 ): Promise<'dark' | 'light' | null> {
   // Check if terminal supports OSC
   if (!terminalSupportsOSC(env)) {
@@ -447,7 +491,7 @@ async function detectTerminalThemeCore(
   }
 
   // Try background color first (OSC 11) - more reliable
-  const bgResponse = await queryTerminalOSC(11)
+  const bgResponse = await queryTerminalOSC(11, { deadlineMs })
   if (bgResponse) {
     const bgRgb = parseOSCResponse(bgResponse)
     if (bgRgb) {
@@ -462,7 +506,7 @@ async function detectTerminalThemeCore(
   }
 
   // Fallback to foreground color (OSC 10)
-  const fgResponse = await queryTerminalOSC(10)
+  const fgResponse = await queryTerminalOSC(10, { deadlineMs })
   if (fgResponse) {
     const fgRgb = parseOSCResponse(fgResponse)
     if (fgRgb) {
@@ -480,8 +524,13 @@ async function detectTerminalThemeCore(
  */
 export async function detectTerminalTheme(): Promise<'dark' | 'light' | null> {
   try {
+    // Shared deadline for every probe: clamping each probe's internal timer
+    // to this value (minus the guard) guarantees all cleanup completes
+    // strictly before the global race below resolves and main() creates the
+    // renderer, which claims stdin raw mode.
+    const deadlineMs = Date.now() + GLOBAL_OSC_TIMEOUT_MS
     return await withTimeout(
-      detectTerminalThemeCore(),
+      detectTerminalThemeCore(getCliEnv(), deadlineMs),
       GLOBAL_OSC_TIMEOUT_MS,
       null,
     )

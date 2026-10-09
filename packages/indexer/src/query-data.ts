@@ -7,6 +7,22 @@ import type {
 
 const MAX_POSTING_TOKEN_LENGTH = 160
 
+/**
+ * X-2a bounds for the posting-vocabulary substring scan in
+ * {@link getPostingCandidates}: the vocabulary itself is already capped at
+ * MAX_POSTING_TOKEN_LENGTH chars per token by normalizePostingToken, and
+ * these two bounds keep the per-query union cost finite on very large
+ * indexes without changing results for typical queries.
+ */
+/** Upper bound on the candidate path union (a recall pre-filter, not the result set). */
+export const MAX_POSTING_CANDIDATE_PATHS = 4096
+/**
+ * Exact postings for tokens at least this long skip the substring expansion
+ * pass entirely: a long token with an exact posting rarely gains recall from
+ * vocabulary substrings, which are mostly noise at that length.
+ */
+const MIN_EXACT_TOKEN_LENGTH_TO_SKIP_SUBSTRING_SCAN = 8
+
 /** Build deterministic, JSON-persistable query accelerators. */
 export function buildIndexQueryData(
   files: Record<string, IndexedFile>,
@@ -56,24 +72,42 @@ export function getPostingCandidates(
     const token = normalizePostingToken(rawToken)
     if (!token) continue
     const exact = postings[token]
+    // Exact postings are always added, cap or not: the result must stay a
+    // superset of the exact-match results.
     if (exact) for (const filePath of exact) candidates.add(filePath)
+    if (exact && token.length >= MIN_EXACT_TOKEN_LENGTH_TO_SKIP_SUBSTRING_SCAN) {
+      continue
+    }
+    // Once the union is generously large, stop expanding substrings; later
+    // tokens' exact postings are still added above.
+    if (candidates.size >= MAX_POSTING_CANDIDATE_PATHS) continue
 
     // Preserve the historical substring matching contract without scanning
     // every file: scan the compact posting vocabulary and union its lists.
     for (const indexedToken of postingTokens) {
       if (
         indexedToken === token ||
+        indexedToken.length > MAX_POSTING_TOKEN_LENGTH ||
         (!indexedToken.includes(token) &&
           !(indexedToken.length >= 4 && token.includes(indexedToken)))
       ) {
         continue
       }
       for (const filePath of postings[indexedToken]) candidates.add(filePath)
+      if (candidates.size >= MAX_POSTING_CANDIDATE_PATHS) break
     }
   }
   return candidates
 }
 
+/**
+ * Document frequency for one query token, or undefined when no safe value is
+ * available. The substring-expansion fallback reuses getPostingCandidates,
+ * whose union is capped at MAX_POSTING_CANDIDATE_PATHS: when the union hits
+ * the cap its size is a truncated lower bound (badly skewed for frequent
+ * tokens), so this returns undefined instead and callers fall back to their
+ * own safe default (query.ts counts the token across the indexed corpus).
+ */
 export function getPostingDocumentFrequency(
   index: MetadataIndex,
   token: string,
@@ -82,7 +116,11 @@ export function getPostingDocumentFrequency(
   if (!normalized || !index.queryData) return undefined
   const exact = index.queryData.documentFrequencies[normalized]
   if (exact !== undefined) return exact
-  return getPostingCandidates(index, [normalized])?.size
+  const candidates = getPostingCandidates(index, [normalized])
+  if (!candidates) return undefined
+  // The union was truncated at the cap: its size is not a document frequency.
+  if (candidates.size >= MAX_POSTING_CANDIDATE_PATHS) return undefined
+  return candidates.size
 }
 
 export function collectFilePostingTokens(file: IndexedFile): Set<string> {

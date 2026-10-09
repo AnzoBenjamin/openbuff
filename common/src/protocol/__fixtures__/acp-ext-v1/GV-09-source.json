@@ -1,0 +1,16 @@
+{
+  "_note": "Source input for GV-09 (§8): the Base2GateState plus phase that projectGateState consumes to produce exactly the state object in GV-09. lastReviewerGateSkipReason is empty here, so no skipReason is emitted; gateProgressLine is unset, so no progress is emitted.",
+  "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+  "phase": "final_response_allowed",
+  "state": {
+    "pendingGateFiles": [],
+    "gatePassedFiles": [
+      "src/a.ts"
+    ],
+    "gatePassedPendingFiles": [],
+    "gatePassedReviewerVerdict": "LOOKS_GOOD",
+    "gatePassedValidationSummary": "typecheck ok; 12 tests passed",
+    "gatePassedFingerprint": "v3:0123456789abc",
+    "lastReviewerGateSkipReason": ""
+  }
+}

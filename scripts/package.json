@@ -10,13 +10,16 @@
     "guard:byok-wording": "bun run byok-wording-guard.ts",
     "guard:memory-drift": "bun run memory-drift-guard.ts",
     "guard:sync-agent-config": "bun run sync-agent-config.ts",
+    "guard:determinism": "bun run determinism-guard.ts",
+    "guard:mock-module": "bun run mock-module-guard.ts",
     "guard:ci-local": "bun run check-ci-local.ts",
     "debug-log-subset": "bun run debug-log-subset.ts",
     "typecheck-all": "bun run typecheck-all.ts",
     "harness:lsp": "bun run harness-language-server.ts",
     "harness:repro": "bun run generate-minimal-repro.ts",
     "harness:mutation": "bun run run-mutation-gate.ts",
-    "harness:classifier-smoke": "bun harness-smoke.mjs"
+    "harness:classifier-smoke": "bun harness-smoke.mjs",
+    "calibrate:openai-tokens": "bun run calibrate-openai-tokens.ts"
   },
   "sideEffects": false,
   "engines": {

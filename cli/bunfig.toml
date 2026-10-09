@@ -1,0 +1,12 @@
+[install]
+# Keep CLI installs consistent with root hoisted setup
+linker = "hoisted"
+linkWorkspacePackages = true
+
+[test]
+# The setup-scm-loader preload that this file once existed to provide (the root
+# preload resolved cwd-relative to a nonexistent cli/test path, crashing test
+# collection on .scm imports) is GONE: tree-sitter queries load via fs at
+# query-load time (packages/code-map/src/languages.ts resolveQueryPath), so no
+# .scm plugin is required. Kept package-locally for the hoisted [install]
+# settings and as the place to add CLI-specific test config.

@@ -1,6 +1,7 @@
 import { match } from 'ts-pattern'
 
 import {
+  appendTextToAgentBlock,
   appendTextToRootStream,
   appendToolToAgentBlock,
   closeNativeReasoningBlock,
@@ -266,6 +267,21 @@ const handleSubagentStart = (
       }),
     )
 
+    // Show a prompt activity hint for spawn_agents children while they run.
+    // Use textType 'reasoning' so applySpawnAgentResultToBlock's
+    // hasStreamedTextContent guard (which checks textType === 'text') still
+    // allows final structured content to be injected on completion.
+    const spawnPromptText = event.prompt?.trim()
+    if (spawnPromptText) {
+      const snippet =
+        spawnPromptText.length > 200
+          ? spawnPromptText.slice(0, 200) + '\u2026'
+          : spawnPromptText
+      state.message.updater.updateAiMessageBlocks((blocks) =>
+        appendTextToAgentBlock(blocks, event.agentId, snippet, 'reasoning'),
+      )
+    }
+
     updateStreamingAgents(state, {
       remove: spawnAgentMatch.tempId,
       add: event.agentId,
@@ -311,6 +327,20 @@ const handleSubagentStart = (
     }
     return [...blocks, newAgentBlock]
   })
+
+  // Show the agent prompt as a live activity hint while it runs. Only for
+  // organic subagents (no spawn_agents match): spawn_agents children get
+  // their final formatted content via handleSpawnAgentsResult, and
+  // applySpawnAgentResultToBlock checks hasStreamedTextContent before
+  // appending — adding a prompt block here would suppress that final output.
+  const promptText = event.prompt?.trim()
+  if (promptText) {
+    const snippet =
+      promptText.length > 200 ? promptText.slice(0, 200) + '…' : promptText
+    state.message.updater.updateAiMessageBlocks((blocks) =>
+      appendTextToAgentBlock(blocks, event.agentId, snippet),
+    )
+  }
 
   updateStreamingAgents(state, { add: event.agentId })
 }

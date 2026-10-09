@@ -35,13 +35,14 @@ import {
   finishBashCommand,
   registerBashCommand,
 } from '../utils/bash-command-controller'
+import * as turnSnapshots from '../utils/turn-snapshots'
 const INTERACTIVE_BASH_TIMEOUT_SECONDS = 10 * 60
 
 /**
  * Run a bash command with automatic ghost/direct mode selection.
  * Uses ghost mode when streaming or chain in progress, otherwise adds directly to chat history.
  */
-export function runBashCommand(command: string) {
+export async function runBashCommand(command: string) {
   const {
     streamingAgents,
     isChainInProgress,
@@ -49,6 +50,21 @@ export function runBashCommand(command: string) {
     addPendingBashMessage,
     updatePendingBashMessage,
   } = useChatStore.getState()
+
+  // Fail closed at the single execution choke point so every dispatch path
+  // (routeUserPrompt bash mode, '!'-prefixed input, and the /bash <args>
+  // slash command) is covered: a running bisection is rewriting the tracked
+  // working tree, and a shell command mutating tracked files mid-probe would
+  // be silently clobbered by the bisection's final restore.
+  if (turnSnapshots.isTurnBisectionRunning()) {
+    setMessages((prev) => [
+      ...prev,
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before running a shell command.',
+      ),
+    ])
+    return
+  }
 
   const ghost = streamingAgents.size > 0 || isChainInProgress
   const id = crypto.randomUUID()
@@ -78,6 +94,23 @@ export function runBashCommand(command: string) {
     })
     setMessages((prev) => [...prev, assistantMessage])
   }
+
+  // Bounded pre-dispatch snapshot (finding a, p2-c-turn-snapshots): the
+  // capture is AWAITED before dispatch so a fast mutating command (`rm
+  // tracked-file`) cannot beat the snapshot's `git write-tree` and make the
+  // 'shell' snapshot record the POST-mutation tree (which /undo-turn would
+  // then restore). Shell commands are long-lived, so the bounded capture
+  // (5s timeout inside capturePreDispatchSnapshot; on timeout it logs once
+  // and the outcome is 'skipped' so dispatch proceeds) is acceptable
+  // latency. Single choke point covering both ghost and direct modes;
+  // runBashCommand has no async completion seam, so the after-state is
+  // covered by the next turn's snapshot. Failures surface through
+  // logTurnSnapshotFailure (finding b): one latched warning per distinct
+  // error — never silent, never spammy.
+  await turnSnapshots
+    .capturePreDispatchSnapshot({ label: 'shell' })
+    .then((outcome) => turnSnapshots.logTurnSnapshotFailure(outcome, 'shell'))
+    .catch(() => undefined)
 
   runTerminalCommand({
     command,
@@ -305,6 +338,35 @@ export async function routeUserPrompt(
     mentionCount: mentionMatches.length,
   })
 
+  // A running bisection is rewriting the tracked working tree. A user shell
+  // command dispatched now would mutate tracked files mid-probe that the
+  // bisection's final restore silently clobbers (and its own 'shell'
+  // snapshot would chain onto a probed tree mid-run), so bash dispatch
+  // fails closed exactly like agent dispatch. This must sit BEFORE the
+  // bash-mode and '!' dispatch paths below so both are covered.
+  if (
+    (inputMode === 'bash' || trimmed.startsWith('!')) &&
+    turnSnapshots.isTurnBisectionRunning()
+  ) {
+    if (inputMode === 'bash') {
+      saveToHistory('!' + trimmed)
+      setInputMode('default')
+      setInputFocused(true)
+      inputRef.current?.focus()
+    } else {
+      saveToHistory(trimmed)
+    }
+    setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
+    setMessages((prev) => [
+      ...prev,
+      getUserMessage(trimmed),
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before running a shell command.',
+      ),
+    ])
+    return
+  }
+
   // Handle bash mode commands
   if (inputMode === 'bash') {
     const commandWithBang = '!' + trimmed
@@ -314,7 +376,7 @@ export async function routeUserPrompt(
     setInputFocused(true)
     inputRef.current?.focus()
 
-    runBashCommand(trimmed)
+    void runBashCommand(trimmed)
     return
   }
 
@@ -355,7 +417,7 @@ export async function routeUserPrompt(
     const command = trimmed.slice(1)
     saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-    runBashCommand(command)
+    void runBashCommand(command)
     return
   }
 
@@ -479,6 +541,20 @@ export async function routeUserPrompt(
     showClipboardMessage('processing attachments...', {
       durationMs: 2000,
     })
+    return
+  }
+
+  // A running bisection is rewriting the tracked working tree; starting an
+  // agent turn now would clobber its probes (and the bisection's final
+  // restore would clobber the agent's edits). Fail closed instead.
+  if (turnSnapshots.isTurnBisectionRunning()) {
+    setMessages((prev) => [
+      ...prev,
+      getUserMessage(trimmed),
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before sending a new message.',
+      ),
+    ])
     return
   }
 

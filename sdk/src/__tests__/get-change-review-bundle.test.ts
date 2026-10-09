@@ -3,13 +3,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 
-import { getChangeReviewBundle } from '../tools/get-change-review-bundle'
+import {
+  getChangeReviewBundle,
+  hashIdentityFileBytes,
+  runGitBounded,
+} from '../tools/get-change-review-bundle'
 import { LocalHarnessStore } from '../services/local-harness-store'
 import {
   advanceWorkspaceState,
   createInitialWorkspaceState,
 } from '@codebuff/common/types/workspace-state'
+
+import type { SemgrepRunner } from '../services/semgrep-baseline'
 
 describe('getChangeReviewBundle', () => {
   const temporaryRoots: string[] = []
@@ -336,5 +343,334 @@ describe('getChangeReviewBundle', () => {
     const bundle = value as { files: string[]; diff: string }
     expect(bundle.files).toEqual([])
     expect(bundle.diff).toBe('')
+  })
+
+  test('adds a securityScan field with parsed findings when semgrep is available', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-semgrep-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("one")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("two")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'second').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'exec(user_input)\n')
+
+    const sarif = JSON.stringify({
+      version: '2.1.0',
+      runs: [
+        {
+          tool: { driver: { name: 'semgrep' } },
+          results: [
+            {
+              ruleId: 'python.lang.security.audit.exec-detected',
+              level: 'error',
+              message: { text: 'Detected the use of exec().' },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: 'app.py' },
+                    region: {
+                      startLine: 1,
+                      startColumn: 1,
+                      endLine: 1,
+                      endColumn: 4,
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    const seenArgv: string[][] = []
+    const runner: SemgrepRunner = (argv) => {
+      seenArgv.push(argv)
+      if (argv[0] === '--version') {
+        return { exitCode: 0, stdout: '1.45.0\n', stderr: '' }
+      }
+      return { exitCode: 0, stdout: sarif, stderr: '' }
+    }
+
+    const result = await getChangeReviewBundle({
+      cwd,
+      securityScanRunner: runner,
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as {
+      snapshotId: string
+      files: string[]
+      securityScan: {
+        status: string
+        findings: Array<Record<string, unknown>>
+        toolVersion?: string
+      }
+    }
+    expect(bundle.files).toEqual(['app.py'])
+    expect(bundle.securityScan.status).toBe('ok')
+    expect(bundle.securityScan.toolVersion).toBe('1.45.0')
+    expect(bundle.securityScan.findings).toHaveLength(1)
+    expect(bundle.securityScan.findings[0]).toMatchObject({
+      file: 'app.py',
+      severity: 'error',
+      code: 'python.lang.security.audit.exec-detected',
+      message: 'Detected the use of exec().',
+      source: 'sarif',
+    })
+    const scanArgv = seenArgv.find((argv) => argv[0] === 'scan')
+    expect(scanArgv).toBeDefined()
+    expect(scanArgv![1]).toMatch(/^--baseline-commit=[0-9a-f]{40}$/)
+    expect(scanArgv).toContain('--sarif')
+    expect(scanArgv).toContain('--include')
+    expect(scanArgv).toContain('app.py')
+  })
+
+  test('keeps the bundle intact with an unavailable securityScan when semgrep is missing', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-nosemgrep-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("one")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'print("two")\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'second').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'app.py'), 'exec(user_input)\n')
+
+    const runner: SemgrepRunner = () => ({
+      exitCode: -1,
+      stdout: '',
+      stderr: 'spawn semgrep ENOENT',
+    })
+    const result = await getChangeReviewBundle({
+      cwd,
+      securityScanRunner: runner,
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as {
+      snapshotId: string
+      files: string[]
+      diff: string
+      securityScan: { status: string; reason?: string; findings: unknown[] }
+    }
+    expect(bundle.securityScan.status).toBe('unavailable')
+    expect(bundle.securityScan.reason).toBe('semgrep-not-found')
+    expect(bundle.securityScan.findings).toEqual([])
+    // The rest of the bundle is unchanged by the failed optional layer.
+    expect(typeof bundle.snapshotId).toBe('string')
+    expect(bundle.files).toEqual(['app.py'])
+    expect(bundle.diff).toContain('exec(user_input)')
+  })
+
+  test('reports a skipped securityScan and never runs semgrep when no changed file is scannable', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-skipsemgrep-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'notes.txt'), 'one\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'notes.txt'), 'two\n')
+
+    const runner: SemgrepRunner = () => {
+      throw new Error('semgrep must not run when nothing is scannable')
+    }
+    const result = await getChangeReviewBundle({
+      cwd,
+      securityScanRunner: runner,
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as {
+      files: string[]
+      securityScan: { status: string; reason?: string; findings: unknown[] }
+    }
+    expect(bundle.files).toEqual(['notes.txt'])
+    expect(bundle.securityScan).toMatchObject({
+      status: 'skipped',
+      reason: 'no-source-files',
+      findings: [],
+    })
+  })
+
+  test('per-file identity byte cap cannot alias distinct worktree states', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-cap-'))
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'seed.txt'), 'seed\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    // Both states keep big.txt UNTRACKED, so the git diff contribution is
+    // empty both times and identity rests entirely on the per-file bytes.
+    // The hashed per-file byte prefix (1 MiB cap) is byte-identical across
+    // the two states, so mixing the untruncated size into the hash is what
+    // keeps the ids distinct — the cap boundary can never alias two states.
+    const shared = 'a'.repeat(1024 * 1024)
+    fs.writeFileSync(path.join(cwd, 'big.txt'), `${shared}tail-one\n`)
+    const first = await getChangeReviewBundle({ cwd })
+    fs.writeFileSync(path.join(cwd, 'big.txt'), `${shared}tail-two-longer\n`)
+    const second = await getChangeReviewBundle({ cwd })
+    const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
+    const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
+    expect(firstValue).not.toHaveProperty('errorMessage')
+    expect(secondValue).not.toHaveProperty('errorMessage')
+    expect((secondValue as { snapshotId: string }).snapshotId).not.toBe(
+      (firstValue as { snapshotId: string }).snapshotId,
+    )
+  })
+
+  test('identity reads stay order-stable across a file set larger than the read fan-out', async () => {
+    // The per-file byte prefixes are read with bounded concurrency (perf:
+    // snapshot-identity-serial-file-reads); the hash must still join the
+    // contributions in sorted file order, so the snapshotId is identical
+    // across repeated runs over more changed files than the fan-out width.
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-parallel-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'seed.txt'), 'seed\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    const fileCount = 24
+    for (let i = 0; i < fileCount; i++) {
+      fs.writeFileSync(
+        path.join(cwd, `changed-${i}.txt`),
+        `content-${i}\n${'x'.repeat(i * 512)}\n`,
+      )
+    }
+    const first = await getChangeReviewBundle({ cwd })
+    const second = await getChangeReviewBundle({ cwd })
+    const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
+    const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
+    expect(firstValue).not.toHaveProperty('errorMessage')
+    expect(secondValue).not.toHaveProperty('errorMessage')
+    expect((secondValue as { snapshotId: string }).snapshotId).toBe(
+      (firstValue as { snapshotId: string }).snapshotId,
+    )
+    const files = (firstValue as { files: string[] }).files
+    // Only the 24 untracked files appear in identity: seed.txt is committed
+    // and unchanged, so it never shows up in porcelain status output.
+    expect(files).toHaveLength(fileCount)
+    expect(files).toEqual([...files].sort())
+  })
+
+  test('windowed identity reads hash the identical byte stream the serial loop did', async () => {
+    // The per-file reads run through a bounded read window (perf:
+    // snapshot-identity-contributions-unbounded-retention); each settled
+    // contribution is hashed in sorted order with its buffer released, so
+    // the digest must stay byte-identical to the serial loop's over the
+    // same changed-file list.
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-window-'),
+    )
+    temporaryRoots.push(cwd)
+    const fileCount = 20
+    for (let i = 0; i < fileCount; i++) {
+      fs.writeFileSync(path.join(cwd, `f-${i}.txt`), `body-${i}\n`)
+    }
+    const files = Array.from({ length: fileCount }, (_, i) => `f-${i}.txt`)
+    const serial = createHash('sha256')
+    for (const file of [...files].sort()) {
+      const stats = fs.statSync(path.join(cwd, file))
+      serial.update(`\0${file}\0size:${stats.size}\0`)
+      serial.update(fs.readFileSync(path.join(cwd, file)))
+    }
+    const windowed = createHash('sha256')
+    await hashIdentityFileBytes(windowed, cwd, files)
+    expect(windowed.digest('hex')).toBe(serial.digest('hex'))
+  })
+
+  test('abort escalates SIGTERM to SIGKILL for a git child that ignores SIGTERM', async () => {
+    // perf: run-git-bounded-abort-no-sigkill-escalation — the abort path used
+    // to send a bare SIGTERM with no escalation, so a git child that trapped
+    // SIGTERM kept running with live piped stdio (the same leak shape the
+    // semgrep and diagnostic runners fixed). A PATH shim `git` that ignores
+    // SIGTERM proves the SIGKILL escalation reaps it shortly after abort.
+    // POSIX-only (shebang shim + signal traps); skipped on Windows.
+    if (process.platform === 'win32') return
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-git-abort-'))
+    temporaryRoots.push(dir)
+    const pidFile = path.join(dir, 'shim.pid')
+    fs.writeFileSync(
+      path.join(dir, 'git'),
+      [
+        '#!/bin/sh',
+        `echo $$ > ${JSON.stringify(pidFile)}`,
+        `trap '' TERM`,
+        'while :; do :; done',
+      ].join('\n'),
+    )
+    fs.chmodSync(path.join(dir, 'git'), 0o755)
+    const previousPath = process.env.PATH
+    process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
+    try {
+      const controller = new AbortController()
+      const resultPromise = runGitBounded(['status'], dir, controller.signal, {
+        timeoutMs: 30_000,
+        maxOutputBytes: 1024,
+        sigtermGraceMs: 150,
+      })
+      // Wait until the shim is live, then cancel.
+      const pidDeadline = Date.now() + 5_000
+      let pid = -1
+      while (pid === -1 && Date.now() < pidDeadline) {
+        try {
+          pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+      }
+      expect(pid).toBeGreaterThan(0)
+      controller.abort()
+      const result = await resultPromise
+      // The runner settles at the abort; the SIGKILL escalation reaps the
+      // SIGTERM-ignoring child shortly after (grace 150ms), rather than the
+      // child leaking forever with live piped stdio.
+      expect(result.exitCode).toBe(-1)
+      const goneDeadline = Date.now() + 3_000
+      let gone = false
+      while (Date.now() < goneDeadline) {
+        try {
+          process.kill(pid, 0)
+        } catch {
+          gone = true
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      expect(gone).toBe(true)
+    } finally {
+      process.env.PATH = previousPath
+    }
   })
 })

@@ -2621,6 +2621,110 @@ describe('context-pruner spawn_agents with prompt and params', () => {
     expect(content).not.toContain('Agent results:')
   })
 
+  test('strips control/escape/invisible chars from lines BEFORE extraction and pinning', () => {
+    const messages = [
+      createMessage('user', 'Implement the feature'),
+      createMessage(
+        'assistant',
+        [
+          'Working on it.',
+          'BLOCKING: \u001b[31mInjected via ANSI\u001b[0m fix the null guard.',
+          'Next required action: \u000bstrip\u200bme\u202e before pinning',
+        ].join('\n'),
+      ),
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000, {
+      assistantToolBudget: 1,
+      userBudget: 1,
+    })
+    const content = results[0].input.messages[0].content[0].text
+
+    expect(content).toContain('<pinned_active_work_state>')
+    // Sanitization happens BEFORE extraction, so an injected line cannot hide
+    // its operational shape inside control/escape characters: the sanitized
+    // text is what gets matched AND pinned.
+    expect(content).toContain('BLOCKING: Injected via ANSI fix the null guard.')
+    expect(content).toContain('Next required action: stripme before pinning')
+    // No escape/control/invisible character survives into the pinned state.
+    expect(content).not.toContain('\u001b')
+    expect(content).not.toContain('\u000b')
+    expect(content).not.toContain('\u200b')
+    expect(content).not.toContain('\u202e')
+  })
+
+  test('sanitizes decisions and blockers pinned into knowledge memory', () => {
+    const messages = [
+      createMessage('user', 'Implement the feature'),
+      createMessage(
+        'assistant',
+        [
+          'Decision: use the \u200bzerowidth\u202e-free parser.',
+          'BLOCKING: \u001b[1mreviewer\u001b[0m finding must not carry escapes.',
+        ].join('\n'),
+      ),
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000, {
+      assistantToolBudget: 1,
+      userBudget: 1,
+    })
+    const content = results[0].input.messages[0].content[0].text
+
+    expect(content).toContain('<knowledge_memory>')
+    expect(content).toContain(
+      'Decision: use the zerowidth-free parser.',
+    )
+    expect(content).toContain(
+      'BLOCKING: reviewer finding must not carry escapes.',
+    )
+    expect(content).not.toContain('\u200b')
+    expect(content).not.toContain('\u202e')
+    expect(content).not.toContain('\u001b')
+  })
+
+  test('removes escape sequences assembled across embedded control characters (CP-1 regression)', () => {
+    // CP-1: a control character embedded inside a would-be escape sequence
+    // (e.g. ESC [ 2 NUL J) used to defeat the sequence regex; the later
+    // control-character pass removed the NUL and the assembled 'ESC[2J'
+    // survived into pinned/summarized operational state. Sanitization must
+    // strip the control class first and iterate to a fixpoint so the
+    // assembled sequence is matched and removed whole.
+    const messages = [
+      createMessage('user', 'Implement the feature'),
+      createMessage(
+        'assistant',
+        [
+          'BLOCKING: \u001b[2\u0000Jassembled escape must not survive.',
+          'BLOCKING: \u001b]0\u0000\u0007OSC assembly must not survive.',
+          'Decision: \u001b[3\u0000mkeep this text visible.',
+          'BLOCKING: clean text stays byte-identical.',
+        ].join('\n'),
+      ),
+    ]
+
+    const results = runHandleSteps(messages, 250000, 200000, {
+      assistantToolBudget: 1,
+      userBudget: 1,
+    })
+    const content = results[0].input.messages[0].content[0].text
+
+    // The surrounding text is still extracted and pinned after sanitization.
+    expect(content).toContain('BLOCKING: assembled escape must not survive.')
+    // The OSC case: the terminator (BEL) was consumed by the control-class
+    // pass before the OSC pattern could match, so only the INERT `]0`
+    // fragment remains — no ESC survives, so no functional sequence exists.
+    expect(content).toContain('OSC assembly must not survive.')
+    expect(content).toContain('Decision: keep this text visible.')
+    expect(content).toContain('BLOCKING: clean text stays byte-identical.')
+    // No escape/control character or assembled sequence fragment survives.
+    expect(content).not.toContain('\u001b')
+    expect(content).not.toContain('\u0000')
+    expect(content).not.toContain('\u0007')
+    expect(content).not.toContain('[2J')
+    expect(content).not.toContain('[3m')
+  })
+
   test('limits long todo summaries to active tasks', () => {
     const todos = Array.from({ length: 12 }, (_, i) => ({
       task: `Todo ${i + 1}`,
@@ -5063,5 +5167,260 @@ describe('context-pruner dual-budget behavior', () => {
     expect(countKnowledgeMemoryEntries(content, 'Files Inspected')).toBe(25)
     expect(countKnowledgeMemoryEntries(content, 'Decisions')).toBe(12)
     expect(countKnowledgeMemoryEntries(content, 'Validation Results')).toBe(12)
+  })
+})
+
+describe('context-pruner non-object JSON part values (D24/PR-T6 crash regression)', () => {
+  let mockAgentState: AgentState
+
+  beforeEach(() => {
+    mockAgentState = createMockAgentState([], 0)
+  })
+
+  const runHandleSteps = (messages: Message[]) => {
+    mockAgentState.messageHistory = messages
+    mockAgentState.contextTokenCount = 250000
+    const mockLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }
+    const generator = contextPruner.handleSteps!({
+      agentState: mockAgentState,
+      logger: mockLogger,
+      params: { maxContextLength: 200000 },
+    })
+    const results: any[] = []
+    let result = generator.next()
+    while (!result.done) {
+      if (typeof result.value === 'object') {
+        results.push(result.value)
+      }
+      result = generator.next()
+    }
+    return results
+  }
+
+  test('completes when an ask_user tool result carries a string-valued JSON part', () => {
+    // D24/PR-T6: a truthy-primitive JSON part value used to crash the pruner
+    // with "Cannot use 'in' operator to search for 'answers' in <string>".
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', 'boom — not an object'),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    const content = results[0].input.messages[0].content[0].text
+    expect(content).toContain('<conversation_summary>')
+    // The string part is simply not summarized as user answers.
+    expect(content).not.toContain('User answered:')
+    expect(content).not.toContain('User skipped question')
+  })
+
+  test('completes when an ask_user tool result carries a non-zero numeric JSON part value', () => {
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', 42),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    expect(results[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
+
+  test('completes when an ask_user tool result carries a boolean JSON part value', () => {
+    const messages = [
+      createMessage('user', 'Ask me something'),
+      createToolCallMessage('call-1', 'ask_user', {
+        questions: [{ question: 'Pick one', options: [] }],
+      }),
+      createToolResultMessage('call-1', 'ask_user', true),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    expect(results[0].input.messages[0].content[0].text).toContain(
+      '<conversation_summary>',
+    )
+  })
+
+  test('completes when a run_terminal_command result carries a string-valued JSON part', () => {
+    // D24/PR-T6: the identical 'exitCode' in value hazard for a primitive value.
+    const messages = [
+      createMessage('user', 'Run tests'),
+      createToolCallMessage('call-1', 'run_terminal_command', {
+        command: 'npm test',
+      }),
+      createToolResultMessage('call-1', 'run_terminal_command', 'boom — not an object'),
+    ]
+
+    const results = runHandleSteps(messages)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].toolName).toBe('set_messages')
+    const content = results[0].input.messages[0].content[0].text
+    expect(content).toContain('<conversation_summary>')
+    expect(content).not.toContain('Command failed with exit code')
+  })
+})
+
+describe('context-pruner archive eviction pointers (D25/CQ-T1)', () => {
+  let mockAgentState: AgentState
+
+  beforeEach(() => {
+    mockAgentState = createMockAgentState([], 0)
+  })
+
+  const runHandleStepsWithParams = (
+    messages: Message[],
+    params: Record<string, unknown>,
+  ) => {
+    mockAgentState.messageHistory = messages
+    mockAgentState.contextTokenCount = 250000
+    const mockLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }
+    const generator = contextPruner.handleSteps!({
+      agentState: mockAgentState,
+      logger: mockLogger,
+      params,
+    })
+    const results: any[] = []
+    let result = generator.next()
+    while (!result.done) {
+      if (typeof result.value === 'object') {
+        results.push(result.value)
+      }
+      result = generator.next()
+    }
+    return results
+  }
+
+  test('threads a seeded archivePointers param verbatim into the pinned block', () => {
+    const pointer =
+      '[action=tool_result_eviction steps=12-18 msgs=7] deterministic tool-result eviction (stale recency)'
+    const messages = [
+      createMessage('user', 'Compact with archive eviction pointers'),
+      createMessage('assistant', 'Understood.'),
+    ]
+
+    const results = runHandleStepsWithParams(messages, {
+      maxContextLength: 200000,
+      archivePointers: [pointer],
+    })
+    const content = results[0].input.messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    expect(knowledgeMemory).toContain('Archive Pointers:')
+    expect(knowledgeMemory).toContain(`  - ${pointer}`)
+    // Backward-parseable placement: the pointer section is emitted BEFORE
+    // Goal: so a legacy parser (a pre-archive-pointers SECTION_RE) neither
+    // folds the pointer lines into the persisted nextAction field nor loses
+    // any recognized section.
+    expect(knowledgeMemory.indexOf('Archive Pointers:')).toBeLessThan(
+      knowledgeMemory.indexOf('Goal:'),
+    )
+  })
+
+  test('a legacy parser without the Archive Pointers header drops the leading section', () => {
+    // Backward-parseability pin: the emitted block leads with the unknown
+    // 'Archive Pointers:' section, so a pre-archive-pointers SECTION_RE (the
+    // only consumer shape that differs between versions) must skip it without
+    // folding the pointer lines into the persisted nextAction field and
+    // without losing any recognized section.
+    const legacyBlock = [
+      'Archive Pointers:',
+      '  - [action=semantic_compaction steps=0-120 msgs=121] pre-pass transcript archived before compaction.',
+      'Goal:',
+      '  Ship the repair behind the reviewer gate',
+      'Next Action:',
+      '  Re-run the compatibility review',
+      '',
+    ].join('\n')
+    const LEGACY_SECTION_RE =
+      /^(Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):\s*([\s\S]*?)(?=\n(?:Goal|Decisions|Files Inspected|Edits Made|Validation Results|Review Receipts|Post-Edit Anchors|Blockers|Next Action):|(?![\s\S]))/gm
+    const parsed: Record<string, string> = {}
+    let match: RegExpExecArray | null
+    while ((match = LEGACY_SECTION_RE.exec(legacyBlock)) !== null) {
+      parsed[match[1]] = match[2].trim()
+    }
+
+    expect(parsed['Goal']).toBe('Ship the repair behind the reviewer gate')
+    expect(parsed['Next Action']).toBe('Re-run the compatibility review')
+    expect(parsed['Next Action']).not.toContain('Archive Pointers')
+    expect(parsed['Next Action']).not.toContain('semantic_compaction')
+  })
+
+  test('keeps archive pointers verbatim under a small-window budget', () => {
+    const pointer =
+      '[action=semantic_compaction steps=0-120 msgs=121] pre-pass transcript archived before compaction.'
+    const longPaths = Array.from(
+      { length: 40 },
+      (_, index) => `src/retention/module-${index}/file-${index}.ts`,
+    )
+    const messages = [
+      createMessage('user', 'Compact with archive eviction pointers'),
+      ...longPaths.flatMap((path, index) => [
+        createToolCallMessage(`ptr-read-${index}`, 'read_files', {
+          paths: [path],
+        }),
+        createToolResultMessage(`ptr-read-${index}`, 'read_files', {
+          kind: 'read_files_result',
+          version: 1,
+          status: 'ok',
+          summary: { requested: 1, ok: 1, partial: 0, failed: 0, uniquePaths: 1 },
+          results: [
+            {
+              selector: 'file',
+              requestIndex: 0,
+              path,
+              status: 'ok',
+              content: 'export const value = 1',
+              complete: true,
+              template: false,
+            },
+          ],
+        }),
+      ]),
+    ]
+
+    const results = runHandleStepsWithParams(messages, {
+      maxContextLength: 200000,
+      semanticBudget: {
+        triggerBudgetTokens: 2_800,
+        targetBudgetTokens: 2_500,
+      },
+      archivePointers: [pointer],
+    })
+    const content = results[0].input.messages[0].content[0].text
+    const knowledgeMemory =
+      content.match(/<knowledge_memory>([\s\S]*?)<\/knowledge_memory>/)?.[1] ??
+      ''
+
+    // The small-window ceiling (1,500 estimated tokens) evicts the ordinary
+    // retention lists, but the pinned pointer line survives verbatim.
+    expect(knowledgeMemory).toContain('Archive Pointers:')
+    expect(knowledgeMemory).toContain(`  - ${pointer}`)
   })
 })

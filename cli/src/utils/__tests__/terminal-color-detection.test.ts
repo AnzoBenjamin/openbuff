@@ -9,6 +9,7 @@ import {
   withTimeout,
   getGlobalOscTimeout,
   getQueryOscTimeout,
+  computeQueryTimeoutMs,
 } from '../terminal-color-detection'
 
 // ============================================================================
@@ -368,6 +369,64 @@ describe('timeout constants', () => {
     const timeout = getQueryOscTimeout()
     expect(timeout).toBeGreaterThan(0)
     expect(timeout).toBeLessThanOrEqual(2000) // Should be at most 2 seconds
+  })
+})
+
+// ============================================================================
+// computeQueryTimeoutMs Tests
+// ============================================================================
+
+describe('computeQueryTimeoutMs', () => {
+  test('returns the bare query timeout when no deadline is provided', () => {
+    // undefined deadline = legacy unbounded path: keep OSC_QUERY_TIMEOUT_MS
+    expect(computeQueryTimeoutMs(undefined, Date.now())).toBe(
+      getQueryOscTimeout(),
+    )
+    expect(computeQueryTimeoutMs(undefined, Date.now())).toBe(250)
+  })
+
+  test('returns the unclamped query timeout for a far-future deadline', () => {
+    const now = Date.now()
+    expect(computeQueryTimeoutMs(now + 10_000, now)).toBe(250)
+  })
+
+  test('clamps probe 2 to the remaining global budget minus the guard', () => {
+    // Repro shape: probe 1 (OSC 11) finished at ~+410ms of the 600ms global
+    // budget; probe 2 must not arm a full 250ms timer that fires after the
+    // global race resolves and the renderer claims stdin raw mode
+    // (input-deaf TUI).
+    const now = Date.now()
+    expect(computeQueryTimeoutMs(now + 190, now)).toBe(140)
+  })
+
+  test('returns the 1ms floor when the deadline has already passed', () => {
+    // The floor keeps the timer firing so the probe's own cleanup still runs
+    // (listener removed, fd closed) instead of leaking them.
+    const now = Date.now()
+    expect(computeQueryTimeoutMs(now - 10, now)).toBe(1)
+    expect(computeQueryTimeoutMs(now, now)).toBe(1)
+    // Remaining (1ms) minus the 50ms guard is <= 0
+    expect(computeQueryTimeoutMs(now + 1, now)).toBe(1)
+  })
+
+  test('invariant: sequential probes complete strictly before the global deadline', () => {
+    // With the clamp, probe1 (250ms) + guard + probe2 (clamped to the
+    // remaining budget) always lands before the 600ms global deadline, so no
+    // abandoned probe cleanup can fire after the renderer claims stdin raw
+    // mode.
+    const start = Date.now()
+    const probe1 = computeQueryTimeoutMs(start + 600, start)
+    expect(probe1).toBe(250)
+
+    const probe1End = start + probe1
+    const probe2 = computeQueryTimeoutMs(start + 600, probe1End)
+    expect(probe2).toBeLessThanOrEqual(600 - probe1 - 50)
+    expect(probe1 + probe2 + 50).toBeLessThanOrEqual(600)
+
+    // The exact instrumented-repro timing also stays safe:
+    expect(computeQueryTimeoutMs(start + 600, start + 410)).toBeLessThanOrEqual(
+      600 - 410 - 50,
+    )
   })
 })
 

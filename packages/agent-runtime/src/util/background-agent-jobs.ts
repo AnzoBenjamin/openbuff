@@ -35,6 +35,7 @@
  * outlive the CLI process.
  */
 
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   isTerminalJobState,
   jobRegistry,
@@ -329,6 +330,7 @@ function createBackgroundAgentJobRecord(params: {
   agentType: string
   agentName: string
   owner: BackgroundAgentJob['owner']
+  now?: number
 }): BackgroundAgentJob {
   const { agentType, agentName, owner } = params
   // The unified core owns lifecycle/state: create in 'queued' with the
@@ -348,7 +350,9 @@ function createBackgroundAgentJobRecord(params: {
     agentName,
     owner,
     status: 'running',
-    startedAt: startedCoreJob.startedAt ?? Date.now(),
+    // P2-T1b: lifecycle timestamps use the injected clock when threaded; the
+    // registry stamps startedAt itself.
+    startedAt: startedCoreJob.startedAt ?? params.now ?? realClock.now(),
     chunks: [],
     readOffset: 0,
     consumerCursors: new Map(),
@@ -374,6 +378,7 @@ export function allocateBackgroundAgentJob(params: {
   agentType: string
   agentName: string
   owner?: BackgroundAgentJob['owner']
+  now?: number
 }): BackgroundAgentJob {
   const owner = resolveBackgroundAgentJobOwner(params.owner)
   assertBackgroundAgentCapacity({ additional: 1, owner })
@@ -381,6 +386,7 @@ export function allocateBackgroundAgentJob(params: {
     agentType: params.agentType,
     agentName: params.agentName,
     owner,
+    now: params.now,
   })
 }
 
@@ -400,11 +406,12 @@ export function allocateBackgroundAgentJob(params: {
 export function allocateBackgroundAgentJobBatch(params: {
   agents: Array<{ agentType: string; agentName: string }>
   owner?: BackgroundAgentJob['owner']
+  now?: number
 }): BackgroundAgentJob[] {
   const owner = resolveBackgroundAgentJobOwner(params.owner)
   assertBackgroundAgentCapacity({ additional: params.agents.length, owner })
   return params.agents.map(({ agentType, agentName }) =>
-    createBackgroundAgentJobRecord({ agentType, agentName, owner }),
+    createBackgroundAgentJobRecord({ agentType, agentName, owner, now: params.now }),
   )
 }
 
@@ -610,11 +617,13 @@ export function getBackgroundAgentJob(
  */
 export function reconcileInterruptedBackgroundAgentIntents(
   state: AgentState,
+  now?: number,
 ): void {
   for (const job of state.backgroundAgentJobs ?? []) {
     if (job.status === 'running' && !getBackgroundAgentJob(job.jobId)) {
       job.status = 'interrupted'
-      job.completedAt = Date.now()
+      // P2-T1b: interrupted timestamps use the injected clock when threaded.
+      job.completedAt = now ?? realClock.now()
       job.error =
         'Background agent host process/session ended before a terminal receipt was recorded.'
     }
@@ -792,6 +801,7 @@ export type CancelBackgroundAgentJobResult =
 
 export function cancelBackgroundAgentJob(
   jobId: string,
+  now?: number,
 ): CancelBackgroundAgentJobResult {
   sweepBackgroundAgentJobs()
   const coreJob = registry.get(jobId)
@@ -814,7 +824,8 @@ export function cancelBackgroundAgentJob(
   // 'running', absorbing once terminal); the adapter performs the real abort.
   registry.cancel(jobId)
   job.status = 'cancelled'
-  job.completedAt = Date.now()
+  // P2-T1b: cancelled timestamps use the caller's injected clock.
+  job.completedAt = now ?? realClock.now()
   job.error = error
   job.abortController.abort(new Error(error))
   return { cancelled: true, status: 'cancelled' }
@@ -871,6 +882,7 @@ export function backgroundAgentJobWasCancelled(
 export function abandonPreLaunchBackgroundAgentJob(
   job: BackgroundAgentJob,
   reason: string,
+  now?: number,
 ): void {
   const coreJob = registry.get(job.jobId)
   // Terminal states absorb in the core, so an already-settled job is a no-op.
@@ -882,7 +894,8 @@ export function abandonPreLaunchBackgroundAgentJob(
     })
   }
   job.status = 'error'
-  job.completedAt = Date.now()
+  // P2-T1b: abandoned timestamps use the caller's injected clock.
+  job.completedAt = now ?? realClock.now()
   job.error = reason
   if (!job.abortController.signal.aborted) {
     job.abortController.abort(new Error(reason))
