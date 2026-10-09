@@ -936,20 +936,23 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
   })
 
-  it("degrades a live member whose 'any' emission is not round-trip coercible to {type:object}", () => {
-    // z.never() is the verified degrade case: its 'any' emission fails the
-    // serialize-side round-trip verification (the JSON round-tripped emission
-    // does not re-convert to a schema that is representable under BOTH io
-    // modes), so the serializer transports the permissive fallback instead of
-    // an unverified emission the child could not coerce back to zod.
-    expect(serializeSchemaMemberForTransport(z.never(), 'input')).toEqual({
-      type: 'object',
-    })
-    // Contrast: formerly-gap shapes like z.record(z.string(), z.date()) and
-    // z.map now emit degenerate-but-round-trippable schemas — the round-trip
-    // verification PASSES for them, so they transport verbatim (with
-    // structure) rather than collapsing to the fallback. Degrading them would
-    // silently lose member-specific validation strictness.
+  it("transports even unrepresentable-emission members verbatim; child hardening owns unrepresentability", () => {
+    // z.never() is the canonical live-but-UNREPRESENTABLE re-conversion: its
+    // 'any' emission is degenerate `{}`, which re-converts to a live zod
+    // schema carrying the z.custom base-union branch (not representable under
+    // BOTH io modes). The serializer transports it VERBATIM — the child's
+    // coerceJsonSchemaMember is hardened (try/catch + representability guard
+    // → native fallback), so unrepresentability is handled child-side and
+    // degrading here would only lose the emission's structure. The serializer
+    // degrades ONLY when the emission's JSON form is not parseable JSON
+    // Schema (convertJsonSchemaToZod throws) — that branch is defensive and
+    // not naturally reachable from a zod emission.
+    expect(
+      serializeSchemaMemberForTransport(z.never(), 'input'),
+    ).not.toEqual({ type: 'object' })
+    // The same class: formerly-gap shapes (z.record(z.string(), z.date()),
+    // z.map) emit degenerate-but-parseable schemas and transport verbatim
+    // with their structure intact.
     const record = z.record(z.string(), z.date()) as unknown
     const recordOut = serializeSchemaMemberForTransport(record, 'input') as {
       type?: string
@@ -962,8 +965,9 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     expect(
       serializeSchemaMemberForTransport(map, 'input'),
     ).not.toEqual({ type: 'object' })
-    // The degraded form is the established fallback the child re-coerces
-    // into a live, representable loose-object schema — the spawn survives.
+    // The degraded form remains available for genuinely unparseable
+    // emissions: the child re-coerces {type:object} into a live,
+    // representable loose-object schema — the spawn survives either way.
     const fallback = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
     expect(typeof fallback.safeParse).toBe('function')
     expect(() => z.toJSONSchema(fallback, { io: 'input' })).not.toThrow()

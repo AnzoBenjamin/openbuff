@@ -639,29 +639,26 @@ export function serializeSchemaMemberForTransport(
     return { type: 'object' }
   }
   try {
-    // Round-trip verification: a successful 'any' emission is not yet safe
-    // to transport. Several zod v4 shapes (z.bigint, z.map, z.set,
-    // z.record(z.string(), z.date()), ...) do NOT throw under
-    // unrepresentable: 'any' — they emit `{}`/partial schemas — yet the
-    // CHILD-side re-coercion of that emission fails: convertJsonSchemaToZod
-    // throws on it, or lands on the z.custom base-union branch that zod's
-    // JSON-Schema generator rejects. Mirror the real transport boundary by
-    // JSON round-tripping the emission BEFORE converting (the wire crosses
-    // JSON.stringify and the child parses it, so verifying the pre-JSON form
-    // would miss JSON-lossy shapes), then require the re-converted schema
-    // to be a representable zod schema under BOTH io modes. This is a
-    // linear one-shot check (one convert + one dual-mode probe) — no
-    // recursion back into this serializer — and it runs on the cold
+    // Round-trip verification: verify the emission is PARSEABLE JSON Schema
+    // on the child side by mirroring the real transport boundary — JSON
+    // round-trip the emission first (the wire crosses JSON.stringify and the
+    // child parses it, so verifying the pre-JSON form would miss JSON-lossy
+    // shapes), then require convertJsonSchemaToZod to accept it without
+    // throwing. We deliberately do NOT require the re-converted schema to be
+    // REPRESENTABLE: emissions that re-convert to a live-but-unrepresentable
+    // schema (a z.custom base-union branch — exactly the bundled
+    // code-reviewer outputSchema shape, or z.never()'s degenerate emission)
+    // are the DESIGNED transport form, and the child's coerceJsonSchemaMember
+    // is hardened to degrade any unrepresentable conversion to a native
+    // fallback — so transporting them verbatim is safe and preserves the full
+    // structure the pipeline-intersection contract requires. Degrading those
+    // would silently lose member-specific validation strictness. This is a
+    // linear one-shot check (one JSON round-trip + one convert) on the cold
     // per-spawn path, not a hot loop.
     const jsonForm = JSON.parse(
       JSON.stringify(converted),
     ) as Record<string, unknown>
-    const reconverted = convertJsonSchemaToZod(jsonForm)
-    if (!isRepresentableZodSchema(reconverted)) {
-      // Unverifiable emission: degrade to the permissive fallback rather
-      // than transport a shape the child cannot coerce back to zod.
-      return { type: 'object' }
-    }
+    convertJsonSchemaToZod(jsonForm)
   } catch {
     // The emitted schema is not valid/convertible JSON Schema on the child
     // side — same degradation as the fallback branch above.
