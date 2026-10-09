@@ -398,7 +398,7 @@ function convertInputSchema(
  * crashes the spawn with "undefined is not an object (evaluating
  * 'H.typeName')".
  */
-function isDegradedZodHusk(value: unknown): boolean {
+export function isDegradedZodHusk(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false
   }
@@ -425,7 +425,7 @@ function isDegradedZodHusk(value: unknown): boolean {
  * z.custom(...) branch, which zod-v4's JSON-Schema generator rejects with
  * "Custom types cannot be represented in JSON Schema".
  */
-function isRepresentableZodSchema(value: unknown): boolean {
+export function isRepresentableZodSchema(value: unknown): boolean {
   if (!value || typeof value !== 'object') {
     return false
   }
@@ -449,7 +449,7 @@ function isRepresentableZodSchema(value: unknown): boolean {
  * carries the poisoned z.custom base-union branch, so it must never be the
  * fallback either.
  */
-function buildNativeFallbackSchema(jsonSchemaType: unknown): z.ZodType {
+export function buildNativeFallbackSchema(jsonSchemaType: unknown): z.ZodType {
   switch (jsonSchemaType) {
     case 'string':
       return z.string()
@@ -517,7 +517,17 @@ export function coerceJsonSchemaMember(value: unknown): unknown {
     }
     return buildNativeFallbackSchema(record.type)
   }
-  const converted = convertJsonSchemaToZod(value as Record<string, unknown>)
+  let converted: unknown
+  try {
+    converted = convertJsonSchemaToZod(value as Record<string, unknown>)
+  } catch {
+    // A plain non-husk object that is not valid JSON Schema makes
+    // convertJsonSchemaToZod throw. Degrade to the type-faithful native
+    // fallback instead of propagating and crashing the spawn — mirroring the
+    // husk branch above and honoring this function's representability
+    // guarantee for any object input.
+    return buildNativeFallbackSchema(record.type)
+  }
   if (
     converted &&
     typeof converted === 'object' &&
@@ -581,7 +591,7 @@ function isLiveZodSchema(value: unknown): boolean {
   return record._zod !== undefined || typeof record.safeParse === 'function'
 }
 
-function serializeSchemaMemberForTransport(
+export function serializeSchemaMemberForTransport(
   value: unknown,
   io: 'input' | 'output',
 ): unknown {
@@ -638,6 +648,12 @@ export function serializeAgentTemplatesForTransport(
   templates: Record<string, AgentTemplate>,
 ): Record<string, AgentTemplate> {
   const transported: Record<string, AgentTemplate> = {}
+  // Null-safe: an unset localAgentTemplates (top-level orchestrators, tests,
+  // some programmatic spawns) must not crash the transport serializer — an
+  // absent catalog is an empty one.
+  if (templates == null) {
+    return transported
+  }
   for (const [id, template] of Object.entries(templates)) {
     const inputSchema = template.inputSchema
     const prompt = serializeSchemaMemberForTransport(
