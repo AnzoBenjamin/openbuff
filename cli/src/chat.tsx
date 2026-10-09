@@ -113,70 +113,29 @@ import {
 import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
 import { whenRegistriesReady } from './services/deferred-registries'
 
-// Shared mention-selection helpers. The three mention-selection sites
-// (handleMentionItemClick, onMentionMenuSelect's trySelectAtIndex, and
-// onMentionMenuComplete) resolve the same replacement string from the same
-// match lists and apply the same input splice; these pure module-scope
-// helpers keep that logic in one place. setInputValue/setAgentSelectedIndex
-// stay at the call sites so each hook closure keeps its own dependencies.
-type MentionAgentMatch = { id: string }
-type MentionFileMatch = { filePath: string; isDirectory: boolean }
-
-type MentionReplacement = {
-  replacement: string
-  selectedFile?: MentionFileMatch
-}
+import {
+  type MentionReplacement,
+  resolveMentionReplacement,
+  buildMentionReplacement,
+} from './utils/mention-helpers'
 
 /**
- * Resolve the mention replacement for `index` against the agent/file match
- * lists. With `useFallback` false (click and Enter-select), an out-of-range
- * or missing entry yields null and the caller aborts. With `useFallback` true
- * (tab-complete), a missing entry falls back to the first entry of the same
- * list; null is returned only when that list is empty. `selectedFile` is set
- * for file matches so the caller can run the addPendingFileMention side
- * effect.
+ * Policy for when the status-bar git diff-stats refresh may fork a git
+ * subprocess across an isStreaming transition (wasStreaming → isStreaming).
+ *
+ * Pins the streaming hot-path invariant documented on the diff-stats effects
+ * below: a stream never spawns git from this component. The steady-stream
+ * half is enforced by the 10s interval poller gating on
+ * `!isStreamingRef.current`; the falling edge applies this predicate
+ * directly and refreshes exactly once. A regression that re-introduces
+ * spawns during streaming must change this predicate's truth table or
+ * bypass it, both reviewable in isolation.
  */
-const resolveMentionReplacement = (
-  index: number,
-  agentMatches: readonly MentionAgentMatch[],
-  fileMatches: readonly MentionFileMatch[],
-  useFallback: boolean,
-): MentionReplacement | null => {
-  if (index < agentMatches.length) {
-    const selected = useFallback
-      ? agentMatches[index] || agentMatches[0]
-      : agentMatches[index]
-    if (!selected) return null
-    return { replacement: `@${selected.id} ` }
-  }
-  const fileIndex = index - agentMatches.length
-  const selectedFile = useFallback
-    ? fileMatches[fileIndex] || fileMatches[0]
-    : fileMatches[fileIndex]
-  if (!selectedFile) return null
-  return {
-    selectedFile,
-    replacement: `@${selectedFile.filePath} `,
-  }
-}
-
-/**
- * Splice a mention replacement into the input at the active mention token
- * (the `@` at `startIndex` followed by `query`), returning the new text and
- * the cursor position just after the inserted replacement.
- */
-const buildMentionReplacement = (
-  inputValue: string,
-  startIndex: number,
-  query: string,
-  replacement: string,
-): { text: string; cursorPosition: number } => {
-  const before = inputValue.slice(0, startIndex)
-  const after = inputValue.slice(startIndex + 1 + query.length)
-  return {
-    text: before + replacement + after,
-    cursorPosition: before.length + replacement.length,
-  }
+export function shouldSpawnDiffStatsForStreamingTransition(
+  wasStreaming: boolean,
+  isStreaming: boolean,
+): boolean {
+  return wasStreaming && !isStreaming
 }
 
 export const Chat = ({
@@ -503,7 +462,7 @@ export const Chat = ({
       setExitStreamSignal(undefined)
       setQueuedPromptDrain(undefined)
     }
-  }, [clearQueue, saveToHistory, addToQueue, abortControllerRef])
+  }, [clearQueue, saveToHistory, abortControllerRef])
 
   // M4.3: Context-window usage for the status bar (updated via context_window
   // PrintModeEvent from the agent runtime).
@@ -531,15 +490,32 @@ export const Chat = ({
     return agentId ? resolveModelNameForAgent(agentId) : null
   }, [agentMode])
 
+  // Current isStreaming value, readable from the effects below so they do
+  // not have to re-subscribe when it changes.
+  const isStreamingRef = useRef(false)
+
   // Poll git diff stats: on mount and periodically while idle. The git call
   // runs off the render thread (getDiffStatsAsync). A per-effect AbortController
   // + cancelled flag ensures a late-resolving result after unmount does not
-  // call setState, and only the latest in-flight refresh wins.
+  // call setState, and only the latest in-flight refresh wins. The interval
+  // callback is a no-op while isStreaming is true, so no git subprocess is
+  // forked on the streaming hot path; the falling-edge effect below refreshes
+  // exactly once when the stream completes.
+  //
+  // Streaming-path spawn count, before → after (the streaming half is
+  // pinned by shouldSpawnDiffStatsForStreamingTransition below; counting
+  // getDiffStatsAsync invocations while a stream is active verifies the
+  // rest): a stream that holds isStreaming true for T seconds previously
+  // forked floor(T / 10) extra git subprocesses from this interval, on top
+  // of the one per falling edge — e.g. a 60s stream forked ≥6 spawns during
+  // streaming plus 1 after, vs exactly 1 spawn (after) now. The index-status
+  // poller below applies the same pause.
   useEffect(() => {
     const cwd = getProjectRoot() ?? process.cwd()
     let cancelled = false
     const controller = new AbortController()
     const refresh = () => {
+      if (isStreamingRef.current) return
       getDiffStatsAsync({ cwd, signal: controller.signal })
         .then((stats) => {
           if (!cancelled) setDiffStats(stats)
@@ -554,9 +530,17 @@ export const Chat = ({
       clearInterval(interval)
     }
   }, [])
-  // Refresh diff stats when streaming completes (files may have changed).
+  // Refresh diff stats only on the falling edge of isStreaming (stream just
+  // completed) via the pinned shouldSpawnDiffStatsForStreamingTransition
+  // predicate. The shared ref doubles as the previous-value tracker, so the
+  // rising edge still does not spawn — and then immediately abort — a
+  // subprocess.
   useEffect(() => {
-    if (isStreaming) return
+    const wasStreaming = isStreamingRef.current
+    isStreamingRef.current = isStreaming
+    if (!shouldSpawnDiffStatsForStreamingTransition(wasStreaming, isStreaming)) {
+      return
+    }
     const cwd = getProjectRoot() ?? process.cwd()
     let cancelled = false
     const controller = new AbortController()
@@ -573,12 +557,14 @@ export const Chat = ({
 
   // Peek index status from the existing singleton (~2s). getStatus() may
   // schedule an age-stale refresh; do not call ensureBuilt() from the UI.
+  // Pause polling while streaming to avoid unnecessary work on the hot path.
   useEffect(() => {
+    if (isStreaming) return
     const refresh = () => setIndexStatus(peekIndexStatus())
     refresh()
     const interval = setInterval(refresh, 2_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [isStreaming])
 
   // When streaming completes, flush any pending bash commands into history (ghost mode only)
   // Non-ghost mode commands are already in history and will be cleared when user sends next message
@@ -759,45 +745,54 @@ export const Chat = ({
   // Handle followup suggestion clicks
   useEffect(() => {
     const handleFollowupClick = (event: Event) => {
-      const customEvent = event as CustomEvent<{
-        prompt: string
-        index: number
-        toolCallId: string
-      }>
-      const { prompt, index, toolCallId } = customEvent.detail
+      try {
+        const customEvent = event as CustomEvent<{
+          prompt: string
+          index: number
+          toolCallId: string
+        }>
+        if (!customEvent.detail || typeof customEvent.detail !== 'object') {
+          logger.warn({ event }, '[followup-click] Received malformed event without detail')
+          return
+        }
+        const { prompt, index, toolCallId } = customEvent.detail
 
-      logger.info(
-        { promptLength: prompt.length, index, toolCallId, agentMode },
-        '[followup-click] Followup clicked',
-      )
+        logger.info(
+          { promptLength: prompt.length, index, toolCallId, agentMode },
+          '[followup-click] Followup clicked',
+        )
 
-      // Track analytics event
-      trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
-        promptLength: prompt.length,
-        index,
-        agentMode,
-      })
-
-      // Mark this followup as clicked (persisted per toolCallId)
-      useChatStore.getState().markFollowupClicked(toolCallId, index)
-
-      // Send the followup prompt directly, preserving the user's current input
-      onSubmitPrompt(prompt, agentMode, {
-        preserveInputValue: true,
-      })
-        .then((result) => {
-          logger.info(
-            { hasResult: !!result },
-            '[followup-click] onSubmitPrompt completed',
-          )
+        // Track analytics event
+        trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
+          promptLength: prompt.length,
+          index,
+          agentMode,
         })
-        .catch((error) => {
-          logger.error(
-            { error },
-            '[followup-click] onSubmitPrompt failed with error',
-          )
-          showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+
+        // Mark this followup as clicked (persisted per toolCallId)
+        useChatStore.getState().markFollowupClicked(toolCallId, index)
+
+        // Send the followup prompt directly, preserving the user's current input
+        onSubmitPrompt(prompt, agentMode, {
+          preserveInputValue: true,
         })
+          .then((result) => {
+            logger.info(
+              { hasResult: !!result },
+              '[followup-click] onSubmitPrompt completed',
+            )
+          })
+          .catch((error) => {
+            logger.error(
+              { error },
+              '[followup-click] onSubmitPrompt failed with error',
+            )
+            showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+          })
+      } catch (error) {
+        logger.error({ error }, '[followup-click] Synchronous error in followup handler')
+        showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+      }
     }
 
     globalThis.addEventListener('codebuff:send-followup', handleFollowupClick)
@@ -1006,13 +1001,10 @@ export const Chat = ({
 
   const inputValueRef = useRef(inputValue)
   const cursorPositionRef = useRef(cursorPosition)
-  useEffect(() => {
-    inputValueRef.current = inputValue
-  }, [inputValue])
-
-  useEffect(() => {
-    cursorPositionRef.current = cursorPosition
-  }, [cursorPosition])
+  // Sync refs synchronously during render — no useEffect needed, avoids
+  // scheduling overhead on the hot keystroke path.
+  inputValueRef.current = inputValue
+  cursorPositionRef.current = cursorPosition
 
   const handleOpenFeedbackForMessage = useCallback(
     (

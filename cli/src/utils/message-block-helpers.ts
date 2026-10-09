@@ -1039,6 +1039,13 @@ const formatGeneralAgentSummaryStructuredOutput = (
   if (Array.isArray(value.changedFiles)) return undefined
   // Defer to formatFilePickerStructuredOutput: file-picker shape has files.
   if (Array.isArray(value.files)) return undefined
+  // Defer to formatBrowserUseStructuredOutput: browser-use output has outputKind = 'browser-use'.
+  if (value.outputKind === 'browser-use') return undefined
+  // Defer to formatExternalCliStructuredOutput: external CLI output has outputKind = 'external-cli'.
+  if (value.outputKind === 'external-cli') return undefined
+  // Defer to JSON fallback: overallStatus signals a structured results payload (reviewer, agent
+  // status) that either has its own formatter or should render as JSON — not a bare summary string.
+  if (typeof value.overallStatus === 'string') return undefined
 
   const summary = getStringField(value, 'summary')
   if (summary === undefined) return undefined
