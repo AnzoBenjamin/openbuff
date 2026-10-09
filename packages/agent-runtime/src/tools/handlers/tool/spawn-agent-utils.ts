@@ -2672,6 +2672,7 @@ function mapSettledOutcomeToAgentOutput(params: {
   agentType: string
   outcome: ReceiptOutcome
   stderrTail: string
+  crashReason?: string
 }): SupervisedErrorOutput {
   const detail = params.stderrTail.trim().slice(0, 2_000)
   const detailSuffix = detail.length > 0 ? `: ${detail}` : ''
@@ -2682,11 +2683,26 @@ function mapSettledOutcomeToAgentOutput(params: {
   // up folded into the synthesized failed receipt's errors[] without any
   // settle-chain change.
   switch (params.outcome) {
-    case 'crashed':
+    case 'crashed': {
+      if (params.crashReason === 'timeout') {
+        return {
+          type: 'error',
+          message: `Subagent ${params.agentType} crashed: supervised child exceeded its activity deadline and was killed (timeout)${detailSuffix}`,
+        }
+      }
+      // Any other transport crash reason (spawn_failed / internal_error /
+      // nonzero_exit, or a free-form reason) stays on the conservative
+      // "exited before emitting a valid receipt" fallback, but names the
+      // reason so the specific transport failure is visible.
+      const reasonSuffix =
+        typeof params.crashReason === 'string' && params.crashReason.length > 0
+          ? ` (${params.crashReason})`
+          : ''
       return {
         type: 'error',
-        message: `Subagent ${params.agentType} crashed: supervised child exited before emitting a valid receipt${detailSuffix}`,
+        message: `Subagent ${params.agentType} crashed: supervised child exited before emitting a valid receipt${reasonSuffix}${detailSuffix}`,
       }
+    }
     case 'missing_output':
       return {
         type: 'error',
@@ -2848,6 +2864,7 @@ async function runSupervisedSubagent(params: {
         agentType: agentTemplate.id,
         outcome: settled.outcome,
         stderrTail: settled.stderrTail,
+        crashReason: settled.crashReason,
       }),
     }
   }

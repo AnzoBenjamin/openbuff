@@ -5,6 +5,7 @@ import { z } from 'zod/v4'
 import {
   coerceJsonSchemaMember,
   isDegradedZodHusk,
+  isRepresentableZodSchema,
   serializeSchemaMemberForTransport,
   validateAgents,
 } from '../templates/agent-validation'
@@ -933,5 +934,75 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     const coerced = coerceJsonSchemaMember(transported) as z.ZodType
     expect(typeof coerced.safeParse).toBe('function')
     expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
+  })
+
+  it("degrades a live member whose 'any' emission is not round-trip coercible to {type:object}", () => {
+    // z.never() is the verified degrade case: its 'any' emission fails the
+    // serialize-side round-trip verification (the JSON round-tripped emission
+    // does not re-convert to a schema that is representable under BOTH io
+    // modes), so the serializer transports the permissive fallback instead of
+    // an unverified emission the child could not coerce back to zod.
+    expect(serializeSchemaMemberForTransport(z.never(), 'input')).toEqual({
+      type: 'object',
+    })
+    // Contrast: formerly-gap shapes like z.record(z.string(), z.date()) and
+    // z.map now emit degenerate-but-round-trippable schemas — the round-trip
+    // verification PASSES for them, so they transport verbatim (with
+    // structure) rather than collapsing to the fallback. Degrading them would
+    // silently lose member-specific validation strictness.
+    const record = z.record(z.string(), z.date()) as unknown
+    const recordOut = serializeSchemaMemberForTransport(record, 'input') as {
+      type?: string
+      propertyNames?: unknown
+    }
+    expect(recordOut.type).toBe('object')
+    expect(recordOut.propertyNames).toBeDefined()
+    expect(recordOut).not.toEqual({ type: 'object' })
+    const map = z.map(z.string(), z.string()) as unknown
+    expect(
+      serializeSchemaMemberForTransport(map, 'input'),
+    ).not.toEqual({ type: 'object' })
+    // The degraded form is the established fallback the child re-coerces
+    // into a live, representable loose-object schema — the spawn survives.
+    const fallback = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
+    expect(typeof fallback.safeParse).toBe('function')
+    expect(() => z.toJSONSchema(fallback, { io: 'input' })).not.toThrow()
+  })
+
+  it("keeps a representable live member's full structure", () => {
+    const transported = serializeSchemaMemberForTransport(
+      z.object({ name: z.string() }),
+      'input',
+    ) as { properties?: { name?: { type?: string } } }
+    // Containment (not deep-equal): zod's exact emission details (required,
+    // additionalProperties, ...) must not make this brittle — the point is
+    // that a representable member does NOT degrade to { type: 'object' }.
+    expect(transported.properties?.name?.type).toBe('string')
+    expect(transported).not.toEqual({ type: 'object' })
+  })
+
+  it('isRepresentableZodSchema requires BOTH io modes to succeed', () => {
+    // z.string().transform(...) is the canonical dual-mode divergence: the
+    // input side is a plain string, but the output side is a Date, which zod
+    // cannot represent in JSON Schema. The inline probes document the
+    // divergence the assertion relies on — the AI SDK consumes coerced
+    // members in both modes (tool inputSchema input-mode;
+    // set_output/structuredOutput output-mode), so an input-only probe
+    // would let this shape through and crash later in output mode.
+    const transformSchema = z.string().transform((s) => new Date(s))
+    expect(() =>
+      z.toJSONSchema(transformSchema, { io: 'input' }),
+    ).not.toThrow()
+    expect(() => z.toJSONSchema(transformSchema, { io: 'output' })).toThrow()
+    expect(isRepresentableZodSchema(transformSchema)).toBe(false)
+    // A schema representable in both modes passes the probe.
+    expect(isRepresentableZodSchema(z.object({ name: z.string() }))).toBe(
+      true,
+    )
+    // z.map already throws in input mode, so the dual-mode probe rejects it
+    // as well.
+    expect(isRepresentableZodSchema(z.map(z.string(), z.string()))).toBe(
+      false,
+    )
   })
 })

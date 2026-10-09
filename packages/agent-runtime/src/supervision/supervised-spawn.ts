@@ -20,7 +20,14 @@
  * DEFAULTS: `timeoutMs` defaults to the supervisor's 10-minute deadline
  * (SETTLE_DEFAULT_TIMEOUT_MS) — supervised spawns gain a wall-clock deadline
  * in-process spawns do not have; callers override via the request's
- * `timeoutMs`. NOTE: on timeout the supervisor tears down the child's WHOLE
+ * `timeoutMs`. The deadline is enforced as an ABSOLUTE, never-reset lifetime
+ * cap (the supervisor's `maxLifetimeMs`) in ADDITION to the idle-aware
+ * window: a child that keeps emitting stdout/bridge activity resets the
+ * idle window but can never outrun the wall-clock cap, so the deadline
+ * always fires even for a continuously-active child. That cap — not an
+ * AbortSignal (the supervised child does not observe the parent's signal;
+ * the request is JSON-serialized) — is the hard bound on the child's
+ * runtime. NOTE: on timeout the supervisor tears down the child's WHOLE
  * process group (the default seam spawns the child as a group leader via
  * `detached: true`, and SIGTERM/SIGKILL go to the group by negative-pid
  * kill), so shell grandchildren die too; only custom seams without a
@@ -107,6 +114,7 @@ import type {
   SupervisedChildEnvSeed,
   SupervisedSpawnRequest,
 } from './process-supervisor'
+import { SETTLE_DEFAULT_TIMEOUT_MS } from './process-supervisor'
 import type {
   ParentBridgeHandlers,
   ParentBridgeServer,
@@ -497,6 +505,14 @@ export function buildDefaultSpawnSupervised(
     // and is closed in the finally below, also when the spawn throws.
     let bridge: ParentBridgeServer | undefined
     let socketPath: string | undefined
+    // Per-attempt activity relay: the bridge server fires emitActivity on
+    // every well-formed request, which fans out to the supervisor's idle
+    // deadline listener subscribed via onActivity below. Created fresh per
+    // attempt so a restart re-subscribes cleanly.
+    const activityListeners = new Set<() => void>()
+    const emitActivity = () => {
+      for (const l of activityListeners) l()
+    }
     // P2-T8b collision-proof bridge sentinel: the per-table marker nonce
     // minted by buildSupervisedBridgeHandlers, stamped into the request
     // envelope below so the child sanitizer emits nonce-stamped markers the
@@ -526,7 +542,7 @@ export function buildDefaultSpawnSupervised(
           bridgeNonce = tableNonce
         }
         socketPath = join(sandboxCwd, 'rpc.sock')
-        bridge = startParentBridgeServer(table, socketPath)
+        bridge = startParentBridgeServer(table, socketPath, emitActivity)
         await bridge.ready
       }
       const wireRequest =
@@ -569,6 +585,10 @@ export function buildDefaultSpawnSupervised(
       // imported real one (byte-identical when the hook is absent).
       const spawnSettled =
         options?._spawnSettledSubagent ?? spawnSettledSubagent
+      // The settle deadline: the request's wall-clock budget, or the
+      // supervisor's 10-minute default when the request omits timeoutMs
+      // (see the DEFAULTS section in the module docblock).
+      const settleDeadlineMs = request.timeoutMs ?? SETTLE_DEFAULT_TIMEOUT_MS
       writeFileSync(requestPath, serializedRequest, { mode: 0o600 })
       // P2-T8d SELF-EXEC: in a compiled `bun build --compile` binary the
       // child entry cannot be a file (`$bunfs`), so the child is the parent
@@ -596,7 +616,25 @@ export function buildDefaultSpawnSupervised(
           : { args: [requestPath] }),
         env: buildSupervisedChildEnv(seed),
         cwd: sandboxCwd,
-        timeoutMs: request.timeoutMs,
+        timeoutMs: settleDeadlineMs,
+        // Idle-aware deadline: reset on bridge request activity (and stdout/
+        // stderr chunks). Falls back to the supervisor's 10-minute default
+        // when the request omits timeoutMs. Alone it cannot bound a child
+        // that keeps emitting bridge/stdout activity — the idle window is
+        // reset on EVERY such event, so it would never fire.
+        idleTimeoutMs: settleDeadlineMs,
+        // ABSOLUTE, never-reset lifetime cap (the supervisor rearms it only
+        // once at spawn) equal to the settle deadline: the documented
+        // wall-clock deadline now fires even for a child that continuously
+        // emits bridge/stdout activity (which would otherwise reset the
+        // idle window indefinitely), and — since the supervised child does
+        // not observe the parent AbortSignal — this cap is the hard bound
+        // on its maximum runtime.
+        maxLifetimeMs: settleDeadlineMs,
+        onActivity: (l) => {
+          activityListeners.add(l)
+          return () => activityListeners.delete(l)
+        },
       })
     } finally {
       // Close the bridge server unconditionally — success, spawn throw, or

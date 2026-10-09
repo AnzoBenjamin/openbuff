@@ -188,6 +188,7 @@ export type ParentBridgeServer = {
 export function startParentBridgeServer(
   handlers: ParentBridgeHandlers,
   socketPath: string,
+  onRequestActivity?: () => void,
 ): ParentBridgeServer {
   const logger = createBridgeStderrLogger('parent-bridge')
   const sockets = new Set<net.Socket>()
@@ -243,6 +244,10 @@ export function startParentBridgeServer(
       socket.destroy()
       return
     }
+    // Every well-formed request/notification is an activity signal for the
+    // supervisor's idle deadline (counted before method/budget checks so a
+    // busy or unknown-method request still proves the child is alive).
+    onRequestActivity?.()
     const failureReply = (message: string): void => {
       reply(socket, { id: parsed.id, ok: false, error: { message } })
     }

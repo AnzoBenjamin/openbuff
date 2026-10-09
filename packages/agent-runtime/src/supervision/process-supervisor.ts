@@ -170,6 +170,15 @@ export type SpawnSettledSubagentParams = {
   cwd?: string
   /** Injectable monotonic clock for durationMs (see NOTE below). */
   now?: () => number
+  /** When set, the deadline is an INACTIVITY window reset on each activity
+   *  event (see onActivity); omitted → the single wall-clock timeoutMs timer. */
+  idleTimeoutMs?: number
+  /** Absolute, never-resettable lifetime cap. Default undefined (off). */
+  maxLifetimeMs?: number
+  /** Subscribe to external activity (e.g. bridge requests); returns an
+   *  unsubscribe. Fired listeners reset the idle window. Omitted → no external
+   *  activity source. */
+  onActivity?: (listener: () => void) => () => void
 }
 
 // Structurally identical to the seam contract in common
@@ -248,6 +257,7 @@ function concatChunks(chunks: Uint8Array[]): Uint8Array {
 async function captureStream(
   stream: ReadableStream<Uint8Array>,
   capBytes: number,
+  onActivity?: () => void,
 ): Promise<{ bytes: Uint8Array; totalBytes: number }> {
   const chunks: Uint8Array[] = []
   let kept = 0
@@ -257,6 +267,8 @@ async function captureStream(
     const { done, value } = await reader.read()
     if (done) break
     if (!value || value.byteLength === 0) continue
+    // Chunk arrival is a secondary activity signal (resets the idle window).
+    onActivity?.()
     totalBytes += value.byteLength
     if (kept < capBytes) {
       const room = capBytes - kept
@@ -324,11 +336,9 @@ export async function spawnSettledSubagent(
   let timedOut = false
   let killed = false
   let termTimer: ReturnType<typeof setTimeout> | undefined
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
   let killTimer: ReturnType<typeof setTimeout> | undefined
-  const clearTimers = () => {
-    if (termTimer !== undefined) clearTimeout(termTimer)
-    if (killTimer !== undefined) clearTimeout(killTimer)
-  }
+  let maxTimer: ReturnType<typeof setTimeout> | undefined
 
   // Process-group teardown when the seam provides killGroup (the default
   // seam does): both the SIGTERM and the escalation SIGKILL target the
@@ -343,7 +353,14 @@ export async function spawnSettledSubagent(
     }
   }
 
-  termTimer = setTimeout(() => {
+  // Idempotent deadline-kill latch: once committed, late activity events are
+  // neutralized (markActivity's killCommitted guard) and the maxLifetime cap
+  // never gets rearmed. commitKill keeps the legacy timedOut=true semantics
+  // so the settle path still picks crashReason='timeout'.
+  let killCommitted = false
+  const commitKill = () => {
+    if (killCommitted) return
+    killCommitted = true
     timedOut = true
     killed = true
     try {
@@ -358,12 +375,45 @@ export async function spawnSettledSubagent(
         // Child already gone.
       }
     }, SETTLE_KILL_GRACE_MS)
-  }, timeoutMs)
+  }
+
+  const idleWindowMs = params.idleTimeoutMs
+  const armIdle = () => {
+    idleTimer = setTimeout(commitKill, idleWindowMs as number)
+  }
+  const markActivity = () => {
+    // No idle window configured → activity has nothing to reset. This keeps
+    // the legacy single-wall-clock-timer path byte-identical even when an
+    // activity source (stdout/stderr capture, or an injected onActivity) is
+    // wired: without this guard armIdle() would schedule setTimeout(commitKill,
+    // undefined), which fires immediately and spuriously kills the child.
+    if (idleWindowMs === undefined) return
+    if (killCommitted) return
+    if (idleTimer !== undefined) clearTimeout(idleTimer)
+    armIdle()
+  }
+  // idleTimeoutMs present → inactivity window (reset on activity); absent →
+  // the byte-identical single wall-clock timeoutMs timer.
+  if (idleWindowMs !== undefined) armIdle()
+  else termTimer = setTimeout(commitKill, timeoutMs)
+  // Optional absolute lifetime cap (default off): never reset by activity.
+  if (params.maxLifetimeMs !== undefined) {
+    maxTimer = setTimeout(commitKill, params.maxLifetimeMs)
+  }
+  const unsubscribeActivity = params.onActivity?.(markActivity)
+
+  const clearTimers = () => {
+    if (termTimer !== undefined) clearTimeout(termTimer)
+    if (idleTimer !== undefined) clearTimeout(idleTimer)
+    if (killTimer !== undefined) clearTimeout(killTimer)
+    if (maxTimer !== undefined) clearTimeout(maxTimer)
+    unsubscribeActivity?.()
+  }
 
   try {
     const [stdoutCapture, stderrCapture] = await Promise.all([
-      captureStream(proc.stdout, SETTLE_STDOUT_CAP_BYTES),
-      captureStream(proc.stderr, SETTLE_STDERR_CAP_BYTES),
+      captureStream(proc.stdout, SETTLE_STDOUT_CAP_BYTES, markActivity),
+      captureStream(proc.stderr, SETTLE_STDERR_CAP_BYTES, markActivity),
     ])
     const rawExit = await proc.exited
     clearTimers()

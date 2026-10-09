@@ -405,17 +405,23 @@ async function additionalToolDefinitions(
     agentState,
   )
 
+  // `customToolDefinitions` is schema-defaulted, but hand-rolled fileContext
+  // objects (test fixtures, programmatic hosts, new spawn paths) may omit it;
+  // guard locally instead of relying on callers (see the defaulting in
+  // supervision/child-entry.ts, which exists because of this exact site).
   const defs = cloneDeep(
     Object.fromEntries(
-      Object.entries(fileContext.customToolDefinitions).filter(([toolName]) =>
-        effectiveToolNames.includes(toolName),
+      Object.entries(fileContext.customToolDefinitions ?? {}).filter(
+        ([toolName]) => effectiveToolNames.includes(toolName),
       ),
     ),
   )
   return getMCPToolData({
     ...params,
     toolNames: effectiveToolNames,
-    mcpServers: agentTemplate!.mcpServers,
+    // `agentTemplate` is a required non-optional param and `mcpServers` is a
+    // required, schema-defaulted field on AgentTemplate — no assertion needed.
+    mcpServers: agentTemplate.mcpServers,
     writeTo: defs,
   })
 }
@@ -1230,7 +1236,8 @@ export const runAgentStep = async (
     shouldEndTurn = true
   }
 
-agentState = {    ...agentState,
+  agentState = {
+    ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
         ? agentState.stepsRemaining - 1
@@ -1898,7 +1905,6 @@ export async function loopAgentSteps(
               ],
             ),
           ),
-        ,
       ],
 
       instructionsPrompt &&

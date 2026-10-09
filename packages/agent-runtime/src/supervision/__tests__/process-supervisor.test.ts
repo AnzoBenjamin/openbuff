@@ -82,6 +82,94 @@ function recordingChildSeam(sinks: {
   }
 }
 
+/**
+ * A minimal `agentReceiptSchema`-valid envelope the idle-survival case writes
+ * to the stub child's stdout so the clean exit settles as 'ok'. Mirrors the
+ * fixture's MINIMAL_OK_RECEIPT shape (required fields + the seven arrays).
+ */
+const VALID_SETTLE_RECEIPT = {
+  schemaVersion: 1,
+  receiptId: 'idle-fixture-receipt',
+  taskId: 'idle-fixture-task',
+  role: 'specialist',
+  agentId: 'idle-fixture-agent',
+  status: 'completed',
+  outcome: 'ok',
+  changedFiles: [],
+  requirementsAddressed: [],
+  acceptanceCriteriaAddressed: [],
+  findingsAddressed: [],
+  evidence: [],
+  assumptions: [],
+  unresolved: [],
+  requestedValidation: [],
+  artifacts: [],
+  errors: [],
+}
+
+/**
+ * A fully MANUAL stub child for the idle-aware cases: the test drives stdout
+ * bytes, stream EOF, and the `exited` resolution itself (nothing settles on
+ * its own), and direct `kill` calls are recorded. A SIGKILL still EOFs the
+ * streams and resolves the exit (mirroring a real signal death) so a kill
+ * path can never hang the settle.
+ */
+function controllableChildSeam(): {
+  seam: SettleSpawnSeam
+  emitStdout: (text: string) => void
+  closeStreams: () => void
+  resolveExit: (code: number | null) => void
+  directKills: Array<'SIGTERM' | 'SIGKILL'>
+} {
+  const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+  let stdoutController!: ReadableStreamDefaultController<Uint8Array>
+  let stderrController!: ReadableStreamDefaultController<Uint8Array>
+  let resolveExitFn: (code: number | null) => void = () => {}
+  let stdoutClosed = false
+  let stderrClosed = false
+  const closeStreams = (): void => {
+    if (!stdoutClosed) {
+      stdoutClosed = true
+      stdoutController.close()
+    }
+    if (!stderrClosed) {
+      stderrClosed = true
+      stderrController.close()
+    }
+  }
+  const seam: SettleSpawnSeam = () => ({
+    stdout: new ReadableStream<Uint8Array>({
+      start(controller) {
+        stdoutController = controller
+      },
+    }),
+    stderr: new ReadableStream<Uint8Array>({
+      start(controller) {
+        stderrController = controller
+      },
+    }),
+    exited: new Promise<number | null>((resolve) => {
+      resolveExitFn = resolve
+    }),
+    kill: (signal) => {
+      const resolved = signal ?? 'SIGTERM'
+      directKills.push(resolved)
+      if (resolved === 'SIGKILL') {
+        closeStreams()
+        resolveExitFn(null)
+      }
+    },
+  })
+  return {
+    seam,
+    emitStdout: (text) =>
+      stdoutController.enqueue(new TextEncoder().encode(text)),
+    closeStreams,
+    resolveExit: (code) => resolveExitFn(code),
+    directKills,
+  }
+}
+
 describe('spawnSettledSubagent', () => {
   it.skipIf(!canSpawn)(
     'happy path: settles a healthy child as ok with a validated receipt',
@@ -303,6 +391,115 @@ describe('spawnSettledSubagent', () => {
       expect(directKills).toEqual(['SIGTERM', 'SIGKILL'])
     },
   )
+
+  // ── Behavior A: idle-aware deadline (idleTimeoutMs / maxLifetimeMs /
+  // onActivity) ─────────────────────────────────────────────────────────
+
+  it('idle window resets on injected activity and survives past idleTimeoutMs', async () => {
+    // Injected activity source: each fired listener resets the idle window.
+    const ls = new Set<() => void>()
+    const emit = () => ls.forEach((f) => f())
+    const onActivity = (f: () => void) => {
+      ls.add(f)
+      return () => {
+        ls.delete(f)
+      }
+    }
+    const child = controllableChildSeam()
+    const receiptLine = `${JSON.stringify(VALID_SETTLE_RECEIPT)}\n`
+
+    const settlePromise = spawnSettledSubagent({
+      childModulePath: fixturePath,
+      idleTimeoutMs: 50,
+      onActivity,
+      spawn: child.seam,
+    })
+
+    // Fire activity every ~30ms so total elapsed crosses the raw 50ms idle
+    // window (4 pings ≈ 120ms); each reset keeps the child alive.
+    for (let i = 0; i < 4; i++) {
+      await Bun.sleep(30)
+      emit()
+    }
+    // Resolve the clean exit shortly after the final ping — well within one
+    // idle window — so 'ok' is driven by the exit, not a race with the timer.
+    await Bun.sleep(10)
+    child.emitStdout(receiptLine)
+    child.closeStreams()
+    child.resolveExit(0)
+
+    const result = await settlePromise
+    // Activity kept it alive past the 50ms window: a clean 'ok', never killed.
+    expect(result.outcome).toBe('ok')
+    expect(result.crashReason).toBeUndefined()
+    expect(result.killed).toBe(false)
+    expect(result.receipt?.taskId).toBe('idle-fixture-task')
+    expect(child.directKills).toEqual([])
+  })
+
+  it('idle window with no activity kills at idleTimeoutMs', async () => {
+    const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      idleTimeoutMs: 50,
+      // No onActivity and a child that neither exits nor emits: the ONLY thing
+      // that can settle it is the idle deadline kill.
+      spawn: recordingChildSeam({ direct: directKills }),
+    })
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('timeout')
+    expect(result.killed).toBe(true)
+    // SIGTERM first (then the SIGKILL escalation the recorder uses to settle).
+    expect(directKills).toContain('SIGTERM')
+  })
+
+  it('maxLifetimeMs caps a continuously-active child', async () => {
+    const ls = new Set<() => void>()
+    const emit = () => ls.forEach((f) => f())
+    const onActivity = (f: () => void) => {
+      ls.add(f)
+      return () => {
+        ls.delete(f)
+      }
+    }
+    const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    // Fire activity every ~30ms (< the 50ms idle window) across the whole
+    // run, so the idle timer never fires — only the absolute cap can kill it.
+    const ticker = setInterval(emit, 30)
+    try {
+      const result = await spawnSettledSubagent({
+        childModulePath: fixturePath,
+        idleTimeoutMs: 50,
+        maxLifetimeMs: 120,
+        onActivity,
+        spawn: recordingChildSeam({ direct: directKills }),
+      })
+      // Continuous activity resets the idle window but NOT the absolute cap:
+      // the child is still killed (~120ms) with crashReason timeout.
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toBe('timeout')
+      expect(result.killed).toBe(true)
+      expect(directKills).toContain('SIGTERM')
+    } finally {
+      clearInterval(ticker)
+    }
+  })
+
+  it('omitting idleTimeoutMs/onActivity preserves the legacy single wall-clock timer', async () => {
+    const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      // Only the legacy wall-clock timeoutMs — no idle params at all.
+      timeoutMs: 50,
+      spawn: recordingChildSeam({ direct: directKills }),
+    })
+    // Byte-identical-baseline guard: unchanged crashed/timeout + SIGTERM→
+    // SIGKILL direct-pid kill.
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('timeout')
+    expect(result.killed).toBe(true)
+    expect(directKills).toEqual(['SIGTERM', 'SIGKILL'])
+  })
 
   it(
     'P2-T8d SELF-EXEC: cmdOverride is used VERBATIM and args are ignored',

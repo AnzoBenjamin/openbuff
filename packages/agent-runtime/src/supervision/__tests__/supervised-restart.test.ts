@@ -23,6 +23,7 @@ import type {
 } from '@codebuff/common/types/contracts/agent-runtime'
 
 import type { SpawnSettledSubagentParams } from '../process-supervisor'
+import { SETTLE_DEFAULT_TIMEOUT_MS } from '../process-supervisor'
 import { buildDefaultSpawnSupervised } from '../supervised-spawn'
 
 // ---- outcome-sequence injection (the only test-side seam available) ------
@@ -469,4 +470,52 @@ describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
     ])
     expect(record.delays).toEqual([10, 20])
   })
+})
+
+describe('supervised-spawn settle deadline wiring (absolute lifetime cap)', () => {
+  /**
+   * The default seam (no restart policy) driven through the settle-stub
+   * injection: the stub records the params it received, so these tests
+   * assert the DEADLINE WIRING `runSettledAttempt` hands to the supervisor
+   * — without spawning a real child process.
+   */
+  it('arms idleTimeoutMs AND maxLifetimeMs (plus timeoutMs) at the request deadline', async () => {
+    resetSpawnQueue()
+    const okResult = settledOk()
+    queueSpawns(okResult)
+    const seam = buildDefaultSpawnSupervised({}, undefined, {
+      _spawnSettledSubagent: spawnSettledSubagentStub,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(result).toBe(okResult)
+    const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+    expect(settleParams.timeoutMs).toBe(REQUEST.timeoutMs)
+    expect(settleParams.idleTimeoutMs).toBe(REQUEST.timeoutMs)
+    // The absolute lifetime cap MUST ride along with the idle window: with
+    // only the idle window armed (the regressions this guards against), a
+    // child that keeps emitting stdout/bridge activity resets the window
+    // forever and NEVER settles — the supervisor's single wall-clock
+    // termTimer branch is skipped whenever idleTimeoutMs is present.
+    expect(settleParams.maxLifetimeMs).toBe(REQUEST.timeoutMs)
+  })
+
+  it(
+    `defaults the deadline (including maxLifetimeMs) to SETTLE_DEFAULT_TIMEOUT_MS when the request omits timeoutMs`,
+    async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(okResult)
+      const seam = buildDefaultSpawnSupervised({}, undefined, {
+        _spawnSettledSubagent: spawnSettledSubagentStub,
+      })
+      await settleBounded(seam, { ...REQUEST, timeoutMs: undefined })
+      const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+      expect(settleParams.idleTimeoutMs).toBe(SETTLE_DEFAULT_TIMEOUT_MS)
+      expect(settleParams.timeoutMs).toBe(SETTLE_DEFAULT_TIMEOUT_MS)
+      // The default deadline applies as the absolute cap too — the
+      // documented 10-minute wall-clock deadline holds even for a
+      // continuously-active child.
+      expect(settleParams.maxLifetimeMs).toBe(SETTLE_DEFAULT_TIMEOUT_MS)
+    },
+  )
 })
