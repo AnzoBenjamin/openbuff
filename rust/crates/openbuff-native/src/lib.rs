@@ -10,6 +10,12 @@
 //! - known role      -> 2, one structured `not_implemented` JSON line on
 //!   stdout (real role implementations land with P5-T1+).
 //! - unknown/missing -> 1, usage line on stderr.
+//!
+//! The `exec` role is the first real implementation (P5-T1): it diverges into
+//! [`exec::run`] (JSON-RPC `initialize` handshake + Landlock sandbox + `exec`)
+//! and never produces a [`RoleOutcome`].
+
+pub mod exec;
 
 /// The sidecar roles a single `openbuff-native` artifact can multiplex into
 /// (SPEC D49).
@@ -60,12 +66,20 @@ pub fn parse_role(arg: &str) -> Option<Role> {
     }
 }
 
-/// Dispatch a known role. All roles are explicit `not_implemented` until the
-/// real sandbox/sidecar work lands (P5-T1+).
+/// Dispatch a known role.
+///
+/// `Role::Exec` is implemented (P5-T1): it delegates to [`exec::run`], which
+/// never returns (it either `exec`s the target process or `process::exit`s on
+/// failure), so that arm diverges. The remaining four roles are still explicit
+/// `not_implemented` outcomes (exit code 2) until their slices land.
 pub fn handle_role(role: Role) -> RoleOutcome {
-    let _ = role;
-    RoleOutcome::NotImplemented {
-        line: not_implemented_line(role.name()),
+    match role {
+        Role::Exec => exec::run(),
+        Role::Daemon | Role::Infer | Role::PluginHost | Role::A11y => {
+            RoleOutcome::NotImplemented {
+                line: not_implemented_line(role.name()),
+            }
+        }
     }
 }
 
@@ -125,13 +139,10 @@ mod tests {
 
     #[test]
     fn every_role_outcome_is_structured_not_implemented() {
-        for role in [
-            Role::Exec,
-            Role::Daemon,
-            Role::Infer,
-            Role::PluginHost,
-            Role::A11y,
-        ] {
+        // `Role::Exec` is deliberately excluded: it is now implemented and
+        // `handle_role(Role::Exec)` diverges into `exec::run` (it never yields a
+        // `RoleOutcome`). The four roles below are still unimplemented stubs.
+        for role in [Role::Daemon, Role::Infer, Role::PluginHost, Role::A11y] {
             match handle_role(role) {
                 RoleOutcome::NotImplemented { line } => {
                     assert_eq!(

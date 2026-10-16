@@ -36,6 +36,7 @@ import {
   setupStreamingContext,
 } from './helpers/send-message'
 import { whenRegistriesReady } from '../services/deferred-registries'
+import { hydrateContextArchiveSnapshots } from '../services/memory-v2/context-archive-sync'
 import { NETWORK_ERROR_ID } from '../utils/validation-error-helpers'
 import { yieldToEventLoop } from '../utils/yield-to-event-loop'
 
@@ -176,6 +177,56 @@ export const useSendMessage = ({
       previousRunStateRef.current = loadedState.runState
       setRunState(loadedState.runState)
       setMessages(loadedState.messages)
+      // Cross-session context-archive hydration (SEAM: this restore effect —
+      // the place where loadMostRecentChatState's result is applied to the
+      // live session via setRunState, so it is where durable memory-v2
+      // archive snapshots are merged back into the restored agentState so
+      // recall_context covers prior sessions). The restore path itself is
+      // synchronous, so hydration runs as a fire-and-forget merge applied
+      // through the same setRunState path used for live state updates. The
+      // identity guards keep the merge from clobbering a run started in
+      // between (any run replaces the store's runState object), and
+      // previousRunStateRef is kept in lockstep so the next send forks from
+      // the hydrated archive. The helper is no-throw; the .catch is a
+      // double-guard so an unexpected rejection can only ever log.
+      const restoredRunState = loadedState.runState
+      const restoredSessionState = restoredRunState.sessionState
+      if (restoredSessionState) {
+        const restoredMainAgentState = restoredSessionState.mainAgentState
+        void hydrateContextArchiveSnapshots(
+          restoredMainAgentState.compactionArchive,
+        )
+          .then((mergedArchive) => {
+            const { runState: latestRunState, setRunState: setLatestRunState } =
+              useChatStore.getState()
+            const latestSessionState = latestRunState?.sessionState
+            if (
+              latestRunState !== restoredRunState ||
+              latestSessionState !== restoredSessionState ||
+              latestSessionState.mainAgentState !== restoredMainAgentState
+            ) {
+              return
+            }
+            const hydratedRunState: RunState = {
+              ...latestRunState,
+              sessionState: {
+                ...latestSessionState,
+                mainAgentState: {
+                  ...latestSessionState.mainAgentState,
+                  compactionArchive: mergedArchive,
+                },
+              },
+            }
+            previousRunStateRef.current = hydratedRunState
+            setLatestRunState(hydratedRunState)
+          })
+          .catch((error) => {
+            logger.warn(
+              { error },
+              '[send-message] Context archive hydration merge failed (non-fatal)',
+            )
+          })
+      }
       if (loadedState.chatId) {
         setCurrentChatId(loadedState.chatId)
       }

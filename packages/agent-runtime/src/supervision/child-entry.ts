@@ -65,9 +65,16 @@
  *        does not consume it; higher layers already resolved the user).
  *
  * Other slice-1 scope notes:
- *  - the loop's `onResponseChunk` is a child-local no-op: print-mode events
- *    are parent-run-scoped, and child→parent display streaming flows through
- *    the bridged `sendSubagentChunk` / `handleStepsLogChunk` instead;
+ *  - the loop's `onResponseChunk` FORWARDS the child's own live display
+ *    stream to the parent through the bridged fire-and-forget
+ *    `sendSubagentChunk` channel (see {@link buildChildOnResponseChunk}):
+ *    string chunks and `text`-type PrintModeEvents cross keyed to the
+ *    child's own agentId/agentType and the request's verbatim `userInputId`,
+ *    so the CLI renders the supervised child's reasoning/text deltas live in
+ *    the agent block it already created from the spawn event; the remaining
+ *    PrintModeEvent variants have no clean shape on that display channel
+ *    (`handleStepsLogChunk` carries log records, not display events) and
+ *    stay unforwarded — a documented follow-up;
  *  - the child does NOT observe the parent AbortSignal; it is bounded by the
  *    supervisor's wall-clock deadline (and by bridge fail-closed teardown);
  *  - the child reads ONLY its own allowlisted env (OPENBUFF_API_KEY legacy
@@ -83,6 +90,9 @@ import { ensureAgentTemplateZodSchemas } from '@codebuff/common/templates/agent-
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { SendSubagentChunkFn } from '@codebuff/common/types/contracts/client'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import { getCiEnv } from '@codebuff/common/env-ci'
 import { clientProcessEnv } from '@codebuff/common/env-schema'
 import { getInitialAgentState } from '@codebuff/common/types/session-state'
@@ -434,6 +444,90 @@ function buildFailedChildReceipt(params: {
 }
 
 /**
+ * Builds the supervised child's `onResponseChunk` display-stream forwarder
+ * (wired into the loop params by {@link runSupervisedChildEntry}): the
+ * child's OWN live stream, relayed to the parent through the bridged
+ * fire-and-forget `sendSubagentChunk` channel so the CLI renders the child's
+ * reasoning/text deltas live in the agent block it already created from the
+ * spawn event — keyed to the child's own `agentId` (never a fresh id) and the
+ * request's verbatim `userInputId`, mirroring the foreground spawn path's
+ * forwarding rule (spawn-agents.ts `onResponseChunk`).
+ *
+ * Forward rule: a string chunk forwards verbatim; a `text`-type
+ * PrintModeEvent forwards its non-empty `text` as the string chunk. Every
+ * other PrintModeEvent variant (tool_call, tool_result, subagent_start,
+ * subagent_finish, reasoning_delta, phase, error, ...) stays unforwarded — a
+ * documented follow-up: the display channel carries text chunks only, and
+ * `handleStepsLogChunk`'s log-record shape ({ userInputId, runId, level,
+ * data }) does not fit display events.
+ *
+ * Never throws: a forwarding failure is swallowed after one stderr warn per
+ * run — a display-stream failure must never crash the child run, and the
+ * bridge client already logs notify-overflow/failure replies loudly
+ * child-side (not duplicated here). Exported so the forwarding contract is
+ * directly testable.
+ */
+export function buildChildOnResponseChunk(params: {
+  sendSubagentChunk: SendSubagentChunkFn
+  agentId: string
+  agentType: string
+  userInputId: string
+  prompt: string | undefined
+  logger: Logger
+}): (chunk: string | PrintModeEvent) => void {
+  const {
+    sendSubagentChunk,
+    agentId,
+    agentType,
+    userInputId,
+    prompt,
+    logger,
+  } = params
+  let warnedForwardFailure = false
+  return (chunk: string | PrintModeEvent): void => {
+    try {
+      if (typeof chunk === 'string') {
+        sendSubagentChunk({ userInputId, agentId, agentType, chunk, prompt })
+        return
+      }
+      if (chunk.type === 'text') {
+        if (chunk.text) {
+          sendSubagentChunk({
+            userInputId,
+            agentId,
+            agentType,
+            chunk: chunk.text,
+            prompt,
+          })
+        }
+        return
+      }
+      // Documented follow-up: the remaining PrintModeEvent variants
+      // (tool_call, tool_result, subagent_start, subagent_finish,
+      // reasoning_delta, phase, error, ...) are not forwarded — the
+      // fire-and-forget display channel carries text chunks only, and
+      // handleStepsLogChunk's log-record shape ({ userInputId, runId, level,
+      // data }) does not fit display events. The user-visible primary gap
+      // (reasoning/text deltas) is covered by the two cases above.
+    } catch (error) {
+      // A display-stream failure must never crash the child run: swallow it
+      // after one stderr warn (the bridge client already logs notify
+      // overflow/failure replies loudly, so this covers local bugs only).
+      if (!warnedForwardFailure) {
+        warnedForwardFailure = true
+        logger.warn(
+          {
+            agentId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'supervised child display-stream forwarding failed; further forwarding failures are swallowed',
+        )
+      }
+    }
+  }
+}
+
+/**
  * Runs the child entry logic for one parsed request and returns the single
  * receipt envelope to write. Pure with respect to stdout/stderr/exit — the
  * main() below owns the process contract.
@@ -538,6 +632,7 @@ export async function runSupervisedChildEntry(
           | Record<string, unknown>
           | undefined) ?? {},
     }
+    const childLogger = createBridgeStderrLogger('child-agent')
     const loopParams = {
       ...bridgedDeps,
       ...buildLocalChildDeps(),
@@ -565,8 +660,19 @@ export async function runSupervisedChildEntry(
         process.env.OPENBUFF_API_KEY ?? process.env.CODEBUFF_API_KEY ?? '',
       clientEnv: clientProcessEnv,
       ciEnv: getCiEnv(),
-      logger: createBridgeStderrLogger('child-agent'),
-      onResponseChunk: () => {},
+      logger: childLogger,
+      // The child's OWN live display stream: forwarded to the parent through
+      // the bridged fire-and-forget sendSubagentChunk channel (the same
+      // shape the foreground spawn path forwards), keyed to this child's own
+      // agentId so the CLI appends to the EXISTING agent block. Never throws.
+      onResponseChunk: buildChildOnResponseChunk({
+        sendSubagentChunk: bridgedDeps.sendSubagentChunk,
+        agentId,
+        agentType: request.agentType,
+        userInputId: request.userInputId ?? '',
+        prompt: request.prompt,
+        logger: childLogger,
+      }),
       signal: new AbortController().signal,
     }
     const loopResult = (await Promise.race([

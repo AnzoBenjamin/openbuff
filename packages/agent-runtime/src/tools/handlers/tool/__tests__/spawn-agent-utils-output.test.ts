@@ -1135,3 +1135,129 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.status).toBe('completed')
   })
 })
+
+/**
+ * Relaxed general-agent completion contract (buildRuntimeAgentReceiptOrThrow):
+ * a non-audit general-agent that produced a real, non-empty final answer is
+ * credited as completed even without an explicit task_completed call. Only a
+ * genuinely answerless / step-capped run stays a retryable missing-completion
+ * miss, and the audit-shard case still STRICTLY requires a write_audit_findings
+ * structuralReceipt.
+ */
+describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
+  test('credits a general-agent final assistant answer without task_completed', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'ga-answer-lastmessage',
+      output: {
+        type: 'lastMessage',
+        value: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Here is my final answer.' }],
+          },
+        ],
+      },
+    })
+    expect(receipt.status).toBe('completed')
+    expect(receipt.outcome).toBe('ok')
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
+  })
+
+  test('credits a general-agent non-empty summary answer without task_completed', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'ga-answer-summary',
+      output: {
+        type: 'structuredOutput',
+        value: { summary: 'A real, non-empty final answer.' },
+      },
+    })
+    expect(receipt.status).toBe('completed')
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
+  })
+
+  test('still flags an answerless/step-capped general-agent as a retryable miss', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'ga-answerless',
+      output: undefined,
+      agentState: {
+        messageHistory: [],
+        output: {
+          harvestedFromFallback: true,
+          noHarvestedAnswer: true,
+          summary: 'Step cap reached before a final answer.',
+        },
+      } as any,
+    })
+    expect(receipt.status).toBe('partial')
+    expect(
+      receipt.errors.some(
+        (error) =>
+          error.retryable === true &&
+          error.message.includes('task_completed'),
+      ),
+    ).toBe(true)
+  })
+
+  test('does not credit an explicit empty placeholder output as a final answer', () => {
+    // The `{ summary: '', partial: true }` placeholder normalizeSpawnedAgentOutput
+    // emits must stay a retryable miss — the partial guard rejects it.
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'ga-empty-placeholder',
+      output: {
+        summary: '',
+        partial: true,
+        errorMessage: 'general-agent ended without calling set_output',
+      },
+    })
+    expect(receipt.status).toBe('partial')
+    expect(
+      receipt.errors.some(
+        (error) =>
+          error.retryable === true &&
+          error.message.includes('task_completed'),
+      ),
+    ).toBe(true)
+  })
+
+  test('keeps the audit-shard write_audit_findings requirement strict even with a final answer', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'general-agent',
+      agentId: 'ga-audit-missing',
+      spawnParams: {
+        sessionSlug: 'session-1',
+        shardId: 'shard-1',
+        snapshotId: 'v3:' + 'a'.repeat(64),
+      },
+      output: {
+        type: 'lastMessage',
+        value: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'My audit answer prose.' }],
+          },
+        ],
+      },
+    })
+    expect(receipt.status).toBe('partial')
+    expect(
+      receipt.errors.some(
+        (error) =>
+          error.retryable === true &&
+          error.message.includes('write_audit_findings'),
+      ),
+    ).toBe(true)
+    // The relaxed completion contract must not have added a stray
+    // task_completed miss on top of the audit requirement.
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
+  })
+})

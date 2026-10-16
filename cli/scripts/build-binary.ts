@@ -655,6 +655,31 @@ async function main() {
   )
   logAlways(`Copied ${copiedGrammarCount} tree-sitter language grammars`)
 
+  // Ship the tree-sitter tag-query files as siblings next to the binary, in a
+  // tree-sitter-queries/ subdirectory. At runtime resolveQueryPath
+  // (packages/code-map/src/languages.ts) resolves them at
+  // `join(dirname(process.execPath), 'tree-sitter-queries', <file>.scm)`, so
+  // the compiled binary throws "Parser or query not found" for every indexed
+  // file unless they are copied here. The source directory is read at build
+  // time so a newly added grammar query is picked up automatically; only
+  // `.scm` files are copied (the directory's readme.md is skipped).
+  const queriesSourceDir = join(
+    repoRoot,
+    'packages/code-map/src/tree-sitter-queries',
+  )
+  const queriesDestDir = join(binDir, 'tree-sitter-queries')
+  mkdirSync(queriesDestDir, { recursive: true })
+  let copiedQueryCount = 0
+  for (const queryFile of readdirSync(queriesSourceDir)) {
+    if (!queryFile.endsWith('.scm')) continue
+    copyFileSync(
+      join(queriesSourceDir, queryFile),
+      join(queriesDestDir, queryFile),
+    )
+    copiedQueryCount++
+  }
+  logAlways(`Copied ${copiedQueryCount} tree-sitter tag queries`)
+
   if (targetInfo.platform !== 'win32') {
     chmodSync(outputFile, 0o755)
   }

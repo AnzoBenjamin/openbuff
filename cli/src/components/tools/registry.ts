@@ -29,6 +29,9 @@ import {
   KillJobComponent,
   ReadLogsComponent,
 } from './background-job-tools'
+import { CheckBackgroundAgentComponent } from './check-background-agent'
+import { ListJobsComponent } from './list-jobs'
+import { RecallContextComponent } from './recall-context'
 
 import type { ToolRenderConfig, ToolRenderOptions, ToolBlock } from './types'
 import type { ChatTheme } from '../../types/theme-system'
@@ -96,6 +99,9 @@ const toolComponentRegistry = new Map<
   [CheckJobComponent.toolName, CheckJobComponent],
   [ReadLogsComponent.toolName, ReadLogsComponent],
   [KillJobComponent.toolName, KillJobComponent],
+  [CheckBackgroundAgentComponent.toolName, CheckBackgroundAgentComponent],
+  [ListJobsComponent.toolName, ListJobsComponent],
+  [RecallContextComponent.toolName, RecallContextComponent],
   [ReadDocsComponent.toolName, ReadDocsComponent],
   [ReadFilesComponent.toolName, ReadFilesComponent],
   [ReadSubtreeComponent.toolName, ReadSubtreeComponent],

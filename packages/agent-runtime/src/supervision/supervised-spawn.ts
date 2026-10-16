@@ -17,17 +17,18 @@
  *    auto-load a repo `.env` on top of the allowlist;
  *  - the request file and the sandbox dir are removed after settle.
  *
- * DEFAULTS: `timeoutMs` defaults to the supervisor's 10-minute deadline
- * (SETTLE_DEFAULT_TIMEOUT_MS) — supervised spawns gain a wall-clock deadline
- * in-process spawns do not have; callers override via the request's
- * `timeoutMs`. The deadline is enforced as an ABSOLUTE, never-reset lifetime
- * cap (the supervisor's `maxLifetimeMs`) in ADDITION to the idle-aware
- * window: a child that keeps emitting stdout/bridge activity resets the
- * idle window but can never outrun the wall-clock cap, so the deadline
- * always fires even for a continuously-active child. That cap — not an
- * AbortSignal (the supervised child does not observe the parent's signal;
- * the request is JSON-serialized) — is the hard bound on the child's
- * runtime. NOTE: on timeout the supervisor tears down the child's WHOLE
+ * DEFAULTS: there is NO default deadline — a supervised spawn runs UNBOUNDED
+ * (matching the in-process path, which is bounded only by user
+ * cancellation), settling only when the child exits on its own, the bridge/
+ * socket tears down, or the process is cancelled. Only an EXPLICIT
+ * `request.timeoutMs` arms a deadline; when set it is enforced BOTH as the
+ * idle-aware window AND as an ABSOLUTE, never-reset lifetime cap (the
+ * supervisor's `maxLifetimeMs`), so a child that keeps emitting stdout/bridge
+ * activity resets the idle window but can never outrun the wall-clock cap.
+ * That cap — not an AbortSignal (the supervised child does not observe the
+ * parent's signal; the request is JSON-serialized) — is the hard bound on an
+ * explicitly-bounded child's runtime. NOTE: on timeout the supervisor tears
+ * down the child's WHOLE
  * process group (the default seam spawns the child as a group leader via
  * `detached: true`, and SIGTERM/SIGKILL go to the group by negative-pid
  * kill), so shell grandchildren die too; only custom seams without a
@@ -114,7 +115,6 @@ import type {
   SupervisedChildEnvSeed,
   SupervisedSpawnRequest,
 } from './process-supervisor'
-import { SETTLE_DEFAULT_TIMEOUT_MS } from './process-supervisor'
 import type {
   ParentBridgeHandlers,
   ParentBridgeServer,
@@ -585,10 +585,12 @@ export function buildDefaultSpawnSupervised(
       // imported real one (byte-identical when the hook is absent).
       const spawnSettled =
         options?._spawnSettledSubagent ?? spawnSettledSubagent
-      // The settle deadline: the request's wall-clock budget, or the
-      // supervisor's 10-minute default when the request omits timeoutMs
-      // (see the DEFAULTS section in the module docblock).
-      const settleDeadlineMs = request.timeoutMs ?? SETTLE_DEFAULT_TIMEOUT_MS
+      // The settle deadline: ONLY an explicit request.timeoutMs arms a
+      // deadline. When the request omits it, settleDeadlineMs is undefined
+      // and NO timeout/idle/lifetime bound is passed below — the supervised
+      // child runs UNBOUNDED (see the DEFAULTS section in the module
+      // docblock), matching the in-process path.
+      const settleDeadlineMs = request.timeoutMs
       writeFileSync(requestPath, serializedRequest, { mode: 0o600 })
       // P2-T8d SELF-EXEC: in a compiled `bun build --compile` binary the
       // child entry cannot be a file (`$bunfs`), so the child is the parent
@@ -616,21 +618,23 @@ export function buildDefaultSpawnSupervised(
           : { args: [requestPath] }),
         env: buildSupervisedChildEnv(seed),
         cwd: sandboxCwd,
-        timeoutMs: settleDeadlineMs,
-        // Idle-aware deadline: reset on bridge request activity (and stdout/
-        // stderr chunks). Falls back to the supervisor's 10-minute default
-        // when the request omits timeoutMs. Alone it cannot bound a child
-        // that keeps emitting bridge/stdout activity — the idle window is
-        // reset on EVERY such event, so it would never fire.
-        idleTimeoutMs: settleDeadlineMs,
-        // ABSOLUTE, never-reset lifetime cap (the supervisor rearms it only
-        // once at spawn) equal to the settle deadline: the documented
-        // wall-clock deadline now fires even for a child that continuously
-        // emits bridge/stdout activity (which would otherwise reset the
-        // idle window indefinitely), and — since the supervised child does
-        // not observe the parent AbortSignal — this cap is the hard bound
-        // on its maximum runtime.
-        maxLifetimeMs: settleDeadlineMs,
+        // ONLY an explicit request.timeoutMs arms bounds. When present, the
+        // deadline is wired BOTH as the idle-aware window (reset on bridge
+        // request activity and stdout/stderr chunks) AND as an ABSOLUTE,
+        // never-reset lifetime cap (maxLifetimeMs, rearmed only once at
+        // spawn) — so a child that keeps emitting activity resets the idle
+        // window but can never outrun the wall-clock cap, and since the
+        // supervised child does not observe the parent AbortSignal that cap
+        // is the hard bound on its runtime. When settleDeadlineMs is
+        // undefined (the default), NONE of these fields is passed and the
+        // child runs unbounded — zero timers armed in the supervisor.
+        ...(settleDeadlineMs !== undefined
+          ? {
+              timeoutMs: settleDeadlineMs,
+              idleTimeoutMs: settleDeadlineMs,
+              maxLifetimeMs: settleDeadlineMs,
+            }
+          : {}),
         onActivity: (l) => {
           activityListeners.add(l)
           return () => activityListeners.delete(l)

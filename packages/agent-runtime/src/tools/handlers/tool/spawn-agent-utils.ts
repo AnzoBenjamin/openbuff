@@ -1689,6 +1689,94 @@ function stripUndefinedValuedKeys(value: unknown, depth = 0): unknown {
   return out
 }
 
+/**
+ * Conservative "did this general agent produce a usable final answer?" signal
+ * for the relaxed completion contract (buildRuntimeAgentReceiptOrThrow). True
+ * when params.output carries real non-empty answer text — a non-empty string,
+ * or a non-empty summary/answer/text/message/report field (including inside a
+ * structuredOutput wrapper or a text-only lastMessage) — or the most recent
+ * assistant message in the history has non-empty text. The empty placeholder
+ * normalizeSpawnedAgentOutput emits (`{ summary: '', partial: true }`) and the
+ * answerless / step-capped harvest placeholder never qualify: an explicit
+ * `partial` marker is rejected and blank fields do not count, so an answerless
+ * run stays a retryable missing-completion miss.
+ */
+const FINAL_ANSWER_TEXT_FIELDS = [
+  'summary',
+  'answer',
+  'text',
+  'message',
+  'report',
+] as const
+
+function recordHasNonEmptyAnswerText(
+  record: Record<string, unknown>,
+): boolean {
+  // Never credit an explicit partial placeholder as a real final answer.
+  if (record.partial === true) return false
+  return FINAL_ANSWER_TEXT_FIELDS.some(
+    (field) =>
+      typeof record[field] === 'string' &&
+      (record[field] as string).trim().length > 0,
+  )
+}
+
+function lastMessageValueHasNonEmptyAssistantText(value: unknown): boolean {
+  if (!Array.isArray(value)) return false
+  return value.some((message) => {
+    if (!message || typeof message !== 'object') return false
+    const entry = message as Record<string, unknown>
+    if (entry.role !== 'assistant') return false
+    const content = entry.content
+    if (typeof content === 'string') return content.trim().length > 0
+    if (!Array.isArray(content)) return false
+    return content.some(
+      (part) =>
+        !!part &&
+        typeof part === 'object' &&
+        (part as Record<string, unknown>).type === 'text' &&
+        typeof (part as Record<string, unknown>).text === 'string' &&
+        ((part as Record<string, unknown>).text as string).trim().length > 0,
+    )
+  })
+}
+
+function hasNonEmptyFinalAnswerText(
+  output: unknown,
+  messageHistory: unknown,
+): boolean {
+  if (typeof output === 'string') return output.trim().length > 0
+  if (output && typeof output === 'object' && !Array.isArray(output)) {
+    const record = output as Record<string, unknown>
+    if (
+      record.type === 'structuredOutput' &&
+      record.value &&
+      typeof record.value === 'object' &&
+      !Array.isArray(record.value) &&
+      recordHasNonEmptyAnswerText(record.value as Record<string, unknown>)
+    ) {
+      return true
+    }
+    if (
+      record.type === 'lastMessage' &&
+      lastMessageValueHasNonEmptyAssistantText(record.value)
+    ) {
+      return true
+    }
+    if (recordHasNonEmptyAnswerText(record)) return true
+  }
+  // Fallback: the most recent assistant message's text in the history.
+  if (Array.isArray(messageHistory)) {
+    for (let i = messageHistory.length - 1; i >= 0; i -= 1) {
+      const message = messageHistory[i]
+      if (!message || typeof message !== 'object') continue
+      if ((message as Record<string, unknown>).role !== 'assistant') continue
+      return lastMessageValueHasNonEmptyAssistantText([message])
+    }
+  }
+  return false
+}
+
 function buildRuntimeAgentReceiptOrThrow(params: {
   agentType: string
   agentId: string
@@ -1714,18 +1802,28 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     typeof shardId === 'string' &&
     shardId.trim().length > 0 &&
     trimmedSnapshotId.length > 0
-  // Credit the generator harvest from the harvest flag alone. Only a harvest
-  // that recovered REAL answer text may stand in for explicit completion: an answerless / step-capped run marks its output with
-  // noHarvestedAnswer, whose summary is just a placeholder, so it stays a
-  // retryable partial the parent can re-spawn instead of completed with zero
-  // errors.
+  // Relaxed general-agent completion contract: an explicit task_completed
+  // call is no longer required when the agent produced a usable final answer.
+  // A harvest that recovered REAL answer text, OR non-empty final answer text
+  // in the output / last assistant message, credits completion. Only a
+  // genuinely answerless / step-capped run — which marks its harvested output
+  // with noHarvestedAnswer (a placeholder summary) and carries no recoverable
+  // answer text — stays a retryable missing-completion partial the parent can
+  // re-spawn. The audit-shard requirement below is unaffected: audit shards
+  // still MUST emit a write_audit_findings structuralReceipt.
   const harvestedOutput = params.agentState?.output
   const hasHarvestedFallback =
     harvestedOutput !== undefined &&
     harvestedOutput.harvestedFromFallback === true &&
     harvestedOutput.noHarvestedAnswer !== true
+  const hasRecoverableFinalAnswer = hasNonEmptyFinalAnswerText(
+    params.output,
+    params.agentState?.messageHistory,
+  )
   const hasExplicitCompletionOrHarvest =
-    containsToolCall(receiptSources, 'task_completed') || hasHarvestedFallback
+    containsToolCall(receiptSources, 'task_completed') ||
+    hasHarvestedFallback ||
+    hasRecoverableFinalAnswer
   const missingExplicitCompletion =
     isGeneralAgent && !hasExplicitCompletionOrHarvest
   const missingAuditReceipt =

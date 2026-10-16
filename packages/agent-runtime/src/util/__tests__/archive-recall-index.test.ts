@@ -473,11 +473,12 @@ describe('recallFromArchiveIndexed RecallContextResult shape compatibility', () 
 describe('recallEmptyResultMessage (D27)', () => {
   it('appends the fallback note ONLY when the index fell back', () => {
     const indexed = recallEmptyResultMessage({ indexState: 'indexed' })
-    expect(indexed).toContain('No archived pre-compaction content matched')
+    expect(indexed).toContain('No matching archived context')
+    expect(indexed).toContain('persist across sessions')
     expect(indexed).not.toContain('substring scan')
 
     const fallback = recallEmptyResultMessage({ indexState: 'fallback' })
-    expect(fallback).toContain('No archived pre-compaction content matched')
+    expect(fallback).toContain('No matching archived context')
     expect(fallback).toContain('(archive index unavailable, fell back to substring scan)')
   })
 })

@@ -16,6 +16,7 @@ import type {
   SessionState,
 } from '@codebuff/common/types/session-state'
 import { z } from 'zod'
+import { flushContextArchiveSnapshots } from '../services/memory-v2/context-archive-sync'
 
 const RUN_STATE_FILENAME = 'run-state.json'
 const CHAT_MESSAGES_FILENAME = 'chat-messages.json'
@@ -368,6 +369,24 @@ export function saveChatState(
     }
     writeJsonAtomic(getRunStatePath(), persistedRunState)
     writeJsonAtomic(getChatMessagesPath(), persistedMessages)
+
+    // Cross-session context-archive persistence: fire-and-forget flush of the
+    // run's compaction archive into the memory-v2 store (the recall_context
+    // source) after the chat state itself is safely on disk. The SANITIZED
+    // run state is flushed, not the raw one: the durable store must never
+    // persist tool bodies less redacted than the run-state.json produced by
+    // the same sanitizeForChatPersistence pass. Deliberately NOT
+    // awaited — saveChatState must stay synchronous — and safe to fire here
+    // without an import cycle: context-archive-sync → provider → utils/env +
+    // project-files, none of which import back into run-state-storage. The
+    // helper is no-throw; the .catch is a double-guard so an unexpected
+    // rejection can only ever log.
+    void flushContextArchiveSnapshots(persistedRunState).catch((error) => {
+      logger.warn(
+        { error: error instanceof Error ? error.message : String(error) },
+        'Context archive flush failed (non-fatal)',
+      )
+    })
   } catch (error) {
     logger.error(
       {

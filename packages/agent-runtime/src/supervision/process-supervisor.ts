@@ -288,7 +288,12 @@ async function captureStream(
 export async function spawnSettledSubagent(
   params: SpawnSettledSubagentParams,
 ): Promise<SettledSubagentResult> {
-  const timeoutMs = params.timeoutMs ?? SETTLE_DEFAULT_TIMEOUT_MS
+  // No implicit default: when params.timeoutMs is omitted (and no idle/max
+  // bound is set either) the child runs UNBOUNDED — zero timers are armed
+  // and the function simply awaits child exit. SETTLE_DEFAULT_TIMEOUT_MS is
+  // still exported for callers that choose it, but is no longer silently
+  // applied here.
+  const timeoutMs = params.timeoutMs
   // NOTE (determinism guard): durationMs is a performance.now delta — a
   // monotonic interval, never a Date.now-derived absolute timestamp.
   // Injectable via params.now so tests stay deterministic.
@@ -392,10 +397,12 @@ export async function spawnSettledSubagent(
     if (idleTimer !== undefined) clearTimeout(idleTimer)
     armIdle()
   }
-  // idleTimeoutMs present → inactivity window (reset on activity); absent →
-  // the byte-identical single wall-clock timeoutMs timer.
+  // idleTimeoutMs present → inactivity window (reset on activity). Otherwise
+  // an EXPLICIT timeoutMs arms the single wall-clock timer; when timeoutMs is
+  // ALSO absent (the no-bounds case) NO term timer is armed — the function
+  // just awaits child exit, matching the unbounded in-process path.
   if (idleWindowMs !== undefined) armIdle()
-  else termTimer = setTimeout(commitKill, timeoutMs)
+  else if (timeoutMs !== undefined) termTimer = setTimeout(commitKill, timeoutMs)
   // Optional absolute lifetime cap (default off): never reset by activity.
   if (params.maxLifetimeMs !== undefined) {
     maxTimer = setTimeout(commitKill, params.maxLifetimeMs)

@@ -37,12 +37,22 @@
  * exposing bm25 ordering is a follow-up for when a consumer needs it.
  */
 
+import { sanitizeFtsQuery } from '@codebuff/common/util/fts5-query'
+
 import {
   RECALL_MAX_RESULTS,
   RECALL_SNIPPET_CHARS,
   recallFromArchive,
   stepProvenance,
 } from './context-archive'
+
+/**
+ * Re-exported for the module's existing consumers: the sanitizer's canonical
+ * home is `@codebuff/common/util/fts5-query` (shared with the cli memory
+ * store's durable `context_archive_fts` index), and this re-export keeps the
+ * public surface of this module byte-compatible.
+ */
+export { sanitizeFtsQuery }
 
 import type {
   ContextArchiveSnapshot,
@@ -110,20 +120,7 @@ export const buildArchiveRecallRows = (
   return rows
 }
 
-/**
- * FTS5 query-syntax operator characters. Replaced with spaces (not stripped)
- * so each resulting word becomes its own quoted term: `a:b` must stay
- * findable the way the scanner finds the substring `a:b`, and FTS5 tokenizes
- * `a:b` in archived text as the adjacent tokens `a`,`b` — hit by the ANDed
- * terms `a` and `b`, but NOT by the fused token `ab`. Hyphens are NOT FTS5
- * operators and are kept, so a quoted `keystone-fact-3` stays one adjacency
- * phrase matching hyphenated text exactly. Double quotes are handled by
- * doubling (below), not by this class.
- */
-const FTS5_OPERATOR_CHARS = /[(){}\[\]^*:+]/g
-
-/** A character FTS5's unicode61 tokenizer will keep as (part of) a token. */
-const HAS_TOKEN_CHAR = /[\p{L}\p{N}]/u
+export { HAS_TOKEN_CHAR, FTS5_OPERATOR_CHARS } from '@codebuff/common/util/fts5-query'
 
 /**
  * Sanitize a user query into safe FTS5 MATCH terms, or `null` when NO term
@@ -137,21 +134,13 @@ const HAS_TOKEN_CHAR = /[\p{L}\p{N}]/u
  * strings, never operators, and no syntax error is possible. Joined with
  * spaces this gives implicit AND — the scanner's ALL-terms semantics. E.g.
  * `he said "hello" (AND)` → `"he" "said" """hello""" "AND"`.
+ *
+ * Canonical implementation lives in `@codebuff/common/util/fts5-query`
+ * (shared with the cli memory store's durable archive index); this local
+ * binding exists so the rest of this module keeps calling the unqualified
+ * name unchanged.
  */
-const sanitizeFtsQuery = (query: string): string[] | null => {
-  const terms: string[] = []
-  for (const word of query
-    .toLowerCase()
-    .replace(FTS5_OPERATOR_CHARS, ' ')
-    .split(/\s+/)) {
-    if (word.length === 0) continue
-    // A token-less word cannot be quoted into an FTS5 phrase: drop it and
-    // keep the remaining expressible terms (never disable the whole query).
-    if (!HAS_TOKEN_CHAR.test(word)) continue
-    terms.push(`"${word.replace(/"/g, '""')}"`)
-  }
-  return terms.length > 0 ? terms : null
-}
+const sanitizeLocal = sanitizeFtsQuery
 
 /**
  * Narrow structural subset of the bun:sqlite `Database` API this module uses,
@@ -217,7 +206,7 @@ export type ArchiveRecallIndexedResult = RecallContextResult & {
 export const recallEmptyResultMessage = (
   result: Pick<ArchiveRecallIndexedResult, 'indexState'>,
 ): string =>
-  'No archived pre-compaction content matched. Archived transcripts exist only after a compaction pass rewrote history; verify facts against live files with read_files instead.' +
+  'No matching archived context. Archived snippets survive compaction and persist across sessions; verify facts against live files with read_files instead.' +
   (result.indexState === 'fallback'
     ? ' (archive index unavailable, fell back to substring scan)'
     : '')
@@ -257,7 +246,7 @@ export async function recallFromArchiveIndexed(
   if (terms.length === 0) {
     return { ...recallFromArchive(archive, query), indexState: 'indexed' }
   }
-  const sanitized = sanitizeFtsQuery(query)
+  const sanitized = sanitizeLocal(query)
   if (sanitized === null) {
     // Every term was non-tokenizable (e.g. `--` alone): no FTS5 MATCH query
     // can be built. A blank-MATCH query would return ALL rows unranked,
