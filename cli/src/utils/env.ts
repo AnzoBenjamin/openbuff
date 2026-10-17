@@ -76,6 +76,9 @@ export const getCliEnv = (): CliEnv => ({
   CODEBUFF_PERF_TEST: process.env.CODEBUFF_PERF_TEST,
   OPENBUFF_CONFIG_DIR: process.env.OPENBUFF_CONFIG_DIR,
   OPENBUFF_MEMORY_AUTHORITY: process.env.OPENBUFF_MEMORY_AUTHORITY,
+  // Optional cap on the missing-output retry loop (maxMissingOutputRetries).
+  OPENBUFF_MAX_MISSING_OUTPUT_RETRIES:
+    process.env.OPENBUFF_MAX_MISSING_OUTPUT_RETRIES,
   // P1-T3 attach mode: target of a running `openbuff serve` to attach to.
   OPENBUFF_SERVE_SOCKET: process.env.OPENBUFF_SERVE_SOCKET,
   OPENBUFF_SERVE_TOKEN: process.env.OPENBUFF_SERVE_TOKEN,

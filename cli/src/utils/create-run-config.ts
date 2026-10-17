@@ -6,6 +6,7 @@ import { IndexManager } from '@codebuff/indexer'
 import { loadProviderConfigSync } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../project-files'
+import { getCliEnv } from './env'
 import { notifyTerminal } from './terminal-notify'
 import { writeToTty } from './terminal-title'
 import {
@@ -132,6 +133,8 @@ function resolveMaxAgentSteps(): number {
  * Resolve the optional missing-output retry cap. Unlike maxAgentSteps there
  * is no -1 sentinel: omitted (or invalid) means unlimited retries, so
  * returning undefined keeps the runtime's unlimited-by-default contract.
+ * Config wins over the env fallback, mirroring the OPENBUFF_MAX_*_REPAIR_ROUNDS
+ * convention (explicit option values win over the env).
  */
 function resolveMaxMissingOutputRetries(): number | undefined {
   try {
@@ -141,6 +144,13 @@ function resolveMaxMissingOutputRetries(): number | undefined {
     }
   } catch {
     // Best-effort; never let config loading break run creation.
+  }
+  const envRaw = getCliEnv().OPENBUFF_MAX_MISSING_OUTPUT_RETRIES
+  if (envRaw !== undefined && envRaw.trim() !== '') {
+    const parsed = Number(envRaw.trim())
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed)
+    }
   }
   return undefined
 }

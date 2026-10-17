@@ -15,6 +15,8 @@ import type { BaseEnv, ClientEnv } from '@codebuff/common/types/contracts/env'
 export type CliEnv = BaseEnv & {
   OPENBUFF_CONFIG_DIR?: string
   OPENBUFF_MEMORY_AUTHORITY?: string
+  // Optional cap on the missing-output retry loop (maxMissingOutputRetries).
+  OPENBUFF_MAX_MISSING_OUTPUT_RETRIES?: string
   // P1-T3 attach mode: target of a running `openbuff serve` to attach to.
   OPENBUFF_SERVE_SOCKET?: string
   OPENBUFF_SERVE_TOKEN?: string

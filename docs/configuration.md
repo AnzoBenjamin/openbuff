@@ -397,7 +397,9 @@ field** for these systems yet — the behavior is code-default and always on.
   a configured `maxAgentSteps` cap or user cancellation ends the run.
   Setting a positive integer caps those retries; after the cap the parent
   receives a null structured value. Configure in `openbuff.json` as
-  `"maxMissingOutputRetries": 3`.
+  `"maxMissingOutputRetries": 3`, or set the
+  `OPENBUFF_MAX_MISSING_OUTPUT_RETRIES` env var to a positive integer; the
+  JSON config wins over the env fallback.
 - **`/context`** is a read-only slash command that prints the per-component
   token breakdown recorded for the current turn (advisory telemetry, not a
   hard gate). It also always prints the effective gate repair budgets

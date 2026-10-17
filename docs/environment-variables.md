@@ -63,6 +63,11 @@ gate repair budgets have optional env canaries:
   caps the specialist→repair→re-review loop (max `20`). Unset or invalid →
   **unlimited** (progress-gated). Explicit
   `createBase2({ maxSpecialistRepairRounds })` always wins over the env.
+- `OPENBUFF_MAX_MISSING_OUTPUT_RETRIES` — optional positive integer string that
+  caps how many times a structured-output agent is re-prompted after ending
+  its turn without calling `set_output`. Unset or invalid → **unlimited**
+  (bounded only by the configured step cap). A valid `maxMissingOutputRetries`
+  in `openbuff.json` wins over the env.
 - `OPENBUFF_MAX_REVIEWER_NO_VERDICT_RETRIES` — optional positive integer string
   that caps how many times the reviewer is retried after returning no
   schema-valid verdict before the user-authorized BYPASS REVIEWER escape is
