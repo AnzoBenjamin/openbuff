@@ -1373,6 +1373,12 @@ export async function loopAgentSteps(
     // contextTokenCount exceeds this threshold, the loop proactively trims
     // message history via trimMessagesToFitTokenLimit. Defaults to 190k.
     maxContextLength?: number
+    // Optional cap on the missing-output retry loop below: when the knob is
+    // omitted the retry fires on EVERY turn-end that still lacks required
+    // output (bounded only by the configured step cap / cancellation); a
+    // positive integer caps the retries and then the structured agent
+    // returns a null value.
+    maxMissingOutputRetries?: number
     resolveModelContextWindow?: (params: {
       agentId?: string
       model?: string
@@ -2905,6 +2911,12 @@ export async function loopAgentSteps(
         })
 
         // Check if output is required but missing
+        // Omitted knob → unlimited retries (the post-cap-removal default), so
+        // the step cap / cancellation remains the only bound. A configured
+        // positive integer exhausts after that many retries; the loop then
+        // falls through to the existing shouldEndTurn break and the parent
+        // receives a null structured value.
+        const maxMissingOutputRetries = params.maxMissingOutputRetries
         if (
           agentTemplate.outputSchema &&
           // Skip for programmatic agents: the generator (not the model) drives
@@ -2913,7 +2925,9 @@ export async function loopAgentSteps(
           // reminder also has no effect on a generator-driven agent.
           !agentTemplate.handleSteps &&
           currentAgentState.output === undefined &&
-          shouldEndTurn
+          shouldEndTurn &&
+          (maxMissingOutputRetries === undefined ||
+            outputSchemaRetryCount < maxMissingOutputRetries)
         ) {
           outputSchemaRetryCount += 1
           // The set_output handler records its rejection on this same agent

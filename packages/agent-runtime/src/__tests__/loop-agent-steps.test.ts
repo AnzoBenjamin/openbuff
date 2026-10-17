@@ -2348,6 +2348,45 @@ describe('loopAgentSteps', () => {
     })
   })
 
+  // maxMissingOutputRetries contract: when the knob IS configured, the
+  // missing-output nudge fires at most that many times before the loop ends
+  // via the existing shouldEndTurn break — even though the step budget still
+  // has headroom. The bound is the retry counter, not the step cap: 1 initial
+  // call + 2 retries = 3 LLM calls with stepsRemaining: 20, and the parent
+  // receives the null structured value.
+  it('caps the missing-output nudge at maxMissingOutputRetries and returns a null structured value', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // The LLM only ever returns prose — it never calls set_output.
+      yield { type: 'text' as const, text: 'Still no structured output.' }
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      // Step budget deliberately has headroom: with the knob set, the retry
+      // counter (not the step cap) must be what ends the loop.
+      agentState: { ...agentState, stepsRemaining: 20 },
+      maxMissingOutputRetries: 2,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // 1 initial call + 2 capped retries — the third nudge never fires.
+    expect(llmCallCount).toBe(3)
+    // The structured-output envelope is returned with a null/absent value
+    // rather than throwing.
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: null,
+    })
+  })
+
   // Regression: when a set_output call is rejected (schema validation), the
   // missing-output retry must name the actual rejection so the model can fix
   // the reported fields, instead of a generic reminder.

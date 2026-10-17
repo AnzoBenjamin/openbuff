@@ -128,6 +128,23 @@ function resolveMaxAgentSteps(): number {
   return MAX_AGENT_STEPS_DEFAULT
 }
 
+/**
+ * Resolve the optional missing-output retry cap. Unlike maxAgentSteps there
+ * is no -1 sentinel: omitted (or invalid) means unlimited retries, so
+ * returning undefined keeps the runtime's unlimited-by-default contract.
+ */
+function resolveMaxMissingOutputRetries(): number | undefined {
+  try {
+    const configured = loadProviderConfigSync().config.maxMissingOutputRetries
+    if (typeof configured === 'number' && configured > 0) {
+      return Math.floor(configured)
+    }
+  } catch {
+    // Best-effort; never let config loading break run creation.
+  }
+  return undefined
+}
+
 const HARNESS_APPROVAL_TARGET_DISPLAY_MAX = 200
 
 export type HarnessApprovalRequest = {
@@ -215,6 +232,7 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     previousRun: previousRunState ?? undefined,
     agentDefinitions,
     maxAgentSteps: resolveMaxAgentSteps(),
+    maxMissingOutputRetries: resolveMaxMissingOutputRetries(),
     handleStreamChunk: createStreamChunkHandler(eventHandlerState),
     handleEvent: createEventHandler(eventHandlerState),
     signal: params.signal,

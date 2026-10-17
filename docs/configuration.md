@@ -391,6 +391,13 @@ field** for these systems yet — the behavior is code-default and always on.
   positive int cap, max `20`. When omitted, resolves from
   `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` only when set to a valid positive
   int; unset/invalid → unlimited. Explicit option values win over the env.
+- **`maxMissingOutputRetries`** is an `openbuff.json` key (and an SDK run
+  option). Default **unlimited**: a structured-output agent that ends its
+  turn without calling `set_output` is re-prompted on every turn-end until
+  a configured `maxAgentSteps` cap or user cancellation ends the run.
+  Setting a positive integer caps those retries; after the cap the parent
+  receives a null structured value. Configure in `openbuff.json` as
+  `"maxMissingOutputRetries": 3`.
 - **`/context`** is a read-only slash command that prints the per-component
   token breakdown recorded for the current turn (advisory telemetry, not a
   hard gate). It also always prints the effective gate repair budgets

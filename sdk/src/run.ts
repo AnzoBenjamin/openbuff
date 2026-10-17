@@ -323,6 +323,8 @@ export type OpenbuffClientOptions = {
    */
   mcpServers?: Record<string, MCPConfig>
   maxAgentSteps?: number
+  /** (Optional) Cap on how many times the agent retries a structured set_output after ending its turn without one. Omit for unlimited retries (bounded by maxAgentSteps). */
+  maxMissingOutputRetries?: number
   env?: Record<string, string>
   /** Harness control-plane state root. Defaults to the Openbuff config directory. */
   harnessStateDir?: string
@@ -718,6 +720,9 @@ async function runOnce({
   agentDefinitions,
   mcpServers,
   maxAgentSteps = MAX_AGENT_STEPS_DEFAULT,
+  // No default: omitted means unlimited missing-output retries, mirroring
+  // the runtime knob's undefined → unlimited contract.
+  maxMissingOutputRetries,
   env,
   harnessStateDir,
   approvalReceiptIds = [],
@@ -1658,6 +1663,10 @@ async function runOnce({
         runSignal,
       ).catch(() => {})
     }
+    // Terminal path: dispose the process-wide jobRegistry listener so it does
+    // not leak across runs (same invariant as the aborted path below).
+    callbacksEnabled = false
+    unsubscribeJobEvents()
     return terminalState
   }
 
@@ -1706,6 +1715,7 @@ async function runOnce({
     signal: runSignal,
     onCheckpoint,
     resumeInterruptedTurn,
+    maxMissingOutputRetries,
   })
     .then((result) => {
       resolveTerminal(result)

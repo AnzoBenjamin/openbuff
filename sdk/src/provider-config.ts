@@ -499,6 +499,13 @@ export const providerConfigFileSchema = z
     maxAgentSteps: z
       .union([z.literal(-1), z.number().int().positive().max(100000)])
       .optional(),
+    /**
+     * Optional cap on the missing-output retry loop for structured-output
+     * agents. Unset means unlimited retries (bounded only by the configured
+     * step cap); a positive integer caps the retries before the parent
+     * receives a null structured value.
+     */
+    maxMissingOutputRetries: z.number().int().positive().max(100000).optional(),
   })
   .transform((config) => {
     const agents: Record<string, string> = {}
@@ -583,6 +590,12 @@ export const providerConfigFileSchema = z
       // callers use the unlimited default, bounded only by budget enforcement.
       ...(config.maxAgentSteps !== undefined && {
         maxAgentSteps: config.maxAgentSteps,
+      }),
+      // Same optional-spread contract as maxAgentSteps: the field stays
+      // absent when unset so consumers see unlimited retries, never an
+      // implicit cap.
+      ...(config.maxMissingOutputRetries !== undefined && {
+        maxMissingOutputRetries: config.maxMissingOutputRetries,
       }),
     }
   })
@@ -995,6 +1008,8 @@ function mergeProviderConfigs(
       : (base.readableRoots ?? []),
     failoverModels: override.failoverModels ?? base.failoverModels,
     maxAgentSteps: override.maxAgentSteps ?? base.maxAgentSteps,
+    maxMissingOutputRetries:
+      override.maxMissingOutputRetries ?? base.maxMissingOutputRetries,
   }
 }
 
@@ -2782,6 +2797,9 @@ export function writeProviderConfigFile(params: {
         existingConfig.autoFileChangeHooks ?? newConfig.autoFileChangeHooks,
       failoverModels: existingConfig.failoverModels ?? newConfig.failoverModels,
       maxAgentSteps: existingConfig.maxAgentSteps ?? newConfig.maxAgentSteps,
+      maxMissingOutputRetries:
+        existingConfig.maxMissingOutputRetries ??
+        newConfig.maxMissingOutputRetries,
       // Preserve the user's existing allowlist; /setup only adds providers.
       readableRoots: existingConfig.readableRoots?.length
         ? existingConfig.readableRoots
