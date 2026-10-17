@@ -1630,6 +1630,35 @@ export const findAgentTypeById = (
 }
 
 /**
+ * Returns true when an agent block with the given id exists anywhere in the
+ * block tree. Callers use this to decide whether a nested update can land:
+ * `appendToolToAgentBlock`/`updateBlocksRecursively` are no-ops when no
+ * matching agent block exists, so an unconditional nest would silently drop
+ * the block instead of appending it at root.
+ */
+export const hasAgentBlock = (
+  blocks: ContentBlock[],
+  agentId: string,
+  _depth = 0,
+): boolean => {
+  for (const block of blocks) {
+    if (block.type === 'agent') {
+      if (block.agentId === agentId) {
+        return true
+      }
+      if (
+        block.blocks &&
+        _depth < MAX_BLOCK_UPDATE_DEPTH &&
+        hasAgentBlock(block.blocks, agentId, _depth + 1)
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
  * Options for creating an agent content block.
  */
 export interface CreateAgentBlockOptions {

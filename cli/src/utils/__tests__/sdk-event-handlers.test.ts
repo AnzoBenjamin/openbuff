@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { createMessageUpdater } from '../message-updater'
+import {
+  createBatchedMessageUpdater,
+  createMessageUpdater,
+} from '../message-updater'
 import {
   createEventHandler,
   createStreamChunkHandler,
@@ -12,6 +15,7 @@ import type {
   ChatMessage,
   CompactionContentBlock,
   CompactionNotice,
+  ContentBlock,
 } from '../../types/chat'
 import { CLI_LIVE_SESSION_ID } from '../../types/chat'
 import type { EventHandlerState } from '../sdk-event-handlers'
@@ -376,6 +380,44 @@ describe('sdk-event-handlers', () => {
     expect(getMessages()[0].blocks?.[0]).toMatchObject({ lifecycle: 'failed' })
   })
 
+  test('[hasToolBlockById] a pathologically deep block tree does not overflow the flush', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    // Build a block tree nested well past the walk's depth cap. Without the
+    // cap, hasToolBlockById would recurse until the stack overflowed and
+    // aborted the message-update flush; with it, the walk stops descending and
+    // the tool_call still lands (at root).
+    let nested: ContentBlock = { type: 'text', content: 'leaf' }
+    for (let i = 0; i < 4000; i++) {
+      nested = {
+        type: 'agent',
+        agentId: `agent-${i}`,
+        agentName: 'deep',
+        agentType: 'deep',
+        content: '',
+        status: 'running',
+        blocks: [nested],
+        initialPrompt: '',
+      }
+    }
+    ctx.message.updater.updateAiMessageBlocks(() => [nested])
+    expect(() =>
+      dispatchValidEvent(handleEvent, {
+        type: 'tool_call',
+        toolCallId: 'tool-deep',
+        toolName: 'read_files',
+        input: { paths: ['a.ts'] },
+      }),
+    ).not.toThrow()
+    // The deep tree has no tool block, so the new card is appended at root.
+    const rootBlocks = getMessages()[0].blocks ?? []
+    expect(
+      rootBlocks.some(
+        (block) => block.type === 'tool' && block.toolCallId === 'tool-deep',
+      ),
+    ).toBe(true)
+  })
+
   test('late canonical mutation result replaces cancellation with authoritative state', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)
@@ -552,6 +594,282 @@ describe('sdk-event-handlers', () => {
       agentId: 'general-2',
       status: 'partial',
     })
+  })
+
+  test('[RF-4] nested tool call lands exactly once under its agent with a batched updater', () => {
+    // The production updater is createBatchedMessageUpdater, which QUEUES block
+    // updaters and runs them at the next flush (or on dispose). The nest-vs-root
+    // decision must therefore be made INSIDE the same updater that appends the
+    // block — a closure flag set by the updater would still be false at the
+    // synchronous check, so the tool block was appended BOTH nested (later, at
+    // flush) and at root (immediately), rendering a duplicate/orphaned card.
+    const { ctx } = createTestContext()
+    let messages: ChatMessage[] = [
+      {
+        id: 'ai-1',
+        variant: 'ai',
+        content: '',
+        blocks: [],
+        timestamp: 'now',
+      },
+    ]
+    const getMessages = () => messages
+    const batched = createBatchedMessageUpdater('ai-1', (fn) => {
+      messages = fn(messages)
+    })
+    ctx.message.updater = batched
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'subagent_start',
+      agentId: 'agent-1',
+      agentType: 'editor',
+      displayName: 'Editor',
+      onlyChild: false,
+    } as any)
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'nested-tool-1',
+      toolName: 'edit_transaction',
+      input: { edits: [] },
+      agentId: 'agent-1',
+    })
+    // The tool_call updaters are still QUEUED here; the flag-based implementation
+    // would already have appended at root, so flush to observe the real result.
+    batched.flush()
+    const blocks = getMessages()[0].blocks ?? []
+    // Exactly one root block (the agent), and the tool card nested under it once.
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({ type: 'agent', agentId: 'agent-1' })
+    const nestedTools = (blocks[0] as any).blocks.filter(
+      (b: any) => b.type === 'tool' && b.toolCallId === 'nested-tool-1',
+    )
+    expect(nestedTools).toHaveLength(1)
+    const rootTools = blocks.filter(
+      (b: any) => b.type === 'tool' && b.toolCallId === 'nested-tool-1',
+    )
+    expect(rootTools).toHaveLength(0)
+  })
+
+  test('[RF-4] tool call with an agentId whose block is absent appends once at root', () => {
+    // Root-append fallback: with no matching agent block the tool card must not
+    // be silently dropped, and must not be appended twice.
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'orphan-tool-1',
+      toolName: 'edit_transaction',
+      input: { edits: [] },
+      agentId: 'never-created',
+    })
+    const rootTools = (getMessages()[0].blocks ?? []).filter(
+      (b: any) => b.type === 'tool' && b.toolCallId === 'orphan-tool-1',
+    )
+    expect(rootTools).toHaveLength(1)
+  })
+
+  test('[RF-4] a root-orphaned tool card is adopted by its agent block once it appears', () => {
+    // Race-safe nest-vs-root under the batched updater: the tool_call's updater
+    // can flush BEFORE the agent-block updater, so with no agent block present
+    // it appends at ROOT. Once the agent block appears the already-rendered card
+    // must be RE-PARENTED under it, not left as a root orphan nor duplicated.
+    const { ctx } = createTestContext()
+    let messages: ChatMessage[] = [
+      {
+        id: 'ai-1',
+        variant: 'ai',
+        content: '',
+        blocks: [],
+        timestamp: 'now',
+      },
+    ]
+    const getMessages = () => messages
+    const batched = createBatchedMessageUpdater('ai-1', (fn) => {
+      messages = fn(messages)
+    })
+    ctx.message.updater = batched
+    const handleEvent = createEventHandler(ctx)
+
+    // tool_call arrives first and its updater is still QUEUED; flush it with no
+    // agent block in the tree so it takes the root fallback.
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'adopt-tool-1',
+      toolName: 'edit_transaction',
+      input: { edits: [] },
+      agentId: 'late-agent',
+    })
+    batched.flush()
+    expect(
+      (getMessages()[0].blocks ?? []).filter(
+        (b: any) => b.type === 'tool' && b.toolCallId === 'adopt-tool-1',
+      ),
+    ).toHaveLength(1)
+
+    // The agent block is created afterwards; the root card must move under it.
+    handleEvent({
+      type: 'subagent_start',
+      agentId: 'late-agent',
+      agentType: 'editor',
+      displayName: 'Editor',
+      onlyChild: true,
+    } as any)
+    batched.flush()
+
+    const blocks = getMessages()[0].blocks ?? []
+    const rootTools = blocks.filter(
+      (b: any) => b.type === 'tool' && b.toolCallId === 'adopt-tool-1',
+    )
+    expect(rootTools).toHaveLength(0)
+    const agentBlock = blocks.find(
+      (b: any) => b.type === 'agent' && b.agentId === 'late-agent',
+    ) as any
+    expect(agentBlock).toBeDefined()
+    const nestedTools = (agentBlock.blocks ?? []).filter(
+      (b: any) => b.type === 'tool' && b.toolCallId === 'adopt-tool-1',
+    )
+    expect(nestedTools).toHaveLength(1)
+  })
+
+  test('[RF-4] a root-orphaned tool card is adopted when subagent_start matches a spawn placeholder', () => {
+    const { ctx } = createTestContext()
+    let messages: ChatMessage[] = [
+      {
+        id: 'ai-1',
+        variant: 'ai',
+        content: '',
+        blocks: [],
+        timestamp: 'now',
+      },
+    ]
+    const getMessages = () => messages
+    const batched = createBatchedMessageUpdater('ai-1', (fn) => {
+      messages = fn(messages)
+    })
+    ctx.message.updater = batched
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'spawn-match-1',
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'editor', prompt: 'edit' }] },
+    })
+    batched.flush()
+    ctx.streaming.streamRefs.state.spawnAgentsMap.set('spawn-match-1-0', {
+      index: 0,
+      agentType: 'editor',
+    })
+
+    // The child tool arrives before subagent_start and therefore takes the
+    // existing root fallback while its matching spawn placeholder is pending.
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'spawned-child-tool',
+      toolName: 'edit_transaction',
+      input: { edits: [] },
+      agentId: 'real-child',
+    })
+    batched.flush()
+    expect(
+      (getMessages()[0].blocks ?? []).filter(
+        (block) =>
+          block.type === 'tool' && block.toolCallId === 'spawned-child-tool',
+      ),
+    ).toHaveLength(1)
+
+    dispatchValidEvent(handleEvent, {
+      type: 'subagent_start',
+      agentId: 'real-child',
+      agentType: 'editor',
+      displayName: 'Editor',
+      spawnToolCallId: 'spawn-match-1',
+      spawnIndex: 0,
+      onlyChild: true,
+    })
+    batched.flush()
+
+    const blocks = getMessages()[0].blocks ?? []
+    expect(
+      blocks.filter(
+        (block) =>
+          block.type === 'tool' && block.toolCallId === 'spawned-child-tool',
+      ),
+    ).toHaveLength(0)
+    const agentBlock = blocks.find(
+      (block) => block.type === 'agent' && block.agentId === 'real-child',
+    )
+    expect(agentBlock).toBeDefined()
+    expect(
+      (agentBlock as Extract<ContentBlock, { type: 'agent' }>).blocks?.filter(
+        (block) =>
+          block.type === 'tool' && block.toolCallId === 'spawned-child-tool',
+      ),
+    ).toHaveLength(1)
+  })
+
+  test('[RF-4] two batched tool_calls for one agent nest exactly once each', () => {
+    // Two tool_calls in one batch run their updaters at flush in queue order.
+    // The idempotent by-toolCallId append must leave exactly one nested card per
+    // id with no root duplicate, regardless of the order the flush runs them.
+    const { ctx } = createTestContext()
+    let messages: ChatMessage[] = [
+      {
+        id: 'ai-1',
+        variant: 'ai',
+        content: '',
+        blocks: [],
+        timestamp: 'now',
+      },
+    ]
+    const getMessages = () => messages
+    const batched = createBatchedMessageUpdater('ai-1', (fn) => {
+      messages = fn(messages)
+    })
+    ctx.message.updater = batched
+    const handleEvent = createEventHandler(ctx)
+    handleEvent({
+      type: 'subagent_start',
+      agentId: 'agent-batch',
+      agentType: 'editor',
+      displayName: 'Editor',
+      onlyChild: true,
+    } as any)
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'batch-tool-1',
+      toolName: 'read_files',
+      input: { paths: ['a.ts'] },
+      agentId: 'agent-batch',
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'batch-tool-2',
+      toolName: 'read_files',
+      input: { paths: ['b.ts'] },
+      agentId: 'agent-batch',
+    })
+    batched.flush()
+    // Flush a second time: a re-run of the queued updaters must not duplicate.
+    batched.flush()
+
+    const blocks = getMessages()[0].blocks ?? []
+    const agentBlock = blocks.find(
+      (b: any) => b.type === 'agent' && b.agentId === 'agent-batch',
+    ) as any
+    expect(agentBlock).toBeDefined()
+    for (const toolCallId of ['batch-tool-1', 'batch-tool-2']) {
+      expect(
+        blocks.filter(
+          (b: any) => b.type === 'tool' && b.toolCallId === toolCallId,
+        ),
+      ).toHaveLength(0)
+      expect(
+        (agentBlock.blocks ?? []).filter(
+          (b: any) => b.type === 'tool' && b.toolCallId === toolCallId,
+        ),
+      ).toHaveLength(1)
+    }
   })
 
   test('[ERR-H01] subagent error finishes persist failed status', () => {
@@ -998,6 +1316,42 @@ describe('sdk-event-handlers', () => {
       queued: false,
       lifecycle: 'running',
     })
+  })
+
+  test('tool_start does not overflow on a pathologically deep agent block tree', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    let nested: ContentBlock = {
+      type: 'tool',
+      toolCallId: 'deep-queued',
+      toolName: 'write_file',
+      input: {},
+      queued: true,
+      lifecycle: 'queued',
+    }
+    for (let i = 0; i < 4000; i++) {
+      nested = {
+        type: 'agent',
+        agentId: `deep-agent-${i}`,
+        agentName: 'Deep agent',
+        agentType: 'deep',
+        content: '',
+        status: 'running',
+        blocks: [nested],
+        initialPrompt: '',
+      }
+    }
+    ctx.message.updater.updateAiMessageBlocks(() => [nested])
+
+    expect(() =>
+      dispatchValidEvent(handleEvent, {
+        type: 'tool_start',
+        toolCallId: 'deep-queued',
+      }),
+    ).not.toThrow()
+    // The bounded walk safely leaves blocks beyond the supported nesting
+    // depth untouched rather than risking a stack overflow in the event path.
+    expect(getMessages()[0].blocks).toEqual([nested])
   })
 
   test('tool_start flips a queued custom/unknown-path tool block back to running', () => {

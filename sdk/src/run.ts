@@ -1235,15 +1235,29 @@ async function runOnce({
     if (!callbacksEnabled || runSignal.aborted) {
       return
     }
-    const { agentId, agentType, chunk } = action
+    const { agentId, agentType, chunk, chunkKind, ancestorRunIds } = action
 
     if (handleStreamChunk && chunk) {
-      await handleStreamChunk({
-        type: 'subagent_chunk',
-        agentId,
-        agentType,
-        chunk,
-      })
+      if (chunkKind === 'reasoning') {
+        // Reasoning (thinking) delta from a subagent: emit the SAME
+        // reasoning_chunk stream event the root loop's onResponseChunk maps
+        // its reasoning_delta events to (ancestorRunIds is required in the
+        // CLI's reasoning_chunk shape, so a missing chain falls back to the
+        // root reasoning stream with []).
+        await handleStreamChunk({
+          type: 'reasoning_chunk',
+          agentId,
+          ancestorRunIds: ancestorRunIds ?? [],
+          chunk,
+        })
+      } else {
+        await handleStreamChunk({
+          type: 'subagent_chunk',
+          agentId,
+          agentType,
+          chunk,
+        })
+      }
     }
   }
 
@@ -1605,6 +1619,8 @@ async function runOnce({
       chunk,
       prompt,
       forwardToPrompt = true,
+      chunkKind,
+      ancestorRunIds,
     }) => {
       if (!callbacksEnabled || terminalRequested) {
         return
@@ -1617,6 +1633,8 @@ async function runOnce({
         chunk,
         prompt,
         forwardToPrompt,
+        chunkKind,
+        ancestorRunIds,
       })
     },
   })

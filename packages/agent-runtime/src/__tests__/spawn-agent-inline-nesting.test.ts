@@ -698,7 +698,9 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(serialized).toContain('.agents/sessions/a/findings/services.md')
   })
 
-  it('marks a general agent partial when it omits explicit completion', () => {
+  // Relaxed completion contract: a general agent that produced a usable final
+  // answer completes without an explicit task_completed call.
+  it('credits a general agent final answer without explicit task_completed', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'general-1',
@@ -710,15 +712,17 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
       },
     })
 
-    expect(receipt.status).toBe('partial')
-    expect(receipt.errors[0]?.message).toContain('task_completed')
+    expect(receipt.status).toBe('completed')
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
   })
 
   // Early-exit contract: a realistic spawn finish shape often has the final
   // answer only on agentState.messageHistory (not also re-wrapped in output).
-  // Missing task_completed still forces status partial + retryable error so
-  // parents can re-spawn rather than treating prose as completed work.
-  it('marks general agent partial for messageHistory final answer without task_completed (early-exit contract)', () => {
+  // The relaxed contract credits that recoverable answer even without
+  // task_completed.
+  it('credits a messageHistory final answer without task_completed (relaxed contract)', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'general-message-history-only',
@@ -741,9 +745,10 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
       } as any,
     })
 
-    expect(receipt.status).toBe('partial')
-    expect(receipt.errors[0]?.message).toContain('task_completed')
-    expect(receipt.errors[0]?.retryable).toBe(true)
+    expect(receipt.status).toBe('completed')
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
   })
 
   // Completion credit for a harvested-fallback general agent must come from

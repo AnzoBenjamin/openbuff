@@ -14,7 +14,10 @@
  * and verify freshness with the same script's `--check` mode.
  */
 
-import { isAttestableSnapshotFingerprint } from './gate-fingerprint'
+import {
+  hashGateSnapshotDetails,
+  isAttestableSnapshotFingerprint,
+} from './gate-fingerprint'
 import { normalizeGateFilePath } from './gate-paths'
 
 type ReviewerStructuredVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING'
@@ -1176,4 +1179,684 @@ function collectStrings(
   for (const nested of Object.values(value as Record<string, unknown>)) {
     collectStrings(nested, out, depth + 1)
   }
+}
+
+/**
+ * Wave 3 (A6) DETERMINISTIC VERDICT RECOVERY.
+ *
+ * Reviewer-family agents occasionally emit a schema-valid verdict inside a
+ * prose reply, a fenced code block, or a JSON object whose verdict lives under
+ * a NON-slot key (`reviewVerdict` / `finalVerdict` / `decision` / `status`)
+ * instead of the `verdict` slot the gate recognizes. Today the EXISTING
+ * recognizer (`collectStructuredReviewerOutputs` / `visitForStructuredVerdict`)
+ * drops every one of those, and the gate parks in the no-verdict retry loop
+ * even though a valid review was returned. This helper is a SEPARATE pre-pass
+ * that text-repairs the leaf STRINGS of a tool result so the UNMODIFIED
+ * recognizer can shape the verdict on the next pass.
+ *
+ * INV-A.2 (recovery never mints attestation): the recovered node carries ONLY
+ * the normalized `verdict` (+ `schemaVersion: 1`); it NEVER synthesizes
+ * `findings`, `findingRecords`, `advisories`, `requirementCoverage`,
+ * `dimensions`, `snapshotFingerprint`, or `reviewedFiles`. A recovered object
+ * therefore still fails closed on the unmodified attestation check — the gate
+ * cannot be talked into a forged snapshot by prompt-injected text.
+ *
+ * R0 short-circuit: when the result ALREADY carries a shaped entry (any
+ * `schemaVersion !== undefined`), the input is returned VERBATIM
+ * (byte-identical) so recovery can never perturb an already-recognizable
+ * receipt. Only a result the recognizer would otherwise DROP is repaired.
+ *
+ * Recovery NEVER widens `stripReviewerPreamble` / `visitForStructuredVerdict`:
+ * those stay the global verdict surface. This is a bounded pre-pass over leaf
+ * strings only.
+ *
+ * Hoisted top-level `function` (NOT a module-scope const) because
+ * `scripts/generate-gate-helpers.ts` splices ONLY top-level function/type/
+ * interface declarations into base2's `<gate-helpers-generated>` region and
+ * emits NO imports and NO module-scope `const`/`let`. Every regex and lookup
+ * table is therefore inlined in the body, exactly as `isTransientReviewerCrash`
+ * already inlines its `patterns` array. It CALLS the existing module-private
+ * recognizer (`collectStructuredReviewerOutputs`), which the generator also
+ * emits, so the spliced copy resolves it in-region.
+ */
+export function recoverStructuredReviewerOutputs(toolResult: unknown): unknown {
+  // R0: an already-shaped receipt is returned byte-identical. `some` (not
+  // `every`) matches the recognizer's own "any shaped entry exists" narrowing,
+  // so a result the gate already credits is never rewritten.
+  const existing = collectStructuredReviewerOutputs(toolResult)
+  if (existing.length > 0 && existing.some((e) => e.schemaVersion !== undefined)) {
+    return toolResult
+  }
+  // Walk the SAME envelope shapes `visitForStructuredVerdict` walks (depth 8,
+  // `json`/`structuredOutput` recursed into `value`, `json` also into
+  // `agentReceipt`). Record the LAST qualifying candidate: a real receipt tends
+  // to FOLLOW a quoted example in the reviewer's prose, so the last hit is the
+  // one that describes this review.
+  let recovered: Record<string, unknown> | undefined
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 8) return
+    if (!value) return
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1)
+      return
+    }
+    if (typeof value === 'string') {
+      const candidate = extractVerdictObjectFromText(value)
+      if (candidate) recovered = candidate
+      return
+    }
+    if (typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    if (
+      (record.type === 'json' || record.type === 'structuredOutput') &&
+      'value' in record
+    ) {
+      visit(record.value, depth + 1)
+      if (record.type === 'json' && record.agentReceipt !== undefined) {
+        visit(record.agentReceipt, depth + 1)
+      }
+      return
+    }
+    for (const nested of Object.values(record)) {
+      visit(nested, depth + 1)
+    }
+  }
+  visit(toolResult, 0)
+  if (!recovered) return toolResult
+  // Synthetic node shaped so the EXISTING recognizer credits it: the recognizer
+  // reads `json.value` and inherits `schemaVersion` from the wrapper. NO extra
+  // sentinel keys (a collector might enumerate them into operator output).
+  return { type: 'json', value: recovered, schemaVersion: 1 }
+}
+
+/**
+ * Wave 3 (A6) ordered, first-wins verdict-object extraction from ONE leaf
+ * string. Returns the normalized verdict object (a plain record carrying at
+ * least a canonical `verdict` literal) or null. Recovery NEVER synthesizes
+ * fields beyond `verdict` / `schemaVersion` (see
+ * `recoverStructuredReviewerOutputs` for the INV-A.2 rationale).
+ *
+ * Order (first hit wins):
+ *   R1a whole string is a JSON object (`{` after trim) that parses + is
+ *       verdict-shaped.
+ *   R1b a fenced code block (```json or ```) whose body parses to a
+ *       verdict-shaped object.
+ *   R2  the first balanced `{...}` span in prose that parses to a
+ *       verdict-shaped object.
+ *   R3  a balanced `{...}` span that parses to an object whose verdict literal
+ *       sits under a NON-slot key among reviewVerdict/finalVerdict/decision/
+ *       status — normalize that key to `verdict`.
+ *   R4  a `coverage` value outside the three literals but mappable, applied in
+ *       `normalizeVerdictKeyAndCoverage`, FAIL-CLOSED and TOTAL.
+ *   R5  verdict present ONLY as a prose line (LOOKS_GOOD / NON_BLOCKING /
+ *       BLOCKING on its own line) with no JSON object -> null. DO NOT
+ *       synthesize from prose: prompt-injection — a reviewed file's content
+ *       could contain `// BLOCKING:` and a prose-derived verdict would let it
+ *       forge a review.
+ *
+ * Hoisted top-level `function`; every regex is inlined (no module-scope const)
+ * so the spliced copy is self-contained.
+ */
+function extractVerdictObjectFromText(text: string): Record<string, unknown> | null {
+  if (typeof text !== 'string') return null
+  const cleaned = stripReviewerPreamble(text)
+  if (!cleaned) return null
+
+  // R1a: the whole string IS a JSON object.
+  if (cleaned.startsWith('{')) {
+    const parsed = tryParseJsonObject(cleaned)
+    if (parsed && isVerdictShaped(parsed)) {
+      return normalizeVerdictKeyAndCoverage(parsed)
+    }
+  }
+
+  // R1b: a fenced code block (```json or ```) whose body is a verdict object.
+  {
+    const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(cleaned)
+    if (fence) {
+      const parsed = tryParseJsonObject(fence[1].trim())
+      if (parsed && isVerdictShaped(parsed)) {
+        return normalizeVerdictKeyAndCoverage(parsed)
+      }
+    }
+  }
+
+  // R2 / R3: balanced `{...}` spans in prose. First verdict-shaped span wins;
+  // otherwise the first span whose verdict literal sits under a NON-slot key is
+  // normalized to `verdict` (R3).
+  const spans = balancedObjectSpans(cleaned)
+  let r3Candidate: Record<string, unknown> | null = null
+  for (const span of spans) {
+    const parsed = tryParseJsonObject(span)
+    if (!parsed) continue
+    if (isVerdictShaped(parsed)) {
+      return normalizeVerdictKeyAndCoverage(parsed)
+    }
+    if (r3Candidate === null && hasNonSlotVerdictKey(parsed)) {
+      r3Candidate = parsed
+    }
+  }
+  if (r3Candidate) return normalizeVerdictKeyAndCoverage(r3Candidate)
+
+  // R5: prose-only verdict line -> null (never synthesize).
+  return null
+}
+
+/**
+ * The set of keys a verdict literal may legally appear under, in priority
+ * order. `verdict` is the canonical slot the recognizer reads; the rest are the
+ * NON-slot aliases R3 normalizes into it. Inlined inside the consuming
+ * functions (no module-scope const) so the spliced region stays self-contained.
+ */
+function verdictKeyPriority(): string[] {
+  return ['verdict', 'reviewVerdict', 'finalVerdict', 'decision', 'status']
+}
+
+/**
+ * True iff a string value among the recognized verdict keys trims+uppercases to
+ * one of the three canonical literals. A verdict literal under a NON-slot key
+ * is still verdict-shaped (R3 later normalizes the key); the recognizer's own
+ * `visitForStructuredVerdict` only reads `verdict`, which is why recovery must
+ * normalize the key before handing the object back.
+ */
+function isVerdictShaped(obj: Record<string, unknown>): boolean {
+  for (const key of verdictKeyPriority()) {
+    const value = obj[key]
+    if (typeof value !== 'string') continue
+    const upper = value.trim().toUpperCase()
+    if (
+      upper === 'LOOKS_GOOD' ||
+      upper === 'NON_BLOCKING' ||
+      upper === 'BLOCKING'
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * True iff a verdict literal sits under a NON-slot key (reviewVerdict /
+ * finalVerdict / decision / status) and `verdict` is not already canonical —
+ * i.e. the object R3 should normalize.
+ */
+function hasNonSlotVerdictKey(obj: Record<string, unknown>): boolean {
+  if (typeof obj.verdict === 'string') return false
+  for (const key of ['reviewVerdict', 'finalVerdict', 'decision', 'status']) {
+    const value = obj[key]
+    if (typeof value !== 'string') continue
+    const upper = value.trim().toUpperCase()
+    if (
+      upper === 'LOOKS_GOOD' ||
+      upper === 'NON_BLOCKING' ||
+      upper === 'BLOCKING'
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Normalize a recovered verdict object to the EXACT shape the recognizer reads:
+ * the verdict literal moved to the canonical `verdict` key (uppercased/trimmed)
+ * and a `schemaVersion: 1`. R4 coverage mapping is applied here, FAIL-CLOSED and
+ * TOTAL: any `coverage` value outside the three literals is mapped to the
+ * closest literal, and EVERYTHING unrecognized maps to `missing` — never to
+ * `covered`, because `covered` must only ever mean "lexically full/complete/ok/
+ * yes". Returns a NEW object (never mutates the parsed input).
+ *
+ * NO field is synthesized beyond `verdict` (+ `coverage` normalization and
+ * `schemaVersion`): see the INV-A.2 rationale on
+ * `recoverStructuredReviewerOutputs`. The caller (`visitForStructuredVerdict`)
+ * still applies its own coverage/verdict parsing, so a `covered` here is only a
+ * hint the recognizer re-validates.
+ */
+function normalizeVerdictKeyAndCoverage(
+  obj: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  // Verdict: canonical `verdict` wins; otherwise the first NON-slot alias with
+  // a canonical literal (the same priority order R3 uses).
+  let verdictLiteral = ''
+  if (typeof obj.verdict === 'string') {
+    verdictLiteral = obj.verdict.trim().toUpperCase()
+  } else {
+    for (const key of ['reviewVerdict', 'finalVerdict', 'decision', 'status']) {
+      const value = obj[key]
+      if (typeof value !== 'string') continue
+      const upper = value.trim().toUpperCase()
+      if (
+        upper === 'LOOKS_GOOD' ||
+        upper === 'NON_BLOCKING' ||
+        upper === 'BLOCKING'
+      ) {
+        verdictLiteral = upper
+        break
+      }
+    }
+  }
+  out.verdict = verdictLiteral
+  // R4 (fail-closed, total): map a coverage value to one of the three literals.
+  // Only full/complete/ok/yes may become `covered`; n/a aliases become `n/a`;
+  // EVERYTHING else (including absent) is `missing`.
+  const rawCoverage = typeof obj.coverage === 'string' ? obj.coverage.trim().toLowerCase() : ''
+  out.coverage = mapCoverageValue(rawCoverage)
+  // Recovery's own marker so the recognizer shapes the entry. Deliberately the
+  // ONLY added key: no findings/advisories/fingerprint/reviewedFiles (INV-A.2).
+  out.schemaVersion = 1
+  return out
+}
+
+/**
+ * R4 total, fail-closed coverage mapping. Returns one of `covered` / `missing` /
+ * `n/a`. `full|complete|ok|yes` -> `covered`; `n/a|na|not-applicable` -> `n/a`;
+ * EVERYTHING else -> `missing`. Never maps anything to `covered` unless it
+ * lexically means full/complete/ok/yes. Inlined literals (no module-scope
+ * const) so the spliced copy is self-contained.
+ */
+function mapCoverageValue(value: string): 'covered' | 'missing' | 'n/a' {
+  if (value === 'covered') return 'covered'
+  if (value === 'missing') return 'missing'
+  if (value === 'n/a') return 'n/a'
+  if (value === 'full' || value === 'complete' || value === 'ok' || value === 'yes') {
+    return 'covered'
+  }
+  if (value === 'na' || value === 'not-applicable' || value === 'not applicable') {
+    return 'n/a'
+  }
+  return 'missing'
+}
+
+/**
+ * A brace matcher that respects JSON string/escape state. Returns the inner
+ * text of every top-level balanced `{...}` span in `text`, in source order.
+ * Unbalanced trailing spans are dropped (fail closed — a partial object is not
+ * parseable and must not be recovered from). Hoisted top-level `function`; no
+ * module-scope state, so the spliced copy is self-contained.
+ */
+function balancedObjectSpans(text: string): string[] {
+  const spans: string[] = []
+  if (typeof text !== 'string') return spans
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (ch === '\\') {
+        escaped = true
+      } else if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+    if (ch === '{') {
+      if (depth === 0) start = i
+      depth++
+    } else if (ch === '}') {
+      if (depth > 0) {
+        depth--
+        if (depth === 0 && start >= 0) {
+          spans.push(text.slice(start, i + 1))
+          start = -1
+        }
+      }
+    }
+  }
+  return spans
+}
+
+/**
+ * Parse `text` as a JSON object (an object literal only), returning the record
+ * or null. Arrays, primitives, and malformed JSON all return null so recovery
+ * stays fail-closed. Hoisted top-level `function`; no module-scope state.
+ */
+function tryParseJsonObject(text: string): Record<string, unknown> | null {
+  if (typeof text !== 'string') return null
+  const trimmed = text.trim()
+  if (!trimmed.startsWith('{')) return null
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null
+    }
+    return parsed as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Wave 3 (A7) RETRY FEEDBACK.
+ *
+ * The machine-readable reason a reviewer verdict was rejected. `code` is a
+ * closed union so a caller can branch on it; `summary` is a human-readable
+ * one-liner; `observed` holds the EXACT rejected literals (truncated);
+ * `expected` holds the accepted set; `recoveryStep` echoes the caller's step
+ * label; `attempt` is the 1-based retry attempt number.
+ */
+export type ReviewerVerdictRejectionDiagnostic = {
+  code:
+    | 'no_structured_output'
+    | 'unshaped_only'
+    | 'unrecognized_verdict_literal'
+    | 'invalid_coverage_value'
+    | 'invalid_schema_version'
+    | 'verdict_key_not_found'
+    | 'prose_only'
+    | 'attestation_incomplete'
+    | 'recovered'
+  summary: string
+  observed: string[]
+  expected: string[]
+  recoveryStep: string
+  attempt: number
+}
+
+/**
+ * Wave 3 (A7) diagnostic for a rejected reviewer verdict. Computes the
+ * diagnostic from the SAME (possibly recovered) result the recognizer read, so
+ * the operator message describes the exact rejection the gate saw. Hoisted
+ * top-level `function`; every literal set is inlined (no module-scope const) so
+ * the spliced copy is self-contained.
+ *
+ * Classification:
+ *   - no structured entry at all -> `no_structured_output`;
+ *   - structured entries but none shaped -> `unshaped_only`;
+ *   - a prose-only verdict line (LOOKS_GOOD / NON_BLOCKING / BLOCKING on its
+ *     own line) with no structured entry -> `prose_only`;
+ *   - a shaped entry whose verdict / schemaVersion / coverage is invalid -> the
+ *     matching code.
+ *
+ * `observed` holds the exact rejected literals (truncated); `expected` holds
+ * the accepted sets.
+ */
+export function diagnoseReviewerVerdictRejection(
+  toolResult: unknown,
+  recoveryStep: string,
+): ReviewerVerdictRejectionDiagnostic {
+  const acceptedVerdicts = ['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING']
+  const acceptedCoverage = ['covered', 'missing', 'n/a']
+  const structured = collectStructuredReviewerOutputs(toolResult)
+  const shaped = structured.filter((entry) => entry.schemaVersion !== undefined)
+  const base = {
+    recoveryStep,
+    attempt: 1,
+  }
+
+  if (structured.length === 0) {
+    // No structured entry at all. Distinguish a prose-only verdict line, which
+    // is a recognizable-but-unshapeable label, from a totally unstructured
+    // reply. `collectStrings` + `hasReviewerLineVerdict` mirror the existing
+    // text-mode path exactly.
+    const texts: string[] = []
+    collectStrings(toolResult, texts)
+    const hasProseVerdict = texts
+      .map((text) => stripReviewerPreamble(text))
+      .some(
+        (text) =>
+          hasReviewerLineVerdict(text, 'LOOKS_GOOD') ||
+          hasReviewerLineVerdict(text, 'NON_BLOCKING') ||
+          hasReviewerLineVerdict(text, 'BLOCKING'),
+      )
+    if (hasProseVerdict) {
+      return {
+        ...base,
+        code: 'prose_only',
+        summary:
+          'Reviewer emitted a verdict line as prose with no structured object; the gate cannot shape a verdict from prose.',
+        observed: truncateObserved(collectProseVerdictLines(texts)),
+        expected: acceptedVerdicts,
+      }
+    }
+    return {
+      ...base,
+      code: 'no_structured_output',
+      summary:
+        'Reviewer returned no structured output; the gate cannot shape a verdict.',
+      observed: [],
+      expected: acceptedVerdicts,
+    }
+  }
+
+  if (shaped.length === 0) {
+    // Structured entries exist but none carry a schemaVersion, so the gate
+    // treats the whole result as unshaped.
+    return {
+      ...base,
+      code: 'unshaped_only',
+      summary:
+        'Reviewer returned structured output but no entry was schema-shaped; the gate cannot credit a verdict.',
+      observed: truncateObserved(
+        structured.map((entry) => entry.verdict).filter(Boolean),
+      ),
+      expected: acceptedVerdicts,
+    }
+  }
+
+  // Shaped entries exist. Surface the FIRST concrete invalidity so the operator
+  // knows exactly what to fix.
+  for (const entry of shaped) {
+    if (entry.schemaVersion !== 1) {
+      return {
+        ...base,
+        code: 'invalid_schema_version',
+        summary: `Reviewer reported an invalid schemaVersion (${String(entry.schemaVersion)}); only 1 is accepted.`,
+        observed: truncateObserved([String(entry.schemaVersion)]),
+        expected: ['1'],
+      }
+    }
+  }
+  // A verdict literal under a NON-slot key was normalized to `verdict` by the
+  // recovery pre-pass; the recognizer only reads `verdict`, so a shaped entry
+  // with an empty verdict means the key was not found. Report it explicitly.
+  const verdictless = shaped.find((entry) => !entry.verdict)
+  if (verdictless) {
+    return {
+      ...base,
+      code: 'verdict_key_not_found',
+      summary:
+        'Reviewer structured output carried no recognized verdict key; the gate cannot read a verdict.',
+      observed: [],
+      expected: acceptedVerdicts,
+    }
+  }
+  const coverageInvalid = shaped.find(
+    (entry) => entry.coverage === undefined,
+  )
+  if (coverageInvalid) {
+    return {
+      ...base,
+      code: 'invalid_coverage_value',
+      summary:
+        'Reviewer coverage value was outside the accepted set (covered | missing | n/a).',
+      observed: [],
+      expected: acceptedCoverage,
+    }
+  }
+  // A shaped entry that reached here is creditable; recovery already ran, so
+  // report `recovered` to signal the pre-pass is what made it shapeable.
+  return {
+    ...base,
+    code: 'recovered',
+    summary:
+      'Reviewer structured output was recovered into a creditable verdict by the recovery pre-pass.',
+    observed: truncateObserved(shaped.map((entry) => entry.verdict).filter(Boolean)),
+    expected: acceptedVerdicts,
+  }
+}
+
+/**
+ * Extract the raw prose verdict lines (LOOKS_GOOD / NON_BLOCKING / BLOCKING on
+ * their own line) from a list of texts, for diagnostic `observed` output. The
+ * literal is returned verbatim so the operator sees exactly what was rejected.
+ */
+function collectProseVerdictLines(texts: string[]): string[] {
+  const lines: string[] = []
+  for (const text of texts) {
+    const cleaned = stripReviewerPreamble(text)
+    for (const rawLine of cleaned.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (/^(?:LOOKS_GOOD|NON_BLOCKING|BLOCKING)\b/i.test(line)) {
+        lines.push(line)
+      }
+    }
+  }
+  return lines
+}
+
+/** Bound a diagnostic's `observed` list: at most 5 literals, each <= 80 chars. */
+function truncateObserved(values: string[]): string[] {
+  return values.slice(0, 5).map((value) => {
+    const text = String(value ?? '')
+    return text.length > 80 ? `${text.slice(0, 77)}...` : text
+  })
+}
+
+/**
+ * Wave 3 (A7) value-showing retry notice. Lists the rejected literal verbatim
+ * and the accepted set, and instructs the reviewer to call `set_output` with
+ * the required shape. It MUST NOT include the expected `snapshotFingerprint`
+ * (that would leak a forgeable attestation target), so it references 'the
+ * snapshot id given in your spawn contract' instead. Hoisted top-level
+ * `function`; no module-scope state.
+ */
+export function buildReviewerVerdictRetryNotice(
+  diag: ReviewerVerdictRejectionDiagnostic,
+  reviewerAgentType: string,
+): string {
+  const lines: string[] = [
+    `Your previous ${reviewerAgentType} response was rejected by the automated reviewer gate.`,
+    `Reason (${diag.code}): ${diag.summary}`,
+    `Recovery step: ${diag.recoveryStep} (attempt ${diag.attempt}).`,
+  ]
+  if (diag.observed.length > 0) {
+    lines.push('', 'Rejected value(s):')
+    for (const observed of diag.observed) {
+      lines.push(`  - ${observed}`)
+    }
+  }
+  if (diag.expected.length > 0) {
+    lines.push('', 'Accepted value(s):')
+    for (const expected of diag.expected) {
+      lines.push(`  - ${expected}`)
+    }
+  }
+  lines.push(
+    '',
+    'Re-emit your review by calling `set_output` with the required structured object shape:',
+    "  { verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING', findings: [...], coverage: 'covered' | 'missing' | 'n/a', dimensions: {...}, requirementCoverage: [...], snapshotFingerprint: <the snapshot id given in your spawn contract>, reviewedFiles: [...] }",
+    'Echo the snapshot id given in your spawn contract exactly (do not invent or re-hash one), list every reviewed file, and use only the accepted verdict/coverage literals above. Do not answer in prose.',
+  )
+  return lines.join('\n')
+}
+
+/**
+ * Wave 3 (A8) WINDOWED REVIEW PLANNING.
+ *
+ * Partition the CREDITABLE, uncredited files into deterministic waves capped at
+ * 40 files (the `MAX_COMMITTED_SURFACE_FILES` literal, kept in-body — NO
+ * module-scope const). A file is 'uncredited' when `priorWaveCredit[file]`
+ * differs from `markerFor(file)`: a file whose content marker still matches its
+ * prior-wave credit needs no re-review. The caller supplies `isReviewable` (do
+ * NOT import `selectReviewableGateFiles`; the caller owns that predicate).
+ * Deleted files are returned separately (attested-by-absence) and excluded from
+ * the waves.
+ *
+ * CREDIT-UNIVERSE INVARIANT (universe-mismatch fix): `pendingFiles` here is the
+ * set of files that a specialist pass CAN actually credit — the UNION of every
+ * routed specialist's scoped spawn file set — NOT the full reviewable pending
+ * set. Planning over the wider pending set was the defect: a planned wave could
+ * contain a reviewable file that no specialist is ever spawned against (e.g. a
+ * `__tests__/` file or any file excluded from the aux-relevant scoped subset),
+ * so `recordWaveCompletionsForFiles` could never fully credit that wave and the
+ * finalization check reported it missing forever. Planning and crediting now
+ * describe the SAME universe, so every planned wave is creditable by at least
+ * one spawned specialist. The caller (base2.ts) passes the union; this helper
+ * stays a pure partitioner and does not recompute it.
+ *
+ * Hoisted top-level `function`; the 40 cap and every literal are in-body so the
+ * spliced copy is self-contained.
+ */
+export function planGateReviewWaves(
+  pendingFiles: string[],
+  deletedFiles: string[],
+  priorWaveCredit: Record<string, string>,
+  isReviewable: (file: string) => boolean,
+  markerFor: (file: string) => string,
+): { waves: string[][]; deleted: string[]; uncredited: string[] } {
+  const waveCap = 40
+  // NORMALIZATION INVARIANT: every path that leaves this planner (the wave
+  // lists, the deleted list, and the uncredited list) is in the SAME normalized
+  // form `recordWaveCompletionsForFiles` and the finalization live-marker check
+  // compare against. `pendingFiles` arrives as the union of the routed
+  // specialists' scoped spawn file sets, which are collected from raw
+  // reviewer/change sources and may carry a leading `./` or backslashes; a
+  // path that differs only by normalization could never match the credited set
+  // and the post-spawn finalization re-opened the wave as missing. Normalizing
+  // here keeps planning, crediting, and the completion check on one universe.
+  const deleted: string[] = []
+  const deletedSeen = new Set<string>()
+  for (const rawFile of deletedFiles) {
+    const file = normalizeGateFilePath(rawFile)
+    if (!file) continue
+    if (deletedSeen.has(file)) continue
+    deletedSeen.add(file)
+    deleted.push(file)
+  }
+  const uncredited: string[] = []
+  const seen = new Set<string>()
+  for (const rawFile of pendingFiles) {
+    const file = normalizeGateFilePath(rawFile)
+    if (!file) continue
+    if (seen.has(file)) continue
+    seen.add(file)
+    if (!isReviewable(file)) continue
+    if (deletedSeen.has(file)) continue
+    const marker = markerFor(file)
+    // Uncredited when there is no prior credit for this file, or the recorded
+    // credit differs from the live marker (fail closed: a changed or missing
+    // credit re-reviews).
+    if (priorWaveCredit[file] === marker && marker !== undefined) continue
+    uncredited.push(file)
+  }
+  // Deterministic: sort the uncredited creditable files, then chunk by 40.
+  const sorted = [...uncredited].sort()
+  const waves: string[][] = []
+  for (let i = 0; i < sorted.length; i += waveCap) {
+    waves.push(sorted.slice(i, i + waveCap))
+  }
+  return { waves, deleted, uncredited: sorted }
+}
+
+/**
+ * Wave 3 (A8) deterministic wave identity.
+ *
+ * Returns `${fingerprint}#w${waveIndex}#${sha256(sorted(waveFiles).join('\n'))}`.
+ * The hash is taken through the ALREADY-AVAILABLE in-region primitive
+ * `hashGateSnapshotDetails` (spliced from `gate-fingerprint.ts`, which the
+ * generator emits AFTER `gate-reviewer.ts` into the SAME `handleSteps` scope).
+ * Choosing the in-region primitive over a `hash: (s) => string` parameter keeps
+ * `waveKey` IMPORT-FREE — a spliced function cannot `import` a hash lib — and
+ * keeps the caller's signature simple. `hashGateSnapshotDetails` is a hoisted
+ * top-level `function` in the generated region, so calling it here resolves in
+ * both the module (where it is an imported binding) and the spliced copy. The
+ * helper returns `v3:<64 hex>` for a stable string; sorting the wave files makes
+ * the key independent of the order the caller collected them in.
+ */
+export function waveKey(
+  fingerprint: string,
+  waveIndex: number,
+  waveFiles: string[],
+): string {
+  const sorted = [...waveFiles].sort()
+  return `${fingerprint}#w${waveIndex}#${hashGateSnapshotDetails(sorted.join('\n'))}`
 }

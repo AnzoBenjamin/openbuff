@@ -1276,6 +1276,21 @@ ${guideSections}
       // sites once a fresh pass mints markers. Never seeded to `{}` here.
       activeWorkState.specialistRepairRoundCount ??= 0
       activeWorkState.specialistNoVerdictCounts ??= {}
+      // Wave 3 (A8) convergence + windowed-credit records. Plain objects so
+      // older serialized state (which lacks them) is treated as `{}` and fails
+      // closed: an empty diagnostic map means "no prior rejection recorded",
+      // and an empty wave map means "no wave credited yet".
+      activeWorkState.noVerdictDiagnosticCodes ??= {}
+      activeWorkState.waveCompletions ??= {}
+      // WAVE-UNIVERSE per-file credit ledger, keyed by agentType. This is the
+      // ONLY source the post-spawn wave finalization check reads for its
+      // live-marker requirement, and it is populated exclusively by
+      // recordWaveCompletionsForFiles over the SAME (reviewable) universe the
+      // activation threshold and the planner use — NOT the raw R4-widened
+      // specialistReviewFileMarkers set. Absent in older serialized state →
+      // `{}`, which fails closed (no wave credit validated) exactly like an
+      // empty wave ledger.
+      activeWorkState.specialistWaveCreditMarkers ??= {}
       activeWorkState.reviewReceipts ??= []
       activeWorkState.auxGatesLastPendingFiles ??= []
       // Gate-issued per-task plan validation receipts, published ONLY when the
@@ -2950,23 +2965,30 @@ ${guideSections}
           } as any
           const securityToolResult =
             (securityReviewResult as any)?.toolResult ?? securityReviewResult
-          const securityCrash = detectReviewerCrash(securityToolResult)
+          // Wave 3 (A6) recovery for the security gate: computed ONCE and
+          // threaded to EVERY collector below (the same object, never a second
+          // divergent read) so the verdict-agreement invariant holds. Recovery
+          // only widens the input scanned and never synthesizes attestation
+          // fields, so the hard rules below still run against it.
+          const derivedSecurityToolResult =
+            recoverStructuredReviewerOutputs(securityToolResult)
+          const securityCrash = detectReviewerCrash(derivedSecurityToolResult)
           // Parent-owned process RF strings are not repair targets for security.
           // Pass toolResult so evidence-only parent ownership matches finalization.
           const rawSecurityBlockers =
-            collectReviewerBlockers(securityToolResult)
+            collectReviewerBlockers(derivedSecurityToolResult)
           // One structured walk for the whole list: the per-blocker helper
           // re-collects the structured reviewer outputs on every call.
           const parentOwnedSecurityBlockers =
             collectParentOwnedRequirementBlockers(
               rawSecurityBlockers,
-              securityToolResult,
+              derivedSecurityToolResult,
             )
           const securityBlockers = rawSecurityBlockers.filter(
             (blocker: string) => !parentOwnedSecurityBlockers.has(blocker),
           )
           const securityAttestationIssues = collectReviewerAttestationIssues(
-            securityToolResult,
+            derivedSecurityToolResult,
             securitySpawnFingerprint,
             securitySpawnFiles,
             securitySpawnDeletedFiles,
@@ -2979,13 +3001,15 @@ ${guideSections}
           // security-specific credit accepts NON_BLOCKING while keeping the
           // same coverage/requirement/dimension gates.
           const securityVerdict =
-            getSecurityReviewerFinalizationVerdict(securityToolResult)
+            getSecurityReviewerFinalizationVerdict(derivedSecurityToolResult)
           const securityProtocolFailure =
             securityCrash ||
             securityAttestationIssues.length > 0 ||
             !securityVerdict
           if (securityBlockers.length > 0) {
-            const records = collectReviewerFindingRecords(securityToolResult)
+            const records = collectReviewerFindingRecords(
+              derivedSecurityToolResult,
+            )
             const securityFindingRecords = securityBlockers.map(
               (text: string, index: number) => {
                 const record = correlateReviewerFindingRecord(text, records)
@@ -3245,7 +3269,7 @@ ${guideSections}
             break
           } else {
             recordSuccessfulReviewReceipt(
-              securityToolResult,
+              derivedSecurityToolResult,
               'security-reviewer',
               securitySpawnFingerprint,
             )
@@ -3261,7 +3285,7 @@ ${guideSections}
             // Non-empty only: a passing security gate stays silent exactly as
             // before whenever the receipt carries no advisories.
             const securityAdvisories = boundAdvisoryLines(
-              collectReviewerAdvisories(securityToolResult),
+              collectReviewerAdvisories(derivedSecurityToolResult),
             )
             if (securityAdvisories.length > 0) {
               yield {
@@ -3397,8 +3421,42 @@ ${guideSections}
           const specialistDeletedFiles = collectDeletedFilesFromSnapshotDetails(
             buildGateSnapshotDetails(specialistPendingFiles, ''),
           )
+          // R4: a change touching ONLY manifests/lockfiles/CI files (e.g.
+          // package.json) routes `dependency-reviewer` but never spawned it,
+          // because the router input was the reviewable set and those files are
+          // non-reviewable. Route over the aux-relevant reviewable files PLUS
+          // the pending manifest/lockfile/CI files so a manifest-only change
+          // still selects the specialist. The manifests never enter the
+          // reviewable set: the code-reviewer attestation below is computed from
+          // specialistPendingFiles (reviewable-only) and stays untouched.
+          // R4: the pending manifest / lockfile / CI files that the specialist
+          // router treats as dependency-reviewable. In-body and import-free
+          // because handleSteps is serialized via .toString() + new Function()
+          // and the path patterns must mirror specialist-risk-router.ts exactly.
+          // These are NON-reviewable, so they widen the router input and the
+          // specialist's scoped spawn set WITHOUT entering the code-reviewer
+          // attestation set (specialistPendingFiles stays reviewable-only).
+          function isGateManifestOrCiFile(file: string): boolean {
+            if (!file) return false
+            if (
+              /(?:^|\/)(?:package\.json|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|pyproject\.toml|uv\.lock|poetry\.lock|cargo\.toml|cargo\.lock|go\.mod|go\.sum|gemfile(?:\.lock)?|composer\.(?:json|lock)|pom\.xml|build\.gradle(?:\.kts)?|package\.swift)$/.test(
+                file,
+              )
+            ) {
+              return true
+            }
+            // CI workflow definitions (non-reviewable .yml/.yaml under the
+            // conventional CI directories) route dependency-reviewer too.
+            return /(?:^|\/)\.github\/workflows\/.+\.ya?ml$/.test(file)
+          }
+          const specialistManifestFiles = currentPendingGateFiles.filter(
+            (file) => isGateManifestOrCiFile(normalizeGateFilePath(file)),
+          )
+          const specialistRoutingFiles = Array.from(
+            new Set([...specialistAuxRelevantFiles, ...specialistManifestFiles]),
+          )
           const baseRoutedSpecialists = selectSpecialistReviewersInline({
-            files: specialistPendingFiles,
+            files: specialistRoutingFiles,
             requirements: prompt ?? '',
           })
           const routedSpecialists = (
@@ -3425,16 +3483,34 @@ ${guideSections}
           const specialistScopedFingerprints = new Map<string, string>()
           const specialistScopedDeletedFiles = new Map<string, string[]>()
           for (const agentType of routedSpecialists) {
+            // R4: the scoped spawn set is the aux-relevant reviewable subset the
+            // router saw, widened with the pending manifest/lockfile/CI files
+            // when the router selected this specialist for them. The widened
+            // list is what the specialist is spawned against, what
+            // specialistScopedFingerprints hashes, and what its attestation
+            // covers — all three describe the SAME list, and it is never empty
+            // for a routed specialist that was selected off a manifest.
+            const manifestScopedFiles =
+              specialistManifestFiles.length > 0 &&
+              selectSpecialistReviewersInline({
+                files: specialistManifestFiles,
+                requirements: prompt ?? '',
+              }).includes(agentType)
+                ? specialistManifestFiles
+                : []
+            const scopedRoutingFiles = Array.from(
+              new Set([...specialistAuxRelevantFiles, ...manifestScopedFiles]),
+            )
             const driftedFiles = specialistDriftedFiles(
               agentType,
-              specialistAuxRelevantFiles,
+              scopedRoutingFiles,
             )
             const scopedFiles =
               driftedFiles.length > 0
                 ? driftedFiles
                 : selectReviewableGateFiles(
                     selectAuxRelevantFiles(currentPendingGateFiles),
-                  )
+                  ).concat(manifestScopedFiles)
             specialistScopedFileSets.set(agentType, scopedFiles)
             const scopedDetails = buildGateSnapshotDetails(scopedFiles, '')
             specialistScopedFingerprints.set(
@@ -3446,12 +3522,22 @@ ${guideSections}
               collectDeletedFilesFromSnapshotDetails(scopedDetails),
             )
           }
+          // R4: a specialist is only unspawnable when its SCOPED file set is
+          // genuinely empty (nothing for its attestation to cover). A
+          // manifest-only change leaves specialistPendingFiles (the reviewable
+          // set) empty while the routed specialist still owns a non-empty
+          // scoped manifest list, so the old `specialistPendingFiles.length === 0`
+          // guard swallowed the routed specialist instead of spawning it.
+          const routedSpecialistsWithAttestableScope = routedSpecialists.filter(
+            (agentType) =>
+              (specialistScopedFileSets.get(agentType) ?? []).length > 0,
+          )
           if (
             routedSpecialists.length > 0 &&
-            specialistPendingFiles.length === 0
+            routedSpecialistsWithAttestableScope.length === 0
           ) {
             // Requirements may still route a specialist, but with no
-            // reviewable pending files there is nothing to attest. Mark done
+            // attestable scoped files there is nothing to review. Mark done
             // instead of spawning a reviewer that can only fail file
             // attestation. (Empty-bundle evidence must NOT auto-credit when
             // pending files still exist — that path always spawns.)
@@ -3467,7 +3553,7 @@ ${guideSections}
               ] = specialistCreditFingerprint
             }
             activeWorkState.lastReviewerGateSkipReason =
-              'no-pending-changes-in-snapshot'
+              'specialist-no-attestable-files'
             markActiveWorkStateChanged()
             emitGateTelemetry({
               currentPhase: 'final_response_allowed',
@@ -3475,20 +3561,37 @@ ${guideSections}
               pendingFiles: [],
               reviewerStatus: 'skipped',
               validationStatus: 'skipped',
-              reuseReason: 'no-pending-changes-in-snapshot',
+              reuseReason: 'specialist-no-attestable-files',
             })
-          } else if (routedSpecialists.length > 0) {
+          } else if (routedSpecialists.length === 0) {
+            // R5: nothing routed for the current pending set + requirements.
+            // Record an explicit, non-empty, JSON-serializable skip reason and
+            // emit telemetry, mirroring the committed-surface
+            // 'committed-surface-no-specialists-routed' pattern above.
+            activeWorkState.lastReviewerGateSkipReason =
+              'no-specialists-routed'
+            markActiveWorkStateChanged()
+            emitGateTelemetry({
+              currentPhase: 'final_response_allowed',
+              pendingFileCount: currentPendingGateFiles.length,
+              pendingFiles: currentPendingGateFiles,
+              reviewerStatus: 'skipped',
+              validationStatus: 'skipped',
+              reuseReason: 'no-specialists-routed',
+            })
+          } else if (routedSpecialistsWithAttestableScope.length > 0) {
             // Gate-owned v3 fingerprint is the sole specialist attestation
             // token (same family as security/code-reviewer). Fail closed when
             // crypto is unavailable rather than spawning with a bare bundle id.
             // Each scoped spawn fingerprint must attest independently.
-            const scopedFingerprintsAreAttestable = routedSpecialists.every(
-              (agentType) =>
-                isAttestableSnapshotFingerprint(
-                  specialistScopedFingerprints.get(agentType) ??
-                    specialistCreditFingerprint,
-                ),
-            )
+            const scopedFingerprintsAreAttestable =
+              routedSpecialistsWithAttestableScope.every(
+                (agentType) =>
+                  isAttestableSnapshotFingerprint(
+                    specialistScopedFingerprints.get(agentType) ??
+                      specialistCreditFingerprint,
+                  ),
+              )
             if (
               !isAttestableSnapshotFingerprint(specialistCreditFingerprint) ||
               !scopedFingerprintsAreAttestable
@@ -3515,12 +3618,115 @@ ${guideSections}
               (bundleResult as any)?.toolResult ?? bundleResult,
             )
             // Empty/failed bundle must not falsely clear specialist review when
-            // reviewable pending files exist. This branch only runs after the
-            // specialistPendingFiles.length === 0 early credit path, so always
-            // spawn with the gate-owned v3 token — never auto-credit from
-            // empty-tree evidence alone (bundle snapshotId is not attestation).
+            // attestable scoped files exist. This branch only runs after the
+            // no-attestable-scope early credit path, so always spawn with the
+            // gate-owned v3 token — never auto-credit from empty-tree evidence
+            // alone (bundle snapshotId is not attestation).
             void bundle
+            // Wave 3 (A8) CREDIT-UNIVERSE INVARIANT. Waves must be planned over
+            // exactly the files a specialist pass can CREDIT — the union of
+            // every routed specialist's scoped spawn file set — NOT the wider
+            // reviewable pending set. Planning over `specialistPendingFiles` was
+            // the universe-mismatch defect: a planned wave could contain a
+            // reviewable file no specialist is ever spawned against (e.g. a
+            // `__tests__/` file excluded from `selectAuxRelevantFiles`), so no
+            // pass could ever fully credit that wave and `missingWaves` stayed
+            // permanently non-empty (the gate blocked forever with
+            // 'specialist-review-waves-incomplete'). Planning and crediting now
+            // describe the SAME universe, so every planned wave is creditable.
+            const waveCreditUniverse: string[] = []
             {
+              const universeSeen = new Set<string>()
+              for (const agentType of routedSpecialistsWithAttestableScope) {
+                for (const file of specialistScopedFileSets.get(agentType) ??
+                  []) {
+                  if (universeSeen.has(file)) continue
+                  universeSeen.add(file)
+                  // REVIEWABLE-UNIVERSE INVARIANT: the universe must contain
+                  // ONLY files the planner can actually place in a wave.
+                  // `planGateReviewWaves` filters its input through
+                  // `isReviewableGateFile`, and the R4 manifest widening appends
+                  // NON-reviewable manifest/lockfile/CI paths into each
+                  // specialist's scoped set. Counting those here made
+                  // `waveReviewIsActive` true for a change with ≤40 REVIEWABLE
+                  // files plus enough manifest files to exceed 40, activating
+                  // windowed credit and planning waves over a strictly smaller
+                  // reviewable set — changing behavior (and breaking the
+                  // byte-identical-below-cap guarantee) based on files that can
+                  // never be wave-placed. Filtering here keeps the activation
+                  // threshold and the planner on ONE universe.
+                  if (!isReviewableGateFile(file)) continue
+                  waveCreditUniverse.push(file)
+                }
+              }
+            }
+            // Wave 3 (A8) WINDOWED REVIEW CREDIT. `waveReviewIsActive` is keyed
+            // on the SIZE OF THE WAVE-CREDIT UNIVERSE — the exact set a
+            // specialist pass can credit — NOT on the reviewable pending count.
+            // The R4 manifest widening appends non-reviewable manifest/lockfile
+            // /CI paths into each specialist's scoped set, so keying on
+            // `specialistPendingFiles.length` let a change with ≤40 reviewable
+            // files plus many manifest files keep `waves=[]` while the SAME
+            // manifest files were still credited into
+            // `specialistReviewFileMarkers`; a later change that pushed the
+            // reviewable count above 40 then planned waves over a universe whose
+            // manifest entries carried stale markers, which the planner treated
+            // as already-credited and skipped. Keying on the credit universe
+            // keeps the activation threshold and the planner on ONE universe, so
+            // every file a pass can credit is either wave-covered or the change
+            // stays below the cap byte-identically. Per-FILE credit still lives
+            // in the path-keyed marker ledgers (specialistReviewFileMarkers /
+            // securityReviewFileMarkers / reviewedFileHashes) — `waveCompletions`
+            // records only WHICH waves finished, so the wave ledger survives the
+            // bounded `reviewReceipts` eviction. A wave with an empty file list
+            // is never planned or credited.
+            const waveReviewIsActive = waveCreditUniverse.length > 40
+            // Prior credit must come from the SAME family ledger the
+            // completion re-validation below reads (the SPECIALIST-family
+            // per-file markers), so the forward plan and the completion check
+            // agree about which files are already credited. Reading the
+            // security-family ledger here made the two disagree on a
+            // rollback/re-entry: the two families are populated by different
+            // passes, so a wave could be planned as credited (skipped) while
+            // its completion record was simultaneously judged stale (or vice
+            // versa), producing a redundant wide re-review or an unreachable
+            // completion. A file is credited only while it carries a fresh
+            // marker under at least one routed specialist; the union is used
+            // because a wave may be completed by a later specialist (see the
+            // completion check below).
+            const priorWaveCredit: Record<string, string> = {}
+            for (const agentType of routedSpecialistsWithAttestableScope) {
+              const storedMarkers =
+                activeWorkState.specialistReviewFileMarkers?.[agentType]
+              if (storedMarkers === undefined) continue
+              for (const [file, marker] of Object.entries(storedMarkers)) {
+                priorWaveCredit[file] = marker
+              }
+            }
+            // Snapshot the markers of files that were already credited BEFORE
+            // this specialist pass starts. Finalization must not accept a wave
+            // merely because a changed file was re-credited with its new marker
+            // during the same pass: that pass raced the file transition and its
+            // review evidence is no longer a stable snapshot-bound credit.
+            const priorWaveCreditAtPassStart: Record<string, string> = {
+              ...priorWaveCredit,
+            }
+            const plannedReviewWaves = waveReviewIsActive
+              ? planGateReviewWaves(
+                  waveCreditUniverse,
+                  specialistDeletedFiles,
+                  priorWaveCredit,
+                  isReviewableGateFile,
+                  readGateFileContentMarker,
+                ).waves.filter((wave) => wave.length > 0)
+              : []
+            {
+              // R4: spawn ONLY the specialists whose scoped file set is
+              // non-empty, so no specialist is ever spawned against an empty
+              // list its attestation cannot cover. A manifest-only change keeps
+              // its routed specialist here even though specialistPendingFiles
+              // (the reviewable set) is empty.
+              const spawnableSpecialists = routedSpecialistsWithAttestableScope
               auxGateFiredThisIteration = true
               let specialistBlocked = false
               let specialistTerminalFailure = false
@@ -3532,13 +3738,13 @@ ${guideSections}
               let specialistRepairExit = false
               const specialistResults = new Map<string, unknown>()
               const specialistSnapshots = new Map<string, string>()
-              for (const agentType of routedSpecialists) {
+              for (const agentType of spawnableSpecialists) {
                 specialistSnapshots.set(agentType, specialistCreditFingerprint)
               }
               const firstSpecialistBatch = yield {
                 toolName: 'spawn_agents',
                 input: {
-                  agents: routedSpecialists.map((agentType) => ({
+                  agents: spawnableSpecialists.map((agentType) => ({
                     agent_type: agentType,
                     prompt: buildSpecialistScopedReviewPrompt({
                       title: 'Perform the routed post-edit specialist review.',
@@ -3569,13 +3775,13 @@ ${guideSections}
               const firstBatchToolResult =
                 (firstSpecialistBatch as any)?.toolResult ??
                 firstSpecialistBatch
-              for (const agentType of routedSpecialists) {
+              for (const agentType of spawnableSpecialists) {
                 specialistResults.set(
                   agentType,
                   extractSpawnedAgentResult(firstBatchToolResult, agentType),
                 )
               }
-              const retrySpecialists = routedSpecialists.filter((agentType) => {
+              const retrySpecialists = spawnableSpecialists.filter((agentType) => {
                 const result = specialistResults.get(agentType)
                 // A fully-attesting review (every pending source file covered
                 // by a well-formed snapshot fingerprint) is accepted even when
@@ -3675,15 +3881,23 @@ ${guideSections}
                 }
               }
               if (!specialistTerminalFailure) {
-                for (const agentType of routedSpecialists) {
+                for (const agentType of spawnableSpecialists) {
                   const expectedSnapshotId =
                     specialistSnapshots.get(agentType) ??
                     specialistScopedFingerprints.get(agentType) ??
                     specialistCreditFingerprint
                   const specialistToolResult = specialistResults.get(agentType)
+                  // Wave 3 (A6) recovery for the specialist gate: computed ONCE
+                  // per specialist and threaded to EVERY collector below (the
+                  // same object, never a second divergent read) so the
+                  // verdict-agreement invariant holds. Recovery only widens the
+                  // input scanned and never synthesizes attestation fields, so
+                  // the hard rules below still run against it.
+                  const derivedSpecialistToolResult =
+                    recoverStructuredReviewerOutputs(specialistToolResult)
                   const specialistAttestationIssues =
                     collectReviewerAttestationIssues(
-                      specialistToolResult,
+                      derivedSpecialistToolResult,
                       expectedSnapshotId,
                       specialistScopedFileSets.get(agentType) ?? [],
                       specialistScopedDeletedFiles.get(agentType) ?? [],
@@ -3704,7 +3918,7 @@ ${guideSections}
                   // credit this one.
                   if (
                     !attestsEverything &&
-                    isStaleSnapshotReviewerResult(specialistToolResult)
+                    isStaleSnapshotReviewerResult(derivedSpecialistToolResult)
                   ) {
                     activeWorkState.currentPhase = 'blocked'
                     activeWorkState.openReviewerBlockers = [
@@ -3731,7 +3945,7 @@ ${guideSections}
                   if (attestsEverything) {
                     const specialistFingerprintDrift =
                       collectReviewerFingerprintDrift(
-                        specialistToolResult,
+                        derivedSpecialistToolResult,
                         expectedSnapshotId,
                       )
                     if (specialistFingerprintDrift) {
@@ -3746,9 +3960,9 @@ ${guideSections}
                       })
                     }
                   }
-                  const crash = detectReviewerCrash(specialistToolResult)
+                  const crash = detectReviewerCrash(derivedSpecialistToolResult)
                   const rawBlockers =
-                    collectReviewerBlockers(specialistToolResult)
+                    collectReviewerBlockers(derivedSpecialistToolResult)
                   // Defense in depth: parent-owned process RF strings must not
                   // alone force a specialist repair-editor spawn. Classify the
                   // whole list in ONE structured walk (the per-blocker helper
@@ -3758,7 +3972,7 @@ ${guideSections}
                   const parentOwnedSpecialistBlockers =
                     collectParentOwnedRequirementBlockers(
                       rawBlockers,
-                      specialistToolResult,
+                      derivedSpecialistToolResult,
                     )
                   const blockers = rawBlockers.filter(
                     (blocker: string) =>
@@ -3767,15 +3981,22 @@ ${guideSections}
                   const parentOwnedOnlyBlockers =
                     rawBlockers.length > 0 && blockers.length === 0
                   const verdict =
-                    getReviewerFinalizationVerdict(specialistToolResult)
+                    getReviewerFinalizationVerdict(derivedSpecialistToolResult)
+                  let specialistResultCreditPathQualified = false
                   if (parentOwnedOnlyBlockers && verdict === 'LOOKS_GOOD') {
                     // Pure parent-owned requirementCoverage gaps with LOOKS_GOOD:
                     // credit the specialist the same as a clean pass.
                     delete (activeWorkState.specialistNoVerdictCounts ??= {})[
                       agentType
                     ]
+                    // Re-arm this family's full retry cycle at the same
+                    // clean-slate point: drop its A8 convergence-ledger entries
+                    // so a later rejection on the same snapshot does not
+                    // converge on its first repeat (see
+                    // clearNoVerdictConvergenceForFamily).
+                    clearNoVerdictConvergenceForFamily(agentType)
                     recordSuccessfulReviewReceipt(
-                      specialistToolResult,
+                      derivedSpecialistToolResult,
                       agentType,
                       expectedSnapshotId,
                     )
@@ -3803,8 +4024,24 @@ ${guideSections}
                           readGateFileContentMarker(scopedFile)
                       }
                     }
+                    // Wave 3 (A8): record which planned wave(s) this pass just
+                    // fully credited. Per-file credit is already in the
+                    // path-keyed marker ledger above; this only records wave
+                    // completion so finalization can require every wave present.
+                    // The recorder ALSO mirrors each completion's own
+                    // `creditedFileMarkers` into the WAVE-UNIVERSE marker ledger
+                    // (`specialistWaveCreditMarkers[agentType]`), which is the
+                    // ONLY source the post-spawn finalization check validates
+                    // against — keeping the activation threshold, the planner,
+                    // and the completion-validation universe identical.
+                    recordWaveCompletionsForFiles(
+                      specialistScopedFileSets.get(agentType) ?? [],
+                      plannedReviewWaves,
+                      specialistCreditFingerprint,
+                      agentType,
+                    )
                     const parentOwnedPassAdvisories = boundAdvisoryLines(
-                      collectReviewerAdvisories(specialistToolResult),
+                      collectReviewerAdvisories(derivedSpecialistToolResult),
                     )
                     yield {
                       toolName: 'add_message',
@@ -3830,8 +4067,13 @@ ${guideSections}
                     continue
                   }
                   if (blockers.length > 0) {
+                    invalidateWaveCompletionsForSpecialistBlockers(
+                      blockers,
+                      specialistCreditFingerprint,
+                      specialistScopedFileSets.get(agentType) ?? [],
+                    )
                     const records =
-                      collectReviewerFindingRecords(specialistToolResult)
+                      collectReviewerFindingRecords(derivedSpecialistToolResult)
                     const specialistFindingRecords = blockers.map(
                       (text: string, index: number) => {
                         const record = correlateReviewerFindingRecord(
@@ -4272,7 +4514,62 @@ ${guideSections}
                     const noVerdictCount =
                       Number(noVerdictCounts[agentType] ?? 0) + 1
                     noVerdictCounts[agentType] = noVerdictCount
-                    if (noVerdictCount <= MAX_SPECIALIST_NO_VERDICT_RETRIES) {
+                    // Wave 3 (A8) STATE-based convergence, shared with the
+                    // code-reviewer path. The diagnostic describes EXACTLY the
+                    // rejection the specialist gate saw, read from the SAME
+                    // derived object the verdict derivation used. The ledger is
+                    // the SAME `noVerdictDiagnosticCodes` map the code-reviewer
+                    // path writes, keyed `${family}\n${snapshotFingerprint}`,
+                    // so `clearNoVerdictConvergenceForFamily` at the specialist
+                    // clean-slate points actually has entries to clear. A
+                    // deterministic, repeatable rejection (prose-only / unshaped
+                    // / unrecognized literal / no structured output) means
+                    // another spawn could only reproduce it, so a repeat is
+                    // credited with reduced assurance instead of re-spawned
+                    // forever. The fingerprint component re-arms a full retry
+                    // cycle on a fresh edit.
+                    const specialistNoVerdictDiagnostic =
+                      diagnoseReviewerVerdictRejection(
+                        derivedSpecialistToolResult,
+                        'specialist-verdict-retry',
+                      )
+                    const specialistNoVerdictConvergenceKey = `${agentType}\n${specialistCreditFingerprint}`
+                    const specialistNoVerdictDiagnosticCodes =
+                      (activeWorkState.noVerdictDiagnosticCodes ??= {})
+                    const priorSpecialistNoVerdictCode =
+                      specialistNoVerdictDiagnosticCodes[
+                        specialistNoVerdictConvergenceKey
+                      ]
+                    const specialistNoVerdictCodeIsConvergent =
+                      specialistNoVerdictDiagnostic.code ===
+                        'no_structured_output' ||
+                      specialistNoVerdictDiagnostic.code === 'prose_only' ||
+                      specialistNoVerdictDiagnostic.code === 'unshaped_only' ||
+                      specialistNoVerdictDiagnostic.code ===
+                        'unrecognized_verdict_literal' ||
+                      specialistNoVerdictDiagnostic.code ===
+                        'verdict_key_not_found'
+                    const specialistNoVerdictConverged =
+                      specialistNoVerdictCodeIsConvergent &&
+                      priorSpecialistNoVerdictCode ===
+                        specialistNoVerdictDiagnostic.code
+                    // Record the code for this pair so the NEXT identical
+                    // rejection converges. Written before the branches below so
+                    // both the convergence path and a normal retry leave the
+                    // same durable marker. The CURRENT pair's key is passed to
+                    // the bound so it is retained regardless of insertion order.
+                    specialistNoVerdictDiagnosticCodes[
+                      specialistNoVerdictConvergenceKey
+                    ] = specialistNoVerdictDiagnostic.code
+                    activeWorkState.noVerdictDiagnosticCodes =
+                      boundNoVerdictDiagnosticCodes(
+                        specialistNoVerdictDiagnosticCodes,
+                        specialistNoVerdictConvergenceKey,
+                      )
+                    if (
+                      !specialistNoVerdictConverged &&
+                      noVerdictCount <= MAX_SPECIALIST_NO_VERDICT_RETRIES
+                    ) {
                       activeWorkState.validationAssurance = 'reduced'
                       activeWorkState.latestWorkSummary = `${agentType} returned no verdict; retrying it (attempt ${noVerdictCount}/${MAX_SPECIALIST_NO_VERDICT_RETRIES}) before crediting the gate.`
                       markActiveWorkStateChanged()
@@ -4287,24 +4584,70 @@ ${guideSections}
                       continue
                     }
                     activeWorkState.validationAssurance = 'reduced'
+                    specialistResultCreditPathQualified = blockers.length === 0
                     if (!activeWorkState.lastReviewerGateSkipReason) {
                       activeWorkState.lastReviewerGateSkipReason =
                         'specialist-no-verdict-budget-exhausted'
                     }
-                    activeWorkState.latestWorkSummary = `${agentType} never returned a verdict after ${MAX_SPECIALIST_NO_VERDICT_RETRIES} retry/retries; the gate proceeded with reduced assurance.`
+                    activeWorkState.latestWorkSummary = specialistNoVerdictConverged
+                      ? `${agentType} repeated the same no-verdict rejection (${specialistNoVerdictDiagnostic.code}); the gate converged and proceeded with reduced assurance.`
+                      : `${agentType} never returned a verdict after ${MAX_SPECIALIST_NO_VERDICT_RETRIES} retry/retries; the gate proceeded with reduced assurance.`
+                    // Wave 3 (A8) IDEMPOTENT CREDIT: this converged/exhausted
+                    // no-verdict path CREDITS the specialist below (done set +
+                    // fingerprint + per-file markers), so it MUST record the
+                    // wave completions its pass covers — exactly like the
+                    // parent-owned and verdict credit paths. Without this the
+                    // specialist was marked done while its planned waves stayed
+                    // uncredited, and the post-spawn
+                    // 'specialist-review-waves-incomplete' check then blocked
+                    // and re-entered the loop with the specialist already in
+                    // specialistReviewGatesDone, so the missing waves could
+                    // never be credited (partial-failure deadlock: the retry
+                    // re-evaluated the same pending set with the credit already
+                    // applied and spun between the wave-incomplete block and a
+                    // credited-but-uncredited-wave state instead of making
+                    // forward progress).
+                    // MARKER-MISMATCH CLOSURE: the recorder writes the SAME
+                    // `creditedFileMarkers` into the wave-credit marker ledger
+                    // the finalization check validates against, so this path's
+                    // completions are validated against the marker source it
+                    // just wrote rather than the (differently-scoped)
+                    // specialistReviewFileMarkers set. `agentType` scopes it.
+                    if (blockers.length === 0) {
+                      recordWaveCompletionsForFiles(
+                        specialistScopedFileSets.get(agentType) ?? [],
+                        plannedReviewWaves,
+                        specialistCreditFingerprint,
+                        agentType,
+                      )
+                    }
                   } else {
                     delete (activeWorkState.specialistNoVerdictCounts ??= {})[
                       agentType
                     ]
                     recordSuccessfulReviewReceipt(
-                      specialistToolResult,
+                      derivedSpecialistToolResult,
                       agentType,
                       expectedSnapshotId,
                     )
+                    // Wave 3 (A8): same per-wave completion recording as the
+                    // parent-owned pass path above; `agentType` scopes the
+                    // wave-credit marker ledger the finalization check reads.
+                    // A verdict with specialist-owned blockers is being sent
+                    // to repair below; it must not leave reusable wave credit.
+                    if (blockers.length === 0) {
+                      recordWaveCompletionsForFiles(
+                        specialistScopedFileSets.get(agentType) ?? [],
+                        plannedReviewWaves,
+                        specialistCreditFingerprint,
+                        agentType,
+                      )
+                    }
+                    specialistResultCreditPathQualified = true
                     // Non-empty only: a passing specialist gate stays silent
                     // exactly as before when the receipt carries no advisories.
                     const specialistAdvisories = boundAdvisoryLines(
-                      collectReviewerAdvisories(specialistToolResult),
+                      collectReviewerAdvisories(derivedSpecialistToolResult),
                     )
                     if (specialistAdvisories.length > 0) {
                       yield {
@@ -4322,31 +4665,40 @@ ${guideSections}
                       } as any
                     }
                   }
-                  activeWorkState.specialistReviewGatesDone = Array.from(
-                    new Set([
-                      ...(activeWorkState.specialistReviewGatesDone ?? []),
-                      agentType,
-                    ]),
-                  )
-                  // Snapshot-bind the credit so a later byte change to the
-                  // same paths (including a validation-hook rewrite) re-reviews.
-                  ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
-                    agentType
-                  ] = specialistCreditFingerprint
-                  // Phase 4: merge markers for exactly the files this pass
-                  // attested, PRESERVING previously stored markers for other
-                  // files so their per-file credit survives the re-review.
-                  {
-                    const markerMap =
-                      ((activeWorkState.specialistReviewFileMarkers ??= {})[
-                        agentType
-                      ] ??= {})
-                    for (const scopedFile of specialistScopedFileSets.get(
-                      agentType,
-                    ) ?? []) {
-                      markerMap[scopedFile] =
-                        readGateFileContentMarker(scopedFile)
+                  if (
+                    isCreditEligibleSpecialistResult(
+                      blockers,
+                      specialistResultCreditPathQualified,
+                    )
+                  ) {
+                    activeWorkState.specialistReviewGatesDone = Array.from(
+                      new Set([
+                        ...(activeWorkState.specialistReviewGatesDone ?? []),
+                        agentType,
+                      ]),
+                    )
+                    // Snapshot-bind the credit so a later byte change to the
+                    // same paths (including a validation-hook rewrite) re-reviews.
+                    ;(activeWorkState.specialistReviewGateFingerprints ??= {})[
+                      agentType
+                    ] = specialistCreditFingerprint
+                    // Phase 4: merge markers for exactly the files this pass
+                    // attested, PRESERVING previously stored markers for other
+                    // files so their per-file credit survives the re-review.
+                    {
+                      const markerMap =
+                        ((activeWorkState.specialistReviewFileMarkers ??= {})[
+                          agentType
+                        ] ??= {})
+                      for (const scopedFile of specialistScopedFileSets.get(
+                        agentType,
+                      ) ?? []) {
+                        markerMap[scopedFile] =
+                          readGateFileContentMarker(scopedFile)
+                      }
                     }
+                    clearOwedReviewer(agentType)
+                    clearNoVerdictConvergenceForFamily(agentType)
                   }
                   if (
                     activeWorkState.lastReviewerGateSkipReason ===
@@ -4356,11 +4708,150 @@ ${guideSections}
                   ) {
                     activeWorkState.lastReviewerGateSkipReason = ''
                   }
-                  // The specialist aux block owns specialist-family
-                  // revalidation; clear its owed entry once it passes. This
-                  // never clobbers a code/security owed entry.
-                  clearOwedReviewer(agentType)
+                  // Only a qualifying blocker-free result clears specialist
+                  // revalidation and resets its no-verdict convergence state.
                   markActiveWorkStateChanged()
+                }
+              }
+              // A previously credited file changing while this specialist
+              // pass was in flight invalidates the pass's window credit even
+              // when the reviewer returned a marker for the new bytes. The
+              // pre-pass marker snapshot above is the stable boundary; compare
+              // it with the live filesystem now, evict all specialist credit,
+              // and re-enter the gate so the changed file is reviewed in a
+              // fresh pass. This closes the prior-wave-drift race rather than
+              // allowing the completion record written by the racing pass to
+              // make the wave appear complete.
+              const driftedPriorWaveFiles = findDriftedPriorWaveFiles(
+                priorWaveCreditAtPassStart,
+                readGateFileContentMarker,
+              )
+              if (driftedPriorWaveFiles.length > 0) {
+                activeWorkState.specialistReviewGatesDone = []
+                activeWorkState.specialistReviewGateFingerprints = {}
+                delete activeWorkState.specialistReviewFileMarkers
+                delete activeWorkState.specialistWaveCreditMarkers
+                activeWorkState.waveCompletions = {}
+                for (const file of driftedPriorWaveFiles) {
+                  changedFiles.add(file)
+                  pendingGateFiles.add(file)
+                }
+                activeWorkState.pendingGateFiles = Array.from(pendingGateFiles)
+                activeWorkState.currentPhase = 'awaiting_validation'
+                activeWorkState.lastReviewerGateSkipReason =
+                  'specialist-review-prior-wave-drift'
+                activeWorkState.latestWorkSummary =
+                  'A previously credited specialist-review file changed during the current pass; specialist wave credit was invalidated and the review was reopened.'
+                activeWorkState.nextRequiredAction =
+                  'Re-run validation and specialist review against the current file bytes before finalization.'
+                markActiveWorkStateChanged()
+                continue
+              }
+
+              // Wave 3 (A8) FINALIZATION REQUIREMENT — evaluated AFTER the
+              // specialist pass above (spawn-block fix). Above the 40-file cap
+              // the review is credited wave-by-wave, so finalization must
+              // require EVERY planned wave present (each wave key folds in its
+              // exact bytes) with live per-file markers — a partially-credited
+              // wide change cannot finalize (fail closed). Placing this AFTER
+              // the spawn is what makes the windowed-credit path reachable: the
+              // ledger is only ever written by a specialist pass, so checking it
+              // BEFORE the spawn saw an empty ledger on the first iteration,
+              // marked every wave missing, set currentPhase='blocked' and
+              // `continue`d — the specialist was never spawned and the waves
+              // could never be credited (permanent
+              // 'specialist-review-waves-incomplete' deadlock). Below the cap
+              // `plannedReviewWaves` is empty and this block is a no-op, so
+              // small changes stay byte-identical. `recordWaveCompletionsForFiles`
+              // above has already credited every wave this pass fully covered.
+              // FAIL-CLOSED ON TERMINAL FAILURE: this gate is deliberately NOT
+              // guarded by `!specialistTerminalFailure`. A terminal specialist
+              // failure (crash/rate-limit) must not skip the wave-completeness
+              // requirement: the `specialistBlocked` handler below can credit
+              // the specialist via the bypass flow, which marks gates done and
+              // clears owed entries while `waveCompletions` stays partially
+              // populated. If the wave check were skipped here, the next
+              // iteration — with no planned waves re-checked because the
+              // specialist is now credited — could advance to the code-reviewer
+              // with an incomplete wave ledger. Evaluating it on BOTH terminal
+              // and non-terminal paths keeps every planned wave required before
+              // finalization.
+              if (waveReviewIsActive && plannedReviewWaves.length > 0) {
+                const waveCompletions = activeWorkState.waveCompletions ?? {}
+                const missingWaves = plannedReviewWaves.filter(
+                  (_waveFiles, waveIndex) => {
+                    const key = waveKey(
+                      specialistCreditFingerprint,
+                      waveIndex,
+                      plannedReviewWaves[waveIndex],
+                    )
+                    const completion = waveCompletions[key]
+                    if (!completion) return true
+                    // Live-marker requirement: a completion record is only
+                    // honored while EVERY file it covered still carries a fresh
+                    // stored specialist marker (equal to the file's current
+                    // content marker) under AT LEAST ONE routed specialist with
+                    // attestable scope, so a wave whose bytes drifted after
+                    // crediting re-opens. The union over the routed specialists
+                    // is required because a wave may be completed by a LATER
+                    // specialist whose scoped set differs from the first one's.
+                    //
+                    // DRIFT-INVALIDATION: the marker RECORDED at credit time
+                    // must still equal the live marker. A file edited and then
+                    // reverted to its original bytes yields the SAME content
+                    // marker, so a marker-equality-only check would honor the
+                    // stale credit and treat the wave complete without the
+                    // re-edit ever being re-reviewed by a fresh pass.
+                    const recordedMarkers = completion.creditedFileMarkers
+                    return completion.files.some((file) => {
+                      const liveMarker = readGateFileContentMarker(file)
+                      const recordedMarker = recordedMarkers?.[file]
+                      if (
+                        recordedMarker === undefined ||
+                        recordedMarker !== liveMarker
+                      ) {
+                        return true
+                      }
+                      // COMPLETION-VALIDATION UNIVERSE: the stored marker is
+                      // read from the WAVE-UNIVERSE ledger
+                      // (`specialistWaveCreditMarkers`), NOT the raw
+                      // R4-widened `specialistReviewFileMarkers`. That ledger
+                      // is populated exclusively by
+                      // recordWaveCompletionsForFiles over the SAME reviewable
+                      // universe the activation threshold and the planner use,
+                      // so a manifest/lockfile/CI path that can never be
+                      // wave-placed cannot desynchronize credit accounting.
+                      // The union over routed specialists is still required
+                      // because a wave may be completed by a LATER specialist
+                      // whose scoped set differs from the first one's.
+                      return !routedSpecialistsWithAttestableScope.some(
+                        (agentType) => {
+                          const stored =
+                            activeWorkState.specialistWaveCreditMarkers?.[
+                              agentType
+                            ]?.[file]
+                          return stored !== undefined && stored === liveMarker
+                        },
+                      )
+                    })
+                  },
+                )
+                if (missingWaves.length > 0) {
+                  activeWorkState.currentPhase = 'blocked'
+                  activeWorkState.lastReviewerGateSkipReason =
+                    'specialist-review-waves-incomplete'
+                  activeWorkState.nextRequiredAction = `Review this change wave-by-wave: ${missingWaves.length} of ${plannedReviewWaves.length} planned review wave(s) still lack fresh per-file credit. Re-run the specialist review so every wave completes before finalization.`
+                  activeWorkState.latestWorkSummary = `Windowed review incomplete: ${missingWaves.length}/${plannedReviewWaves.length} wave(s) outstanding.`
+                  markActiveWorkStateChanged()
+                  emitGateTelemetry({
+                    currentPhase: 'blocked',
+                    pendingFileCount: specialistPendingFiles.length,
+                    pendingFiles: specialistPendingFiles,
+                    reviewerStatus: 'failed',
+                    validationStatus: 'passed',
+                    skipReason: 'specialist-review-waves-incomplete',
+                  })
+                  continue
                 }
               }
               if (specialistBlocked) {
@@ -4391,13 +4882,81 @@ ${guideSections}
                       reviewChallengeFingerprint(currentPendingGateFiles),
                     )
                   if (specialistBypassAuthorized) {
+                    // BYPASS-ORDER INVARIANT: the bypass credits every routed
+                    // specialist below (done set + fingerprint + markers +
+                    // owed clear), so on the NEXT outer iteration
+                    // `waveReviewIsActive`/`plannedReviewWaves` are recomputed
+                    // as EMPTY (the specialists are credited and re-routing
+                    // skips them) and the wave-completeness check above becomes
+                    // a no-op. A wave ledger left partially populated at that
+                    // point could then advance to the code-reviewer with an
+                    // incomplete wave ledger. Fail closed HERE, BEFORE the
+                    // credit is applied, so the bypass can only proceed when
+                    // every planned wave is already complete under the wave
+                    // universe. The user-authorized bypass still unblocks a
+                    // terminal specialist failure on an otherwise fully-credited
+                    // change; a genuinely incomplete wide change stays blocked.
+                    if (waveReviewIsActive && plannedReviewWaves.length > 0) {
+                      const bypassWaveCompletions =
+                        activeWorkState.waveCompletions ?? {}
+                      const bypassMissingWaves = plannedReviewWaves.filter(
+                        (_waveFiles, waveIndex) => {
+                          const key = waveKey(
+                            specialistCreditFingerprint,
+                            waveIndex,
+                            plannedReviewWaves[waveIndex],
+                          )
+                          const completion = bypassWaveCompletions[key]
+                          if (!completion) return true
+                          const recordedMarkers = completion.creditedFileMarkers
+                          return completion.files.some((file) => {
+                            const liveMarker = readGateFileContentMarker(file)
+                            const recordedMarker = recordedMarkers?.[file]
+                            if (
+                              recordedMarker === undefined ||
+                              recordedMarker !== liveMarker
+                            ) {
+                              return true
+                            }
+                            return !routedSpecialistsWithAttestableScope.some(
+                              (agentType) => {
+                                const stored =
+                                  activeWorkState.specialistWaveCreditMarkers?.[
+                                    agentType
+                                  ]?.[file]
+                                return (
+                                  stored !== undefined && stored === liveMarker
+                                )
+                              },
+                            )
+                          })
+                        },
+                      )
+                      if (bypassMissingWaves.length > 0) {
+                        activeWorkState.currentPhase = 'blocked'
+                        activeWorkState.lastReviewerGateSkipReason =
+                          'specialist-review-waves-incomplete'
+                        activeWorkState.nextRequiredAction = `Review this change wave-by-wave: ${bypassMissingWaves.length} of ${plannedReviewWaves.length} planned review wave(s) still lack fresh per-file credit. Re-run the specialist review so every wave completes before finalization.`
+                        activeWorkState.latestWorkSummary = `Windowed review incomplete: ${bypassMissingWaves.length}/${plannedReviewWaves.length} wave(s) outstanding; the specialist bypass cannot credit an incomplete wave ledger.`
+                        markActiveWorkStateChanged()
+                        emitGateTelemetry({
+                          currentPhase: 'blocked',
+                          pendingFileCount: specialistPendingFiles.length,
+                          pendingFiles: specialistPendingFiles,
+                          reviewerStatus: 'failed',
+                          validationStatus: 'passed',
+                          skipReason: 'specialist-review-waves-incomplete',
+                        })
+                        continue
+                      }
+                    }
                     // The terminal-failure handler runs AFTER the routed-agent
                     // for loop, so the failing agentType is no longer bound.
-                    // Credit every routed specialist for this snapshot exactly
-                    // like the success path (done set + fingerprint + file
-                    // markers + owed clear) so re-routing skips them and the
-                    // loop advances toward the final code-reviewer.
-                    for (const routedAgent of routedSpecialists) {
+                    // Credit every specialist that was actually spawned for
+                    // this snapshot exactly like the success path. Routed
+                    // specialists with an empty scope have no result and must
+                    // remain uncredited for a later reviewable scope.
+                    for (const routedAgent of spawnableSpecialists) {
                       activeWorkState.specialistReviewGatesDone = Array.from(
                         new Set([
                           ...(activeWorkState.specialistReviewGatesDone ?? []),
@@ -6455,18 +7014,27 @@ ${guideSections}
               continue
             }
           }
+          // Wave 3 (A6) DETERMINISTIC VERDICT RECOVERY. Computed ONCE per
+          // iteration and threaded to EVERY collector below so no collector can
+          // see a different input than the one the verdict came from (the
+          // verdict-agreement invariant depends on all of them reading the same
+          // object). Recovery only WIDENS the input scanned — it never
+          // synthesizes snapshotFingerprint/reviewedFiles and never loosens a
+          // passing rule, so the hard rules below still run against it.
+          const derivedReviewerToolResult =
+            recoverStructuredReviewerOutputs(reviewerToolResult)
           // Keep the verdict already set by the condoned pass above;
           // otherwise derive it from the reviewer output as before.
           if (!reviewerFinalizationVerdict) {
             reviewerFinalizationVerdict =
-              getReviewerFinalizationVerdict(reviewerToolResult)
+              getReviewerFinalizationVerdict(derivedReviewerToolResult)
           }
           if (reviewerFinalizationVerdict) {
             setGateProgress(
               `gate: reviewer verdict ${reviewerFinalizationVerdict}; finalizing`,
             )
             recordSuccessfulReviewReceipt(
-              reviewerToolResult,
+              derivedReviewerToolResult,
               requiredReviewerAgentType,
               reviewSnapshotFingerprint,
             )
@@ -6481,7 +7049,7 @@ ${guideSections}
             // contract; the reviewer ran fine, it just used the wrong
             // format". Conflating them caused reviewer-loop bugs where the
             // model kept retrying the same prompt against a crashing agent.
-            const reviewerCrash = detectReviewerCrash(reviewerToolResult)
+            const reviewerCrash = detectReviewerCrash(derivedReviewerToolResult)
             activeWorkState.currentPhase = 'blocked'
             if (reviewerCrash) {
               activeWorkState.reviewerCrashCount =
@@ -6554,6 +7122,57 @@ ${guideSections}
               const noVerdictExhausted =
                 activeWorkState.reviewerNoVerdictCount >
                 MAX_REVIEWER_NO_VERDICT_RETRIES
+              // Wave 3 (A7) retry feedback + (A8) state-based convergence. The
+              // diagnostic describes EXACTLY the rejection the gate saw, read
+              // from the SAME derived object the verdict derivation used.
+              const noVerdictDiagnostic = diagnoseReviewerVerdictRejection(
+                derivedReviewerToolResult,
+                'reviewer-verdict-retry',
+              )
+              // A8: STATE-based convergence, never budget-based. When this exact
+              // (family, snapshot) pair already produced this exact diagnostic
+              // code, another spawn could only reproduce the same rejection, so
+              // do NOT re-spawn — transition straight to the existing
+              // bypass-offer flow (same shape as the exhausted-retry path). The
+              // fingerprint component means a fresh edit re-arms a full retry
+              // cycle, and no budget constant is read or changed here.
+              const noVerdictConvergenceKey = `${requiredReviewerAgentType}\n${reviewSnapshotFingerprint}`
+              const noVerdictDiagnosticCodes =
+                (activeWorkState.noVerdictDiagnosticCodes ??= {})
+              const priorNoVerdictCode =
+                noVerdictDiagnosticCodes[noVerdictConvergenceKey]
+              // C3/C4 classification: a deterministic, repeatable rejection
+              // (prose-only / unshaped / unrecognized literal) is what makes a
+              // re-spawn pointless. `recovered` means the pre-pass succeeded, so
+              // it is NOT a convergence signal (the verdict branch above would
+              // have taken it). `no_structured_output` is also repeatable.
+              const noVerdictCodeIsConvergent =
+                noVerdictDiagnostic.code === 'no_structured_output' ||
+                noVerdictDiagnostic.code === 'prose_only' ||
+                noVerdictDiagnostic.code === 'unshaped_only' ||
+                noVerdictDiagnostic.code ===
+                  'unrecognized_verdict_literal' ||
+                noVerdictDiagnostic.code === 'verdict_key_not_found'
+              const noVerdictConverged =
+                noVerdictCodeIsConvergent &&
+                priorNoVerdictCode === noVerdictDiagnostic.code
+              // Record the code for this pair so the NEXT identical rejection
+              // converges. Written before the branches below so both the
+              // convergence path and a normal retry leave the same durable
+              // marker.
+              noVerdictDiagnosticCodes[noVerdictConvergenceKey] =
+                noVerdictDiagnostic.code
+              // Bound the durable convergence ledger: the key embeds the
+              // snapshot fingerprint, so a long session of fresh edits would
+              // otherwise grow it without bound. The CURRENT pair's key is
+              // passed explicitly so it is retained regardless of where it sat
+              // in insertion order (an existing key re-write does not move to
+              // the end), keeping the next identical rejection convergent.
+              activeWorkState.noVerdictDiagnosticCodes =
+                boundNoVerdictDiagnosticCodes(
+                  noVerdictDiagnosticCodes,
+                  noVerdictConvergenceKey,
+                )
               // Deadlock escape: a reviewer that keeps running but never emits
               // a schema-valid verdict would otherwise block the turn forever
               // (weaker non-SOTA models often fail the structured set_output
@@ -6598,6 +7217,51 @@ ${guideSections}
                 })
                 // No break/continue: fall through to shared finalization,
                 // exactly like the reviewer-crash bypass sibling.
+              } else if (noVerdictConverged) {
+                // Wave 3 (A8) CONVERGENCE: the SAME (family, snapshot) pair
+                // just produced the SAME diagnostic code as the previous
+                // attempt, so another spawn could only reproduce it. Do NOT
+                // re-spawn — offer the bypass directly, mirroring the
+                // exhausted-retry branch's shape so operator UX is consistent.
+                // The bypass still requires the exact `BYPASS REVIEWER <id>`
+                // reply and records reduced assurance; this branch never
+                // auto-passes.
+                const challenge = ensureReviewerBypassChallenge(
+                  reviewSnapshotFingerprint,
+                  currentConversationMessages,
+                )
+                activeWorkState.currentPhase = 'blocked'
+                activeWorkState.lastReviewerGateSkipReason =
+                  'reviewer-no-verdict-converged'
+                activeWorkState.nextRequiredAction = `Reviewer repeated the same structured-output rejection (${noVerdictDiagnostic.code}) for this unchanged snapshot; retrying will not converge. Fix reviewer configuration, or explicitly reply "BYPASS REVIEWER ${challenge.id}" to finalize using the recorded validation evidence for this snapshot only.`
+                activeWorkState.latestWorkSummary = `Reviewer no-verdict rejection converged (${noVerdictDiagnostic.code}).`
+                markActiveWorkStateChanged()
+                emitGateTelemetry({
+                  currentPhase: 'blocked',
+                  pendingFileCount: pendingGateFiles.size,
+                  pendingFiles: Array.from(pendingGateFiles),
+                  reviewerStatus: 'failed',
+                  validationStatus: 'passed',
+                  skipReason: 'reviewer-no-verdict-converged',
+                })
+                yield {
+                  toolName: 'add_message',
+                  input: {
+                    role: 'user',
+                    content: [
+                      `Reviewer gate: ${reviewerAgentType} repeated the same structured-output rejection for this unchanged snapshot; no further retry was spawned.`,
+                      '',
+                      buildReviewerVerdictRetryNotice(
+                        noVerdictDiagnostic,
+                        reviewerAgentType,
+                      ),
+                      '',
+                      `Fix reviewer configuration, or explicitly reply "BYPASS REVIEWER ${challenge.id}" to finalize on the recorded validation evidence for this snapshot only.`,
+                    ].join('\n'),
+                  },
+                  includeToolCall: false,
+                } as any
+                break
               } else if (noVerdictExhausted) {
                 const challenge = ensureReviewerBypassChallenge(
                   reviewSnapshotFingerprint,
@@ -6631,6 +7295,11 @@ ${guideSections}
                     role: 'user',
                     content: [
                       `Reviewer gate: ${reviewerAgentType} ran but returned no structured output. The verdict is unavailable.`,
+                      '',
+                      buildReviewerVerdictRetryNotice(
+                        noVerdictDiagnostic,
+                        reviewerAgentType,
+                      ),
                       '',
                       'Do not manually re-spawn the reviewer or ask it for a textual label. Continue the gate loop so the automated reviewer retries with its declared output schema; it must call set_output and populate verdict, findings, coverage, dimensions, requirementCoverage, snapshotFingerprint, and reviewedFiles.',
                     ].join('\n'),
@@ -6737,6 +7406,23 @@ ${guideSections}
             activeWorkState.reviewerProtocolRetryCount = 0
             activeWorkState.reviewerRepairRoundCount = 0
             activeWorkState.reviewerNoVerdictCount = 0
+            // Clear the durable no-verdict convergence ledger too. It is keyed
+            // by (family, snapshot fingerprint); leaving an entry behind lets a
+            // later rejection on the SAME snapshot satisfy the convergence
+            // precondition on its first repeat and skip a legitimate retry. The
+            // pass is the clean-slate point, exactly like the counters above.
+            activeWorkState.noVerdictDiagnosticCodes = {}
+            // Wave 3 (A8) windowed-credit ledger, cleared at the SAME clean-slate
+            // point for the same reason as the two sibling ledgers above
+            // (noVerdictDiagnosticCodes / specialistNoVerdictCounts): the pass is
+            // documented as a full reset, and the wave key embeds the snapshot
+            // fingerprint, so entries from prior snapshots would otherwise keep
+            // inflating the serialized base2ActiveWork state and any retained
+            // same-fingerprint entry whose recorded markers still match would be
+            // honored across a gate-pass boundary that is supposed to be a full
+            // reset. The next edit cycle re-plans waves against its new
+            // fingerprint and credits them through a fresh specialist pass.
+            activeWorkState.waveCompletions = {}
             // Per-turn specialist budgets are reset for the same reason as the
             // code-reviewer ones: the next edit set must start with a full
             // repair/retry budget instead of inheriting this gate's spend.
@@ -7554,6 +8240,34 @@ ${guideSections}
         activeWorkState.requiredReviewerRevalidation = owed[0] ?? undefined
       }
 
+      // Drop the A8 convergence ledger entries for ONE reviewer family. The
+      // ledger `noVerdictDiagnosticCodes` is keyed
+      // `${requiredReviewerAgentType}\n${reviewSnapshotFingerprint}` and is
+      // otherwise reset to `{}` ONLY on the code-reviewer gate's clean pass.
+      // Specialist no-verdict rejections are recorded under the SAME ledger, so
+      // a specialist that converged (same diagnostic code twice) left an entry
+      // that the code-reviewer-only reset never reached: after the operator
+      // repaired the reviewer CONFIGURATION (same bytes, same snapshot), the
+      // FIRST repeat for that (family, snapshot) pair already matched the
+      // stored code and converged immediately, skipping the legitimate retry
+      // the convergence comment promises ('a fresh edit re-arms a full retry
+      // cycle' — but a fresh CONFIG with the same bytes did not). Clearing the
+      // family's entries at the SAME clean-slate points that clear its
+      // no-verdict COUNTERS (`specialistNoVerdictCounts`) re-arms a full retry
+      // cycle whenever that family is re-credited. Inline because handleSteps
+      // is serialized via .toString() + new Function(...).
+      function clearNoVerdictConvergenceForFamily(family: string): void {
+        const codes = activeWorkState.noVerdictDiagnosticCodes
+        if (!codes) return
+        const prefix = `${family}\n`
+        const remaining: Record<string, string> = {}
+        for (const [key, value] of Object.entries(codes)) {
+          if (key.startsWith(prefix)) continue
+          remaining[key] = value
+        }
+        activeWorkState.noVerdictDiagnosticCodes = remaining
+      }
+
       // A specialist counts as done only when it is credited AND its stored
       // credit fingerprint matches the current reviewable snapshot. Legacy
       // state with no stored fingerprint, or a non-attestable sentinel such as
@@ -7746,6 +8460,220 @@ ${guideSections}
       // preserves convergence for the findings the current rounds re-raise.
       function boundCondonedEntries(values: string[]): string[] {
         return Array.from(new Set(values)).slice(-200)
+      }
+
+      // Bound the durable windowed-review wave ledger. The wave key embeds the
+      // snapshot fingerprint, so every fresh edit of a >40-file change mints
+      // NEW keys rather than replacing old ones; without a bound this record
+      // grows monotonically across a long session and inflates the serialized
+      // base2ActiveWork state that is round-tripped each turn.
+      //
+      // CRITICAL: the bound must be applied ONLY to waves from OTHER snapshots,
+      // never to the CURRENT snapshot's waves. A single >40-file change with
+      // more than 256 waves (i.e. >10,240 reviewable files) writes ALL of its
+      // completions in one pass; a fixed most-recent-256 window then evicts the
+      // earliest of them, and the post-spawn finalization check reports those
+      // evicted waves missing — blocking the gate for an otherwise fully
+      // reviewed change. The bound and the 'every planned wave present'
+      // requirement are mutually inconsistent at that scale, so `currentFingerprint`
+      // keys are ALWAYS retained.
+      //
+      // REVERT-INVALIDATION INVARIANT: the previous snapshot's entries must NOT
+      // be treated as unconditionally disposable. The wave KEY embeds the
+      // fingerprint, so reverting a >40-file change to its prior bytes restores
+      // the PRIOR fingerprint and therefore the PRIOR wave keys. If the prior
+      // snapshot's partially-credited waves were evicted while an intermediate
+      // edit held the current fingerprint, the revert would have to re-review
+      // every wave from scratch — despite `creditedFileMarkers`
+      // drift-invalidation claiming a revert re-credits through a fresh pass
+      // (recordWaveCompletionsForFiles discards credit only on a MISMATCHED
+      // fingerprint; a reverted key matches exactly, so the retained entry is
+      // honored). Retention is therefore by DISTINCT FINGERPRINT, not by
+      // current-vs-stale: the current fingerprint plus the most recent
+      // STALE_FINGERPRINT_LIMIT distinct other fingerprints are kept, and each
+      // retained fingerprint keeps up to STALE_WAVE_COMPLETION_LIMIT of its
+      // most recent waves. Order-preserving and idempotent. Inline because
+      // handleSteps is serialized via .toString() + new Function(...), so it
+      // must not reference module-scope imports; hoisted `function` declaration
+      // because recordWaveCompletionsForFiles (which calls it) appears EARLIER
+      // in the source.
+      function boundWaveCompletions(
+        completions: Record<
+          string,
+          {
+            fingerprint: string
+            waveIndex: number
+            files: string[]
+            creditedFiles?: string[]
+            creditedFileMarkers?: Record<string, string>
+            completedAt?: string
+          }
+        >,
+        currentFingerprint: string,
+      ): Record<
+        string,
+        {
+          fingerprint: string
+          waveIndex: number
+          files: string[]
+          creditedFiles?: string[]
+          creditedFileMarkers?: Record<string, string>
+          completedAt?: string
+        }
+      > {
+        const STALE_WAVE_COMPLETION_LIMIT = 256
+        const STALE_FINGERPRINT_LIMIT = 8
+        type WaveCompletion = {
+          fingerprint: string
+          waveIndex: number
+          files: string[]
+          creditedFiles?: string[]
+          creditedFileMarkers?: Record<string, string>
+          completedAt?: string
+          lastTouchedAt?: string
+        }
+        const entries = Object.entries(completions) as Array<
+          [string, WaveCompletion]
+        >
+        // Group by fingerprint. The bucket's FIRST-SEEN position is recorded as
+        // a fallback recency rank, but recency is decided by each bucket's
+        // NEWEST `lastTouchedAt` (see below): object insertion order does NOT
+        // move an existing key to the end when it is re-written, so ordering
+        // stale fingerprints purely by first-seen position let a re-touched
+        // (re-credited) stale fingerprint keep its early slot and be evicted by
+        // `slice(-STALE_FINGERPRINT_LIMIT)` even though it was the most recently
+        // touched — contradicting the documented 'most recent waves are
+        // retained' guarantee and defeating revert-invalidation.
+        // LEGACY/UNSTAMPED BUCKET: an entry whose `fingerprint` is `undefined`
+        // (legacy or partially-serialized wave completions) carries NO
+        // fingerprint to rank against the distinct-fingerprint limit, so it
+        // must NOT be treated as unconditionally disposable. Previously such an
+        // entry made `needsBound` return `true` AND was never inserted into
+        // `byFingerprint`, so the rebuild silently evicted it even when the
+        // ledger was otherwise within cap. Bucketing every fingerprint-less
+        // entry under a dedicated sentinel key keeps them through the rebuild;
+        // they are exempt from the fingerprint limit (only the per-bucket wave
+        // cap and the ledger's own boundedness apply to them), which matches
+        // the 'never drop legacy state that is within cap' contract.
+        const UNFINGERPRINTED_BUCKET_KEY = '\u0000unfingerprinted'
+        const byFingerprint = new Map<string, Array<[string, WaveCompletion]>>()
+        const firstSeenRank = new Map<string, number>()
+        for (const entry of entries) {
+          const fingerprint = entry[1]?.fingerprint
+          const bucketKey =
+            fingerprint === undefined ? UNFINGERPRINTED_BUCKET_KEY : fingerprint
+          const bucket = byFingerprint.get(bucketKey)
+          if (bucket) {
+            bucket.push(entry)
+          } else {
+            byFingerprint.set(bucketKey, [entry])
+            firstSeenRank.set(bucketKey, firstSeenRank.size)
+          }
+        }
+        // TOUCH-RECENCY RANK: the newest `lastTouchedAt` in the bucket, parsed
+        // as epoch ms. A legacy entry (serialized before `lastTouchedAt`
+        // existed) has no stamp and falls back to its first-seen position, so
+        // older state keeps its prior behavior; a stamped bucket always outranks
+        // an unstamped one. Ties break on first-seen rank for determinism.
+        const touchedAtMs = (bucket: Array<[string, WaveCompletion]>): number => {
+          let newest = Number.NEGATIVE_INFINITY
+          for (const [, value] of bucket) {
+            const stamp = value?.lastTouchedAt
+            if (typeof stamp !== 'string') continue
+            const parsed = Date.parse(stamp)
+            if (Number.isFinite(parsed) && parsed > newest) newest = parsed
+          }
+          return newest
+        }
+        // Fingerprints other than the current one, ordered LEAST-RECENT first
+        // so `slice(-STALE_FINGERPRINT_LIMIT)` keeps the most recently touched.
+        // Retain the current fingerprint plus the most recent
+        // STALE_FINGERPRINT_LIMIT others, so a revert to a recent snapshot still
+        // finds its prior credit.
+        const otherFingerprints = [...byFingerprint.keys()]
+          .filter(
+            (fingerprint) =>
+              fingerprint !== currentFingerprint &&
+              fingerprint !== UNFINGERPRINTED_BUCKET_KEY,
+          )
+          .sort((left, right) => {
+            const leftTouched = touchedAtMs(byFingerprint.get(left) ?? [])
+            const rightTouched = touchedAtMs(byFingerprint.get(right) ?? [])
+            if (leftTouched !== rightTouched) return leftTouched - rightTouched
+            return (
+              (firstSeenRank.get(left) ?? 0) - (firstSeenRank.get(right) ?? 0)
+            )
+          })
+        const retainedStaleFingerprints = new Set(
+          otherFingerprints.slice(-STALE_FINGERPRINT_LIMIT),
+        )
+        const retainedFingerprints = new Set<string>([
+          currentFingerprint,
+          // The fingerprint-less bucket is always retained: it has no
+          // fingerprint to evict and dropping it is the exact silent legacy
+          // eviction this bound must avoid.
+          UNFINGERPRINTED_BUCKET_KEY,
+          ...retainedStaleFingerprints,
+        ])
+        const needsBound = entries.some(([key, value]) => {
+          const fingerprint = value?.fingerprint
+          if (fingerprint === undefined) return true
+          if (!retainedFingerprints.has(fingerprint)) return true
+          const bucket = byFingerprint.get(fingerprint) ?? []
+          // A retained fingerprint with more than the per-fingerprint wave cap
+          // must also be trimmed.
+          return bucket.length > STALE_WAVE_COMPLETION_LIMIT
+        })
+        if (!needsBound) return completions
+        const bounded: Record<string, WaveCompletion> = {}
+        for (const [fingerprint, bucket] of byFingerprint) {
+          if (!retainedFingerprints.has(fingerprint)) continue
+          for (const [key, value] of bucket.slice(
+            -STALE_WAVE_COMPLETION_LIMIT,
+          )) {
+            bounded[key] = value
+          }
+        }
+        return bounded
+      }
+
+      // Bound the durable no-verdict convergence ledger the same way. Its key
+      // embeds the snapshot fingerprint, so every fresh edit of the reviewed
+      // bytes mints a NEW key; without a bound this record grows monotonically
+      // across a long session. Order-preserving (keeps the MOST RECENT pairs,
+      // including the one the pass that just rejected wrote) so the next
+      // identical rejection still converges.
+      //
+      // RETENTION INVARIANT: the CURRENT pair's key must survive the bound even
+      // when it was first inserted long ago. Object insertion order does NOT
+      // move an already-existing key to the end when it is re-written, so in a
+      // >128-distinct-pair session the current key could sit early in insertion
+      // order and be evicted by `slice(-128)` immediately after it is
+      // (re)written — dropping the durable marker for the pair the next
+      // comparison reads and letting an identical rejection re-spawn. Rebuilding
+      // with `retainKey` FIRST (and re-emitting it, which places it at the end
+      // of insertion order) guarantees the pair just written is always retained.
+      function boundNoVerdictDiagnosticCodes(
+        codes: Record<string, string>,
+        retainKey: string,
+      ): Record<string, string> {
+        const NO_VERDICT_DIAGNOSTIC_LIMIT = 128
+        const entries = Object.entries(codes)
+        if (entries.length <= NO_VERDICT_DIAGNOSTIC_LIMIT) return codes
+        const bounded: Record<string, string> = {}
+        const retainedValue = codes[retainKey]
+        // Reserve one slot for the retained key so the total stays within the
+        // cap; the retained key is written LAST so it is never the evicted one.
+        const evictable = entries.filter(([key]) => key !== retainKey)
+        for (const [key, value] of evictable.slice(
+          -(NO_VERDICT_DIAGNOSTIC_LIMIT - 1),
+        )) {
+          bounded[key] = value
+        }
+        if (retainedValue !== undefined) {
+          bounded[retainKey] = retainedValue
+        }
+        return bounded
       }
 
       // Merge one reviewer's blocking output into the open finding ledger
@@ -8990,6 +9918,663 @@ function collectStrings(value: unknown, out: string[], depth: number = 0): void 
     for (const nested of Object.values(value as Record<string, unknown>)) {
         collectStrings(nested, out, depth + 1);
     }
+}
+
+/**
+ * Wave 3 (A6) DETERMINISTIC VERDICT RECOVERY.
+ *
+ * Reviewer-family agents occasionally emit a schema-valid verdict inside a
+ * prose reply, a fenced code block, or a JSON object whose verdict lives under
+ * a NON-slot key (`reviewVerdict` / `finalVerdict` / `decision` / `status`)
+ * instead of the `verdict` slot the gate recognizes. Today the EXISTING
+ * recognizer (`collectStructuredReviewerOutputs` / `visitForStructuredVerdict`)
+ * drops every one of those, and the gate parks in the no-verdict retry loop
+ * even though a valid review was returned. This helper is a SEPARATE pre-pass
+ * that text-repairs the leaf STRINGS of a tool result so the UNMODIFIED
+ * recognizer can shape the verdict on the next pass.
+ *
+ * INV-A.2 (recovery never mints attestation): the recovered node carries ONLY
+ * the normalized `verdict` (+ `schemaVersion: 1`); it NEVER synthesizes
+ * `findings`, `findingRecords`, `advisories`, `requirementCoverage`,
+ * `dimensions`, `snapshotFingerprint`, or `reviewedFiles`. A recovered object
+ * therefore still fails closed on the unmodified attestation check — the gate
+ * cannot be talked into a forged snapshot by prompt-injected text.
+ *
+ * R0 short-circuit: when the result ALREADY carries a shaped entry (any
+ * `schemaVersion !== undefined`), the input is returned VERBATIM
+ * (byte-identical) so recovery can never perturb an already-recognizable
+ * receipt. Only a result the recognizer would otherwise DROP is repaired.
+ *
+ * Recovery NEVER widens `stripReviewerPreamble` / `visitForStructuredVerdict`:
+ * those stay the global verdict surface. This is a bounded pre-pass over leaf
+ * strings only.
+ *
+ * Hoisted top-level `function` (NOT a module-scope const) because
+ * `scripts/generate-gate-helpers.ts` splices ONLY top-level function/type/
+ * interface declarations into base2's `<gate-helpers-generated>` region and
+ * emits NO imports and NO module-scope `const`/`let`. Every regex and lookup
+ * table is therefore inlined in the body, exactly as `isTransientReviewerCrash`
+ * already inlines its `patterns` array. It CALLS the existing module-private
+ * recognizer (`collectStructuredReviewerOutputs`), which the generator also
+ * emits, so the spliced copy resolves it in-region.
+ */
+function recoverStructuredReviewerOutputs(toolResult: unknown): unknown {
+    // R0: an already-shaped receipt is returned byte-identical. `some` (not
+    // `every`) matches the recognizer's own "any shaped entry exists" narrowing,
+    // so a result the gate already credits is never rewritten.
+    const existing = collectStructuredReviewerOutputs(toolResult);
+    if (existing.length > 0 && existing.some((e) => e.schemaVersion !== undefined)) {
+        return toolResult;
+    }
+    // Walk the SAME envelope shapes `visitForStructuredVerdict` walks (depth 8,
+    // `json`/`structuredOutput` recursed into `value`, `json` also into
+    // `agentReceipt`). Record the LAST qualifying candidate: a real receipt tends
+    // to FOLLOW a quoted example in the reviewer's prose, so the last hit is the
+    // one that describes this review.
+    let recovered: Record<string, unknown> | undefined;
+    const visit = (value: unknown, depth: number): void => {
+        if (depth > 8)
+            return;
+        if (!value)
+            return;
+        if (Array.isArray(value)) {
+            for (const item of value)
+                visit(item, depth + 1);
+            return;
+        }
+        if (typeof value === 'string') {
+            const candidate = extractVerdictObjectFromText(value);
+            if (candidate)
+                recovered = candidate;
+            return;
+        }
+        if (typeof value !== 'object')
+            return;
+        const record = value as Record<string, unknown>;
+        if ((record.type === 'json' || record.type === 'structuredOutput') &&
+            'value' in record) {
+            visit(record.value, depth + 1);
+            if (record.type === 'json' && record.agentReceipt !== undefined) {
+                visit(record.agentReceipt, depth + 1);
+            }
+            return;
+        }
+        for (const nested of Object.values(record)) {
+            visit(nested, depth + 1);
+        }
+    };
+    visit(toolResult, 0);
+    if (!recovered)
+        return toolResult;
+    // Synthetic node shaped so the EXISTING recognizer credits it: the recognizer
+    // reads `json.value` and inherits `schemaVersion` from the wrapper. NO extra
+    // sentinel keys (a collector might enumerate them into operator output).
+    return { type: 'json', value: recovered, schemaVersion: 1 };
+}
+
+/**
+ * Wave 3 (A6) ordered, first-wins verdict-object extraction from ONE leaf
+ * string. Returns the normalized verdict object (a plain record carrying at
+ * least a canonical `verdict` literal) or null. Recovery NEVER synthesizes
+ * fields beyond `verdict` / `schemaVersion` (see
+ * `recoverStructuredReviewerOutputs` for the INV-A.2 rationale).
+ *
+ * Order (first hit wins):
+ *   R1a whole string is a JSON object (`{` after trim) that parses + is
+ *       verdict-shaped.
+ *   R1b a fenced code block (```json or ```) whose body parses to a
+ *       verdict-shaped object.
+ *   R2  the first balanced `{...}` span in prose that parses to a
+ *       verdict-shaped object.
+ *   R3  a balanced `{...}` span that parses to an object whose verdict literal
+ *       sits under a NON-slot key among reviewVerdict/finalVerdict/decision/
+ *       status — normalize that key to `verdict`.
+ *   R4  a `coverage` value outside the three literals but mappable, applied in
+ *       `normalizeVerdictKeyAndCoverage`, FAIL-CLOSED and TOTAL.
+ *   R5  verdict present ONLY as a prose line (LOOKS_GOOD / NON_BLOCKING /
+ *       BLOCKING on its own line) with no JSON object -> null. DO NOT
+ *       synthesize from prose: prompt-injection — a reviewed file's content
+ *       could contain `// BLOCKING:` and a prose-derived verdict would let it
+ *       forge a review.
+ *
+ * Hoisted top-level `function`; every regex is inlined (no module-scope const)
+ * so the spliced copy is self-contained.
+ */
+function extractVerdictObjectFromText(text: string): Record<string, unknown> | null {
+    if (typeof text !== 'string')
+        return null;
+    const cleaned = stripReviewerPreamble(text);
+    if (!cleaned)
+        return null;
+    // R1a: the whole string IS a JSON object.
+    if (cleaned.startsWith('{')) {
+        const parsed = tryParseJsonObject(cleaned);
+        if (parsed && isVerdictShaped(parsed)) {
+            return normalizeVerdictKeyAndCoverage(parsed);
+        }
+    }
+    // R1b: a fenced code block (```json or ```) whose body is a verdict object.
+    {
+        const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(cleaned);
+        if (fence) {
+            const parsed = tryParseJsonObject(fence[1].trim());
+            if (parsed && isVerdictShaped(parsed)) {
+                return normalizeVerdictKeyAndCoverage(parsed);
+            }
+        }
+    }
+    // R2 / R3: balanced `{...}` spans in prose. First verdict-shaped span wins;
+    // otherwise the first span whose verdict literal sits under a NON-slot key is
+    // normalized to `verdict` (R3).
+    const spans = balancedObjectSpans(cleaned);
+    let r3Candidate: Record<string, unknown> | null = null;
+    for (const span of spans) {
+        const parsed = tryParseJsonObject(span);
+        if (!parsed)
+            continue;
+        if (isVerdictShaped(parsed)) {
+            return normalizeVerdictKeyAndCoverage(parsed);
+        }
+        if (r3Candidate === null && hasNonSlotVerdictKey(parsed)) {
+            r3Candidate = parsed;
+        }
+    }
+    if (r3Candidate)
+        return normalizeVerdictKeyAndCoverage(r3Candidate);
+    // R5: prose-only verdict line -> null (never synthesize).
+    return null;
+}
+
+/**
+ * The set of keys a verdict literal may legally appear under, in priority
+ * order. `verdict` is the canonical slot the recognizer reads; the rest are the
+ * NON-slot aliases R3 normalizes into it. Inlined inside the consuming
+ * functions (no module-scope const) so the spliced region stays self-contained.
+ */
+function verdictKeyPriority(): string[] {
+    return ['verdict', 'reviewVerdict', 'finalVerdict', 'decision', 'status'];
+}
+
+/**
+ * True iff a string value among the recognized verdict keys trims+uppercases to
+ * one of the three canonical literals. A verdict literal under a NON-slot key
+ * is still verdict-shaped (R3 later normalizes the key); the recognizer's own
+ * `visitForStructuredVerdict` only reads `verdict`, which is why recovery must
+ * normalize the key before handing the object back.
+ */
+function isVerdictShaped(obj: Record<string, unknown>): boolean {
+    for (const key of verdictKeyPriority()) {
+        const value = obj[key];
+        if (typeof value !== 'string')
+            continue;
+        const upper = value.trim().toUpperCase();
+        if (upper === 'LOOKS_GOOD' ||
+            upper === 'NON_BLOCKING' ||
+            upper === 'BLOCKING') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * True iff a verdict literal sits under a NON-slot key (reviewVerdict /
+ * finalVerdict / decision / status) and `verdict` is not already canonical —
+ * i.e. the object R3 should normalize.
+ */
+function hasNonSlotVerdictKey(obj: Record<string, unknown>): boolean {
+    if (typeof obj.verdict === 'string')
+        return false;
+    for (const key of ['reviewVerdict', 'finalVerdict', 'decision', 'status']) {
+        const value = obj[key];
+        if (typeof value !== 'string')
+            continue;
+        const upper = value.trim().toUpperCase();
+        if (upper === 'LOOKS_GOOD' ||
+            upper === 'NON_BLOCKING' ||
+            upper === 'BLOCKING') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Normalize a recovered verdict object to the EXACT shape the recognizer reads:
+ * the verdict literal moved to the canonical `verdict` key (uppercased/trimmed)
+ * and a `schemaVersion: 1`. R4 coverage mapping is applied here, FAIL-CLOSED and
+ * TOTAL: any `coverage` value outside the three literals is mapped to the
+ * closest literal, and EVERYTHING unrecognized maps to `missing` — never to
+ * `covered`, because `covered` must only ever mean "lexically full/complete/ok/
+ * yes". Returns a NEW object (never mutates the parsed input).
+ *
+ * NO field is synthesized beyond `verdict` (+ `coverage` normalization and
+ * `schemaVersion`): see the INV-A.2 rationale on
+ * `recoverStructuredReviewerOutputs`. The caller (`visitForStructuredVerdict`)
+ * still applies its own coverage/verdict parsing, so a `covered` here is only a
+ * hint the recognizer re-validates.
+ */
+function normalizeVerdictKeyAndCoverage(obj: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    // Verdict: canonical `verdict` wins; otherwise the first NON-slot alias with
+    // a canonical literal (the same priority order R3 uses).
+    let verdictLiteral = '';
+    if (typeof obj.verdict === 'string') {
+        verdictLiteral = obj.verdict.trim().toUpperCase();
+    }
+    else {
+        for (const key of ['reviewVerdict', 'finalVerdict', 'decision', 'status']) {
+            const value = obj[key];
+            if (typeof value !== 'string')
+                continue;
+            const upper = value.trim().toUpperCase();
+            if (upper === 'LOOKS_GOOD' ||
+                upper === 'NON_BLOCKING' ||
+                upper === 'BLOCKING') {
+                verdictLiteral = upper;
+                break;
+            }
+        }
+    }
+    out.verdict = verdictLiteral;
+    // R4 (fail-closed, total): map a coverage value to one of the three literals.
+    // Only full/complete/ok/yes may become `covered`; n/a aliases become `n/a`;
+    // EVERYTHING else (including absent) is `missing`.
+    const rawCoverage = typeof obj.coverage === 'string' ? obj.coverage.trim().toLowerCase() : '';
+    out.coverage = mapCoverageValue(rawCoverage);
+    // Recovery's own marker so the recognizer shapes the entry. Deliberately the
+    // ONLY added key: no findings/advisories/fingerprint/reviewedFiles (INV-A.2).
+    out.schemaVersion = 1;
+    return out;
+}
+
+/**
+ * R4 total, fail-closed coverage mapping. Returns one of `covered` / `missing` /
+ * `n/a`. `full|complete|ok|yes` -> `covered`; `n/a|na|not-applicable` -> `n/a`;
+ * EVERYTHING else -> `missing`. Never maps anything to `covered` unless it
+ * lexically means full/complete/ok/yes. Inlined literals (no module-scope
+ * const) so the spliced copy is self-contained.
+ */
+function mapCoverageValue(value: string): 'covered' | 'missing' | 'n/a' {
+    if (value === 'covered')
+        return 'covered';
+    if (value === 'missing')
+        return 'missing';
+    if (value === 'n/a')
+        return 'n/a';
+    if (value === 'full' || value === 'complete' || value === 'ok' || value === 'yes') {
+        return 'covered';
+    }
+    if (value === 'na' || value === 'not-applicable' || value === 'not applicable') {
+        return 'n/a';
+    }
+    return 'missing';
+}
+
+/**
+ * A brace matcher that respects JSON string/escape state. Returns the inner
+ * text of every top-level balanced `{...}` span in `text`, in source order.
+ * Unbalanced trailing spans are dropped (fail closed — a partial object is not
+ * parseable and must not be recovered from). Hoisted top-level `function`; no
+ * module-scope state, so the spliced copy is self-contained.
+ */
+function balancedObjectSpans(text: string): string[] {
+    const spans: string[] = [];
+    if (typeof text !== 'string')
+        return spans;
+    let depth = 0;
+    let start = -1;
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            }
+            else if (ch === '\\') {
+                escaped = true;
+            }
+            else if (ch === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === '{') {
+            if (depth === 0)
+                start = i;
+            depth++;
+        }
+        else if (ch === '}') {
+            if (depth > 0) {
+                depth--;
+                if (depth === 0 && start >= 0) {
+                    spans.push(text.slice(start, i + 1));
+                    start = -1;
+                }
+            }
+        }
+    }
+    return spans;
+}
+
+/**
+ * Parse `text` as a JSON object (an object literal only), returning the record
+ * or null. Arrays, primitives, and malformed JSON all return null so recovery
+ * stays fail-closed. Hoisted top-level `function`; no module-scope state.
+ */
+function tryParseJsonObject(text: string): Record<string, unknown> | null {
+    if (typeof text !== 'string')
+        return null;
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('{'))
+        return null;
+    try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null;
+        }
+        return parsed as Record<string, unknown>;
+    }
+    catch {
+        return null;
+    }
+}
+
+/**
+ * Wave 3 (A7) RETRY FEEDBACK.
+ *
+ * The machine-readable reason a reviewer verdict was rejected. `code` is a
+ * closed union so a caller can branch on it; `summary` is a human-readable
+ * one-liner; `observed` holds the EXACT rejected literals (truncated);
+ * `expected` holds the accepted set; `recoveryStep` echoes the caller's step
+ * label; `attempt` is the 1-based retry attempt number.
+ */
+type ReviewerVerdictRejectionDiagnostic = {
+    code: 'no_structured_output' | 'unshaped_only' | 'unrecognized_verdict_literal' | 'invalid_coverage_value' | 'invalid_schema_version' | 'verdict_key_not_found' | 'prose_only' | 'attestation_incomplete' | 'recovered';
+    summary: string;
+    observed: string[];
+    expected: string[];
+    recoveryStep: string;
+    attempt: number;
+};
+
+/**
+ * Wave 3 (A7) diagnostic for a rejected reviewer verdict. Computes the
+ * diagnostic from the SAME (possibly recovered) result the recognizer read, so
+ * the operator message describes the exact rejection the gate saw. Hoisted
+ * top-level `function`; every literal set is inlined (no module-scope const) so
+ * the spliced copy is self-contained.
+ *
+ * Classification:
+ *   - no structured entry at all -> `no_structured_output`;
+ *   - structured entries but none shaped -> `unshaped_only`;
+ *   - a prose-only verdict line (LOOKS_GOOD / NON_BLOCKING / BLOCKING on its
+ *     own line) with no structured entry -> `prose_only`;
+ *   - a shaped entry whose verdict / schemaVersion / coverage is invalid -> the
+ *     matching code.
+ *
+ * `observed` holds the exact rejected literals (truncated); `expected` holds
+ * the accepted sets.
+ */
+function diagnoseReviewerVerdictRejection(toolResult: unknown, recoveryStep: string): ReviewerVerdictRejectionDiagnostic {
+    const acceptedVerdicts = ['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING'];
+    const acceptedCoverage = ['covered', 'missing', 'n/a'];
+    const structured = collectStructuredReviewerOutputs(toolResult);
+    const shaped = structured.filter((entry) => entry.schemaVersion !== undefined);
+    const base = {
+        recoveryStep,
+        attempt: 1,
+    };
+    if (structured.length === 0) {
+        // No structured entry at all. Distinguish a prose-only verdict line, which
+        // is a recognizable-but-unshapeable label, from a totally unstructured
+        // reply. `collectStrings` + `hasReviewerLineVerdict` mirror the existing
+        // text-mode path exactly.
+        const texts: string[] = [];
+        collectStrings(toolResult, texts);
+        const hasProseVerdict = texts
+            .map((text) => stripReviewerPreamble(text))
+            .some((text) => hasReviewerLineVerdict(text, 'LOOKS_GOOD') ||
+            hasReviewerLineVerdict(text, 'NON_BLOCKING') ||
+            hasReviewerLineVerdict(text, 'BLOCKING'));
+        if (hasProseVerdict) {
+            return {
+                ...base,
+                code: 'prose_only',
+                summary: 'Reviewer emitted a verdict line as prose with no structured object; the gate cannot shape a verdict from prose.',
+                observed: truncateObserved(collectProseVerdictLines(texts)),
+                expected: acceptedVerdicts,
+            };
+        }
+        return {
+            ...base,
+            code: 'no_structured_output',
+            summary: 'Reviewer returned no structured output; the gate cannot shape a verdict.',
+            observed: [],
+            expected: acceptedVerdicts,
+        };
+    }
+    if (shaped.length === 0) {
+        // Structured entries exist but none carry a schemaVersion, so the gate
+        // treats the whole result as unshaped.
+        return {
+            ...base,
+            code: 'unshaped_only',
+            summary: 'Reviewer returned structured output but no entry was schema-shaped; the gate cannot credit a verdict.',
+            observed: truncateObserved(structured.map((entry) => entry.verdict).filter(Boolean)),
+            expected: acceptedVerdicts,
+        };
+    }
+    // Shaped entries exist. Surface the FIRST concrete invalidity so the operator
+    // knows exactly what to fix.
+    for (const entry of shaped) {
+        if (entry.schemaVersion !== 1) {
+            return {
+                ...base,
+                code: 'invalid_schema_version',
+                summary: `Reviewer reported an invalid schemaVersion (${String(entry.schemaVersion)}); only 1 is accepted.`,
+                observed: truncateObserved([String(entry.schemaVersion)]),
+                expected: ['1'],
+            };
+        }
+    }
+    // A verdict literal under a NON-slot key was normalized to `verdict` by the
+    // recovery pre-pass; the recognizer only reads `verdict`, so a shaped entry
+    // with an empty verdict means the key was not found. Report it explicitly.
+    const verdictless = shaped.find((entry) => !entry.verdict);
+    if (verdictless) {
+        return {
+            ...base,
+            code: 'verdict_key_not_found',
+            summary: 'Reviewer structured output carried no recognized verdict key; the gate cannot read a verdict.',
+            observed: [],
+            expected: acceptedVerdicts,
+        };
+    }
+    const coverageInvalid = shaped.find((entry) => entry.coverage === undefined);
+    if (coverageInvalid) {
+        return {
+            ...base,
+            code: 'invalid_coverage_value',
+            summary: 'Reviewer coverage value was outside the accepted set (covered | missing | n/a).',
+            observed: [],
+            expected: acceptedCoverage,
+        };
+    }
+    // A shaped entry that reached here is creditable; recovery already ran, so
+    // report `recovered` to signal the pre-pass is what made it shapeable.
+    return {
+        ...base,
+        code: 'recovered',
+        summary: 'Reviewer structured output was recovered into a creditable verdict by the recovery pre-pass.',
+        observed: truncateObserved(shaped.map((entry) => entry.verdict).filter(Boolean)),
+        expected: acceptedVerdicts,
+    };
+}
+
+/**
+ * Extract the raw prose verdict lines (LOOKS_GOOD / NON_BLOCKING / BLOCKING on
+ * their own line) from a list of texts, for diagnostic `observed` output. The
+ * literal is returned verbatim so the operator sees exactly what was rejected.
+ */
+function collectProseVerdictLines(texts: string[]): string[] {
+    const lines: string[] = [];
+    for (const text of texts) {
+        const cleaned = stripReviewerPreamble(text);
+        for (const rawLine of cleaned.split(/\r?\n/)) {
+            const line = rawLine.trim();
+            if (/^(?:LOOKS_GOOD|NON_BLOCKING|BLOCKING)\b/i.test(line)) {
+                lines.push(line);
+            }
+        }
+    }
+    return lines;
+}
+
+/** Bound a diagnostic's `observed` list: at most 5 literals, each <= 80 chars. */
+function truncateObserved(values: string[]): string[] {
+    return values.slice(0, 5).map((value) => {
+        const text = String(value ?? '');
+        return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+    });
+}
+
+/**
+ * Wave 3 (A7) value-showing retry notice. Lists the rejected literal verbatim
+ * and the accepted set, and instructs the reviewer to call `set_output` with
+ * the required shape. It MUST NOT include the expected `snapshotFingerprint`
+ * (that would leak a forgeable attestation target), so it references 'the
+ * snapshot id given in your spawn contract' instead. Hoisted top-level
+ * `function`; no module-scope state.
+ */
+function buildReviewerVerdictRetryNotice(diag: ReviewerVerdictRejectionDiagnostic, reviewerAgentType: string): string {
+    const lines: string[] = [
+        `Your previous ${reviewerAgentType} response was rejected by the automated reviewer gate.`,
+        `Reason (${diag.code}): ${diag.summary}`,
+        `Recovery step: ${diag.recoveryStep} (attempt ${diag.attempt}).`,
+    ];
+    if (diag.observed.length > 0) {
+        lines.push('', 'Rejected value(s):');
+        for (const observed of diag.observed) {
+            lines.push(`  - ${observed}`);
+        }
+    }
+    if (diag.expected.length > 0) {
+        lines.push('', 'Accepted value(s):');
+        for (const expected of diag.expected) {
+            lines.push(`  - ${expected}`);
+        }
+    }
+    lines.push('', 'Re-emit your review by calling `set_output` with the required structured object shape:', "  { verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING', findings: [...], coverage: 'covered' | 'missing' | 'n/a', dimensions: {...}, requirementCoverage: [...], snapshotFingerprint: <the snapshot id given in your spawn contract>, reviewedFiles: [...] }", 'Echo the snapshot id given in your spawn contract exactly (do not invent or re-hash one), list every reviewed file, and use only the accepted verdict/coverage literals above. Do not answer in prose.');
+    return lines.join('\n');
+}
+
+/**
+ * Wave 3 (A8) WINDOWED REVIEW PLANNING.
+ *
+ * Partition the CREDITABLE, uncredited files into deterministic waves capped at
+ * 40 files (the `MAX_COMMITTED_SURFACE_FILES` literal, kept in-body — NO
+ * module-scope const). A file is 'uncredited' when `priorWaveCredit[file]`
+ * differs from `markerFor(file)`: a file whose content marker still matches its
+ * prior-wave credit needs no re-review. The caller supplies `isReviewable` (do
+ * NOT import `selectReviewableGateFiles`; the caller owns that predicate).
+ * Deleted files are returned separately (attested-by-absence) and excluded from
+ * the waves.
+ *
+ * CREDIT-UNIVERSE INVARIANT (universe-mismatch fix): `pendingFiles` here is the
+ * set of files that a specialist pass CAN actually credit — the UNION of every
+ * routed specialist's scoped spawn file set — NOT the full reviewable pending
+ * set. Planning over the wider pending set was the defect: a planned wave could
+ * contain a reviewable file that no specialist is ever spawned against (e.g. a
+ * `__tests__/` file or any file excluded from the aux-relevant scoped subset),
+ * so `recordWaveCompletionsForFiles` could never fully credit that wave and the
+ * finalization check reported it missing forever. Planning and crediting now
+ * describe the SAME universe, so every planned wave is creditable by at least
+ * one spawned specialist. The caller (base2.ts) passes the union; this helper
+ * stays a pure partitioner and does not recompute it.
+ *
+ * Hoisted top-level `function`; the 40 cap and every literal are in-body so the
+ * spliced copy is self-contained.
+ */
+function planGateReviewWaves(pendingFiles: string[], deletedFiles: string[], priorWaveCredit: Record<string, string>, isReviewable: (file: string) => boolean, markerFor: (file: string) => string): {
+    waves: string[][];
+    deleted: string[];
+    uncredited: string[];
+} {
+    const waveCap = 40;
+    // NORMALIZATION INVARIANT: every path that leaves this planner (the wave
+    // lists, the deleted list, and the uncredited list) is in the SAME normalized
+    // form `recordWaveCompletionsForFiles` and the finalization live-marker check
+    // compare against. `pendingFiles` arrives as the union of the routed
+    // specialists' scoped spawn file sets, which are collected from raw
+    // reviewer/change sources and may carry a leading `./` or backslashes; a
+    // path that differs only by normalization could never match the credited set
+    // and the post-spawn finalization re-opened the wave as missing. Normalizing
+    // here keeps planning, crediting, and the completion check on one universe.
+    const deleted: string[] = [];
+    const deletedSeen = new Set<string>();
+    for (const rawFile of deletedFiles) {
+        const file = normalizeGateFilePath(rawFile);
+        if (!file)
+            continue;
+        if (deletedSeen.has(file))
+            continue;
+        deletedSeen.add(file);
+        deleted.push(file);
+    }
+    const uncredited: string[] = [];
+    const seen = new Set<string>();
+    for (const rawFile of pendingFiles) {
+        const file = normalizeGateFilePath(rawFile);
+        if (!file)
+            continue;
+        if (seen.has(file))
+            continue;
+        seen.add(file);
+        if (!isReviewable(file))
+            continue;
+        if (deletedSeen.has(file))
+            continue;
+        const marker = markerFor(file);
+        // Uncredited when there is no prior credit for this file, or the recorded
+        // credit differs from the live marker (fail closed: a changed or missing
+        // credit re-reviews).
+        if (priorWaveCredit[file] === marker && marker !== undefined)
+            continue;
+        uncredited.push(file);
+    }
+    // Deterministic: sort the uncredited creditable files, then chunk by 40.
+    const sorted = [...uncredited].sort();
+    const waves: string[][] = [];
+    for (let i = 0; i < sorted.length; i += waveCap) {
+        waves.push(sorted.slice(i, i + waveCap));
+    }
+    return { waves, deleted, uncredited: sorted };
+}
+
+/**
+ * Wave 3 (A8) deterministic wave identity.
+ *
+ * Returns `${fingerprint}#w${waveIndex}#${sha256(sorted(waveFiles).join('\n'))}`.
+ * The hash is taken through the ALREADY-AVAILABLE in-region primitive
+ * `hashGateSnapshotDetails` (spliced from `gate-fingerprint.ts`, which the
+ * generator emits AFTER `gate-reviewer.ts` into the SAME `handleSteps` scope).
+ * Choosing the in-region primitive over a `hash: (s) => string` parameter keeps
+ * `waveKey` IMPORT-FREE — a spliced function cannot `import` a hash lib — and
+ * keeps the caller's signature simple. `hashGateSnapshotDetails` is a hoisted
+ * top-level `function` in the generated region, so calling it here resolves in
+ * both the module (where it is an imported binding) and the spliced copy. The
+ * helper returns `v3:<64 hex>` for a stable string; sorting the wave files makes
+ * the key independent of the order the caller collected them in.
+ */
+function waveKey(fingerprint: string, waveIndex: number, waveFiles: string[]): string {
+    const sorted = [...waveFiles].sort();
+    return `${fingerprint}#w${waveIndex}#${hashGateSnapshotDetails(sorted.join('\n'))}`;
 }
 
 /**
@@ -10242,6 +11827,235 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             (text.includes('snapshot') || text.includes('attest'))
           )
         })
+      }
+
+      // Wave 3 (A8) windowed-credit recorder. Given the set of files a single
+      // specialist pass just credited and the planned waves for the current
+      // snapshot, mark every planned wave whose file list is FULLY covered by
+      // this pass as complete. A wave is keyed by
+      // `waveKey(fingerprint, waveIndex, waveFiles)` so its identity folds in
+      // the exact bytes reviewed; per-FILE credit stays in the marker ledgers,
+      // so this map survives the bounded `reviewReceipts` eviction. Empty wave
+      // lists are never planned (the caller filters them), and an empty file
+      // set is a no-op here. Inline hoisted `function` for the serialization
+      // reason recorded on recordSuccessfulReviewReceipt: handleSteps is
+      // serialized via .toString() + new Function(...), so it must not
+      // reference module-scope imports, and both call sites appear EARLIER in
+      // the source than this declaration.
+      //
+      // COMPLETION-VALIDATION UNIVERSE: every file this recorder credits is
+      // ALSO written into the wave-credit marker ledger
+      // (`specialistWaveCreditMarkers[agentType]`) — see the caller, which
+      // passes the crediting agentType via the same write. That ledger is the
+      // ONLY source the post-spawn finalization check reads for its live-marker
+      // requirement, and it is keyed on the WAVE universe (reviewable files
+      // only), NOT the raw R4-widened `specialistReviewFileMarkers` set. Using
+      // the raw set there desynchronized credit accounting: a manifest/lockfile
+      // /CI path credited into `specialistReviewFileMarkers` but excluded from
+      // the wave universe could make a wave look complete (or missing) on a
+      // different file set than the planner used. Writing the SAME per-file
+      // markers here — from the exact `creditedFileMarkers` recorded on the
+      // completion — keeps the activation threshold, the planner, and the
+      // completion-validation universe identical, on EVERY credit path
+      // (parent-owned, verdict, and the converged/exhausted no-verdict path).
+      function isCreditEligibleSpecialistResult(
+        blockers: string[],
+        creditPathQualified: boolean,
+      ): boolean {
+        return blockers.length === 0 && creditPathQualified
+      }
+
+      function invalidateWaveCompletionsForSpecialistBlockers(
+        blockers: string[],
+        fingerprint: string,
+        blockedFiles: string[],
+      ): void {
+        if (blockers.length === 0 || blockedFiles.length === 0) return
+        const blockedFileSet = new Set(normalizeGateFileList(blockedFiles))
+        const completions = activeWorkState.waveCompletions ?? {}
+        const invalidatedWaveFiles = new Set<string>()
+        for (const [key, completion] of Object.entries(completions)) {
+          if (
+            completion.fingerprint !== fingerprint ||
+            !completion.files.some((file) => blockedFileSet.has(file))
+          ) {
+            continue
+          }
+          for (const file of completion.files) invalidatedWaveFiles.add(file)
+          delete completions[key]
+        }
+        if (invalidatedWaveFiles.size === 0) return
+        for (const markers of Object.values(
+          activeWorkState.specialistWaveCreditMarkers ?? {},
+        )) {
+          for (const file of invalidatedWaveFiles) delete markers[file]
+        }
+        activeWorkState.waveCompletions = completions
+      }
+
+      function findDriftedPriorWaveFiles(
+        priorMarkers: Record<string, string>,
+        markerFor: (file: string) => string,
+      ): string[] {
+        return Object.keys(priorMarkers).filter(
+          (file) => markerFor(file) !== priorMarkers[file],
+        )
+      }
+
+      function recordWaveCompletionsForFiles(
+        creditedFiles: string[],
+        plannedWaves: string[][],
+        fingerprint: string,
+        agentType: string,
+      ): void {
+        if (plannedWaves.length === 0 || creditedFiles.length === 0) return
+        const creditedSet = new Set(normalizeGateFileList(creditedFiles))
+        if (creditedSet.size === 0) return
+        // WAVE-UNIVERSE MARKER LEDGER: the SAME universe the planner and the
+        // activation threshold use. Every file this recorder credits is written
+        // here (and ONLY here) so the post-spawn finalization check validates
+        // its live-marker requirement against exactly the wave universe. The
+        // raw R4-widened `specialistReviewFileMarkers` set is deliberately NOT
+        // read by that check: it carries NON-reviewable manifest/lockfile/CI
+        // paths that the wave universe excludes, so keying completion on it
+        // could desynchronize credit accounting. `agentType` scopes the ledger
+        // so the union over routed specialists matches the union used at plan
+        // time. `readGateFileContentMarker` is read at the SAME instant as the
+        // completion's own recorded marker, so a completion whose bytes drift
+        // afterward re-opens (marker mismatch) exactly as before.
+        const waveCreditMarkers = ((activeWorkState.specialistWaveCreditMarkers ??=
+          {})[agentType] ??= {})
+        const waveCompletions = (activeWorkState.waveCompletions ??= {})
+        for (let waveIndex = 0; waveIndex < plannedWaves.length; waveIndex++) {
+          const rawWaveFiles = plannedWaves[waveIndex]
+          if (!rawWaveFiles || rawWaveFiles.length === 0) continue
+          // NORMALIZATION INVARIANT: the credited set is normalized, so wave
+          // membership must be tested in the SAME normalized form. Testing the
+          // RAW wave strings meant a path that differed only by normalization
+          // (a leading `./`, backslashes) could never be marked fully credited
+          // and the post-spawn finalization re-opened the wave as missing.
+          const waveFiles = normalizeGateFileList(rawWaveFiles)
+          if (waveFiles.length === 0) continue
+          const key = waveKey(fingerprint, waveIndex, waveFiles)
+          // CREDIT-UNIVERSE INVARIANT: waves are planned over the UNION of the
+          // routed specialists' scoped file sets, but each pass credits only its
+          // OWN specialist's files. A wave spanning files owned by DIFFERENT
+          // specialists can therefore never be fully covered by any single pass.
+          // Credit accumulates PER WAVE across passes: a wave is marked complete
+          // once the union of every file any pass has credited for THIS
+          // fingerprint covers it. Previously a single pass's credited set had
+          // to cover the whole wave, so a cross-specialist wave was never
+          // recorded and the post-spawn finalization reported it missing forever
+          // (permanent 'specialist-review-waves-incomplete' block).
+          // Accumulate the union of every file any pass has credited for this
+          // wave under the CURRENT fingerprint. A prior entry for a DIFFERENT
+          // fingerprint is discarded: the wave key already embeds the
+          // fingerprint, so a cross-fingerprint entry is a stale collision and
+          // must not carry credit into the current snapshot.
+          // DRIFT-INVALIDATION INVARIANT: credit is keyed by the file's LIVE
+          // content marker at the moment it was credited, not by its mere
+          // presence in a prior entry. A file that is edited and later reverted
+          // to its original bytes produces the SAME content marker, so a
+          // presence-only accumulated set (and the preserved `completedAt`)
+          // would honor stale credit and treat the wave complete without the
+          // re-edit ever being re-reviewed by a fresh pass. Requiring the live
+          // marker to still equal the recorded one re-opens the wave on any
+          // drift, and a reverted edit re-credits through a fresh pass whose
+          // marker is re-read here.
+          const existing = waveCompletions[key]
+          const priorCredit =
+            existing && existing.fingerprint === fingerprint
+              ? existing.creditedFileMarkers ?? {}
+              : {}
+          const accumulated = new Set<string>(
+            existing && existing.fingerprint === fingerprint
+              ? (existing.creditedFiles ?? []).filter(
+                  (file) =>
+                    priorCredit[file] !== undefined &&
+                    priorCredit[file] === readGateFileContentMarker(file),
+                )
+              : [],
+          )
+          const creditedFileMarkers: Record<string, string> = {}
+          for (const file of accumulated) {
+            creditedFileMarkers[file] = priorCredit[file]
+          }
+          let grew = false
+          for (const file of waveFiles) {
+            if (creditedSet.has(file) && !accumulated.has(file)) {
+              accumulated.add(file)
+              creditedFileMarkers[file] = readGateFileContentMarker(file)
+              grew = true
+            }
+          }
+          // Record the accumulated per-file credit even while the wave is not
+          // yet fully covered, so a LATER pass covering the remaining files can
+          // complete it. Only a fully-covered wave is durably reported complete
+          // (`completedAt` set); a partial entry keeps `completedAt` undefined
+          // so the finalization check still reports it missing.
+          if (!grew && existing && existing.fingerprint === fingerprint) {
+            // IDEMPOTENCY ON DRIFT: the existing same-fingerprint entry neither
+            // grew nor matched any live marker (accumulated is empty), so it is
+            // a PARTIAL entry whose recorded creditedFileMarkers have since
+            // drifted. The finalization check reads creditedFileMarkers and
+            // reports the wave missing (fail-closed, so this never wrongly
+            // credits), but leaving the stale record in place keeps a wave that
+            // can never complete for the current bytes occupying a ledger slot
+            // and re-evaluating live markers every iteration. Drop it so the
+            // ledger reflects the current bytes and a later pass re-credits the
+            // wave from scratch.
+            if (accumulated.size === 0) {
+              delete waveCompletions[key]
+            }
+            continue
+          }
+          const fullyCredited = waveFiles.every((file) =>
+            accumulated.has(file),
+          )
+          if (!fullyCredited && accumulated.size === 0) continue
+          // Mirror this wave's per-file credit into the WAVE-UNIVERSE marker
+          // ledger. Every file the wave universe placed in a wave is therefore
+          // represented in the SAME ledger the finalization check reads, on
+          // EVERY credit path (parent-owned, verdict, converged/exhausted
+          // no-verdict) — which is what closes the no-verdict marker-mismatch:
+          // the completion record and its validation source are written by the
+          // SAME call, from the SAME marker reads.
+          for (const file of accumulated) {
+            waveCreditMarkers[file] = creditedFileMarkers[file]
+          }
+          waveCompletions[key] = {
+            fingerprint,
+            waveIndex,
+            files: [...waveFiles],
+            creditedFiles: [...accumulated],
+            creditedFileMarkers,
+            completedAt: fullyCredited
+              ? existing?.completedAt ?? new Date().toISOString()
+              : undefined,
+            // TOUCH ORDER: stamped on EVERY write (including a re-write of an
+            // existing key, which does NOT move it in object insertion order)
+            // so boundWaveCompletions can rank fingerprints by most-recent
+            // touch instead of first-seen position. Without this a stale
+            // fingerprint's waves re-touched by a later pass kept their early
+            // insertion position and could be evicted even though they were
+            // the most recently touched, defeating the revert-invalidation
+            // promise for a reverted >40-file change.
+            lastTouchedAt: new Date().toISOString(),
+          }
+        }
+        // Bound the durable wave ledger so a long session of fresh edits cannot
+        // grow it without bound (the wave key embeds the snapshot fingerprint,
+        // so fresh edits mint NEW keys). Order-preserving, so the waves this
+        // pass just credited are retained for the finalization check above.
+        // `fingerprint` scopes the bound to the CURRENT snapshot: every key this
+        // pass minted is retained regardless of the cap, and only stale
+        // (previous-snapshot) entries are pruned — otherwise the cap would
+        // evict the very waves the post-spawn finalization check requires for a
+        // >256-wave change, blocking an otherwise fully-reviewed change.
+        activeWorkState.waveCompletions = boundWaveCompletions(
+          waveCompletions,
+          fingerprint,
+        )
       }
 
       function recordSuccessfulReviewReceipt(

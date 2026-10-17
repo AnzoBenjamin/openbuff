@@ -65,16 +65,18 @@
  *        does not consume it; higher layers already resolved the user).
  *
  * Other slice-1 scope notes:
- *  - the loop's `onResponseChunk` FORWARDS the child's own live display
- *    stream to the parent through the bridged fire-and-forget
- *    `sendSubagentChunk` channel (see {@link buildChildOnResponseChunk}):
- *    string chunks and `text`-type PrintModeEvents cross keyed to the
- *    child's own agentId/agentType and the request's verbatim `userInputId`,
- *    so the CLI renders the supervised child's reasoning/text deltas live in
- *    the agent block it already created from the spawn event; the remaining
- *    PrintModeEvent variants have no clean shape on that display channel
- *    (`handleStepsLogChunk` carries log records, not display events) and
- *    stay unforwarded — a documented follow-up;
+ *  - the loop's `onResponseChunk` FORWARDS the child's own live stream to the
+ *    parent (see {@link buildChildOnResponseChunk}): string chunks and
+ *    `text`-type PrintModeEvents cross the bridged fire-and-forget
+ *    `sendSubagentChunk` channel keyed to the child's own agentId/agentType
+ *    and the request's verbatim `userInputId`, so the CLI renders the
+ *    supervised child's reasoning/text deltas live in the agent block it
+ *    already created from the spawn event; every OTHER PrintModeEvent
+ *    (tool_call, tool_result, subagent_start, subagent_finish, phase, error,
+ *    ...) is relayed over the EXISTING bridged `sendAction` channel as a
+ *    `response-chunk` action, which the parent routes to the SAME
+ *    `handleEvent` path the in-process path uses — so the supervised child's
+ *    tool/lifecycle events render exactly like the orchestrator's own;
  *  - the child does NOT observe the parent AbortSignal; it is bounded by the
  *    supervisor's wall-clock deadline (and by bridge fail-closed teardown);
  *  - the child reads ONLY its own allowlisted env (OPENBUFF_API_KEY legacy
@@ -90,7 +92,10 @@ import { ensureAgentTemplateZodSchemas } from '@codebuff/common/templates/agent-
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { SendSubagentChunkFn } from '@codebuff/common/types/contracts/client'
+import type {
+  SendActionFn,
+  SendSubagentChunkFn,
+} from '@codebuff/common/types/contracts/client'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import { getCiEnv } from '@codebuff/common/env-ci'
@@ -444,22 +449,42 @@ function buildFailedChildReceipt(params: {
 }
 
 /**
- * Builds the supervised child's `onResponseChunk` display-stream forwarder
- * (wired into the loop params by {@link runSupervisedChildEntry}): the
- * child's OWN live stream, relayed to the parent through the bridged
- * fire-and-forget `sendSubagentChunk` channel so the CLI renders the child's
- * reasoning/text deltas live in the agent block it already created from the
- * spawn event — keyed to the child's own `agentId` (never a fresh id) and the
- * request's verbatim `userInputId`, mirroring the foreground spawn path's
- * forwarding rule (spawn-agents.ts `onResponseChunk`).
+ * Builds the supervised child's `onResponseChunk` stream forwarder (wired
+ * into the loop params by {@link runSupervisedChildEntry}): the child's OWN
+ * live stream, relayed to the parent so the CLI renders the child's activity
+ * in the agent block it already created from the spawn event — keyed to the
+ * child's own `agentId` (never a fresh id) and the request's verbatim
+ * `userInputId`, mirroring the foreground spawn path's forwarding rule
+ * (spawn-agents.ts `onResponseChunk`).
  *
- * Forward rule: a string chunk forwards verbatim; a `text`-type
- * PrintModeEvent forwards its non-empty `text` as the string chunk. Every
- * other PrintModeEvent variant (tool_call, tool_result, subagent_start,
- * subagent_finish, reasoning_delta, phase, error, ...) stays unforwarded — a
- * documented follow-up: the display channel carries text chunks only, and
- * `handleStepsLogChunk`'s log-record shape ({ userInputId, runId, level,
- * data }) does not fit display events.
+ * Forward rule:
+ *  - a string chunk forwards verbatim over the bridged fire-and-forget
+ *    `sendSubagentChunk` display channel;
+ *  - a `text`-type PrintModeEvent forwards its non-empty `text` as the string
+ *    chunk on that same channel;
+ *  - a `reasoning_delta` PrintModeEvent forwards its non-empty `text` as a
+ *    REASONING chunk — the same `chunk` string on the display channel, tagged
+ *    with `chunkKind: 'reasoning'` and carrying the event's `ancestorRunIds`
+ *    verbatim, so the SDK maps it to the SAME `reasoning_chunk` stream event
+ *    the root loop emits for its own reasoning deltas (see sdk/src/run.ts
+ *    `onResponseChunk`);
+ *  - EVERY other PrintModeEvent variant (tool_call, tool_result,
+ *    subagent_start, subagent_finish, phase, error, ...) is relayed over the
+ *    EXISTING bridged `sendAction` channel as a `response-chunk` action whose
+ *    `chunk` is the event VERBATIM. That is the exact shape the parent's
+ *    `sendAction` handler routes to `onResponseChunk`, which forwards a
+ *    non-string, non-`reasoning_delta` chunk to `handleEvent` — the SAME
+ *    `createEventHandler` path the in-process path uses. So the supervised
+ *    child's tool/lifecycle events render identically to the orchestrator's
+ *    own, instead of being silently dropped. `sendAction` is chosen over
+ *    `sendSubagentChunk` deliberately: the display channel's contract carries
+ *    text/reasoning chunks only, and widening `SendSubagentChunkFn` would be a
+ *    contract change.
+ *
+ * BOUNDED: exactly one `sendAction` notification is emitted per non-text
+ * event — no per-token or per-field fan-out — so a chatty child cannot starve
+ * the parent's fire-and-forget notify budget (see the bridge client's
+ * `bridge_notify_overflow` saturation reply, logged loudly child-side).
  *
  * Never throws: a forwarding failure is swallowed after one stderr warn per
  * run — a display-stream failure must never crash the child run, and the
@@ -469,6 +494,7 @@ function buildFailedChildReceipt(params: {
  */
 export function buildChildOnResponseChunk(params: {
   sendSubagentChunk: SendSubagentChunkFn
+  sendAction: SendActionFn
   agentId: string
   agentType: string
   userInputId: string
@@ -477,6 +503,7 @@ export function buildChildOnResponseChunk(params: {
 }): (chunk: string | PrintModeEvent) => void {
   const {
     sendSubagentChunk,
+    sendAction,
     agentId,
     agentType,
     userInputId,
@@ -502,13 +529,31 @@ export function buildChildOnResponseChunk(params: {
         }
         return
       }
-      // Documented follow-up: the remaining PrintModeEvent variants
-      // (tool_call, tool_result, subagent_start, subagent_finish,
-      // reasoning_delta, phase, error, ...) are not forwarded — the
-      // fire-and-forget display channel carries text chunks only, and
-      // handleStepsLogChunk's log-record shape ({ userInputId, runId, level,
-      // data }) does not fit display events. The user-visible primary gap
-      // (reasoning/text deltas) is covered by the two cases above.
+      if (chunk.type === 'reasoning_delta') {
+        if (chunk.text) {
+          sendSubagentChunk({
+            userInputId,
+            agentId,
+            agentType,
+            chunk: chunk.text,
+            prompt,
+            chunkKind: 'reasoning',
+            ancestorRunIds: chunk.ancestorRunIds,
+          })
+        }
+        return
+      }
+      // Remaining PrintModeEvent variants (tool_call, tool_result,
+      // subagent_start, subagent_finish, phase, error, ...): relay the event
+      // VERBATIM to the parent over the bridged sendAction channel as a
+      // `response-chunk` action. The parent's sendAction routes a non-string,
+      // non-reasoning_delta chunk to handleEvent — the same createEventHandler
+      // path the in-process stream uses — so the child's tool/lifecycle events
+      // render exactly like the orchestrator's own. Exactly ONE notification
+      // per event (no per-token fan-out), keeping the notify budget bounded.
+      sendAction({
+        action: { type: 'response-chunk', userInputId, chunk },
+      })
     } catch (error) {
       // A display-stream failure must never crash the child run: swallow it
       // after one stderr warn (the bridge client already logs notify
@@ -536,6 +581,35 @@ export function buildChildOnResponseChunk(params: {
  * failed receipt (outcome 'crashed') — it never throws past this boundary,
  * so the process contract (exactly one envelope, exit 0) holds.
  */
+export const CHILD_LOOP_CLEANUP_TIMEOUT_MS = 5_000
+
+export async function abortAndAwaitChildLoop<T>(
+  loopPromise: Promise<T>,
+  abortLoop: () => void,
+  onCleanupTimeout?: () => void,
+  cleanupTimeoutMs = CHILD_LOOP_CLEANUP_TIMEOUT_MS,
+): Promise<void> {
+  abortLoop()
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const cleanupDeadline = new Promise<void>((resolve) => {
+    timeout = setTimeout(() => {
+      onCleanupTimeout?.()
+      resolve()
+    }, cleanupTimeoutMs)
+  })
+  // Cleanup only needs settlement, not the loop's result. Observe both outcomes
+  // here while leaving the original loop promise's rejection intact for the
+  // caller's failure-receipt path.
+  await Promise.race([
+    loopPromise.then(
+      () => undefined,
+      () => undefined,
+    ),
+    cleanupDeadline,
+  ])
+  if (timeout !== undefined) clearTimeout(timeout)
+}
+
 export async function runSupervisedChildEntry(
   request: SupervisedSpawnRequest,
 ): Promise<AgentReceipt> {
@@ -633,6 +707,11 @@ export async function runSupervisedChildEntry(
           | undefined) ?? {},
     }
     const childLogger = createBridgeStderrLogger('child-agent')
+    // The loop owns file/tool resources and is cancellable through its own
+    // AbortController. It is aborted whenever the bridge fails so a mid-run
+    // socket close actually stops the child's work instead of leaving the
+    // losing loop promise running unobserved until process exit.
+    const loopAbortController = new AbortController()
     const loopParams = {
       ...bridgedDeps,
       ...buildLocalChildDeps(),
@@ -661,26 +740,65 @@ export async function runSupervisedChildEntry(
       clientEnv: clientProcessEnv,
       ciEnv: getCiEnv(),
       logger: childLogger,
-      // The child's OWN live display stream: forwarded to the parent through
-      // the bridged fire-and-forget sendSubagentChunk channel (the same
-      // shape the foreground spawn path forwards), keyed to this child's own
-      // agentId so the CLI appends to the EXISTING agent block. Never throws.
+      // The child's OWN live stream: text/reasoning deltas ride the bridged
+      // fire-and-forget sendSubagentChunk display channel (the same shape the
+      // foreground spawn path forwards) keyed to this child's own agentId so
+      // the CLI appends to the EXISTING agent block; every other PrintModeEvent
+      // rides the EXISTING bridged sendAction channel as a response-chunk
+      // action so the child's tool/lifecycle events render like the parent's.
+      // Never throws.
       onResponseChunk: buildChildOnResponseChunk({
         sendSubagentChunk: bridgedDeps.sendSubagentChunk,
+        sendAction: bridgedDeps.sendAction,
         agentId,
         agentType: request.agentType,
         userInputId: request.userInputId ?? '',
         prompt: request.prompt,
         logger: childLogger,
       }),
-      signal: new AbortController().signal,
+      signal: loopAbortController.signal,
     }
-    const loopResult = (await Promise.race([
+    // Race the loop against the bridge-failure promise. On the bridge-failure
+    // branch the losing loop promise keeps running: its AbortController is
+    // never aborted and the loop owns file/tool resources, so Promise.race
+    // settling with the rejection left the loop running unobserved until
+    // process exit. Abort the loop on EITHER outcome so a mid-run socket close
+    // actually stops the child's work; the abort is idempotent and harmless
+    // when the loop won (the run is already settled). A loop rejection remains
+    // a rejection from this race and is converted by the outer catch into the
+    // structured failed-child receipt. The abort is issued in a `finally` so
+    // the invariant holds on BOTH branches: a loop that wins the race also sees
+    // an aborted signal before any trailing cleanup runs.
+    let loopResult: { agentState: unknown; output: unknown }
+    // Keep the loop's rejection observable to the race below: a rejected child
+    // loop must enter the structured failed-receipt path, never look like a
+    // fulfilled result eligible for normal runtime receipt derivation. The
+    // cleanup helper separately observes either settlement outcome after abort.
+    const loopPromise = Promise.resolve(
       loopAgentStepsFn(loopParams),
-      bridgeFailure,
-    ])) as {
-      agentState: unknown
-      output: unknown
+    ).then((value) => value as { agentState: unknown; output: unknown })
+    // A loop rejection propagates out of the race into the outer catch below
+    // (structured failed-child receipt); the finally still aborts first.
+    try {
+      loopResult = (await Promise.race([loopPromise, bridgeFailure])) as {
+        agentState: unknown
+        output: unknown
+      }
+    } finally {
+      // The loop owns the bridged resources. Abort it first, then await
+      // cooperative settlement for a bounded interval. If the loop ignores
+      // cancellation, close the bridge at the deadline so pending RPCs and
+      // fire-and-forget resource ownership are released without depending on
+      // the outer process-supervisor deadline.
+      await abortAndAwaitChildLoop(
+        loopPromise,
+        () => {
+          loopAbortController.abort()
+        },
+        () => {
+          client.close()
+        },
+      )
     }
 
     // Mirror the in-process settle chain's receipt derivation exactly.

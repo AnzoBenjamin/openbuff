@@ -1812,14 +1812,21 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   // re-spawn. The audit-shard requirement below is unaffected: audit shards
   // still MUST emit a write_audit_findings structuralReceipt.
   const harvestedOutput = params.agentState?.output
+  // An answerless / step-capped harvest marks itself with noHarvestedAnswer:
+  // its placeholder summary is diagnostic text, not a real final answer, so
+  // neither the harvest flag nor the answer-text path may credit completion.
+  const answerlessHarvest =
+    harvestedOutput !== undefined && harvestedOutput.noHarvestedAnswer === true
   const hasHarvestedFallback =
     harvestedOutput !== undefined &&
     harvestedOutput.harvestedFromFallback === true &&
-    harvestedOutput.noHarvestedAnswer !== true
-  const hasRecoverableFinalAnswer = hasNonEmptyFinalAnswerText(
-    params.output,
-    params.agentState?.messageHistory,
-  )
+    !answerlessHarvest
+  const hasRecoverableFinalAnswer =
+    !answerlessHarvest &&
+    hasNonEmptyFinalAnswerText(
+      params.output,
+      params.agentState?.messageHistory,
+    )
   const hasExplicitCompletionOrHarvest =
     containsToolCall(receiptSources, 'task_completed') ||
     hasHarvestedFallback ||
@@ -2017,6 +2024,14 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   // retryable failure.
   const endedWithoutSetOutputOrHarvest =
     harvestedOutput === undefined || harvestedOutput.noHarvestedAnswer === true
+  // A recoverable final answer in the history (the relaxed early-exit
+  // contract) is real output: the empty-output guard below must not classify
+  // such a run as missing_output. The answerless-harvest case is excluded
+  // upstream by hasNonEmptyFinalAnswerText's noHarvestedAnswer handling.
+  const hasRecoverableOutputAnswer = hasNonEmptyFinalAnswerText(
+    params.output,
+    params.agentState?.messageHistory,
+  )
   const normalizedOutputIsEmptyPlaceholder =
     normalizedOutputRecord?.partial === true &&
     normalizedOutputRecord.summary === ''
@@ -2039,8 +2054,9 @@ function buildRuntimeAgentReceiptOrThrow(params: {
       )
     })
   const missingOutputEvidence =
-    rawOutputMissing ||
+    (rawOutputMissing && !hasRecoverableOutputAnswer) ||
     (endedWithoutSetOutputOrHarvest &&
+      !hasRecoverableOutputAnswer &&
       (normalizedOutputIsEmptyPlaceholder || blankLastMessageOutput))
   // schema_invalid diagnostic detail: the set_output rejection when one was
   // recorded, else the supervised crash-envelope message that carries the

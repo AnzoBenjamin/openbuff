@@ -12,7 +12,7 @@ import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import { createInitialWorkspaceState } from '@codebuff/common/types/workspace-state'
 
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -24,6 +24,7 @@ import {
   buildUnsupportedDepsReceipt,
   missingChildCallbackDeps,
   rehydrateLocalAgentTemplates,
+  abortAndAwaitChildLoop,
   runChildEntryMain,
   runSupervisedChildEntry,
 } from '../child-entry'
@@ -54,6 +55,78 @@ function makeRequest(
     ...overrides,
   }
 }
+
+describe('child-entry cancellation and cleanup ordering', () => {
+  it('aborts immediately but does not finish cleanup until the loop settles', async () => {
+    let settleLoop!: () => void
+    let loopSettled = false
+    let abortCalled = false
+    const loopPromise = new Promise<void>((resolve) => {
+      settleLoop = () => {
+        loopSettled = true
+        resolve()
+      }
+    })
+
+    const cleanup = abortAndAwaitChildLoop(loopPromise, () => {
+      abortCalled = true
+    })
+    expect(abortCalled).toBe(true)
+    expect(loopSettled).toBe(false)
+
+    settleLoop()
+    await cleanup
+    expect(loopSettled).toBe(true)
+  })
+
+  it('bounds cooperative cleanup and closes owned resources when the loop ignores abort', async () => {
+    let abortCalled = false
+    let cleanupTimedOut = false
+    const neverSettles = new Promise<void>(() => {})
+
+    await abortAndAwaitChildLoop(
+      neverSettles,
+      () => {
+        abortCalled = true
+      },
+      () => {
+        cleanupTimedOut = true
+      },
+      10,
+    )
+
+    expect(abortCalled).toBe(true)
+    expect(cleanupTimedOut).toBe(true)
+  })
+
+  it('awaits cleanup after a rejected loop without swallowing that rejection from the caller race', async () => {
+    const loopFailure = new Error('child loop failed')
+    const loopPromise = Promise.reject(loopFailure)
+
+    await expect(
+      Promise.race([loopPromise, Promise.resolve('bridge remained open')]),
+    ).rejects.toBe(loopFailure)
+    // The cleanup wait observes rejection only to know the loop has settled;
+    // it must not rethrow during finally and obscure the structured failure.
+    await expect(
+      abortAndAwaitChildLoop(loopPromise, () => {}),
+    ).resolves.toBeUndefined()
+
+    // Pin the child-entry settle chain: a rejection must propagate out of the
+    // race into the structured failed-child receipt path, not be converted to
+    // undefined and passed to the normal runtime receipt builder.
+    const childEntrySource = readFileSync(
+      join(import.meta.dir, '../child-entry.ts'),
+      'utf8',
+    )
+    expect(childEntrySource).toContain(
+      'const loopPromise = Promise.resolve(\n      loopAgentStepsFn(loopParams),\n    ).then((value) => value as { agentState: unknown; output: unknown })',
+    )
+    expect(childEntrySource).toContain(
+      'return buildFailedChildReceipt({\n      agentType: request.agentType,\n      agentId,\n      message: error instanceof Error ? error.message : String(error),\n    })',
+    )
+  })
+})
 
 describe('child-entry honest degradation (P2-T8)', () => {
   it('every request yields a schema-valid FAILED receipt with code unsupported-deps', async () => {
@@ -320,6 +393,7 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
       sendSubagentChunk: (params) => {
         sent.push(params)
       },
+      sendAction: () => {},
       agentId: 'child-entry-agent-1',
       agentType: 'thinker',
       userInputId: 'ui-parent-1',
@@ -382,7 +456,7 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
   })
 
   it(
-    'other PrintModeEvent variants (tool_call, subagent_start, reasoning_delta) stay UNFORWARDED — no invented wire shape',
+    'other PrintModeEvent variants (tool_call, subagent_start, phase, error) stay UNFORWARDED — no invented wire shape',
     () => {
       const { sent, onResponseChunk } = makeForwarder()
       onResponseChunk({
@@ -399,17 +473,54 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
         onlyChild: false,
       } as PrintModeEvent)
       onResponseChunk({
-        type: 'reasoning_delta',
-        text: 'thinking...',
-        ancestorRunIds: [],
-        runId: 'run-1',
-      } as PrintModeEvent)
+        type: 'phase',
+        phase: 'thinking',
+      } as unknown as PrintModeEvent)
+      onResponseChunk({
+        type: 'error',
+        message: 'boom',
+      } as unknown as PrintModeEvent)
       // None of these crossed the display channel: the channel carries text
-      // chunks only (the documented follow-up in the child-entry docblock;
-      // handleStepsLogChunk's log-record shape does not fit display events).
+      // and reasoning chunks only (the documented forward rule in the
+      // child-entry docblock; handleStepsLogChunk's log-record shape does
+      // not fit display events).
       expect(sent).toHaveLength(0)
     },
   )
+
+  it(
+    "a reasoning_delta event forwards its non-empty text as a reasoning chunk (chunkKind 'reasoning' + the event's ancestorRunIds) keyed to the child's OWN agentId/agentType and the request's verbatim userInputId",
+    () => {
+      const { sent, onResponseChunk } = makeForwarder()
+      onResponseChunk({
+        type: 'reasoning_delta',
+        text: 'thinking...',
+        ancestorRunIds: ['run-root', 'run-child'],
+        runId: 'run-1',
+      } as PrintModeEvent)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toEqual({
+        userInputId: 'ui-parent-1',
+        agentId: 'child-entry-agent-1',
+        agentType: 'thinker',
+        chunk: 'thinking...',
+        prompt: 'Probe',
+        chunkKind: 'reasoning',
+        ancestorRunIds: ['run-root', 'run-child'],
+      })
+    },
+  )
+
+  it('an EMPTY reasoning_delta event forwards nothing (no sendSubagentChunk call)', () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk({
+      type: 'reasoning_delta',
+      text: '',
+      ancestorRunIds: ['run-root'],
+      runId: 'run-1',
+    } as PrintModeEvent)
+    expect(sent).toHaveLength(0)
+  })
 
   it(
     'a THROWING sendSubagentChunk never crashes the forwarder: the failure is warned at most once and later chunks still forward',
@@ -425,6 +536,7 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
           }
           sent.push(params)
         },
+        sendAction: () => {},
         agentId: 'child-entry-agent-1',
         agentType: 'thinker',
         userInputId: 'ui-parent-1',

@@ -410,8 +410,8 @@ describe('handleRecallContext consolidation merge failure paths', () => {
     })
     const value = await invokeRecall(agentState, 'eviction')
     expect(value.consolidations).toBeUndefined()
-    // Both result sets empty: the guidance message IS shown.
-    expect(value.message).toContain('No archived pre-compaction content matched')
+    // Both result sets empty: the guidance message IS shown (D27 message).
+    expect(value.message).toContain('No matching archived context')
   })
 
   test('shows the guidance message only when both matches and consolidations are empty', async () => {
@@ -448,7 +448,7 @@ describe('handleRecallContext consolidation merge failure paths', () => {
     expect(value.matches).toEqual([])
     expect(value.archivedAt).toEqual([])
     expect(value.snapshotsSearched).toBe(0)
-    expect(value.message).toContain('No archived pre-compaction content matched')
+    expect(value.message).toContain('No matching archived context')
   })
 
   test('searchConsolidations failure degrades to verbatim-only output instead of throwing', async () => {

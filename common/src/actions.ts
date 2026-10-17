@@ -169,7 +169,28 @@ type ServerActionSubagentResponseChunk = {
   agentId: string
   agentType: string
   chunk: string
-  prompt?: string
+  /**
+   * When set to 'reasoning', `chunk` is a reasoning/thinking delta rather
+   * than display text. Omitted keeps the existing text semantics.
+   */
+  /**
+   * `| undefined` keeps this action assignable from the producer contract's
+   * param read types (`SendSubagentChunkFn` in types/contracts/client.ts):
+   * the SDK builds this action from the dep's destructured params via
+   * property shorthand, so every optional member may be explicitly present
+   * as undefined.
+   */
+  chunkKind?: 'reasoning' | undefined
+  /**
+   * Reasoning provenance, mirroring PrintModeReasoningDelta.ancestorRunIds.
+   * Only meaningful alongside `chunkKind: 'reasoning'`.
+   */
+  ancestorRunIds?: string[] | undefined
+  /**
+   * Aligned with `SendSubagentChunkFn.prompt` (types/contracts/client.ts),
+   * which declares the same `string | undefined` shape.
+   */
+  prompt?: string | undefined
   forwardToPrompt?: boolean
 }
 

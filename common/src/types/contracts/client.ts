@@ -52,6 +52,18 @@ export type SendSubagentChunkFn = (params: {
   agentId: string
   agentType: string
   chunk: string
+  /**
+   * When set to 'reasoning', `chunk` is a reasoning/thinking delta rather
+   * than display text. Omitted (or any other value) keeps the existing text
+   * semantics.
+   */
+  chunkKind?: 'reasoning'
+  /**
+   * Reasoning provenance, mirroring PrintModeReasoningDelta.ancestorRunIds:
+   * the run chain that produced the reasoning delta. Only meaningful
+   * alongside `chunkKind: 'reasoning'`.
+   */
+  ancestorRunIds?: string[]
   prompt?: string | undefined
   forwardToPrompt?: boolean
 }) => void

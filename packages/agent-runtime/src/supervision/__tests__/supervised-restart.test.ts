@@ -23,7 +23,6 @@ import type {
 } from '@codebuff/common/types/contracts/agent-runtime'
 
 import type { SpawnSettledSubagentParams } from '../process-supervisor'
-import { SETTLE_DEFAULT_TIMEOUT_MS } from '../process-supervisor'
 import { buildDefaultSpawnSupervised } from '../supervised-spawn'
 
 // ---- outcome-sequence injection (the only test-side seam available) ------
@@ -172,6 +171,32 @@ function buildRestartingSeam(policy: {
     },
   })
   return { seam, record }
+}
+
+/**
+ * Runs one bounded seam call with the given (partial) restart policy and
+ * returns the recorded restart delays — the reference schedule the
+ * normalization clamp cases below assert against. Omitting `backoffMs` /
+ * `backoffMultiplier` exercises the seam's own module-private defaults with
+ * no test-side mirror. Resets and reuses the shared spawn queue; a caller
+ * must make its own spawnCallParams assertions BEFORE calling this.
+ */
+async function referenceDelays(policy: {
+  maxAttempts: number
+  backoffMs?: number
+  backoffMultiplier?: number
+}): Promise<number[]> {
+  const okResult = settledOk()
+  queueSpawns(
+    ...Array.from({ length: policy.maxAttempts }, () =>
+      settledCrash('spawn_failed'),
+    ),
+    okResult,
+  )
+  const { seam, record } = buildRestartingSeam(policy)
+  const result = await settleBounded(seam, REQUEST)
+  expect(result).toBe(okResult)
+  return record.delays
 }
 
 describe('supervised-spawn restart policy (P2-T8c)', () => {
@@ -356,11 +381,15 @@ describe('supervised-spawn restart policy (P2-T8c)', () => {
 })
 
 describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
-  // Mirrors RESTART_DEFAULT_BACKOFF_MS / RESTART_DEFAULT_BACKOFF_MULTIPLIER
-  // in supervised-spawn.ts (module-private, so asserted by value here).
-  const DEFAULT_BACKOFF_MS = 250
-  const DEFAULT_BACKOFF_MULTIPLIER = 2
-
+  // RESTART_DEFAULT_BACKOFF_MS / RESTART_DEFAULT_BACKOFF_MULTIPLIER are
+  // module-private in supervised-spawn.ts (not exported), so the clamp
+  // defaults are pinned via the seam's BEHAVIOR instead of mirrored
+  // literals: each junk-value case runs an otherwise-identical reference
+  // call that OMITS the scalar under test (the clamp default applies) and
+  // asserts the recorded delays match that reference element-for-element.
+  // If the production defaults change, these tests track the new value
+  // instead of failing with a stale literal diff; if the clamp breaks, the
+  // junk-value run diverges from its reference and fails.
   const NON_FINITE_VALUES: Array<[string, number]> = [
     ['NaN', Number.NaN],
     ['Infinity', Number.POSITIVE_INFINITY],
@@ -368,7 +397,7 @@ describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
   ]
 
   for (const [label, value] of NON_FINITE_VALUES) {
-    it(`non-finite backoffMs (${label}) clamps to the default ${DEFAULT_BACKOFF_MS}ms`, async () => {
+    it(`non-finite backoffMs (${label}) clamps to the seam's default backoff`, async () => {
       resetSpawnQueue()
       const okResult = settledOk()
       queueSpawns(settledCrash('spawn_failed'), okResult)
@@ -380,12 +409,15 @@ describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
       const result = await settleBounded(seam, REQUEST)
       expect(spawnCallParams).toHaveLength(2)
       expect(result).toBe(okResult)
-      // First restart waits exactly backoffMs → the clamped default.
-      expect(record.delays).toEqual([DEFAULT_BACKOFF_MS])
+      // First restart waits exactly backoffMs → the clamped default, proven
+      // equal to the omit-backoffMs reference run's recorded delay.
+      expect(record.delays).toEqual(
+        await referenceDelays({ maxAttempts: 1, backoffMultiplier: 2 }),
+      )
     })
   }
 
-  it(`negative backoffMs clamps to the default ${DEFAULT_BACKOFF_MS}ms`, async () => {
+  it(`negative backoffMs clamps to the seam's default backoff`, async () => {
     resetSpawnQueue()
     const okResult = settledOk()
     queueSpawns(settledCrash('spawn_failed'), okResult)
@@ -397,11 +429,13 @@ describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
     const result = await settleBounded(seam, REQUEST)
     expect(spawnCallParams).toHaveLength(2)
     expect(result).toBe(okResult)
-    expect(record.delays).toEqual([DEFAULT_BACKOFF_MS])
+    expect(record.delays).toEqual(
+      await referenceDelays({ maxAttempts: 1, backoffMultiplier: 2 }),
+    )
   })
 
   for (const [label, value] of NON_FINITE_VALUES) {
-    it(`non-finite backoffMultiplier (${label}) clamps to the default ×${DEFAULT_BACKOFF_MULTIPLIER}`, async () => {
+    it(`non-finite backoffMultiplier (${label}) clamps to the seam's default multiplier`, async () => {
       resetSpawnQueue()
       const okResult = settledOk()
       queueSpawns(
@@ -417,12 +451,15 @@ describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
       const result = await settleBounded(seam, REQUEST)
       expect(spawnCallParams).toHaveLength(3)
       expect(result).toBe(okResult)
-      // 10 * 2^0 = 10, 10 * 2^1 = 20 with the clamped default multiplier.
-      expect(record.delays).toEqual([10, 10 * DEFAULT_BACKOFF_MULTIPLIER])
+      // 10 * m^0 = 10, 10 * m^1 = 10m with the clamped default multiplier,
+      // proven element-equal to the omit-backoffMultiplier reference run.
+      expect(record.delays).toEqual(
+        await referenceDelays({ maxAttempts: 2, backoffMs: 10 }),
+      )
     })
   }
 
-  it(`negative backoffMultiplier clamps to the default ×${DEFAULT_BACKOFF_MULTIPLIER}`, async () => {
+  it(`negative backoffMultiplier clamps to the seam's default multiplier`, async () => {
     resetSpawnQueue()
     const okResult = settledOk()
     queueSpawns(
@@ -438,7 +475,9 @@ describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
     const result = await settleBounded(seam, REQUEST)
     expect(spawnCallParams).toHaveLength(3)
     expect(result).toBe(okResult)
-    expect(record.delays).toEqual([10, 10 * DEFAULT_BACKOFF_MULTIPLIER])
+    expect(record.delays).toEqual(
+      await referenceDelays({ maxAttempts: 2, backoffMs: 10 }),
+    )
   })
 
   it('fractional maxAttempts (2.7) floors to 2 restarts — 3 total spawns', async () => {
@@ -500,7 +539,7 @@ describe('supervised-spawn settle deadline wiring (absolute lifetime cap)', () =
   })
 
   it(
-    `defaults the deadline (including maxLifetimeMs) to SETTLE_DEFAULT_TIMEOUT_MS when the request omits timeoutMs`,
+    `arms NO deadline when the request omits timeoutMs (documented unbounded contract)`,
     async () => {
       resetSpawnQueue()
       const okResult = settledOk()
@@ -510,12 +549,13 @@ describe('supervised-spawn settle deadline wiring (absolute lifetime cap)', () =
       })
       await settleBounded(seam, { ...REQUEST, timeoutMs: undefined })
       const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
-      expect(settleParams.idleTimeoutMs).toBe(SETTLE_DEFAULT_TIMEOUT_MS)
-      expect(settleParams.timeoutMs).toBe(SETTLE_DEFAULT_TIMEOUT_MS)
-      // The default deadline applies as the absolute cap too — the
-      // documented 10-minute wall-clock deadline holds even for a
-      // continuously-active child.
-      expect(settleParams.maxLifetimeMs).toBe(SETTLE_DEFAULT_TIMEOUT_MS)
+      // No implicit default: SETTLE_DEFAULT_TIMEOUT_MS is only applied when a
+      // caller chooses it explicitly. With no request deadline the seam passes
+      // NO timeout/idle/lifetime bound and the child runs unbounded with zero
+      // timers armed, matching the in-process path.
+      expect(settleParams.timeoutMs).toBeUndefined()
+      expect(settleParams.idleTimeoutMs).toBeUndefined()
+      expect(settleParams.maxLifetimeMs).toBeUndefined()
     },
   )
 })
