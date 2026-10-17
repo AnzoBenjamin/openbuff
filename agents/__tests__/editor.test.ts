@@ -659,7 +659,7 @@ describe('editor agent', () => {
       )
     })
 
-    test('forces one fresh-read recovery turn after an aborted transaction', () => {
+    test('repeats fresh-read recovery turns until the step cap ends them', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
         logger: noopLogger as any,
@@ -718,10 +718,34 @@ describe('editor agent', () => {
         }).value,
       ).toBe('STEP')
 
+      // Continuations are unlimited: a SECOND stepsComplete with the same
+      // pending recovery yields ANOTHER recovery directive, not the receipt.
+      const secondRecovery = generator.next({
+        agentState: failedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((secondRecovery.value as any).toolName).toBe('add_message')
+      expect((secondRecovery.value as any).input.content).toContain(
+        '<editor_recovery>',
+      )
+
+      expect(
+        generator.next({
+          agentState: failedState,
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      // The receipt is reached only when the run stopped at the explicit step
+      // cap (hitStepCap: true), which the generator must honor by breaking out
+      // of the continuation loop.
       const finalReceipt = generator.next({
         agentState: failedState,
         toolResult: undefined,
         stepsComplete: true,
+        hitStepCap: true,
       })
       expect((finalReceipt.value as any).input.output.failureStage).toBe(
         'edit_recovery_exhausted',
@@ -730,7 +754,7 @@ describe('editor agent', () => {
         paths: ['src/live.ts', 'src/live.test.ts'],
         preferredStrategy: 'replace_range',
         errorCode: 'no_match',
-        attempts: 1,
+        attempts: 2,
       })
     })
 
@@ -1456,6 +1480,37 @@ describe('editor agent', () => {
         }).value,
       ).toBe('STEP')
 
+      // Continuations are unlimited: a second stepsComplete with still-no
+      // edits yields ANOTHER action-required directive, not the receipt.
+      const secondActionRequired = generator.next({
+        agentState: createMockAgentState([
+          ...preReadMessages,
+          editorMessage,
+          controlMessage,
+        ]),
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((secondActionRequired.value as any).toolName).toBe('add_message')
+      expect((secondActionRequired.value as any).input.content).toContain(
+        '<editor_action_required>',
+      )
+
+      expect(
+        generator.next({
+          agentState: createMockAgentState([
+            ...preReadMessages,
+            editorMessage,
+            controlMessage,
+          ]),
+          toolResult: undefined,
+          stepsComplete: false,
+        }).value,
+      ).toBe('STEP')
+
+      // The receipt is reached only when the run stopped at the explicit step
+      // cap (hitStepCap: true), which the generator must honor by breaking out
+      // of the continuation loop.
       const result = generator.next({
         agentState: createMockAgentState([
           ...preReadMessages,
@@ -1464,6 +1519,7 @@ describe('editor agent', () => {
         ]),
         toolResult: undefined,
         stepsComplete: true,
+        hitStepCap: true,
       })
 
       expect((result.value as any).input.output.messages).toEqual([

@@ -3106,8 +3106,8 @@ export async function executeSubagent(
 
   // The subagent runs on the parent's signal (carried by ...withDefaults), so
   // user/parent cancellation still propagates. There is no wall-clock deadline:
-  // productive subagents are bounded only by cancellation, the repeated-step
-  // watchdog, spawn depth, and cost/token budgets.
+  // productive subagents are bounded only by cancellation, the configured step
+  // cap and budget enforcement, spawn depth, and cost/token budgets.
   // `output` is `unknown` (not AgentOutput) on purpose: the post-loop spread
   // through finalizeOwnedLibrarianClone widens it, and the un-annotated let
   // previously relied on TS's evolving-let union — freezing AgentOutput here

@@ -493,7 +493,8 @@ export const providerConfigFileSchema = z
     readableRoots: z.array(z.string().min(1)).default([]),
     /**
      * Optional fixed agent-step cap. Unset or -1 means unlimited productive
-     * steps; a repeated-step watchdog still stops identical no-progress loops.
+     * steps; the configured cap and budget enforcement are what bound runaway
+     * runs.
      */
     maxAgentSteps: z
       .union([z.literal(-1), z.number().int().positive().max(100000)])
@@ -579,7 +580,7 @@ export const providerConfigFileSchema = z
       // run-start registry wiring) never has to handle `undefined`.
       readableRoots: config.readableRoots,
       // Optional in the resolved config: omitted unless explicitly set, so
-      // callers use the unlimited default plus the no-progress watchdog.
+      // callers use the unlimited default, bounded only by budget enforcement.
       ...(config.maxAgentSteps !== undefined && {
         maxAgentSteps: config.maxAgentSteps,
       }),

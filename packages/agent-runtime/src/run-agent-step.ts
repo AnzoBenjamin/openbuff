@@ -2913,8 +2913,7 @@ export async function loopAgentSteps(
           // reminder also has no effect on a generator-driven agent.
           !agentTemplate.handleSteps &&
           currentAgentState.output === undefined &&
-          shouldEndTurn &&
-          outputSchemaRetryCount < MAX_MISSING_OUTPUT_RETRIES
+          shouldEndTurn
         ) {
           outputSchemaRetryCount += 1
           // The set_output handler records its rejection on this same agent
@@ -2935,7 +2934,7 @@ export async function loopAgentSteps(
           )
 
           // Add system message instructing to use set_output
-          const attemptSuffix = `(attempt ${outputSchemaRetryCount} of ${MAX_MISSING_OUTPUT_RETRIES})`
+          const attemptSuffix = `(attempt ${outputSchemaRetryCount})`
           const outputSchemaMessage = withSystemTags(
             rejection
               ? `Your set_output call was rejected and your output is still unset ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Rejection: ${rejection}`
@@ -3281,15 +3280,6 @@ const buildCompactionNoProgressClause = (
   `Compaction is not reclaiming space: ${consecutiveNoProgressCompactions} consecutive compactions reclaimed under ${Math.round(
     COMPACTION_NO_PROGRESS_FRACTION * 100,
   )}%.`
-
-/**
- * Bounded retries for a structured-output agent that ended its turn without
- * setting required output. A failed `set_output` ends the turn (set_output is in
- * TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so a single retry left a reviewer that
- * botched one field with no step to act on the validation error, and the parent
- * received `value: null`. Bounded, not unlimited: each retry is one more LLM step.
- */
-const MAX_MISSING_OUTPUT_RETRIES = 3
 
 /**
  * How many steps before the cap the one-time near-cap checkpoint nudge fires.

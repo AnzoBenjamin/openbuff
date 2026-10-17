@@ -295,30 +295,34 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
 
       // Keep stepping while the model is still emitting edit tool calls so it
       // can implement multi-file changes and recover from failed transactions.
-      // Productive steps are unlimited by default. The runtime's repeated-step
-      // watchdog, cancellation, budgets, and subagent timeout bound runaway work.
-      // A failed atomic transaction is different from a finished edit: the
-      // runtime already revoked stale authorization and supplied a recovery
-      // packet, but a provider can still emit a reasoning-only final turn.
-      // Give it one bounded, explicit recovery step instead of turning that
-      // provider quirk into a misleading "no edit_transaction" receipt.
+      // Productive steps are unlimited by default, and so are the continuations
+      // below: a failed atomic transaction is different from a finished edit —
+      // the runtime already revoked stale authorization and supplied a recovery
+      // packet, but a provider can still emit a reasoning-only final turn. Each
+      // directive re-fires on EVERY turn-end that still shows its condition,
+      // instead of turning that provider quirk into a misleading "no
+      // edit_transaction" receipt. User cancellation is the only guaranteed
+      // bound (there is no wall-clock deadline); a configured step cap or
+      // cost/token budget additionally bounds the loop. hitStepCap must break
+      // out per the StepGenerator contract — a continuation past an explicit
+      // step cap would re-trigger it forever.
       let recoveryContinuationCount = 0
       // The same provider behavior can happen before the first mutation. For
-      // declared implementation targets, allow one action-required turn so a
-      // read-only/reasoning-only completion cannot silently end the repair.
-      let noEditContinuationCount = 0
+      // declared implementation targets, every read-only/reasoning-only
+      // completion gets another action-required turn so it cannot silently
+      // end the repair.
       while (true) {
         const result = yield 'STEP'
         agentState = result.agentState
+        // Step-capped runs must break to the receipt path immediately: the
+        // StepGenerator contract requires it, because yielding more STEP
+        // continuations past an explicit step cap re-triggers the cap forever.
+        if (result.hitStepCap) break
         const stepMessages = agentState.messageHistory.slice(
           initialMessageHistoryLength,
         )
         const recovery = getPendingTransactionRecovery(stepMessages)
-        if (
-          result.stepsComplete &&
-          recovery &&
-          recoveryContinuationCount === 0
-        ) {
+        if (result.stepsComplete && recovery) {
           recoveryContinuationCount += 1
           yield {
             toolName: 'add_message',
@@ -334,10 +338,8 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
           result.stepsComplete &&
           targetFiles.length > 0 &&
           extractChangedFiles(stepMessages).length === 0 &&
-          !hasEditTransactionResult(stepMessages) &&
-          noEditContinuationCount === 0
+          !hasEditTransactionResult(stepMessages)
         ) {
-          noEditContinuationCount += 1
           yield {
             toolName: 'add_message',
             input: {
@@ -781,6 +783,9 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             }
           }
         }
+        // With continuations unlimited, this stage only fires when the run
+        // stopped at the step cap with recovery still unresolved: unresolved
+        // recovery after continuations were exhausted by the step cap.
         if (recovery && recoveryContinuationCount > 0) {
           return 'edit_recovery_exhausted'
         }

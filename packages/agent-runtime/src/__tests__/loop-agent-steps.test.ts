@@ -2309,10 +2309,14 @@ describe('loopAgentSteps', () => {
     }
   })
 
-  // Regression: a structured agent that never populates output used to get only
-  // one retry. The fix introduces MAX_MISSING_OUTPUT_RETRIES (= 3) so the loop
-  // retries the missing-output nudge up to the cap before handing back null.
-  it('retries the missing-output nudge up to the cap and then returns null value', async () => {
+  // With the missing-output retry cap removed, the nudge fires on EVERY
+  // turn-end that still lacks required output. An agent that never calls
+  // set_output keeps being nudged until the STEP CAP ends the loop: each
+  // retry is a real LLM step that consumes the configured step budget, so a
+  // configured cap (not a retry counter) is the bound that terminates a
+  // never-completing structured agent. Under the unlimited default only user
+  // cancellation bounds the loop — the accepted tradeoff of cap removal.
+  it('repeats the missing-output nudge until the step cap ends the loop', async () => {
     setup()
     let llmCallCount = 0
     agentTemplate.handleSteps = undefined
@@ -2327,17 +2331,15 @@ describe('loopAgentSteps', () => {
 
     const result = await loopAgentSteps({
       ...baseParams,
-      // More steps than the retry budget so the loop ends because the retry cap
-      // is hit, not because steps ran out.
-      agentState: { ...agentState, stepsRemaining: 20 },
+      // Every available step is consumed by a nudge-and-retry cycle: no
+      // hidden retry cap exists anymore, and this test configures the step
+      // budget as the bound.
+      agentState: { ...agentState, stepsRemaining: 8 },
       promptAiSdkStream: runtimeParams.promptAiSdkStream,
       localAgentTemplates: { 'test-agent': agentTemplate },
     })
 
-    // 1 initial call + 3 retries = MAX_MISSING_OUTPUT_RETRIES (hard-coded 4;
-    // the constant is module-private in run-agent-step.ts). The old one-shot
-    // behavior yielded 2.
-    expect(llmCallCount).toBe(4)
+    expect(llmCallCount).toBe(8)
     // The structured-output envelope is returned with a null/absent value
     // rather than throwing.
     expect(result.output).toEqual({

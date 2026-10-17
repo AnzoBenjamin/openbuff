@@ -204,9 +204,7 @@ export async function formatPrompt(
     [PLACEHOLDER.GIT_CHANGES_PROMPT]: () =>
       getGitChangesPrompt(fileContext, ledger),
     [PLACEHOLDER.REMAINING_STEPS]: () =>
-      agentState.stepsRemaining < 0
-        ? 'unlimited (no-progress watchdog active)'
-        : `${agentState.stepsRemaining}`,
+      agentState.stepsRemaining < 0 ? 'unlimited' : `${agentState.stepsRemaining}`,
     [PLACEHOLDER.PROJECT_ROOT]: () => fileContext.projectRoot,
     [PLACEHOLDER.SYSTEM_INFO_PROMPT]: () =>
       getSystemInfoPrompt(fileContext, ledger),
