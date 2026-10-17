@@ -3708,9 +3708,8 @@ ${guideSections}
             // merely because a changed file was re-credited with its new marker
             // during the same pass: that pass raced the file transition and its
             // review evidence is no longer a stable snapshot-bound credit.
-            const priorWaveCreditAtPassStart: Record<string, string> = {
-              ...priorWaveCredit,
-            }
+            const priorWaveCreditAtPassStart: Record<string, string> | null =
+              waveReviewIsActive ? { ...priorWaveCredit } : null
             const plannedReviewWaves = waveReviewIsActive
               ? planGateReviewWaves(
                   waveCreditUniverse,
@@ -4714,18 +4713,29 @@ ${guideSections}
                 }
               }
               // A previously credited file changing while this specialist
-              // pass was in flight invalidates the pass's window credit even
+              // pass was in flight invalidates the pass's WINDOW credit even
               // when the reviewer returned a marker for the new bytes. The
               // pre-pass marker snapshot above is the stable boundary; compare
-              // it with the live filesystem now, evict all specialist credit,
+              // it with the live filesystem now, evict the windowed credit,
               // and re-enter the gate so the changed file is reviewed in a
               // fresh pass. This closes the prior-wave-drift race rather than
               // allowing the completion record written by the racing pass to
               // make the wave appear complete.
-              const driftedPriorWaveFiles = findDriftedPriorWaveFiles(
-                priorWaveCreditAtPassStart,
-                readGateFileContentMarker,
-              )
+              // WINDOWED-ONLY SCOPE: below the 40-file cap the wave ledger is
+              // never planned, so per-file marker credit semantics govern —
+              // the marker merge above PRESERVES previously stored markers for
+              // other files and `specialistDriftedFiles` scopes the next
+              // re-review to the drifted files, which is the documented
+              // below-cap contract (a drifted file re-reviews; unchanged files
+              // keep their markers). Running this wipe unconditionally would
+              // erase unchanged per-file credit on every pass below the cap.
+              const driftedPriorWaveFiles =
+                waveReviewIsActive && priorWaveCreditAtPassStart !== null
+                  ? findDriftedPriorWaveFiles(
+                      priorWaveCreditAtPassStart as Record<string, string>,
+                      readGateFileContentMarker,
+                    )
+                  : []
               if (driftedPriorWaveFiles.length > 0) {
                 activeWorkState.specialistReviewGatesDone = []
                 activeWorkState.specialistReviewGateFingerprints = {}
