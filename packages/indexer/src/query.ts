@@ -285,7 +285,12 @@ function querySearch(
 
   if (!commandIntent) {
     blendPageRankScores(index, directResults, pageRankWeight)
-    const graphScores = scoreGraphNeighborhood(index, adjacency, directResults)
+    const graphScores = scoreGraphNeighborhood(
+      index,
+      adjacency,
+      directResults,
+      tokens,
+    )
     for (const [path, related] of graphScores.entries()) {
       if (!matchesFileType(index.files[path], fileTypes)) continue
       if (!pathMatchesPrefixes(path, pathPrefixes)) continue
@@ -330,7 +335,7 @@ function querySearch(
         ? explainResult(result, { ageMs: indexAgeMs, stale })
         : undefined,
     }))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, limit)
 }
 
@@ -350,7 +355,7 @@ function queryNeighbors(
   )
   const related = new Map<string, QueryIndexResult>()
   for (const seedPath of seedPaths) {
-    for (const item of getRelatedFiles(index, adjacency, seedPath, 2)) {
+    for (const item of getRelatedFiles(index, adjacency, seedPath, 2, tokens)) {
       if (
         item.path === seedPath ||
         isNoisyFilePath(item.path) ||
@@ -377,9 +382,12 @@ function queryNeighbors(
       }
     }
   }
+  // Tier 1C: same deterministic path tie-break as querySearch — without it,
+  // equal-score neighbor results were ordered by map-insertion (seed
+  // iteration and edge-walk) order, which is not stable across runs.
   return Array.from(related.values())
     .map((result) => ({ ...result, score: roundScore(result.score) }))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
 }
 
 function queryPath(
@@ -709,13 +717,14 @@ function scoreGraphNeighborhood(
   index: MetadataIndex,
   adjacency: GraphAdjacency,
   directResults: Map<string, QueryIndexResult>,
+  tokens: string[],
 ): Map<string, { score: number; relatedFiles: RelatedFile[] }> {
   const graphScores = new Map<
     string,
     { score: number; relatedFiles: RelatedFile[] }
   >()
   const sortedDirectResults = Array.from(directResults.values())
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, 25)
 
   for (const result of sortedDirectResults) {
@@ -725,6 +734,7 @@ function scoreGraphNeighborhood(
       adjacency,
       result.path,
       boost,
+      tokens,
     )) {
       const current = graphScores.get(related.path) ?? {
         score: 0,
@@ -750,6 +760,7 @@ function getRelatedFiles(
   adjacency: GraphAdjacency,
   filePath: string,
   boost: number,
+  tokens: string[],
 ): RelatedFile[] {
   const fileId = fileNodeId(filePath)
   const edges = adjacency.get(fileId) ?? []
@@ -767,6 +778,28 @@ function getRelatedFiles(
           via: edge.label,
         })
       }
+      continue
+    }
+
+    // Tier 1C: second-hop expansion through shared concept/import nodes was
+    // the dominant source of unrelated relatedFiles ("everyone imports
+    // react"; shared comment tokens like "error"/"test"). Only expand
+    // through such a node when the query itself references its label; direct
+    // file<->file edges above are always allowed. An empty token list
+    // (neighbors mode seeded purely by an explicit file) carries no query
+    // evidence to require, so the gate is bypassed there.
+    const neighborType = neighborNode?.type
+    const tokenMatchedNeighbor =
+      tokens.length === 0 ||
+      tokens.some((token) =>
+        (neighborNode?.label ?? '')
+          .toLowerCase()
+          .includes(token.toLowerCase()),
+      )
+    if (
+      (neighborType === 'concept' || neighborType === 'import') &&
+      !tokenMatchedNeighbor
+    ) {
       continue
     }
 

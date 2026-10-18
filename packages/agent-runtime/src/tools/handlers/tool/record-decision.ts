@@ -49,7 +49,7 @@ export const handleRecordDecision = (async (params: {
       return errorOutput('record_decision: text must be at most 1024 characters.')
     }
     if ((kind === 'decision' || kind === 'constraint') && !hasDecisionRationale(rawText)) {
-      return errorOutput('record_decision: a decision/constraint must state a rationale (>=24 chars and include one of: because, so that, instead of, to avoid, rather than, chose, rejected, trade, prefer, must, require).')
+      return errorOutput('record_decision: a decision/constraint must state a rationale (>=24 chars and include reasoning such as: because, since, so that, in order to, to avoid, rather than, instead of, chosen over, due to, rejected).')
     }
     if (rawSelectors.length < 1 || rawSelectors.length > 32) {
       return errorOutput('record_decision: evidenceSelectors must contain 1..32 entries.')
@@ -120,6 +120,79 @@ export const handleRecordDecision = (async (params: {
     }
     if (!Array.isArray(memory.evidence)) {
       memory.evidence = []
+    }
+    // Tier 1D content-level dedup: a verbatim restatement of an already
+    // recorded decision must not occupy another cap slot. Normalized
+    // (lowercased, whitespace-collapsed) comparison against stored records
+    // of the SAME kind (kinds map to distinct evidence kinds — decision vs
+    // requirement vs note — so a cross-kind restatement is a different
+    // record, not a duplicate); the duplicate is acknowledged idempotently
+    // instead of recording again.
+    const normalizedNewText = rawText.toLowerCase().replace(/\s+/g, ' ').trim()
+    const sameKindPrefix = '[' + kind + '] '
+    const isDuplicate = memory.decisions.some((existing) => {
+      if (!existing.startsWith(sameKindPrefix)) return false
+      const withoutKind = existing.slice(sameKindPrefix.length)
+      return (
+        withoutKind.toLowerCase().replace(/\s+/g, ' ').trim() ===
+        normalizedNewText
+      )
+    })
+    if (isDuplicate) {
+      // The tool contract says supersedes "never blocks capture": a
+      // verbatim-duplicate text must still honor a genuinely new supersedes
+      // list. The decision text is not re-appended (the dedup win), but we
+      // record a slim evidence entry carrying the supersedes ids so
+      // normalizeEvidence can mark the superseded observations stale.
+      if (supersedes !== undefined) {
+        const dedupIdPrefix = 'decision:' + evidenceTimestamp.toString() + ':'
+        let dedupSequence = 0
+        for (const item of memory.evidence) {
+          if (!item.id.startsWith(dedupIdPrefix)) continue
+          const suffix = Number.parseInt(item.id.slice(dedupIdPrefix.length), 10)
+          if (Number.isInteger(suffix) && suffix >= dedupSequence) {
+            dedupSequence = suffix + 1
+          }
+        }
+        const dedupEvidenceId = (dedupIdPrefix + String(dedupSequence)).slice(
+          0,
+          160,
+        )
+        memory.evidence.push({
+          id: dedupEvidenceId,
+          kind: 'decision',
+          summary: (
+            '[' + kind + '] ' + rawText + '\nEvidence: ' + normalizedPaths.join(', ')
+          ).slice(0, 2000),
+          source: normalizedPaths[0],
+          path: normalizedPaths[0],
+          verifiedAt: evidenceTimestamp,
+          supersedes,
+        })
+        while (memory.evidence.length > TASK_MEMORY_LIST_CAPS.evidence) {
+          memory.evidence.shift()
+        }
+      }
+      if (logger) {
+        logger.debug(
+          { kind, supersedesEmitted: supersedes !== undefined },
+          'record_decision skipped a duplicate decision',
+        )
+      }
+      return {
+        output: jsonToolResult({
+          message:
+            supersedes !== undefined
+              ? 'Decision already recorded; duplicate text skipped, but supersedes was still applied to mark the target observations stale.'
+              : 'Decision already recorded; duplicate skipped (no new evidence recorded).',
+          kind,
+          evidenceCount: 0,
+          text: rawText,
+          evidenceSelectors: normalizedPaths,
+          ...(excerpt !== undefined ? { excerpt } : {}),
+          ...(supersedes !== undefined ? { supersedes } : {}),
+        }),
+      }
     }
     const record = '[' + kind + '] ' + rawText
     memory.decisions.push(record)

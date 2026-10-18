@@ -684,6 +684,12 @@ function deriveToolEvidence(params: {
       path,
       freshnessHash: toStoredFreshnessHash(anchor.contentHash),
       verifiedAt,
+      // Tier 1D: derived read evidence is session-ephemeral. It stays
+      // available to compileTaskMemoryContext within the run but is dropped
+      // by the store at merge time, so per-read boilerplate ("Read X lines
+      // 1-N") no longer occupies durable evidence slots across sessions.
+      // Mutation evidence below remains durable.
+      sessionScoped: true,
       workspaceRevision: workspaceState?.revision,
     })
     filesInspected.push(path)

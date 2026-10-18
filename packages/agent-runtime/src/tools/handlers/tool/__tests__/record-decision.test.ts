@@ -25,6 +25,49 @@ describe('handleRecordDecision', () => {
     expect(agentState.taskMemory?.decisions.length).toBe(1)
     expect(agentState.taskMemory?.evidence.length).toBe(1)
   })
+  test('skips a verbatim duplicate decision idempotently', async () => {
+    const agentState = buildAgentState()
+    const first = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Chose Postgres because sessions must survive restarts', kind: 'decision', evidenceSelectors: ['docs/architecture.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const firstValue = ((first.output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { errorMessage?: string })
+    expect(firstValue.errorMessage).toBeUndefined()
+
+    const second = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Chose Postgres because sessions must survive restarts', kind: 'decision', evidenceSelectors: ['docs/other.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const secondValue = ((second.output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { message?: string; evidenceCount?: number; errorMessage?: string })
+    expect(secondValue.errorMessage).toBeUndefined()
+    expect(secondValue.message).toContain('duplicate')
+    expect(secondValue.evidenceCount).toBe(0)
+    expect(agentState.taskMemory?.decisions.length).toBe(1)
+    expect(agentState.taskMemory?.evidence.length).toBe(1)
+  })
+  test('does not dedupe a cross-kind restatement (fact vs decision)', async () => {
+    const agentState = buildAgentState()
+    const asDecision = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Config uses port 8080 because the proxy expects it', kind: 'decision', evidenceSelectors: ['docs/a.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    expect(((asDecision.output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { errorMessage?: string }).errorMessage).toBeUndefined()
+
+    const asFact = await handleRecordDecision({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: buildToolCall({ text: 'Config uses port 8080 because the proxy expects it', kind: 'fact', evidenceSelectors: ['docs/a.md'] }),
+      agentState,
+    } as Parameters<typeof handleRecordDecision>[0])
+    const factValue = ((asFact.output as Array<{ type: string; value: Record<string, unknown> }>)[0].value as { message?: string; evidenceCount?: number; errorMessage?: string })
+    expect(factValue.errorMessage).toBeUndefined()
+    // Different kind = different record: the fact is stored, not skipped.
+    expect(factValue.message).not.toContain('duplicate')
+    expect(agentState.taskMemory?.decisions.length).toBe(2)
+    expect(agentState.taskMemory?.evidence.length).toBe(2)
+  })
   test('rejects empty text without throwing', async () => {
     const agentState = buildAgentState()
     const { output } = await handleRecordDecision({

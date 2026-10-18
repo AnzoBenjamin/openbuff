@@ -1,15 +1,23 @@
+/**
+ * Tier 1D: markers now require actual reasoning structure (causal or
+ * comparative) instead of accepting bare imperative keywords. The previous
+ * lexicon included 'must'/'require'/'prefer', which match ordinary
+ * instructions and made the decision-quality gate nearly a no-op.
+ */
 export const DECISION_RATIONALE_MARKERS = [
   'because',
+  'since',
   'so that',
-  'instead of',
+  'in order to',
   'to avoid',
   'rather than',
-  'chose',
+  'instead of',
+  'chosen over',
+  'due to',
+  'allows',
+  'enables',
+  'prevents',
   'rejected',
-  'trade',
-  'prefer',
-  'must',
-  'require',
 ] as const
 
 export const DECISION_RATIONALE_MIN_LENGTH = 24

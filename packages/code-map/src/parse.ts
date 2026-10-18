@@ -10,7 +10,69 @@ import type { Parser, Query } from 'web-tree-sitter'
 import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
 
 export const DEBUG_PARSING = false
+/**
+ * Language-agnostic tokens ignored everywhere (dunder-style constructor
+ * names), plus a conservative per-language-family stoplist of ubiquitous
+ * builtins (Tier 1A retrieval-quality fix): builtins carry no retrieval
+ * with real symbols. Keys match getLanguageFamily() outputs — pinned
+ * families by name ('typescript', 'javascript', 'c', 'cpp', 'kotlin'),
+ * other languages by their normalized extension WITH dot ('.py', '.go',
+ * '.rs', '.rb', '.java'), which is what getLanguageFamily returns for
+ * non-pinned families. Resolve the family from the FULL file path, not a
+ * bare extension: path.extname('.py') is '' inside getLanguageFamily, so a
+ * bare '.py' input returns '' and would never match these keys.
+ */
 const IGNORE_TOKENS = ['__init__', '__post_init__', '__call__', 'constructor']
+
+const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
+  typescript: new Set([
+    'console', 'window', 'document', 'JSON', 'Promise', 'Math', 'Object',
+    'Array', 'String', 'Number', 'Boolean', 'Error', 'Symbol', 'Map', 'Set',
+    'globalThis', 'process', 'require', 'module', 'exports',
+  ]),
+  javascript: new Set([
+    'console', 'window', 'document', 'JSON', 'Promise', 'Math', 'Object',
+    'Array', 'String', 'Number', 'Boolean', 'Error', 'Symbol', 'Map', 'Set',
+    'globalThis', 'process', 'require', 'module', 'exports',
+  ]),
+  c: new Set([
+    'printf', 'scanf', 'malloc', 'free', 'memcpy', 'memset', 'sizeof', 'NULL',
+    'std',
+  ]),
+  cpp: new Set([
+    'printf', 'scanf', 'malloc', 'free', 'memcpy', 'memset', 'sizeof', 'NULL',
+    'std', 'cout', 'cin', 'endl',
+  ]),
+  kotlin: new Set([
+    'System', 'String', 'Integer', 'Boolean', 'Exception', 'Override', 'this',
+    'super',
+  ]),
+  '.py': new Set([
+    'self', 'cls', 'None', 'True', 'False', 'print', 'len', 'range', 'str',
+    'int', 'float', 'dict', 'list', 'set', 'tuple', 'isinstance',
+  ]),
+  '.go': new Set([
+    'err', 'fmt', 'nil', 'panic', 'recover', 'defer', 'make', 'new', 'len',
+    'cap', 'append', 'copy',
+  ]),
+  '.rs': new Set([
+    'self', 'Self', 'crate', 'Some', 'None', 'Ok', 'Err', 'println', 'vec',
+    'stringify',
+  ]),
+  '.rb': new Set([
+    'puts', 'require', 'require_relative', 'attr_accessor', 'attr_reader',
+    'attr_writer', 'self', 'nil', 'proc', 'lambda',
+  ]),
+  '.java': new Set([
+    'System', 'String', 'Integer', 'Boolean', 'Exception', 'RuntimeException',
+    'Override', 'this', 'super',
+  ]),
+}
+
+function isIgnoredToken(identifier: string, family: string): boolean {
+  if (IGNORE_TOKENS.includes(identifier)) return true
+  return IGNORED_TOKENS_BY_LANGUAGE_FAMILY[family]?.has(identifier) ?? false
+}
 const MAX_CALLERS = 25
 const DEFAULT_MAX_PARSE_FILES = 10_000
 const DEFAULT_MAX_PARSE_FILE_BYTES = 1_000_000
@@ -232,6 +294,8 @@ type ParsedTokens = {
 type ParsedTokensForScoring = ParsedTokens & {
   bytes: number
   imports: string[]
+  /** Per-identifier capture counts within this file (Tier 1A tf input). */
+  identifierCounts: Record<string, number>
   skipped: boolean
   skipReason?:
     | 'file_too_large'
@@ -274,6 +338,13 @@ export interface ParsedFileTokens {
    * field is absent or empty.
    */
   imports?: string[]
+  /**
+   * Tier 1A tf×IDF: per-identifier capture counts within this file, so
+   * in-file term frequency can participate in token scoring. Optional so
+   * parse caches persisted before this field stay valid; scoring falls back
+   * to a uniform count of 1 when absent.
+   */
+  identifierCounts?: Record<string, number>
 }
 
 export async function getFileTokenScores(
@@ -398,6 +469,7 @@ export async function getFileTokenScores(
         calls: result.calls,
         numLines: result.numLines,
         imports: result.imports,
+        identifierCounts: result.identifierCounts,
       }
     }
 
@@ -414,7 +486,7 @@ export async function getFileTokenScores(
   }
 
   const tokenCallers = buildTokenCallers(tokenScores, fileCallsMap)
-  boostScoresByExternalCalls(tokenScores, externalCalls)
+  downweightCommonTokensByDocumentFrequency(tokenScores)
 
   if (DEBUG_PARSING) {
     const endTime = Date.now()
@@ -673,6 +745,18 @@ function parseTokensFromLoadedSource(
     }
 
     const parseResults = parseFile(parser, query, source.code)
+    // Tier 1A tf×IDF: keep per-capture counts alongside the deduped token
+    // set. The public parseTokens contract still returns the deduped set
+    // (pinned by parse.test.ts); only scoring consumes the counts.
+    // parseFile omits the identifier key entirely when a source yields zero
+    // identifier captures (null tree, import-only sources), so coalesce
+    // before iterating — `for...of undefined` would throw and degrade the
+    // whole file to a parse_error.
+    const identifierCaptures = parseResults.identifier ?? []
+    const identifierCounts: Record<string, number> = {}
+    for (const identifier of identifierCaptures) {
+      identifierCounts[identifier] = (identifierCounts[identifier] ?? 0) + 1
+    }
     const identifiers = Array.from(new Set(parseResults.identifier))
     const calls = Array.from(new Set(parseResults['call.identifier']))
     // P3-T5 AST import-capture tier: @import.* captures from the SAME tags
@@ -696,6 +780,7 @@ function parseTokensFromLoadedSource(
       identifiers: identifiers ?? [],
       calls: calls ?? [],
       imports,
+      identifierCounts,
       bytes: source.bytes,
       skipped: false,
     }
@@ -756,17 +841,30 @@ function loadSourceWithinLimits(params: {
   return { source: { code, bytes }, bytes }
 }
 
-function scoreFileTokens(fullPath: string, parsed: ParsedTokens): FileCallData {
+/**
+ * Tier 1A tf×IDF token scoring. The previous formula gave every identifier in
+ * a file the identical base score (directory depth × file shape), so a test
+ * fixture and the core export ranked identically and only walk order decided
+ * prominence. In-file term frequency now differentiates: a name captured once
+ * scores its base weight, a heavily used name scores progressively higher.
+ * Document-frequency damping is applied corpus-wide afterwards (see
+ * {@link downweightCommonTokensByDocumentFrequency}).
+ */
+function scoreFileTokens(
+  fullPath: string,
+  parsed: ParsedTokens & { identifierCounts?: Record<string, number> },
+): FileCallData {
   const scores: Record<string, number> = {}
   const dirs = path.dirname(fullPath).split(path.sep)
   const depth = dirs.length
   const tokenBaseScore =
     0.8 ** depth * Math.sqrt(parsed.numLines / (parsed.identifiers.length + 1))
+  const family = getLanguageFamily(fullPath)
 
   for (const identifier of parsed.identifiers) {
-    if (!IGNORE_TOKENS.includes(identifier)) {
-      scores[identifier] = tokenBaseScore
-    }
+    if (isIgnoredToken(identifier, family)) continue
+    const tf = parsed.identifierCounts?.[identifier] ?? 1
+    scores[identifier] = tokenBaseScore * (1 + Math.log(1 + tf))
   }
 
   return { scores, calls: parsed.calls }
@@ -840,14 +938,30 @@ export function buildTokenCallers(
   return tokenCallers
 }
 
-function boostScoresByExternalCalls(
+/**
+ * Tier 1A retrieval-quality fix: replaces the external-call popularity boost,
+ * which multiplied scores by call frequency and thereby promoted framework
+ * boilerplate (map, fetch, describe) — the tokens called from the most files
+ * scored highest. Tokens appearing across many files are instead damped
+ * IDF-style; distinctive identifiers keep their weight. Relative order within
+ * a single file is unaffected when every token has the same document
+ * frequency.
+ */
+function downweightCommonTokensByDocumentFrequency(
   tokenScores: Record<string, Record<string, number>>,
-  externalCalls: Record<string, number>,
 ): void {
+  const fileCount = Object.keys(tokenScores).length
+  if (fileCount === 0) return
+  const documentFrequency: Record<string, number> = {}
   for (const scores of Object.values(tokenScores)) {
     for (const token of Object.keys(scores)) {
-      const numCalls = externalCalls[token] ?? 0
-      scores[token] *= 1 + Math.log(1 + numCalls)
+      documentFrequency[token] = (documentFrequency[token] ?? 0) + 1
+    }
+  }
+  for (const scores of Object.values(tokenScores)) {
+    for (const token of Object.keys(scores)) {
+      const df = documentFrequency[token] ?? 1
+      scores[token] *= Math.log(1 + fileCount / (1 + df))
       scores[token] = Math.round(scores[token] * 1000) / 1000
     }
   }
@@ -862,6 +976,7 @@ function emptyParsedTokens(
     identifiers: [],
     calls: [],
     imports: [],
+    identifierCounts: {},
     bytes,
     skipped: Boolean(skipReason),
     skipReason,

@@ -465,24 +465,48 @@ async function buildChunks(
     if (best >= 0) callOwner.set(siteIdx, best)
   })
 
-  // Outgoing calls + resolved references.
+  // Tier 1B: dedup outgoing calls by name (keeping the first-use line and
+  // occurrence count), rank by frequency then line, and only then apply the
+  // MAX_CHUNK_CALLS cap. Previously the cap kept the first 25 raw sites with
+  // an adjacent-duplicate check only, so a loop calling map() filled the
+  // entire cap with 25 copies of one name and displaced every other call.
+  const callSitesByChunk = new Map<
+    number,
+    Map<string, { count: number; line: number; col: number }>
+  >()
+  callSites.forEach((site, siteIdx) => {
+    const owner = callOwner.get(siteIdx)
+    if (owner === undefined) return
+    const byName = callSitesByChunk.get(owner) ?? new Map()
+    const existing = byName.get(site.name)
+    if (existing) {
+      existing.count += 1
+      if (site.line < existing.line) {
+        existing.line = site.line
+        existing.col = site.col
+      }
+    } else {
+      byName.set(site.name, { count: 1, line: site.line, col: site.col })
+    }
+    callSitesByChunk.set(owner, byName)
+  })
+  for (const [owner, byName] of callSitesByChunk) {
+    const chunk = chunks[owner]!
+    chunk.calls = Array.from(byName.entries())
+      .map(([name, info]) => ({ name, ...info }))
+      .sort(
+        (a, b) =>
+          b.count - a.count || a.line - b.line || a.name.localeCompare(b.name),
+      )
+      .slice(0, MAX_CHUNK_CALLS)
+      .map(({ name, line, col }) => ({ name, line, col }))
+  }
+
+  // Outgoing references (calls are assigned above, deduped and ranked).
   callSites.forEach((site, siteIdx) => {
     const owner = callOwner.get(siteIdx)
     if (owner === undefined) return
     const chunk = chunks[owner]!
-    if (chunk.calls.length < MAX_CHUNK_CALLS) {
-      const last = chunk.calls[chunk.calls.length - 1]
-      if (
-        !(
-          last &&
-          last.name === site.name &&
-          last.line === site.line &&
-          last.col === site.col
-        )
-      ) {
-        chunk.calls.push({ name: site.name, line: site.line, col: site.col })
-      }
-    }
     const candidates = (bySimpleName.get(site.name) ?? []).filter(
       (idx) => idx !== owner,
     )

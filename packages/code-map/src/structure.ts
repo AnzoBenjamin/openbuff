@@ -966,7 +966,11 @@ async function parseStructureOnce(
         const captures = cfg.query.captures(tree.rootNode)
         for (const capture of captures) {
           const captureName = (capture as { name?: string }).name ?? ''
-          if (!captureName.toLowerCase().includes('call')) continue
+          // Tier 1B: only true call captures (capture names beginning with
+          // "call", e.g. call.identifier) are call sites. The previous
+          // substring match swept in @import.call captures, so every dynamic
+          // require()/import() polluted the chunk call lists.
+          if (!captureName.toLowerCase().startsWith('call')) continue
           const node = (
             capture as {
               node?: {
