@@ -2931,6 +2931,13 @@ export async function loopAgentSteps(
           !agentTemplate.handleSteps &&
           currentAgentState.output === undefined &&
           shouldEndTurn &&
+          // A turn ended by the STEP CAP must not be nudged back into the
+          // loop: at the cap runAgentStep short-circuits WITHOUT consuming a
+          // step (stepsRemaining === 0 at entry), so resetting shouldEndTurn
+          // here would spin nudge → short-circuit → nudge forever with zero
+          // LLM calls. The step cap is the documented bound for the
+          // unlimited-retry default, so let the loop break below.
+          !hitStepCap &&
           (maxMissingOutputRetries === undefined ||
             outputSchemaRetryCount < maxMissingOutputRetries)
         ) {

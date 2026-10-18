@@ -2328,8 +2328,10 @@ describe('loopAgentSteps', () => {
   // set_output keeps being nudged until the STEP CAP ends the loop: each
   // retry is a real LLM step that consumes the configured step budget, so a
   // configured cap (not a retry counter) is the bound that terminates a
-  // never-completing structured agent. Under the unlimited default only user
-  // cancellation bounds the loop — the accepted tradeoff of cap removal.
+  // never-completing structured agent. The nudge must never resurrect a
+  // turn that ended via the step cap itself — at the cap no step is
+  // consumed, so resetting shouldEndTurn there spins the loop forever with
+  // zero LLM calls (run-agent-step.ts guards this with !hitStepCap).
   it('repeats the missing-output nudge until the step cap ends the loop', async () => {
     setup()
     let llmCallCount = 0
