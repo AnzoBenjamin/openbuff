@@ -14,8 +14,10 @@ initializeThemeStore()
  * Stage 2 pattern, unapplied in ToolBranch).
  *
  * `ToolBranch` is the fallback renderer for every tool WITHOUT a registered
- * component (recall_context, list_jobs, check_background_agent, custom tools,
- * ...). Its fallback text always contains a fenced code block built from the
+ * component (web_search, read_image, render_3d_preview, custom tools, ...).
+ * recall_context / list_jobs / check_background_agent have since gained
+ * registered components, so the fixture uses web_search to keep exercising
+ * the fallback path. Its fallback text always contains a fenced code block built from the
  * tool input (`inputContent`), so `ContentWithMarkdown` returns a native
  * <markdown> renderable for every such block — and before the fix ToolBranch
  * wrapped that renderable inside a `<text>` element. A renderable cannot nest
@@ -72,7 +74,7 @@ const makeToolBlock = (
 ): ToolContentBlock => ({
   type: 'tool',
   toolCallId: 'tool-fallback-1',
-  toolName: 'recall_context',
+  toolName: 'web_search',
   input: { query: 'archive eviction floor' },
   output: 'matches: archive-recall-index.ts:209 buildArchiveRecallRows',
   ...overrides,
@@ -112,7 +114,7 @@ describe('ToolBranch fallback renders markdown at box level', () => {
       expect(frame).toContain('INPUT BAR BELOW')
       expect(frame).not.toContain('Could not render this tool block.')
       // The fallback path renders the tool header...
-      expect(frame).toContain('recall_context')
+      expect(frame).toContain('web_search')
       // ...and the expanded body paints both the fenced input and the plain
       // result string (tokens are asserted whole: word wrap never splits them).
       expect(frame).toContain('query')
@@ -129,8 +131,8 @@ describe('ToolBranch fallback renders markdown at box level', () => {
 
       expect(frame).toContain('STATUS LINE ABOVE')
       expect(frame).toContain('INPUT BAR BELOW')
-      expect(frame).not.toContain('Could not render this tool block.')
-      expect(frame).toContain('recall_context')
+    expect(frame).not.toContain('Could not render this tool block.')
+    expect(frame).toContain('web_search')
     },
   )
 })
