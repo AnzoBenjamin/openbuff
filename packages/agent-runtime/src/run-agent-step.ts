@@ -1498,7 +1498,12 @@ export async function loopAgentSteps(
   // Seed the state before the first programmatic step. The context-pruner runs
   // before the first LLM request, so waiting for the streaming callback would
   // make the first compaction use the legacy fallback even for 500k/1M models.
-  initialAgentState.contextWindowTokens = resolvedModelContextWindow
+  // A supervised child receives its window pre-resolved in the transport slice
+  // and has no bridged resolver dep; do not clobber that rehydrated seed with
+  // undefined.
+  if (resolvedModelContextWindow !== undefined) {
+    initialAgentState.contextWindowTokens = resolvedModelContextWindow
+  }
   reconcileInterruptedLedgerSpawns(initialAgentState, clock.now())
   reconcileInterruptedPathLeases(initialAgentState, clock.now())
   // Discovery shard claims are durable parent state too: a shard left 'active'

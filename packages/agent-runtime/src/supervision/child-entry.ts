@@ -64,6 +64,35 @@
  *        column; the child supplies a null-failing stub (the subagent loop
  *        does not consume it; higher layers already resolved the user).
  *
+ * Dropped prompt-param callbacks (documented divergence) — supervised
+ * children only; the in-process path invokes all of these:
+ *  - resolveModelContextWindow — NOT bridged (a function). The parent stamps
+ *    the INITIAL window into the transport slice (runSupervisedSubagent) and
+ *    relays per-request ROUTE windows through the stream replies
+ *    (contextWindowTokens on promptAiSdkStreamStart / legacy
+ *    promptAiSdkStream — see bridge-protocol.ts);
+ *    child-bridge-client.ts applies them to the loop's callback below.
+ *  - onModelContextResolved — dropped by the sanitizer (a function),
+ *    re-applied locally from the relayed stream replies (child-bridge-client
+ *    buildBridgedChildDeps → bridgedPromptAiSdkStream), so a mid-run failover
+ *    to a different-window model still updates the child's compaction budget.
+ *  - onCostCalculated — RELAYED: the parent injects a captor, llm.ts's
+ *    provider cost rides the prompt/stream replies as providerCostCents, and
+ *    child-bridge-client re-applies it to the loop's callback (creditsUsed +
+ *    BYOK telemetry now match the in-process path).
+ *  - onRequestContextTrimmed — RELAYED (same pattern): the parent injects a
+ *    per-request captor, the trim telemetry rides the prompt/stream replies
+ *    as `contextTrim`, and child-bridge-client re-applies it to the loop's
+ *    callback — full observational parity with the in-process path.
+ *  - onCacheDebug* — RELAYED (same pattern): the parent injects per-request
+ *    captors, the cache-debug telemetry rides the prompt/stream replies as
+ *    `cacheDebugRequestBuilt` / `cacheDebugUsage`, and child-bridge-client
+ *    re-applies them to the loop's callbacks — full observational parity
+ *    with the in-process path. `cacheDebugRequestBuilt` is size-guarded
+ *    parent-side at 1 MB: an oversize provider rawBody degrades to
+ *    `{ provider, rawBodyDropped: true, bytes }` so the relay never risks
+ *    the 16 MiB per-message bridge cap.
+ *
  * Other slice-1 scope notes:
  *  - the loop's `onResponseChunk` FORWARDS the child's own live stream to the
  *    parent (see {@link buildChildOnResponseChunk}): string chunks and
@@ -346,6 +375,20 @@ export function buildChildAgentState(request: SupervisedSpawnRequest) {
   }
   if (child.contextTokenCount !== undefined) {
     state.contextTokenCount = child.contextTokenCount
+  }
+  if (child.contextWindowTokens !== undefined) {
+    if (
+      typeof child.contextWindowTokens === 'number' &&
+      Number.isFinite(child.contextWindowTokens) &&
+      child.contextWindowTokens > 0
+    ) {
+      state.contextWindowTokens = child.contextWindowTokens
+    } else {
+      logStateFieldDropped(
+        'contextWindowTokens',
+        'failed rehydration validation (not a finite positive number)',
+      )
+    }
   }
   state.ancestorRunIds = [...(request.ancestorRunIds ?? [])]
   return state

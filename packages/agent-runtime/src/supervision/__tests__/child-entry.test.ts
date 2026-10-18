@@ -186,6 +186,41 @@ describe('child-state rehydration validation (json-roundtrip repair)', () => {
     expect(state.workspaceState?.revision).toBe(0)
   })
 
+  it('a valid positive contextWindowTokens rehydrates into the rebuilt AgentState', () => {
+    // The parent stamps the resolved BYOK window into the child slice
+    // (runSupervisedSubagent) so a supervised child does not fall back to the
+    // unknown-window compaction policy; the child must rehydrate it verbatim.
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        contextWindowTokens: 1_000_000,
+      },
+    })
+    expect(state.contextWindowTokens).toBe(1_000_000)
+  })
+
+  it('a contextWindowTokens that fails rehydration validation is DROPPED, not blind-cast', () => {
+    // 0 / negative / string / NaN all fail the finite-positive-number check,
+    // so the fresh initial-state default (undefined) stands in — the same
+    // dropped-field contract as messageHistory/taskMemory/workspaceState.
+    for (const bad of [
+      0,
+      -5,
+      '1000000',
+      Number.NaN,
+    ] as unknown as number[]) {
+      const state = buildChildAgentState({
+        ...makeRequest(),
+        child: {
+          agentId: 'child-entry-agent-1',
+          contextWindowTokens: bad,
+        },
+      })
+      expect(state.contextWindowTokens).toBeUndefined()
+    }
+  })
+
   it('a messageHistory whose sentAt was coerced to an ISO string by the JSON round trip is DROPPED, not blind-cast', () => {
     // Simulates the wire: a live Date timestamp serialized to an ISO string.
     const state = buildChildAgentState({

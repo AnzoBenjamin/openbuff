@@ -254,6 +254,20 @@ describe('loopAgentSteps', () => {
     expect(result.agentState.contextWindowTokens).toBe(32_000)
   })
 
+  it('preserves a pre-seeded contextWindowTokens when no resolver dep is present', async () => {
+    setup()
+    // A supervised child rehydrates its parent-resolved window from the
+    // transport slice and has no bridged resolveModelContextWindow dep; the
+    // seeding must not clobber that rehydrated seed with undefined.
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState: { ...agentState, contextWindowTokens: 200_000 },
+      resolveModelContextWindow: undefined,
+    })
+
+    expect(result.agentState.contextWindowTokens).toBe(200_000)
+  })
+
   it('forwards a request-time SDK trim as a context_request_trim event', async () => {
     setup()
     const events: any[] = []

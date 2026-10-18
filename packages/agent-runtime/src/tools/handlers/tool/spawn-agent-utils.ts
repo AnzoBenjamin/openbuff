@@ -2884,6 +2884,10 @@ async function runSupervisedSubagent(params: {
   parentSystemPrompt: string | undefined
   fileContext: ProjectFileContext
   localAgentTemplates: Record<string, AgentTemplate>
+  resolveModelContextWindow?: (params: {
+    agentId?: string
+    model?: string
+  }) => number | undefined
 }): Promise<{
   agentState: AgentState
   output: AgentOutput
@@ -2898,6 +2902,16 @@ async function runSupervisedSubagent(params: {
     prompt,
     spawnParams,
   } = params
+
+  // Supervised children have no bridged resolveModelContextWindow dep
+  // (functions cannot cross the JSON transport), so the parent stamps the
+  // resolved window into the request's child slice here; without it the
+  // child falls back to the unknown-window compaction policy regardless of
+  // the configured route.
+  const contextWindowTokens = params.resolveModelContextWindow?.({
+    agentId: agentTemplate.id,
+    model: agentTemplate.model,
+  })
 
   const request: SupervisedSpawnRequest = {
     agentType: agentTemplate.id,
@@ -2923,6 +2937,7 @@ async function runSupervisedSubagent(params: {
       ...(agentState.contextTokenCount !== undefined
         ? { contextTokenCount: agentState.contextTokenCount }
         : {}),
+      ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
     },
     fileContext: params.fileContext,
     localAgentTemplates:
@@ -3205,6 +3220,7 @@ export async function executeSubagent(
       parentSystemPrompt: withDefaults.parentSystemPrompt,
       fileContext: withDefaults.fileContext,
       localAgentTemplates: withDefaults.localAgentTemplates,
+      resolveModelContextWindow: withDefaults.resolveModelContextWindow,
     })
   } else {
     try {

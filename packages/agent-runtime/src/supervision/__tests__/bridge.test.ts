@@ -1910,6 +1910,182 @@ describe('incremental promptAiSdkStream bridging (P2-T8c)', () => {
   )
 
   it(
+    'context-window relay (in-process): a deps table supplying resolveModelContextWindow relays the resolved route window in BOTH stream replies (incremental start + legacy full-collection), reading agentId/model off the RAW wire params',
+    async () => {
+      const resolverCalls: Array<{ agentId?: string; model?: string }> = []
+      const deps = {
+        promptAiSdkStream: async function* () {
+          yield { type: 'text', text: 'chunk' }
+          return { aborted: false, value: 'done' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+        resolveModelContextWindow: (params: {
+          agentId?: string
+          model?: string
+        }) => {
+          resolverCalls.push(params)
+          return 500_000
+        },
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const start = table.promptAiSdkStreamStart as (
+        params: unknown,
+      ) => Promise<{ streamId: string; contextWindowTokens?: number }>
+      const legacy = table.promptAiSdkStream as (
+        params: unknown,
+      ) => Promise<{ contextWindowTokens?: number; chunks: unknown[] }>
+      const startReply = await withTimeout(
+        start({ agentId: 'agent-1', model: 'claude-x' }),
+        CALL_BUDGET_MS,
+        'incremental start relay',
+      )
+      expect(startReply.contextWindowTokens).toBe(500_000)
+      const legacyReply = await withTimeout(
+        legacy({ agentId: 'agent-1', model: 'claude-x' }),
+        CALL_BUDGET_MS,
+        'legacy full-collection relay',
+      )
+      expect(legacyReply.contextWindowTokens).toBe(500_000)
+      // The resolver was called with the plain-string agentId/model from the
+      // RAW wire params (the sanitize walk preserves plain strings).
+      expect(resolverCalls.length).toBeGreaterThanOrEqual(1)
+      for (const call of resolverCalls) {
+        expect(call).toEqual({ agentId: 'agent-1', model: 'claude-x' })
+      }
+      // Leave nothing behind: the started incremental stream was never
+      // consumed or stopped.
+      table.cancelInFlightStreams()
+    },
+  )
+
+  it(
+    'context-window relay back-compat (in-process): a deps table WITHOUT resolveModelContextWindow leaves contextWindowTokens absent in both stream replies (partial handler tables keep the exact old reply shape)',
+    async () => {
+      const deps = {
+        promptAiSdkStream: async function* () {
+          yield { type: 'text', text: 'chunk' }
+          return { aborted: false, value: 'done' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const start = table.promptAiSdkStreamStart as (
+        params: unknown,
+      ) => Promise<{ streamId: string; contextWindowTokens?: number }>
+      const legacy = table.promptAiSdkStream as (
+        params: unknown,
+      ) => Promise<{ contextWindowTokens?: number; chunks: unknown[] }>
+      const startReply = await withTimeout(
+        start({ agentId: 'agent-1', model: 'claude-x' }),
+        CALL_BUDGET_MS,
+        'incremental start (no resolver)',
+      )
+      expect(startReply.contextWindowTokens).toBeUndefined()
+      expect('contextWindowTokens' in startReply).toBe(false)
+      const legacyReply = await withTimeout(
+        legacy({ agentId: 'agent-1', model: 'claude-x' }),
+        CALL_BUDGET_MS,
+        'legacy full-collection (no resolver)',
+      )
+      expect(legacyReply.contextWindowTokens).toBeUndefined()
+      expect('contextWindowTokens' in legacyReply).toBe(false)
+      table.cancelInFlightStreams()
+    },
+  )
+
+  it(
+    'context-window relay end-to-end: the child wrapper re-applies the relayed route window to the loop-supplied onModelContextResolved callback (incremental start reply), and a non-numeric window is never applied',
+    async () => {
+      const windows: Array<number | undefined> = []
+      const deps = {
+        promptAiSdkStream: async function* () {
+          yield { type: 'text', text: 'chunk' }
+          return { aborted: false, value: 'done' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+        resolveModelContextWindow: () => 500_000,
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const bridge = await startBridge(table)
+      try {
+        const childDeps = buildBridgedChildDeps(bridge.client, {
+          bridgeNonce: table.bridgeNonce,
+        })
+        const generator = childDeps.promptAiSdkStream({
+          onModelContextResolved: (window: number | undefined) => {
+            windows.push(window)
+          },
+        } as never)
+        const first = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'incremental chunk delivery',
+        )
+        expect((first.value as { text?: string }).text).toBe('chunk')
+        await withTimeout(
+          generator.return(undefined as never),
+          CALL_BUDGET_MS,
+          'early return',
+        )
+        // The start reply's relayed window was applied to the loop's callback
+        // (the sanitizer dropped the callback from the wire params; the
+        // wrapper re-applied it locally).
+        expect(windows).toEqual([500_000])
+      } finally {
+        await bridge.teardown()
+      }
+    },
+  )
+
+  it(
+    'child wrapper fallback relay: the LEGACY full-collection reply carries contextWindowTokens and the wrapper re-applies it to the loop callback',
+    async () => {
+      const windows: Array<number | undefined> = []
+      const stubClient: ChildBridgeClient = {
+        call: async (method) => {
+          if (method === 'promptAiSdkStreamStart') {
+            throw new Error(
+              'bridge method not supplied by the parent: promptAiSdkStreamStart',
+            )
+          }
+          if (method === 'promptAiSdkStream') {
+            return {
+              chunks: [{ type: 'text', text: 'legacy-1' }],
+              result: { aborted: false, value: 'legacy-done' },
+              contextWindowTokens: 123_456,
+            }
+          }
+          throw new Error(`unexpected call: ${method}`)
+        },
+        notify: () => {},
+        close: () => {},
+        onClose: () => {},
+      }
+      const deps = buildBridgedChildDeps(stubClient)
+      const generator = deps.promptAiSdkStream({
+        onModelContextResolved: (window: number | undefined) => {
+          windows.push(window)
+        },
+      } as never)
+      for (;;) {
+        const next = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'fallback-path chunk delivery',
+        )
+        if (next.done) break
+      }
+      expect(windows).toEqual([123_456])
+    },
+  )
+
+  it(
     'child wrapper fallback: a partial table (no incremental methods) makes the wrapper fall back to the LEGACY full-collection call — chunks + result with BYTE-IDENTICAL semantics, and no stop is ever sent',
     async () => {
       const calls: BridgeMethod[] = []
@@ -2316,6 +2492,719 @@ describe('bridged prompt params schema re-coercion (H.typeName repair)', () => {
       } finally {
         coerceSpy.mockRestore()
       }
+    },
+  )
+})
+
+describe('provider-cost relay (onCostCalculated across the bridge)', () => {
+  /** deps stub whose promptAiSdkStream reports a provider cost through the
+   * injected onCostCalculated captor, yields one chunk, then finishes. */
+  const makeCostStreamDeps = (
+    reportedCost: number | undefined,
+  ): SupervisedBridgeHandlerDeps =>
+    ({
+      promptAiSdkStream: async function* (params: unknown) {
+        if (reportedCost !== undefined) {
+          await (
+            params as { onCostCalculated?: (cents: number) => Promise<void> }
+          ).onCostCalculated?.(reportedCost)
+        }
+        yield { type: 'text', text: 'c' }
+        return { aborted: false, value: 'done' }
+      },
+      trackEvent: async () => null,
+      fetch: globalThis.fetch,
+      apiKey: 'test-key',
+    }) as unknown as SupervisedBridgeHandlerDeps
+
+  it(
+    'cost relay (legacy full-collection, in-process): the deps stub awaits params.onCostCalculated(123) and the collectPromptStream reply carries providerCostCents: 123',
+    async () => {
+      const table = buildSupervisedBridgeHandlers(makeCostStreamDeps(123))
+      const reply = (await withTimeout(
+        (table.promptAiSdkStream as (p: unknown) => Promise<unknown>)({
+          agentId: 'a',
+          model: 'm',
+        }),
+        CALL_BUDGET_MS,
+        'legacy cost relay',
+      )) as { providerCostCents?: number; result?: unknown }
+      expect(reply.providerCostCents).toBe(123)
+      // The result semantics are unchanged.
+      expect((reply.result as { value?: unknown }).value).toBe('done')
+    },
+  )
+
+  it(
+    'cost relay (incremental, in-process): the START reply carries no providerCostCents yet and the DONE reply carries providerCostCents: 123 (the cost fires during stream consumption, at/near the final usage chunk)',
+    async () => {
+      const table = buildSupervisedBridgeHandlers(makeCostStreamDeps(123))
+      const start = table.promptAiSdkStreamStart as (
+        p: unknown,
+      ) => Promise<{ streamId: string; providerCostCents?: number }>
+      const next = table.promptAiSdkStreamNext as (
+        p: unknown,
+      ) => Promise<{
+        done: boolean
+        chunk?: unknown
+        result?: unknown
+        providerCostCents?: number
+      }>
+      const startReply = await withTimeout(
+        start({ agentId: 'a', model: 'm' }),
+        CALL_BUDGET_MS,
+        'incremental start cost relay',
+      )
+      // The cost can only be known once the stream is consumed: the start
+      // reply keeps the exact old shape (no providerCostCents member).
+      expect('providerCostCents' in startReply).toBe(false)
+      for (;;) {
+        const step = await withTimeout(
+          next({ streamId: startReply.streamId }),
+          CALL_BUDGET_MS,
+          'incremental next cost relay',
+        )
+        if (step.done) {
+          expect(step.providerCostCents).toBe(123)
+          break
+        }
+      }
+    },
+  )
+
+  it(
+    'cost relay (promptAiSdk, in-process): the captured cost rides as an EXTRA MEMBER on the PromptResult-shaped reply',
+    async () => {
+      const deps = {
+        promptAiSdk: async (params: unknown) => {
+          await (
+            params as { onCostCalculated?: (cents: number) => Promise<void> }
+          ).onCostCalculated?.(456)
+          return { aborted: false, value: 'x' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const reply = (await withTimeout(
+        (table.promptAiSdk as (p: unknown) => Promise<unknown>)({
+          agentId: 'a',
+          model: 'm',
+        }),
+        CALL_BUDGET_MS,
+        'promptAiSdk cost relay',
+      )) as { providerCostCents?: number; value?: unknown }
+      expect(reply.providerCostCents).toBe(456)
+      expect(reply.value).toBe('x')
+    },
+  )
+
+  it(
+    'cost relay (promptAiSdkStructured, in-process): the captured cost rides as an EXTRA MEMBER on the reply (the re-validation flow is untouched parent-side)',
+    async () => {
+      const deps = {
+        promptAiSdkStructured: async (params: unknown) => {
+          await (
+            params as { onCostCalculated?: (cents: number) => Promise<void> }
+          ).onCostCalculated?.(789)
+          return { aborted: false, value: {} }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const reply = (await withTimeout(
+        (table.promptAiSdkStructured as (p: unknown) => Promise<unknown>)({
+          schema: { type: 'object' },
+        }),
+        CALL_BUDGET_MS,
+        'promptAiSdkStructured cost relay',
+      )) as { providerCostCents?: number; value?: unknown }
+      expect(reply.providerCostCents).toBe(789)
+      expect(reply.value).toEqual({})
+    },
+  )
+
+  it(
+    'cost relay back-compat (in-process): a stub that NEVER calls onCostCalculated leaves providerCostCents ABSENT in all four reply shapes (partial handler tables / cost-less providers keep the exact old reply shape)',
+    async () => {
+      const deps = {
+        ...makeCostStreamDeps(undefined),
+        promptAiSdk: async () => ({ aborted: false, value: 'x' }),
+        promptAiSdkStructured: async () => ({ aborted: false, value: {} }),
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const legacyReply = (await withTimeout(
+        (table.promptAiSdkStream as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'legacy no-cost reply',
+      )) as Record<string, unknown>
+      expect('providerCostCents' in legacyReply).toBe(false)
+      const startReply = (await withTimeout(
+        (table.promptAiSdkStreamStart as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'incremental start no-cost reply',
+      )) as Record<string, unknown>
+      expect('providerCostCents' in startReply).toBe(false)
+      const next = table.promptAiSdkStreamNext as (
+        p: unknown,
+      ) => Promise<Record<string, unknown>>
+      for (;;) {
+        const step = await withTimeout(
+          next({ streamId: (startReply as { streamId: string }).streamId }),
+          CALL_BUDGET_MS,
+          'incremental done no-cost reply',
+        )
+        if (step.done) {
+          expect('providerCostCents' in step).toBe(false)
+          break
+        }
+      }
+      const promptReply = (await withTimeout(
+        (table.promptAiSdk as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'promptAiSdk no-cost reply',
+      )) as Record<string, unknown>
+      expect('providerCostCents' in promptReply).toBe(false)
+      const structuredReply = (await withTimeout(
+        (table.promptAiSdkStructured as (p: unknown) => Promise<unknown>)({
+          schema: { type: 'object' },
+        }),
+        CALL_BUDGET_MS,
+        'promptAiSdkStructured no-cost reply',
+      )) as Record<string, unknown>
+      expect('providerCostCents' in structuredReply).toBe(false)
+    },
+  )
+
+  it(
+    'cost relay end-to-end: the child wrapper re-applies the parent-relayed providerCostCents to the loop-supplied onCostCalculated callback (incremental path — the sanitizer dropped the callback from the wire params; the wrapper re-applied it locally)',
+    async () => {
+      const costs: number[] = []
+      const table = buildSupervisedBridgeHandlers(makeCostStreamDeps(123))
+      const bridge = await startBridge(table)
+      try {
+        const childDeps = buildBridgedChildDeps(bridge.client, {
+          bridgeNonce: table.bridgeNonce,
+        })
+        const generator = childDeps.promptAiSdkStream({
+          onCostCalculated: async (cents: number) => {
+            costs.push(cents)
+          },
+        } as never)
+        for (;;) {
+          const next = await withTimeout(
+            generator.next(),
+            CALL_BUDGET_MS,
+            'cost relay chunk delivery',
+          )
+          if (next.done) break
+        }
+        expect(costs).toEqual([123])
+      } finally {
+        await bridge.teardown()
+      }
+    },
+  )
+
+  it(
+    'cost relay end-to-end (legacy fallback via stub client): the LEGACY full-collection reply carries providerCostCents and the wrapper re-applies it to the loop callback before yielding chunks',
+    async () => {
+      const costs: number[] = []
+      const stubClient: ChildBridgeClient = {
+        call: async (method) => {
+          if (method === 'promptAiSdkStreamStart') {
+            throw new Error(
+              'bridge method not supplied by the parent: promptAiSdkStreamStart',
+            )
+          }
+          if (method === 'promptAiSdkStream') {
+            return {
+              chunks: [{ type: 'text', text: 'legacy-1' }],
+              result: { aborted: false, value: 'legacy-done' },
+              providerCostCents: 42,
+            }
+          }
+          throw new Error(`unexpected call: ${method}`)
+        },
+        notify: () => {},
+        close: () => {},
+        onClose: () => {},
+      }
+      const deps = buildBridgedChildDeps(stubClient)
+      const generator = deps.promptAiSdkStream({
+        onCostCalculated: async (cents: number) => {
+          costs.push(cents)
+        },
+      } as never)
+      for (;;) {
+        const next = await withTimeout(
+          generator.next(),
+          CALL_BUDGET_MS,
+          'fallback-path cost relay chunk delivery',
+        )
+        if (next.done) {
+          expect((next.value as { value?: unknown }).value).toBe('legacy-done')
+          break
+        }
+      }
+      expect(costs).toEqual([42])
+    },
+  )
+
+  it(
+    'cost relay end-to-end (promptAiSdk child wrapper): the extra member is STRIPPED from the reply and relayed to the loop callback; a reply without the member is returned untouched',
+    async () => {
+      const costs: number[] = []
+      let replies: unknown[] = [
+        { aborted: false, value: 'x', providerCostCents: 456 },
+        { aborted: false, value: 'y' },
+      ]
+      const stubClient: ChildBridgeClient = {
+        call: async () => {
+          const next = replies.shift()
+          if (next === undefined) throw new Error('unexpected extra call')
+          return next
+        },
+        notify: () => {},
+        close: () => {},
+        onClose: () => {},
+      }
+      const deps = buildBridgedChildDeps(stubClient)
+      const first = (await withTimeout(
+        deps.promptAiSdk({
+          onCostCalculated: async (cents: number) => {
+            costs.push(cents)
+          },
+        } as never),
+        CALL_BUDGET_MS,
+        'promptAiSdk child strip-and-relay',
+      )) as Record<string, unknown>
+      expect(costs).toEqual([456])
+      // Stripped: the loop never sees the relay member on its result.
+      expect('providerCostCents' in first).toBe(false)
+      expect(first.value).toBe('x')
+      // Back-compat: a reply WITHOUT the member is returned untouched (no
+      // crash, no 0-cost call).
+      const second = (await withTimeout(
+        deps.promptAiSdk({
+          onCostCalculated: async (cents: number) => {
+            costs.push(cents)
+          },
+        } as never),
+        CALL_BUDGET_MS,
+        'promptAiSdk child no-cost reply',
+      )) as Record<string, unknown>
+      expect(second).toEqual({ aborted: false, value: 'y' })
+      expect(costs).toEqual([456])
+    },
+  )
+
+  it(
+    'cost relay end-to-end (promptAiSdkStructured child wrapper): the extra member is stripped BEFORE re-validation, relayed to the loop callback, and never part of the parsed/returned value',
+    async () => {
+      const costs: number[] = []
+      const stubClient: ChildBridgeClient = {
+        call: async () => ({
+          aborted: false,
+          value: { ok: true },
+          providerCostCents: 789,
+        }),
+        notify: () => {},
+        close: () => {},
+        onClose: () => {},
+      }
+      const deps = buildBridgedChildDeps(stubClient)
+      const result = (await withTimeout(
+        deps.promptAiSdkStructured({
+          apiKey: 'test-key',
+          runId: 'run-1',
+          messages: [],
+          schema: z.object({ ok: z.boolean() }),
+          clientSessionId: 'cs-1',
+          fingerprintId: 'fp-1',
+          userInputId: 'ui-1',
+          userId: undefined,
+          onCostCalculated: async (cents: number) => {
+            costs.push(cents)
+          },
+        } as never),
+        CALL_BUDGET_MS,
+        'structured child strip-and-relay',
+      )) as Record<string, unknown>
+      expect(costs).toEqual([789])
+      // Stripped: never part of the returned object, and re-validation saw
+      // the clean value ({ ok: true } parsed through the authored schema).
+      expect('providerCostCents' in result).toBe(false)
+      expect(result.value).toEqual({ ok: true })
+    },
+  )
+})
+
+describe('telemetry relay (onRequestContextTrimmed + onCacheDebug* across the bridge)', () => {
+  const TELEMETRY_TRIM_INFO = {
+    contextWindowTokens: 1000000,
+    messageBudgetTokens: 800000,
+    beforeTokens: 900000,
+    afterTokens: 700000,
+    beforeMessages: 10,
+    afterMessages: 8,
+  }
+  const TELEMETRY_REQUEST_BUILT = { provider: 'x', rawBody: { a: 1 } }
+  const TELEMETRY_USAGE = {
+    inputTokens: 1,
+    outputTokens: 2,
+    cachedInputTokens: 3,
+    totalTokens: 6,
+  }
+
+  /** deps stub whose promptAiSdkStream fires the OBSERVATIONAL prompt-param
+   * callbacks through the injected parent captors (the same relay pattern as
+   * makeCostStreamDeps above), yields one chunk, then finishes. Pass
+   * fire=false for the back-compat stub (no callback fires). */
+  const makeTelemetryStreamDeps = (
+    fire = true,
+  ): SupervisedBridgeHandlerDeps =>
+    ({
+      promptAiSdkStream: async function* (params: unknown) {
+        if (fire) {
+          const p = params as {
+            onRequestContextTrimmed?: (info: never) => void
+            onCacheDebugProviderRequestBuilt?: (payload: unknown) => void
+            onCacheDebugUsageReceived?: (usage: unknown) => void
+          }
+          p.onRequestContextTrimmed?.(TELEMETRY_TRIM_INFO as never)
+          p.onCacheDebugProviderRequestBuilt?.(TELEMETRY_REQUEST_BUILT)
+          p.onCacheDebugUsageReceived?.(TELEMETRY_USAGE)
+        }
+        yield { type: 'text', text: 'c' }
+        return { aborted: false, value: 'done' }
+      },
+      trackEvent: async () => null,
+      fetch: globalThis.fetch,
+      apiKey: 'test-key',
+    }) as unknown as SupervisedBridgeHandlerDeps
+
+  it(
+    'telemetry relay (legacy full-collection, in-process): the deps stub fires the three observational callbacks and the collectPromptStream reply carries contextTrim / cacheDebugRequestBuilt / cacheDebugUsage',
+    async () => {
+      const table = buildSupervisedBridgeHandlers(makeTelemetryStreamDeps())
+      const reply = (await withTimeout(
+        (table.promptAiSdkStream as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'legacy telemetry relay',
+      )) as {
+        contextTrim?: unknown
+        cacheDebugRequestBuilt?: unknown
+        cacheDebugUsage?: unknown
+        result?: unknown
+      }
+      expect(reply.contextTrim).toEqual(TELEMETRY_TRIM_INFO)
+      expect(reply.cacheDebugRequestBuilt).toEqual(TELEMETRY_REQUEST_BUILT)
+      expect(reply.cacheDebugUsage).toEqual(TELEMETRY_USAGE)
+      // The result semantics are unchanged.
+      expect((reply.result as { value?: unknown }).value).toBe('done')
+    },
+  )
+
+  it(
+    'telemetry relay (incremental, in-process): the START reply carries NO telemetry members yet and the DONE reply carries all three (the callbacks fire during stream consumption)',
+    async () => {
+      const table = buildSupervisedBridgeHandlers(makeTelemetryStreamDeps())
+      const start = table.promptAiSdkStreamStart as (
+        p: unknown,
+      ) => Promise<Record<string, unknown>>
+      const next = table.promptAiSdkStreamNext as (
+        p: unknown,
+      ) => Promise<{
+        done: boolean
+        chunk?: unknown
+        result?: unknown
+        contextTrim?: unknown
+        cacheDebugRequestBuilt?: unknown
+        cacheDebugUsage?: unknown
+      }>
+      const startReply = await withTimeout(
+        start({ agentId: 'a', model: 'm' }),
+        CALL_BUDGET_MS,
+        'incremental start telemetry relay',
+      )
+      // Nothing has fired at start time: the start reply keeps the exact old
+      // shape (no telemetry members).
+      expect('contextTrim' in startReply).toBe(false)
+      expect('cacheDebugRequestBuilt' in startReply).toBe(false)
+      expect('cacheDebugUsage' in startReply).toBe(false)
+      for (;;) {
+        const step = await withTimeout(
+          next({ streamId: startReply.streamId as string }),
+          CALL_BUDGET_MS,
+          'incremental next telemetry relay',
+        )
+        if (step.done) {
+          expect(step.contextTrim).toEqual(TELEMETRY_TRIM_INFO)
+          expect(step.cacheDebugRequestBuilt).toEqual(TELEMETRY_REQUEST_BUILT)
+          expect(step.cacheDebugUsage).toEqual(TELEMETRY_USAGE)
+          break
+        }
+      }
+    },
+  )
+
+  it(
+    'telemetry relay (promptAiSdk, in-process): the captured telemetry rides as EXTRA MEMBERS on the PromptResult-shaped reply',
+    async () => {
+      const deps = {
+        promptAiSdk: async (params: unknown) => {
+          const p = params as {
+            onRequestContextTrimmed?: (info: never) => void
+            onCacheDebugProviderRequestBuilt?: (payload: unknown) => void
+            onCacheDebugUsageReceived?: (usage: unknown) => void
+          }
+          p.onRequestContextTrimmed?.(TELEMETRY_TRIM_INFO as never)
+          p.onCacheDebugProviderRequestBuilt?.(TELEMETRY_REQUEST_BUILT)
+          p.onCacheDebugUsageReceived?.(TELEMETRY_USAGE)
+          return { aborted: false, value: 'x' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const reply = (await withTimeout(
+        (table.promptAiSdk as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'promptAiSdk telemetry relay',
+      )) as Record<string, unknown>
+      expect(reply.contextTrim).toEqual(TELEMETRY_TRIM_INFO)
+      expect(reply.cacheDebugRequestBuilt).toEqual(TELEMETRY_REQUEST_BUILT)
+      expect(reply.cacheDebugUsage).toEqual(TELEMETRY_USAGE)
+      expect(reply.value).toBe('x')
+    },
+  )
+
+  it(
+    'telemetry relay (promptAiSdkStructured, in-process): the captured telemetry rides as EXTRA MEMBERS on the reply (the re-validation flow is untouched parent-side)',
+    async () => {
+      const deps = {
+        promptAiSdkStructured: async (params: unknown) => {
+          const p = params as {
+            onRequestContextTrimmed?: (info: never) => void
+            onCacheDebugProviderRequestBuilt?: (payload: unknown) => void
+            onCacheDebugUsageReceived?: (usage: unknown) => void
+          }
+          p.onRequestContextTrimmed?.(TELEMETRY_TRIM_INFO as never)
+          p.onCacheDebugProviderRequestBuilt?.(TELEMETRY_REQUEST_BUILT)
+          p.onCacheDebugUsageReceived?.(TELEMETRY_USAGE)
+          return { aborted: false, value: {} }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const reply = (await withTimeout(
+        (table.promptAiSdkStructured as (p: unknown) => Promise<unknown>)({
+          schema: { type: 'object' },
+        }),
+        CALL_BUDGET_MS,
+        'promptAiSdkStructured telemetry relay',
+      )) as Record<string, unknown>
+      expect(reply.contextTrim).toEqual(TELEMETRY_TRIM_INFO)
+      expect(reply.cacheDebugRequestBuilt).toEqual(TELEMETRY_REQUEST_BUILT)
+      expect(reply.cacheDebugUsage).toEqual(TELEMETRY_USAGE)
+      expect(reply.value).toEqual({})
+    },
+  )
+
+  it(
+    'telemetry relay size guard (in-process): a ~2 MB provider rawBody degrades to { provider, rawBodyDropped: true, bytes } — the giant body NEVER rides the reply (the 16 MiB per-message cap is never risked)',
+    async () => {
+      const deps = {
+        promptAiSdkStream: async function* (params: unknown) {
+          ;(
+            params as {
+              onCacheDebugProviderRequestBuilt?: (payload: unknown) => void
+            }
+          ).onCacheDebugProviderRequestBuilt?.({
+            provider: 'big',
+            rawBody: 'x'.repeat(2_000_000),
+          })
+          yield { type: 'text', text: 'c' }
+          return { aborted: false, value: 'done' }
+        },
+        trackEvent: async () => null,
+        fetch: globalThis.fetch,
+        apiKey: 'test-key',
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const reply = (await withTimeout(
+        (table.promptAiSdkStream as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'telemetry size guard',
+      )) as { cacheDebugRequestBuilt?: Record<string, unknown> }
+      const built = reply.cacheDebugRequestBuilt as Record<string, unknown>
+      expect(built.provider).toBe('big')
+      expect(built.rawBodyDropped).toBe(true)
+      expect(typeof built.bytes).toBe('number')
+      // The giant body never crossed: no rawBody member on the relay.
+      expect('rawBody' in built).toBe(false)
+    },
+  )
+
+  it(
+    'telemetry relay back-compat (in-process): a stub that NEVER fires the callbacks leaves ALL FOUR relay members ABSENT in every reply shape (partial handler tables / quiet providers keep the exact old reply shape)',
+    async () => {
+      const deps = {
+        ...makeTelemetryStreamDeps(false),
+        promptAiSdk: async () => ({ aborted: false, value: 'x' }),
+        promptAiSdkStructured: async () => ({ aborted: false, value: {} }),
+      } as unknown as SupervisedBridgeHandlerDeps
+      const table = buildSupervisedBridgeHandlers(deps)
+      const RELAY_MEMBERS = [
+        'providerCostCents',
+        'contextTrim',
+        'cacheDebugRequestBuilt',
+        'cacheDebugUsage',
+      ] as const
+      const legacyReply = (await withTimeout(
+        (table.promptAiSdkStream as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'legacy no-telemetry reply',
+      )) as Record<string, unknown>
+      for (const member of RELAY_MEMBERS) {
+        expect(member in legacyReply).toBe(false)
+      }
+      const startReply = (await withTimeout(
+        (table.promptAiSdkStreamStart as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'incremental start no-telemetry reply',
+      )) as Record<string, unknown>
+      for (const member of RELAY_MEMBERS) {
+        expect(member in startReply).toBe(false)
+      }
+      const next = table.promptAiSdkStreamNext as (
+        p: unknown,
+      ) => Promise<Record<string, unknown>>
+      for (;;) {
+        const step = await withTimeout(
+          next({ streamId: startReply.streamId as string }),
+          CALL_BUDGET_MS,
+          'incremental done no-telemetry reply',
+        )
+        if (step.done) {
+          for (const member of RELAY_MEMBERS) {
+            expect(member in step).toBe(false)
+          }
+          break
+        }
+      }
+      const promptReply = (await withTimeout(
+        (table.promptAiSdk as (p: unknown) => Promise<unknown>)({}),
+        CALL_BUDGET_MS,
+        'promptAiSdk no-telemetry reply',
+      )) as Record<string, unknown>
+      for (const member of RELAY_MEMBERS) {
+        expect(member in promptReply).toBe(false)
+      }
+      const structuredReply = (await withTimeout(
+        (table.promptAiSdkStructured as (p: unknown) => Promise<unknown>)({
+          schema: { type: 'object' },
+        }),
+        CALL_BUDGET_MS,
+        'promptAiSdkStructured no-telemetry reply',
+      )) as Record<string, unknown>
+      for (const member of RELAY_MEMBERS) {
+        expect(member in structuredReply).toBe(false)
+      }
+    },
+  )
+
+  it(
+    'telemetry relay end-to-end: the child wrapper re-applies the relayed contextTrim / cacheDebugRequestBuilt / cacheDebugUsage to the loop-supplied callbacks (incremental path — the sanitizer dropped the callbacks from the wire params; the wrapper re-applied them locally)',
+    async () => {
+      const trims: unknown[] = []
+      const built: unknown[] = []
+      const usages: unknown[] = []
+      const table = buildSupervisedBridgeHandlers(makeTelemetryStreamDeps())
+      const bridge = await startBridge(table)
+      try {
+        const childDeps = buildBridgedChildDeps(bridge.client, {
+          bridgeNonce: table.bridgeNonce,
+        })
+        const generator = childDeps.promptAiSdkStream({
+          onRequestContextTrimmed: (info: unknown) => {
+            trims.push(info)
+          },
+          onCacheDebugProviderRequestBuilt: (payload: unknown) => {
+            built.push(payload)
+          },
+          onCacheDebugUsageReceived: (usage: unknown) => {
+            usages.push(usage)
+          },
+        } as never)
+        for (;;) {
+          const next = await withTimeout(
+            generator.next(),
+            CALL_BUDGET_MS,
+            'telemetry relay chunk delivery',
+          )
+          if (next.done) break
+        }
+        expect(trims).toEqual([TELEMETRY_TRIM_INFO])
+        expect(built).toEqual([TELEMETRY_REQUEST_BUILT])
+        expect(usages).toEqual([TELEMETRY_USAGE])
+      } finally {
+        await bridge.teardown()
+      }
+    },
+  )
+
+  it(
+    'telemetry relay end-to-end (promptAiSdk child wrapper): the relay members are STRIPPED from the reply and re-applied to the loop callbacks — no relay member on the returned object',
+    async () => {
+      const trims: unknown[] = []
+      const built: unknown[] = []
+      const usages: unknown[] = []
+      const stubClient: ChildBridgeClient = {
+        call: async () => ({
+          aborted: false,
+          value: 'x',
+          providerCostCents: 456,
+          contextTrim: TELEMETRY_TRIM_INFO,
+          cacheDebugRequestBuilt: TELEMETRY_REQUEST_BUILT,
+          cacheDebugUsage: TELEMETRY_USAGE,
+        }),
+        notify: () => {},
+        close: () => {},
+        onClose: () => {},
+      }
+      const deps = buildBridgedChildDeps(stubClient)
+      const result = (await withTimeout(
+        deps.promptAiSdk({
+          onRequestContextTrimmed: (info: unknown) => {
+            trims.push(info)
+          },
+          onCacheDebugProviderRequestBuilt: (payload: unknown) => {
+            built.push(payload)
+          },
+          onCacheDebugUsageReceived: (usage: unknown) => {
+            usages.push(usage)
+          },
+        } as never),
+        CALL_BUDGET_MS,
+        'promptAiSdk child telemetry strip-and-relay',
+      )) as Record<string, unknown>
+      expect(trims).toEqual([TELEMETRY_TRIM_INFO])
+      expect(built).toEqual([TELEMETRY_REQUEST_BUILT])
+      expect(usages).toEqual([TELEMETRY_USAGE])
+      // Stripped: the loop never sees a relay member on its result.
+      expect('providerCostCents' in result).toBe(false)
+      expect('contextTrim' in result).toBe(false)
+      expect('cacheDebugRequestBuilt' in result).toBe(false)
+      expect('cacheDebugUsage' in result).toBe(false)
+      expect(result.value).toBe('x')
     },
   )
 })

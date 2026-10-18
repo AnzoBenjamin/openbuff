@@ -437,9 +437,111 @@ export function buildBridgedChildDeps(
     return rest
   }
 
+  /**
+   * Fire-and-forget relay of the parent-captured provider cost to the loop's
+   * `onCostCalculated` callback (the same relay pattern as the
+   * context-window relay): the callback is a FUNCTION, so the sanitizer drops
+   * it from the wire params and the parent injects a captor instead; the
+   * captured cost rides the replies as `providerCostCents` and this helper
+   * re-applies it locally so the child's creditsUsed budget enforcement and
+   * BYOK cost telemetry match the in-process path. DEFENSIVE: an absent,
+   * non-numeric, non-finite, or negative value means "no update" — never a
+   * crash and never a 0-cost call. Fire-and-forget is fine: the loop's own
+   * callback is fire-and-forget at tool-executor level too.
+   */
+  const relayCostTo = (
+    onCostCalculated: ((cents: number) => Promise<void>) | undefined,
+    value: unknown,
+  ): void => {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+      void onCostCalculated?.(value)
+    }
+  }
+
+  /**
+   * Fire-and-forget relay of the parent-captured observational telemetry to
+   * the loop's prompt-param callbacks (the TELEMETRY RELAY — the observational
+   * counterpart of relayCostTo): `onRequestContextTrimmed` /
+   * `onCacheDebugProviderRequestBuilt` / `onCacheDebugUsageReceived` are
+   * FUNCTIONS dropped at the wire by the sanitizer, so the parent injects
+   * per-request captors and their captured values ride the replies as
+   * `contextTrim` / `cacheDebugRequestBuilt` / `cacheDebugUsage`; this helper
+   * re-applies a present member locally so the supervised child's telemetry
+   * matches the in-process path. DEFENSIVE: an absent or null member means
+   * "no event" — never a crash and never a synthetic call. Fire-and-forget is
+   * fine: the loop's own callbacks are fire-and-forget too.
+   */
+  const relayTelemetryTo = (
+    apply: (value: never) => void,
+    value: unknown,
+  ): void => {
+    if (value !== undefined && value !== null) apply(value as never)
+  }
+
   const bridgedPromptAiSdkStream = (
     params: PromptAiSdkStreamParams,
   ): ReturnType<PromptAiSdkStreamFn> => {
+    // The loop's onModelContextResolved is a FUNCTION, so the sanitizer drops
+    // it from the wire params and the parent's handler table never re-injects
+    // it. Instead: the parent relays the resolved route context window
+    // (contextWindowTokens) in the stream replies, and this wrapper
+    // re-applies it to the loop's callback locally so a mid-run failover to a
+    // different-window model keeps the child's compaction budget accurate.
+    const onModelContextResolved = (
+      params as { onModelContextResolved?: (window: number | undefined) => void }
+    ).onModelContextResolved
+    const relayWindow = (value: unknown): void => {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        onModelContextResolved?.(value)
+      }
+    }
+    // Same story for the loop's onCostCalculated (a FUNCTION, dropped at the
+    // wire): capture it BEFORE sanitization and re-apply the parent-relayed
+    // provider cost (`providerCostCents`) locally — the parent injects a
+    // captor and llm.ts's cost rides the replies (see bridge-protocol.ts).
+    const onCostCalculated = (
+      params as { onCostCalculated?: (cents: number) => Promise<void> }
+    ).onCostCalculated
+    const relayCost = (value: unknown): void =>
+      relayCostTo(onCostCalculated, value)
+    // Same story for the loop's OBSERVATIONAL prompt-param callbacks (all
+    // FUNCTIONS, dropped at the wire): capture them BEFORE sanitization and
+    // re-apply the parent-relayed members (`contextTrim` /
+    // `cacheDebugRequestBuilt` / `cacheDebugUsage`) locally — observational
+    // parity with the in-process path (see bridge-protocol.ts's TELEMETRY
+    // RELAY note). The parent size-guards cacheDebugRequestBuilt at 1 MB, so
+    // an oversize provider rawBody arrives as
+    // `{ provider, rawBodyDropped: true, bytes }` — never a socket-destroying
+    // giant reply.
+    const onRequestContextTrimmed = (
+      params as { onRequestContextTrimmed?: (info: unknown) => void }
+    ).onRequestContextTrimmed
+    const onCacheDebugProviderRequestBuilt = (
+      params as {
+        onCacheDebugProviderRequestBuilt?: (payload: unknown) => void
+      }
+    ).onCacheDebugProviderRequestBuilt
+    const onCacheDebugUsageReceived = (
+      params as { onCacheDebugUsageReceived?: (usage: unknown) => void }
+    ).onCacheDebugUsageReceived
+    /** Re-applies every present telemetry relay member of a wire reply. */
+    const relayTelemetryReply = (reply: unknown): void => {
+      if (reply === null || typeof reply !== 'object') return
+      const record = reply as Record<string, unknown>
+      relayTelemetryTo(
+        (value) => onRequestContextTrimmed?.(value),
+        record.contextTrim,
+      )
+      relayTelemetryTo(
+        (value) => onCacheDebugProviderRequestBuilt?.(value),
+        record.cacheDebugRequestBuilt,
+      )
+      relayTelemetryTo(
+        (value) => onCacheDebugUsageReceived?.(value),
+        record.cacheDebugUsage,
+      )
+    }
+
     // Chunk-PULL wire params: sanitized exactly once (the incremental start
     // and the legacy fallback share the SAME sanitized member set — channel
     // functions/keys are dropped and the parent re-injects its live values,
@@ -467,6 +569,18 @@ export function buildBridgedChildDeps(
         'promptAiSdkStream',
         wireParams,
       )) as BridgedPromptStreamResult
+      // Re-apply the relayed route window (defensive: a non-finite/absent
+      // value means "no update", never a reset of the loop's seed).
+      relayWindow(
+        (wire as { contextWindowTokens?: unknown }).contextWindowTokens,
+      )
+      // Re-apply the relayed provider cost BEFORE yielding chunks (defensive:
+      // an absent/non-finite/negative value means "no update", never a
+      // 0-cost call — the loop's cost accounting is credited exactly once).
+      relayCost((wire as { providerCostCents?: unknown }).providerCostCents)
+      // The observational telemetry relay rides the legacy reply too:
+      // re-apply every present member BEFORE yielding chunks.
+      relayTelemetryReply(wire)
       // A truncated reply means the parent DROPPED chunk bytes to keep the
       // single stream reply under the 16 MiB per-message cap (see
       // bridge-protocol.ts BRIDGE_MAX_STREAM_CHUNKS_BYTES). Loud on stderr — a
@@ -509,6 +623,12 @@ export function buildBridgedChildDeps(
           'promptAiSdkStreamStart',
           wireParams,
         )) as PromptAiSdkStreamStartResult
+        // Re-apply the relayed route window (see the onModelContextResolved
+        // note above): the incremental start reply carries the SAME
+        // contextWindowTokens relay as the legacy full-collection reply.
+        relayWindow(
+          (start as { contextWindowTokens?: unknown }).contextWindowTokens,
+        )
         streamId = start.streamId
         for (;;) {
           // One chunk per round trip; when done, the reply INCLUDES the final
@@ -533,6 +653,14 @@ export function buildBridgedChildDeps(
                 `incremental bridged stream ${streamId} ended without a result (the parent no longer has this stream registered)`,
               )
             }
+            // The provider cost rides the DONE reply (it fires during stream
+            // consumption, at/near the final usage chunk): re-apply it to the
+            // loop's callback before returning the result. The observational
+            // telemetry relay rides the DONE reply too.
+            relayCost(
+              (reply as { providerCostCents?: unknown }).providerCostCents,
+            )
+            relayTelemetryReply(reply)
             return reply.result as PromptResultType<string | null>
           }
           yield reply.chunk
@@ -647,10 +775,69 @@ export function buildBridgedChildDeps(
 
   return {
     promptAiSdkStream: bridgedPromptAiSdkStream,
-    promptAiSdk: (params: PromptAiSdkParams) =>
-      client
-        .call('promptAiSdk', callParams(dropPromptChannelKeys(params)))
-        .then((result) => result as Awaited<ReturnType<PromptAiSdkFn>>),
+    promptAiSdk: async (params: PromptAiSdkParams) => {
+      // Capture the loop's onCostCalculated and the OBSERVATIONAL telemetry
+      // callbacks BEFORE sanitization (the sanitizer drops all of them from
+      // the wire params); after the reply resolves, strip the parent-relayed
+      // providerCostCents extra member AND the telemetry relay members in one
+      // pass and re-apply each present one locally. CONDITIONAL: a reply with
+      // NONE of the four members (or a non-object reply) is returned UNTOUCHED
+      // — partial handler tables, cost-less providers, and quiet telemetry
+      // keep the exact old reply shape.
+      const onCostCalculated = (
+        params as { onCostCalculated?: (cents: number) => Promise<void> }
+      ).onCostCalculated
+      const onRequestContextTrimmed = (
+        params as { onRequestContextTrimmed?: (info: unknown) => void }
+      ).onRequestContextTrimmed
+      const onCacheDebugProviderRequestBuilt = (
+        params as {
+          onCacheDebugProviderRequestBuilt?: (payload: unknown) => void
+        }
+      ).onCacheDebugProviderRequestBuilt
+      const onCacheDebugUsageReceived = (
+        params as { onCacheDebugUsageReceived?: (usage: unknown) => void }
+      ).onCacheDebugUsageReceived
+      const reply = await client.call(
+        'promptAiSdk',
+        callParams(dropPromptChannelKeys(params)),
+      )
+      if (reply !== null && typeof reply === 'object') {
+        const record = reply as Record<string, unknown>
+        const hasCost = 'providerCostCents' in record
+        const hasTelemetry =
+          'contextTrim' in record ||
+          'cacheDebugRequestBuilt' in record ||
+          'cacheDebugUsage' in record
+        if (hasCost || hasTelemetry) {
+          const {
+            providerCostCents: cost,
+            contextTrim: _contextTrim,
+            cacheDebugRequestBuilt: _cacheDebugRequestBuilt,
+            cacheDebugUsage: _cacheDebugUsage,
+            ...clean
+          } = record
+          if (hasCost) relayCostTo(onCostCalculated, cost)
+          if ('contextTrim' in record)
+            relayTelemetryTo(
+              (value) => onRequestContextTrimmed?.(value),
+              record.contextTrim,
+            )
+          if ('cacheDebugRequestBuilt' in record)
+            relayTelemetryTo(
+              (value) => onCacheDebugProviderRequestBuilt?.(value),
+              record.cacheDebugRequestBuilt,
+            )
+          if ('cacheDebugUsage' in record)
+            relayTelemetryTo(
+              (value) => onCacheDebugUsageReceived?.(value),
+              record.cacheDebugUsage,
+            )
+          return clean as Awaited<ReturnType<PromptAiSdkFn>>
+        }
+      }
+      return reply as Awaited<ReturnType<PromptAiSdkFn>>
+    },
     // `promptAiSdkStructured`: the zod schema is serialized to JSON Schema
     // BEFORE the request is sent; a schema `z.toJSONSchema` cannot represent
     // fails CLOSED here (the promise rejects) instead of silently widening to
@@ -663,10 +850,66 @@ export function buildBridgedChildDeps(
     // pass through verbatim.
     promptAiSdkStructured: (async (params: PromptAiSdkStructuredParams) => {
       const { schema, ...rest } = params
-      const reply = (await client.call(
+      // Capture the loop's onCostCalculated and the OBSERVATIONAL telemetry
+      // callbacks BEFORE sanitization (see the promptAiSdk wrapper above):
+      // the parent-relayed providerCostCents extra member and the telemetry
+      // relay members (`contextTrim` / `cacheDebugRequestBuilt` /
+      // `cacheDebugUsage`) are stripped and re-applied BEFORE the
+      // re-validation flow below — they are never part of the value passed to
+      // schema.safeParse and never part of the returned object.
+      const onCostCalculated = (
+        params as { onCostCalculated?: (cents: number) => Promise<void> }
+      ).onCostCalculated
+      const onRequestContextTrimmed = (
+        params as { onRequestContextTrimmed?: (info: unknown) => void }
+      ).onRequestContextTrimmed
+      const onCacheDebugProviderRequestBuilt = (
+        params as {
+          onCacheDebugProviderRequestBuilt?: (payload: unknown) => void
+        }
+      ).onCacheDebugProviderRequestBuilt
+      const onCacheDebugUsageReceived = (
+        params as { onCacheDebugUsageReceived?: (usage: unknown) => void }
+      ).onCacheDebugUsageReceived
+      const wireReply = (await client.call(
         'promptAiSdkStructured',
         callParams({ ...rest, schema: toBridgeJsonSchema(schema) }),
-      )) as { aborted?: unknown; value?: unknown }
+      )) as unknown
+      let reply = wireReply as { aborted?: unknown; value?: unknown }
+      if (reply !== null && typeof reply === 'object') {
+        const record = reply as Record<string, unknown>
+        const hasCost = 'providerCostCents' in record
+        const hasTelemetry =
+          'contextTrim' in record ||
+          'cacheDebugRequestBuilt' in record ||
+          'cacheDebugUsage' in record
+        if (hasCost || hasTelemetry) {
+          const {
+            providerCostCents: cost,
+            contextTrim: _contextTrim,
+            cacheDebugRequestBuilt: _cacheDebugRequestBuilt,
+            cacheDebugUsage: _cacheDebugUsage,
+            ...clean
+          } = record
+          if (hasCost) relayCostTo(onCostCalculated, cost)
+          if ('contextTrim' in record)
+            relayTelemetryTo(
+              (value) => onRequestContextTrimmed?.(value),
+              record.contextTrim,
+            )
+          if ('cacheDebugRequestBuilt' in record)
+            relayTelemetryTo(
+              (value) => onCacheDebugProviderRequestBuilt?.(value),
+              record.cacheDebugRequestBuilt,
+            )
+          if ('cacheDebugUsage' in record)
+            relayTelemetryTo(
+              (value) => onCacheDebugUsageReceived?.(value),
+              record.cacheDebugUsage,
+            )
+          reply = clean as { aborted?: unknown; value?: unknown }
+        }
+      }
       if (
         reply !== null &&
         typeof reply === 'object' &&

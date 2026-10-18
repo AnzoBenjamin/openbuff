@@ -255,6 +255,32 @@ describe('processSupervision flag routing (P2-T8)', () => {
     })
   })
 
+  it('flag on: the supervised request carries the parent-resolved context window into the child slice', async () => {
+    loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      },
+    )
+    const seenRequests: SupervisedSpawnRequest[] = []
+    await executeSubagent(
+      buildExecuteParams({
+        processSupervision: true,
+        resolveModelContextWindow: () => 1_000_000,
+        spawnSupervised: async (request: SupervisedSpawnRequest) => {
+          seenRequests.push(request)
+          // A crashed settle keeps this test focused on the request shape
+          // instead of the full ok-receipt settle chain.
+          return settledCrash('settle outcome not asserted here')
+        },
+      }),
+    )
+    expect(seenRequests).toHaveLength(1)
+    expect(seenRequests[0].child?.contextWindowTokens).toBe(1_000_000)
+    // The stamped window must be JSON-native: it has to survive the temp-file
+    // transport round trip intact (see runSupervisedSubagent's child slice).
+    expect(() => JSON.stringify(seenRequests[0])).not.toThrow()
+  })
+
   it('flag on: crashed settle maps to the crash-envelope output with the stderr tail folded in', async () => {
     loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
       async () => {

@@ -89,9 +89,11 @@ import type {
   StartAgentRunFn,
 } from '@codebuff/common/types/contracts/database'
 import type {
+  CacheDebugUsageData,
   PromptAiSdkFn,
   PromptAiSdkStreamFn,
   PromptAiSdkStructuredFn,
+  RequestContextTrimInfo,
   StreamChunk,
 } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -376,8 +378,21 @@ export type PromptAiSdkStreamNextParams = { streamId: string }
 /** Parameters of the incremental `promptAiSdkStreamStop` bridge method. */
 export type PromptAiSdkStreamStopParams = { streamId: string }
 
-/** Success result of `promptAiSdkStreamStart`. */
-export type PromptAiSdkStreamStartResult = { streamId: string }
+/**
+ * Success result of `promptAiSdkStreamStart`.
+ *
+ * `contextWindowTokens` is the parent-resolved BYOK route context window for
+ * this request's agent/model, relayed so a supervised child can update its
+ * compaction budget (the loop's `onModelContextResolved` callback) on a
+ * mid-run failover to a different-window model. OPTIONAL so partial handler
+ * tables (which do not supply the `resolveModelContextWindow` dep) keep the
+ * exact old reply shape — the child wrapper treats an absent field as "no
+ * update" (fail-closed), never as a reset.
+ */
+export type PromptAiSdkStreamStartResult = {
+  streamId: string
+  contextWindowTokens?: number
+}
 
 /**
  * Result of `promptAiSdkStreamNext`:
@@ -387,10 +402,46 @@ export type PromptAiSdkStreamStartResult = { streamId: string }
  *  - `{ done: true, result: <StreamTruncatedError-styled prompt failure> }` —
  *    a single oversized chunk could not encode (practically impossible): the
  *    failure is a STRUCTURED error-shaped reply, never a socket destroy.
+ *
+ * The provider-cost relay (`providerCostCents`) and the TELEMETRY RELAY
+ * (`contextTrim` / `cacheDebugRequestBuilt` / `cacheDebugUsage`) ride the
+ * DONE reply: the loop's `onCostCalculated` and the observational telemetry
+ * callbacks fire DURING stream consumption — at/near the final usage chunk —
+ * so the values are fully captured parent-side by the injected captors when
+ * the iterator returns (see the cost-relay / telemetry-relay notes by the
+ * prompt param type aliases below). OPTIONAL so partial handler tables keep
+ * the exact old reply shape.
  */
 export type PromptAiSdkStreamNextResult =
   | { done: false; chunk: StreamChunk }
-  | { done: true; result?: PromptResult<string | null> }
+  | {
+      done: true
+      result?: PromptResult<string | null>
+      providerCostCents?: number
+      /**
+       * Parent-captured request-context-trim telemetry (the loop's
+       * `onRequestContextTrimmed` payload), relayed so the supervised
+       * child's callback fires like the in-process path. OPTIONAL: absent =
+       * no trim event (partial handler tables / quiet providers).
+       */
+      contextTrim?: RequestContextTrimInfo
+      /**
+       * Parent-captured cache-debug provider-request-built payload (the
+       * loop's `onCacheDebugProviderRequestBuilt` argument), relayed so the
+       * supervised child's callback fires like the in-process path.
+       * Size-guarded parent-side at 1 MB: an oversize provider rawBody
+       * degrades to `{ provider, rawBodyDropped: true, bytes }` so the relay
+       * never risks the per-message bridge cap. OPTIONAL: absent = no event.
+       */
+      cacheDebugRequestBuilt?: BridgedCacheDebugRequestBuilt
+      /**
+       * Parent-captured cache-debug usage telemetry (the loop's
+       * `onCacheDebugUsageReceived` payload), relayed so the supervised
+       * child's callback fires like the in-process path. OPTIONAL: absent =
+       * no usage event.
+       */
+      cacheDebugUsage?: CacheDebugUsageData
+    }
 
 /**
  * PromptResult-styled failure returned for a SINGLE incremental-stream chunk
@@ -673,6 +724,40 @@ export function findNonRoundTripSafeResultPaths(value: unknown): string[] {
 
 // ── Per-method wire shapes derived from the real dep signatures ───────────
 
+/**
+ * Wire shape of the parent-captured `onCacheDebugProviderRequestBuilt`
+ * payload. Normal case: the callback's argument verbatim. Size-guarded case
+ * (see the TELEMETRY RELAY note below): a provider rawBody whose
+ * serialization exceeds the 1 MB captor guard degrades to the
+ * `rawBodyDropped` variant so the relay never risks the per-message cap.
+ */
+export type BridgedCacheDebugRequestBuilt =
+  | { provider: string; rawBody: unknown; normalizedBody?: unknown }
+  | { provider: string; rawBodyDropped: true; bytes: number }
+
+/**
+ * Per-request observational telemetry captors (the TELEMETRY RELAY
+ * counterpart of the cost captor; minted by makeTelemetryCaptors in
+ * parent-bridge-server.ts): each callback is a plain VOID assignment that
+ * NEVER throws and stores its latest argument (LAST-WRITE-WINS per slot);
+ * `read()` returns only the slots that fired so the reply spread stays
+ * byte-identical when nothing fired.
+ */
+export type TelemetryCaptors = {
+  callbacks: {
+    onRequestContextTrimmed: (info: RequestContextTrimInfo) => void
+    onCacheDebugProviderRequestBuilt: (
+      payload: BridgedCacheDebugRequestBuilt,
+    ) => void
+    onCacheDebugUsageReceived: (usage: CacheDebugUsageData) => void
+  }
+  read: () => {
+    contextTrim?: RequestContextTrimInfo
+    cacheDebugRequestBuilt?: BridgedCacheDebugRequestBuilt
+    cacheDebugUsage?: CacheDebugUsageData
+  }
+}
+
 /** Wire result of the bridged `promptAiSdkStream` (streaming limitation). */
 export type BridgedPromptStreamResult = {
   chunks: StreamChunk[]
@@ -684,6 +769,47 @@ export type BridgedPromptStreamResult = {
    * bounded bridge is never a silent drop.
    */
   truncated?: boolean
+  /**
+   * Parent-resolved BYOK route context window for this request's agent/model,
+   * relayed so a supervised child can update its compaction budget (the
+   * loop's `onModelContextResolved` callback) on a mid-run failover to a
+   * different-window model — the legacy full-collection path carries the
+   * SAME relay as the incremental `promptAiSdkStreamStart` reply. OPTIONAL:
+   * partial handler tables (which do not supply the
+   * `resolveModelContextWindow` dep) keep the exact old reply shape.
+   */
+  contextWindowTokens?: number
+  /**
+   * Provider cost in cents captured PARENT-SIDE by the injected
+   * `onCostCalculated` captor during stream collection, relayed so the
+   * supervised child can credit its loop's cost accounting (creditsUsed /
+   * BYOK telemetry) the way the in-process path does. OPTIONAL so partial
+   * handler tables keep the exact old reply shape.
+   */
+  providerCostCents?: number
+  /**
+   * Parent-captured request-context-trim telemetry (the loop's
+   * `onRequestContextTrimmed` payload), relayed so the supervised child's
+   * callback fires like the in-process path. OPTIONAL: absent = no trim
+   * event (partial handler tables / quiet providers).
+   */
+  contextTrim?: RequestContextTrimInfo
+  /**
+   * Parent-captured cache-debug provider-request-built payload (the loop's
+   * `onCacheDebugProviderRequestBuilt` argument), relayed so the supervised
+   * child's callback fires like the in-process path. Size-guarded
+   * parent-side at 1 MB: an oversize provider rawBody degrades to
+   * `{ provider, rawBodyDropped: true, bytes }` so the relay never risks the
+   * per-message bridge cap. OPTIONAL: absent = no event.
+   */
+  cacheDebugRequestBuilt?: BridgedCacheDebugRequestBuilt
+  /**
+   * Parent-captured cache-debug usage telemetry (the loop's
+   * `onCacheDebugUsageReceived` payload), relayed so the supervised child's
+   * callback fires like the in-process path. OPTIONAL: absent = no usage
+   * event.
+   */
+  cacheDebugUsage?: CacheDebugUsageData
 }
 
 /** Wire params/result of the bridged `fetch` (Response reconstructed child-side). */
@@ -703,6 +829,37 @@ export type BridgedFetchResult = {
   bodyText: string
 }
 
+/**
+ * COST RELAY (prompt-family callbacks): the loop's `onCostCalculated` (and
+ * every other function-valued prompt-param callback) is DROPPED by the child
+ * sanitizer at the wire — the parent's real prompt dep never receives it, so
+ * the provider cost sdk/src/impl/llm.ts computes would be discarded and the
+ * supervised child would under-count `creditsUsed` and BYOK cost telemetry.
+ * Instead the PARENT injects a per-request captor into the rehydrated params;
+ * the captured cost rides the prompt/stream replies as `providerCostCents`
+ * (BridgedPromptStreamResult / the PromptAiSdkStreamNextResult DONE variant),
+ * and the child wrapper re-applies it to the loop's callback locally. For
+ * `promptAiSdk` / `promptAiSdkStructured` the relay rides as an EXTRA MEMBER
+ * on the returned PromptResult-shaped object — the handler spreads it in and
+ * the child strips it before re-validation/return (no PromptResult type
+ * change).
+ *
+ * TELEMETRY RELAY (same pattern): the loop's `onRequestContextTrimmed` and
+ * the two cache-debug callbacks (`onCacheDebugProviderRequestBuilt` /
+ * `onCacheDebugUsageReceived`) are FUNCTIONS dropped by the same sanitizer —
+ * the parent injects per-request captors for them too, and the captured
+ * observational telemetry rides the replies as `contextTrim` /
+ * `cacheDebugRequestBuilt` / `cacheDebugUsage` (BridgedPromptStreamResult /
+ * the DONE variant of PromptAiSdkStreamNextResult; extra members on the
+ * promptAiSdk / promptAiSdkStructured reply objects), and the child wrapper
+ * re-applies them to the loop's callbacks locally — full observational
+ * parity with the in-process path (no runtime effect). LAST-WRITE-WINS per
+ * slot: `onCacheDebugProviderRequestBuilt` may in principle fire more than
+ * once per request. `rawBody` can be a huge provider request body, so the
+ * parent size-guards `cacheDebugRequestBuilt` at 1 MB (oversize degrades to
+ * `{ provider, rawBodyDropped: true, bytes }`). OPTIONAL members (absent =
+ * no event) keep partial handler tables byte-identical.
+ */
 export type PromptAiSdkStreamParams = Parameters<PromptAiSdkStreamFn>[0]
 export type PromptAiSdkParams = Parameters<PromptAiSdkFn>[0]
 export type PromptAiSdkStructuredParams = Parameters<PromptAiSdkStructuredFn>[0]

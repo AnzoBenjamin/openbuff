@@ -172,6 +172,13 @@ export type SupervisedSpawnRequest = {
     taskMemory?: unknown
     workspaceState?: unknown
     contextTokenCount?: number
+    /**
+     * The parent-resolved BYOK context window for the child's agent route,
+     * computed by runSupervisedSubagent via the parent's
+     * resolveModelContextWindow dep. JSON-native (a number); optional so
+     * requests serialized before this field existed stay valid.
+     */
+    contextWindowTokens?: number
   }
   fileContext?: unknown
   localAgentTemplates?: unknown

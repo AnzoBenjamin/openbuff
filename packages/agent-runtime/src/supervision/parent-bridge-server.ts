@@ -62,6 +62,7 @@ import {
   isBridgeMethod,
   isBridgeRequest,
   isBridgeWireMarker,
+  type BridgedCacheDebugRequestBuilt,
   type BridgedFetchParams,
   type BridgedPromptStreamResult,
   type BridgeReply,
@@ -77,13 +78,14 @@ import {
   type PromptAiSdkStreamStopParams,
   type PromptAiSdkStructuredFn,
   type SendActionFn,
+  type TelemetryCaptors,
   type TrackEventFn,
 } from './bridge-protocol'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contracts/billing'
 import type { HandleStepsLogChunkFn, RequestFilesFn, RequestMcpToolDataFn, RequestOptionalFileFn, RequestToolCallFn, SendSubagentChunkFn } from '@codebuff/common/types/contracts/client'
 import type { AddAgentStepFn, FetchAgentFromDatabaseFn, FinishAgentRunFn, StartAgentRunFn } from '@codebuff/common/types/contracts/database'
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type { CacheDebugUsageData, RequestContextTrimInfo, StreamChunk } from '@codebuff/common/types/contracts/llm'
 import type { PromptResult as PromptResultType } from '@codebuff/common/util/error'
 
 /** Bound on concurrently in-flight REQUEST handler invocations; beyond it
@@ -132,6 +134,23 @@ export type IncrementalStreamEntry = {
    * one chunk, capped by BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES), so this stays 0
    * — the legacy full-collection budget never applies to these entries. */
   readonly reservedBytes: number
+  /** Per-request cost captor (see makeCostCaptor in
+   * buildSupervisedBridgeHandlers): records the provider cost llm.ts reports
+   * while THIS stream is consumed, so the DONE reply can relay it as
+   * `providerCostCents` and the child re-applies it to its own loop callback
+   * (creditsUsed + BYOK telemetry). */
+  cost: {
+    onCostCalculated: (providerCostCents: number) => Promise<void>
+    read: () => number | undefined
+  }
+  /** Per-request telemetry captors (see makeTelemetryCaptors in
+   * buildSupervisedBridgeHandlers): records the observational prompt telemetry
+   * (request-context trim + cache-debug) while THIS stream is consumed, so
+   * the DONE reply can relay it as `contextTrim` /
+   * `cacheDebugRequestBuilt` / `cacheDebugUsage` and the child re-applies it
+   * to its loop's callbacks (observational parity with the in-process
+   * path). */
+  telemetry: TelemetryCaptors
 }
 
 /**
@@ -421,6 +440,19 @@ export type SupervisedBridgeHandlerDeps = {
   apiKey: string
   /** Parent-side logger rehydrated into sanitized params. */
   logger?: Logger
+  /**
+   * The parent's real model-context-window resolver (the same one the
+   * in-process loop drives via `onModelContextResolved`). When supplied, the
+   * prompt stream handlers call it parent-side on the already-sanitized wire
+   * params (agentId/model are plain strings) and relay the resolved route
+   * window back in the stream replies (`contextWindowTokens`), so the child's
+   * context-window seed stays accurate across a mid-run failover to a
+   * different-window model. OPTIONAL so raw dep tables in tests keep working.
+   */
+  resolveModelContextWindow?: (params: {
+    agentId?: string
+    model?: string
+  }) => number | undefined
 }
 
 /**
@@ -802,9 +834,171 @@ export function buildSupervisedBridgeHandlers(
   // collector stops consuming the provider stream with no consumer.
   const activeStreamCancels = new Set<() => void>()
 
+  // Parent-resolved route context window (see
+  // SupervisedBridgeHandlerDeps.resolveModelContextWindow): read from the RAW
+  // wire params (agentId/model are plain strings that survive the
+  // sanitize/rehydrate walk untouched — the resolver is called on the PARENT
+  // side, before/independent of rehydration). Undefined when the dep is
+  // absent (partial handler tables) — the reply shape stays byte-identical.
+  const resolveRouteWindow = (params: unknown): number | undefined => {
+    const p = (params ?? {}) as Record<string, unknown>
+    const agentId = typeof p.agentId === 'string' ? p.agentId : undefined
+    const model = typeof p.model === 'string' ? p.model : undefined
+    return deps.resolveModelContextWindow?.({
+      ...(agentId !== undefined ? { agentId } : {}),
+      ...(model !== undefined ? { model } : {}),
+    })
+  }
+
+  // The loop's onCostCalculated is a FUNCTION (dropped at the wire by the
+  // child sanitizer and never re-injected by the handler table), so the
+  // parent injects a captor that records the provider cost llm.ts reports
+  // during prompt/stream execution; the reply relays it as
+  // `providerCostCents` so the child re-applies it to its own loop callback
+  // (creditsUsed budget enforcement + BYOK cost telemetry — the same relay
+  // pattern as the context-window relay above). The captor is a plain
+  // assignment — it NEVER throws or rejects (llm.ts awaits it) — and a
+  // FRESH captor is minted per prompt request: no shared state across
+  // sequential prompts in one loop.
+  const makeCostCaptor = (): {
+    onCostCalculated: (providerCostCents: number) => Promise<void>
+    read: () => number | undefined
+  } => {
+    let costCents: number | undefined
+    return {
+      onCostCalculated: async (providerCostCents: number) => {
+        costCents = providerCostCents
+      },
+      read: () => costCents,
+    }
+  }
+  // Conditional spread so a provider that never reported a cost keeps the
+  // exact old reply shape (no `providerCostCents: undefined` member — the
+  // child treats an absent field as "no update", never a 0-cost call).
+  const costSpread = (cost: number | undefined): Record<string, unknown> =>
+    cost !== undefined ? { providerCostCents: cost } : {}
+
+  // TELEMETRY RELAY (observational prompt-param callbacks): the loop's
+  // onRequestContextTrimmed / onCacheDebugProviderRequestBuilt /
+  // onCacheDebugUsageReceived are FUNCTIONS dropped by the child sanitizer
+  // and never re-injected by the handler table, so their telemetry would be
+  // silently lost in a supervised child. Same relay pattern as the cost
+  // captor above: the parent injects a FRESH per-request captor set (no
+  // cross-request state), each callback is a plain VOID assignment that
+  // NEVER throws, and the captured values ride the prompt/stream replies as
+  // `contextTrim` / `cacheDebugRequestBuilt` / `cacheDebugUsage` so the child
+  // wrapper re-applies them to the loop's callbacks — observational parity
+  // with the in-process path. LAST-WRITE-WINS per slot:\  // onCacheDebugProviderRequestBuilt may in principle fire more than once per
+  // request. SIZE GUARD (cacheDebugRequestBuilt only by design): rawBody can
+  // be a huge provider request body, so an argument serializing past 1 MB
+  // degrades to `{ provider, rawBodyDropped: true, bytes }` — the relay never
+  // risks the 16 MiB per-message bridge cap. The same try/catch + size check
+  // guards contextTrim / cacheDebugUsage defense-in-depth; an oversize or
+  // unserializable value there is DROPPED (absent = no event, never a crash).
+  const TELEMETRY_RELAY_MAX_BYTES = 1_000_000
+  const makeTelemetryCaptors = (): TelemetryCaptors => {
+    let contextTrim: RequestContextTrimInfo | undefined
+    let cacheDebugRequestBuilt: BridgedCacheDebugRequestBuilt | undefined
+    let cacheDebugUsage: CacheDebugUsageData | undefined
+    // Serialized length of a captured value, or undefined when it cannot be
+    // measured (stringify threw / returned undefined) — an unmeasurable
+    // value is treated as oversize (fail-closed toward the bridge cap).
+    // JSON.stringify is the ONLY fallible operation inside the captors and
+    // it is guarded here, so the captors are never the throw source.
+    const relayBytes = (value: unknown): number | undefined => {
+      try {
+        const json = JSON.stringify(value)
+        return json === undefined ? undefined : json.length
+      } catch {
+        return undefined
+      }
+    }
+    const fitsRelay = (value: unknown): boolean => {
+      const bytes = relayBytes(value)
+      return bytes !== undefined && bytes <= TELEMETRY_RELAY_MAX_BYTES
+    }
+    return {
+      callbacks: {
+        onRequestContextTrimmed: (info: RequestContextTrimInfo): void => {
+          // LAST-WRITE-WINS. RequestContextTrimInfo is a small fixed shape
+          // in practice: an oversize/unmeasurable payload is DROPPED
+          // (absent = no event) — defense-in-depth for the bridge cap.
+          if (fitsRelay(info)) contextTrim = info
+        },
+        onCacheDebugProviderRequestBuilt: (
+          payload: BridgedCacheDebugRequestBuilt,
+        ): void => {
+          // LAST-WRITE-WINS: the callback may in principle fire more than
+          // once per request. An oversize/unmeasurable rawBody degrades to
+          // the REPLACEMENT object (never the giant body) so the loop still
+          // observes the event and the relay never risks the 16 MiB
+          // per-message cap.
+          if (fitsRelay(payload)) {
+            cacheDebugRequestBuilt = payload
+          } else {
+            const p = (payload ?? {}) as { provider?: unknown }
+            const provider =
+              typeof p.provider === 'string' ? p.provider : 'unknown'
+            cacheDebugRequestBuilt = {
+              provider,
+              rawBodyDropped: true,
+              bytes: relayBytes(payload) ?? -1,
+            }
+          }
+        },
+        onCacheDebugUsageReceived: (usage: CacheDebugUsageData): void => {
+          // LAST-WRITE-WINS. CacheDebugUsageData is a small fixed shape in
+          // practice: an oversize/unmeasurable payload is DROPPED
+          // (defense-in-depth for the bridge cap).
+          if (fitsRelay(usage)) cacheDebugUsage = usage
+        },
+      },
+      read: () => ({
+        ...(contextTrim !== undefined ? { contextTrim } : {}),
+        ...(cacheDebugRequestBuilt !== undefined
+          ? { cacheDebugRequestBuilt }
+          : {}),
+        ...(cacheDebugUsage !== undefined ? { cacheDebugUsage } : {}),
+      }),
+    }
+  }
+  // Conditional spread of the telemetry relay members: an unset slot stays
+  // ABSENT (no `key: undefined` member), so a provider that never fired a
+  // callback keeps the exact old reply shape (back-compat with partial
+  // handler tables and quiet providers).
+  const telemetrySpread = (
+    read: TelemetryCaptors['read'],
+  ): Record<string, unknown> => {
+    const captured = read()
+    return {
+      ...(captured.contextTrim !== undefined
+        ? { contextTrim: captured.contextTrim }
+        : {}),
+      ...(captured.cacheDebugRequestBuilt !== undefined
+        ? { cacheDebugRequestBuilt: captured.cacheDebugRequestBuilt }
+        : {}),
+      ...(captured.cacheDebugUsage !== undefined
+        ? { cacheDebugUsage: captured.cacheDebugUsage }
+        : {}),
+    }
+  }
+
   const collectPromptStream = async (
     params: PromptAiSdkStreamParams,
   ): Promise<BridgedPromptStreamResult> => {
+    // Resolved ONCE on the raw wire params, before consuming: relayed in BOTH
+    // return shapes below (truncated and non-truncated) so a supervised child
+    // can re-seed its compaction budget on a mid-run model failover (see
+    // bridge-protocol.ts BridgedPromptStreamResult.contextWindowTokens).
+    const contextWindowTokens = resolveRouteWindow(params)
+    // A FRESH per-request cost captor (see makeCostCaptor): injected into
+    // the rehydrated params below so the real prompt dep can report cost.
+    const cost = makeCostCaptor()
+    // A FRESH per-request telemetry captor set (see makeTelemetryCaptors):
+    // injected alongside the cost captor so the loop's observational
+    // prompt-param callbacks (request-context trim + cache-debug) are
+    // captured parent-side and relayed on the reply.
+    const telemetry = makeTelemetryCaptors()
     // The rehydrated signal is OWNED by this collection: cancelling the
     // collection aborts it, so the real provider stream stops producing
     // (provider spend stops) even though no consumer will read the tail.
@@ -817,6 +1011,8 @@ export function buildSupervisedBridgeHandlers(
       apiKey: deps.apiKey,
       sendAction: deps.sendAction,
       trackEvent: deps.trackEvent,
+      onCostCalculated: cost.onCostCalculated,
+      ...telemetry.callbacks,
       logger,
       signal: streamAbort.signal,
     } as unknown as PromptAiSdkStreamParams
@@ -857,7 +1053,33 @@ export function buildSupervisedBridgeHandlers(
       for (;;) {
         const next = await iterator.next()
         if (next.done) {
-          return truncated ? { chunks, result: next.value, truncated } : { chunks, result: next.value }
+          // BOTH return shapes carry the resolved route window (Risks note:
+          // the truncated and non-truncated replies must match) AND the
+          // captured provider cost (the cost relay rides BOTH shapes too —
+          // a truncated reply must not lose the loop's cost accounting) AND
+          // the captured observational telemetry (the TELEMETRY RELAY rides
+          // BOTH shapes for the same reason — see
+          // bridge-protocol.ts BridgedPromptStreamResult).
+          return truncated
+            ? {
+                chunks,
+                result: next.value,
+                truncated,
+                ...(contextWindowTokens !== undefined
+                  ? { contextWindowTokens }
+                  : {}),
+                ...costSpread(cost.read()),
+                ...telemetrySpread(telemetry.read),
+              }
+            : {
+                chunks,
+                result: next.value,
+                ...(contextWindowTokens !== undefined
+                  ? { contextWindowTokens }
+                  : {}),
+                ...costSpread(cost.read()),
+                ...telemetrySpread(telemetry.read),
+              }
         }
         if (!truncated) {
           collectedBytes += Buffer.byteLength(JSON.stringify(next.value) ?? '', 'utf8')
@@ -907,6 +1129,8 @@ export function buildSupervisedBridgeHandlers(
   const buildStreamParams = (
     params: PromptAiSdkStreamStartParams,
     streamAbort: AbortController,
+    cost: ReturnType<typeof makeCostCaptor>,
+    telemetry: TelemetryCaptors,
   ): PromptAiSdkStreamStartParams =>
     ({
       ...(rehydratePromptParamsForBridge(params, logger, bridgeNonce) as Record<
@@ -916,6 +1140,8 @@ export function buildSupervisedBridgeHandlers(
       apiKey: deps.apiKey,
       sendAction: deps.sendAction,
       trackEvent: deps.trackEvent,
+      onCostCalculated: cost.onCostCalculated,
+      ...telemetry.callbacks,
       logger,
       signal: streamAbort.signal,
     } as unknown as PromptAiSdkStreamStartParams)
@@ -929,23 +1155,47 @@ export function buildSupervisedBridgeHandlers(
       )
     }
     const streamAbort = new AbortController()
+    // FRESH per-request cost captor (see makeCostCaptor): records the cost
+    // llm.ts reports while THIS stream is consumed; stored on the registry
+    // entry so the DONE reply can relay it.
+    const cost = makeCostCaptor()
+    // FRESH per-request telemetry captors (see makeTelemetryCaptors): the
+    // observational counterpart, stored on the registry entry so the DONE
+    // reply can relay it alongside the cost.
+    const telemetry = makeTelemetryCaptors()
     const iterator = deps
-      .promptAiSdkStream(buildStreamParams(params, streamAbort))
+      .promptAiSdkStream(buildStreamParams(params, streamAbort, cost, telemetry))
       [Symbol.asyncIterator]()
     const streamId = realIdGen.uuid()
     const cancel = (): void => {
       incrementalStreams.delete(streamId)
       activeStreamCancels.delete(cancel)
-      tearStreamDown({ iterator, abort: streamAbort, cancel, reservedBytes: 0 })
+      tearStreamDown({
+        iterator,
+        abort: streamAbort,
+        cancel,
+        reservedBytes: 0,
+        cost,
+        telemetry,
+      })
     }
     incrementalStreams.set(streamId, {
       iterator,
       abort: streamAbort,
       cancel,
       reservedBytes: 0,
+      cost,
+      telemetry,
     })
     activeStreamCancels.add(cancel)
-    return { streamId }
+    // SUCCESS reply only: the resolved route window rides the start reply so
+    // the child's context-window seed stays accurate across failover (error
+    // paths above — the concurrency-cap throw — stay unchanged).
+    const contextWindowTokens = resolveRouteWindow(params)
+    return {
+      streamId,
+      ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
+    }
   }
 
   const handleIncrementalStreamNext = async (
@@ -978,7 +1228,17 @@ export function buildSupervisedBridgeHandlers(
       activeStreamCancels.delete(entry.cancel)
       // NOTE: unlike the legacy collectPromptStream, the incremental path
       // never needs a truncation budget: each reply is ONE chunk.
-      return { done: true, result: next.value }
+      // The cost relay rides the DONE reply (cost fires during stream
+      // consumption, at/near the final usage chunk — see
+      // bridge-protocol.ts PromptAiSdkStreamNextResult), and so does the
+      // TELEMETRY RELAY (the observational callbacks fire during stream
+      // consumption too).
+      return {
+        done: true,
+        result: next.value,
+        ...costSpread(entry.cost.read()),
+        ...telemetrySpread(entry.telemetry.read),
+      }
     }
     // Per-reply cap contract (reviewer-facing; see
     // bridge-protocol.ts BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES): the reply is a
@@ -1044,8 +1304,17 @@ export function buildSupervisedBridgeHandlers(
       handleIncrementalStreamNext(params as PromptAiSdkStreamNextParams),
     promptAiSdkStreamStop: (params) =>
       handleIncrementalStreamStop(params as PromptAiSdkStreamStopParams),
-    promptAiSdk: (params) =>
-      deps.promptAiSdk({
+    promptAiSdk: async (params) => {
+      // Cost relay: inject the per-request captor, then attach the captured
+      // provider cost as an EXTRA MEMBER on the returned PromptResult-shaped
+      // object (the child strips it before use). Defensive: PromptResult is
+      // always an object in practice; a non-object reply passes verbatim.
+      // TELEMETRY RELAY (same pattern): the observational captor set rides
+      // the rehydrated params too, and its captured members spread in
+      // alongside providerCostCents.
+      const cost = makeCostCaptor()
+      const telemetry = makeTelemetryCaptors()
+      const result = await deps.promptAiSdk({
         ...(rehydratePromptParamsForBridge(
           params,
           logger,
@@ -1054,10 +1323,28 @@ export function buildSupervisedBridgeHandlers(
         apiKey: deps.apiKey,
         sendAction: deps.sendAction,
         trackEvent: deps.trackEvent,
+        onCostCalculated: cost.onCostCalculated,
+        ...telemetry.callbacks,
         logger,
         signal: new AbortController().signal,
-      } as unknown as Parameters<PromptAiSdkFn>[0]),
-    promptAiSdkStructured: (params) => {
+      } as unknown as Parameters<PromptAiSdkFn>[0])
+      return typeof result === 'object' && result !== null
+        ? {
+            ...(result as Record<string, unknown>),
+            ...costSpread(cost.read()),
+            ...telemetrySpread(telemetry.read),
+          }
+        : result
+    },
+    promptAiSdkStructured: async (params) => {
+      // Cost relay (same as promptAiSdk): the per-request captor rides the
+      // rehydrated params, and the captured provider cost is attached as an
+      // EXTRA MEMBER on the returned PromptResult-shaped object.
+      // TELEMETRY RELAY (same pattern): the observational captor set rides
+      // the rehydrated params too, and its captured members spread in
+      // alongside providerCostCents.
+      const cost = makeCostCaptor()
+      const telemetry = makeTelemetryCaptors()
       const record = (params ?? {}) as Record<string, unknown>
       const { schema } = record as {
         schema?: Record<string, unknown>
@@ -1073,17 +1360,29 @@ export function buildSupervisedBridgeHandlers(
           'bridged promptAiSdkStructured: wire params carry no JSON Schema — refusing to widen to { type: "object" }',
         )
       }
-      return deps.promptAiSdkStructured({
+      const result = await deps.promptAiSdkStructured({
         ...(rehydrateParams(record, logger, bridgeNonce) as Record<string, unknown>),
         apiKey: deps.apiKey,
         sendAction: deps.sendAction,
         trackEvent: deps.trackEvent,
+        onCostCalculated: cost.onCostCalculated,
+        ...telemetry.callbacks,
         logger,
         signal: new AbortController().signal,
         // The zod schema crossed the bridge as JSON Schema; convert it back
         // so the real structured-prompt dep keeps its contract.
         schema: convertJsonSchemaToZod(schema),
       } as unknown as Parameters<PromptAiSdkStructuredFn>[0])
+      // Extra-member relay, defensively (PromptResult is always an object in
+      // practice): the child strips providerCostCents and the telemetry
+      // relay members before re-validation.
+      return typeof result === 'object' && result !== null
+        ? {
+            ...(result as Record<string, unknown>),
+            ...costSpread(cost.read()),
+            ...telemetrySpread(telemetry.read),
+          }
+        : result
     },
     // sendAction is rehydrated like every other method: the child sanitizer
     // replaces nested logger-like objects / AbortSignals with wire markers,
