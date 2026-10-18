@@ -237,7 +237,9 @@ function persistFullCommandOutput(serialized: string): string | undefined {
   try {
     const dir = path.join(os.tmpdir(), 'openbuff-command-output')
     if (commandOutputDirEnsured !== dir) {
-      fs.mkdirSync(dir, { recursive: true })
+      // 0o700 regardless of umask: the directory holds untruncated command
+      // output, so it must never be group/world-readable on shared hosts.
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
       commandOutputDirEnsured = dir
     }
     const artifactPath = path.join(
@@ -616,10 +618,13 @@ export function runTerminalCommand({
       }
 
       // Use the already-resolved, project-contained cwd from the entry guard.
-      const resolvedCwd = containedCwd
+      // Local name differs from the outer `resolvedCwd` (the PATH RESOLVER
+      // RESULT object) so the two are not confused: this is the cwd STRING
+      // the child process spawns in.
+      const spawnCwd = containedCwd
 
       const childProcess = spawn(shell, [...shellArgs, command], {
-        cwd: resolvedCwd,
+        cwd: spawnCwd,
         env: processEnv,
         stdio: 'pipe',
         detached: !isWindows,
@@ -671,6 +676,10 @@ export function runTerminalCommand({
         timer = setTimeout(() => {
           requestTermination('timeout')
         }, timeout_seconds * 1000)
+        // Never hold the event loop open just for the timeout: after the
+        // child settles (or the run aborts) the pending timer must not keep
+        // the process alive briefly.
+        timer.unref?.()
       }
 
       // Collect stdout. Cap accumulation during streaming so a chatty process
@@ -735,7 +744,7 @@ export function runTerminalCommand({
         if (stdoutTruncated || stderrTruncated) {
           const serialized = JSON.stringify({
             command,
-            startingCwd: resolvedCwd,
+            startingCwd: spawnCwd,
             stdout: stripColors(stdout),
             ...(stderr ? { stderr: stripColors(stderr) } : {}),
             ...(exitCode !== null ? { exitCode } : {}),
@@ -784,7 +793,7 @@ export function runTerminalCommand({
                 command,
                 errorMessage: `Command timed out after ${timeout_seconds} seconds`,
                 timedOut: true,
-                startingCwd: resolvedCwd,
+                startingCwd: spawnCwd,
                 ...fullLogFields,
                 stdout: truncatedStdout,
                 ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
@@ -797,7 +806,7 @@ export function runTerminalCommand({
 
         const combinedOutput = {
           command,
-          startingCwd: resolvedCwd,
+          startingCwd: spawnCwd,
           ...fullLogFields,
           stdout: truncatedStdout,
           ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
@@ -830,7 +839,7 @@ export function runTerminalCommand({
               command,
               errorMessage: `Failed to spawn command: ${error.message}`,
               spawnFailed: true,
-              startingCwd: resolvedCwd,
+              startingCwd: spawnCwd,
               stdout: stripColors(stdout),
               ...(stderr ? { stderr: stripColors(stderr) } : {}),
             },
