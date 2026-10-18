@@ -772,15 +772,24 @@ export async function processStream(
         if (chunk.text) {
           assistantMessages.push(assistantMessage(chunk.text))
         }
-      } else if (chunk.type === 'error') {
-        // do nothing
-      } else {
-        chunk satisfies never
-        throw new Error(
-          `Internal error: unhandled chunk type: ${(chunk as { type: unknown }).type}`,
-        )
+        // Single-forward rule: each text delta reaches the caller exactly once
+        // — as the yielded string consumed by the stream loop below
+        // (`onResponseChunk(chunk.text)`), which every child forwarder
+        // (sendSubagentChunk / writeToClient) keys to the child's agentId.
+        // Delegating the PrintModeText event here as well double-delivered
+        // every delta over two parallel transports, rendering as interleaved
+        // duplicated text in the TUI's subagent stream. Error events still
+        // delegate so clients surface parser failures.
+        return
       }
-      return onResponseChunk(chunk)
+      if (chunk.type === 'error') {
+        // do nothing extra
+        return onResponseChunk(chunk)
+      }
+      chunk satisfies never
+      throw new Error(
+        `Internal error: unhandled chunk type: ${(chunk as { type: unknown }).type}`,
+      )
     },
     // Execute XML-parsed tool calls immediately during streaming
     executeXmlToolCall: async ({ toolName, input }) => {
