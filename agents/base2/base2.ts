@@ -439,6 +439,12 @@ export function createBase2(
     publisher,
     ...(modelOverride !== undefined ? { model: modelOverride } : {}),
     providerOptions,
+    // Without this, provider defaults (the Anthropic path defaults to ~4k
+    // output tokens) truncate large tool-call payloads such as multi-edit
+    // edit_transaction transactions mid-JSON. Mirrors the editor agent's
+    // ceiling (agents/editor/editor.ts), which fixed the same failure class
+    // for its own transactions.
+    maxOutputTokens: 64_000,
     displayName: 'Buffy the Orchestrator',
     spawnerPrompt:
       'Advanced base agent that orchestrates planning, editing, and reviewing for complex coding tasks',

@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'child_process'
+import { createHash } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -213,6 +214,41 @@ export function withTouchedPaths<T extends Record<string, unknown>>(
 ): T {
   if (paths.length === 0) return value
   return { ...value, touchedPaths: paths }
+}
+
+let commandOutputDirEnsured: string | undefined
+
+/**
+ * Best-effort persistence of the FULL accumulated SYNC command output when the
+ * inline result had to be truncated, mirroring the `persistOversizeArtifact`
+ * pattern in packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts:
+ * content-addressed by the sha256 of the serialized payload, so the same
+ * content always maps to the same scratch path (idempotent overwrite).
+ * `tmpdir()` is resolved at call time so TMPDIR overrides in tests are
+ * respected. Returns the artifact path, or undefined on ANY error — the
+ * pointer is a pure enhancement and must never fail the command result.
+ * Owner-only 0o600 permissions regardless of the process umask: these files
+ * hold untruncated command output in a shared tmp directory.
+ *
+ * NOTE: unlike the spawn-agent artifact path, no TTL sweep is added here —
+ * OS tmp cleanup suffices for this first slice.
+ */
+function persistFullCommandOutput(serialized: string): string | undefined {
+  try {
+    const dir = path.join(os.tmpdir(), 'openbuff-command-output')
+    if (commandOutputDirEnsured !== dir) {
+      fs.mkdirSync(dir, { recursive: true })
+      commandOutputDirEnsured = dir
+    }
+    const artifactPath = path.join(
+      dir,
+      `${createHash('sha256').update(serialized).digest('hex')}.json`,
+    )
+    fs.writeFileSync(artifactPath, serialized, { mode: 0o600 })
+    return artifactPath
+  } catch {
+    return undefined
+  }
 }
 
 export function runTerminalCommand({
@@ -681,6 +717,40 @@ export function runTerminalCommand({
           signal.removeEventListener('abort', onAbort)
         }
 
+        // Truncation signal: truncateStringWithMessage uses remove:'MIDDLE',
+        // so comparing the RAW accumulated lengths (before truncation) is the
+        // only reliable way to know truncation will occur.
+        const stdoutTruncated = stdout.length > COMMAND_OUTPUT_LIMIT
+        const stderrTruncated = stderr.length > COMMAND_OUTPUT_LIMIT
+
+        // When either stream was truncated inline, persist the FULL accumulated
+        // output to a content-addressed scratch file and return a pointer
+        // (fullLogPath) so the agent can read it back with read_logs/read_files
+        // instead of re-running an expensive command. NOTE: the artifact holds
+        // the ACCUMULATED stream, which is itself capped at
+        // STREAM_ACCUMULATION_CAP (head+tail) — so beyond 2x the limit the
+        // pointer recovers the capped stream, still far more than the 50k
+        // inline slice.
+        let fullLogFields: { fullLogPath?: string; logBytes?: number } = {}
+        if (stdoutTruncated || stderrTruncated) {
+          const serialized = JSON.stringify({
+            command,
+            startingCwd: resolvedCwd,
+            stdout: stripColors(stdout),
+            ...(stderr ? { stderr: stripColors(stderr) } : {}),
+            ...(exitCode !== null ? { exitCode } : {}),
+          })
+          const fullLogPath = persistFullCommandOutput(serialized)
+          if (fullLogPath !== undefined) {
+            // Byte length (not char length): the schema documents logBytes as
+            // the artifact's byte size.
+            fullLogFields = {
+              fullLogPath,
+              logBytes: Buffer.byteLength(serialized, 'utf8'),
+            }
+          }
+        }
+
         // Truncate stdout to prevent excessive output
         const truncatedStdout = truncateStringWithMessage({
           str: stripColors(stdout),
@@ -715,6 +785,7 @@ export function runTerminalCommand({
                 errorMessage: `Command timed out after ${timeout_seconds} seconds`,
                 timedOut: true,
                 startingCwd: resolvedCwd,
+                ...fullLogFields,
                 stdout: truncatedStdout,
                 ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
                 ...(exitCode !== null ? { exitCode } : {}),
@@ -727,6 +798,7 @@ export function runTerminalCommand({
         const combinedOutput = {
           command,
           startingCwd: resolvedCwd,
+          ...fullLogFields,
           stdout: truncatedStdout,
           ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
           ...(exitCode !== null ? { exitCode } : {}),

@@ -693,3 +693,99 @@ describe('startBackgroundJob failed-spawn log file preservation', () => {
     expect(fs.readFileSync(foreignLogFile, 'utf8')).toBe(FOREIGN_CONTENT)
   })
 })
+
+describe('runTerminalCommand SYNC full-output persistence on truncation', () => {
+  // The inline COMMAND_OUTPUT_LIMIT is 50_000 chars; outputs here stay under
+  // the 2x STREAM_ACCUMULATION_CAP so the accumulated stream itself is never
+  // mid-stream truncated and the persisted artifact holds the FULL output.
+  const OVER_LIMIT_BYTES = 60_000
+
+  it('omits fullLogPath when output fits under the inline limit', async () => {
+    const result = await runTerminalCommand({
+      command: `printf ${JSON.stringify('a'.repeat(1000))}`,
+      process_type: 'SYNC',
+      cwd: process.cwd(),
+      projectRoot: process.cwd(),
+      timeout_seconds: 5,
+    })
+    const value = result[0].value as {
+      errorMessage?: string
+      stdout?: string
+      fullLogPath?: string
+      logBytes?: number
+    }
+
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.stdout?.length).toBe(1000)
+    expect(value.fullLogPath).toBeUndefined()
+    expect(value.logBytes).toBeUndefined()
+  })
+
+  it('persists the full untruncated output and returns a pointer when stdout exceeds the limit', async () => {
+    // head -c + tr produce exactly OVER_LIMIT_BYTES of stdout deterministically.
+    const result = await runTerminalCommand({
+      command: `yes a | tr -d '\\n' | head -c ${OVER_LIMIT_BYTES}`,
+      process_type: 'SYNC',
+      cwd: process.cwd(),
+      projectRoot: process.cwd(),
+      timeout_seconds: 5,
+    })
+    const value = result[0].value as {
+      errorMessage?: string
+      stdout?: string
+      fullLogPath?: string
+      logBytes?: number
+    }
+
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.fullLogPath).toBeDefined()
+    expect(value.logBytes).toBeGreaterThan(0)
+    try {
+      const fullLogPath = value.fullLogPath!
+      expect(fullLogPath).toContain('openbuff-command-output')
+      const persisted = JSON.parse(fs.readFileSync(fullLogPath, 'utf8')) as {
+        command?: string
+        stdout?: string
+      }
+      // The artifact holds the FULL untruncated stdout, not the 50k inline slice.
+      expect(persisted.stdout).toBe('a'.repeat(OVER_LIMIT_BYTES))
+      expect(persisted.command).toBe(
+        `yes a | tr -d '\\n' | head -c ${OVER_LIMIT_BYTES}`,
+      )
+      // The inline stdout meanwhile was truncated mid-stream.
+      expect(value.stdout!.length).toBeLessThan(OVER_LIMIT_BYTES)
+    } finally {
+      if (value.fullLogPath !== undefined) {
+        fs.rmSync(value.fullLogPath, { force: true })
+      }
+    }
+  })
+
+  it('includes the pointer on a truncated, timed-out command result', async () => {
+    const result = await runTerminalCommand({
+      command: `yes a | tr -d '\\n' | head -c ${OVER_LIMIT_BYTES}; sleep 30`,
+      process_type: 'SYNC',
+      cwd: process.cwd(),
+      projectRoot: process.cwd(),
+      timeout_seconds: 2,
+    })
+    const value = result[0].value as {
+      timedOut?: boolean
+      fullLogPath?: string
+      stdout?: string
+    }
+
+    expect(value.timedOut).toBe(true)
+    expect(value.fullLogPath).toBeDefined()
+    try {
+      const persisted = JSON.parse(
+        fs.readFileSync(value.fullLogPath!, 'utf8'),
+      ) as { stdout?: string }
+      expect(persisted.stdout).toBe('a'.repeat(OVER_LIMIT_BYTES))
+    } finally {
+      if (value.fullLogPath !== undefined) {
+        fs.rmSync(value.fullLogPath, { force: true })
+      }
+    }
+  })
+})
