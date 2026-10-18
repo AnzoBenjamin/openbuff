@@ -914,6 +914,7 @@ export interface SetMessagesParams {
       verifiedAt?: number
       supersedes?: string[]
       stale?: boolean
+      sessionScoped?: boolean
     }[]
     workspaceRevision?: number
     workspaceSnapshotId?: string
