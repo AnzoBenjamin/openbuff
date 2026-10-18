@@ -502,7 +502,10 @@ function buildFailedChildReceipt(params: {
  *
  * Forward rule:
  *  - a string chunk forwards verbatim over the bridged fire-and-forget
- *    `sendSubagentChunk` display channel;
+ *    `sendSubagentChunk` display channel — EXCEPT the string twin that
+ *    immediately follows its identical {type:'text'} event (the child
+ *    runtime emits each streamed text delta in both forms; see the
+ *    single-forward pairing note on the forwarder itself);
  *  - a `text`-type PrintModeEvent forwards its non-empty `text` as the string
  *    chunk on that same channel;
  *  - a `reasoning_delta` PrintModeEvent forwards its non-empty `text` as a
@@ -554,14 +557,29 @@ export function buildChildOnResponseChunk(params: {
     logger,
   } = params
   let warnedForwardFailure = false
+  // Single-forward pairing: the child runtime delivers each streamed text
+  // delta TWICE — first as a {type:'text'} PrintModeEvent, then as the
+  // identical string yielded by the stream loop. Both forms map to the same
+  // subagent_chunk stream event client-side, so forwarding both rendered
+  // interleaved duplicated text in the TUI. Forward the event, then swallow
+  // the string twin that immediately follows it; a string with no matching
+  // preceding event still forwards (string-only sources), and event-only
+  // emissions (like the apply_patch deprecation shim) are unaffected.
+  let pendingEventText: string | null = null
   return (chunk: string | PrintModeEvent): void => {
     try {
       if (typeof chunk === 'string') {
+        if (pendingEventText !== null && chunk === pendingEventText) {
+          pendingEventText = null
+          return
+        }
+        pendingEventText = null
         sendSubagentChunk({ userInputId, agentId, agentType, chunk, prompt })
         return
       }
       if (chunk.type === 'text') {
         if (chunk.text) {
+          pendingEventText = chunk.text
           sendSubagentChunk({
             userInputId,
             agentId,
@@ -569,6 +587,8 @@ export function buildChildOnResponseChunk(params: {
             chunk: chunk.text,
             prompt,
           })
+        } else {
+          pendingEventText = null
         }
         return
       }

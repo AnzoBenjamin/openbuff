@@ -32,7 +32,10 @@ import { buildDefaultSpawnSupervised } from '../supervised-spawn'
 
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
 import type { SupervisedSpawnRequest } from '@codebuff/common/types/contracts/agent-runtime'
-import type { SendSubagentChunkFn } from '@codebuff/common/types/contracts/client'
+import type {
+  SendActionFn,
+  SendSubagentChunkFn,
+} from '@codebuff/common/types/contracts/client'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 
@@ -424,11 +427,14 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
   ) {
     const { logger, warns } = makeLogger()
     const sent: Parameters<SendSubagentChunkFn>[0][] = []
+    const actions: Parameters<SendActionFn>[0][] = []
     const onResponseChunk = buildChildOnResponseChunk({
       sendSubagentChunk: (params) => {
         sent.push(params)
       },
-      sendAction: () => {},
+      sendAction: (params) => {
+        actions.push(params)
+      },
       agentId: 'child-entry-agent-1',
       agentType: 'thinker',
       userInputId: 'ui-parent-1',
@@ -436,7 +442,7 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
       logger,
       ...overrides,
     })
-    return { sent, onResponseChunk, warns }
+    return { sent, actions, onResponseChunk, warns }
   }
 
   it(
@@ -490,36 +496,159 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
     expect(sent).toHaveLength(0)
   })
 
+  it('a text event and its identical string twin forward EXACTLY ONCE (single-forward pairing)', () => {
+    // Regression: the child runtime emits each streamed text delta twice —
+    // a {type:'text'} PrintModeEvent followed by the identical string — and
+    // forwarding both rendered interleaved duplicated text in the TUI.
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk({ type: 'text', text: 'hello ' } as PrintModeEvent)
+    onResponseChunk('hello ')
+    onResponseChunk({ type: 'text', text: 'world' } as PrintModeEvent)
+    onResponseChunk('world')
+    expect(sent).toHaveLength(2)
+    expect(sent.map((s) => s.chunk)).toEqual(['hello ', 'world'])
+  })
+
+  it('a repeated identical delta still forwards once per delta (pairing resets after each twin)', () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk({ type: 'text', text: 'yes' } as PrintModeEvent)
+    onResponseChunk('yes')
+    onResponseChunk({ type: 'text', text: 'yes' } as PrintModeEvent)
+    onResponseChunk('yes')
+    expect(sent).toHaveLength(2)
+    expect(sent.every((s) => s.chunk === 'yes')).toBe(true)
+  })
+
+  it('a string with no preceding event still forwards (string-only sources)', () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk('standalone')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toEqual({
+      userInputId: 'ui-parent-1',
+      agentId: 'child-entry-agent-1',
+      agentType: 'thinker',
+      chunk: 'standalone',
+      prompt: 'Probe',
+    })
+  })
+
+  it('a string that differs from the pending event text forwards (mismatch clears the pair)', () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk({ type: 'text', text: 'event text' } as PrintModeEvent)
+    onResponseChunk('different string')
+    expect(sent).toHaveLength(2)
+    expect(sent.map((s) => s.chunk)).toEqual(['event text', 'different string'])
+  })
+
+  it('reasoning_delta pairing is unaffected (reasoning has its own channel tagging)', () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk({
+      type: 'reasoning_delta',
+      text: 'thought',
+      ancestorRunIds: ['run-root'],
+      runId: 'run-1',
+    } as PrintModeEvent)
+    // No string twin is expected for reasoning deltas in the child runtime
+    // emission order; verify an unrelated string right after still forwards.
+    onResponseChunk('next')
+    expect(sent).toHaveLength(2)
+    expect(sent[0]?.chunkKind).toBe('reasoning')
+    expect(sent[1]?.chunk).toBe('next')
+  })
+
   it(
-    'other PrintModeEvent variants (tool_call, subagent_start, phase, error) stay UNFORWARDED — no invented wire shape',
+    "non-text PrintModeEvent variants (tool_call, subagent_start, phase, error) are relayed VERBATIM over the bridged sendAction channel as 'response-chunk' actions — exactly one notification per event",
     () => {
-      const { sent, onResponseChunk } = makeForwarder()
-      onResponseChunk({
+      const { sent, actions, onResponseChunk } = makeForwarder()
+      const toolCallEvent = {
         type: 'tool_call',
         toolCallId: 'tc-1',
         toolName: 'read_files',
         input: {},
-      } as unknown as PrintModeEvent)
-      onResponseChunk({
+      } as unknown as PrintModeEvent
+      const subagentStartEvent = {
         type: 'subagent_start',
         agentId: 'nested-1',
         agentType: 'editor',
         displayName: 'Editor',
         onlyChild: false,
-      } as PrintModeEvent)
-      onResponseChunk({
+      } as PrintModeEvent
+      const phaseEvent = {
         type: 'phase',
         phase: 'thinking',
-      } as unknown as PrintModeEvent)
-      onResponseChunk({
+      } as unknown as PrintModeEvent
+      const errorEvent = {
         type: 'error',
         message: 'boom',
-      } as unknown as PrintModeEvent)
-      // None of these crossed the display channel: the channel carries text
-      // and reasoning chunks only (the documented forward rule in the
-      // child-entry docblock; handleStepsLogChunk's log-record shape does
-      // not fit display events).
+      } as unknown as PrintModeEvent
+      for (const event of [
+        toolCallEvent,
+        subagentStartEvent,
+        phaseEvent,
+        errorEvent,
+      ]) {
+        onResponseChunk(event)
+      }
+      // The display channel stays clean: it carries text and reasoning
+      // chunks only (the documented forward rule in the child-entry
+      // docblock; handleStepsLogChunk's log-record shape does not fit
+      // display events).
       expect(sent).toHaveLength(0)
+      // Each event is relayed VERBATIM as a `response-chunk` action over
+      // the bridged sendAction channel — the exact shape the parent's
+      // sendAction handler routes to onResponseChunk → handleEvent (the
+      // same createEventHandler path the in-process stream uses), so the
+      // child's tool/lifecycle events render like the orchestrator's own.
+      // Exactly ONE notification per event (no per-token/per-field
+      // fan-out), keeping the notify budget bounded.
+      expect(actions).toEqual([
+        {
+          action: {
+            type: 'response-chunk',
+            userInputId: 'ui-parent-1',
+            chunk: toolCallEvent,
+          },
+        },
+        {
+          action: {
+            type: 'response-chunk',
+            userInputId: 'ui-parent-1',
+            chunk: subagentStartEvent,
+          },
+        },
+        {
+          action: {
+            type: 'response-chunk',
+            userInputId: 'ui-parent-1',
+            chunk: phaseEvent,
+          },
+        },
+        {
+          action: {
+            type: 'response-chunk',
+            userInputId: 'ui-parent-1',
+            chunk: errorEvent,
+          },
+        },
+      ])
+    },
+  )
+
+  it(
+    'text and reasoning_delta events do NOT touch the sendAction relay channel (display-only boundary)',
+    () => {
+      const { sent, actions, onResponseChunk } = makeForwarder()
+      onResponseChunk({ type: 'text', text: 'delta' } as PrintModeEvent)
+      onResponseChunk({
+        type: 'reasoning_delta',
+        text: 'thought',
+        ancestorRunIds: ['run-root'],
+        runId: 'run-1',
+      } as PrintModeEvent)
+      // Text/reasoning deltas ride the display channel only; the sendAction
+      // relay is reserved for the remaining (tool/lifecycle) variants.
+      expect(actions).toHaveLength(0)
+      expect(sent).toHaveLength(2)
     },
   )
 

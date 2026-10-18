@@ -53,7 +53,6 @@ describe('stream parser reasoning history', () => {
   async function runStream(
     stream: AsyncGenerator<StreamChunk, PromptResult<string | null>>,
     templateOverrides: Partial<AgentTemplate> = {},
-    onResponseChunk: (chunk: string | any) => void = () => {},
   ) {
     const abortController = new AbortController()
     const sessionState = getInitialSessionState(mockFileContext)
@@ -85,7 +84,7 @@ describe('stream parser reasoning history', () => {
       userId: 'test-user',
       userInputId: 'test-input-id',
       onCostCalculated: async () => {},
-      onResponseChunk,
+      onResponseChunk: () => {},
     })
 
     return agentState.messageHistory
@@ -153,43 +152,6 @@ describe('stream parser reasoning history', () => {
     const reasoningParts = getReasoningParts(history)
 
     expect(reasoningParts).toEqual(['First thought.', 'Second thought.'])
-  })
-
-  it('forwards each text delta exactly once (single-forward rule)', async () => {
-    // Regression: the inner onResponseChunk wrapper used to delegate the
-    // PrintModeText event AND the consumption loop re-emitted the same delta
-    // as a string, so subagent forwarders received every delta twice —
-    // rendering as interleaved duplicated text in the TUI.
-    async function* mockStream(): AsyncGenerator<
-      StreamChunk,
-      PromptResult<string | null>
-    > {
-      yield { type: 'text' as const, text: 'Hello ' }
-      yield { type: 'text' as const, text: 'world' }
-      return { aborted: false, value: 'msg-id' }
-    }
-
-    const forwarded: Array<string | any> = []
-    const history = await runStream(mockStream(), {}, (chunk) =>
-      forwarded.push(chunk),
-    )
-
-    // Every forwarded chunk is a plain string delta carrying the text once —
-    // no {type:'text'} PrintModeEvent duplicates alongside them.
-    const textChunks = forwarded.filter((c) => typeof c === 'string')
-    const textEvents = forwarded.filter(
-      (c) => typeof c === 'object' && c?.type === 'text',
-    )
-    expect(textEvents).toEqual([])
-    expect(textChunks).toEqual(['Hello ', 'world'])
-
-    // Message-history capture is unchanged by the dedup.
-    const textParts = history
-      .filter((m): m is AssistantMessage => m.role === 'assistant')
-      .flatMap((m) => m.content)
-      .filter((c) => c.type === 'text')
-      .map((c) => ('text' in c ? c.text : ''))
-    expect(textParts).toEqual(['Hello ', 'world'])
   })
 
   it('drops empty reasoning chunks when enabled', async () => {
