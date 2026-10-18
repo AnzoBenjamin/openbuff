@@ -384,3 +384,13 @@ Validation: common params 240/0 (incl. edit-blocks + golden vectors), full commo
 - Run B (blocks): final contextTokenCount 68,053 (−2.8%); 46 iterations (−6); 13 edit_transaction results (−2); 0 error tool results; ~2m19s; 6 SEARCH/REPLACE markers (blocks path confirmed active).
 - Caveats recorded honestly: n=1 per arm (noise-dominated; NOT the eval-confirmed completion-rate gate PLAN.md requires); both runs' blocking reviewers self-expanded scope (added test files), which inflates both token counts similarly; Run B's extra ~15s wall time is the separate test-file creation, not the block payload. Directionally consistent with the deterministic EB2 escaping-overhead ratios (0.795–0.984).
 
+## CI hang root-caused and fixed (2026-10-18) — commit d8c8a2458
+
+`test-packages/agent-runtime` failed 3/3 attempts at the 25-minute timeout across four consecutive CI runs (~1h17m each), always hanging at the same point: the last printed test was `loopAgentSteps > rebuilds one bounded V2 context message…`, i.e. the hang was in the NEXT test — `repeats the missing-output nudge until the step cap ends the loop` — with ~25 minutes of total silence (zero LLM calls, next file never started). Local repro: `bun test --isolate -t 'repeats the missing-output nudge'` hangs (exit 124 at 90s); the knob-capped sibling test passes in 1.1s.
+
+Root cause (real runtime bug, not CI flake — introduced with `dfa0520de`, the maxMissingOutputRetries knob): for structured-output agents, the missing-output nudge in `loopAgentSteps` reset `shouldEndTurn = false` even when the turn ended via the STEP CAP. At the cap `runAgentStep` short-circuits WITHOUT consuming a step (`stepsRemaining === 0` at entry), so the cycle nudge → short-circuit → nudge spun forever with zero LLM calls — the documented "step cap / cancellation remains the only bound" was not honored. Any structured-output agent that never calls set_output and exhausts its step budget would spin the same way.
+
+Fix (`d8c8a2458`, pushed to PR #93): added the `!hitStepCap` guard to the nudge condition in `packages/agent-runtime/src/run-agent-step.ts` (+ explanatory comment; retry-knob-capped path unchanged) plus a test-comment update in `loop-agent-steps.test.ts`. Validation: the previously hanging test now terminates in ~91ms with the expected 8-LLM-call bound; full loop-agent-steps suite + agent-runtime typecheck green; reviewer gate LOOKS_GOOD; pre-push guards passed (1546 tests / 0 fail).
+
+CI confirmed green on the fix run: `test-packages/agent-runtime` and `test-integration-packages/agent-runtime` both completed with **success** (no more hour-long timeouts).
+
