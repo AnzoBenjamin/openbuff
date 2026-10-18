@@ -566,26 +566,35 @@ const toolName = 'edit_transaction'
 const endsAgentStep = false
 
 // PR-T4 (D22) wave 2: plain-text SEARCH/REPLACE edit blocks for `edits`,
-// gated behind the default-off OPENBUFF_EDIT_BLOCKS flag. The flag is
-// evaluated at access time on the exported params (via getters below), not
-// captured once at module load, so a process that imports this module with
-// the flag off and later enables it (tests) sees the flag-on surface. Both
-// the description text and providerInputSchema are precomputed as flag-on and
-// flag-off constants; the getters just select between them, so the flag-off
-// artifacts (description text, JSON schemas, generated TS definitions, golden
-// vectors) stay byte-identical to the pre-feature surface. The wave-1
-// preprocess (normalizeTransactionEditList) re-reads the flag per parse, so a
-// module built with the flag off still translates valid block payloads if the
-// flag is enabled later in-process. The string arms below additionally
-// re-check the flag at parse time so the surface fail-closes on blocks as soon
-// as the runtime flag is disabled again.
+// gated behind the OPENBUFF_EDIT_BLOCKS flag, which is DEFAULT-ON since
+// 2026-10-18 (unset → enabled; explicitly set 0/false/off/empty disables).
+// The flag is evaluated at access time on the exported params (via getters
+// below), not captured once at module load, so a process that imports this
+// module with the flag off and later enables it (tests) sees the flag-on
+// surface. Both the description text and providerInputSchema are precomputed
+// as flag-on and flag-off constants; the getters just select between them, so
+// the flag-off artifacts (description text, JSON schemas, generated TS
+// definitions, golden vectors) stay byte-identical to the pre-feature
+// surface. The wave-1 preprocess (normalizeTransactionEditList) re-reads the
+// flag per parse, so a module built with the flag off still translates valid
+// block payloads if the flag is enabled later in-process. The string arms
+// below additionally re-check the flag at parse time so the surface
+// fail-closes on blocks as soon as the runtime flag is disabled again.
 
 // Only fires for strings the preprocess did not translate into an edits
 // array, i.e. invalid block payloads: the arm rejects them with a
 // block-specific diagnostic instead of a generic array-type error, and the
 // runtime flag re-check keeps the flag authoritative at parse time.
+// Empty/whitespace-only payloads parse to zero edits, which the runtime
+// input schema rejects ('Transaction edits cannot be empty'), so the arm
+// rejects them here too — the provider surface never validates a payload the
+// runtime would abort.
 const editBlockStringSchema = z.string().refine(
-  (value) => areEditBlocksEnabled() && !('error' in parseEditBlocks(value)),
+  (value) => {
+    if (!areEditBlocksEnabled()) return false
+    const parsed = parseEditBlocks(value)
+    return !('error' in parsed) && parsed.edits.length > 0
+  },
   { message: 'Not valid edit blocks' },
 )
 

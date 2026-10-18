@@ -361,3 +361,26 @@ Incident note: the base2 editor shard accidentally truncated agents/base2/base2.
 
 Validation: supervision 30/30, watcher 15/15, turn-snapshot suites green, sdk 77/77 (journal-wiring/intent-log/dash), agent-runtime affected suites 233/233, sdk/agents/cli typechecks clean, determinism guard 0 findings.
 
+## Truncation-fix wave landed (2026-10-18) — commits e83d32b17…62686e93c on PR #93
+
+Three commits delivered the truncation-driven token-waste fixes:
+- **e83d32b17** — base2 `maxOutputTokens: 64_000` (closes the Anthropic ~4k provider-default mid-JSON cut of large edit_transaction payloads); SYNC `run_terminal_command` full-output persistence (`fullLogPath`/`logBytes` content-addressed scratch artifact, 0o600 file, additive schema fields, 3 new tests); `.envrc` sets `OPENBUFF_EDIT_BLOCKS=1` (live exercise passed: edit via blocks in 35s).
+- **6f842695c** — reviewer advisories cleared: SYNC timeout timer `unref()`d, artifact dir `mkdirSync` mode 0o700, `spawnCwd` rename (was shadowing the outer resolver-result `resolvedCwd`).
+- **77892e195** — ToolBranch fallback fixture refresh (web_search now exercises the fallback path) + the live tmux exercise lessons recorded in `cli/tmux.knowledge.md`.
+- `f62253a4a`/`62686e93c` — the sanctioned `common/knowledge.md` + `cli/knowledge.md` staleness-refresh entries satisfying the pre-push memory-drift guard (the earlier push attempt failed the guard; fixed via the repo's own refresh pattern, never `--no-verify`).
+
+Live-run diagnosis: the run summary's "Errors: 5-6" was benign — repeated `git_status: fatal: not a git repository` output from a non-git scratch dir; empty session.log (stderr) is the real health signal.
+
+Binary rebuilt and reinstalled at `~/.local/share/openbuff-test/openbuff-branch` (139.7 MB, smoke pass, --version 1.0.0).
+
+## OPENBUFF_EDIT_BLOCKS flipped default-on + live A/B measurement (2026-10-18)
+
+The PR-T4/D22 flag graduated from opt-in to default (user-approved followup): `readEditBlocksEnvFlag` now returns TRUE when the env var is UNSET; explicitly set `0`/`false`/`off`/empty disables; unknown non-falsy values stay enabled (new-default polarity). Editor applied the flip + polarity test rewrite + EB4 rename ('explicitly-disabled identity') + edit-transaction.ts description/comment updates + docs/environment-variables.md entry; the now-redundant `.envrc` override was removed. Tool-definition mirrors regenerated deliberately (EditTransactionParams gains the block-format string arm by default).
+
+Validation: common params 240/0 (incl. edit-blocks + golden vectors), full common suite exit 0, edit-blocks eval 10/0, sdk/agents/cli/agent-runtime typechecks clean.
+
+**Live A/B (bounded, single-task, tmux, real provider):** identical `edit_transaction` append task, only OPENBUFF_EDIT_BLOCKS differs (A=0 JSON, B=1 blocks):
+- Run A (JSON): final contextTokenCount 69,991; 52 iterations; 15 edit_transaction results; 0 error tool results; ~2m04s; 0 SEARCH/REPLACE markers (JSON path confirmed).
+- Run B (blocks): final contextTokenCount 68,053 (−2.8%); 46 iterations (−6); 13 edit_transaction results (−2); 0 error tool results; ~2m19s; 6 SEARCH/REPLACE markers (blocks path confirmed active).
+- Caveats recorded honestly: n=1 per arm (noise-dominated; NOT the eval-confirmed completion-rate gate PLAN.md requires); both runs' blocking reviewers self-expanded scope (added test files), which inflates both token counts similarly; Run B's extra ~15s wall time is the separate test-file creation, not the block payload. Directionally consistent with the deterministic EB2 escaping-overhead ratios (0.795–0.984).
+

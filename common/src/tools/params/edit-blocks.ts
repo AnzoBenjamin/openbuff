@@ -1,8 +1,10 @@
 /**
  * Plain-text SEARCH/REPLACE edit-block parsing for edit_transaction
- * (PR-T4 wave 1). Enabled behind the default-off OPENBUFF_EDIT_BLOCKS env
- * flag; `normalizeTransactionEditList` translates successfully parsed blocks
- * into canonical str_replace edit objects at the preprocess seam.
+ * (PR-T4 wave 1). Enabled by default (OPENBUFF_EDIT_BLOCKS default-on since
+ * 2026-10-18); explicitly setting the env var to `0`, `false`, `off`, or
+ * empty disables the format. `normalizeTransactionEditList` translates
+ * successfully parsed blocks into canonical str_replace edit objects at the
+ * preprocess seam.
  *
  * The parser is deliberately fail-closed and deterministic:
  * - A block is recognized only when its marker lines EXACTLY equal
@@ -61,20 +63,39 @@ export type ParseEditBlocksResult =
 const EDIT_BLOCKS_ENV_VAR = 'OPENBUFF_EDIT_BLOCKS'
 /** Truthy set mirrored from OPENBUFF_COLLECT_FULL_FILE_CONTEXT handling. */
 const TRUTHY_ENV_PATTERN = /^(1|true|yes|on)$/i
+/** Explicit disable set: `0`, `false`, or `off` (case-insensitive). */
+const FALSY_ENV_PATTERN = /^(0|false|off)$/i
 
 let cachedEditBlocksEnabled: boolean | null = null
 
 function readEditBlocksEnvFlag(): boolean {
   const envValue = process.env[EDIT_BLOCKS_ENV_VAR]
+  // Unset env → default-on: the flag graduated from opt-in to default on
+  // 2026-10-18 after the deterministic eval and a live tmux exercise passed.
   if (envValue === undefined) {
+    return true
+  }
+  const trimmed = envValue.trim()
+  // Explicit falsy set disables; an empty/whitespace-only value counts as
+  // set-falsy. Keep this check BEFORE the truthy check so `0` never matches
+  // anything else.
+  if (trimmed === '' || FALSY_ENV_PATTERN.test(trimmed)) {
     return false
   }
-  return TRUTHY_ENV_PATTERN.test(envValue.trim())
+  if (TRUTHY_ENV_PATTERN.test(trimmed)) {
+    return true
+  }
+  // Unknown non-falsy set values ALSO stay enabled: they fail toward the new
+  // default rather than silently disabling, mirroring how the truthy pattern
+  // already rejects unknown strings instead of inventing a disable.
+  return true
 }
 
 /**
  * Whether plain-text edit-block input is accepted for edit_transaction.
  * The flag is cached at first call; wave 1 has no config-file fallback.
+ * Default-on since 2026-10-18; explicitly setting OPENBUFF_EDIT_BLOCKS to
+ * `0`, `false`, `off`, or empty disables it.
  */
 export function areEditBlocksEnabled(): boolean {
   if (cachedEditBlocksEnabled === null) {

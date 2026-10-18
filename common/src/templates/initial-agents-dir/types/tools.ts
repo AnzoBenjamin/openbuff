@@ -225,131 +225,133 @@ export interface EndTurnParams {}
  * Parameters for edit_transaction tool
  */
 export interface EditTransactionParams {
-  edits: (
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'str_replace'
-        replacements: {
-          oldString: string
-          newString: string
-          allowMultiple?: boolean
-          occurrenceIndex?: number
-          /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
-          basedOnRead?: string
-          /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
-          skipIfMissing?: boolean
-        }[]
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        /** A structured edit dispatched by operation kind. */
-        type: 'structured'
-        /** Structured edit operation to apply to this file. */
-        operation:
-          | {
-              /** Deterministic text insertion. */
-              kind: 'insert_text'
-              /** 1-indexed insertion position. */
-              position: {
-                /** 1-indexed target line. */
-                line: number
-                /** 1-indexed target column. */
-                column: number
-              }
-              text: string
+  edits:
+    | string
+    | (
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'str_replace'
+            replacements: {
+              oldString: string
+              newString: string
+              allowMultiple?: boolean
+              occurrenceIndex?: number
+              /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
+              basedOnRead?: string
+              /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
+              skipIfMissing?: boolean
+            }[]
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            /** A structured edit dispatched by operation kind. */
+            type: 'structured'
+            /** Structured edit operation to apply to this file. */
+            operation:
+              | {
+                  /** Deterministic text insertion. */
+                  kind: 'insert_text'
+                  /** 1-indexed insertion position. */
+                  position: {
+                    /** 1-indexed target line. */
+                    line: number
+                    /** 1-indexed target column. */
+                    column: number
+                  }
+                  text: string
+                }
+              | {
+                  /** Language-aware import insertion. */
+                  kind: 'insert_import'
+                  /** Complete language-native import statement to add, e.g. "import { foo } from 'bar'", "from app import value", or "use crate::value". */
+                  importStatement: string
+                }
+              | {
+                  /** Language-aware import removal. */
+                  kind: 'remove_import'
+                  /** Complete language-native import statement to remove. Required unless moduleSpecifier is provided. */
+                  importStatement?: string
+                  /** Module specifier to remove imports from, e.g. "react" or "./helper". */
+                  moduleSpecifier?: string
+                }
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'create'
+            /** Exact bytes to write to the new file. */
+            content: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'delete'
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'move'
+            /** New project-relative path. The destination must be absent. */
+            destinationPath: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'replace_range'
+            readCapability: string
+            startLine?: number
+            endLine?: number
+            occurrence?: {
+              match: string
+              occurrence?: number
             }
-          | {
-              /** Language-aware import insertion. */
-              kind: 'insert_import'
-              /** Complete language-native import statement to add, e.g. "import { foo } from 'bar'", "from app import value", or "use crate::value". */
-              importStatement: string
-            }
-          | {
-              /** Language-aware import removal. */
-              kind: 'remove_import'
-              /** Complete language-native import statement to remove. Required unless moduleSpecifier is provided. */
-              importStatement?: string
-              /** Module specifier to remove imports from, e.g. "react" or "./helper". */
-              moduleSpecifier?: string
-            }
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'create'
-        /** Exact bytes to write to the new file. */
-        content: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'delete'
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'move'
-        /** New project-relative path. The destination must be absent. */
-        destinationPath: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'replace_range'
-        readCapability: string
-        startLine?: number
-        endLine?: number
-        occurrence?: {
-          match: string
-          occurrence?: number
-        }
-        newContent: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'rewrite_symbol'
-        symbol: string
-        content: string
-        occurrence?: number
-        /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
-        readCapability?: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'patch'
-        diff: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'write_file'
-        content: string
-        /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file. */
-        basedOnRead?: string
-      }
-  )[]
+            newContent: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'rewrite_symbol'
+            symbol: string
+            content: string
+            occurrence?: number
+            /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
+            readCapability?: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'patch'
+            diff: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'write_file'
+            content: string
+            /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file. */
+            basedOnRead?: string
+          }
+      )[]
 }
 
 /**

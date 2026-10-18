@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 
+import { MAX_TRANSACTION_INPUT_BYTES } from '../../../actions'
 import {
   __setEditBlocksEnabledForTest,
   areEditBlocksEnabled,
@@ -248,6 +249,48 @@ describe('parseEditBlocks', () => {
     )
     expect('error' in result && result.error.code).toBe('unparseable_block')
   })
+
+  it('fails closed with unparseable_block when the payload exceeds the transaction input byte cap (EB-SEC-1)', () => {
+    // The size-cap guard fires before any line splitting, so ANY payload
+    // over MAX_TRANSACTION_INPUT_BYTES must return unparseable_block
+    // regardless of its shape; the JSON pipeline stays authoritative for
+    // oversized payloads.
+    const oversized = `a.ts\n<<<<<<< SEARCH\n${'x'.repeat(MAX_TRANSACTION_INPUT_BYTES + 1)}`
+    const result = parseEditBlocks(oversized)
+    if (!('error' in result)) {
+      throw new Error('expected a parse error')
+    }
+    expect(result.error.code).toBe('unparseable_block')
+    expect(result.error.message).toContain(`${MAX_TRANSACTION_INPUT_BYTES}-byte`)
+  })
+
+  it('pins EB-SEC-2: a CRLF body line that is exactly the divider is treated as the divider', () => {
+    // Module doc (EB-SEC-2): because one trailing \r is stripped before
+    // marker comparison, a body line that is exactly '=======' in a CRLF
+    // payload is consumed as the divider instead of being kept as body
+    // content (it is NOT reported as a marker_collision, which is what a
+    // non-divider comparison would produce). Here the author intended
+    // oldString = '=======\nvalue'; the leading divider-like line terminates
+    // the SEARCH body immediately, so the block fails with an empty SEARCH
+    // body. Block bodies cannot represent a line that is exactly '======='
+    // in a CRLF file; such payloads must use the JSON path.
+    const text = [
+      'a.ts',
+      '<<<<<<< SEARCH',
+      '=======', // intended first body line, consumed as the divider
+      'value',
+      '=======', // the real divider
+      'replacement',
+      '>>>>>>> REPLACE',
+    ].join('\r\n')
+    const result = parseEditBlocks(text)
+    if (!('error' in result)) {
+      throw new Error('expected a parse error')
+    }
+    expect(result.error.code).toBe('unparseable_block')
+    expect(result.error.blockIndex).toBe(0)
+    expect(result.error.message).toContain('empty SEARCH body')
+  })
 })
 
 describe('areEditBlocksEnabled', () => {
@@ -256,22 +299,30 @@ describe('areEditBlocksEnabled', () => {
     __setEditBlocksEnabledForTest(undefined)
   })
 
-  it('uses a truthy-set regex on the trimmed OPENBUFF_EDIT_BLOCKS value', () => {
+  it('defaults ON when unset; falsy-set values disable; unknown values fail toward the default', () => {
     const original = process.env.OPENBUFF_EDIT_BLOCKS
     try {
+      // Unset env → default-on since 2026-10-18.
+      delete process.env.OPENBUFF_EDIT_BLOCKS
+      __setEditBlocksEnabledForTest(undefined)
+      expect(areEditBlocksEnabled()).toBe(true)
       for (const value of ['1', 'true', 'YES', 'on', ' true ']) {
         process.env.OPENBUFF_EDIT_BLOCKS = value
         __setEditBlocksEnabledForTest(undefined)
         expect(areEditBlocksEnabled()).toBe(true)
       }
-      for (const value of ['0', 'false', '', 'off', 'enabled', ' maybe ']) {
+      for (const value of ['0', 'false', 'off', '', '  ']) {
         process.env.OPENBUFF_EDIT_BLOCKS = value
         __setEditBlocksEnabledForTest(undefined)
         expect(areEditBlocksEnabled()).toBe(false)
       }
-      delete process.env.OPENBUFF_EDIT_BLOCKS
-      __setEditBlocksEnabledForTest(undefined)
-      expect(areEditBlocksEnabled()).toBe(false)
+      // Unknown non-falsy set values no longer disable: they fail toward the
+      // new default (enabled) rather than silently turning the feature off.
+      for (const value of ['enabled', ' maybe ']) {
+        process.env.OPENBUFF_EDIT_BLOCKS = value
+        __setEditBlocksEnabledForTest(undefined)
+        expect(areEditBlocksEnabled()).toBe(true)
+      }
     } finally {
       if (original === undefined) {
         delete process.env.OPENBUFF_EDIT_BLOCKS
@@ -434,6 +485,27 @@ describe('edit_transaction input schema with edit blocks', () => {
     expect(result.success).toBe(true)
     if (result.success) {
       expect(result.data.edits[0]?.type).toBe('str_replace')
+    }
+  })
+
+  it('with the flag ON, a valid block payload also passes providerInputSchema', () => {
+    __setEditBlocksEnabledForTest(true)
+    const result = editTransactionParams.providerInputSchema.safeParse({
+      edits: block('src/a.ts', 'const value = 1', 'const value = 2'),
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('with the flag ON, empty and whitespace-only block payloads fail providerInputSchema like the runtime empty-edits bound', () => {
+    __setEditBlocksEnabledForTest(true)
+    // parseEditBlocks('') and parseEditBlocks('\n') return `{ edits: [] }`,
+    // which the runtime input schema rejects as an empty transaction. The
+    // provider string arm must reject them too instead of validating them.
+    for (const payload of ['', '\n', '  \n  ']) {
+      const result = editTransactionParams.providerInputSchema.safeParse({
+        edits: payload,
+      })
+      expect(result.success).toBe(false)
     }
   })
 })

@@ -21,19 +21,22 @@
  *  - EB3 adversarial injection: marker collisions inside SEARCH bodies,
  *    JSON/block mixtures, and prose outside blocks all FAIL schema
  *    validation end to end instead of producing a corrupted edit.
- *  - EB4 flag-off identity: with the flag forced off at runtime, the same
- *    JSON payloads parse identically and block payloads are rejected, so
- *    the default path stays untouched.
+ *  - EB4 explicit-disable identity: with the flag explicitly disabled at
+ *    runtime (`OPENBUFF_EDIT_BLOCKS=0`), the same JSON payloads parse
+ *    identically and block payloads are rejected, so the default-on path
+ *    stays untouched.
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 
 // The edit-transaction tool params read OPENBUFF_EDIT_BLOCKS exactly once,
 // at module load, to decide whether the block-format schema arms and the
-// description section exist at all. The env var therefore must be set
-// before the (dynamic) imports below: a static import would be hoisted
-// above this line and build the flag-off surface instead. If another test
-// file in the same process has already imported the module with the flag
-// off, the EB1 probe below fails with that signal.
+// description section exist at all. The env var is therefore set explicitly
+// to '1' before the (dynamic) imports below so this file deterministically
+// builds the flag-on surface regardless of process state (the flag is
+// default-on since 2026-10-18, but an explicit '1' pins the surface even if
+// a sibling test file disabled it). If another test file in the same
+// process has already imported the module with the flag disabled, the EB1
+// probe below fails with that signal.
 process.env.OPENBUFF_EDIT_BLOCKS = '1'
 
 const { __setEditBlocksEnabledForTest, parseEditBlocks } = await import(
@@ -49,7 +52,8 @@ const { editTransactionParams } = await import(
 
 // The flag is cached inside the module at first use (module load above);
 // restore the environment immediately so test files loaded later in the
-// same process keep building the default flag-off surface.
+// same process keep building the default surface (flag-on since
+// 2026-10-18: unset OPENBUFF_EDIT_BLOCKS means enabled).
 delete process.env.OPENBUFF_EDIT_BLOCKS
 
 /** Builds one SEARCH/REPLACE block; body strings may contain \n. */
@@ -383,9 +387,9 @@ const canonicalParsedEdits = (fixture: EditBlocksFixture) => ({
 
 describe('EB1: equivalence of the block path and the JSON path', () => {
   test('the module under test exposes the flag-on provider surface', () => {
-    // A stale module instance (already imported with the flag off by another
-    // test file in the same process) fails here with a clear signal instead
-    // of a confusing equivalence failure below.
+    // A stale module instance (already imported with the flag disabled by
+    // another test file in the same process) fails here with a clear signal
+    // instead of a confusing equivalence failure below.
     const probe = block('probe.ts', 'old', 'new')
     expect(
       editTransactionParams.providerInputSchema.safeParse({ edits: probe })
@@ -522,13 +526,16 @@ describe('EB3: adversarial injection fails closed end to end', () => {
   })
 })
 
-describe('EB4: flag-off identity (default path untouched)', () => {
+describe('EB4: explicitly-disabled identity (default-on path untouched)', () => {
   afterEach(() => {
-    // undefined re-reads OPENBUFF_EDIT_BLOCKS (deleted above) on next use.
+    delete process.env.OPENBUFF_EDIT_BLOCKS
+    // undefined re-reads OPENBUFF_EDIT_BLOCKS on next use (default-on when
+    // unset).
     __setEditBlocksEnabledForTest(undefined)
   })
 
-  test('the same JSON payloads parse identically with the flag off', () => {
+  test('the same JSON payloads parse identically with the flag explicitly disabled', () => {
+    process.env.OPENBUFF_EDIT_BLOCKS = '0'
     __setEditBlocksEnabledForTest(false)
     for (const fixture of FIXTURES) {
       const jsonEdits = toJsonEdits(fixture)
@@ -551,7 +558,8 @@ describe('EB4: flag-off identity (default path untouched)', () => {
     }
   })
 
-  test('block payloads fail with the flag off', () => {
+  test('block payloads fail with the flag explicitly disabled', () => {
+    process.env.OPENBUFF_EDIT_BLOCKS = '0'
     __setEditBlocksEnabledForTest(false)
     for (const fixture of FIXTURES) {
       const blockPayload = toBlockPayload(fixture)
