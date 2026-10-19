@@ -811,4 +811,156 @@ describe('handleSetOutput', () => {
     expect(typeof agentState.lastSetOutputError).toBe('string')
     expect(agentState.lastSetOutputError).toBe(message)
   })
+
+  describe('jsonKey envelope handling', () => {
+    const reviewTemplate = (id: string): AgentTemplate => ({
+      id,
+      displayName: 'Code Reviewer',
+      spawnerPrompt: 'Review code',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema: z.object({
+        schemaVersion: z.number(),
+        verdict: z.enum(['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING']),
+        snapshotFingerprint: z.string(),
+        reviewedFiles: z.array(z.string()),
+        findings: z.array(z.string()),
+        coverage: z.enum(['covered', 'missing', 'n/a']),
+      }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: 'Test system prompt',
+      instructionsPrompt: 'Test instructions',
+      stepPrompt: 'Test step prompt',
+    })
+
+    const validReceipt = {
+      schemaVersion: 1,
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint: 'v3:review-test-fingerprint',
+      reviewedFiles: ['packages/agent-runtime/src/tools/handlers/tool/set-output.ts'],
+      findings: [],
+      coverage: 'covered',
+    }
+
+    const setupEnvelopeState = async (
+      id: string,
+      input: Record<string, unknown>,
+    ) => {
+      const template = reviewTemplate(id)
+      const agentState = getInitialSessionState(mockFileContext).mainAgentState
+      agentState.agentType = id
+      const toolCall = {
+        toolName: 'set_output',
+        toolCallId: `jsonKey-envelope-${id}`,
+        input,
+      } as unknown as CodebuffToolCall<'set_output'>
+      const { output } = await handleSetOutput({
+        ...TEST_AGENT_RUNTIME_IMPL,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall,
+        agentState,
+        apiKey: 'test-api-key',
+        localAgentTemplates: { [template.id]: template },
+      } as unknown as Parameters<typeof handleSetOutput>[0])
+      return { agentState, output }
+    }
+
+    test('sets agentState.output from a stringified receipt inside a jsonKey envelope', async () => {
+      const { agentState, output } = await setupEnvelopeState(
+        'jsonKey-envelope-reviewer',
+        { jsonKey: 'output', value: JSON.stringify(validReceipt) },
+      )
+
+      expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+      expect(agentState.output).toEqual(validReceipt)
+      expect(agentState.lastSetOutputError).toBeUndefined()
+    })
+
+    test('sets agentState.output from a native receipt object inside a jsonKey envelope', async () => {
+      const { agentState, output } = await setupEnvelopeState(
+        'jsonKey-envelope-native-reviewer',
+        { jsonKey: 'output', value: validReceipt },
+      )
+
+      expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+      expect(agentState.output).toEqual(validReceipt)
+      expect(agentState.lastSetOutputError).toBeUndefined()
+    })
+
+    test('does not set agentState.output when the jsonKey envelope contains malformed JSON', async () => {
+      const { agentState, output } = await setupEnvelopeState(
+        'jsonKey-envelope-bad-reviewer',
+        { jsonKey: 'output', value: '{"verdict":"LOOKS_GOOD",' },
+      )
+
+      expect(agentState.output).toBeUndefined()
+      expect(typeof agentState.lastSetOutputError).toBe('string')
+      const message =
+        output[0]?.type === 'json' ? output[0].value.message : ''
+      expect(message).toContain('Output validation error')
+    })
+
+    test('accepts a native non-envelope reviewer object exactly like before', async () => {
+      const { agentState, output } = await setupEnvelopeState(
+        'jsonKey-envelope-non-envelope-reviewer',
+        validReceipt,
+      )
+
+      expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+      expect(agentState.output).toEqual(validReceipt)
+      expect(agentState.lastSetOutputError).toBeUndefined()
+    })
+
+    test('sets agentState.output from a receipt under ANY envelope key name (e.g. jsonValue)', async () => {
+      // Content-addressed recovery does not key on the field name: the same
+      // receipt under `jsonValue` (or any other invented label) must settle
+      // identically — models keep inventing new envelope names.
+      const { agentState, output } = await setupEnvelopeState(
+        'jsonValue-envelope-reviewer',
+        { jsonValue: JSON.stringify(validReceipt) },
+      )
+
+      expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+      expect(agentState.output).toEqual(validReceipt)
+      expect(agentState.lastSetOutputError).toBeUndefined()
+    })
+
+    test('sets agentState.output from a receipt under a wholly arbitrary envelope key name', async () => {
+      // Another invented label: the unwrap keys on CONTENT (verdict +
+      // snapshotFingerprint), never on the field name.
+      const { agentState, output } = await setupEnvelopeState(
+        'arbitrary-envelope-reviewer',
+        { someRandomKey: JSON.stringify(validReceipt) },
+      )
+
+      expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+      expect(agentState.output).toEqual(validReceipt)
+      expect(agentState.lastSetOutputError).toBeUndefined()
+    })
+
+    test('leaves an envelope whose string decodes to a NON-receipt object untouched (schema validation paths)', async () => {
+      // A plain `{ message: 'hello' }` must NOT be promoted; the existing
+      // no-schema path decides what to do with it, as before.
+      const { agentState, output } = await setupEnvelopeState(
+        'non-receipt-envelope-reviewer',
+        { jsonKey: 'greeting', value: JSON.stringify({ message: 'hello' }) },
+      )
+
+      // The keyless envelope is NOT a receipt: it falls through to the
+      // schema-validation path, which will fail (the review schema does not
+      // accept {jsonKey,value}), leaving lastSetOutputError set and
+      // agentState.output undefined — the ORIGINAL behavior for a
+      // non-envelope payload.
+      expect(agentState.output).toBeUndefined()
+      expect(typeof agentState.lastSetOutputError).toBe('string')
+      const message =
+        output[0]?.type === 'json' ? output[0].value.message : ''
+      expect(message).toContain('Output validation error')
+    })
+  })
 })

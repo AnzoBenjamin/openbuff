@@ -44,7 +44,20 @@ export const handleSetOutput = (async (params: {
   const { previousToolCallFinished, toolCall, agentState, logger } = params
   await previousToolCallFinished
 
-  const rawOutput = toolCall.input as Record<string, unknown>
+  const envelopeOutput = toolCall.input as Record<string, unknown>
+  // Unwrap a model-supplied keyless JSON envelope UP FRONT: some models deliver
+  // the receipt as `{ jsonKey: 'output', value: JSON.stringify(receipt) }` (or
+  // `value` as a native receipt). When this envelope is not decoded here, it
+  // falls through to schema validation as-is and FAILS (jsonKey-envelope
+  // rejected at schema validation → retry loop; observed 2026-10-19 on
+  // compatibility-reviewer), so the model repeats set_output and often
+  // degenerates into a bare `{ message: 'Output set' }` echo. Decoding the
+  // envelope first makes the FIRST call succeed and avoids the retry loop.
+  const unwrappedEnvelope =
+    unwrapArbitraryEnvelope(envelopeOutput)
+  const rawOutput: Record<string, unknown> =
+    unwrappedEnvelope ?? envelopeOutput
+
   // Reject oversized string payloads BEFORE any decode/parse attempt: a giant
   // inlined payload is far more likely to be cut off in transport than to be
   // intentionally encoded as one string, and the caller needs explicit bound +
@@ -270,4 +283,74 @@ function getZodIssueCount(error: unknown): number {
     return (error as { issues: unknown[] }).issues.length
   }
   return Infinity
+}
+
+/**
+ * Content-addressed envelope recovery.
+ *
+ * WHY (user-corrected 2026-10-19): the previous jsonKey-only unwrap was a
+ * narrow patch — models keep inventing envelope key names (jsonKey,
+ * jsonValue, output, result, ...), so keying on the FIELD NAME chases the
+ * bug forever. The principled rule is CONTENT-based: any object whose value
+ * yields a receipt shape (string verdict + snapshotFingerprint) is the
+ * receipt, regardless of the field name it traveled under.
+ *
+ * Applies ONLY when the rawOutput itself carries no verdict/fingerprint
+ * keys (i.e. it is an envelope, not a receipt). All decode paths are
+ * bounded, try/catch, and fall through to the ORIGINAL output unchanged so
+ * the existing malformed-JSON + transport-truncation diagnostics keep
+ * applying.
+ */
+function unwrapArbitraryEnvelope(
+  rawOutput: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!rawOutput) return rawOutput
+
+  /** A receipt shape: object with string verdict + snapshotFingerprint. */
+  const isReceiptShape = (candidate: unknown): boolean =>
+    !!candidate &&
+    typeof candidate === 'object' &&
+    !Array.isArray(candidate) &&
+    typeof (candidate as Record<string, unknown>).verdict === 'string' &&
+    typeof (candidate as Record<string, unknown>).snapshotFingerprint ===
+      'string'
+
+  // Fast path: the rawOutput is already a receipt at top level.
+  if (isReceiptShape(rawOutput)) return rawOutput
+  if (
+    'verdict' in rawOutput ||
+    'snapshotFingerprint' in rawOutput
+  ) {
+    // Semi-receipt shape (has fingerprint but not verdict, or vice versa) —
+    // NOT an envelope, so leave it for schema validation to diagnose.
+    return rawOutput
+  }
+
+  // 1. Native-object receipt candidate: any value field whose native object
+  //    is already receipt-shaped. Returns the receipt itself.
+  for (const candidate of Object.values(rawOutput)) {
+    if (isReceiptShape(candidate)) {
+      return candidate as Record<string, unknown>
+    }
+  }
+
+  // 2. Stringified receipt candidate: any string-valued field that decodes
+  //    (bounded, try/catch) to a receipt-shaped object. Reuses the existing
+  //    decoder so fenced-json + truncated-receipt recovery keep applying —
+  //    and the field NAME is irrelevant (jsonKey, jsonValue, output,
+  //    result, ... are all covered by the same content rule).
+  for (const candidate of Object.values(rawOutput)) {
+    if (
+      typeof candidate !== 'string' ||
+      candidate.length > MAX_SET_OUTPUT_JSON_CHARS
+    ) {
+      continue
+    }
+    const decoded = decodeJsonObjectString(candidate)
+    if (isReceiptShape(decoded)) {
+      return decoded as Record<string, unknown>
+    }
+  }
+
+  return rawOutput
 }

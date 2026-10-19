@@ -1,5 +1,6 @@
 import z from 'zod/v4'
 
+import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import {
   buildReadFilesResultV1,
@@ -512,6 +513,42 @@ describe('tool validation error handling', () => {
     }
   })
 
+  it('classifies an over-band payload from the provider cut only, never from size', () => {
+    // Companion to the small-payload test above, at the transport band: the
+    // band (MAX_TRANSPORT_SAFE_PAYLOAD_BYTES) is config-side only and never
+    // gates or sets the marker. A payload LARGER than the band that is
+    // balanced-but-unparseable must behave exactly like the small one —
+    // unclassified without the provider-reported cut, payload_truncated with
+    // it — so size alone can never flip (or suppress) the classification.
+    const oversizedMalformed =
+      '{"paths" "' + 'x'.repeat(MAX_TRANSPORT_SAFE_PAYLOAD_BYTES) + '"}'
+
+    const withoutFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'oversized-truncation-flag-absent-tool-call-id',
+        input: oversizedMalformed,
+      },
+    })
+    expect('error' in withoutFlag).toBe(true)
+    if ('error' in withoutFlag) {
+      expect(withoutFlag.error).not.toContain('payload_truncated')
+    }
+
+    const withFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'oversized-truncation-flag-present-tool-call-id',
+        input: oversizedMalformed,
+      },
+      providerReportedTruncation: true,
+    })
+    expect('error' in withFlag).toBe(true)
+    if ('error' in withFlag) {
+      expect(withFlag.error).toContain('payload_truncated')
+    }
+  })
+
   it('threads the streamed transportTruncated marker into the payload_truncated classification', async () => {
     // End-to-end companion to the parseRawToolCall-level test above: the
     // stream-only `transportTruncated` marker on a tool-call chunk is consumed
@@ -589,6 +626,109 @@ describe('tool validation error handling', () => {
     const withoutMarkerErrors = errorEvents(withoutMarker.responseChunks)
     expect(withoutMarkerErrors.length).toBe(1)
     expect(withoutMarkerErrors[0].message).not.toContain('payload_truncated')
+  })
+
+  it('strips the transportTruncated marker from published and persisted tool calls', async () => {
+    // The marker is stream-only evidence: tool-stream-parser consumes it into
+    // providerReportedTruncation and yields the stripped payload, so the
+    // published tool_call event and the message-history tool-call part must
+    // never carry `transportTruncated` — every boundary into history routes
+    // through toToolCallStreamChunkPayload. Real payload fields (input,
+    // providerOptions) must still round-trip unchanged.
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    const markedValidChunk: StreamChunk = {
+      type: 'tool-call',
+      toolName: 'read_files',
+      toolCallId: 'stream-marker-stripped-tool-call-id',
+      input: { paths: ['test.ts'] },
+      transportTruncated: true,
+      providerOptions: {
+        openaiCompatible: {
+          extra_content: {
+            google: {
+              thought_signature: 'sig-789',
+            },
+          },
+        },
+      },
+    }
+
+    async function* mockStream() {
+      yield markedValidChunk
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithReadFiles,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithReadFiles },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    // A marked-but-valid call parses and executes without any error event.
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(0)
+
+    const toolCallEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'tool_call' }> =>
+        typeof chunk !== 'string' && chunk.type === 'tool_call',
+    )
+    expect(toolCallEvents.length).toBe(1)
+    expect(toolCallEvents[0].toolName).toBe('read_files')
+    expect(toolCallEvents[0].input).toEqual({ paths: ['test.ts'] })
+    // The stream-only marker never reaches the published event.
+    expect(Object.hasOwn(toolCallEvents[0], 'transportTruncated')).toBe(false)
+
+    // ...nor the persisted assistant tool-call part.
+    const assistantToolCallMessage = agentState.messageHistory.find(
+      (message): message is AssistantMessage =>
+        message.role === 'assistant' &&
+        message.content.some((part) => part.type === 'tool-call'),
+    )
+    const assistantToolCallPart = assistantToolCallMessage?.content.find(
+      (part) => part.type === 'tool-call',
+    )
+    expect(assistantToolCallPart?.toolCallId).toBe(
+      'stream-marker-stripped-tool-call-id',
+    )
+    expect(
+      Object.hasOwn(assistantToolCallPart ?? {}, 'transportTruncated'),
+    ).toBe(false)
+    // Real payload fields still round-trip alongside the stripped marker.
+    expect(assistantToolCallPart?.providerOptions).toEqual(
+      markedValidChunk.providerOptions,
+    )
   })
 
   it('should preserve provider options from parsed native tool calls', () => {

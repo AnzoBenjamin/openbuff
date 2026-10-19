@@ -1383,6 +1383,57 @@ export function normalizeSpawnedAgentOutput(
   }
   if (output && typeof output === 'object' && !Array.isArray(output)) {
     const record = output as Record<string, unknown>
+    // Some reviewer-family children deliver the receipt inside a KEYLESS
+    // json-part envelope: { jsonKey: 'output', value: '<JSON string (or
+    // native object) of the full receipt>' } — no `type` discriminator at all
+    // (observed live on compatibility-reviewer). Neither structuredOutput
+    // branch below matches it (they require record.type), so the verdict
+    // riding inside stays invisible to the reviewer verdict guard and the
+    // parent re-reviews forever. Recognize it ONLY when the receipt shape is
+    // confirmed by a string `verdict` inside the parsed/native value,
+    // which keeps generic json-part envelopes that are NOT receipts
+    // untouched. Bounded and conservative: malformed JSON, an array, an
+    // oversize string, or a verdict-less value fall through unchanged.
+    if (
+      typeof record.jsonKey === 'string' &&
+      typeof record.verdict !== 'string' &&
+      !record.type
+    ) {
+      let unwrapped: unknown = undefined
+      if (
+        typeof record.value === 'string' &&
+        record.value.length <= MAX_REVIEWER_JSON_VALUE_CHARS
+      ) {
+        try {
+          unwrapped = JSON.parse(record.value)
+        } catch {
+          unwrapped = undefined
+        }
+      } else if (
+        record.value &&
+        typeof record.value === 'object' &&
+        !Array.isArray(record.value)
+      ) {
+        unwrapped = record.value
+      }
+      if (
+        unwrapped &&
+        typeof unwrapped === 'object' &&
+        !Array.isArray(unwrapped) &&
+        typeof (unwrapped as Record<string, unknown>).verdict === 'string'
+      ) {
+        return boundAgentOutputForParent(
+          {
+            type: 'structuredOutput',
+            value: compactReviewerOutput(
+              unwrapped as Record<string, unknown>,
+              agentType,
+            ),
+          },
+          agentType,
+        )
+      }
+    }
     // Some reviewer-family children deliver the receipt as a single
     // JSON-encoded STRING value (observed live on compatibility-reviewer).
     // Such a string can never qualify for the object branch below, so the

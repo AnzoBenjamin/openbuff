@@ -1703,6 +1703,74 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(receipt.review?.verdict).toBe('BLOCKING')
   })
 
+  // Keyless json-part envelope (live bug pinned 2026-10-19: compatibility-
+  // reviewer delivered its verdict-bearing receipt as { jsonKey: 'output',
+  // value: '<JSON string of the full receipt>' } with NO `type`
+  // discriminator, so every structuredOutput-specific unwrap branch missed it
+  // and the settle read the degenerate {message: 'Output set'} ack instead,
+  // looping schema_invalid forever).
+  test('unwraps a keyless json-part envelope ({ jsonKey, value }) carrying a stringified reviewer receipt', () => {
+    const fullReceipt = {
+      family: 'reviewer',
+      schemaVersion: 1,
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint: fingerprint,
+      coverage: 'covered',
+      reviewedFiles: ['src/proto/client.ts'],
+      findings: [reviewerFinding],
+      requirementCoverage: [{ id: 'R-1', covered: true }],
+      dimensions: { compatibility: 'PASS' },
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-jsonkey-envelope-1',
+      output: {
+        jsonKey: 'output',
+        value: JSON.stringify(fullReceipt),
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+    expect(receipt.review?.verdict).toBe('LOOKS_GOOD')
+  })
+
+  test('unwraps a keyless json-part envelope whose value is a native receipt object', () => {
+    const fullReceipt = {
+      family: 'reviewer',
+      schemaVersion: 1,
+      verdict: 'NON_BLOCKING',
+      snapshotFingerprint: fingerprint,
+      coverage: 'covered',
+      reviewedFiles: ['src/proto/client.ts'],
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-jsonkey-native-1',
+      output: { jsonKey: 'output', value: fullReceipt },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+    expect(receipt.review?.verdict).toBe('NON_BLOCKING')
+  })
+
+  test('leaves a keyless json-part envelope with a verdict-less value untouched (schema_invalid)', () => {
+    // A jsonKey envelope whose parsed/native value has NO verdict must NOT be
+    // promoted to structuredOutput — the verdict guard still catches it as
+    // the degenerate receipt it is.
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-jsonkey-verdictless-1',
+      output: {
+        jsonKey: 'output',
+        value: JSON.stringify({ snapshotFingerprint: 'x', reviewedFiles: [] }),
+      },
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.errors[0]?.retryable).toBe(true)
+  })
+
   test('falls through unchanged when the nested output string parses to an array (schema_invalid)', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'compatibility-reviewer',
