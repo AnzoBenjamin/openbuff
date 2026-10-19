@@ -253,32 +253,79 @@ function unquoteGitPath(raw: string): string {
     return raw
   }
   const inner = raw.slice(1, -1)
-  return inner.replace(/\\(?:([tn"\\])|([0-7]{1,3}))/g, (_match, simple, octal) => {
-    if (simple !== undefined) {
-      switch (simple) {
-        case 't':
-          return '\t'
-        case 'n':
-          return '\n'
-        case '"':
-          return '"'
-        default:
-          return '\\'
-      }
+  // \ooo octal bytes (1-3 digits) are git's encoding for non-ASCII bytes.
+  // Consecutive octal bytes accumulate into one buffer and are decoded as
+  // UTF-8 when the run ends, so multi-byte sequences (e.g. é = \303\251)
+  // round-trip instead of mangling into one lone char per byte. All-ASCII
+  // runs keep the historical String.fromCharCode mapping, and the simple
+  // escapes (t, n, quote, backslash) are unchanged, so ordinary quoted paths
+  // decode exactly as before.
+  let out = ''
+  let octalBytes: number[] | undefined
+  const flushOctalRun = () => {
+    if (octalBytes === undefined) return
+    if (octalBytes.every((byte) => byte < 128)) {
+      out += String.fromCharCode(...octalBytes)
+    } else {
+      out += Buffer.from(octalBytes).toString('utf8')
     }
-    // \ooo octal byte (1-3 digits) — git's encoding for non-ASCII bytes.
-    return String.fromCharCode(parseInt(octal!, 8))
-  })
+    octalBytes = undefined
+  }
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i]!
+    if (char !== '\\') {
+      flushOctalRun()
+      out += char
+      continue
+    }
+    const next = inner[i + 1]
+    if (next === 't' || next === 'n' || next === '"' || next === '\\') {
+      flushOctalRun()
+      out += next === 't' ? '\t' : next === 'n' ? '\n' : next
+      i += 1
+      continue
+    }
+    const octal = /^[0-7]{1,3}/.exec(inner.slice(i + 1))?.[0]
+    if (octal !== undefined) {
+      ;(octalBytes ??= []).push(parseInt(octal, 8))
+      i += octal.length
+      continue
+    }
+    // Unrecognized escape: keep the backslash verbatim, as before.
+    flushOctalRun()
+    out += '\\'
+  }
+  flushOctalRun()
+  return out
 }
 
-/** Extracts the changed-file paths from a committed `git diff` body. */
-function committedDiffFiles(diff: string): string[] {
+/**
+ * Extracts the changed-file paths from a committed `git diff` body.
+ * Exported for test coverage; module-private in production usage.
+ */
+export function committedDiffFiles(diff: string): string[] {
   const files = new Set<string>()
   for (const line of diff.split('\n')) {
     const match = line.match(/^diff --git a\/.+ b\/(.+)$/)
     if (match) files.add(unquoteGitPath(match[1]))
   }
   return [...files]
+}
+
+/**
+ * Extracts the path portion of a `git status --porcelain` line. Git only
+ * formats a ` -> ` rename/copy arrow for R/C status entries, so the arrow
+ * split applies only when the two-character status prefix contains R or C;
+ * any other line keeps its whole path even if the filename itself contains
+ * a literal ' -> '.
+ */
+const extractPorcelainPath = (line: string): string => {
+  const status = line.slice(0, 2)
+  const rest = line.slice(3)
+  if (status.includes('R') || status.includes('C')) {
+    return rest.split(' -> ').at(-1)?.trim() ?? ''
+  }
+  return rest.trim()
 }
 
 /**
@@ -291,15 +338,13 @@ function deriveIdentityFromPorcelain(
   identityLines: string[],
   fallbackFiles?: string[],
 ): { files: string[]; identityStatus: string } {
-  let files = identityLines
-    .map((line) => line.slice(3).split(' -> ').at(-1)?.trim() ?? '')
-    .filter(Boolean)
+  let files = identityLines.map(extractPorcelainPath).filter(Boolean)
   if (files.length === 0 && fallbackFiles) files = fallbackFiles
   // Drop session-artifact lines from the porcelain status used for identity;
   // the caller still returns the real, unfiltered status for display.
   const identityStatus = identityLines
     .filter((line) => {
-      const p = line.slice(3).split(' -> ').at(-1)?.trim() ?? ''
+      const p = extractPorcelainPath(line)
       return p ? !isSessionArtifactPath(p) : true
     })
     .join('\n')

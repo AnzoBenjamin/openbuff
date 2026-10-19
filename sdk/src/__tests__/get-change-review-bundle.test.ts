@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 
 import {
+  committedDiffFiles,
   getChangeReviewBundle,
   hashIdentityFileBytes,
   runGitBounded,
@@ -320,6 +321,36 @@ describe('getChangeReviewBundle', () => {
     const bundle = value as { files: string[]; diff: string }
     expect(bundle.files).toEqual(['file.txt'])
     expect(bundle.diff.length).toBeGreaterThan(0)
+  })
+
+  test('committedDiffFiles decodes git-quoted UTF-8 paths from the committed diff', () => {
+    // Git C-quotes non-ASCII paths as octal-escaped raw bytes (é -> \303\251),
+    // so the committed-diff fallback used to decode each octal byte separately
+    // into a lone char, mangling multi-byte UTF-8 filenames. The decoder must
+    // join consecutive octal bytes and decode them as UTF-8.
+    // committedDiffFiles is exported for test coverage; module-private in
+    // production usage.
+    const fileName = 'caféæøå.txt'
+    const octalEscaped = Array.from(Buffer.from(fileName, 'utf8'))
+      .map((byte) => `\\${byte.toString(8).padStart(3, '0')}`)
+      .join('')
+    const diff = [
+      `diff --git a/"${octalEscaped}" b/"${octalEscaped}"`,
+      'index 1111111..2222222 100644',
+      `--- a/"${octalEscaped}"`,
+      `+++ b/"${octalEscaped}"`,
+    ].join('\n')
+    expect(committedDiffFiles(diff)).toEqual([fileName])
+
+    // An already-literal quoted non-ASCII path (no octal escapes) also maps
+    // to its unquoted spelling.
+    const literal = `diff --git a/"${fileName}" b/"${fileName}"\n`
+    expect(committedDiffFiles(literal)).toEqual([fileName])
+
+    // Ordinary unquoted ASCII paths pass through unchanged.
+    expect(
+      committedDiffFiles('diff --git a/plain.txt b/plain.txt\n'),
+    ).toEqual(['plain.txt'])
   })
 
   test('ignores .agents/sessions plan artifacts for snapshot identity and files', async () => {

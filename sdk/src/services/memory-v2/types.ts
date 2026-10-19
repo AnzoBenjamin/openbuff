@@ -18,6 +18,7 @@ import {
   type MemoryVerifyRequest,
 } from '@codebuff/common/types/memory-v2'
 import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
 
 export type { MemoryAuthorityMode }
 
@@ -229,6 +230,18 @@ export interface MemoryRepositoryV2 {
   getObservationStatus?(
     params: MemoryObservationStatusReadRequest,
   ): Promise<MemoryObservationStatusReadOutcome>
+  /**
+   * Optional procedural-memory (playbook) surface. Absent on fakes and on
+   * backends without playbook support; callers must narrow before use (see
+   * getStoreStats). The coordinator loads active playbooks through these and
+   * the runtime playbook gate enforces them.
+   */
+  listPlaybooks?(workspaceId: string): Promise<MemoryPlaybook[]>
+  ensureSeedPlaybooks?(workspaceId: string): Promise<void>
+  recordPlaybookGateOutcome?(
+    playbookId: string,
+    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive',
+  ): Promise<void>
   /** Optional privileged GC surface. Absent on fakes; fail-closed when missing. */
   getStoreStats?(request: { projectId: ProjectId }): Promise<MemoryStoreStats>
   selectGCandidates?(request: {

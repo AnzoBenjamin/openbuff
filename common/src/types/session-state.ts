@@ -25,6 +25,7 @@ import type {
   TaskId,
   TaskStatus,
 } from './memory-v2'
+import type { MemoryPlaybook } from './memory-playbook'
 
 export const toolCallSchema = z.object({
   toolName: z.string(),
@@ -532,6 +533,8 @@ export type AgentState = {
   memoryAuthority?: MemoryAuthorityStateV2
   /** Validated retrieval context for the current trusted turn only. */
   memoryV2Context?: MemoryTurnContextV2
+  /** Active procedural playbooks for the turn: loaded by the coordinator, consumed by the runtime playbook gate. */
+  playbookContext?: MemoryPlaybook[]
   /** Per-turn memory-cover reuse accumulator (S2 reuse receipt). Reset each turn. */
   memoryReuse?: MemoryReuseReceiptV1
   /** Snapshot of the completed turn's reuse receipt handed to the SDK coordinator for usage correlation; cleared by coordinator finishTurn. */

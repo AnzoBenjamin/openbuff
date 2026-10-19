@@ -1,5 +1,6 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
 import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
+import { toToolCallStreamChunkPayload } from '@codebuff/common/types/contracts/llm'
 
 import {
   createStreamParserState,
@@ -25,6 +26,12 @@ import type { PromptResult } from '@codebuff/common/util/error'
 type ToolCallContext = {
   toolCallId?: string
   providerOptions?: ProviderMetadata
+  /**
+   * Set only when the provider reported a max-token cut for the response that
+   * emitted this call, so the executor can classify truncation from a known
+   * fact instead of a JSON-parse heuristic.
+   */
+  providerReportedTruncation?: boolean
 }
 
 function summarizeToolInput(input: unknown): Record<string, unknown> {
@@ -121,6 +128,12 @@ export async function* processStreamWithTools(params: {
     input: any
     contents?: string
     providerOptions?: ProviderMetadata
+    /**
+     * Provider-reported max-token cut carried on the tool-call chunk
+     * (`ToolCallStreamChunk.transportTruncated`) — stream-only evidence that
+     * this call's payload may have been cut in transport.
+     */
+    transportTruncated?: true
   }): Promise<void> {
     const { toolCallId, toolName, contents, providerOptions } = params
     let { input } = params
@@ -172,6 +185,9 @@ export async function* processStreamWithTools(params: {
     await processor.onTagEnd(toolName, input, {
       toolCallId,
       providerOptions,
+      ...(params.transportTruncated
+        ? { providerReportedTruncation: true }
+        : {}),
     })
   }
 
@@ -235,6 +251,11 @@ export async function* processStreamWithTools(params: {
 
     if (chunk.type === 'tool-call') {
       await processToolCallObject(chunk)
+      // The transport marker is consumed above into `providerReportedTruncation`
+      // and is then dropped: it is stream-only evidence, so nothing this stream
+      // forwards or persists ever carries it.
+      yield toToolCallStreamChunkPayload(chunk)
+      return
     }
 
     yield chunk

@@ -4,6 +4,7 @@ import path from 'path'
 
 import { z } from 'zod/v4'
 
+import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { CHATGPT_OAUTH_OPENAI_MODEL_ALLOWLIST } from '@codebuff/common/constants/chatgpt-oauth'
 
 import { getConfigDir } from './credentials'
@@ -121,6 +122,25 @@ export const providerDiscoverySchema = z.object({
 export type ProviderDiscovery = z.infer<typeof providerDiscoverySchema>
 export type ProviderDiscoveryInput = z.input<typeof providerDiscoverySchema>
 
+/**
+ * Default transport-safe byte band for a single assistant response / tool-call
+ * payload.
+ *
+ * Deliberately far below any provider's real output budget (a maxed-out token
+ * budget is orders of magnitude larger) while comfortably above real tool-call
+ * payloads, so it marks a response as truncated without constraining a
+ * legitimate one. Models whose transport band differs declare their own
+ * `maxOutputBytes`; this is only the fallback.
+ *
+ * DERIVED, never restated: this is not a copy of the common transport band
+ * `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES` (`common/src/actions.ts`) — it republishes
+ * that binding under the provider-config name (a live ESM alias), so there is no
+ * second value to keep in sync and no edit path that can leave the SDK default
+ * behind when the common band changes. See {@link getMaxOutputBytesForModel} for
+ * the resolution order.
+ */
+export { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES as DEFAULT_MAX_OUTPUT_BYTES }
+
 export const modelCapabilitiesSchema = z.object({
   input: z
     .object({
@@ -134,6 +154,22 @@ export const modelCapabilitiesSchema = z.object({
       outputTokens: positiveIntSchema.optional(),
     })
     .optional(),
+  /**
+   * Transport-safe byte band for a single assistant response / tool-call
+   * payload: how many bytes one response may occupy on the wire before a
+   * provider or intermediary is expected to cut it. Undefined means "use
+   * DEFAULT_MAX_OUTPUT_BYTES", so only a model with a known different ceiling
+   * needs to declare it.
+   *
+   * This is the SAME band as the common `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES`
+   * (`DEFAULT_MAX_OUTPUT_BYTES` republishes that binding), optionally tuned per
+   * model — not a separate concept. The band is a config-side envelope: its
+   * runtime consumer is the sdk stream's band diagnostic, not the marker
+   * setter — the stream-only `ToolCallStreamChunk.transportTruncated` marker
+   * (`common/src/types/contracts/llm.ts`) is set solely by the provider's
+   * `finishReason === 'length'` report.
+   */
+  maxOutputBytes: z.number().int().positive().optional(),
   reasoning: z
     .object({
       supported: z.boolean().optional(),
@@ -1547,6 +1583,7 @@ function mergeModelCapabilities(
     )
     merged.pricing = mergeDefined(merged.pricing, capability.pricing)
     merged.quality = mergeDefined(merged.quality, capability.quality)
+    merged.maxOutputBytes = capability.maxOutputBytes ?? merged.maxOutputBytes
   }
 
   return merged
@@ -1556,6 +1593,9 @@ function compactCapability(capabilities: ModelCapabilities): ModelCapabilities {
   return Object.fromEntries(
     Object.entries(capabilities).filter(([, value]) => {
       if (!value) return false
+      // Scalar capabilities (e.g. maxOutputBytes) are their own value; only
+      // object-shaped capabilities are compacted based on their fields.
+      if (typeof value !== 'object') return true
       return Object.values(value).some((field) => field !== undefined)
     }),
   ) as ModelCapabilities
@@ -1616,6 +1656,50 @@ export function resolveModelCapabilities(params: {
       provider.defaultCapabilities,
       ...modelCapabilityOverrides,
     ),
+  )
+}
+
+/**
+ * Transport-safe output-byte band for one model, resolved in the same order
+ * `resolveModelCapabilities` uses: the per-model
+ * `modelCapabilities.<model>.maxOutputBytes` override wins over the
+ * provider-level `defaultCapabilities.maxOutputBytes`, which falls back to
+ * `DEFAULT_MAX_OUTPUT_BYTES`.
+ *
+ * `providerId` is optional. When given, the model key is resolved through the
+ * same candidate order `resolveModelCapabilities` uses
+ * (`capabilityModelKeyCandidates`: provider-mapped id, provider-qualified
+ * mapped id, unprefixed requested id, raw requested id), and a LATER
+ * candidate's `maxOutputBytes` wins, matching `mergeModelCapabilities`'
+ * sequential merge — so a per-model override keyed by the provider-mapped or
+ * unprefixed id is honored for a provider-qualified request. Omitting it
+ * keeps the exact single-key lookup on `model`, the historical behavior
+ * callers and fixtures that hold no provider id rely on.
+ *
+ * The fallback reads the common `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES` binding
+ * directly — the single source that `DEFAULT_MAX_OUTPUT_BYTES`
+ * alias-republishes — so every branch of this function returns the same concept
+ * (the band above which a response is expected to be cut in transport), and a
+ * config that declares no `maxOutputBytes` at all always keeps the common
+ * default.
+ */
+export function getMaxOutputBytesForModel(
+  provider: ProviderConfig,
+  model: string,
+  providerId?: string,
+): number {
+  const modelKeys = providerId
+    ? capabilityModelKeyCandidates({ providerId, model, provider })
+    : [model]
+  let modelOverride: number | undefined
+  for (const key of modelKeys) {
+    const candidateOverride = provider.modelCapabilities?.[key]?.maxOutputBytes
+    if (candidateOverride !== undefined) modelOverride = candidateOverride
+  }
+  if (modelOverride !== undefined) return modelOverride
+  return (
+    provider.defaultCapabilities?.maxOutputBytes ??
+    MAX_TRANSPORT_SAFE_PAYLOAD_BYTES
   )
 }
 
@@ -2032,7 +2116,6 @@ export function resolveContextWindowTokens(params: {
   }
   return legacyTokens
 }
-
 
 export type OpenbuffProviderPreset = {
   id: string

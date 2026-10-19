@@ -4,6 +4,7 @@ import { deriveClaimId } from '@codebuff/common/util/claim-identity'
 import { STABLE_CHUNK_ID_RE } from '@codebuff/common/util/contradiction-detector'
 import { classifyMemoryArtifactPath } from '@codebuff/common/util/memory-artifact-policy'
 
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
 import {
   MemoryAppendOutcomeSchema,
   MemoryAppendRequestSchema,
@@ -824,6 +825,7 @@ export class MemoryV2Coordinator {
     reason: MemoryAuthorityReasonCode,
   ): void {
     agentState.memoryV2Context = undefined
+    agentState.playbookContext = []
     if (!agentState.memoryAuthority) return
     agentState.memoryAuthority.active =
       agentState.memoryAuthority.requested === 'sqlite-v2-opt-in'
@@ -861,6 +863,9 @@ export class MemoryV2Coordinator {
       memoryV2Context: params.agentState.memoryV2Context
         ? structuredClone(params.agentState.memoryV2Context)
         : undefined,
+      playbookContext: params.agentState.playbookContext
+        ? structuredClone(params.agentState.playbookContext)
+        : [],
     }
     const invalidate = () => {
       if (this.activePreparation !== operation) return
@@ -876,6 +881,7 @@ export class MemoryV2Coordinator {
       params.agentState.memoryV2 = stagedState.memoryV2
       params.agentState.memoryV2Context = stagedState.memoryV2Context
       params.agentState.memoryAuthority = stagedState.memoryAuthority
+      params.agentState.playbookContext = stagedState.playbookContext
       this.runtimeState = operation.runtimeState
       this.queryTerminal = operation.queryTerminal
       this.preparationReady = operation.ready
@@ -886,6 +892,10 @@ export class MemoryV2Coordinator {
       const { requested, invalidAuthority } =
         getEffectiveMemoryAuthority(this.config)
       stagedState.memoryV2Context = undefined
+      // Playbooks are staged and cleared on the same terms as the injected V2
+      // context: a fresh turn starts with no inherited rules until the
+      // preparation below reinstalls them for this workspace.
+      stagedState.playbookContext = []
       stagedState.memoryAuthority = {
         schemaVersion: 1,
         userInputId: params.trustedUserInputId.slice(0, 128),
@@ -1272,6 +1282,26 @@ export class MemoryV2Coordinator {
         params.agentState.memoryAuthority!.fallbackOccurred = false
         params.agentState.memoryAuthority!.reason = undefined
       }
+      // Procedural memory (playbook gate): load the workspace's active
+      // playbooks so the runtime gate can enforce them. FAIL-OPEN — a load
+      // failure installs an empty set and never breaks the turn. One indexed
+      // SELECT; ensureSeedPlaybooks is idempotent and provides the baseline
+      // CI-before-commit rule on first turn.
+      const playbookRepository = this.config.repository
+      if (playbookRepository?.ensureSeedPlaybooks && playbookRepository.listPlaybooks) {
+        try {
+          await playbookRepository.ensureSeedPlaybooks(this.config.projectId)
+          params.agentState.playbookContext = await playbookRepository.listPlaybooks(
+            this.config.projectId,
+          )
+        } catch (error) {
+          this.logger?.warn(
+            { error },
+            'Playbook load failed; proceeding without rules',
+          )
+          params.agentState.playbookContext = []
+        }
+      }
       return
     }
     const rejected = outcome.outcome === 'rejected'
@@ -1299,6 +1329,29 @@ export class MemoryV2Coordinator {
     mcp?: boolean
   }): Promise<void> {
     return this.bestEffort(() => this.captureToolObservation(params))
+  }
+
+  /**
+   * Persist one playbook-gate outcome for the effectiveness counters that
+   * drive promotion/retirement (Phase 1: counters only). Best-effort by
+   * construction — a failed counter bump must never fail the tool call that
+   * the gate already decided. The event-journal leg (`playbook.blocked` /
+   * `playbook.bypassed`) is deferred to Phase 3 with the other append-only
+   * hygiene work so this stays a single bounded UPDATE on the hot path.
+   */
+  async recordPlaybookGateOutcome(params: {
+    playbookId: string
+    triggerSignature: string
+    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive'
+  }): Promise<void> {
+    return this.bestEffort(async () => {
+      const repository = this.config.repository
+      if (!repository?.recordPlaybookGateOutcome) return
+      await repository.recordPlaybookGateOutcome(
+        params.playbookId,
+        params.outcome,
+      )
+    })
   }
 
   async verifyCapturedPaths(params: {

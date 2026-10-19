@@ -58,10 +58,11 @@ const TRANSACTION_SNAPSHOT_CONCURRENCY = 8
 /**
  * Conservative signal that a preflight syntax message is a transport-truncation
  * artifact (a payload cut in transit) rather than a genuine code-syntax error.
- * Only fires on SMALL payloads carrying `Unexpected )` / `Unexpected ,`: a real
- * file very rarely has more closers than openers, but a payload whose newString
- * was cut mid-expression ends exactly there. Genuine syntax errors on real file
- * content keep the normal preflight_failed path; this never overrides them.
+ * Fires on a payload carrying `Unexpected )` / `Unexpected ,` whose replacement
+ * content has more closers than openers: a real file very rarely has more
+ * closers than openers, but a payload whose newString was cut mid-expression
+ * ends exactly there. Genuine syntax errors on real file content keep the
+ * normal preflight_failed path; this never overrides them.
  *
  * The closer-over-opener heuristic on the edit payload alone can mislabel a
  * malformed-but-NOT-truncated edit whose newString legitimately has more
@@ -97,9 +98,11 @@ function looksLikeTruncatedEditContent(
     return false
   }
   const text = fragments.join('\n')
-  // Truncation only makes sense for sub-slab payloads; large payloads fail at
-  // argument-parse instead and never reach preflight.
-  if (text.length > 64 * 1024) return false
+  // Payload size never disqualifies the classification: large payloads are
+  // exactly the ones transport truncates, so a size bail-out would hide the
+  // very case this signal exists for. False positives on complete content stay
+  // blocked by the isRawDelimiterUnbalanced(filePostEditContent) corroboration
+  // below, which a non-truncated file always fails.
   const balance = (open: string, close: string): number => {
     let delta = 0
     for (const ch of text) {

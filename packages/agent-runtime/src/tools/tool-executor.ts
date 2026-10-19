@@ -37,6 +37,11 @@ import { realpathSync } from 'node:fs'
 
 import { getMCPToolData } from '../mcp'
 import { MCP_TOOL_SEPARATOR } from '../mcp-constants'
+import { evaluatePlaybookGate } from '../memory/playbook-gate'
+import {
+  createSessionEvidenceLog,
+  recordSessionEvidence,
+} from '../memory/session-evidence-log'
 import { getAgentShortName, getAgentToolName } from '../templates/prompts'
 import { getEffectiveAgentToolNames } from '../util/agent-tool-names'
 import {
@@ -69,6 +74,7 @@ import { ensureZodSchema } from './prompts'
 import type { AgentTemplate } from '../templates/types'
 import type { CodebuffToolHandlerFunction } from './handlers/handler-function-type'
 import type { FileProcessingState } from './handlers/tool/write-file'
+import type { SessionEvidenceLog } from '../memory/session-evidence-log'
 import type { ToolName } from '@codebuff/common/tools/constants'
 import type {
   ClientToolCall,
@@ -81,6 +87,7 @@ import type {
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
 import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { ProviderMetadata } from '@codebuff/common/types/messages/provider-metadata'
@@ -342,6 +349,68 @@ function resolveSpawnGateAbort(
     shouldReturn: false,
     returnValue: abortablePreviousToolCallFinished,
   }
+}
+
+/**
+ * The playbook gate's per-session evidence ledger, held additively on agent
+ * state. Created on first use so a session that never sees a playbook (or never
+ * records an eligible tool) never allocates one. The ledger identity is stable
+ * for the session, which is what lets the gate see evidence recorded on an
+ * earlier step.
+ */
+function sessionEvidenceLogFor(agentState: AgentState): SessionEvidenceLog {
+  const state = agentState as AgentState & {
+    sessionEvidenceLog?: SessionEvidenceLog
+  }
+  state.sessionEvidenceLog ??= createSessionEvidenceLog()
+  return state.sessionEvidenceLog
+}
+
+/**
+ * True when a tool result payload carries a terminal failure. The result
+ * contract has no single error field: native failures publish a json part with
+ * an `errorMessage` string (see buildNativeToolResultErrorOutputV1), so any such
+ * part marks the call as not-successful and it is never recorded as evidence.
+ */
+function outputCarriesToolError(output: readonly unknown[]): boolean {
+  return output.some((part) => {
+    if (!part || typeof part !== 'object' || Array.isArray(part)) return false
+    const record = part as Record<string, unknown>
+    if (record.type !== 'json') return false
+    const value = record.value
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    return typeof (value as Record<string, unknown>).errorMessage === 'string'
+  })
+}
+
+/**
+ * Append one successful tool invocation to the session's playbook-gate evidence
+ * ledger (see ../memory/session-evidence-log.ts).
+ *
+ * Deliberately narrow: only `run_terminal_command` with a string `command` is
+ * recorded, because that is the only evidence shape the Phase 1 gate can verify
+ * (`toolSucceeded` + commandText substring). A result carrying an `errorMessage`
+ * is a failure and records nothing, so a broken command can never satisfy a
+ * playbook.
+ *
+ * Call site: the single post-dispatch output-finalization block in
+ * `executeToolCall` (immediately after `toolResults.push(toolResult)`), which
+ * runs exactly once per executed tool call with the validated output.
+ */
+export function recordToolEvidence<T extends ToolName>(params: {
+  agentState: AgentState
+  toolName: T
+  input: Record<string, unknown>
+  output: CodebuffToolOutput<T>
+}): void {
+  const { agentState, toolName, input, output } = params
+  if (toolName !== 'run_terminal_command') return
+  if (outputCarriesToolError(output)) return
+  recordSessionEvidence(sessionEvidenceLogFor(agentState), {
+    toolName,
+    ...(typeof input.command === 'string' ? { commandText: input.command } : {}),
+    atMs: Date.now(),
+  })
 }
 
 export function normalizeNativeToolOutput<T extends ToolName>(params: {
@@ -668,6 +737,7 @@ type TruncationRecoverySummary = {
 function parseStringifiedToolInput(
   input: unknown,
   toolName: string,
+  providerReportedTruncation?: boolean,
 ): {
   input: unknown
   parseError?: string
@@ -692,7 +762,13 @@ function parseStringifiedToolInput(
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error)
-      if (detectTransportTruncation(stringInput, errorMessage)) {
+      // The provider's finishReason === 'length' is authoritative: it is a KNOWN
+      // max-token cut, so the JSON-parse heuristic is only the fallback used
+      // when the provider reported nothing.
+      if (
+        providerReportedTruncation === true ||
+        detectTransportTruncation(stringInput, errorMessage)
+      ) {
         sawTransportTruncation = true
       }
       // A truncated payload is NEVER silently converted into a partial tool
@@ -2081,6 +2157,12 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     providerOptions?: ProviderMetadata
   }
   logger?: Logger
+  /**
+   * Provider-authoritative truncation fact for the response that produced this
+   * call (finishReason === 'length'). Optional: absent means the JSON-parse
+   * heuristic in `detectTransportTruncation` stays the only signal.
+   */
+  providerReportedTruncation?: boolean
 }): CodebuffToolCall<T> | ToolCallError {
   const { rawToolCall, logger } = params
   const toolName = rawToolCall.toolName
@@ -2088,6 +2170,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
   const processedParameters = parseStringifiedToolInput(
     rawToolCall.input,
     toolName,
+    params.providerReportedTruncation,
   )
   const paramsSchema = toolParams[toolName].inputSchema
 
@@ -2210,6 +2293,13 @@ export type ExecuteToolCallParams<T extends string = ToolName> = {
   queued?: boolean
   prompt: string | undefined
   providerOptions?: ProviderMetadata
+  /**
+   * Provider-authoritative truncation fact (finishReason === 'length') for the
+   * response that emitted this tool call. Threaded to the JSON parser so a
+   * provider-confirmed cut classifies as transport truncation regardless of the
+   * error-message heuristic.
+   */
+  providerReportedTruncation?: boolean
   repoId: string | undefined
   repoUrl: string | undefined
   runId: string
@@ -2253,6 +2343,7 @@ export async function executeToolCall<T extends ToolName>(
     onResponseChunk,
     requestToolCall,
     queued,
+    providerReportedTruncation,
   } = params
   const toolCallId = params.toolCallId ?? generateCompactId()
   const abortablePreviousToolCallFinished = makeAbortableBarrier(
@@ -2294,6 +2385,7 @@ export async function executeToolCall<T extends ToolName>(
       providerOptions: params.providerOptions,
     },
     logger,
+    providerReportedTruncation,
   })
 
   // Filter out restricted tools - emit error instead of tool call/result
@@ -2576,6 +2668,63 @@ export async function executeToolCall<T extends ToolName>(
     }
     if (resolved.agents !== effectiveInput.agents) {
       effectiveInput = { ...effectiveInput, agents: resolved.agents }
+    }
+  }
+
+  // Deterministic playbook gate (memory playbook Phase 1). Deliberately placed
+  // OUTSIDE the `canSuggestFollowups === false` condition ABOVE: a learned
+  // playbook applies whether or not the validation/reviewer gate is open, so its
+  // refusal is never conditional on the gate state. It covers the three tools a
+  // playbook may target, is skipped entirely when the coordinator never
+  // installed playbookContext (the common case), and is wrapped in try/catch so
+  // a gate bug can never break tool dispatch (fail OPEN): only a 'blocked'
+  // verdict — which requires BOTH an operator-opted 'block' mode AND a playbook
+  // enforcing 'block' — aborts the call, through the existing abort barrier.
+  const playbookContext = (
+    agentState as AgentState & { playbookContext?: MemoryPlaybook[] }
+  ).playbookContext
+  if (
+    playbookContext &&
+    playbookContext.length > 0 &&
+    (toolName === 'spawn_agents' ||
+      toolName === 'spawn_agent_inline' ||
+      toolName === 'run_terminal_command')
+  ) {
+    try {
+      // The gate reads exactly one key from an environment bag, so project the
+      // client env onto the plain string map it declares instead of widening the
+      // runtime deps contract.
+      const playbookGateEnv: Record<string, string | undefined> = {}
+      for (const [key, value] of Object.entries(params.clientEnv)) {
+        if (typeof value === 'string') playbookGateEnv[key] = value
+      }
+      const verdicts = evaluatePlaybookGate({
+        toolName,
+        input: effectiveInput,
+        playbooks: playbookContext,
+        evidenceLog: sessionEvidenceLogFor(agentState),
+        nowMs: Date.now(),
+        env: playbookGateEnv,
+      })
+      let playbookBlocked = false
+      for (const verdict of verdicts) {
+        if (verdict.outcome === 'allowed') continue
+        onResponseChunk({
+          type: 'error',
+          message: verdict.message,
+          autoRecovering: true,
+        })
+        // A 'warned' verdict is advisory only: it must never abort dispatch.
+        if (verdict.outcome === 'blocked') playbookBlocked = true
+      }
+      if (playbookBlocked) {
+        return abortablePreviousToolCallFinished
+      }
+    } catch (error) {
+      logger.debug(
+        { error, toolName },
+        'Playbook gate failed internally; proceeding with tool dispatch (fail-open)',
+      )
     }
   }
 
@@ -3316,6 +3465,16 @@ export async function executeToolCall<T extends ToolName>(
 
     toolResults.push(toolResult)
 
+    // Playbook-gate evidence: this is the single post-dispatch finalization
+    // point for a native tool result, so the ledger records exactly one entry
+    // per successful call (failures carry an `errorMessage` and record nothing).
+    recordToolEvidence({
+      agentState,
+      toolName,
+      input: toolCall.input as Record<string, unknown>,
+      output: validatedOutput,
+    })
+
     // Record this agent's own reads/edits as task-memory evidence. Only child
     // agents report through mergeAgentReceiptIntoTaskMemory, so without this the
     // root agent's exploration is never remembered. This runs for whichever
@@ -3391,6 +3550,8 @@ export function parseRawCustomToolCall(params: {
     providerOptions?: ProviderMetadata
   }
   autoInsertEndStepParam?: boolean
+  /** See `parseRawToolCall`'s `providerReportedTruncation`. */
+  providerReportedTruncation?: boolean
 }): CustomToolCall | ToolCallError {
   const { customToolDefs, rawToolCall, autoInsertEndStepParam = false } = params
   const toolName = rawToolCall.toolName
@@ -3407,7 +3568,11 @@ export function parseRawCustomToolCall(params: {
     }
   }
 
-  const parsedInput = parseStringifiedToolInput(rawToolCall.input, toolName)
+  const parsedInput = parseStringifiedToolInput(
+    rawToolCall.input,
+    toolName,
+    params.providerReportedTruncation,
+  )
 
   if (typeof parsedInput.input === 'string') {
     return stringInputError(
@@ -3521,6 +3686,7 @@ export async function executeCustomToolCall(
       providerOptions: params.providerOptions,
     },
     autoInsertEndStepParam,
+    providerReportedTruncation: params.providerReportedTruncation,
   })
 
   // Filter out restricted tools - emit error instead of tool call/result

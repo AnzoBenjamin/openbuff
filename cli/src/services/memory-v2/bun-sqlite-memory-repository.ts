@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -35,6 +35,7 @@ import {
   type MemoryHealthRequest,
   type MemoryOperationError,
   type MemoryQueryOutcome,
+  type MemoryProvenance,
   type MemoryRebuildOutcome,
   type MemoryRebuildRequest,
   type MemoryRetrievalRequest,
@@ -74,6 +75,16 @@ import {
   type ContradictionCandidate,
 } from '../../../../common/src/util/contradiction-detector'
 import type { ConceptCorpusEntry, ConceptExpansion } from './concept-index'
+import {
+  MemoryPlaybookSchema,
+  PlaybookCountersSchema,
+  computeTriggerSignature,
+  type MemoryPlaybook,
+  type PlaybookEnforcement,
+  type PlaybookScope,
+  type PlaybookStatus,
+  type PlaybookTrigger,
+} from '../../../../common/src/types/memory-playbook'
 
 export type RuntimeNeutralMemoryRepositoryV2 = MemoryRepositoryV2
 export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
@@ -406,6 +417,24 @@ interface ObservationStatusRow {
   entity_id: string
   task_id: string | null
   state_json: string
+}
+
+interface PlaybookRow {
+  playbook_id: string
+  workspace_id: string
+  task_id: string | null
+  title: string
+  instruction: string
+  trigger_json: string
+  scope_json: string
+  status: string
+  enforcement: string
+  counters_json: string
+  provenance_json: string
+  trigger_signature: string
+  expires_at: number | null
+  created_at: number
+  updated_at: number
 }
 
 type ContextArchiveMessage = ContextArchiveSnapshot['messages'][number]
@@ -1545,6 +1574,298 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
       // thrown error into the recall path.
       return empty
     }
+  }
+
+  /**
+   * Active, unexpired procedural playbooks for one workspace (the runtime
+   * playbook gate's per-turn input). Every row is revalidated through
+   * MemoryPlaybookSchema and its JSON columns, so a corrupt row throws
+   * instead of coercing into a partially-populated rule.
+   */
+  async listPlaybooks(workspaceId: string): Promise<MemoryPlaybook[]> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const rows = this.database
+        .query(
+          `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+             FROM memory_playbooks
+            WHERE workspace_id = ?1
+              AND status = 'active'
+              AND (expires_at IS NULL OR expires_at > ?2)
+            ORDER BY created_at, playbook_id`,
+        )
+        .all(workspaceId, Date.now()) as PlaybookRow[]
+      return rows.map((row) => playbookFromRow(row))
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Insert-or-update a playbook keyed by computeTriggerSignature(trigger,
+   * scope): two playbooks with the same signature are the same rule, so an
+   * existing row keeps its playbookId, createdAt and counters while its
+   * instruction/enforcement/scope/provenance/expiry are refreshed. The
+   * assembled record is validated with MemoryPlaybookSchema BEFORE the write,
+   * so a non-evaluable or schema-invalid payload never reaches the store.
+   */
+  async upsertPlaybookByTriggerSignature(input: {
+    workspaceId: string
+    taskId?: string
+    title: string
+    instruction: string
+    trigger: PlaybookTrigger
+    scope: PlaybookScope
+    status: PlaybookStatus
+    enforcement: PlaybookEnforcement
+    provenance: MemoryProvenance
+    expiresAt?: number
+  }): Promise<MemoryPlaybook> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const triggerSignature = computeTriggerSignature(
+        input.trigger,
+        input.scope,
+      )
+      const now = Date.now()
+      const existing = this.readPlaybookRow(input.workspaceId, triggerSignature)
+      const playbook = MemoryPlaybookSchema.parse({
+        schemaVersion: 1,
+        playbookId: existing?.playbook_id ?? randomUUID(),
+        workspaceId: input.workspaceId,
+        taskId: existing ? (existing.task_id ?? undefined) : input.taskId,
+        title: input.title,
+        instruction: input.instruction,
+        trigger: input.trigger,
+        scope: input.scope,
+        status: input.status,
+        enforcement: input.enforcement,
+        counters: existing
+          ? (JSON.parse(existing.counters_json) as unknown)
+          : PlaybookCountersSchema.parse({}),
+        provenance: input.provenance,
+        triggerSignature,
+        expiresAt: input.expiresAt,
+        createdAt: existing?.created_at ?? now,
+        updatedAt: now,
+      })
+      if (existing) {
+        this.database
+          .query(
+            `UPDATE memory_playbooks
+                SET title = ?1,
+                    instruction = ?2,
+                    status = ?3,
+                    enforcement = ?4,
+                    trigger_json = ?5,
+                    scope_json = ?6,
+                    provenance_json = ?7,
+                    expires_at = ?8,
+                    updated_at = ?9
+              WHERE playbook_id = ?10`,
+          )
+          .run(
+            playbook.title,
+            playbook.instruction,
+            playbook.status,
+            playbook.enforcement,
+            JSON.stringify(playbook.trigger),
+            JSON.stringify(playbook.scope),
+            JSON.stringify(playbook.provenance),
+            playbook.expiresAt ?? null,
+            playbook.updatedAt,
+            playbook.playbookId,
+          )
+      } else {
+        this.database
+          .query(
+            `INSERT INTO memory_playbooks (
+               playbook_id, workspace_id, task_id, title, instruction,
+               trigger_json, scope_json, status, enforcement, counters_json,
+               provenance_json, trigger_signature, expires_at, created_at,
+               updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+          )
+          .run(
+            playbook.playbookId,
+            playbook.workspaceId,
+            playbook.taskId ?? null,
+            playbook.title,
+            playbook.instruction,
+            JSON.stringify(playbook.trigger),
+            JSON.stringify(playbook.scope),
+            playbook.status,
+            playbook.enforcement,
+            JSON.stringify(playbook.counters),
+            JSON.stringify(playbook.provenance),
+            playbook.triggerSignature,
+            playbook.expiresAt ?? null,
+            playbook.createdAt,
+            playbook.updatedAt,
+          )
+      }
+      const stored = this.readPlaybookRow(input.workspaceId, triggerSignature)
+      if (!stored) {
+        throw new MemoryV2StorageError({
+          kind: 'corrupt',
+          message: 'The playbook could not be reloaded after the write.',
+          retryable: false,
+        })
+      }
+      return playbookFromRow(stored)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Fold one gate outcome into a playbook's counters: every outcome bumps
+   * `fired`, the matching counter, and lastFiredAt (a false positive also
+   * stamps lastFalsePositiveAt).
+   */
+  async recordPlaybookGateOutcome(
+    playbookId: string,
+    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive',
+  ): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const row = this.database
+        .query(
+          'SELECT counters_json FROM memory_playbooks WHERE playbook_id = ?1',
+        )
+        .get(playbookId) as { counters_json: string } | null
+      if (!row) {
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: 'The playbook was not found.',
+          retryable: false,
+        })
+      }
+      const now = Date.now()
+      const prior = PlaybookCountersSchema.parse(
+        JSON.parse(row.counters_json) as unknown,
+      )
+      const counters = PlaybookCountersSchema.parse({
+        ...prior,
+        fired: prior.fired + 1,
+        blocked: prior.blocked + (outcome === 'blocked' ? 1 : 0),
+        bypassed: prior.bypassed + (outcome === 'bypassed' ? 1 : 0),
+        compliedAfterBlock:
+          prior.compliedAfterBlock + (outcome === 'compliedAfterBlock' ? 1 : 0),
+        falsePositives:
+          prior.falsePositives + (outcome === 'falsePositive' ? 1 : 0),
+        lastFiredAt: now,
+        ...(outcome === 'falsePositive'
+          ? { lastFalsePositiveAt: now }
+          : {}),
+      })
+      this.database
+        .query(
+          `UPDATE memory_playbooks
+              SET counters_json = ?1, updated_at = ?2
+            WHERE playbook_id = ?3`,
+        )
+        .run(JSON.stringify(counters), now, playbookId)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /** Change a playbook's lifecycle status (e.g. retire a noisy rule). */
+  async setPlaybookStatus(
+    playbookId: string,
+    status: PlaybookStatus,
+  ): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      this.database
+        .query(
+          `UPDATE memory_playbooks
+              SET status = ?1, updated_at = ?2
+            WHERE playbook_id = ?3`,
+        )
+        .run(status, Date.now(), playbookId)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Idempotent install of the built-in seed playbooks for one workspace.
+   *
+   * Deliberately NOT part of migrate(): the table is keyed by workspaceId,
+   * which is unknown at migration time, so the caller seeds its own
+   * workspace. No-ops once a playbook with the seed's trigger signature
+   * exists for that workspace, so repeated calls never duplicate the rule.
+   */
+  async ensureSeedPlaybooks(workspaceId: string): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    const trigger: PlaybookTrigger = {
+      tool: 'spawn_agents',
+      spawnAgentType: 'git-committer',
+      requireEvidence: [
+        {
+          kind: 'toolSucceeded',
+          tool: 'run_terminal_command',
+          commandPattern: '*check:ci-local*',
+          withinMs: 14_400_000,
+        },
+      ],
+    }
+    const scope: PlaybookScope = { repos: [] }
+    const triggerSignature = computeTriggerSignature(trigger, scope)
+    try {
+      const existing = this.database
+        .query(
+          `SELECT 1 AS present FROM memory_playbooks
+            WHERE workspace_id = ?1 AND trigger_signature = ?2
+            LIMIT 1`,
+        )
+        .get(workspaceId, triggerSignature) as { present: number } | null
+      if (existing) return
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+    await this.upsertPlaybookByTriggerSignature({
+      workspaceId,
+      title: 'Run the repo CI check before committing',
+      instruction:
+        'Run the repository CI check (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) successfully in this session before spawning git-committer to commit or push.',
+      trigger,
+      scope,
+      status: 'active',
+      enforcement: 'warn',
+      provenance: {
+        origin: 'migration',
+        recordedBy: 'bun-sqlite-memory-v2',
+        sourceEventIds: [],
+        metadata: {},
+      },
+    })
+  }
+
+  private readPlaybookRow(
+    workspaceId: string,
+    triggerSignature: string,
+  ): PlaybookRow | null {
+    return this.database
+      .query(
+        `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+           FROM memory_playbooks
+          WHERE workspace_id = ?1 AND trigger_signature = ?2
+          LIMIT 1`,
+      )
+      .get(workspaceId, triggerSignature) as PlaybookRow | null
   }
 
   async getCapabilities(): Promise<
@@ -2744,6 +3065,10 @@ function migrate(database: Database): void {
       // No FTS5 in this build: recall falls back to the LIKE scan at query
       // time (sqlite_master will not list context_archive_fts).
     }
+    // Additive procedural-memory table: created idempotently on every open so
+    // existing stores gain it without a structural migration. Nothing here
+    // touches the canonical event log or its append-only triggers.
+    database.exec(MEMORY_PLAYBOOKS_DDL)
     inferAndBindProject(database)
     // A v1->v2 migration replay must stay correct-and-complete: truncating it
     // would leave the projections partially applied while the migration commits,
@@ -3036,6 +3361,42 @@ const CONTEXT_ARCHIVE_DDL = `
 const CONTEXT_ARCHIVE_FTS_DDL = `
   CREATE VIRTUAL TABLE IF NOT EXISTS context_archive_fts
     USING fts5(run_id UNINDEXED, archived_at UNINDEXED, msg_index UNINDEXED, body);
+`
+
+/** Columns every playbook read/write maps back through MemoryPlaybookSchema. */
+const PLAYBOOK_SELECT_COLUMNS = `playbook_id, workspace_id, task_id, title, instruction,
+       trigger_json, scope_json, status, enforcement, counters_json,
+       provenance_json, trigger_signature, expires_at, created_at, updated_at`
+
+/**
+ * Procedural-memory table (memory_playbooks): purely additive, created
+ * idempotently on every open so existing stores gain it without a structural
+ * migration. The unique (workspace_id, trigger_signature) index is the
+ * playbook upsert/dedup key; the (workspace_id, status) index serves the
+ * active-playbook lookup the runtime gate performs every turn.
+ */
+const MEMORY_PLAYBOOKS_DDL = `
+  CREATE TABLE IF NOT EXISTS memory_playbooks (
+    playbook_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    task_id TEXT,
+    title TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    trigger_json TEXT NOT NULL CHECK (json_valid(trigger_json)),
+    scope_json TEXT NOT NULL CHECK (json_valid(scope_json)),
+    status TEXT NOT NULL,
+    enforcement TEXT NOT NULL,
+    counters_json TEXT NOT NULL CHECK (json_valid(counters_json)),
+    provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+    trigger_signature TEXT NOT NULL,
+    expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS memory_playbooks_workspace_status
+    ON memory_playbooks(workspace_id, status);
+  CREATE UNIQUE INDEX IF NOT EXISTS memory_playbooks_workspace_signature
+    ON memory_playbooks(workspace_id, trigger_signature);
 `
 
 /** Whether the durable context_archive_fts index table exists in this store. */
@@ -4101,6 +4462,32 @@ function storedEventFromRow(row: EventRow): MemoryV2StoredEvent {
     sessionId: event.sessionId ?? undefined,
     artifactId: event.artifactId ?? undefined,
   }
+}
+
+/**
+ * Rebuild one stored playbook row through MemoryPlaybookSchema: every JSON
+ * column is parsed and schema-validated, so a corrupt store throws loudly
+ * instead of surfacing a silently coerced rule to the gate.
+ */
+function playbookFromRow(row: PlaybookRow): MemoryPlaybook {
+  return MemoryPlaybookSchema.parse({
+    schemaVersion: 1,
+    playbookId: row.playbook_id,
+    workspaceId: row.workspace_id,
+    ...(row.task_id === null ? {} : { taskId: row.task_id }),
+    title: row.title,
+    instruction: row.instruction,
+    trigger: JSON.parse(row.trigger_json) as unknown,
+    scope: JSON.parse(row.scope_json) as unknown,
+    status: row.status,
+    enforcement: row.enforcement,
+    counters: JSON.parse(row.counters_json) as unknown,
+    provenance: JSON.parse(row.provenance_json) as unknown,
+    triggerSignature: row.trigger_signature,
+    ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
 }
 
 function readProjectionRows(
