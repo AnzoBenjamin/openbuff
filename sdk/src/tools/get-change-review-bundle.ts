@@ -10,7 +10,6 @@ import {
   SIGTERM_GRACE_MS,
 } from '../services/semgrep-baseline'
 import { gitStatus, runGit } from './git-status'
-import { mapWithConcurrency } from './concurrency'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
@@ -874,6 +873,8 @@ export async function getChangeReviewBundle(params: {
         validation,
         findings,
         securityScan,
+        snapshotIdUsage:
+          'evidence-only: the bare-hex snapshotId is for drift checks and diff identity only. NEVER pass it (or any bare hex) as params.snapshot_id or params.snapshot_fingerprint — gate/specialist attestation uses the parent gate\'s opaque v3:<64-hex> token; manual spawns omit params.snapshot_id entirely (scoped files go in params.files).',
       },
     },
   ]

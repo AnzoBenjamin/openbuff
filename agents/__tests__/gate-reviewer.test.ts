@@ -2919,6 +2919,29 @@ describe('gate-reviewer helpers', () => {
     expect(detectReviewerCrash({ errorMessage: '   ' })).toBeNull()
   })
 
+  test('detectReviewerCrash skips inner tool-result envelopes (inner tool errors are not agent crashes)', () => {
+    // A tool-result envelope for a failed inner tool call is not a
+    // reviewer-agent crash.
+    expect(
+      detectReviewerCrash({
+        toolCallId: 'call_1',
+        type: 'tool_result',
+        output: { errorMessage: 'inner tool failed' },
+      }),
+    ).toBeNull()
+    expect(
+      detectReviewerCrash({ type: 'tool_result', errorMessage: 'boom' }),
+    ).toBeNull()
+    // A sibling-level genuine crash is still detected even when a sibling is
+    // a tool-result envelope.
+    expect(
+      detectReviewerCrash({
+        a: { errorMessage: 'top' },
+        b: { toolCallId: 'x', errorMessage: 'inner' },
+      }),
+    ).toBe('top')
+  })
+
   test('isTransientReviewerCrash and classifyReviewerCrash taxonomy', () => {
     expect(isTransientReviewerCrash('rate_limit_error')).toBe(true)
     expect(isTransientReviewerCrash('Concurrency limit exceeded')).toBe(true)

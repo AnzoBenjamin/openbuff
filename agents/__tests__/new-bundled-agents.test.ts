@@ -119,6 +119,21 @@ describe('new bundled agents (M2.6)', () => {
       expect(tools).not.toContain('write_file')
       expect(tools).not.toContain('str_replace')
     })
+
+    test('requirementCoverage status enum matches the reviewer family (no not_applicable)', () => {
+      const outputSchema = securityReviewer.outputSchema as {
+        properties?: {
+          requirementCoverage?: {
+            items?: { properties?: { status?: { enum?: string[] } } }
+          }
+        }
+      }
+      const statusEnum =
+        outputSchema.properties?.requirementCoverage?.items?.properties?.status
+          ?.enum ?? []
+      expect(statusEnum).not.toContain('not_applicable')
+      expect(statusEnum).toContain('uncertain')
+    })
   })
 
   describe('debugger specifics', () => {

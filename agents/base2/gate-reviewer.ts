@@ -744,12 +744,17 @@ function findReviewerCrash(value: unknown, depth: number = 0): string | null {
   }
   if (typeof value !== 'object') return null
   const record = value as Record<string, unknown>
-  // NOTE: an unrelated nested `errorMessage` (e.g. a failed inner tool call
-  // the reviewer made) will also be classified as a reviewer-agent crash.
-  // This is acceptable because the caller only consults detectReviewerCrash
-  // when the reviewer also failed to emit a recognizable verdict — a
-  // reviewer whose inner tool call errored AND who produced no verdict is
-  // effectively crashed from the operator's perspective.
+  // Scope: an inner tool-result envelope (a tool call the reviewer itself
+  // made) carries the inner tool's own failure data. Its `errorMessage` (or
+  // `type: 'error'` payload) describes that inner tool call, not a
+  // reviewer-agent crash, so the entire envelope subtree is skipped instead
+  // of being walked for crash markers.
+  if (
+    typeof record.toolCallId === 'string' ||
+    record.type === 'tool_result'
+  ) {
+    return null
+  }
   if (typeof record.errorMessage === 'string' && record.errorMessage.trim()) {
     return record.errorMessage.trim()
   }

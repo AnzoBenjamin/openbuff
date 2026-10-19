@@ -15,6 +15,7 @@ import {
   advanceWorkspaceState,
   createInitialWorkspaceState,
 } from '@codebuff/common/types/workspace-state'
+import { getChangeReviewBundleParams } from '@codebuff/common/tools/params/tool/get-change-review-bundle'
 
 import type { SemgrepRunner } from '../services/semgrep-baseline'
 
@@ -53,6 +54,57 @@ describe('getChangeReviewBundle', () => {
     )
     expect(Array.isArray((firstValue as { files: unknown }).files)).toBe(true)
     expect(typeof (firstValue as { diff: unknown }).diff).toBe('string')
+  })
+
+  test('carries the evidence-only snapshotIdUsage warning in the success payload', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-usage-'))
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'changed.txt'), 'initial\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'changed.txt'), 'changed\n')
+
+    const result = await getChangeReviewBundle({ cwd })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as { snapshotIdUsage?: string }
+    expect(typeof bundle.snapshotIdUsage).toBe('string')
+    expect(bundle.snapshotIdUsage).toContain('evidence-only')
+    expect(bundle.snapshotIdUsage).toContain('v3:')
+  })
+
+  test('parses success payloads with and without the additive snapshotIdUsage field', () => {
+    const base = {
+      snapshotId: 'a'.repeat(64),
+      repositoryId: 'repo',
+      workspaceId: 'workspace',
+      headCommit: 'b'.repeat(40),
+      status: '',
+      files: [] as string[],
+      diff: '',
+      truncated: false,
+      ownership: [] as Record<string, unknown>[],
+      validation: [] as Record<string, unknown>[],
+      findings: [] as Record<string, unknown>[],
+    }
+    const parse = (value: unknown) =>
+      getChangeReviewBundleParams.outputSchema.safeParse([
+        { type: 'json', value },
+      ])
+    // Additive optional: a legacy payload without the field still parses.
+    expect(parse(base).success).toBe(true)
+    expect(
+      parse({
+        ...base,
+        snapshotIdUsage:
+          'evidence-only: the bare-hex snapshotId is for drift checks and diff identity only. NEVER pass it (or any bare hex) as params.snapshot_id or params.snapshot_fingerprint — gate/specialist attestation uses the parent gate\'s opaque v3:<64-hex> token.',
+      }).success,
+    ).toBe(true)
   })
 
   test('snapshot identity is independent of display truncation and includes every changed file', async () => {

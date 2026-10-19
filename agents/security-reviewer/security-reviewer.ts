@@ -102,7 +102,7 @@ const definition: SecretAgentDefinition = {
             requirement: { type: 'string' },
             status: {
               type: 'string',
-              enum: ['satisfied', 'missing', 'not_applicable'],
+              enum: ['satisfied', 'missing', 'uncertain'],
             },
             evidence: { type: 'array', items: { type: 'string' } },
           },

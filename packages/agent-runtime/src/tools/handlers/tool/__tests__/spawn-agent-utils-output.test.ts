@@ -121,6 +121,42 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     expect(normalized.reviewedFiles).toEqual(['src/a.ts'])
   })
 
+  test('bounds the attestation-core findings on the oversize summary fallback', () => {
+    const fingerprint = 'v3:' + 'f'.repeat(64)
+    const rawFindings = Array.from({ length: 200 }, (_, index) => ({
+      id: `F-${index}`,
+      detail: 'd'.repeat(20_000),
+    }))
+    const normalized = normalizeSpawnedAgentOutput(
+      {
+        nested: {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: fingerprint,
+          coverage: 'covered',
+          reviewedFiles: ['src/a.ts'],
+          findings: rawFindings,
+        },
+      },
+      'security-reviewer',
+    ) as any
+    expect(normalized.type).toBe('agentReceipt')
+    expect(normalized.truncated).toBe(true)
+    expect(normalized.verdict).toBe('LOOKS_GOOD')
+    expect(normalized.snapshotFingerprint).toBe(fingerprint)
+    // The raw (uncompacted) findings array used to be spread into the
+    // fallback receipt verbatim — megabytes past the 256k bound.
+    expect(Array.isArray(normalized.findings)).toBe(true)
+    expect(normalized.findings.length).toBeLessThanOrEqual(48)
+    for (const finding of normalized.findings) {
+      expect(typeof finding.detail).toBe('string')
+      expect(finding.detail.length).toBeLessThanOrEqual(4_000)
+    }
+    // The whole parent-visible receipt stays within the module's max-chars
+    // bound.
+    expect(JSON.stringify(normalized).length).toBeLessThanOrEqual(256_000)
+  })
+
   test('preserves the attestation core through the depth-collapse fallback', () => {
     let deep: any = {
       schemaVersion: 1,
@@ -1259,5 +1295,98 @@ describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
     expect(
       receipt.errors.some((error) => error.message.includes('task_completed')),
     ).toBe(false)
+  })
+})
+
+/**
+ * Reviewer-family verdict guard (security-reviewer investigation,
+ * .agents/sessions/agent-smoke-2026-10/security-reviewer-investigation.md):
+ * a reviewer-family child that emits a degenerate structured object WITHOUT
+ * a verdict field (e.g. just echoed params + snapshotFingerprint) used to
+ * settle as outcome 'ok' and hand the parent garbage. The receipt builder
+ * now classifies it as retryable schema_invalid. Advisory-family specialists
+ * (family: 'advisory', no verdict) and non-reviewer agents stay outcome 'ok'.
+ */
+describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
+  test('classifies a degenerate reviewer-family payload without a verdict as retryable schema_invalid', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'security-reviewer',
+      agentId: 'sec-degenerate-1',
+      output: {
+        type: 'structuredOutput',
+        value: { family: 'reviewer', snapshotFingerprint: 'x' },
+      },
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toEqual([
+      {
+        message:
+          "security-reviewer receipt outcome 'schema_invalid': security-reviewer returned a reviewer-family receipt without a verdict field (degenerate structured output; automated re-review will be triggered)",
+        retryable: true,
+      },
+    ])
+  })
+
+  test('falls back to the agentType reviewer match when the payload omits family', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'code-reviewer',
+      agentId: 'code-degenerate-1',
+      output: {
+        type: 'structuredOutput',
+        value: { snapshotFingerprint: 'x' },
+      },
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors).toHaveLength(1)
+    expect(receipt.errors[0]?.retryable).toBe(true)
+    expect(receipt.errors[0]?.message).toContain('verdict field')
+  })
+
+  test('keeps an advisory-family specialist at outcome ok despite no verdict', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'product-reviewer',
+      agentId: 'advisory-1',
+      output: {
+        type: 'structuredOutput',
+        value: { family: 'advisory', reviewedFiles: [] },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+  })
+
+  test('keeps a valid reviewer receipt with a verdict at outcome ok', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'security-reviewer',
+      agentId: 'sec-valid-1',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + 'a'.repeat(64),
+          reviewedFiles: ['src/a.ts'],
+        },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+  })
+
+  test('leaves non-reviewer agents without a verdict untouched', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'test-writer',
+      agentId: 'tw-no-verdict',
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'completed', summary: 'done' },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.errors).toEqual([])
   })
 })

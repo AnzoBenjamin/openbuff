@@ -819,7 +819,20 @@ function extractReviewerAttestationCore(
       ...(typeof record.coverage === 'string'
         ? { coverage: record.coverage }
         : {}),
-      ...(Array.isArray(record.findings) ? { findings: record.findings } : {}),
+      ...(Array.isArray(record.findings)
+        ? {
+            // Bounded copy (code-reviewer:spawn-agent-utils.ts:
+            // attestation-core-raw-findings-unbounded): the RAW findings
+            // array used to be copied verbatim, and the oversize
+            // agentReceipt fallbacks in boundAgentOutputForParent spread
+            // this core into the parent-visible receipt, so megabytes of
+            // raw findings could ride past PARENT_AGENT_OUTPUT_MAX_CHARS.
+            // The copy now runs through the module's standard compaction
+            // (item cap + per-string truncation); the full untruncated
+            // payload stays recoverable via the persisted artifact.
+            findings: compactAgentOutputValue(record.findings),
+          }
+        : {}),
     }
   }
   if (record.type === 'json' || record.type === 'structuredOutput') {
@@ -2058,13 +2071,45 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     (endedWithoutSetOutputOrHarvest &&
       !hasRecoverableOutputAnswer &&
       (normalizedOutputIsEmptyPlaceholder || blankLastMessageOutput))
+  // Reviewer-family verdict guard: a reviewer child whose structured payload
+  // is degenerate — an object with no verdict field (e.g. just echoed params
+  // plus a snapshotFingerprint) — used to settle as outcome 'ok' and hand the
+  // parent garbage. Classify it as retryable schema_invalid instead. The
+  // guard keys on the structuredOutput payload when present (reviewer
+  // receipts arrive wrapped), falling back to the normalized record itself;
+  // family === 'advisory' specialists (no verdict) stay outcome 'ok', and
+  // non-reviewer agents are untouched (their agentType strings do not contain
+  // 'reviewer').
+  const reviewerOutputRecord =
+    normalizedOutputRecord &&
+    normalizedOutputRecord.type === 'structuredOutput' &&
+    normalizedOutputRecord.value &&
+    typeof normalizedOutputRecord.value === 'object' &&
+    !Array.isArray(normalizedOutputRecord.value)
+      ? (normalizedOutputRecord.value as Record<string, unknown>)
+      : normalizedOutputRecord
+  // The advisory exclusion runs FIRST so the OR-chain below narrows `family`
+  // to 'reviewer' | undefined for TypeScript (comparing that narrowed type
+  // against 'advisory' afterwards is flagged as TS2367); the semantics are
+  // identical: an advisory-family payload is never reviewer-family output.
+  const isReviewerFamilyOutput =
+    reviewerOutputRecord?.family !== 'advisory' &&
+    (reviewerOutputRecord?.family === 'reviewer' ||
+      (reviewerOutputRecord?.family === undefined &&
+        typeof params.agentType === 'string' &&
+        params.agentType.toLowerCase().includes('reviewer')))
+  const reviewerMissingVerdict =
+    isReviewerFamilyOutput === true &&
+    typeof reviewerOutputRecord?.verdict !== 'string'
   // schema_invalid diagnostic detail: the set_output rejection when one was
   // recorded, else the supervised crash-envelope message that carries the
-  // schema_invalid settle detail.
-  const schemaInvalidDetail =
-    lastSetOutputErrorText ??
-    crashEnvelopeMessage ??
-    'set_output failed schema validation'
+  // schema_invalid settle detail. A degenerate reviewer-family payload names
+  // the real problem (missing verdict) instead of the generic fallback.
+  const schemaInvalidDetail = reviewerMissingVerdict
+    ? `${params.agentType} returned a reviewer-family receipt without a verdict field (degenerate structured output; automated re-review will be triggered)`
+    : (lastSetOutputErrorText ??
+      crashEnvelopeMessage ??
+      'set_output failed schema validation')
   const outcome:
     | 'ok'
     | 'missing_output'
@@ -2078,7 +2123,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
           ? 'crashed'
           : missingOutputEvidence
             ? 'missing_output'
-            : lastSetOutputErrorText
+            : lastSetOutputErrorText || reviewerMissingVerdict
               ? 'schema_invalid'
               : normalizedOutputTruncated
                 ? 'truncated'
