@@ -690,19 +690,26 @@ function truncateReviewerText(value: unknown, maxChars: number): unknown {
  * expected shape (a non-null, non-array array for the array keys; a plain
  * object for `dimensions`) — otherwise the original value is kept. `verdict`,
  * `coverage`, `snapshotFingerprint`, and unknown keys are never touched.
+ *
+ * Retention (reliability-reviewer: shared-reviewer-parse-memo-bounded-retention):
+ * the bounded parse memo is scoped to a SINGLE call (created per invocation,
+ * never module-scope), so at most one call's memo of parsed payloads is alive
+ * at any moment and nothing is retained for the process lifetime between
+ * settles.
  */
 const REVIEWER_JSON_PARSE_MEMO_LIMIT = 64
-const reviewerJsonParseMemo = new Map<string, unknown>()
 
 function coerceReviewerPayloadFields(
   output: Record<string, unknown>,
 ): Record<string, unknown> {
-  // Bounded parse memo: compactReviewerOutput may run repeatedly over the
-  // SAME stringified payload across the settle chain (value branch +
-  // attestation-core extraction), so repeated JSON.parses are wasted work.
-  // Bounded: capped LRU-style (cleared whole when over the bound), miss never
-  // caches, and a rejected parse is not memoized so one bad string never
-  // poisons the cache.
+  // Bounded parse memo: compactReviewerOutput may repeatedly parse the SAME
+  // stringified payload across the settle chain (value branch + attestation-
+  // core extraction), so repeated JSON.parses are wasted work. Bounded and
+  // call-scoped: capped LRU-style (cleared whole when over the bound), miss
+  // never caches, a rejected parse is not memoized so one bad string never
+  // poisons the cache, and the map dies with this call instead of living at
+  // module scope.
+  const reviewerJsonParseMemo = new Map<string, unknown>()
   const parseBoundedJsonString = (raw: unknown): unknown => {
     if (
       typeof raw !== 'string' ||
@@ -1020,25 +1027,72 @@ function summarizeNestedAgentOutput(value: unknown): unknown {
 const OVERSIZE_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000
 const OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES = 50
 
-/**
- * Best-effort TTL sweep for persisted oversize artifacts: delete files in
- * `dir` older than OVERSIZE_ARTIFACT_TTL_MS. Work is capped — at most
- * OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES entries are even stat'ed per call — and
- * every per-entry failure is swallowed so one stuck file cannot starve the
- * rest. A directory-level failure (missing dir, unreadable) aborts the whole
- * sweep silently; it must never propagate into the persist path.
+/*
+ * Rotation offset for the capped sweep window (module scope): each call
+ * resumes from where the previous capped sweep stopped instead of always
+ * starting at the arbitrary readdirSync head. This is what turns the per-call
+ * cap into an across-calls forward-progress guarantee on the persist-hot path
+ * (reliability-reviewer: sweep-cap-no-forward-progress) — with a plain
+ * oldest-first window, entries beyond the first 50 readdir order slots are
+ * never even stat'ed unless older entries get deleted by other sweepers.
  */
+let oversizeArtifactSweepCursor: { dir: string; nextIndex: number } | undefined
+
 function sweepExpiredOversizeArtifacts(dir: string, now: number): void {
   try {
-    let checked = 0
-    for (const entry of readdirSync(dir)) {
-      if (checked >= OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES) return
-      checked += 1
+    // Snapshot the directory listing FIRST so unlinkSync in the deletion
+    // phase below cannot mutate readdirSync's visible iteration mid-loop.
+    const allEntries = readdirSync(dir)
+    if (allEntries.length === 0) {
+      oversizeArtifactSweepCursor = { dir, nextIndex: 0 }
+      return
+    }
+    // Phase 1 (capped): stat at most OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES
+    // entries per call, over a modular rotation window anchored at the
+    // rotation cursor (persisted across calls per directory). The window
+    // WRAPS around the end of the directory (reliability-reviewer:
+    // sweep-cap-no-forward-progress): a head-anchored window whose tail
+    // falls off the end of the directory never stat's those entries on any
+    // call, leaving them stale forever. Wrapping guarantees every call
+    // stats a full contiguous (modular) window, so consecutive sweeps
+    // partition-rotate through the ENTIRE directory.
+    const startIndex =
+      oversizeArtifactSweepCursor?.dir === dir
+        ? oversizeArtifactSweepCursor.nextIndex
+        : 0
+    const startIndexMod = startIndex % allEntries.length
+    const windowSize = Math.min(
+      OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES,
+      allEntries.length,
+    )
+    const mtimeEntries: Array<[string, number]> = []
+    for (let offset = 0; offset < windowSize; offset += 1) {
+      const entry = allEntries[(startIndexMod + offset) % allEntries.length]
       const filePath = join(dir, entry)
       try {
-        if (now - statSync(filePath).mtimeMs > OVERSIZE_ARTIFACT_TTL_MS) {
-          unlinkSync(filePath)
-        }
+        mtimeEntries.push([entry, statSync(filePath).mtimeMs])
+      } catch {
+        // Best-effort per entry: a raced deletion or EACCES on one file
+        // must not stop the sweep.
+      }
+    }
+    // The cursor advances by the window size modulo the (pre-deletion)
+    // directory length, so the next call starts right after this window.
+    oversizeArtifactSweepCursor = {
+      dir,
+      nextIndex: (startIndexMod + windowSize) % allEntries.length,
+    }
+    // Phase 2: order the collected candidate window oldest-first so the cap
+    // always inspects the most-expired entries first.
+    mtimeEntries.sort(([, aMtime], [, bMtime]) => aMtime - bMtime)
+    for (const [entry, mtimeMs] of mtimeEntries) {
+      if (now - mtimeMs <= OVERSIZE_ARTIFACT_TTL_MS) {
+        // Sorted oldest-first: everything after the first non-expired entry
+        // is younger, so the sweep can stop early.
+        break
+      }
+      try {
+        unlinkSync(join(dir, entry))
       } catch {
         // Best-effort per entry: a raced deletion or EACCES on one file
         // must not stop the sweep.
@@ -1052,12 +1106,8 @@ function sweepExpiredOversizeArtifacts(dir: string, now: number): void {
 let oversizeArtifactDirEnsured: string | undefined
 
 function persistOversizeArtifact(serialized: string): string | undefined {
-  try {
-    const dir = join(tmpdir(), 'openbuff-spawn-output')
-    if (oversizeArtifactDirEnsured !== dir) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-      oversizeArtifactDirEnsured = dir
-    }
+  const dir = join(tmpdir(), 'openbuff-spawn-output')
+  const writeAndSweep = (): string => {
     const artifactPath = join(
       dir,
       `${createHash('sha256').update(serialized).digest('hex')}.json`,
@@ -1072,8 +1122,31 @@ function persistOversizeArtifact(serialized: string): string | undefined {
     // module boundary. Deferred per the P2-T1 determinism roadmap.
     sweepExpiredOversizeArtifacts(dir, Date.now())
     return artifactPath
+  }
+  try {
+    if (oversizeArtifactDirEnsured !== dir) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      oversizeArtifactDirEnsured = dir
+    }
+    return writeAndSweep()
   } catch {
-    return undefined
+    // Self-heal the ensured cache (reliability-reviewer:
+    // oversize-artifact-dir-flag-never-reset): a failure here may mean the
+    // artifact directory was removed externally between persists or the
+    // mkdir silently raced. Drop the cache, re-run mkdir, and RETRY the
+    // write once within this call so the very next persist still produces
+    // the recovery artifact instead of surfacing a permanent artifactError.
+    try {
+      oversizeArtifactDirEnsured = undefined
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      oversizeArtifactDirEnsured = dir
+      return writeAndSweep()
+    } catch {
+      // Genuinely unwritable (e.g. TMPDIR points at a file): drop the
+      // cache so a future persist re-runs mkdirSync.
+      oversizeArtifactDirEnsured = undefined
+      return undefined
+    }
   }
 }
 
@@ -1114,17 +1187,36 @@ function boundAgentOutputForParent(
   }
   if (serialized.length <= PARENT_AGENT_OUTPUT_MAX_CHARS) return compacted
   // PR-T2 (D20) Part B: persist the FULL serialized payload so the truncated
-  // parent-visible shape below stays recoverable via read_files. On any
-  // persistence error the three artifact fields are omitted entirely and the
-  // fallback shapes stay byte-identical.
-  const artifactPath = persistOversizeArtifact(serialized)
+  // parent-visible shape below stays recoverable via read_files. When
+  // persistence fails, the receipt carries an explicit, bounded diagnostic
+  // (reliability-reviewer: oversize-review-fallback-silent-data-loss) so the
+  // parent knows the data is no longer fully recoverable via the artifact —
+  // the loss is never silent.
+  // The artifact contract is the FULL UNTRUNCATED original output: the
+  // compacted payload loses vines of string/array content, and persisting
+  // the already-compacted fallback shape would make every artifact claim
+  // ('Full untruncated output persisted') a lie. Serialize the RAW value
+  // first and only fall back to the compacted serialization when the raw
+  // form is not serializable (e.g. a circular reference throws under
+  // JSON.stringify).
+  let fullSerialized: string
+  try {
+    fullSerialized = JSON.stringify(value) ?? serialized
+  } catch {
+    fullSerialized = serialized
+  }
+  const artifactPath = persistOversizeArtifact(fullSerialized)
   const artifactFields = artifactPath
     ? {
         artifactPath,
-        artifactBytes: serialized.length,
+        artifactBytes: fullSerialized.length,
         artifact: 'Full untruncated output persisted; read with read_files.',
       }
-    : {}
+    : {
+        artifactPersisted: false,
+        artifactError:
+          'Oversize agent output could NOT be persisted to the oversize artifact directory (tmp unwritable); the parent-visible payload below is truncated and not fully recoverable via read_files.',
+      }
   if (compacted && typeof compacted === 'object' && !Array.isArray(compacted)) {
     const record = compacted as Record<string, unknown>
     const valueRecord =
@@ -1133,10 +1225,21 @@ function boundAgentOutputForParent(
       !Array.isArray(record.value)
         ? (record.value as Record<string, unknown>)
         : record
+    // Reviewer-family gate (reliability-reviewer:
+    // oversize-review-fallback-silent-data-loss): the review-shaped collapse
+    // below keeps ONLY the fixed reviewer receipt fields, so it must apply
+    // ONLY to reviewer-family payloads — a verdict/reviewedFiles/
+    // requirementCoverage shape on its own is not enough (a non-reviewer
+    // agent could carry arbitrary additional payload fields that would then
+    // be dropped when the persisted artifact is the only recovery path).
+    const isReviewerFamilyPayload =
+      valueRecord.family === 'reviewer' ||
+      agentType?.toLowerCase().includes('reviewer')
     if (
-      typeof valueRecord.verdict === 'string' ||
-      Array.isArray(valueRecord.reviewedFiles) ||
-      Array.isArray(valueRecord.requirementCoverage)
+      isReviewerFamilyPayload &&
+      (typeof valueRecord.verdict === 'string' ||
+        Array.isArray(valueRecord.reviewedFiles) ||
+        Array.isArray(valueRecord.requirementCoverage))
     ) {
       return {
         ...(record.type ? { type: record.type } : {}),
@@ -1313,6 +1416,55 @@ export function normalizeSpawnedAgentOutput(
         )
       }
     }
+    // Some reviewer-family children wrap the receipt ONE level deeper: the
+    // structuredOutput value is an OBJECT whose `output` key holds the
+    // whole receipt as a JSON-encoded STRING (observed live on
+    // compatibility-reviewer). Without unwrapping, the verdict inside that
+    // string is invisible to the reviewer verdict guard and the parent
+    // re-reviews forever. Recognize the receipt-level wrapper only, bounded
+    // and conservative: value must be a non-null non-array object WITHOUT a
+    // string verdict (a verdict-shaped wrapper is already handled above),
+    // and value.output must be a string within the parse bound. The parsed
+    // object then flows through the EXISTING object-value branch unchanged;
+    // the gate's own walker already recognizes verdict-shaped quoted JSON
+    // inside leaf strings, so a malformed/oversize/array parse simply falls
+    // through to the unchanged wrapper path below.
+    if (
+      record.type === 'structuredOutput' &&
+      record.value &&
+      typeof record.value === 'object' &&
+      !Array.isArray(record.value) &&
+      typeof (record.value as Record<string, unknown>).verdict !== 'string'
+    ) {
+      const nestedOutput = (record.value as Record<string, unknown>).output
+      if (
+        typeof nestedOutput === 'string' &&
+        nestedOutput.length <= MAX_REVIEWER_JSON_VALUE_CHARS
+      ) {
+        let parsedOutput: unknown
+        try {
+          parsedOutput = JSON.parse(nestedOutput)
+        } catch {
+          parsedOutput = undefined
+        }
+        if (
+          parsedOutput &&
+          typeof parsedOutput === 'object' &&
+          !Array.isArray(parsedOutput)
+        ) {
+          return boundAgentOutputForParent(
+            {
+              ...record,
+              value: compactReviewerOutput(
+                parsedOutput as Record<string, unknown>,
+                agentType,
+              ),
+            },
+            agentType,
+          )
+        }
+      }
+    }
     if (
       record.type === 'structuredOutput' &&
       record.value &&
@@ -1473,11 +1625,34 @@ export async function finalizeOwnedLibrarianClone(params: {
     await rm(cloneDir, { recursive: true, force: true })
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code
-    // Transient filesystem races (ENOENT already removed, ENOTEMPTY busy) must not fail the receipt.
-    params.logger.warn(
-      { cloneDir, code, error: String(error) },
-      'Transient Librarian clone cleanup failure — ignoring',
-    )
+    if (code === 'ENOENT') {
+      // Transient filesystem race: the clone was already removed (e.g. by a
+      // concurrent finalize); the ownership goal holds, so the receipt may
+      // still report the clone as cleaned up.
+      params.logger.debug(
+        { cloneDir, code },
+        'Librarian clone already removed during cleanup — treating as cleaned',
+      )
+    } else {
+      // reliability-reviewer: librarian-cleanup-reports-cleaned-on-failed-rm —
+      // a non-transient rm failure must NOT be reported as cleaned up, or the
+      // receipt misreports ownership state while the clone silently leaks on
+      // disk. Keep the trusted cloneDir, mark the clone as retained, and
+      // surface an explicit cleanup-failure marker for the parent.
+      params.logger.warn(
+        { cloneDir, code, error: String(error) },
+        'Librarian clone cleanup failed — reporting the clone as retained',
+      )
+      const retainedValue = {
+        ...value,
+        cloneDir,
+        cloneRetained: true,
+        cloneCleanupFailed: true,
+      }
+      return wrapper?.type === 'structuredOutput'
+        ? { ...wrapper, value: retainedValue }
+        : retainedValue
+    }
   }
   const cleanedValue = { ...value, cloneDir: '', cloneRetained: false }
   return wrapper?.type === 'structuredOutput'
@@ -3453,6 +3628,55 @@ export async function executeSubagent(
       const parentSignalAborted =
         (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
       if (parentSignalAborted) {
+        // reliability-reviewer: cancel-rethrow-skips-librarian-clone-cleanup —
+        // A librarian subagent may have already cloned its repo into /tmp when
+        // the parent signal aborts, so rethrowing here must never skip the
+        // clone-cleanup step. Run the same cleanup the success path runs (with
+        // a synthetic cancellation error output) so the clone is not leaked,
+        // then still rethrow so genuine cancellation keeps unwinding the run.
+        try {
+          const cleanedOutput = await finalizeOwnedLibrarianClone({
+            agentType: agentTemplate.id,
+            spawnParams,
+            messageHistory: withDefaults.agentState.messageHistory,
+            output: {
+              type: 'error' as const,
+              message: `Subagent ${agentTemplate.id} was cancelled`,
+            },
+            logger: withDefaults.logger,
+          })
+          withDefaults.logger.debug(
+            {
+              agentType: agentTemplate.id,
+              agentId: withDefaults.agentState.agentId,
+              cancelled: true,
+            },
+            `Cleaned up owned librarian clone resources for cancelled subagent ${agentTemplate.id} (cleanup output: ${JSON.stringify(cleanedOutput)})`,
+          )
+        } catch (cleanupError) {
+          // The cleanup result found nothing to clean (e.g. the subagent never
+          // owned resources); log-and-continue so that this does not mask the
+          // original abort error we still need to re-throw.
+          withDefaults.logger.warn(
+            {
+              agentType: agentTemplate.id,
+              agentId: withDefaults.agentState.agentId,
+              cleanupError:
+                cleanupError instanceof Error
+                  ? cleanupError.message
+                  : String(cleanupError),
+            },
+            `Failed to clean up owned resources of cancelled subagent ${agentTemplate.id}; continuing to rethrow parent cancellation`,
+          )
+        }
+        // reliability-reviewer: cancel-rethrow-skips-librarian-clone-cleanup —
+        // the cancelled/abandoned child runId must still land in the parent's
+        // childRunIds chain (the journal/step-boundary spawn-intent machinery
+        // keys on it) even when this catch path rethrows before the normal
+        // settle tail below would have registered it.
+        if (withDefaults.agentState.runId) {
+          parentAgentState.childRunIds.push(withDefaults.agentState.runId)
+        }
         throw error
       }
       // Degrade instead of throwing: a re-raised error previously propagated

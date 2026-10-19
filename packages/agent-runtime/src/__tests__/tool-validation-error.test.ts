@@ -479,6 +479,118 @@ describe('tool validation error handling', () => {
     }
   })
 
+  it('classifies a balanced-but-unparseable payload as payload_truncated only when the provider reported the cut', () => {
+    // Balanced and fully closed, with no duplicate separators to repair, so
+    // neither the structural heuristic nor the separator repair fires: only
+    // the provider-reported cut (finishReason === 'length') can flip the
+    // classification.
+    const balancedMalformed = '{"paths" "src/a.ts"}'
+
+    const withoutFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'provider-truncation-flag-absent-tool-call-id',
+        input: balancedMalformed,
+      },
+    })
+    expect('error' in withoutFlag).toBe(true)
+    if ('error' in withoutFlag) {
+      expect(withoutFlag.error).not.toContain('payload_truncated')
+    }
+
+    const withFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'provider-truncation-flag-present-tool-call-id',
+        input: balancedMalformed,
+      },
+      providerReportedTruncation: true,
+    })
+    expect('error' in withFlag).toBe(true)
+    if ('error' in withFlag) {
+      expect(withFlag.error).toContain('payload_truncated')
+    }
+  })
+
+  it('threads the streamed transportTruncated marker into the payload_truncated classification', async () => {
+    // End-to-end companion to the parseRawToolCall-level test above: the
+    // stream-only `transportTruncated` marker on a tool-call chunk is consumed
+    // by tool-stream-parser and threaded through stream-parser's executor
+    // context into `parseRawToolCall` as `providerReportedTruncation`. For a
+    // balanced-but-malformed payload — where no structural truncation
+    // heuristic fires — only the provider-reported fact may flip the
+    // classification to payload_truncated.
+    const balancedMalformed = '{"paths" "src/a.ts"}'
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    const runStream = async (transportTruncated: boolean) => {
+      const chunk: StreamChunk = {
+        type: 'tool-call',
+        toolName: 'read_files',
+        toolCallId: transportTruncated
+          ? 'stream-marker-present-tool-call-id'
+          : 'stream-marker-absent-tool-call-id',
+        input: balancedMalformed as any,
+        ...(transportTruncated ? { transportTruncated: true as const } : {}),
+      }
+      async function* mockStream() {
+        yield chunk
+        return promptSuccess('mock-message-id')
+      }
+      const sessionState = getInitialSessionState(mockFileContext)
+      const responseChunks: (string | PrintModeEvent)[] = []
+      const result = await processStream({
+        ...agentRuntimeImpl,
+        agentContext: {},
+        agentState: sessionState.mainAgentState,
+        agentStepId: 'test-step-id',
+        agentTemplate: agentWithReadFiles,
+        ancestorRunIds: [],
+        clientSessionId: 'test-session',
+        fileContext: mockFileContext,
+        fingerprintId: 'test-fingerprint',
+        fullResponse: '',
+        localAgentTemplates: { 'test-agent': agentWithReadFiles },
+        messages: [],
+        prompt: 'test prompt',
+        repoId: undefined,
+        repoUrl: undefined,
+        runId: 'test-run-id',
+        signal: new AbortController().signal,
+        stream: mockStream(),
+        system: 'test system',
+        tools: {},
+        userId: 'test-user',
+        userInputId: 'test-input-id',
+        onCostCalculated: async () => {},
+        onResponseChunk: (chunk) => responseChunks.push(chunk),
+      })
+      return { result, responseChunks }
+    }
+
+    const errorEvents = (chunks: (string | PrintModeEvent)[]) =>
+      chunks.filter(
+        (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+          typeof chunk !== 'string' && chunk.type === 'error',
+      )
+
+    const withMarker = await runStream(true)
+    const withMarkerErrors = errorEvents(withMarker.responseChunks)
+    expect(withMarkerErrors.length).toBe(1)
+    expect(withMarkerErrors[0].message).toContain('payload_truncated')
+    expect(withMarker.result.hadToolCallError).toBe(true)
+
+    // Without the marker the same payload stays on the plain parse-failure
+    // path: the structural heuristic alone never classifies it as truncated.
+    const withoutMarker = await runStream(false)
+    const withoutMarkerErrors = errorEvents(withoutMarker.responseChunks)
+    expect(withoutMarkerErrors.length).toBe(1)
+    expect(withoutMarkerErrors[0].message).not.toContain('payload_truncated')
+  })
+
   it('should preserve provider options from parsed native tool calls', () => {
     const providerOptions = {
       openaiCompatible: {

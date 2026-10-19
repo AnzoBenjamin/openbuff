@@ -86,13 +86,6 @@ const definition: SecretAgentDefinition = {
             enum: ['pass', 'warning', 'block', 'not_applicable'],
           },
         },
-        required: [
-          'inputBoundaries',
-          'authorization',
-          'secretHandling',
-          'resourceSafety',
-          'failureMode',
-        ],
       },
       requirementCoverage: {
         type: 'array',
@@ -110,16 +103,19 @@ const definition: SecretAgentDefinition = {
         },
       },
     },
+    // Fix 2: require ONLY the fields the gate consumes to decide. `findings`
+    // and `requirementCoverage` are read as `?? []`, so requiring them added
+    // rejection surface for no semantic gain; `dimensions` stays required for
+    // `block`-prefixed hard blockers. Dimension keys themselves are optional
+    // (no nested `required`), matching the gate's `entry.dimensions ?? {}`.
     required: [
       'schemaVersion',
-      'family',
       'snapshotFingerprint',
       'reviewedFiles',
       'verdict',
-      'findings',
       'coverage',
       'dimensions',
-      'requirementCoverage',
+      'family',
     ],
   },
   includeMessageHistory: false,

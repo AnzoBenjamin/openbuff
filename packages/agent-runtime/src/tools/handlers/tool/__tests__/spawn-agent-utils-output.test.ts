@@ -1,5 +1,7 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
+import fs from 'node:fs'
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,11 +15,17 @@ import { tmpdir as osTmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
+import { getInitialAgentState } from '@codebuff/common/types/session-state'
+import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
 
 import {
   buildRuntimeAgentReceipt,
+  executeSubagent,
+  finalizeOwnedLibrarianClone,
   normalizeSpawnedAgentOutput,
 } from '../spawn-agent-utils'
+
+import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 
 /**
  * Direct coverage for the M0-T3 sub-agent output durability contract on
@@ -400,6 +408,36 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     expect(first.artifactPath).toBe(second.artifactPath)
   })
 
+  test('recreates the artifact directory when it is removed externally between persists', () => {
+    // reliability-reviewer: oversize-artifact-dir-flag-never-reset — the
+    // module-scope ensured-dir cache must not let one external removal (or a
+    // raced mkdir) permanently break every later persist.
+    const dir = join(osTmpdir(), 'openbuff-spawn-output')
+    const payload = { findings: oversizeFindings(100) }
+    // First persist ensures the directory and warms the module-scope cache.
+    const first = normalizeSpawnedAgentOutput(
+      payload,
+      'security-reviewer',
+    ) as any
+    expect(typeof first.artifactPath).toBe('string')
+    expect(statSync(first.artifactPath).isFile()).toBe(true)
+
+    // External (or raced) removal of the artifact directory between calls.
+    rmSync(dir, { recursive: true, force: true })
+
+    // The next persist must end up re-running mkdir (via cache invalidation
+    // on the failed write attempt) and still produce the recovery artifact
+    // instead of a permanent artifactError.
+    const second = normalizeSpawnedAgentOutput(
+      payload,
+      'security-reviewer',
+    ) as any
+    expect(second.artifactPersisted).toBeUndefined()
+    expect(second.artifactError).toBeUndefined()
+    expect(typeof second.artifactPath).toBe('string')
+    expect(statSync(second.artifactPath).isFile()).toBe(true)
+  })
+
   test('adds artifact fields to the reviewer verdict-shaped fast path when it truncates', () => {
     const findings = oversizeFindings(70)
     const normalized = normalizeSpawnedAgentOutput(
@@ -459,6 +497,95 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
       }
       rmSync(scratchDir, { recursive: true, force: true })
     }
+  })
+
+  test('adds an explicit artifactError diagnostic when persistence fails', () => {
+    // Point TMPDIR at a regular FILE: mkdirSync under it fails with ENOTDIR on
+    // every POSIX runner (root included). The failure must not be silent: the
+    // receipt carries artifactPersisted:false + artifactError so the parent
+    // knows the payload is no longer fully recoverable via read_files.
+    const scratchDir = mkdtempSync(join(osTmpdir(), 'openbuff-artifact-err-'))
+    const blockerFile = join(scratchDir, 'blocker')
+    writeFileSync(blockerFile, 'regular file, not a directory')
+    const previousTmpdir = process.env.TMPDIR
+    process.env.TMPDIR = blockerFile
+    try {
+      const normalized = normalizeSpawnedAgentOutput(
+        { findings: oversizeFindings(100) },
+        'security-reviewer',
+      ) as any
+      expect(normalized.artifactPersisted).toBe(false)
+      expect(typeof normalized.artifactError).toBe('string')
+      expect(normalized.artifactError).toContain('NOT be persisted')
+      expect(normalized.artifactError).toContain('not fully recoverable')
+    } finally {
+      if (previousTmpdir === undefined) {
+        delete process.env.TMPDIR
+      } else {
+        process.env.TMPDIR = previousTmpdir
+      }
+      rmSync(scratchDir, { recursive: true, force: true })
+    }
+  })
+
+  test('does not collapse a non-reviewer oversize receipt to review-shaped value fields', () => {
+    // The review-shaped fast path keeps ONLY the fixed reviewer receipt
+    // fields, so it must not fire for a non-reviewer agent whose payload
+    // happens to carry a requirementCoverage array — its other fields (here:
+    // status + summary + answer) must stay visible in the generic truncated
+    // agentReceipt fallback instead of being dropped.
+    const requirementCoverage = Array.from({ length: 60 }, (_, index) => ({
+      id: `R-${index}`,
+      covered: true,
+      evidence: ['e'.repeat(6_000)],
+    }))
+    const normalized = normalizeSpawnedAgentOutput(
+      {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          summary: 'x'.repeat(4_000),
+          answer: 'y'.repeat(34_000),
+          requirementCoverage,
+        },
+      },
+      'repair-editor',
+    ) as any
+    expect(normalized.type).toBe('agentReceipt')
+    expect(normalized.truncated).toBe(true)
+    expect(normalized.agentType).toBe('repair-editor')
+    expect('value' in normalized).toBe(false)
+    expect(typeof normalized.summary).toBe('string')
+    expect(normalized.summary.length).toBeGreaterThan(0)
+    // Data is still durably recoverable via the artifact.
+    expect(typeof normalized.artifactPath).toBe('string')
+    const persisted = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
+    expect(persisted.value.requirementCoverage).toHaveLength(60)
+    expect(persisted.value.status).toBe('completed')
+    expect(persisted.value.answer).toBe('y'.repeat(34_000))
+  })
+
+  test('still uses the review-shaped fast path for reviewer-family oversize payloads', () => {
+    const findings = oversizeFindings(70)
+    const normalized = normalizeSpawnedAgentOutput(
+      {
+        type: 'structuredOutput',
+        value: {
+          family: 'reviewer',
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'v3:' + '9'.repeat(64),
+          coverage: 'covered',
+          reviewedFiles: ['src/a.ts'],
+          findings,
+        },
+      },
+      'custom-specialist',
+    ) as any
+    // family: 'reviewer' alone routes the payload through the fixed-field
+    // collapse even when agentType does not match *reviewer*.
+    expect(normalized.value.verdict).toBe('LOOKS_GOOD')
+    expect(typeof normalized.artifactPath).toBe('string')
   })
 })
 
@@ -1545,5 +1672,417 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(second.outcome).toBe('ok')
     expect(first.status).toBe('completed')
     expect(second.status).toBe('completed')
+  })
+
+  // Receipt-riding-one-level-deeper envelope (live bug: compatibility-
+  // reviewer settled schema_invalid when the receipt traveled as an object
+  // whose `output` key is a JSON-encoded string of the full receipt).
+  test('unwraps a structuredOutput value whose output key is a JSON string of the full reviewer receipt', () => {
+    const fullReceipt = {
+      family: 'reviewer',
+      schemaVersion: 1,
+      verdict: 'BLOCKING',
+      snapshotFingerprint: fingerprint,
+      coverage: 'covered',
+      reviewedFiles: ['src/proto/client.ts'],
+      findings: [reviewerFinding],
+      requirementCoverage: [{ id: 'R-1', covered: true }],
+      dimensions: { compatibility: 'PASS' },
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-nested-output-1',
+      output: {
+        type: 'structuredOutput',
+        value: { output: JSON.stringify(fullReceipt) },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+    expect(receipt.review?.verdict).toBe('BLOCKING')
+  })
+
+  test('falls through unchanged when the nested output string parses to an array (schema_invalid)', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-nested-output-array',
+      output: {
+        type: 'structuredOutput',
+        value: { output: JSON.stringify([{ verdict: 'NON_BLOCKING' }]) },
+      },
+    })
+    // A parsed array is not a receipt object: it falls through to the
+    // unchanged object-value branch, whose verdict-less reviewer-family
+    // payload still settles retryable schema_invalid.
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.errors[0]?.retryable).toBe(true)
+  })
+
+  // eslint-disable-next-line no-useless-escape
+  test('keeps a schema-echo structuredOutput value settling schema_invalid', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-schema-echo-1',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          properties: { verdict: { type: 'string' } },
+          required: ['verdict'],
+          additionalProperties: false,
+        },
+      },
+    })
+    // A schema echo has no `output` string and no verdict: it must still be
+    // recognized as a verdict-less reviewer-family payload.
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.errors[0]?.retryable).toBe(true)
+    expect(receipt.errors[0]?.message).toContain('verdict field')
+  })
+})
+
+/**
+ * reliability-reviewer: librarian-cleanup-reports-cleaned-on-failed-rm — a
+ * non-transient rm failure must surface the clone as retained (with an
+ * explicit cleanup-failure marker) instead of silently reporting it cleaned;
+ * an ENOENT race may still be treated as cleaned because the ownership goal
+ * (the clone is already gone) already holds.
+ */
+describe('finalizeOwnedLibrarianClone cleanup failure reporting', () => {
+  const logger = {
+    debug() {},
+    info() {},
+    warn() {},
+    error() {},
+  } as any
+
+  const librarianParams = (owned: string) => ({
+    agentType: 'librarian',
+    spawnParams: { repoUrl: 'https://github.com/acme/repo' },
+    messageHistory: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `The repository has been cloned to \`${owned}\`. Use it.`,
+          },
+        ],
+      } as any,
+    ],
+  })
+
+  // Unique, create-and-verify, and digits-only-suffixed (finalizeOwned-
+  // LibrarianClone's ownership check requires a digits-only suffix after
+  // the `/tmp/librarian-repo-` prefix): the suffix embeds this pid plus a
+  // random component and a per-process counter so a stale leftover dir from
+  // an aborted prior run can never collide with a fresh path here; mkdir
+  // failures are retried on a fresh candidate instead of surfacing as
+  // EEXIST/EACCES at setup.
+  let ownedPathCounter = 0
+  const ownedPath = () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      ownedPathCounter += 1
+      const candidate = `/tmp/librarian-repo-${Date.now()}${process.pid}${Math.floor(Math.random() * 1_000_000)}${ownedPathCounter}`
+      try {
+        mkdirSync(candidate, { mode: 0o700 })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          // Collision: retry on a fresh unique candidate.
+          continue
+        }
+        throw error
+      }
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
+    }
+    throw new Error('failed to allocate a unique /tmp/librarian-repo-* path')
+  }
+
+  // Only directories owned by THIS process's pid suffix are pre-cleaned so
+  // we never race a truly parallel run.
+  const preCleanOwnedLeftovers = () => {
+    try {
+      for (const entry of readdirSync('/tmp')) {
+        if (
+          entry.startsWith('librarian-repo-') &&
+          entry.includes(`${process.pid}`)
+        ) {
+          try {
+            fs.rmSync(join('/tmp', entry), { recursive: true, force: true })
+          } catch {
+            // Best-effort cleanup only.
+          }
+        }
+      }
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+
+  test('reports a non-transient rm failure as retained with an explicit cleanup-failure marker', async () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      // Root bypasses directory permission checks, so the induced EACCES
+      // below cannot be reproduced; skip rather than assert the wrong thing.
+      return
+    }
+    preCleanOwnedLeftovers()
+    // ownedPath() already created (and verified) the dir with mode 0o700.
+    const owned = ownedPath()
+    // A write-protected child directory makes rm(cloneDir, {recursive}) fail
+    // with EACCES for a non-root runner: unlinking inside it needs write
+    // permission on the child directory itself.
+    const protectedChild = join(owned, 'protected')
+    // Create with a writable mode, write the blocker INTO it, and only then
+    // flip it to 0o555 — so the induced EACCES happens at the rm step the
+    // finding targets, never at test setup.
+    mkdirSync(protectedChild)
+    writeFileSync(join(protectedChild, 'blocker'), 'x')
+    chmodSync(protectedChild, 0o555)
+    try {
+      const output = (await finalizeOwnedLibrarianClone({
+        ...librarianParams(owned),
+        output: {
+          type: 'structuredOutput',
+          value: { status: 'answered', cloneRetained: false },
+        },
+        logger,
+      })) as any
+      // The receipt must NOT claim the clone was cleaned up while it lives on
+      // disk: keep the trusted cloneDir, mark the clone retained, and flag
+      // the cleanup failure explicitly for the parent.
+      expect(output.value.cloneRetained).toBe(true)
+      expect(output.value.cloneDir).toBe(owned)
+      expect(output.value.cloneCleanupFailed).toBe(true)
+      expect(fs.existsSync(owned)).toBe(true)
+    } finally {
+      // Restore writability so the directory can be removed again.
+      try {
+        chmodSync(join(owned, 'protected'), 0o700)
+      } catch {
+        // Best-effort recovery.
+      }
+      try {
+        fs.rmSync(owned, { recursive: true, force: true })
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+  })
+
+  test('treats an already-removed clone (ENOENT race) as cleaned', async () => {
+    // ownedPath() created the dir; remove it to simulate the race.
+    const owned = ownedPath()
+    rmSync(owned, { recursive: true, force: true })
+    const output = (await finalizeOwnedLibrarianClone({
+      ...librarianParams(owned),
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'answered', cloneRetained: false },
+      },
+      logger,
+    })) as any
+    expect(output.value.cloneRetained).toBe(false)
+    expect(output.value.cloneDir).toBe('')
+    expect(fs.existsSync(owned)).toBe(false)
+  })
+})
+
+/**
+ * reliability-reviewer: cancel-rethrow-skips-librarian-clone-cleanup — when
+ * a librarian subagent already owns a /tmp clone and the PARENT signal is
+ * aborted, the in-process catch path must still finalize the owned clone and
+ * register the abandoned child runId in the parent's childRunIds chain before
+ * rethrowing, instead of leaking the clone and orphaning the runId.
+ */
+describe('executeSubagent cancellation cleanup', () => {
+  const librarianTemplate = {
+    id: 'librarian',
+    displayName: 'Librarian',
+    toolNames: [],
+    spawnableAgents: [],
+    mcpServers: {},
+    systemPrompt: '',
+    instructionsPrompt: '',
+    stepPrompt: '',
+    includeMessageHistory: false,
+    inheritParentSystemPrompt: false,
+    outputMode: 'last_message',
+    inputSchema: {},
+  } as unknown as AgentTemplate
+
+  test('finalizes the owned librarian clone and registers the abandoned runId before rethrowing', async () => {
+    // Clone path must satisfy finalizeOwnedLibrarianClone's ownership check:
+    // `/tmp/librarian-<repoName>-<digits>` with a github repoUrl of the same
+    // repoName.
+    const owned = `/tmp/librarian-repo-${Date.now()}1`
+    mkdirSync(owned, { recursive: true, mode: 0o700 })
+
+    // Loop mocked so it throws while the parent signal is aborted — exactly
+    // the in-process catch/rethrow branch the finding targets.
+    mock.module('../../../../run-agent-step', () => ({
+      loopAgentSteps: async () => {
+        throw new Error('parent aborted during step')
+      },
+    }))
+
+    const finishEvents: Array<Record<string, unknown>> = []
+    const parentAgentState = {
+      ...getInitialAgentState(),
+      agentId: 'parent-1',
+      runId: 'parent-run-1',
+    }
+    const childAgentState = {
+      ...getInitialAgentState(),
+      agentId: 'librarian-1',
+      runId: 'child-run-abandoned-1',
+      messageHistory: [
+        {
+          role: 'user' as const,
+          content: [
+            {
+              type: 'text' as const,
+              text: `The repository has been cloned to \`${owned}\`. Use it.`,
+            },
+          ],
+        },
+      ] as any,
+    }
+
+    try {
+      const abortError = new Error('parent aborted during step')
+      await expect(
+        executeSubagent({
+          ...createTestAgentRuntimeParams(),
+          agentTemplate: librarianTemplate,
+          parentAgentState,
+          agentState: childAgentState,
+          onResponseChunk: (chunk: unknown) => {
+            if (typeof chunk === 'object' && chunk !== null) {
+              finishEvents.push(chunk as Record<string, unknown>)
+            }
+          },
+          isOnlyChild: false,
+          ancestorRunIds: [],
+          prompt: 'do research',
+          spawnParams: { repoUrl: 'https://github.com/acme/repo' },
+          spawnToolCallId: 'call-cancel-1',
+          spawnIndex: 0,
+          localAgentTemplates: {},
+          logger: {
+            debug() {},
+            info() {},
+            warn() {},
+            error() {},
+          } as any,
+          userId: undefined,
+          userInputId: 'u',
+          fingerprintId: 'fingerprint-cancel-1',
+          clientSessionId: 'test-session',
+          fileContext: {
+            files: {},
+            systemPromptAdditionalInfo: undefined,
+          } as any,
+          signal: AbortSignal.abort(new Error('abort reason')),
+          system: '',
+          tools: {},
+        } as any),
+      ).rejects.toThrow('parent aborted during step')
+
+      // The abandoned child runId must still be registered in the parent's
+      // childRunIds chain (the journal/step-boundary spawn-intent machinery
+      // keys on it).
+      expect(parentAgentState.childRunIds).toContain('child-run-abandoned-1')
+
+      // The clone must be cleaned up (not leaked) by the catch path.
+      expect(fs.existsSync(owned)).toBe(false)
+
+      // The finish event must be emitted before the rethrow (subagent_start
+      // plus a subagent_finish carrying the error).
+      expect(
+        finishEvents.some(
+          (event) =>
+            event.type === 'subagent_finish' &&
+            'error' in event &&
+            String(event.error).includes('parent aborted during step'),
+        ),
+      ).toBe(true)
+    } finally {
+      mock.restore()
+      try {
+        fs.rmSync(owned, { recursive: true, force: true })
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+  })
+})
+
+/**
+ * reliability-reviewer: sweep-cap-no-forward-progress — consecutive persists
+ * (each of which runs a best-effort TTL sweep capped at
+ * OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES stat'ed entries) must make forward
+ * progress on a shared artifact directory holding more stale entries than the
+ * per-call cap: after a bounded number of consecutive persists, every stale
+ * artifact must have been swept instead of being perpetually skipped beyond
+ * the cap.
+ */
+describe('oversize artifact sweep forward progress', () => {
+  test('consecutive persists sweep the whole stale backlog beyond the per-call cap', () => {
+    const dir = join(osTmpdir(), 'openbuff-spawn-output')
+    mkdirSync(dir, { recursive: true })
+    // Pre-clean the shared scratch dir so stale-backlog counting is exact.
+    try {
+      for (const entry of readdirSync(dir)) {
+        try {
+          rmSync(join(dir, entry), { force: true })
+        } catch {
+          // Best-effort cleanup only.
+        }
+      }
+    } catch {
+      // Best-effort cleanup only.
+    }
+
+    const staleBacklogCount = 120
+    const staleNames = Array.from(
+      { length: staleBacklogCount },
+      (_, index) => `stale-backlog-${index}.json`,
+    )
+    const twentyFiveHoursAgo = new Date(Date.now() - 25 * 60 * 60 * 1000)
+    for (const name of staleNames) {
+      const path = join(dir, name)
+      writeFileSync(path, '{}')
+      utimesSync(path, twentyFiveHoursAgo, twentyFiveHoursAgo)
+    }
+
+    // Run the bound number of sweeps needed to cover the backlog under the
+    // per-call cap (ceil(120 / 50) = 3), changing persisted payload content
+    // each round so every round really persists a NEW artifact and so the
+    // rotation cursor must advance to reach the remaining stale entries.
+    for (let round = 0; round < 3; round += 1) {
+      const normalized = normalizeSpawnedAgentOutput(
+        {
+          findings: [
+            ...Array.from({ length: 100 }, (_, index) =>
+              // Pad each finding above the oversize bound (well past the
+              // 256k-total persisted payload threshold) so every round really
+              // persists an artifact, keeping round-unique content.
+              `round-${round}-finding-${index}`.padEnd(4_000, 'p'),
+            ),
+          ],
+        },
+        'security-reviewer',
+      ) as any
+      expect(typeof normalized.artifactPath).toBe('string')
+    }
+
+    // Every stale backlog artifact must have been swept after the bounded
+    // number of consecutive persists — no permanently-shadowed over-retention.
+    const survivors = readdirSync(dir).filter((entry) =>
+      entry.startsWith('stale-backlog-'),
+    )
+    expect(survivors).toEqual([])
   })
 })

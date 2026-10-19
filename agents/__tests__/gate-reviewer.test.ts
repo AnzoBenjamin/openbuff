@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 
 import {
+  buildLightweightReceiptShape,
+  buildLightweightReviewContract,
   buildReviewerVerdictRetryNotice,
   classifyReviewerCrash,
   collectParentOwnedRequirementBlockers,
@@ -16,11 +18,14 @@ import {
   diagnoseReviewerVerdictRejection,
   getReviewerFinalizationVerdict,
   getSecurityReviewerFinalizationVerdict,
+  isLightweightReceiptEligible,
   isParentOwnedOrOutOfScopeRequirement,
   isTestCoverageReviewerFinding,
   isTransientReviewerCrash,
   planGateReviewWaves,
+  recoverProseVerdictWithAttestation,
   recoverStructuredReviewerOutputs,
+  shouldEscalateToFullContract,
   stripReviewerPreamble,
   waveKey,
 } from '../base2/gate-reviewer'
@@ -4109,5 +4114,332 @@ describe('gate-reviewer Wave 3 helpers', () => {
     expect(
       waveKey('v3:' + 'e'.repeat(64), 0, ['src/a.ts', 'src/b.ts']),
     ).not.toBe(key)
+  })
+})
+
+// Fix 1 / Fix 4 followups: the fingerprint-gated prose recovery, the
+// deterministic lightweight-tier predicate, the single reduced-contract
+// composer, and the escalation-only guard. Like the Wave 3 helpers these are
+// exports of gate-reviewer.ts (the generator splices them into base2's
+// <gate-helpers-generated> region), so they are tested against the export.
+describe('gate-reviewer lightweight tier and prose recovery helpers', () => {
+  const fingerprint = 'v3:' + 'a'.repeat(64)
+
+  // Fix 1: a prose verdict is credited ONLY when the same tool result also
+  // echoes the exact expected fingerprint AND a pending file path — the double
+  // signal a prompt-injected in-file line cannot produce.
+  test('recoverProseVerdictWithAttestation credits a prose verdict with both attestation signals', () => {
+    const proseReply =
+      'I reviewed the change.\n' +
+      'LOOKS_GOOD: nothing to raise.\n' +
+      `snapshotFingerprint: ${fingerprint}\n` +
+      'reviewedFiles: ["src/a.ts"]'
+    const recovered = recoverProseVerdictWithAttestation(
+      proseReply,
+      fingerprint,
+      ['src/a.ts'],
+    ) as { value: { verdict?: string } }
+    expect(recovered.value.verdict).toBe('LOOKS_GOOD')
+    // The recovered node is verdict-only: no attestation or evidence payload.
+    expect(recovered).toEqual({
+      type: 'json',
+      value: { verdict: 'LOOKS_GOOD', schemaVersion: 1 },
+      schemaVersion: 1,
+    } as unknown as { value: { verdict?: string } })
+  })
+
+  // Fail closed: without the exact expected fingerprint the prose line is
+  // indistinguishable from prompt-injected file content, so the input passes
+  // through byte-identical (same reference).
+  test('recoverProseVerdictWithAttestation is a no-op when the fingerprint is absent', () => {
+    const proseReply =
+      'LOOKS_GOOD: nothing to raise.\nreviewedFiles: ["src/a.ts"]'
+    expect(
+      recoverProseVerdictWithAttestation(proseReply, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(proseReply)
+    // An empty expected fingerprint can never be attested either.
+    expect(
+      recoverProseVerdictWithAttestation(proseReply, '', ['src/a.ts']),
+    ).toBe(proseReply)
+  })
+
+  // Fail closed: fingerprint present but no pending file path, so the review
+  // did not evidence any coverage of what it claims to have reviewed.
+  test('recoverProseVerdictWithAttestation is a no-op when no pending file path appears', () => {
+    const proseReply =
+      'LOOKS_GOOD: nothing to raise.\n' + `snapshotFingerprint: ${fingerprint}`
+    expect(
+      recoverProseVerdictWithAttestation(proseReply, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(proseReply)
+    // An empty pending set has nothing to cross-check against.
+    expect(
+      recoverProseVerdictWithAttestation(
+        proseReply + '\nreviewedFiles: ["src/a.ts"]',
+        fingerprint,
+        [],
+      ),
+    ).not.toBe(proseReply)
+  })
+
+  // Fail closed: R5 is untouched, so prose alone (no verdict line at all) is
+  // never synthesized even with both attestation signals present.
+  test('recoverProseVerdictWithAttestation is a no-op when there is no prose verdict line', () => {
+    const noVerdictLine =
+      'I reviewed everything and have nothing to report.\n' +
+      `snapshotFingerprint: ${fingerprint}\n` +
+      'reviewedFiles: ["src/a.ts"]'
+    expect(
+      recoverProseVerdictWithAttestation(noVerdictLine, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(noVerdictLine)
+  })
+
+  // R0 short-circuit: an already-shaped receipt is returned byte-identical so
+  // recovery can never perturb a result the recognizer already credits.
+  test('recoverProseVerdictWithAttestation returns an already-shaped receipt byte-identical', () => {
+    const alreadyShaped = {
+      type: 'json',
+      value: {
+        schemaVersion: 1,
+        verdict: 'BLOCKING',
+        findings: ['real blocker'],
+        coverage: 'covered',
+        snapshotFingerprint: fingerprint,
+        reviewedFiles: ['src/a.ts'],
+      },
+    }
+    expect(
+      recoverProseVerdictWithAttestation(alreadyShaped, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(alreadyShaped)
+  })
+
+  // INV-A.2 (anti-forgery): recovery never mints attestation or evidence, even
+  // when the reviewer's own prose quotes all of it. The node carries ONLY the
+  // verdict (+ schemaVersion), so the unmodified attestation check still has to
+  // be satisfied by the reviewer's own echoed text.
+  test('recoverProseVerdictWithAttestation never synthesizes attestation or evidence fields', () => {
+    const proseReply =
+      'LOOKS_GOOD: all good.\n' +
+      `snapshotFingerprint: ${fingerprint}\n` +
+      'reviewedFiles: ["src/a.ts"]\n' +
+      'findings: ["none"]\n' +
+      'dimensions: { correctness: pass }\n' +
+      'requirementCoverage: [{ requirement: "x", status: "satisfied" }]'
+    const recovered = recoverProseVerdictWithAttestation(
+      proseReply,
+      fingerprint,
+      ['src/a.ts'],
+    ) as Record<string, unknown> & {
+      value: Record<string, unknown>
+    }
+    expect(Object.keys(recovered.value).sort()).toEqual([
+      'schemaVersion',
+      'verdict',
+    ])
+    for (const forbidden of [
+      'snapshotFingerprint',
+      'reviewedFiles',
+      'findings',
+      'dimensions',
+      'requirementCoverage',
+    ]) {
+      expect(forbidden in recovered).toBe(false)
+      expect(forbidden in recovered.value).toBe(false)
+    }
+    // The synthesized verdict is still unreadable as a credit on its own: no
+    // snapshot attestation exists on the node itself.
+    expect(
+      collectReviewerAttestationIssues(
+        { type: 'json', value: recovered.value },
+        fingerprint,
+        ['src/a.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+      'BLOCKING: reviewer did not attest to every pending file: src/a.ts',
+    ])
+  })
+
+  // FU1: DETERMINISTIC eligibility from runtime facts only — no model claim
+  // participates. A small ordinary source-only set is eligible.
+  test('isLightweightReceiptEligible accepts one to five ordinary source files', () => {
+    expect(isLightweightReceiptEligible(['src/a.ts'])).toBe(true)
+    expect(
+      isLightweightReceiptEligible([
+        'src/a.ts',
+        'src/b.ts',
+        'src/c.ts',
+        'src/d.ts',
+        'src/e.ts',
+      ]),
+    ).toBe(true)
+    // The cap is overridable, and the default stays 5.
+    expect(isLightweightReceiptEligible(['src/a.ts'], { maxFiles: 1 })).toBe(
+      true,
+    )
+    expect(
+      isLightweightReceiptEligible(['src/a.ts', 'src/b.ts'], { maxFiles: 1 }),
+    ).toBe(false)
+  })
+
+  test('isLightweightReceiptEligible rejects empty and oversized pending sets', () => {
+    // An empty set never needs a reduced contract.
+    expect(isLightweightReceiptEligible([])).toBe(false)
+    // Six files exceed the default cap of 5.
+    expect(
+      isLightweightReceiptEligible([
+        'src/a.ts',
+        'src/b.ts',
+        'src/c.ts',
+        'src/d.ts',
+        'src/e.ts',
+        'src/f.ts',
+      ]),
+    ).toBe(false)
+    // Non-string / empty entries are rejected rather than coerced.
+    expect(
+      isLightweightReceiptEligible(['src/a.ts', ''], { maxFiles: 5 }),
+    ).toBe(false)
+    expect(
+      isLightweightReceiptEligible(
+        ['src/a.ts', 42 as unknown as string],
+        { maxFiles: 5 },
+      ),
+    ).toBe(false)
+  })
+
+  // FU1: contract-bearing paths are excluded regardless of file count — a
+  // contract change can break consumers, so it always needs the full contract.
+  test('isLightweightReceiptEligible rejects contract-bearing paths', () => {
+    for (const contractPath of [
+      'package.json',
+      'bun.lock',
+      'src/contracts/review.ts',
+      'src/types.ts',
+      'src/shared/types/review.ts',
+      'tsconfig.json',
+      'bunfig.toml',
+      'schemas/review-schema.ts',
+      'agents/schema.ts',
+      'docs/contract.md',
+    ]) {
+      expect(isLightweightReceiptEligible(['src/a.ts', contractPath])).toBe(
+        false,
+      )
+    }
+    // Case-insensitive: an upper-case contract path is excluded too.
+    expect(isLightweightReceiptEligible(['SRC/A.TS', 'PACKAGE.JSON'])).toBe(
+      false,
+    )
+    // A markdown file outside docs/ is not a contract doc.
+    expect(isLightweightReceiptEligible(['README.md'])).toBe(true)
+  })
+
+  // FU1: the single composer for the reduced contract. A full-contract result
+  // must carry every field and no instruction; a lightweight result must carry
+  // exactly the five-field shape read from buildLightweightReceiptShape().
+  test('buildLightweightReviewContract assembles the reduced or full contract', () => {
+    const lightweight = buildLightweightReviewContract(['src/a.ts', 'src/b.ts'])
+    expect(lightweight.lightweight).toBe(true)
+    expect(lightweight.required).toEqual(
+      buildLightweightReceiptShape().required,
+    )
+    expect(lightweight.required).toEqual([
+      'schemaVersion',
+      'verdict',
+      'snapshotFingerprint',
+      'reviewedFiles',
+      'coverage',
+    ])
+    expect(lightweight.instruction.length).toBeGreaterThan(0)
+    expect(lightweight.instruction).toContain('snapshot fingerprint')
+    expect(lightweight.instruction).toContain('BLOCKING')
+
+    // A contract-bearing path falls back to the FULL contract, no instruction.
+    const full = buildLightweightReviewContract(['package.json'])
+    expect(full.lightweight).toBe(false)
+    expect(full.required).toEqual([
+      'schemaVersion',
+      'verdict',
+      'snapshotFingerprint',
+      'reviewedFiles',
+      'coverage',
+      'dimensions',
+      'family',
+    ])
+    expect(full.instruction).toBe('')
+    // An empty set also falls back to the full contract.
+    expect(buildLightweightReviewContract([]).lightweight).toBe(false)
+  })
+
+  // FU1: ESCALATION-ONLY. A clean lightweight LOOKS_GOOD never escalates; every
+  // other outcome does, so the model can only ever increase scrutiny.
+  test('shouldEscalateToFullContract escalates everything but a clean lightweight LOOKS_GOOD', () => {
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'LOOKS_GOOD',
+        findingCount: 0,
+      }),
+    ).toBe(false)
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'BLOCKING',
+        findingCount: 1,
+      }),
+    ).toBe(true)
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'NON_BLOCKING',
+        findingCount: 0,
+      }),
+    ).toBe(true)
+    // A finding reported beside LOOKS_GOOD still escalates.
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'LOOKS_GOOD',
+        findingCount: 1,
+      }),
+    ).toBe(true)
+    // An absent verdict is not the clean case: fail closed either way.
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: undefined,
+        findingCount: 1,
+      }),
+    ).toBe(true)
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: undefined,
+        findingCount: 0,
+      }),
+    ).toBe(true)
+    // A full-contract review never escalates, whatever it found.
+    for (const verdict of [
+      'LOOKS_GOOD',
+      'NON_BLOCKING',
+      'BLOCKING',
+      undefined,
+    ] as const) {
+      expect(
+        shouldEscalateToFullContract({
+          lightweightUsed: false,
+          verdict,
+          findingCount: 3,
+        }),
+      ).toBe(false)
+    }
   })
 })
