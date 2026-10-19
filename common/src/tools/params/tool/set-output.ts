@@ -4,13 +4,15 @@ import { $getNativeToolCallExampleString } from '../utils'
 
 import type { $ToolParams } from '../../constants'
 import {
-  ATTESTATION_CORE_KEYS,
-  GATE_CRITICAL_KEYS,
-  REQUIRED_DIMENSION_KEYS,
-  REVIEWER_COVERAGE_VALUES,
-  REVIEWER_VERDICT_VALUES,
-  TRUNCATION_DIMENSION_PLACEHOLDER,
+  decodeJsonObjectString,
+  recoverTruncatedJsonObject,
 } from '../../../util/model-payload-recovery'
+
+// C2 of the json-overhaul: the decode layer (recoverTruncatedJsonObject +
+// decodeJsonObjectString) moved verbatim to
+// common/src/util/model-payload-recovery.ts. Re-imported here and re-exported
+// so importer paths (tool-executor, handler, set-output-schema tests) stay
+// untouched.
 
 const toolName = 'set_output'
 const endsAgentStep = false
@@ -29,8 +31,10 @@ const structuredContainerFields = new Set([
 // Receipt-shape constants (GATE_CRITICAL_KEYS, ATTESTATION_CORE_KEYS,
 // REVIEWER_VERDICT_VALUES, REVIEWER_COVERAGE_VALUES,
 // REQUIRED_DIMENSION_KEYS, TRUNCATION_DIMENSION_PLACEHOLDER) moved verbatim to
-// common/src/util/model-payload-recovery.ts (C1 of the json-overhaul) so the
-// runtime-side envelope recovery shares the same canonical definitions.
+// common/src/util/model-payload-recovery.ts (C1 of the json-overhaul), and the
+// JSON decode layer (scan helpers + recoverTruncatedJsonObject +
+// decodeJsonObjectString) followed in C2 so all recovery logic has one
+// canonical home.
 
 // When requirementCoverage is truncated off entirely, do not synthesize
 // `[]` under the recovered verdict. The gate finalizes only on LOOKS_GOOD, so
@@ -38,216 +42,10 @@ const structuredContainerFields = new Set([
 // an explicit `uncertain` entry and force verdict BLOCKING so a mid-essay
 // truncate cannot pass as a complete review.
 
-const scanJsonStringEnd = (s: string, start: number): number | undefined => {
-  if (s[start] !== '"') return undefined
-  let i = start + 1
-  while (i < s.length) {
-    const c = s[i]!
-    if (c === '"') return i + 1
-    if (c === '\\') {
-      if (i + 1 >= s.length) return undefined
-      if (s[i + 1] === 'u') {
-        if (i + 5 >= s.length) return undefined
-        i += 6
-      } else {
-        i += 2
-      }
-      continue
-    }
-    i++
-  }
-  return undefined
-}
-
-const scanComplexEnd = (s: string, start: number): number | undefined => {
-  const open = s[start]
-  if (open !== '{' && open !== '[') return undefined
-  let depth = 0
-  let i = start
-  while (i < s.length) {
-    const c = s[i]!
-    if (c === '"') {
-      const end = scanJsonStringEnd(s, i)
-      if (end === undefined) return undefined
-      i = end
-      continue
-    }
-    if (c === '{' || c === '[') {
-      depth++
-      i++
-      continue
-    }
-    if (c === '}' || c === ']') {
-      depth--
-      i++
-      if (depth === 0) return i
-      continue
-    }
-    i++
-  }
-  return undefined
-}
-
-const scanPrimitiveEnd = (s: string, start: number): number | undefined => {
-  if (s.startsWith('true', start)) return start + 4
-  if (s.startsWith('false', start)) return start + 5
-  if (s.startsWith('null', start)) return start + 4
-  const match = s
-    .slice(start)
-    .match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)
-  return match ? start + match[0].length : undefined
-}
-
-const parseCompleteJsonValue = (
-  s: string,
-  start: number,
-): { value: unknown; end: number } | undefined => {
-  const c = s[start]
-  if (c === undefined) return undefined
-
-  let end: number | undefined
-  if (c === '"') end = scanJsonStringEnd(s, start)
-  else if (c === '{' || c === '[') end = scanComplexEnd(s, start)
-  else end = scanPrimitiveEnd(s, start)
-
-  if (end === undefined) return undefined
-  try {
-    return { value: JSON.parse(s.slice(start, end)) as unknown, end }
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * Recover complete top-level fields from a truncated JSON object string.
- * Only includes keys whose values fully close; never invents incomplete values.
- * When the recovered fields form a reviewer receipt (attestation-core fields
- * plus a recognized verdict/coverage pair) but dimensions/requirementCoverage
- * were cut off mid-essay, fills minimal placeholders so schema validation can
- * still accept a receipt the model already decided. Non-reviewer outputs are
- * returned as recovered, without the reviewer-only keys injected.
- */
-export const recoverTruncatedJsonObject = (
-  input: string,
-): Record<string, unknown> | undefined => {
-  const s = input.trim()
-  if (!s.startsWith('{')) return undefined
-
-  const result: Record<string, unknown> = {}
-  let i = 1
-  const n = s.length
-
-  const skipWs = () => {
-    while (i < n && /\s/.test(s[i]!)) i++
-  }
-
-  while (i < n) {
-    skipWs()
-    if (i >= n || s[i] === '}') break
-
-    if (s[i] !== '"') break
-    const keyParsed = parseCompleteJsonValue(s, i)
-    if (!keyParsed || typeof keyParsed.value !== 'string') break
-    i = keyParsed.end
-    skipWs()
-    if (i >= n || s[i] !== ':') break
-    i++
-    skipWs()
-    if (i >= n) break
-
-    const valueParsed = parseCompleteJsonValue(s, i)
-    if (!valueParsed) break
-    result[keyParsed.value] = valueParsed.value
-    i = valueParsed.end
-    skipWs()
-    if (i >= n) break
-    if (s[i] === ',') {
-      i++
-      continue
-    }
-    if (s[i] === '}') break
-    break
-  }
-
-  if (Object.keys(result).length === 0) return undefined
-
-  const hasGateCritical = GATE_CRITICAL_KEYS.some((key) => key in result)
-  if (!hasGateCritical) return undefined
-
-  const hasAttestationCore = ATTESTATION_CORE_KEYS.every((key) => key in result)
-  // Explicit reviewer-receipt gate: filling dimensions/requirementCoverage is
-  // only valid for the review receipt schema. Requiring recognized
-  // verdict/coverage values keeps non-reviewer subagents whose dynamic schema
-  // omits those keys (but reuses the attestation field names) from getting
-  // reviewer-only keys injected into their output.
-  const isReviewerReceipt =
-    hasAttestationCore &&
-    typeof result.verdict === 'string' &&
-    REVIEWER_VERDICT_VALUES.has(result.verdict) &&
-    typeof result.coverage === 'string' &&
-    REVIEWER_COVERAGE_VALUES.has(result.coverage)
-  if (isReviewerReceipt) {
-    const dims = result.dimensions
-    if (!dims || typeof dims !== 'object' || Array.isArray(dims)) {
-      result.dimensions = Object.fromEntries(
-        REQUIRED_DIMENSION_KEYS.map((key) => [
-          key,
-          TRUNCATION_DIMENSION_PLACEHOLDER,
-        ]),
-      )
-    } else {
-      const dimObj = { ...(dims as Record<string, unknown>) }
-      for (const key of REQUIRED_DIMENSION_KEYS) {
-        if (typeof dimObj[key] !== 'string') {
-          dimObj[key] = TRUNCATION_DIMENSION_PLACEHOLDER
-        }
-      }
-      result.dimensions = dimObj
-    }
-    if (!Array.isArray(result.requirementCoverage)) {
-      result.requirementCoverage = [
-        {
-          requirement: 'requirementCoverage',
-          status: 'uncertain',
-          evidence: [TRUNCATION_DIMENSION_PLACEHOLDER],
-        },
-      ]
-      result.verdict = 'BLOCKING'
-    }
-  }
-
-  return result
-}
-
-export const decodeJsonObjectString = (value: unknown): unknown => {
-  let decoded = value
-  for (let depth = 0; depth < 3 && typeof decoded === 'string'; depth++) {
-    let candidate = decoded.trim()
-    const fenced = candidate.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-    if (fenced) candidate = fenced[1].trim()
-    candidate = candidate.replace(/^\/\/\s*json\s*(?:\r?\n|$)/i, '')
-
-    try {
-      decoded = JSON.parse(candidate) as unknown
-    } catch {
-      let recoverCandidate = candidate
-      if (!recoverCandidate.startsWith('{')) {
-        recoverCandidate = recoverCandidate
-          .replace(/^```(?:json)?\s*/i, '')
-          .replace(/^\/\/\s*json\s*(?:\r?\n|$)/i, '')
-          .trim()
-      }
-      const recovered = recoverTruncatedJsonObject(recoverCandidate)
-      if (recovered) return recovered
-      return value
-    }
-  }
-
-  return decoded !== null &&
-    typeof decoded === 'object' &&
-    !Array.isArray(decoded)
-    ? decoded
-    : value
+// Re-exports keep the historical importer paths intact.
+export {
+  decodeJsonObjectString,
+  recoverTruncatedJsonObject,
 }
 
 export const normalizeStructuredOutputValue = (
