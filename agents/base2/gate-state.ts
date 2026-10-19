@@ -265,6 +265,12 @@ export type Base2ActiveWorkState = Base2GateState & {
     snapshotFingerprint: string
     /** Reviewer family that produced this blocking finding. */
     reviewer?: 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent
+    // Repair-payload carrier: the reviewer's structured finding fields so
+    // repair handoffs carry the actual finding payload, not just id/text.
+    severity?: string
+    dimension?: string
+    evidence?: string[]
+    correction?: string
     createdAt: string
   }>
   /**

@@ -7796,10 +7796,19 @@ describe('base2 verification and reviewer gates', () => {
       expect((afterReview.value as any).input.content).toContain(
         'NON_BLOCKING: reviewer returned non-blocking nits without findings',
       )
-      expect(gen.next().value).toMatchObject({
+      const repairSpawn = gen.next().value as any
+      expect(repairSpawn).toMatchObject({
         toolName: 'spawn_agents',
         input: { agents: [{ agent_type: 'repair-editor' }] },
       })
+      // The placeholder finding must carry a real correction payload so the
+      // repair editor is not spawned blind on an `id: text` line alone.
+      const repairFinding =
+        repairSpawn?.input?.agents?.[0]?.handoff?.findings?.[0] as
+          | { correction?: string }
+          | undefined
+      expect(typeof repairFinding?.correction).toBe('string')
+      expect(repairFinding?.correction).toContain('gate placeholder')
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }

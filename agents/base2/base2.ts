@@ -2976,8 +2976,11 @@ ${guideSections}
           // divergent read) so the verdict-agreement invariant holds. Recovery
           // only widens the input scanned and never synthesizes attestation
           // fields, so the hard rules below still run against it.
-          const derivedSecurityToolResult =
-            recoverStructuredReviewerOutputs(securityToolResult)
+          const derivedSecurityToolResult = recoverProseVerdictWithAttestation(
+            recoverStructuredReviewerOutputs(securityToolResult),
+            securitySpawnFingerprint,
+            securitySpawnFiles,
+          )
           const securityCrash = detectReviewerCrash(derivedSecurityToolResult)
           // Parent-owned process RF strings are not repair targets for security.
           // Pass toolResult so evidence-only parent ownership matches finalization.
@@ -3033,6 +3036,7 @@ ${guideSections}
                   files: securitySpawnFiles,
                   snapshotFingerprint: securitySpawnFingerprint,
                   reviewer: 'security-reviewer' as const,
+                  ...buildReviewerRecordPayload(record, text),
                   createdAt: new Date().toISOString(),
                 }
               },
@@ -3115,7 +3119,7 @@ ${guideSections}
                       ],
                       unknowns: [],
                       findings: activeWorkState.openReviewerFindings.map(
-                        ({ id, text, files, snapshotFingerprint, reviewer }) => ({
+                        ({ id, text, files, snapshotFingerprint, reviewer, severity, dimension, evidence, correction }) => ({
                           id,
                           text,
                           files,
@@ -3123,6 +3127,12 @@ ${guideSections}
                           // Q4-3: carry the owning family so the repair
                           // receipt's findingsAddressed can be scoped to it.
                           ...(reviewer && { reviewer }),
+                          // Repair-payload carrier so repair editors are not
+                          // spawned blind on `id: text` lines alone.
+                          ...(severity && { severity }),
+                          ...(dimension && { dimension }),
+                          ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                          ...(correction && { correction }),
                         }),
                       ),
                       permissions: {
@@ -3172,7 +3182,7 @@ ${guideSections}
                       'Read every target from the live filesystem before editing.',
                       '',
                       ...activeWorkState.openReviewerFindings.map(
-                        (finding) => `${finding.id}: ${finding.text}`,
+                        (finding) => buildReviewerPromptLine(finding),
                       ),
                     ].join('\n'),
                   },
@@ -3899,7 +3909,11 @@ ${guideSections}
                   // input scanned and never synthesizes attestation fields, so
                   // the hard rules below still run against it.
                   const derivedSpecialistToolResult =
-                    recoverStructuredReviewerOutputs(specialistToolResult)
+                    recoverProseVerdictWithAttestation(
+                      recoverStructuredReviewerOutputs(specialistToolResult),
+                      expectedSnapshotId,
+                      specialistScopedFileSets.get(agentType) ?? [],
+                    )
                   const specialistAttestationIssues =
                     collectReviewerAttestationIssues(
                       derivedSpecialistToolResult,
@@ -4096,6 +4110,7 @@ ${guideSections}
                           files: specialistPendingFiles,
                           snapshotFingerprint: expectedSnapshotId,
                           reviewer: agentType as SpecialistReviewerAgent,
+                          ...buildReviewerRecordPayload(record, text),
                           createdAt: new Date().toISOString(),
                         }
                       },
@@ -4254,11 +4269,17 @@ ${guideSections}
                               ],
                               unknowns: [],
                               findings: specialistOpenFindings.map(
-                                ({ id, text, files, snapshotFingerprint }) => ({
+                                ({ id, text, files, snapshotFingerprint, severity, dimension, evidence, correction }) => ({
                                   id,
                                   text,
                                   files,
                                   snapshotFingerprint,
+                                  // Repair-payload carrier so repair editors are not
+                                  // spawned blind on `id: text` lines alone.
+                                  ...(severity && { severity }),
+                                  ...(dimension && { dimension }),
+                                  ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                                  ...(correction && { correction }),
                                 }),
                               ),
                               permissions: {
@@ -4309,7 +4330,7 @@ ${guideSections}
                               'Read every target from the live filesystem before editing.',
                               '',
                               ...specialistOpenFindings.map(
-                                (finding) => `${finding.id}: ${finding.text}`,
+                                (finding) => buildReviewerPromptLine(finding),
                               ),
                             ].join('\n'),
                           },
@@ -6366,6 +6387,10 @@ ${guideSections}
                     | 'code-reviewer'
                     | 'security-reviewer'
                     | SpecialistReviewerAgent,
+                  ...buildReviewerRecordPayload(
+                    correlateReviewerFindingRecord(text, reviewerFindingRecords),
+                    text,
+                  ),
                   createdAt: new Date().toISOString(),
                 }),
               )
@@ -6484,6 +6509,10 @@ ${guideSections}
                   | 'code-reviewer'
                   | 'security-reviewer'
                   | SpecialistReviewerAgent,
+                ...buildReviewerRecordPayload(
+                  correlateReviewerFindingRecord(text, reviewerFindingRecords),
+                  text,
+                ),
                 createdAt: new Date().toISOString(),
               }),
             )
@@ -6594,7 +6623,7 @@ ${guideSections}
                           ],
                           unknowns: [],
                           findings: activeWorkState.openReviewerFindings.map(
-                            ({ id, text, files, snapshotFingerprint, reviewer }) => ({
+                            ({ id, text, files, snapshotFingerprint, reviewer, severity, dimension, evidence, correction }) => ({
                               id,
                               text,
                               files,
@@ -6602,6 +6631,12 @@ ${guideSections}
                               // Q4-3: carry the owning family so the repair
                               // receipt's findingsAddressed can be scoped to it.
                               ...(reviewer && { reviewer }),
+                              // Repair-payload carrier so repair editors are not
+                              // spawned blind on `id: text` lines alone.
+                              ...(severity && { severity }),
+                              ...(dimension && { dimension }),
+                              ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                              ...(correction && { correction }),
                             }),
                           ),
                           permissions: {
@@ -6654,7 +6689,7 @@ ${guideSections}
                           'Read the changed source and the relevant existing test file before editing.',
                           '',
                           ...activeWorkState.openReviewerFindings.map(
-                            (finding) => `${finding.id}: ${finding.text}`,
+                            (finding) => buildReviewerPromptLine(finding),
                           ),
                         ].join('\n'),
                       }
@@ -6692,7 +6727,7 @@ ${guideSections}
                           ],
                           unknowns: [],
                           findings: activeWorkState.openReviewerFindings.map(
-                            ({ id, text, files, snapshotFingerprint, reviewer }) => ({
+                            ({ id, text, files, snapshotFingerprint, reviewer, severity, dimension, evidence, correction }) => ({
                               id,
                               text,
                               files,
@@ -6700,6 +6735,12 @@ ${guideSections}
                               // Q4-3: carry the owning family so the repair
                               // receipt's findingsAddressed can be scoped to it.
                               ...(reviewer && { reviewer }),
+                              // Repair-payload carrier so repair editors are not
+                              // spawned blind on `id: text` lines alone.
+                              ...(severity && { severity }),
+                              ...(dimension && { dimension }),
+                              ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                              ...(correction && { correction }),
                             }),
                           ),
                           permissions: {
@@ -6752,7 +6793,7 @@ ${guideSections}
                           'Keep unrelated diagnostics secondary to this finding set.',
                           '',
                           ...activeWorkState.openReviewerFindings.map(
-                            (finding) => `${finding.id}: ${finding.text}`,
+                            (finding) => buildReviewerPromptLine(finding),
                           ),
                         ].join('\n'),
                       },
@@ -7037,8 +7078,11 @@ ${guideSections}
           // object). Recovery only WIDENS the input scanned — it never
           // synthesizes snapshotFingerprint/reviewedFiles and never loosens a
           // passing rule, so the hard rules below still run against it.
-          const derivedReviewerToolResult =
-            recoverStructuredReviewerOutputs(reviewerToolResult)
+          const derivedReviewerToolResult = recoverProseVerdictWithAttestation(
+            recoverStructuredReviewerOutputs(reviewerToolResult),
+            reviewSnapshotFingerprint,
+            reviewableGateScopeFiles,
+          )
           // Keep the verdict already set by the condoned pass above;
           // otherwise derive it from the reviewer output as before.
           if (!reviewerFinalizationVerdict) {
@@ -8700,6 +8744,62 @@ ${guideSections}
       // reviewer/createdAt) is produced by the caller so receipt reconciliation
       // (findingsAddressed.includes(id)) keeps matching. Inline because
       // handleSteps is serialized via .toString() + new Function(...).
+      //
+      // Repair-payload carrier (degenerate-verdict loop follow-up): reviewer
+      // structured findings carry severity/dimension/evidence/correction, but
+      // the stored blocker string holds only prefixed text, so repair editors
+      // were spawned blind on `id: text` lines alone. These helpers build the
+      // optional record payload and the self-sufficient prompt line. Pure,
+      // no imports, serialization-safe. NOTE (TDZ): the placeholder strings
+      // are inlined here rather than consts — call sites textually precede
+      // this block in the serialized generator, so a const referenced at call
+      // time would be a TDZ ReferenceError.
+      function buildReviewerRecordPayload(
+        record: Record<string, unknown> | undefined,
+        blockerText: string,
+      ): {
+        severity?: string
+        dimension?: string
+        evidence?: string[]
+        correction?: string
+      } {
+        const severity =
+          typeof record?.severity === 'string' ? record.severity : undefined
+        const dimension =
+          typeof record?.dimension === 'string' ? record.dimension : undefined
+        const evidence = Array.isArray(record?.evidence)
+          ? record.evidence.filter(
+              (item): item is string => typeof item === 'string',
+            )
+          : []
+        const correction =
+          typeof record?.correction === 'string' ? record.correction : undefined
+        return {
+          ...(severity ? { severity } : {}),
+          ...(dimension ? { dimension } : {}),
+          ...(evidence.length > 0 ? { evidence: evidence.slice(0, 8) } : {}),
+          ...(correction
+            ? { correction }
+            : !record &&
+                blockerText.includes(
+                  'reviewer returned non-blocking nits without findings',
+                )
+              ? {
+                  correction:
+                    'No source-level finding was provided: this is the gate placeholder for an empty NON_BLOCKING receipt. Re-verify the pending gate files still satisfy the review requirements, run targeted validation if needed, and report the finding addressed in your receipt; do not make unrelated edits.',
+                }
+              : {}),
+        }
+      }
+      function buildReviewerPromptLine(finding: {
+        id: string
+        text: string
+        correction?: string
+      }): string {
+        return finding.correction
+          ? `${finding.id}: ${finding.text}\n   correction: ${finding.correction}`
+          : `${finding.id}: ${finding.text}`
+      }
       function mergeReviewerFindings(
         reviewer: string,
         records: NonNullable<Base2ActiveWorkState['openReviewerFindings']>,
@@ -10032,6 +10132,85 @@ function recoverStructuredReviewerOutputs(toolResult: unknown): unknown {
 }
 
 /**
+ * Fix 1 — FINGERPRINT-GATED PROSE-VERDICT RECOVERY.
+ *
+ * Why this exists: R5 in `extractVerdictObjectFromText` returns null for a
+ * prose-only verdict line (LOOKS_GOOD / NON_BLOCKING / BLOCKING on its own
+ * line) on purpose — synthesizing a verdict from prose ALONE would let
+ * prompt-injected file content (e.g. `// BLOCKING: ...` in a reviewed file)
+ * forge a review. This SEPARATE pre-pass promotes a prose verdict ONLY when
+ * the reviewer's own output ALSO evidences the attestation it was asked to
+ * echo: the exact expected fingerprint AND at least one reviewed file path
+ * appear in the same tool result. That double signal is the recovery's gate;
+ * without BOTH signals this function is a byte-identical no-op.
+ *
+ * INV-A.2 (recovery never mints attestation): the synthetic node carries ONLY
+ * the normalized `verdict` (+ `schemaVersion: 1`). It NEVER synthesizes
+ * `snapshotFingerprint`, `reviewedFiles`, `findings`, `dimensions`, or
+ * `requirementCoverage` — the attestation must still flow from the reviewer's
+ * own echoed text through the separate existing attestation path, so a forged
+ * prose verdict can never satisfy `collectReviewerAttestationIssues`.
+ *
+ * Hoisted top-level `function` (NOT a module-scope const) for the same reason
+ * as `recoverStructuredReviewerOutputs`: `scripts/generate-gate-helpers.ts`
+ * splices ONLY top-level function/type/interface declarations into base2's
+ * `<gate-helpers-generated>` region and emits NO imports and NO module-scope
+ * `const`/`let`. Every regex and lookup is therefore inlined in the body. It
+ * reuses the existing module-private helpers (`collectStructuredReviewerOutputs`,
+ * `collectStrings`, `stripReviewerPreamble`, `hasReviewerLineVerdict`), which
+ * the generator also emits, so the spliced copy resolves them in-region.
+ */
+function recoverProseVerdictWithAttestation(toolResult: unknown, expectedFingerprint: string, pendingFiles: string[]): unknown {
+    // 1. R0 short-circuit: an already-shaped receipt is returned byte-identical.
+    //    `some` (not `every`) matches the recognizer's own "any shaped entry"
+    //    narrowing, so a result the gate already credits is never rewritten.
+    const existing = collectStructuredReviewerOutputs(toolResult);
+    if (existing.some((entry) => entry.schemaVersion !== undefined)) {
+        return toolResult;
+    }
+    // 2. Collect every leaf string and look for prose verdict lines through the
+    //    SAME helpers `diagnoseReviewerVerdictRejection` and
+    //    `collectProseVerdictLines` use, so this recovery and the diagnostic
+    //    agree on what "a prose verdict" is. Record the LAST qualifying line's
+    //    normalized literal (a real receipt tends to follow a quoted example).
+    const texts: string[] = [];
+    collectStrings(toolResult, texts);
+    let lastProseVerdict = '';
+    for (const text of texts) {
+        const cleaned = stripReviewerPreamble(text);
+        for (const rawLine of cleaned.split(/\r?\n/)) {
+            const line = rawLine.trim();
+            const match = /^(LOOKS_GOOD|NON_BLOCKING|BLOCKING)\b/i.exec(line);
+            if (match)
+                lastProseVerdict = match[1].trim().toUpperCase();
+        }
+    }
+    if (!lastProseVerdict)
+        return toolResult;
+    // 3. FAIL CLOSED unless BOTH attestation signals are present in the collected
+    //    text: the exact expected fingerprint string and at least one pending
+    //    file path verbatim as a substring. This is what keeps prompt-injected
+    //    prose from forging a review: a forged line cannot also echo the opaque
+    //    runtime fingerprint AND a real reviewed path unless the reviewer
+    //    itself supplied them.
+    if (typeof expectedFingerprint !== 'string' || expectedFingerprint.length === 0) {
+        return toolResult;
+    }
+    const hasFingerprint = texts.some((text) => text.includes(expectedFingerprint));
+    if (!hasFingerprint)
+        return toolResult;
+    const hasReviewedFile = pendingFiles.some((file) => typeof file === 'string' && file.length > 0 && texts.some((text) => text.includes(file)));
+    if (!hasReviewedFile)
+        return toolResult;
+    // 4. Both signals present: synthesize ONLY the verdict (+ schemaVersion).
+    return {
+        type: 'json',
+        value: { verdict: lastProseVerdict, schemaVersion: 1 },
+        schemaVersion: 1,
+    };
+}
+
+/**
  * Wave 3 (A6) ordered, first-wins verdict-object extraction from ONE leaf
  * string. Returns the normalized verdict object (a plain record carrying at
  * least a canonical `verdict` literal) or null. Recovery NEVER synthesizes
@@ -10055,6 +10234,13 @@ function recoverStructuredReviewerOutputs(toolResult: unknown): unknown {
  *       synthesize from prose: prompt-injection — a reviewed file's content
  *       could contain `// BLOCKING:` and a prose-derived verdict would let it
  *       forge a review.
+ *       ESCAPE HATCH (separate pre-pass, NOT part of this ladder):
+ *       `recoverProseVerdictWithAttestation` is the fingerprint-gated route
+ *       around R5. It only promotes a prose verdict when the SAME tool result
+ *       also echoes the exact expected snapshot fingerprint AND at least one
+ *       pending file path, which a forged in-file line cannot produce. R5
+ *       stays unconditional here so this ladder's fail-closed contract remains
+ *       readable and prose alone can never shape a verdict.
  *
  * Hoisted top-level `function`; every regex is inlined (no module-scope const)
  * so the spliced copy is self-contained.
@@ -10100,7 +10286,10 @@ function extractVerdictObjectFromText(text: string): Record<string, unknown> | n
     }
     if (r3Candidate)
         return normalizeVerdictKeyAndCoverage(r3Candidate);
-    // R5: prose-only verdict line -> null (never synthesize).
+    // R5: prose-only verdict line -> null (never synthesize). The gated prose
+    // route lives in `recoverProseVerdictWithAttestation`, which requires the
+    // expected fingerprint AND a pending file path in the same result; nothing in
+    // this ladder may synthesize a verdict from prose alone.
     return null;
 }
 
@@ -10464,12 +10653,13 @@ function truncateObserved(values: string[]): string[] {
 }
 
 /**
- * Wave 3 (A7) value-showing retry notice. Lists the rejected literal verbatim
- * and the accepted set, and instructs the reviewer to call `set_output` with
- * the required shape. It MUST NOT include the expected `snapshotFingerprint`
- * (that would leak a forgeable attestation target), so it references 'the
- * snapshot id given in your spawn contract' instead. Hoisted top-level
- * `function`; no module-scope state.
+ * Fix 3 — Wave 3 (A7) value-showing retry notice. Lists the rejected literal
+ * verbatim and the accepted set, gives a concrete `Replace <observed> with one
+ * of: <accepted>` correction for each observed literal, and instructs the
+ * reviewer to call `set_output` with the required shape. It MUST NOT include
+ * the expected `snapshotFingerprint` (that would leak a forgeable attestation
+ * target), so it references 'the snapshot id given in your spawn contract'
+ * instead. Hoisted top-level `function`; no module-scope state.
  */
 function buildReviewerVerdictRetryNotice(diag: ReviewerVerdictRejectionDiagnostic, reviewerAgentType: string): string {
     const lines: string[] = [
@@ -10477,10 +10667,29 @@ function buildReviewerVerdictRetryNotice(diag: ReviewerVerdictRejectionDiagnosti
         `Reason (${diag.code}): ${diag.summary}`,
         `Recovery step: ${diag.recoveryStep} (attempt ${diag.attempt}).`,
     ];
+    // Code-specific instruction lines. Each names the exact recovery action so a
+    // weaker model has a single unambiguous next step instead of a generic shape
+    // line it can misread as "prose is fine".
+    if (diag.code === 'no_structured_output') {
+        lines.push('', 'You returned NO structured object at all. You MUST call the `set_output` tool exactly once with the native JSON object described below; prose-only replies are not accepted.');
+    }
+    else if (diag.code === 'prose_only') {
+        lines.push('', 'A prose verdict line is not accepted. You must re-emit the review by calling the `set_output` tool with the native JSON object described below.');
+    }
     if (diag.observed.length > 0) {
         lines.push('', 'Rejected value(s):');
         for (const observed of diag.observed) {
             lines.push(`  - ${observed}`);
+        }
+        // Concrete correction per observed literal: the code that carries observed
+        // literals is only useful if the model is told exactly what to replace them
+        // with. Observed literals keep the truncation `truncateObserved` applied.
+        if (diag.expected.length > 0) {
+            lines.push('', 'Corrections:');
+            const acceptedList = diag.expected.join(' | ');
+            for (const observed of diag.observed) {
+                lines.push(`  - Replace ${observed} with one of: ${acceptedList}`);
+            }
         }
     }
     if (diag.expected.length > 0) {
@@ -10491,6 +10700,181 @@ function buildReviewerVerdictRetryNotice(diag: ReviewerVerdictRejectionDiagnosti
     }
     lines.push('', 'Re-emit your review by calling `set_output` with the required structured object shape:', "  { verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING', findings: [...], coverage: 'covered' | 'missing' | 'n/a', dimensions: {...}, requirementCoverage: [...], snapshotFingerprint: <the snapshot id given in your spawn contract>, reviewedFiles: [...] }", 'Echo the snapshot id given in your spawn contract exactly (do not invent or re-hash one), list every reviewed file, and use only the accepted verdict/coverage literals above. Do not answer in prose.');
     return lines.join('\n');
+}
+
+/**
+ * Fix 4 — LIGHTWEIGHT REVIEWER RECEIPT TIER.
+ *
+ * Small, additive diffs over a handful of files do not need the full review
+ * contract, so this tier lets a caller opt into a reduced receipt shape that a
+ * much weaker (non-SOTA) model can reliably satisfy. Calling it is OPT-IN from
+ * the caller: nothing here changes the default contract, and no gate path
+ * reads it automatically.
+ *
+ * DETERMINISTIC ELIGIBILITY (never model-decided): every input is a runtime
+ * fact — the pending file list and an optional count cap. A model claim or
+ * self-assessment NEVER participates, so a reviewer cannot talk its way into
+ * LESS scrutiny. The model's only influence is ESCALATION via
+ * `shouldEscalateToFullContract`, which can only ever add scrutiny back.
+ *
+ * CONTRACT-BEARING EXCLUSION: a path that defines a manifest, a lockfile, a
+ * schema, a shared type surface, a named contract directory, or contract docs
+ * can break consumers far outside this changeset. Such a change always needs
+ * the FULL review contract — dimensions, requirementCoverage, and findings are
+ * exactly what catches a consumer break — no matter how few files it touches,
+ * so it is excluded here. The predicate deliberately errs toward MORE
+ * exclusion: a false negative would silently downgrade a genuine contract
+ * change to the reduced tier.
+ *
+ * An empty pending set is also ineligible: there is nothing to review, so no
+ * reduced contract is ever needed.
+ *
+ * Pure predicate, no I/O, no module-scope const, so the spliced copy stays
+ * self-contained.
+ */
+function isLightweightReceiptEligible(pendingFiles: string[], opts?: {
+    maxFiles?: number;
+}): boolean {
+    const maxFiles = opts?.maxFiles ?? 5;
+    if (!Array.isArray(pendingFiles))
+        return false;
+    if (pendingFiles.length === 0)
+        return false;
+    if (pendingFiles.length > maxFiles)
+        return false;
+    for (const file of pendingFiles) {
+        if (typeof file !== 'string' || file.length === 0)
+            return false;
+        const lower = file.toLowerCase();
+        const base = lower.slice(lower.lastIndexOf('/') + 1);
+        // Manifests, config, and lockfiles: a dependency/version move changes the
+        // installed graph for every consumer.
+        if (lower.endsWith('.json'))
+            return false;
+        if (lower.endsWith('.lock'))
+            return false;
+        if (lower.endsWith('.toml'))
+            return false;
+        if (base === 'package.json' || base === 'tsconfig.json')
+            return false;
+        if (base === 'bunfig.toml')
+            return false;
+        // Schema surfaces: the wire/shape contract other code is validated against.
+        if (lower.includes('/schema'))
+            return false;
+        if (lower.endsWith('-schema.ts') || lower.endsWith('schema.ts')) {
+            return false;
+        }
+        // Explicit contract directories.
+        if (lower.includes('/contracts/'))
+            return false;
+        // Shared type surface: exported types are consumed outside this changeset.
+        if (lower.endsWith('types.ts') || lower.includes('/types/'))
+            return false;
+        // Contract docs under docs/.
+        if (lower.endsWith('.md') &&
+            (lower.startsWith('docs/') || lower.includes('/docs/'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Fix 4 — the four-to-five field receipt shape a reduced contract would
+ * require: the verdict, the snapshot attestation, the reviewed file list, and
+ * the coverage verdict. `findings`, `dimensions`, and `requirementCoverage`
+ * are intentionally absent because the gate reads each of them as optional
+ * (`?? []` / `?? {}`), so a small additive diff can be satisfied without them.
+ * Paired with `isLightweightReceiptEligible`; calling either is opt-in from the
+ * caller. Hoisted top-level `function`; no module-scope state.
+ */
+function buildLightweightReceiptShape(): {
+    required: string[];
+} {
+    return {
+        required: [
+            'schemaVersion',
+            'verdict',
+            'snapshotFingerprint',
+            'reviewedFiles',
+            'coverage',
+        ],
+    };
+}
+
+/**
+ * Fix 4 — the COMPLETE reduced review contract handed to a caller that opted
+ * into the lightweight tier.
+ *
+ * SINGLE COMPOSITION POINT: the reduced `required` list is read from
+ * `buildLightweightReceiptShape()` instead of being re-listed here, so a future
+ * caller cannot hand-roll a divergent five-field shape. When
+ * `isLightweightReceiptEligible` says no, the FULL contract is returned with an
+ * empty `instruction`, which keeps the caller's default behaviour untouched.
+ *
+ * The `instruction` text is the ESCALATION CHANNEL: the reduced shape lets the
+ * reviewer omit the evidence fields, but ANY substantive observation must still
+ * arrive as `verdict: 'BLOCKING'` with a `findings` entry, and
+ * `shouldEscalateToFullContract` then forces a re-review under the full
+ * contract. The model can therefore only ever INCREASE scrutiny, never reduce
+ * it.
+ *
+ * Hoisted top-level `function`; no module-scope state and no imports, so the
+ * spliced copy is self-contained.
+ */
+function buildLightweightReviewContract(pendingFiles: string[]): {
+    lightweight: boolean;
+    required: string[];
+    instruction: string;
+} {
+    if (!isLightweightReceiptEligible(pendingFiles)) {
+        return {
+            lightweight: false,
+            required: [
+                'schemaVersion',
+                'verdict',
+                'snapshotFingerprint',
+                'reviewedFiles',
+                'coverage',
+                'dimensions',
+                'family',
+            ],
+            instruction: '',
+        };
+    }
+    return {
+        lightweight: true,
+        required: buildLightweightReceiptShape().required,
+        instruction: 'This is a small additive change, so you may omit findings, dimensions, and requirementCoverage. You MUST still echo the snapshot fingerprint exactly as given in your spawn contract and list every pending file in reviewedFiles. If you observe anything substantive, raise it as verdict: BLOCKING with a findings entry instead of omitting it.',
+    };
+}
+
+/**
+ * ESCALATION-ONLY guard for the lightweight tier.
+ *
+ * A lightweight review that surfaced ANYTHING must be re-reviewed under the
+ * full contract, so the model can only ever increase scrutiny: a clean
+ * `LOOKS_GOOD` with zero findings stays lightweight, while any other verdict —
+ * or any finding, even one reported beside `LOOKS_GOOD` — sends the review back
+ * through the full contract. An absent (`undefined`) verdict with findings also
+ * escalates, and an absent verdict with zero findings is treated fail-closed
+ * (it is not the clean LOOKS_GOOD case), so an unreadable receipt never keeps
+ * the reduced tier.
+ *
+ * `lightweightUsed: false` always returns false: a full-contract review needs
+ * no escalation. Hoisted top-level `function`; no module-scope state.
+ */
+function shouldEscalateToFullContract(params: {
+    lightweightUsed: boolean;
+    verdict: 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING' | undefined;
+    findingCount: number;
+}): boolean {
+    if (!params.lightweightUsed)
+        return false;
+    if (params.verdict !== 'LOOKS_GOOD')
+        return true;
+    return params.findingCount > 0;
 }
 
 /**

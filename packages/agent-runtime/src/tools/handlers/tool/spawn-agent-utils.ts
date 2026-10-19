@@ -604,6 +604,16 @@ export function deriveSpawnTemplateCapabilities(params: {
 const REVIEWER_EVIDENCE_ITEM_LIMIT = 3
 const REVIEWER_EVIDENCE_CHARS = 360
 const REVIEWER_REQUIREMENT_EVIDENCE_LIMIT = 2
+/**
+ * Upper size bound for JSON-parsing reviewer payload strings, both the
+ * whole-receipt `structuredOutput.value` branch in normalizeSpawnedAgentOutput
+ * and the per-field coercion in coerceReviewerPayloadFields. Reviewer-family
+ * children sometimes deliver their entire receipt as ONE JSON-encoded string;
+ * the bound keeps a pathological multi-megabyte string from being parsed on
+ * the hot spawn-settle path while every realistic receipt still parses.
+ * Oversize or malformed strings stay on the unchanged fallback path.
+ */
+const MAX_REVIEWER_JSON_VALUE_CHARS = 2_000_000
 const PARENT_AGENT_OUTPUT_MAX_CHARS = 256_000
 const PARENT_AGENT_OUTPUT_STRING_CHARS = 4_000
 /**
@@ -662,6 +672,84 @@ function truncateReviewerText(value: unknown, maxChars: number): unknown {
   return `${value.slice(0, prefixChars)}...[truncated]...${value.slice(-suffixChars)}`
 }
 
+/**
+ * Coerces reviewer-family payload fields that arrive as JSON-encoded STRINGS
+ * into their native shapes: findings/reviewedFiles/requirementCoverage/
+ * advisories → arrays, dimensions → plain object, schemaVersion → number.
+ *
+ * WHY: reviewer-family children (e.g. compatibility-reviewer) sometimes
+ * string-encode these fields — or the entire receipt — instead of emitting
+ * native JSON. Left as strings, the payload reads as a verdict-less degenerate
+ * receipt, so buildRuntimeAgentReceipt classifies it as retryable
+ * schema_invalid and the parent re-reviews forever even though the payload
+ * carries a real verdict.
+ *
+ * Pure and conservative: returns a NEW object, never mutates the input. Every
+ * candidate string stays within MAX_REVIEWER_JSON_VALUE_CHARS, is parsed
+ * inside try/catch, and is used ONLY when the parsed value matches the
+ * expected shape (a non-null, non-array array for the array keys; a plain
+ * object for `dimensions`) — otherwise the original value is kept. `verdict`,
+ * `coverage`, `snapshotFingerprint`, and unknown keys are never touched.
+ */
+const REVIEWER_JSON_PARSE_MEMO_LIMIT = 64
+const reviewerJsonParseMemo = new Map<string, unknown>()
+
+function coerceReviewerPayloadFields(
+  output: Record<string, unknown>,
+): Record<string, unknown> {
+  // Bounded parse memo: compactReviewerOutput may run repeatedly over the
+  // SAME stringified payload across the settle chain (value branch +
+  // attestation-core extraction), so repeated JSON.parses are wasted work.
+  // Bounded: capped LRU-style (cleared whole when over the bound), miss never
+  // caches, and a rejected parse is not memoized so one bad string never
+  // poisons the cache.
+  const parseBoundedJsonString = (raw: unknown): unknown => {
+    if (
+      typeof raw !== 'string' ||
+      raw.length > MAX_REVIEWER_JSON_VALUE_CHARS
+    ) {
+      return undefined
+    }
+    if (reviewerJsonParseMemo.has(raw)) return reviewerJsonParseMemo.get(raw)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return undefined
+    }
+    if (reviewerJsonParseMemo.size >= REVIEWER_JSON_PARSE_MEMO_LIMIT) {
+      reviewerJsonParseMemo.clear()
+    }
+    reviewerJsonParseMemo.set(raw, parsed)
+    return parsed
+  }
+  const coerced: Record<string, unknown> = { ...output }
+  for (const key of [
+    'findings',
+    'reviewedFiles',
+    'requirementCoverage',
+    'advisories',
+  ]) {
+    const parsed = parseBoundedJsonString(output[key])
+    if (Array.isArray(parsed)) coerced[key] = parsed
+  }
+  const parsedDimensions = parseBoundedJsonString(output.dimensions)
+  if (
+    parsedDimensions &&
+    typeof parsedDimensions === 'object' &&
+    !Array.isArray(parsedDimensions)
+  ) {
+    coerced.dimensions = parsedDimensions
+  }
+  if (
+    typeof output.schemaVersion === 'string' &&
+    /^\d+$/.test(output.schemaVersion)
+  ) {
+    coerced.schemaVersion = Number(output.schemaVersion)
+  }
+  return coerced
+}
+
 function compactReviewerOutput(
   output: Record<string, unknown>,
   agentType?: string,
@@ -669,12 +757,21 @@ function compactReviewerOutput(
   const isReviewer =
     output.family === 'reviewer' ||
     agentType?.toLowerCase().includes('reviewer')
-  if (!isReviewer || typeof output.verdict !== 'string') {
+  if (!isReviewer) {
     return output
   }
+  // Coerce stringified reviewer payload fields BEFORE the verdict guard:
+  // reviewer receipts sometimes arrive with findings/reviewedFiles/
+  // requirementCoverage/dimensions/schemaVersion as JSON-encoded strings;
+  // without coercion such a payload reads as a verdict-less degenerate
+  // receipt and the parent re-reviews forever.
+  const coerced = coerceReviewerPayloadFields(output)
+  if (typeof coerced.verdict !== 'string') {
+    return coerced
+  }
 
-  const findings = Array.isArray(output.findings)
-    ? output.findings.map((finding) => {
+  const findings = Array.isArray(coerced.findings)
+    ? coerced.findings.map((finding) => {
         if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
           return finding
         }
@@ -692,10 +789,10 @@ function compactReviewerOutput(
             : {}),
         }
       })
-    : output.findings
+    : coerced.findings
 
-  const requirementCoverage = Array.isArray(output.requirementCoverage)
-    ? output.requirementCoverage.map((requirement) => {
+  const requirementCoverage = Array.isArray(coerced.requirementCoverage)
+    ? coerced.requirementCoverage.map((requirement) => {
         if (
           !requirement ||
           typeof requirement !== 'object' ||
@@ -717,10 +814,10 @@ function compactReviewerOutput(
             : {}),
         }
       })
-    : output.requirementCoverage
+    : coerced.requirementCoverage
 
   return {
-    ...output,
+    ...coerced,
     findings,
     requirementCoverage,
   }
@@ -1183,6 +1280,39 @@ export function normalizeSpawnedAgentOutput(
   }
   if (output && typeof output === 'object' && !Array.isArray(output)) {
     const record = output as Record<string, unknown>
+    // Some reviewer-family children deliver the receipt as a single
+    // JSON-encoded STRING value (observed live on compatibility-reviewer).
+    // Such a string can never qualify for the object branch below, so the
+    // verdict riding inside it is invisible to the reviewer verdict guard
+    // and the parent re-reviews forever. Parse it FIRST (bounded, in
+    // try/catch, never throwing) and flow a parsed non-null non-array object
+    // through the EXISTING object-value branch unchanged. Anything else —
+    // malformed JSON, a parsed array, an oversize string — falls through to
+    // the unchanged wrapper path below.
+    if (
+      record.type === 'structuredOutput' &&
+      typeof record.value === 'string' &&
+      record.value.length <= MAX_REVIEWER_JSON_VALUE_CHARS
+    ) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(record.value)
+      } catch {
+        parsed = undefined
+      }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return boundAgentOutputForParent(
+          {
+            ...record,
+            value: compactReviewerOutput(
+              parsed as Record<string, unknown>,
+              agentType,
+            ),
+          },
+          agentType,
+        )
+      }
+    }
     if (
       record.type === 'structuredOutput' &&
       record.value &&

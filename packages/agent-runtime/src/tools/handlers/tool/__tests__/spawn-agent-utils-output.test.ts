@@ -1390,3 +1390,160 @@ describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
     expect(receipt.errors).toEqual([])
   })
 })
+
+/**
+ * Reviewer stringified-payload coercion (live bug: compatibility-reviewer
+ * set_output payloads whose `value` — or whose inner findings/
+ * reviewedFiles/dimensions/requirementCoverage/schemaVersion fields —
+ * arrived as JSON-encoded STRINGS were left as strings, so the payload read
+ * as a verdict-less degenerate receipt, settled retryable schema_invalid,
+ * and the parent re-reviewed forever despite the real verdict inside.
+ */
+describe('reviewer receipt stringified-payload coercion', () => {
+  const reviewerFinding = {
+    id: 'F-1',
+    text: 'Handle the proto signature change.',
+    severity: 'major',
+    dimension: 'compatibility',
+    evidence: ['v1 uses the old call signature', 'v2 requires the new one'],
+    correction: 'Update the two call sites.',
+  }
+  const fingerprint = 'v3:' + 'a'.repeat(64)
+
+  test('builds an ok receipt from a structuredOutput value that is a JSON string of the full reviewer receipt', () => {
+    const fullReceipt = {
+      family: 'reviewer',
+      schemaVersion: 1,
+      verdict: 'NON_BLOCKING',
+      snapshotFingerprint: fingerprint,
+      coverage: 'covered',
+      reviewedFiles: ['src/proto/client.ts'],
+      findings: [reviewerFinding],
+      requirementCoverage: [{
+        id: 'R-1',
+        covered: true,
+        evidence: ['covered by F-1'],
+      }],
+      dimensions: { compatibility: 'PASS', security: 'SKIP' },
+    }
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-str-receipt-1',
+      output: {
+        type: 'structuredOutput',
+        value: JSON.stringify(fullReceipt),
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+    expect(receipt.review?.verdict).toBe('NON_BLOCKING')
+  })
+
+  test('coerces stringified inner fields on an object value so findings become native arrays', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-inner-str-1',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          family: 'reviewer',
+          schemaVersion: 1,
+          verdict: 'NON_BLOCKING',
+          snapshotFingerprint: fingerprint,
+          coverage: 'covered',
+          reviewedFiles: JSON.stringify(['src/proto/client.ts']),
+          findings: JSON.stringify([reviewerFinding]),
+          requirementCoverage: JSON.stringify([{ id: 'R-1', covered: true }]),
+          dimensions: JSON.stringify({ compatibility: 'PASS' }),
+        },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(receipt.errors).toEqual([])
+    const value = receipt.output as Record<string, unknown> | undefined
+    const inner = value?.value as Record<string, unknown> | undefined
+    expect(Array.isArray(inner?.findings)).toBe(true)
+    expect((inner?.findings as unknown[])[0]).toEqual(reviewerFinding)
+    expect(inner?.dimensions).toEqual({ compatibility: 'PASS' })
+    expect(Array.isArray(inner?.requirementCoverage)).toBe(true)
+    expect(Array.isArray(inner?.reviewedFiles)).toBe(true)
+  })
+
+  test('coerces a schemaVersion string "1" to the number 1', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-schema-str-1',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          family: 'reviewer',
+          schemaVersion: '1',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: fingerprint,
+          reviewedFiles: ['src/a.ts'],
+        },
+      },
+    })
+    expect(receipt.outcome).toBe('ok')
+    const value = receipt.output as Record<string, unknown> | undefined
+    const inner = value?.value as Record<string, unknown> | undefined
+    expect(inner?.schemaVersion).toBe(1)
+  })
+
+  test('falls through unchanged when the value string is not valid JSON (schema_invalid)', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-bad-json-1',
+      output: {
+        type: 'structuredOutput',
+        value: 'this is not JSON at all',
+      },
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.status).toBe('partial')
+    expect(receipt.errors[0]?.retryable).toBe(true)
+  })
+
+  test('falls through unchanged when the value string parses to an array (schema_invalid)', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'compatibility-reviewer',
+      agentId: 'compat-array-json-1',
+      output: {
+        type: 'structuredOutput',
+        value: JSON.stringify([{ verdict: 'NON_BLOCKING' }]),
+      },
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+    expect(receipt.errors[0]?.retryable).toBe(true)
+  })
+
+  // Memoization followup: the same stringified value seen twice within one
+  // settle chain must produce the same coerced receipt both times, and the
+  // memo must not leak state across distinct payloads.
+  test('a repeated stringified value settles identically on the second settle', () => {
+    const stringifiedReceipt = JSON.stringify({
+      schemaVersion: 1,
+      family: 'reviewer',
+      verdict: 'NON_BLOCKING',
+      snapshotFingerprint: '',
+      reviewedFiles: ['src/a.ts'],
+      coverage: 'covered',
+      dimensions: { correctness: 'pass' },
+      findings: [],
+      requirementCoverage: [],
+    })
+    const build = (agentId: string) =>
+      buildRuntimeAgentReceipt({
+        agentType: 'compatibility-reviewer',
+        agentId,
+        output: { type: 'structuredOutput', value: stringifiedReceipt },
+      })
+    const first = build('compat-memo-1')
+    const second = build('compat-memo-2')
+    expect(first.outcome).toBe('ok')
+    expect(second.outcome).toBe('ok')
+    expect(first.status).toBe('completed')
+    expect(second.status).toBe('completed')
+  })
+})
