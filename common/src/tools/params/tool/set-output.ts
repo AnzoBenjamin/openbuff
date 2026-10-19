@@ -3,6 +3,14 @@ import z from 'zod/v4'
 import { $getNativeToolCallExampleString } from '../utils'
 
 import type { $ToolParams } from '../../constants'
+import {
+  ATTESTATION_CORE_KEYS,
+  GATE_CRITICAL_KEYS,
+  REQUIRED_DIMENSION_KEYS,
+  REVIEWER_COVERAGE_VALUES,
+  REVIEWER_VERDICT_VALUES,
+  TRUNCATION_DIMENSION_PLACEHOLDER,
+} from '../../../util/model-payload-recovery'
 
 const toolName = 'set_output'
 const endsAgentStep = false
@@ -18,41 +26,11 @@ const structuredContainerFields = new Set([
   'requirementCoverage',
 ])
 
-const GATE_CRITICAL_KEYS = [
-  'verdict',
-  'snapshotFingerprint',
-  'reviewedFiles',
-] as const
-
-const ATTESTATION_CORE_KEYS = [
-  'schemaVersion',
-  'verdict',
-  'snapshotFingerprint',
-  'reviewedFiles',
-  'findings',
-  'coverage',
-] as const
-
-// Reviewer-receipt enum values (mirrors outputSchema in
-// agents/reviewer/code-reviewer.ts). The placeholder fill below is gated on
-// these values so its coupling to the review receipt shape stays explicit
-// instead of firing for any output that happens to reuse the field names.
-const REVIEWER_VERDICT_VALUES = new Set([
-  'LOOKS_GOOD',
-  'NON_BLOCKING',
-  'BLOCKING',
-])
-const REVIEWER_COVERAGE_VALUES = new Set(['covered', 'missing', 'n/a'])
-
-const REQUIRED_DIMENSION_KEYS = [
-  'correctness',
-  'security',
-  'tests',
-  'apiCompatibility',
-  'performance',
-] as const
-
-const TRUNCATION_DIMENSION_PLACEHOLDER = 'recovered-from-truncated-receipt'
+// Receipt-shape constants (GATE_CRITICAL_KEYS, ATTESTATION_CORE_KEYS,
+// REVIEWER_VERDICT_VALUES, REVIEWER_COVERAGE_VALUES,
+// REQUIRED_DIMENSION_KEYS, TRUNCATION_DIMENSION_PLACEHOLDER) moved verbatim to
+// common/src/util/model-payload-recovery.ts (C1 of the json-overhaul) so the
+// runtime-side envelope recovery shares the same canonical definitions.
 
 // When requirementCoverage is truncated off entirely, do not synthesize
 // `[]` under the recovered verdict. The gate finalizes only on LOOKS_GOOD, so

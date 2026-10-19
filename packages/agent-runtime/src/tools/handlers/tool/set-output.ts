@@ -18,6 +18,10 @@ import type {
 } from '@codebuff/common/types/agent-template'
 import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import {
+  MODEL_PAYLOAD_JSON_CHAR_LIMIT,
+  unwrapArbitraryEnvelope,
+} from '@codebuff/common/util/model-payload-recovery'
 
 type ToolName = 'set_output'
 
@@ -28,7 +32,7 @@ type ToolName = 'set_output'
  * here — before any decode attempt — with explicit recovery guidance instead of
  * failing silently (M0-T3 sub-agent output durability).
  */
-export const MAX_SET_OUTPUT_JSON_CHARS = 1_000_000
+export const MAX_SET_OUTPUT_JSON_CHARS = MODEL_PAYLOAD_JSON_CHAR_LIMIT
 
 export const handleSetOutput = (async (params: {
   previousToolCallFinished: Promise<void>
@@ -285,72 +289,7 @@ function getZodIssueCount(error: unknown): number {
   return Infinity
 }
 
-/**
- * Content-addressed envelope recovery.
- *
- * WHY (user-corrected 2026-10-19): the previous jsonKey-only unwrap was a
- * narrow patch — models keep inventing envelope key names (jsonKey,
- * jsonValue, output, result, ...), so keying on the FIELD NAME chases the
- * bug forever. The principled rule is CONTENT-based: any object whose value
- * yields a receipt shape (string verdict + snapshotFingerprint) is the
- * receipt, regardless of the field name it traveled under.
- *
- * Applies ONLY when the rawOutput itself carries no verdict/fingerprint
- * keys (i.e. it is an envelope, not a receipt). All decode paths are
- * bounded, try/catch, and fall through to the ORIGINAL output unchanged so
- * the existing malformed-JSON + transport-truncation diagnostics keep
- * applying.
- */
-function unwrapArbitraryEnvelope(
-  rawOutput: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (!rawOutput) return rawOutput
-
-  /** A receipt shape: object with string verdict + snapshotFingerprint. */
-  const isReceiptShape = (candidate: unknown): boolean =>
-    !!candidate &&
-    typeof candidate === 'object' &&
-    !Array.isArray(candidate) &&
-    typeof (candidate as Record<string, unknown>).verdict === 'string' &&
-    typeof (candidate as Record<string, unknown>).snapshotFingerprint ===
-      'string'
-
-  // Fast path: the rawOutput is already a receipt at top level.
-  if (isReceiptShape(rawOutput)) return rawOutput
-  if (
-    'verdict' in rawOutput ||
-    'snapshotFingerprint' in rawOutput
-  ) {
-    // Semi-receipt shape (has fingerprint but not verdict, or vice versa) —
-    // NOT an envelope, so leave it for schema validation to diagnose.
-    return rawOutput
-  }
-
-  // 1. Native-object receipt candidate: any value field whose native object
-  //    is already receipt-shaped. Returns the receipt itself.
-  for (const candidate of Object.values(rawOutput)) {
-    if (isReceiptShape(candidate)) {
-      return candidate as Record<string, unknown>
-    }
-  }
-
-  // 2. Stringified receipt candidate: any string-valued field that decodes
-  //    (bounded, try/catch) to a receipt-shaped object. Reuses the existing
-  //    decoder so fenced-json + truncated-receipt recovery keep applying —
-  //    and the field NAME is irrelevant (jsonKey, jsonValue, output,
-  //    result, ... are all covered by the same content rule).
-  for (const candidate of Object.values(rawOutput)) {
-    if (
-      typeof candidate !== 'string' ||
-      candidate.length > MAX_SET_OUTPUT_JSON_CHARS
-    ) {
-      continue
-    }
-    const decoded = decodeJsonObjectString(candidate)
-    if (isReceiptShape(decoded)) {
-      return decoded as Record<string, unknown>
-    }
-  }
-
-  return rawOutput
-}
+// Moved verbatim to common/src/util/model-payload-recovery.ts (C1 of the
+// json-overhaul) so the receipt-shape concept has one canonical home.
+// Re-exported so existing importers of this module keep working.
+export { unwrapArbitraryEnvelope }
