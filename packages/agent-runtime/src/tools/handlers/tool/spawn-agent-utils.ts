@@ -958,15 +958,17 @@ function persistOversizeArtifact(serialized: string): string | undefined {
   try {
     const dir = join(tmpdir(), 'openbuff-spawn-output')
     if (oversizeArtifactDirEnsured !== dir) {
-      mkdirSync(dir, { recursive: true })
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
       oversizeArtifactDirEnsured = dir
     }
     const artifactPath = join(
       dir,
       `${createHash('sha256').update(serialized).digest('hex')}.json`,
     )
-    // Owner-only permissions regardless of the process umask: these files
-    // hold untruncated child output in a shared tmp directory.
+    // Owner-only permissions regardless of the process umask: the scratch
+    // directory itself is created 0o700 and these files are written 0o600,
+    // so untruncated child output in a shared tmp directory stays private
+    // to this user.
     writeFileSync(artifactPath, serialized, { mode: 0o600 })
     // NOTE(P2-T1): operational TTL sweep (mtime expiry), not a replay-
     // deterministic timestamp; the injected clock is not threaded to this
@@ -1013,7 +1015,6 @@ function boundAgentOutputForParent(
       summary: 'Agent output was not serializable.',
     }
   }
-  if (serialized === undefined) return compacted
   if (serialized.length <= PARENT_AGENT_OUTPUT_MAX_CHARS) return compacted
   // PR-T2 (D20) Part B: persist the FULL serialized payload so the truncated
   // parent-visible shape below stays recoverable via read_files. On any

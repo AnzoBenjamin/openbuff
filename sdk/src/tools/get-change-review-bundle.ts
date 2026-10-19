@@ -238,12 +238,45 @@ export async function runGitBounded(
   })
 }
 
+/**
+ * A3 advisory (committed-diff identity under git's C-style quoting): when a
+ * path contains special characters (tabs, quotes, non-ASCII), `git diff`
+ * emits the `b/<path>` half as a C-style-quoted string, e.g.
+ * `b/"path/with\tspace.ts"`. The raw quoted form used to feed the
+ * committed-diff identity file list, so such files hashed under their quoted
+ * spelling instead of their real path. Only QUOTED paths are decoded; ordinary
+ * (unquoted) paths pass through byte-identical so existing behavior never
+ * changes.
+ */
+function unquoteGitPath(raw: string): string {
+  if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) {
+    return raw
+  }
+  const inner = raw.slice(1, -1)
+  return inner.replace(/\\(?:([tn"\\])|([0-7]{1,3}))/g, (_match, simple, octal) => {
+    if (simple !== undefined) {
+      switch (simple) {
+        case 't':
+          return '\t'
+        case 'n':
+          return '\n'
+        case '"':
+          return '"'
+        default:
+          return '\\'
+      }
+    }
+    // \ooo octal byte (1-3 digits) — git's encoding for non-ASCII bytes.
+    return String.fromCharCode(parseInt(octal!, 8))
+  })
+}
+
 /** Extracts the changed-file paths from a committed `git diff` body. */
 function committedDiffFiles(diff: string): string[] {
   const files = new Set<string>()
   for (const line of diff.split('\n')) {
     const match = line.match(/^diff --git a\/.+ b\/(.+)$/)
-    if (match) files.add(match[1])
+    if (match) files.add(unquoteGitPath(match[1]))
   }
   return [...files]
 }
@@ -742,10 +775,19 @@ export async function getChangeReviewBundle(params: {
   // fully untracked directory into a single shallow entry (e.g. `?? .agents/`)
   // that would slip past `isSessionArtifactPath`. `-uall` lists every untracked
   // file individually so session artifacts are matched and filtered reliably.
-  const porcelain = await runGit(
+  // A4 advisory (identity-git-spawns-no-deadline parity): this porcelain spawn
+  // ran with no wall-clock deadline while the identity-only path bounds the
+  // same call. Use the identical bounds so a wedged git fails closed instead of
+  // hanging the bundle build; a timeout resolves exitCode -1, which the
+  // unchanged error mapping below already reports via the exitCode !== 0 branch.
+  const porcelain = await runGitBounded(
     ['status', '--porcelain', '-uall'],
     params.cwd,
     params.signal,
+    {
+      timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
+      maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
+    },
   )
   if (porcelain.exitCode !== 0) {
     return [
