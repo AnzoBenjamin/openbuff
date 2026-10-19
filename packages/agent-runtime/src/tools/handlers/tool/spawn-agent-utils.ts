@@ -10,6 +10,7 @@ import {
 } from '@codebuff/common/util/agent-id-parsing'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-receipt'
+import { MODEL_PAYLOAD_JSON_CHAR_LIMIT } from '@codebuff/common/util/model-payload-recovery'
 import {
   agentHandoffSchema,
   agentReceiptSchema,
@@ -606,14 +607,58 @@ const REVIEWER_EVIDENCE_CHARS = 360
 const REVIEWER_REQUIREMENT_EVIDENCE_LIMIT = 2
 /**
  * Upper size bound for JSON-parsing reviewer payload strings, both the
- * whole-receipt `structuredOutput.value` branch in normalizeSpawnedAgentOutput
+ * whole-receipt `structuredOutput.value` branches in normalizeSpawnedAgentOutput
  * and the per-field coercion in coerceReviewerPayloadFields. Reviewer-family
  * children sometimes deliver their entire receipt as ONE JSON-encoded string;
  * the bound keeps a pathological multi-megabyte string from being parsed on
  * the hot spawn-settle path while every realistic receipt still parses.
  * Oversize or malformed strings stay on the unchanged fallback path.
+ *
+ * C3 (json-overhaul): previously 2_000_000 here while the shared module
+ * (set-output.ts via model-payload-recovery.ts) used 1M. Unified onto the
+ * single MODEL_PAYLOAD_JSON_CHAR_LIMIT bound source — no pinned test relies
+ * on this file's bound accepting anything in the 1M–2M band, so the tighter
+ * (still multi-megabyte-sized-claims-defeating) shared bound is safe.
  */
-const MAX_REVIEWER_JSON_VALUE_CHARS = 2_000_000
+const MAX_REVIEWER_JSON_VALUE_CHARS = MODEL_PAYLOAD_JSON_CHAR_LIMIT
+
+/**
+ * C3 (json-overhaul): the single bounded parse previously inlined THREE times
+ * inside normalizeSpawnedAgentOutput (the keyless `jsonKey` envelope branch,
+ * the `structuredOutput` string-value branch, and the nested
+ * `value.output`-string branch). Each branch parsed the candidate string with
+ * its own `try { JSON.parse } catch { undefined }` inside a length guard;
+ * this helper replaces those unrolled blocks while keeping every branch's
+ * condition, accept-check, and return shape byte-identical.
+ *
+ * Behavior contract (must match the old inline blocks exactly):
+ *  - non-string or oversize candidates → undefined (branch falls through to
+ *    its unchanged wrapper path);
+ *  - malformed JSON → undefined (never throws onto the hot settle path);
+ *  - valid JSON → the parsed value verbatim (null/arrays are NOT filtered
+ *    here because the callers' subsequent `typeof X === 'object' &&
+ *    !Array.isArray(X)` accept-checks handle them — returning them verbatim
+ *    preserves the old parsed-value semantics exactly).
+ *
+ * WHY not `isReceiptShape`/`unwrapArbitraryEnvelope` from the shared module:
+ * the branches intentionally accept a verdict-BEARING object even when
+ * `snapshotFingerprint` is absent (the reviewer-verdict guard downstream
+ * classifies those), while `isReceiptShape` additionally requires a string
+ * snapshotFingerprint — adopting it would drop currently-accepted payloads
+ * (observable drift). The local `verdict === 'string'` accept-checks stay in
+ * the branches; only the duplicated bounded-parse mechanics unified here.
+ */
+function parseBoundedReceiptCandidate(
+  raw: unknown,
+  maxChars: number,
+): unknown | undefined {
+  if (typeof raw !== 'string' || raw.length > maxChars) return undefined
+  try {
+    return JSON.parse(raw) as unknown
+  } catch {
+    return undefined
+  }
+}
 const PARENT_AGENT_OUTPUT_MAX_CHARS = 256_000
 const PARENT_AGENT_OUTPUT_STRING_CHARS = 4_000
 /**
@@ -1400,15 +1445,14 @@ export function normalizeSpawnedAgentOutput(
       !record.type
     ) {
       let unwrapped: unknown = undefined
-      if (
-        typeof record.value === 'string' &&
-        record.value.length <= MAX_REVIEWER_JSON_VALUE_CHARS
-      ) {
-        try {
-          unwrapped = JSON.parse(record.value)
-        } catch {
-          unwrapped = undefined
-        }
+      if (typeof record.value === 'string') {
+        // C3 (json-overhaul): shared bounded-receipt-candidate parse replaces
+        // the inlined bound + try/catch JSON.parse block (behavior identical:
+        // oversize/malformed → undefined → fall through unchanged).
+        unwrapped = parseBoundedReceiptCandidate(
+          record.value,
+          MAX_REVIEWER_JSON_VALUE_CHARS,
+        )
       } else if (
         record.value &&
         typeof record.value === 'object' &&
@@ -1445,15 +1489,15 @@ export function normalizeSpawnedAgentOutput(
     // the unchanged wrapper path below.
     if (
       record.type === 'structuredOutput' &&
-      typeof record.value === 'string' &&
-      record.value.length <= MAX_REVIEWER_JSON_VALUE_CHARS
+      typeof record.value === 'string'
     ) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(record.value)
-      } catch {
-        parsed = undefined
-      }
+      // C3 (json-overhaul): shared bounded-receipt-candidate parse replaces
+      // the inlined bound + try/catch JSON.parse block (behavior identical:
+      // oversize/malformed → undefined → fall through unchanged).
+      const parsed = parseBoundedReceiptCandidate(
+        record.value,
+        MAX_REVIEWER_JSON_VALUE_CHARS,
+      )
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         return boundAgentOutputForParent(
           {
@@ -1488,16 +1532,14 @@ export function normalizeSpawnedAgentOutput(
       typeof (record.value as Record<string, unknown>).verdict !== 'string'
     ) {
       const nestedOutput = (record.value as Record<string, unknown>).output
-      if (
-        typeof nestedOutput === 'string' &&
-        nestedOutput.length <= MAX_REVIEWER_JSON_VALUE_CHARS
-      ) {
-        let parsedOutput: unknown
-        try {
-          parsedOutput = JSON.parse(nestedOutput)
-        } catch {
-          parsedOutput = undefined
-        }
+      if (typeof nestedOutput === 'string') {
+        // C3 (json-overhaul): shared bounded-receipt-candidate parse replaces
+        // the inlined bound + try/catch JSON.parse block (behavior identical:
+        // oversize/malformed → undefined → fall through unchanged).
+        const parsedOutput = parseBoundedReceiptCandidate(
+          nestedOutput,
+          MAX_REVIEWER_JSON_VALUE_CHARS,
+        )
         if (
           parsedOutput &&
           typeof parsedOutput === 'object' &&
