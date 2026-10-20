@@ -72,6 +72,8 @@ const chipForeground = (
   switch (tone) {
     case 'muted':
       return theme.muted
+    case 'primary':
+      return theme.primary
     case 'secondary':
       return theme.secondary
     case 'warning':
@@ -216,7 +218,7 @@ export const StatusBar = ({
                 : statusIndicatorState.phaseLabel || 'thinking...'
             }
             interval={SHIMMER_INTERVAL_MS}
-            primaryColor={theme.secondary}
+            primaryColor={theme.primary}
           />
         )
 
@@ -229,7 +231,7 @@ export const StatusBar = ({
                 : statusIndicatorState.phaseLabel || 'working...'
             }
             interval={SHIMMER_INTERVAL_MS}
-            primaryColor={theme.secondary}
+            primaryColor={theme.primary}
           />
         )
 

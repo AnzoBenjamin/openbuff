@@ -14,7 +14,12 @@ export type StatusBarChipId =
   | 'cost'
   | 'timer'
 
-export type StatusBarChipTone = 'muted' | 'secondary' | 'warning' | 'error'
+export type StatusBarChipTone =
+  | 'muted'
+  | 'primary'
+  | 'secondary'
+  | 'warning'
+  | 'error'
 
 export type StatusBarChip = {
   id: StatusBarChipId
@@ -612,7 +617,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     chips.push({
       id: 'model',
       label: shortenStatusModelName(modelName, modelMaxChars(widthSize)),
-      tone: 'muted',
+      tone: 'primary',
     })
   }
 
@@ -631,7 +636,7 @@ export function selectStatusBarChips(input: SelectStatusBarChipsInput): {
     chips.push({
       id: 'timer',
       label: formatElapsedTime(elapsedSeconds),
-      tone: 'secondary',
+      tone: 'primary',
     })
   }
 
