@@ -822,6 +822,7 @@ function createConfiguredAnthropicModel(
     providerId,
     baseURL: provider.baseURL,
   })
+  const configuredFetch = createConfiguredProviderFetch(resolvedModel)
   const anthropic = createAnthropic({
     baseURL: normalizeAnthropicBaseURL(provider.baseURL),
     // Sent as the `x-api-key` header. Pass an empty string rather than letting
@@ -834,6 +835,7 @@ function createConfiguredAnthropicModel(
         : `ai-sdk/anthropic/${VERSION}/openbuff-custom-provider`,
       ...(isGo && sessionId ? { [OPENCODE_GO_SESSION_HEADER]: sessionId } : {}),
     },
+    ...(configuredFetch ? { fetch: configuredFetch } : {}),
     name: providerId,
   })
 
@@ -896,7 +898,8 @@ export function applyConfiguredProviderRequestCompatibility(
     shouldDowngradeRequiredToolChoiceForProviderModel(resolvedModel) &&
     body.tool_choice === 'required'
   const shouldStripStopSequences =
-    shouldStripStopSequencesForProviderModel(resolvedModel) && 'stop' in body
+    shouldStripStopSequencesForProviderModel(resolvedModel) &&
+    ('stop' in body || 'stop_sequences' in body)
 
   const transformed: Record<string, unknown> = {
     ...body,
@@ -915,6 +918,7 @@ export function applyConfiguredProviderRequestCompatibility(
 
   if (shouldStripStopSequences) {
     delete transformed.stop
+    delete transformed.stop_sequences
   }
 
   return transformed

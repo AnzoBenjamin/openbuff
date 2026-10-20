@@ -562,7 +562,7 @@ describe('model-provider', () => {
     })
 
     test('strips stop sequences for providers that opt out', () => {
-      const transformed = applyConfiguredProviderRequestCompatibility(
+      const transformedOpenAI = applyConfiguredProviderRequestCompatibility(
         {
           model: 'custom-coder',
           messages: [{ role: 'user', content: 'hello' }],
@@ -576,7 +576,23 @@ describe('model-provider', () => {
         },
       )
 
-      expect(transformed.stop).toBeUndefined()
+      expect(transformedOpenAI.stop).toBeUndefined()
+
+      const transformedAnthropic = applyConfiguredProviderRequestCompatibility(
+        {
+          model: 'custom-coder',
+          messages: [{ role: 'user', content: 'hello' }],
+          stop_sequences: ['"cb_easp"'],
+        },
+        {
+          providerModel: 'custom-coder',
+          compatibility: {
+            supportsStopSequences: false,
+          },
+        },
+      )
+
+      expect(transformedAnthropic.stop_sequences).toBeUndefined()
     })
 
     test('keeps stop sequences when providers opt in', () => {
