@@ -13,5 +13,5 @@
 - `bun --cwd` does not run scripts from the repo root reliably; `cd <pkg>` chain works.
 
 ## Follow-ups
-- Phase 2 implementation (D1.2 guard, D2.1 description, D3 tests, D4 commit) — pending in PLAN.md.
-- Optimization opportunity: tool-executor's `parseStringifiedToolInput` chain could converge onto the shared decode layer in a future pass (out of scope for Phase 2).
+- Phase 2 implementation (D1.2 guard, D2.1 description, D3 tests, D4 commit) — DONE (79cd33a85).
+- Tool-executor convergence — DONE (final form): its parse chain stays a deliberately SEPARATE fail-closed family (tool args must never be silently repaired into calls), but its `decodeJsonObjectString` import now points at the canonical module, and the two-family boundary is documented in the recovery module's header comment.

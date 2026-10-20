@@ -1,6 +1,6 @@
 import { endsAgentStepParam, toolNames } from '@codebuff/common/tools/constants'
 import { toolParams } from '@codebuff/common/tools/list'
-import { decodeJsonObjectString } from '@codebuff/common/tools/params/tool/set-output'
+import { decodeJsonObjectString } from '@codebuff/common/util/model-payload-recovery'
 import {
   detectTransportTruncation,
   describeTruncationRecovery,

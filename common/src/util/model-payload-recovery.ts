@@ -1,3 +1,16 @@
+// Two RECOVERY FAMILIES share this module's decode layer, and the boundary is
+// a deliberate design decision (json-overhaul Phase 2 follow-up):
+//  - OUTPUT receipts (set_output handler, spawn settle path): fail-OPEN
+//    content-addressed recovery — a verdict-bearing receipt arriving wrapped
+//    or truncated IS promoted (isReceiptShape / recoverTruncatedJsonObject),
+//    because losing a valid review destroys the gate loop.
+//  - TOOL arguments (tool-executor parseStringifiedToolInput): fail-CLOSED —
+//    parseJsonStringWithRepair / detectTransportTruncation /
+//    tryRecoverTruncatedToolArguments classify and repair, but a truncated
+//    tool argument is NEVER silently applied (evidence-only cursor), because
+//    a guessed edit could corrupt real files. Do NOT merge the two policies:
+//    each fail mode is load-bearing on its own path.
+
 /**
  * Hard ceiling on the serialized JSON text accepted in the set_output `data`
  * field. Oversized payloads historically slipped through decoding and vanished
