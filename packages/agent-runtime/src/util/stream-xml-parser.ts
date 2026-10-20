@@ -8,6 +8,11 @@
 import { toolNameParam, toolXmlName } from '@codebuff/common/tools/constants'
 import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
 
+import {
+  MISSING_TOOL_NAME_REASON,
+  resolveToolName,
+} from './tool-name-key'
+
 // Use flexible tag matching without requiring specific newlines
 const startToolTag = `<${toolXmlName}>`
 const endToolTag = `</${toolXmlName}>`
@@ -272,23 +277,33 @@ function parseToolCallContent(content: string): {
       }
     }
 
-    const toolName = parsed[toolNameParam]
+    // Alias-aware resolution, shared with the text parser: models respell the
+    // injected canonical key constantly, so a block whose name arrived as
+    // tool_name / toolName / tool / name is a legitimate call, not a reason to
+    // drop it (the streaming path used to discard exactly those calls).
+    const resolved = resolveToolName(parsed)
 
-    if (typeof toolName !== 'string') {
+    if (resolved === undefined) {
       return {
         error: {
           code: 'missing_tool_name',
-          message: `Ignored ${toolXmlName} content because ${toolNameParam} was missing or not a string.`,
+          message: `Ignored ${toolXmlName} content because ${MISSING_TOOL_NAME_REASON}`,
         },
       }
     }
 
-    // Remove internal params from the input
+    // Remove internal params from the input, plus ONLY the spelling that
+    // actually supplied the name. Deleting every alias spelling would silently
+    // drop a legitimate param that shares one — `skill` declares a real `name`
+    // param, so {"cb_tool_name":"skill","name":"x"} must keep `name`. A
+    // leftover alias is at worst an unknown key that non-strict param schemas
+    // strip, never a missing-field error.
     const input = { ...parsed }
     delete input[toolNameParam]
+    delete input[resolved.key]
     delete input['cb_easp'] // endsAgentStepParam
 
-    return { toolCall: { toolName, input } }
+    return { toolCall: { toolName: resolved.toolName, input } }
   } catch (err) {
     return {
       error: {

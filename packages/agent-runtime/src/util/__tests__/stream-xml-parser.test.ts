@@ -41,6 +41,69 @@ After text`
       expect(result.toolCalls[0].toolName).toBe('test_tool')
     })
 
+    // Both parsers share resolveToolName: models respell the injected
+    // cb_tool_name constantly, so a respelled name is a real call, not a
+    // reason to discard the block.
+    describe('tool-name aliases', () => {
+      it('should resolve the tool name from a respelled alias key', () => {
+        const state = createStreamParserState()
+        const chunk = `<codebuff_tool_call>
+{"tool_name": "test_tool", "path": "foo.ts"}
+</codebuff_tool_call>`
+
+        const result = parseStreamChunk(chunk, state)
+
+        expect(result.errors).toEqual([])
+        expect(result.toolCalls).toHaveLength(1)
+        expect(result.toolCalls[0].toolName).toBe('test_tool')
+        expect(result.toolCalls[0].input).toEqual({ path: 'foo.ts' })
+        expect(result.toolCalls[0].input).not.toHaveProperty('tool_name')
+      })
+
+      it('should prefer cb_tool_name over a conflicting alias', () => {
+        const state = createStreamParserState()
+        const chunk = `<codebuff_tool_call>
+{"cb_tool_name": "test_tool", "name": "not-a-tool"}
+</codebuff_tool_call>`
+
+        const result = parseStreamChunk(chunk, state)
+
+        expect(result.toolCalls).toHaveLength(1)
+        expect(result.toolCalls[0].toolName).toBe('test_tool')
+        expect(result.toolCalls[0].input).toEqual({ name: 'not-a-tool' })
+      })
+
+      it('should keep a param that shares an alias spelling (skill.name)', () => {
+        const state = createStreamParserState()
+        const chunk = `<codebuff_tool_call>
+{"cb_tool_name": "skill", "name": "release"}
+</codebuff_tool_call>`
+
+        const result = parseStreamChunk(chunk, state)
+
+        expect(result.errors).toEqual([])
+        expect(result.toolCalls).toHaveLength(1)
+        expect(result.toolCalls[0].toolName).toBe('skill')
+        expect(result.toolCalls[0].input).toEqual({ name: 'release' })
+      })
+
+      it('should report missing_tool_name when no tool-name key is present', () => {
+        const state = createStreamParserState()
+        const chunk = `<codebuff_tool_call>
+{"paths": ["a.ts"]}
+</codebuff_tool_call>`
+
+        const result = parseStreamChunk(chunk, state)
+
+        expect(result.toolCalls).toEqual([])
+        expect(result.errors).toHaveLength(1)
+        expect(result.errors[0].code).toBe('missing_tool_name')
+        expect(result.errors[0].message).toBe(
+          'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
+        )
+      })
+    })
+
     it('should handle tool call split across multiple chunks', () => {
       const state = createStreamParserState()
 

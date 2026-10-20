@@ -1,4 +1,5 @@
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
+import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
 
@@ -251,6 +252,121 @@ describe('read_files edit-state recovery', () => {
       expect(value.errorMessage ?? '').not.toContain(
         'capability-bearing edits require a nonempty authoritative projectId and runId',
       )
+    }
+  })
+
+  it('mints no editAnchor instead of throwing when the authoritative scope is empty', async () => {
+    const path = 'src/empty-scope-read.ts'
+    const diskContent = 'line 1\nline 2\n'
+    const rangeSourceContent = 'line 1\nline 2'
+    const symbolPath = 'src/empty-scope-symbols.ts'
+    const symbolContent = 'export function target() {\n  return 1\n}\n'
+    const fileProcessingState = createFileProcessingState()
+
+    // No fileContext/runId: projectId and runId both resolve to '', which
+    // hasAuthoritativeReadCapabilityScope rejects. Every anchor-minting branch
+    // must then degrade to "no editAnchor" instead of letting
+    // encodeReadCapabilityToken throw out of the read_files handler.
+    const fileResult = await handleReadFiles({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-whole-file-read',
+        toolName: 'read_files',
+        input: { paths: [path] },
+      },
+      fileProcessingState,
+      requestFiles: async () =>
+        buildWholeFileReadResultV1([path], () => diskContent),
+      logger,
+    } as any)
+
+    expect(fileResult.output[0]?.type).toBe('json')
+    if (fileResult.output[0]?.type === 'json') {
+      const value = fileResult.output[0].value as any
+      expect(value.results[0]).toMatchObject({
+        selector: 'file',
+        path,
+        status: 'ok',
+        complete: true,
+        content: diskContent,
+      })
+      expect(value.results[0].editAnchor).toBeUndefined()
+    }
+
+    const rangeResult = await handleReadFiles({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-complete-range-read',
+        toolName: 'read_files',
+        input: { ranges: [{ path, startLine: 1, endLine: 2 }] },
+      },
+      fileProcessingState,
+      requestFiles: async () =>
+        buildReadFilesResultV1([
+          {
+            selector: 'range',
+            requestIndex: 0,
+            path,
+            status: 'ok',
+            content: `[RANGE_BLOCK ${path} lines 1..2]\n1\tline 1\n2\tline 2`,
+            sourceContent: rangeSourceContent,
+            startLine: 1,
+            endLine: 2,
+            totalLines: 2,
+            complete: true,
+            editAnchor: {
+              startLine: 1,
+              endLine: 2,
+              contentHash: getContentHash(rangeSourceContent),
+              readCapability: 'cap.v3.upstream-scope-token',
+            },
+          },
+        ]),
+      logger,
+    } as any)
+
+    expect(rangeResult.output[0]?.type).toBe('json')
+    if (rangeResult.output[0]?.type === 'json') {
+      const value = rangeResult.output[0].value as any
+      expect(value.results[0]).toMatchObject({
+        selector: 'range',
+        path,
+        status: 'ok',
+        startLine: 1,
+        endLine: 2,
+        complete: true,
+      })
+      expect(value.results[0].editAnchor).toBeUndefined()
+    }
+
+    // The symbols selector mints slice capabilities through the same issuer, so
+    // an empty scope must not surface one there either.
+    const symbolResult = await handleReadFiles({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-symbol-read',
+        toolName: 'read_files',
+        input: { symbols: [{ path: symbolPath, names: ['target'] }] },
+      },
+      fileProcessingState,
+      requestFiles: async () => buildWholeFileReadResultV1([], () => null),
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === symbolPath ? symbolContent : null,
+      logger,
+    } as any)
+
+    expect(symbolResult.output[0]?.type).toBe('json')
+    if (symbolResult.output[0]?.type === 'json') {
+      const value = symbolResult.output[0].value as any
+      expect(value.results[0]).toMatchObject({
+        selector: 'symbols',
+        path: symbolPath,
+      })
+      expect(value.results[0].slices?.length ?? 0).toBeGreaterThan(0)
+      for (const slice of value.results[0].slices ?? []) {
+        expect(slice.editAnchor).toBeUndefined()
+        expect(slice.readCapability).toBeUndefined()
+      }
     }
   })
 

@@ -370,12 +370,12 @@ After text`
       {
         type: 'parse_error',
         message:
-          'Ignored codebuff_tool_call content because cb_tool_name was missing or not a string.',
+          'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
       },
     ])
   })
 
-  it('should trim whitespace from text segments', () => {
+  it('should preserve whitespace around text segments', () => {
     const text = `   
   Text with whitespace  
    
@@ -556,7 +556,7 @@ describe('parseTextWithToolCalls tool-name aliases', () => {
       {
         type: 'parse_error',
         message:
-          'Ignored codebuff_tool_call content because cb_tool_name was missing or not a string.',
+          'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
       },
     ])
   })

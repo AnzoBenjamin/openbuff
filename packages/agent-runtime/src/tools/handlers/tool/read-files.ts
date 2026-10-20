@@ -67,7 +67,12 @@ export const handleReadFiles = (async (
     fileProcessingState,
   } = params
   const capabilityIssuer = {
-    projectId: fileContext.projectRoot,
+    // Matches the other handlers (rewrite_symbol / replace_range / str_replace
+    // / edit_transaction): a missing fileContext or projectRoot degrades to an
+    // empty project id, which hasAuthoritativeReadCapabilityScope rejects, so
+    // no read capability is minted instead of the handler throwing a raw
+    // TypeError.
+    projectId: fileContext?.projectRoot ?? '',
     runId: params.runId ?? '',
   }
   const pathInputs = toolCall.input.paths ?? []
@@ -223,6 +228,10 @@ export const handleReadFiles = (async (
         result.complete &&
         typeof result.content === 'string'
       ) {
+        const scope = { ...capabilityIssuer, path: result.path }
+        // Same guard as mintBlockEditAnchor: a non-authoritative scope (empty
+        // projectId/runId) mints no capability instead of throwing.
+        if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
         const contentHash = getContentHash(result.content)
         const startLine = 1
         const endLine = normalizeLineEndings(result.content).split('\n').length
@@ -230,7 +239,7 @@ export const handleReadFiles = (async (
           startLine,
           endLine,
           hash: contentHash,
-          scope: { ...capabilityIssuer, path: result.path },
+          scope,
         })
         return { startLine, endLine, contentHash, readCapability }
       }
@@ -240,11 +249,13 @@ export const handleReadFiles = (async (
         result.editAnchor &&
         /^sha256:[a-f0-9]{64}$/.test(result.editAnchor.contentHash)
       ) {
+        const scope = { ...capabilityIssuer, path: result.path }
+        if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
         const readCapability = encodeReadCapabilityToken({
           startLine: result.startLine,
           endLine: result.endLine,
           hash: result.editAnchor.contentHash,
-          scope: { ...capabilityIssuer, path: result.path },
+          scope,
         })
         return {
           startLine: result.startLine,
@@ -257,7 +268,7 @@ export const handleReadFiles = (async (
     })()
     const refs =
       result.selector === 'file'
-        ? fileContext.tokenCallers?.[result.path]
+        ? fileContext?.tokenCallers?.[result.path]
         : undefined
     const resultWithoutCapability = { ...result }
     if ('editAnchor' in resultWithoutCapability) {
@@ -599,11 +610,19 @@ export const handleReadFiles = (async (
       continue
     }
 
+    const symbolScope = { ...capabilityIssuer, path: request.path }
     const slices = (
-      await extractSlices(rawContent, request.path, request.names, undefined, {
-        ...capabilityIssuer,
-        path: request.path,
-      })
+      await extractSlices(
+        rawContent,
+        request.path,
+        request.names,
+        undefined,
+        // A non-authoritative scope mints no slice capability instead of
+        // letting encodeReadCapabilityToken throw.
+        hasAuthoritativeReadCapabilityScope(symbolScope)
+          ? symbolScope
+          : undefined,
+      )
     ).map((slice) => {
       if (!slice.readCapability) return slice
       const contentHash = getContentHash(slice.content)
@@ -611,7 +630,7 @@ export const handleReadFiles = (async (
         startLine: slice.startLine,
         endLine: slice.endLine,
         hash: contentHash,
-        scope: { ...capabilityIssuer, path: request.path },
+        scope: symbolScope,
       })
       const sliceWithoutCapability = { ...slice }
       delete sliceWithoutCapability.readCapability

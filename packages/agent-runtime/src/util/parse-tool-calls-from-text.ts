@@ -6,6 +6,11 @@ import {
 import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
 import { escapeRegexForLiteral as escapeRegex } from '@codebuff/common/util/language-profiles'
 
+import {
+  MISSING_TOOL_NAME_REASON,
+  resolveToolName,
+} from './tool-name-key'
+
 // Module-level constant: building the extraction RegExp inside
 // parseTextWithToolCalls allocated a fresh RegExp per assistant-text parse in
 // the hot tool-call path. The tag literals are fixed at module load, so the
@@ -19,22 +24,6 @@ export const TOOL_EXTRACTION_PATTERN = new RegExp(
   `${escapeRegex(startToolTag)}([\\s\\S]*?)${escapeRegex(endToolTag)}`,
   'gs',
 )
-
-// Ordered spellings of the injected tool-name key. Providers and models
-// re-spell `cb_tool_name` as tool_name / toolName / tool / name often enough
-// that treating the canonical key as the only legal spelling turned a
-// formatting quirk into a hard runtime error: the whole <codebuff_tool_call>
-// was discarded with "cb_tool_name was missing or not a string" even though
-// the intended call was obvious. Aliases are consulted only when the canonical
-// key is absent or blank, so a real cb_tool_name always wins (see
-// resolveToolName).
-const TOOL_NAME_KEYS = [
-  toolNameParam,
-  'tool_name',
-  'toolName',
-  'tool',
-  'name',
-] as const
 
 export type ParsedToolCallFromText = {
   type: 'tool_call'
@@ -132,8 +121,7 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
         } else {
           segments.push({
             type: 'parse_error',
-            message:
-              'Ignored codebuff_tool_call content because cb_tool_name was missing or not a string.',
+            message: `Ignored codebuff_tool_call content because ${MISSING_TOOL_NAME_REASON}`,
           })
         }
       }
@@ -179,36 +167,6 @@ export function parseToolCallsFromText(
         segment.type === 'tool_call',
     )
     .map(({ toolName, input }) => ({ toolName, input }))
-}
-
-/**
- * Resolves the tool name from a parsed <codebuff_tool_call> object.
- *
- * The canonical key is checked first and alone: when it holds a non-blank
- * string the result matches the old constant-only lookup, so the common path
- * does no alias work. Only a missing / blank / non-string canonical value walks
- * TOOL_NAME_KEYS, where the first non-blank string in list order wins so
- * precedence never depends on JSON key order.
- *
- * The supplying key travels back with the name so the caller can remove
- * exactly that spelling and leave the others alone — they may be real params.
- */
-function resolveToolName(
-  parsed: Record<string, unknown>,
-): { toolName: string; key: string } | undefined {
-  const canonical = parsed[toolNameParam]
-  if (typeof canonical === 'string' && canonical.trim() !== '') {
-    return { toolName: canonical.trim(), key: toolNameParam }
-  }
-
-  for (const key of TOOL_NAME_KEYS) {
-    const value = parsed[key]
-    if (typeof value === 'string' && value.trim() !== '') {
-      return { toolName: value.trim(), key }
-    }
-  }
-
-  return undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
