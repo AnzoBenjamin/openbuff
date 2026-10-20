@@ -19,6 +19,7 @@ import type {
 import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import {
+  isReceiptShape,
   MODEL_PAYLOAD_JSON_CHAR_LIMIT,
   unwrapArbitraryEnvelope,
 } from '@codebuff/common/util/model-payload-recovery'
@@ -33,6 +34,16 @@ type ToolName = 'set_output'
  * failing silently (M0-T3 sub-agent output durability).
  */
 export const MAX_SET_OUTPUT_JSON_CHARS = MODEL_PAYLOAD_JSON_CHAR_LIMIT
+
+/**
+ * Ack returned when a receipt-bearing reviewer's second set_output call carries
+ * a degenerate, verdict-less payload (typically the `{ message: 'Output set' }
+ * tool ACK echoed back as a payload). The existing receipt is intentionally NOT
+ * overwritten, and this ack teaches the model the difference between the
+ * tool-confirmation and a receipt payload so it does not repeat the echo.
+ */
+export const RECEIPT_GUARD_ACK =
+  'Your structured receipt was already published successfully; this additional set_output call was ignored because it did not carry a full receipt (verdict + snapshotFingerprint). Do not echo the {"message":"Output set"} confirmation back as a payload. If your review outcome changed, re-emit the COMPLETE receipt object (every required schema field).'
 
 export const handleSetOutput = (async (params: {
   previousToolCallFinished: Promise<void>
@@ -233,6 +244,28 @@ export const handleSetOutput = (async (params: {
     finalOutput = hasOnlyDataField ? decodedOutput.data : decodedOutput
   }
 
+  // Receipt-overwrite guard (D1.2/D1.3): reviewer-family children sometimes
+  // call set_output a SECOND time with a degenerate verdict-less payload —
+  // usually the `{ message: 'Output set' }` tool ACK echoed back as a
+  // payload — which would otherwise destroy a good, already-published receipt
+  // and leave the parent re-reviewing forever. Detection is content-addressed
+  // via isReceiptShape (verdict + snapshotFingerprint), never keyed on
+  // envelope or field names: an existing receipt followed by a verdict-less
+  // payload on a reviewer-family agent is treated as a spurious confirmation
+  // echo and ignored. A full receipt replacement (both sides receipt-shaped)
+  // still replaces, so corrections keep working; non-reviewer agents keep the
+  // exact replace-always behavior.
+  const existingIsReceipt = isReceiptShape(agentState.output)
+  const finalIsReceipt = isReceiptShape(finalOutput)
+  const reviewerFamily =
+    shouldNormalizeReviewerOutput ||
+    (existingIsReceipt &&
+      (agentState.output as Record<string, unknown>).family === 'reviewer')
+  if (existingIsReceipt && !finalIsReceipt && reviewerFamily) {
+    // A repeated bogus call must not resurrect a stale rejection.
+    agentState.lastSetOutputError = undefined
+    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK }) }
+  }
   // Set the output (completely replaces previous output)
   agentState.output = finalOutput as Record<string, unknown>
   // A successful receipt supersedes any earlier rejection, so a later generic

@@ -8,6 +8,7 @@ import { mockFileContext } from '../../../../__tests__/test-utils'
 import {
   handleSetOutput,
   MAX_SET_OUTPUT_JSON_CHARS,
+  RECEIPT_GUARD_ACK,
 } from '../set-output'
 
 import type { AgentTemplate } from '../../../../templates/types'
@@ -961,6 +962,181 @@ describe('handleSetOutput', () => {
       const message =
         output[0]?.type === 'json' ? output[0].value.message : ''
       expect(message).toContain('Output validation error')
+    })
+  })
+
+  describe('receipt-overwrite guard', () => {
+    const reviewTemplate = (
+      id: string,
+      outputSchema?: AgentTemplate['outputSchema'],
+    ): AgentTemplate => ({
+      id,
+      displayName: 'Receipt Guard Reviewer',
+      spawnerPrompt: 'Review code',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema:
+        outputSchema ??
+        z.object({
+          schemaVersion: z.number(),
+          verdict: z.enum(['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING']),
+          snapshotFingerprint: z.string(),
+          reviewedFiles: z.array(z.string()),
+          findings: z.array(z.string()),
+          coverage: z.enum(['covered', 'missing', 'n/a']),
+        }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: 'Test system prompt',
+      instructionsPrompt: 'Test instructions',
+      stepPrompt: 'Test step prompt',
+    })
+
+    const validReceipt = {
+      schemaVersion: 1,
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint: 'v3:guard-test-fingerprint',
+      reviewedFiles: ['packages/agent-runtime/src/tools/handlers/tool/set-output.ts'],
+      findings: [],
+      coverage: 'covered',
+    }
+
+    const makeCall = (
+      id: string,
+      input: Record<string, unknown>,
+    ): CodebuffToolCall<'set_output'> =>
+      ({
+        toolName: 'set_output',
+        toolCallId: `guard-${id}`,
+        input,
+      }) as unknown as CodebuffToolCall<'set_output'>
+
+    const callSetOutput = async (
+      id: string,
+      agentState: ReturnType<
+        typeof getInitialSessionState
+      >['mainAgentState'],
+      input: Record<string, unknown>,
+      outputSchema?: AgentTemplate['outputSchema'],
+    ) => {
+      const template = reviewTemplate(id, outputSchema)
+      return await handleSetOutput({
+        ...TEST_AGENT_RUNTIME_IMPL,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: makeCall(id, input),
+        agentState,
+        apiKey: 'test-api-key',
+        localAgentTemplates: { [template.id]: template },
+      } as unknown as Parameters<typeof handleSetOutput>[0])
+    }
+
+    test('ignores a degenerate ACK-echo retry after a valid receipt was published', async () => {
+      const agentState = getInitialSessionState(mockFileContext).mainAgentState
+      agentState.agentType = 'receipt-guard-reviewer'
+
+      const first = await callSetOutput(
+        'receipt-guard-reviewer',
+        agentState,
+        validReceipt,
+      )
+      expect(first.output).toEqual([
+        { type: 'json', value: { message: 'Output set' } },
+      ])
+      expect(agentState.output).toEqual(validReceipt)
+
+      // Degenerate retry: the model echoes the tool ACK back as a payload.
+      const second = await callSetOutput(
+        'receipt-guard-reviewer-echo',
+        agentState,
+        { message: 'Output set' },
+      )
+
+      // Output must still be the ORIGINAL receipt, unchanged.
+      expect(agentState.output).toEqual(validReceipt)
+      // Guard ack (not the plain 'Output set') so the model learns why.
+      expect(second.output).toEqual([
+        { type: 'json', value: { message: RECEIPT_GUARD_ACK } },
+      ])
+      // A repeated bogus call must not resurrect a stale error.
+      expect(agentState.lastSetOutputError).toBeUndefined()
+    })
+
+    test('still replaces the receipt when a corrected FULL receipt is emitted', async () => {
+      const agentState = getInitialSessionState(mockFileContext).mainAgentState
+      agentState.agentType = 'receipt-guard-correction-reviewer'
+
+      await callSetOutput(
+        'receipt-guard-correction-reviewer',
+        agentState,
+        validReceipt,
+      )
+
+      const correctedReceipt = {
+        ...validReceipt,
+        verdict: 'NON_BLOCKING',
+        findings: ['Minor doc inconsistency'],
+      }
+      const second = await callSetOutput(
+        'receipt-guard-correction-reviewer-replacement',
+        agentState,
+        correctedReceipt,
+      )
+
+      expect(second.output).toEqual([
+        { type: 'json', value: { message: 'Output set' } },
+      ])
+      expect(agentState.output).toEqual(correctedReceipt)
+      expect(
+        (agentState.output as Record<string, unknown>).verdict,
+      ).toBe('NON_BLOCKING')
+    })
+
+    test('keeps replace-always behavior for a non-reviewer agent', async () => {
+      const plainSchema = z.object({ note: z.string() })
+      const agentState = getInitialSessionState(mockFileContext).mainAgentState
+      agentState.agentType = 'receipt-guard-plain-agent'
+
+      await callSetOutput(
+        'receipt-guard-plain-agent',
+        agentState,
+        { note: 'output A' },
+        plainSchema,
+      )
+      expect(agentState.output).toEqual({ note: 'output A' })
+
+      const second = await callSetOutput(
+        'receipt-guard-plain-agent-replacement',
+        agentState,
+        { note: 'output B' },
+        plainSchema,
+      )
+
+      expect(second.output).toEqual([
+        { type: 'json', value: { message: 'Output set' } },
+      ])
+      // B replaces A: no receipt guard on non-reviewer agents.
+      expect(agentState.output).toEqual({ note: 'output B' })
+    })
+
+    test('Phase 1 intact: first-call jsonKey envelope with stringified receipt still sets output', async () => {
+      const agentState = getInitialSessionState(mockFileContext).mainAgentState
+      agentState.agentType = 'receipt-guard-envelope-reviewer'
+
+      const { output } = await callSetOutput(
+        'receipt-guard-envelope-reviewer',
+        agentState,
+        { jsonKey: 'output', value: JSON.stringify(validReceipt) },
+      )
+
+      expect(output).toEqual([
+        { type: 'json', value: { message: 'Output set' } },
+      ])
+      expect(agentState.output).toEqual(validReceipt)
+      expect(agentState.lastSetOutputError).toBeUndefined()
     })
   })
 })
