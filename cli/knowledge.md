@@ -3,7 +3,7 @@
 ## Long-running Agent UX
 
 - Productive agent runs are unlimited by default. `maxAgentSteps` is an optional fixed cap; `-1` selects unlimited mode.
-- The runtime stops repeated no-progress patterns separately, and the CLI renders the resulting resumable checkpoint instead of treating it as a missing agent response.
+- No repeated-step or no-progress watchdog exists in the runtime; productive runs are bounded by the optional fixed `maxAgentSteps` cap, cost/token budgets, cancellation, spawn-depth limits, and context compaction rather than progress heuristics.
 - Completion summaries count final file outcomes, terminal top-level failures, and auxiliary-agent failures without duplicating recovered nested tool errors.
 - Regenerate bundled agents and starter type sources with `bun run prebuild:agents` after changing shipped agents or public tool schemas.
 - Public agent/tool type changes must also run the repository-root generator (`bun scripts/generate-tool-definitions.ts`); CI verifies `cli/src/data/initial-agent-type-sources.generated.ts` is committed.

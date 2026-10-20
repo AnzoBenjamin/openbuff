@@ -900,7 +900,7 @@ Three independent stages keep binary and oversized files out of the index AND ou
 2. `none` — if the token-annotated filtered tree fits the budget, render it as-is.
 3. `unimportant-files` — if the no-token filtered tree fits, render it without per-file token scores.
 4. `tokens` (`pruneFileTokenScores`) — iteratively strip the lowest-scoring per-file token annotations (batched, with a 5-tokens-per-name estimate) until the annotated tree fits.
-5. `depth-based` — if tokens pruning alone is not enough, remove the deepest files first (sorted by depth, sampled to estimate avg tokens per filename, removed in batches of `0.5 × tokensToRemove / avgTokensPerFileName + 100`, capped at 10 iterations). A no-progress safety break stops the loop if token count stops decreasing.
+5. `depth-based` — if tokens pruning alone is not enough, remove the deepest files first (sorted by depth, sampled to estimate avg tokens per filename, removed in batches of `0.5 × tokensToRemove / avgTokensPerFileName + 100`, capped at 10 iterations). The loop is bounded solely by that 10-iteration cap (no progress-based early exit), and a tokens-per-file-name fallback keeps the estimate finite when the sampled tree is empty.
 
 Gotchas:
 

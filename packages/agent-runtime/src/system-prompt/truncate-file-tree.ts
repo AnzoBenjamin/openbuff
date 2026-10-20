@@ -15,6 +15,14 @@ import type {
 type TruncationLevel = 'none' | 'unimportant-files' | 'tokens' | 'depth-based'
 const DEBUG = false
 
+/**
+ * Fallback tokens-per-file-name estimate used when the depth-based sampler has
+ * nothing to sample (an empty or fully-filtered tree) or produced a zero/NaN
+ * average. Without it the estimate divides by zero and the whole depth-based
+ * level returns an empty printed tree.
+ */
+const FALLBACK_TOKENS_PER_FILE_NAME = 5
+
 export const truncateFileTreeBasedOnTokenBudget = (params: {
   fileContext: ProjectFileContext
   tokenBudget: number
@@ -151,7 +159,10 @@ export const truncateFileTreeBasedOnTokenBudget = (params: {
   // Get initial state
   let currentTree = filteredTree
   let currentTokenCount = filteredTreeNoTokensCount
-  let currentPrintedTree = ''
+  // Seed from the tree's real path-only render, not '': an empty filtered tree
+  // never enters the removal loop below, so a '' seed would leak out as an
+  // empty file tree instead of that tree's actual render.
+  let currentPrintedTree = printFileTree(currentTree)
 
   // Get all files sorted by depth
   const allFiles = getFilesWithDepths(currentTree)
@@ -167,8 +178,18 @@ export const truncateFileTreeBasedOnTokenBudget = (params: {
   const sampleText = sampleFiles.map((f) => f.node.name).join(' ')
   const sampleTokens = countTokens(sampleText)
 
-  // Calculate average tokens per file from sample
-  const avgTokensPerFileName = sampleTokens / sampleCount
+  // Calculate average tokens per file from sample. An empty (or fully
+  // filtered-out) tree gives sampleCount === 0 and a zero-token sample gives a
+  // zero average, so the raw quotient is NaN or 0 — either way the estimate
+  // below becomes NaN (loop never runs, empty tree returned) or Infinity (every
+  // file removed). Only fall back when the sample could not produce a positive
+  // finite average; a real sample is always used as-is.
+  const sampledAvgTokensPerFileName = sampleTokens / sampleCount
+  const avgTokensPerFileName =
+    Number.isFinite(sampledAvgTokensPerFileName) &&
+    sampledAvgTokensPerFileName > 0
+      ? sampledAvgTokensPerFileName
+      : FALLBACK_TOKENS_PER_FILE_NAME
 
   const tokensToRemove = currentTokenCount - tokenBudget
   // Calculate how many files to remove to hit token budget

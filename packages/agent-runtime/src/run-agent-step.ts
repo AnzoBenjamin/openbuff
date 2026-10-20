@@ -2264,6 +2264,10 @@ export async function loopAgentSteps(
             // mechanical-trim branches: previously read paths require a
             // fresh read before the next edit.
             revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
+            // History was rewritten by eviction: the per-message price memo must
+            // not carry stale entries for the replaced references, so the
+            // estimate below starts from a fresh memo (M3-T2 full-recall point).
+            invalidateHistoryAggregate()
             // D26: archive the evicted segments' full content BEFORE the
             // tombstoned history replaces the originals, so recall_context can
             // still recover the detail. Cheap in-memory append on agentState;
