@@ -135,6 +135,30 @@ export function unwrapArbitraryEnvelope(
 }
 
 /**
+ * Receipt-overwrite downgrade guard (Phase 3 of the json-overhaul; formalized
+ * from the set_output D1.2/D1.3 policy so other consumers can adopt it).
+ *
+ * Policy: a verdict-bearing receipt (isReceiptShape) on a receipt-protected
+ * family can only be REPLACED by another receipt-shaped payload. Any
+ * verdict-less follow-up — typically the `{ message: 'Output set' }` tool ACK
+ * echoed back as a payload — must not destroy the published receipt.
+ *
+ * Pure: returns the decision; the caller owns the ack text and error-state
+ * side effects. Detection is CONTENT-addressed (isReceiptShape), never keyed
+ * on envelope or field names.
+ */
+export function isReceiptDowngradeBlocked(params: {
+  existingOutput: unknown
+  nextOutput: unknown
+  receiptProtected: boolean
+}): boolean {
+  const existingIsReceipt = isReceiptShape(params.existingOutput)
+  if (!existingIsReceipt || params.receiptProtected === false) return false
+  const finalIsReceipt = isReceiptShape(params.nextOutput)
+  return !finalIsReceipt
+}
+
+/**
  * Recover complete top-level fields from a truncated JSON object string.
  * Only includes keys whose values fully close; never invents incomplete values.
  * When the recovered fields form a reviewer receipt (attestation-core fields

@@ -9,6 +9,7 @@ import {
   REVIEWER_VERDICT_VALUES,
   TRUNCATION_DIMENSION_PLACEHOLDER,
   isReceiptShape,
+  isReceiptDowngradeBlocked,
   decodeJsonObjectString,
   recoverTruncatedJsonObject,
   unwrapArbitraryEnvelope,
@@ -138,6 +139,67 @@ describe('unwrapArbitraryEnvelope', () => {
 
   test('model default char limit stays at the historical 1M bound', () => {
     expect(MODEL_PAYLOAD_JSON_CHAR_LIMIT).toBe(1_000_000)
+  })
+})
+
+describe('isReceiptDowngradeBlocked', () => {
+  const receipt = {
+    schemaVersion: 1,
+    verdict: 'LOOKS_GOOD',
+    snapshotFingerprint: 'v3:guard-fp',
+    reviewedFiles: [],
+    findings: [],
+    coverage: 'covered',
+  }
+
+  test('blocks a verdict-less follow-up when a receipt exists and family is protected', () => {
+    expect(
+      isReceiptDowngradeBlocked({
+        existingOutput: receipt,
+        nextOutput: { message: 'Output set' },
+        receiptProtected: true,
+      }),
+    ).toBe(true)
+  })
+
+  test('allows a corrected full receipt to replace', () => {
+    expect(
+      isReceiptDowngradeBlocked({
+        existingOutput: receipt,
+        nextOutput: { ...receipt, verdict: 'BLOCKING' },
+        receiptProtected: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('no guard when no existing receipt', () => {
+    expect(
+      isReceiptDowngradeBlocked({
+        existingOutput: { message: 'hi' },
+        nextOutput: { message: 'set again' },
+        receiptProtected: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('no guard when family is not protected', () => {
+    expect(
+      isReceiptDowngradeBlocked({
+        existingOutput: receipt,
+        nextOutput: { note: 'plain' },
+        receiptProtected: false,
+      }),
+    ).toBe(false)
+  })
+
+  test('no guard when existing is only semi-receipt-shaped', () => {
+    expect(
+      isReceiptDowngradeBlocked({
+        existingOutput: { verdict: 'LOOKS_GOOD' },
+        nextOutput: { message: 'echo' },
+        receiptProtected: true,
+      }),
+    ).toBe(false)
   })
 })
 

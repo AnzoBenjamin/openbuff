@@ -19,6 +19,7 @@ import type {
 import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import {
+  isReceiptDowngradeBlocked,
   isReceiptShape,
   MODEL_PAYLOAD_JSON_CHAR_LIMIT,
   unwrapArbitraryEnvelope,
@@ -244,24 +245,25 @@ export const handleSetOutput = (async (params: {
     finalOutput = hasOnlyDataField ? decodedOutput.data : decodedOutput
   }
 
-  // Receipt-overwrite guard (D1.2/D1.3): reviewer-family children sometimes
-  // call set_output a SECOND time with a degenerate verdict-less payload —
-  // usually the `{ message: 'Output set' }` tool ACK echoed back as a
-  // payload — which would otherwise destroy a good, already-published receipt
-  // and leave the parent re-reviewing forever. Detection is content-addressed
-  // via isReceiptShape (verdict + snapshotFingerprint), never keyed on
-  // envelope or field names: an existing receipt followed by a verdict-less
-  // payload on a reviewer-family agent is treated as a spurious confirmation
-  // echo and ignored. A full receipt replacement (both sides receipt-shaped)
-  // still replaces, so corrections keep working; non-reviewer agents keep the
-  // exact replace-always behavior.
-  const existingIsReceipt = isReceiptShape(agentState.output)
-  const finalIsReceipt = isReceiptShape(finalOutput)
-  const reviewerFamily =
-    shouldNormalizeReviewerOutput ||
-    (existingIsReceipt &&
-      (agentState.output as Record<string, unknown>).family === 'reviewer')
-  if (existingIsReceipt && !finalIsReceipt && reviewerFamily) {
+  // Receipt-overwrite guard (Phase 3): the decision is delegated to the shared
+  // `isReceiptDowngradeBlocked` helper in model-payload-recovery.ts so any
+  // consumer can adopt the same policy. The policy: a reviewer-family child's
+  // verdict-less follow-up — usually the `{ message: 'Output set' }` tool ACK
+  // echoed back as a payload — cannot destroy a published verdict-bearing
+  // receipt. Detection stays content-addressed (isReceiptShape), never keyed
+  // on envelope/field names. A full receipt replacement (both sides
+  // receipt-shaped) still replaces — corrections keep working; non-reviewer
+  // agents keep the exact replace-always behavior.
+  if (
+    isReceiptDowngradeBlocked({
+      existingOutput: agentState.output,
+      nextOutput: finalOutput,
+      receiptProtected: shouldNormalizeReviewerOutput ||
+        (isReceiptShape(agentState.output) &&
+          (agentState.output as Record<string, unknown>).family ===
+            'reviewer'),
+    })
+  ) {
     // A repeated bogus call must not resurrect a stale rejection.
     agentState.lastSetOutputError = undefined
     return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK }) }
