@@ -1,4 +1,7 @@
-import { toolNameParam } from '@codebuff/common/tools/constants'
+import {
+  endsAgentStepParam,
+  toolNameParam,
+} from '@codebuff/common/tools/constants'
 
 // Ordered spellings of the injected tool-name key. Providers and models
 // re-spell `cb_tool_name` as tool_name / toolName / tool / name often enough
@@ -58,4 +61,24 @@ export function resolveToolName(
   }
 
   return undefined
+}
+
+/**
+ * Returns a copy of `parsed` with the injected tool-name control keys removed.
+ *
+ * Only the spelling that actually supplied the name (`resolved.key`) is
+ * stripped, never every alias: `skill` declares a real `name` param, so
+ * {"cb_tool_name":"skill","name":"x"} must keep `name` or the call fails on a
+ * field the model did send. A leftover alias spelling is at worst an unknown key
+ * that non-strict param schemas strip — never a missing-field error.
+ */
+export function stripToolNameKeys(
+  parsed: Record<string, unknown>,
+  resolved: ResolvedToolName,
+): Record<string, unknown> {
+  const input = { ...parsed }
+  delete input[toolNameParam]
+  delete input[resolved.key]
+  delete input[endsAgentStepParam]
+  return input
 }

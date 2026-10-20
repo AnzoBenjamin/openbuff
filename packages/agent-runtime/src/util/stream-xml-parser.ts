@@ -5,12 +5,13 @@
  * Handles partial tags at chunk boundaries using a stateful approach.
  */
 
-import { toolNameParam, toolXmlName } from '@codebuff/common/tools/constants'
+import { toolXmlName } from '@codebuff/common/tools/constants'
 import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
 
 import {
   MISSING_TOOL_NAME_REASON,
   resolveToolName,
+  stripToolNameKeys,
 } from './tool-name-key'
 
 // Use flexible tag matching without requiring specific newlines
@@ -292,16 +293,7 @@ function parseToolCallContent(content: string): {
       }
     }
 
-    // Remove internal params from the input, plus ONLY the spelling that
-    // actually supplied the name. Deleting every alias spelling would silently
-    // drop a legitimate param that shares one — `skill` declares a real `name`
-    // param, so {"cb_tool_name":"skill","name":"x"} must keep `name`. A
-    // leftover alias is at worst an unknown key that non-strict param schemas
-    // strip, never a missing-field error.
-    const input = { ...parsed }
-    delete input[toolNameParam]
-    delete input[resolved.key]
-    delete input['cb_easp'] // endsAgentStepParam
+    const input = stripToolNameKeys(parsed, resolved)
 
     return { toolCall: { toolName: resolved.toolName, input } }
   } catch (err) {

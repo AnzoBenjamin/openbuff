@@ -1,14 +1,11 @@
-import {
-  startToolTag,
-  endToolTag,
-  toolNameParam,
-} from '@codebuff/common/tools/constants'
+import { startToolTag, endToolTag } from '@codebuff/common/tools/constants'
 import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
 import { escapeRegexForLiteral as escapeRegex } from '@codebuff/common/util/language-profiles'
 
 import {
   MISSING_TOOL_NAME_REASON,
   resolveToolName,
+  stripToolNameKeys,
 } from './tool-name-key'
 
 // Module-level constant: building the extraction RegExp inside
@@ -101,17 +98,7 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
         const resolved = resolveToolName(parsed)
 
         if (resolved !== undefined) {
-          // Remove the injected control keys, then ONLY the spelling that
-          // actually supplied the name. Deleting every alias spelling would
-          // silently drop a legitimate param that shares one: `skill` declares
-          // a real `name` param, so {"cb_tool_name":"skill","name":"x"} must
-          // keep `name` or the call fails on a field the model did send. A
-          // leftover alias spelling is at worst an unknown key that non-strict
-          // param schemas strip — never a missing-field error.
-          const input = { ...parsed }
-          delete input[toolNameParam]
-          delete input[resolved.key]
-          delete input['cb_easp']
+          const input = stripToolNameKeys(parsed, resolved)
 
           segments.push({
             type: 'tool_call',
