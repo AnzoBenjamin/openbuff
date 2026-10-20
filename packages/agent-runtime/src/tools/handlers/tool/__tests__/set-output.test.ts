@@ -776,6 +776,65 @@ describe('handleSetOutput', () => {
     stepPrompt: 'Test step prompt',
   })
 
+  test('fails closed when the declared agent type has no resolvable template', async () => {
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    // Truthy agentType with NO resolvable template (no local template matches
+    // and the runtime's fetchAgentFromDatabase returns null): the output schema
+    // is unknown, so the payload must NOT be stored unvalidated.
+    agentState.agentType = 'unregistered-agent-template'
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'unresolvable-template-set-output',
+      input: { message: 'must not be stored without a schema' },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: {},
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.output).toBeUndefined()
+    const message = output[0]?.type === 'json' ? output[0].value.message : ''
+    expect(message).toContain('could not be resolved')
+    expect(message).toContain('NOT stored')
+    // Recorded so the loop's missing-output retry can surface it, exactly like
+    // the sibling rejection paths.
+    expect(agentState.lastSetOutputError).toBe(message)
+  })
+
+  test('keeps passthrough when the resolved template declares no outputSchema', async () => {
+    const template: AgentTemplate = {
+      ...rejectionTemplate('passthrough-no-schema-agent'),
+      outputSchema: undefined,
+    }
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'passthrough-no-schema-set-output',
+      input: { message: 'legitimate passthrough' },
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    // A RESOLVED template without an outputSchema is legitimate: passthrough
+    // stays exactly as before (this is not the fail-closed case).
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual({ message: 'legitimate passthrough' })
+    expect(agentState.lastSetOutputError).toBeUndefined()
+  })
+
   test('rejects an oversized string data payload before decoding with explicit split guidance', async () => {
     const template = rejectionTemplate('reviewer-oversized-test')
     const agentState = getInitialSessionState(mockFileContext).mainAgentState
@@ -1080,7 +1139,14 @@ describe('handleSetOutput', () => {
         toolCall: makeCall(id, input),
         agentState,
         apiKey: 'test-api-key',
-        localAgentTemplates: { [template.id]: template },
+        // Register the template under BOTH the call id and the agent state's
+        // declared agentType: set_output now fails closed when a truthy
+        // agentType cannot be resolved, and these cases intentionally vary the
+        // call id while reusing one agentState.
+        localAgentTemplates: {
+          [template.id]: template,
+          ...(agentState.agentType ? { [agentState.agentType]: template } : {}),
+        },
       } as unknown as Parameters<typeof handleSetOutput>[0])
     }
 

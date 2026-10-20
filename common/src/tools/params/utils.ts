@@ -363,10 +363,11 @@ export function parseJsonBounded(value: unknown, maxDepth = 3): unknown {
  * fragment — potentially 100+ — drowning out the actionable hint.
  *
  * Returns the recovered array when the rejoined fragments parse back into
- * an array. When the array is unrecoverable (no fragment parses as a
- * standalone object AND the rejoined string looks like JSON), returns the
- * joined string so Zod emits a single field-level error. Otherwise returns
- * the original value unchanged so legitimate string arrays survive.
+ * an array. When the rejoined fragments are one truncated container (no
+ * fragment parses as a standalone object), returns the joined string so Zod
+ * emits a single field-level error. Otherwise returns the original value
+ * unchanged so legitimate string arrays keep their array type — including
+ * arrays of bracket-prefixed labels such as ['[draft]', '[final]'].
  */
 function repairCommaSplitFragments(value: unknown): unknown {
   if (
@@ -393,32 +394,37 @@ function repairCommaSplitFragments(value: unknown): unknown {
     return reparsed
   }
 
-  // Only collapse to a single string when the rejoined fragments look like
-  // they could be a (possibly malformed) stringified JSON array/object.
-  // Legitimate string arrays like ['file1.ts', 'file2.ts'] rejoin to
-  // 'file1.ts,file2.ts' which does not start with '[' or '{', so they are
-  // returned unchanged.
+  // Only collapse to a single string when the rejoined fragments carry the
+  // genuine comma-split signature: a single JSON array/object cut off before
+  // its closers. Legitimate string arrays like ['file1.ts', 'file2.ts']
+  // rejoin to a balanced non-JSON string, and so do bracket-prefixed label
+  // arrays like ['[draft]', '[final]'] — those keep their original array type
+  // instead of being narrowed to a string and failing array validation.
   const firstChar = rejoined.trim()[0]
   if (firstChar !== '[' && firstChar !== '{') {
     return value
   }
+  if (!detectTransportTruncation(rejoined)) {
+    return value
+  }
 
-  // If every individual fragment also fails to parse as a standalone
-  // object, the array is unrecoverable. Return the joined string so Zod
-  // emits a single field-level error rather than one per-element error.
+  // A fragment that parses as a standalone object means these are
+  // individually serialized entries (repaired per entry by the caller), not
+  // fragments of one truncated container.
   const hasStandaloneObject = value.some((entry) => {
     const parsed = parseJsonBounded(entry)
     return (
       parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
     )
   })
-  if (!hasStandaloneObject) {
-    return rejoined
+  if (hasStandaloneObject) {
+    return value
   }
 
-  // At least one fragment parses as a standalone object — return the
-  // original array so the caller can apply per-entry repairs.
-  return value
+  // The rejoined fragments are one unrecoverable truncated container. Return
+  // the joined string so Zod emits a single field-level error rather than one
+  // per-element error.
+  return rejoined
 }
 
 /**
@@ -447,40 +453,73 @@ const ARRAY_PARAM_KEYS = [
 
 const MAX_TAGGED_PARAM_LENGTH = 65_536
 const ARG_TAG_PATTERN = /<\/?arg_(?:key|value)>/i
+/**
+ * A single-field provider arg-tag envelope: an optional leading `<arg_key>`
+ * (the provider's tool parser sometimes consumes it), a BARE IDENTIFIER key,
+ * and the `<arg_value>` opener. Requiring an identifier is what keeps ordinary
+ * prose that merely mentions `arg_key` from ever being unwrapped.
+ */
+const SINGLE_ARG_TAG_PREFIX =
+  /^\s*(?:<arg_key>)?([A-Za-z0-9_]+)<\/arg_key>\s*<arg_value>/i
+
+/**
+ * Unwrap a single-field provider arg-tag serialization such as
+ * `key</arg_key><arg_value>VALUE</arg_value>` (the leading `<arg_key>` and
+ * trailing `</arg_value>` may already have been consumed by the provider's
+ * tool parser). Returns `{ [key]: value }` only for an unambiguous
+ * single-field payload; anything with additional tag markers (multi-field or
+ * truncated) is returned unchanged so schema validation still fails closed.
+ *
+ * The extracted value stays a STRING: this only strips the provider's wrapper
+ * syntax, so the destination schema still validates (and parses) the field
+ * itself.
+ */
+export function unwrapSingleArgTagObject(value: unknown): unknown {
+  if (typeof value !== 'string' || value.length > MAX_TAGGED_PARAM_LENGTH) {
+    return value
+  }
+
+  const prefix = value.match(SINGLE_ARG_TAG_PREFIX)
+  const key = prefix?.[1]
+  if (!prefix || !key) return value
+
+  let unwrapped = value.slice(prefix[0].length)
+  const closingTag = unwrapped.match(/<\/arg_value>\s*$/i)
+  if (closingTag?.index !== undefined) {
+    unwrapped = unwrapped.slice(0, closingTag.index)
+  }
+
+  // Additional tag markers indicate a multi-field or truncated serialization,
+  // and an empty value carries no field content: fail closed so normal schema
+  // validation rejects the original instead of treating wrapper syntax as a
+  // real param value.
+  if (!unwrapped.trim() || ARG_TAG_PATTERN.test(unwrapped)) return value
+
+  return { [key]: unwrapped }
+}
 
 /**
  * Repairs a provider serialization that places a Basher command inside the
  * params string as `command</arg_key><arg_value>...`. The opening arg_key and
  * closing arg_value tags may already have been consumed by the provider's tool
- * parser. Keep this Basher-only: interpreting arbitrary agent params strings
- * as tagged data would make malformed custom-agent inputs ambiguous.
+ * parser. The tag parsing itself is the shared `unwrapSingleArgTagObject`
+ * helper so the two entry points cannot drift apart; this narrower wrapper
+ * only restricts the accepted field to `command`, so an envelope naming any
+ * other field still fails closed under normal schema validation.
  */
 function repairBasherTaggedParams(agentType: unknown, value: unknown): unknown {
+  if (agentType !== 'basher') return value
+
+  const unwrapped = unwrapSingleArgTagObject(value)
   if (
-    agentType !== 'basher' ||
-    typeof value !== 'string' ||
-    value.length > MAX_TAGGED_PARAM_LENGTH
+    unwrapped === null ||
+    typeof unwrapped !== 'object' ||
+    Array.isArray(unwrapped)
   ) {
     return value
   }
-
-  const prefix = value.match(
-    /^\s*(?:<arg_key>)?command<\/arg_key>\s*<arg_value>/i,
-  )
-  if (!prefix) return value
-
-  let command = value.slice(prefix[0].length)
-  const closingTag = command.match(/<\/arg_value>\s*$/i)
-  if (closingTag?.index !== undefined) {
-    command = command.slice(0, closingTag.index)
-  }
-
-  // Additional tag markers indicate a multi-field or truncated serialization.
-  // Leave it untouched so normal schema validation rejects it instead of
-  // accidentally treating wrapper syntax as part of a shell command.
-  if (!command.trim() || ARG_TAG_PATTERN.test(command)) return value
-
-  return { command }
+  const record = unwrapped as Record<string, unknown>
+  return typeof record.command === 'string' ? unwrapped : value
 }
 
 /**
@@ -537,11 +576,22 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
       repaired = true
     }
 
+    // A provider tool-call serializer can leak a single-field arg-tag envelope
+    // (`key</arg_key><arg_value>VALUE</arg_value>`) into a string param instead
+    // of a params object, and that happens for ANY agent type — not just
+    // Basher. Unwrap it for every entry before the Basher-specific step below;
+    // ambiguous payloads (multi-field or truncated) come back unchanged so
+    // validation still fails closed.
+    const unwrappedParams = unwrapSingleArgTagObject(record.params)
     const taggedParams = repairBasherTaggedParams(
       record.agent_type,
       record.params,
     )
-    const parsedParams = parseJsonBounded(taggedParams)
+    // Basher's command-only repair is the stricter form of the same unwrap, so
+    // prefer its result when it fired and fall back to the general unwrap.
+    const paramsValue =
+      taggedParams === record.params ? unwrappedParams : taggedParams
+    const parsedParams = parseJsonBounded(paramsValue)
     const canMergeParams =
       parsedParams === undefined ||
       (parsedParams !== null &&
@@ -553,7 +603,7 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
         ...((parsedParams ?? {}) as Record<string, unknown>),
       }
       let paramsRepaired =
-        taggedParams !== record.params || typeof record.params === 'string'
+        paramsValue !== record.params || typeof record.params === 'string'
 
       // Provider tool-call serializers sometimes preserve an agent-specific
       // array as a JSON string inside an otherwise valid params object (for

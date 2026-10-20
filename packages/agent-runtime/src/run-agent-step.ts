@@ -85,7 +85,6 @@ import {
   getSemanticRearmBudgetTokens,
   maybePruneContext,
   recordPassAnnounced,
-  recordPassSettled,
   shouldRunSemanticPass,
 } from './util/context-pruning'
 import {
@@ -2014,21 +2013,17 @@ export async function loopAgentSteps(
 
     // Anti-thrash compaction telemetry, loop-local so each turn starts clean.
     // `compactionCount` counts every compaction (semantic or mechanical) in
-    // this loop. Two independent signals are tracked:
+    // this loop. One shipped reporting signal is tracked:
     //
     //   - `consecutiveNoProgressCompactions` is the shipped reporting signal
     //     carried on `context_compaction`: a compaction is "no progress" when
     //     it reclaims less than COMPACTION_NO_PROGRESS_FRACTION of the
     //     PREVIOUS compaction's post-compaction history size. Report-only
     //     (telemetry + an honest reason clause); nothing is gated on it.
-    //   - `consecutiveUnproductiveSemanticPasses` is per-pass and
-    //     semantic-only: a pass is unproductive when it reclaimed less than
-    //     COMPACTION_NO_PROGRESS_FRACTION of its OWN pre-compaction history
-    //     size, which also covers an announced pass that returned the
-    //     transcript unchanged. Once it reaches
-    //     COMPACTION_NO_PROGRESS_STREAK_THRESHOLD the loop logs a warning;
-    //     the governor (not the streak) caps further paid passes for the rest
-    //     of this turn via `recordPassSettled`.
+    //   - Per-pass semantic reclaim is no longer tracked or gated at all: a
+    //     progress-based gate was removed because it cut off legitimate
+    //     context reclamation. Only the flat SEMANTIC_MAX_PASSES_PER_TURN
+    //     budget and the governor's cooldown/rearm/emergency pacing apply.
     //
     // Budgets are still never silently lowered and pinned state is never
     // dropped as a reaction: the only remediation is to stop paying for a
@@ -2037,14 +2032,6 @@ export async function loopAgentSteps(
     let consecutiveNoProgressCompactions = 0
     let previousPostCompactionHistoryTokens: number | undefined
     let warnedCompactionNoProgress = false
-    let consecutiveUnproductiveSemanticPasses = 0
-    let warnedSemanticCompactionSuppressed = false
-    // Loop-local streak state backing the persisted advisory. The advisory
-    // field itself is recomputed once per iteration (see the mirror below), so
-    // the streak must live here: a field write inside
-    // registerUnproductiveSemanticPass alone would be overwritten by the next
-    // iteration's recomputation.
-    let streakSuppressionActive = false
     // `suppressSemanticCompaction` is a transient, loop-owned advisory. Reset
     // once here, before the loop, so a persisted or inherited `true` from an
     // earlier turn can never leak in and deadlock a recoverable run.
@@ -2054,38 +2041,6 @@ export async function loopAgentSteps(
     // telemetry locals are: each turn starts clean, and the rearm margin is
     // observable in the token counts themselves, so nothing needs to persist.
     const compactionGovernor = createSemanticCompactionGovernor()
-    const registerUnproductiveSemanticPass = () => {
-      consecutiveUnproductiveSemanticPasses += 1
-      // The governor owns loop pacing: an unproductive pass extends its
-      // cooldown, and a SECOND consecutive unproductive pass spends the
-      // turn's remaining pass budget (bounded denial). The persisted
-      // `suppressSemanticCompaction` advisory keeps its documented
-      // streak-based contract, so crossing the streak threshold also sets
-      // it, making the inline pruner spawn path decline for the rest of the
-      // turn. Eviction and the mechanical trim still respond to pressure,
-      // and next turn starts with a fresh governor and a loop-entry reset.
-      recordPassSettled(compactionGovernor, { productive: false })
-      if (
-        consecutiveUnproductiveSemanticPasses <
-        COMPACTION_NO_PROGRESS_STREAK_THRESHOLD
-      ) {
-        return
-      }
-      // Streak state, not a direct field write: the per-iteration advisory
-      // mirror below is the single writer of the persisted field, so the
-      // streak is folded into that recomputation instead of racing it.
-      streakSuppressionActive = true
-      if (warnedSemanticCompactionSuppressed) return
-      warnedSemanticCompactionSuppressed = true
-      logger.warn(
-        {
-          agentId: currentAgentState.agentId,
-          runId,
-          consecutiveUnproductiveSemanticPasses,
-        },
-        'Semantic compaction passes are not reclaiming space; further passes this turn are capped',
-      )
-    }
     const registerCompaction = (compaction: {
       action: 'semantic_compaction' | 'mechanical_trim'
       preCompactionHistoryTokens: number
@@ -2095,11 +2050,7 @@ export async function loopAgentSteps(
       consecutiveNoProgressCompactions: number
       noProgress: boolean
     } => {
-      const {
-        action,
-        preCompactionHistoryTokens,
-        postCompactionHistoryTokens,
-      } = compaction
+      const { action, postCompactionHistoryTokens } = compaction
       compactionCount += 1
       const previousTokens = previousPostCompactionHistoryTokens
       if (previousTokens !== undefined) {
@@ -2111,29 +2062,6 @@ export async function loopAgentSteps(
         }
       }
       previousPostCompactionHistoryTokens = postCompactionHistoryTokens
-
-      // Per-pass, semantic-only streak: compare this pass's reclaim against
-      // its OWN pre-compaction size, so a healthy long run whose passes each
-      // return history to roughly the same target is not misread as thrash.
-      // `mechanical_trim` registrations neither increment nor reset it.
-      if (action === 'semantic_compaction') {
-        const reclaimed =
-          preCompactionHistoryTokens - postCompactionHistoryTokens
-        if (
-          reclaimed <
-          preCompactionHistoryTokens * COMPACTION_NO_PROGRESS_FRACTION
-        ) {
-          registerUnproductiveSemanticPass()
-        } else {
-          consecutiveUnproductiveSemanticPasses = 0
-          // Clearing the streak flag (not the field directly) is what makes
-          // the documented "cleared by a productive pass" path reachable: the
-          // next iteration's advisory mirror recomputes the field from this
-          // flag plus the current governor decision.
-          streakSuppressionActive = false
-          recordPassSettled(compactionGovernor, { productive: true })
-        }
-      }
 
       const noProgress =
         consecutiveNoProgressCompactions >=
@@ -2414,31 +2342,21 @@ export async function loopAgentSteps(
             activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
         })
         // The announcement gate is the semantic trigger plus the governor's
-        // per-iteration decision. The persisted `suppressSemanticCompaction`
-        // advisory keeps its documented streak-based contract (owned by the
-        // pass-outcome accounting above), and an OVER-TRIGGER iteration the
-        // governor denies is additionally mirrored into it: the generator-
-        // driven inline spawn path has no other pacing lever, so without the
-        // mirror a handleSteps template could keep spawning pruner children
-        // every iteration while only the announcement was paced.
+        // per-iteration decision. An OVER-TRIGGER iteration the governor
+        // denies is mirrored into the persisted `suppressSemanticCompaction`
+        // advisory: the generator-driven inline spawn path has no other pacing
+        // lever, so without the mirror a handleSteps template could keep
+        // spawning pruner children every iteration while only the announcement
+        // was paced.
         //
         // The mirror is deliberately NON-STICKY: it recomputes the field every
-        // iteration from the CURRENT governor decision plus the loop-local
-        // streak flag. A sticky version (OR-ing the previous field value)
-        // would let the cooldown denials right after an announced pass pin the
-        // advisory for the whole turn, making the documented clearing paths
-        // unreachable — a productive pass could never clear it, and the second
-        // pass the governor re-arms for (context below the rearm budget
-        // regrowing past the trigger) could never spawn. Below the trigger a
-        // quiet iteration clears the field unless the streak holds it. A
-        // denied iteration runs no pass and announces neither half of the
-        // status pair, exactly as before.
+        // iteration from the CURRENT governor decision, so a below-trigger
+        // quiet iteration clears it again. A denied iteration runs no pass and
+        // announces neither half of the status pair, exactly as before.
         const governorWithheldOverTriggerPass =
           exceededSemanticTrigger && !governorDecision.shouldRunSemanticPass
         currentAgentState.suppressSemanticCompaction =
-          governorWithheldOverTriggerPass || streakSuppressionActive
-            ? true
-            : undefined
+          governorWithheldOverTriggerPass ? true : undefined
         const announceSemanticPass =
           exceededSemanticTrigger && governorDecision.shouldRunSemanticPass
         if (announceSemanticPass) {
@@ -2781,17 +2699,6 @@ export async function loopAgentSteps(
                 : 'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
           })
           compactedThisIteration = true
-        } else if (
-          announceSemanticPass &&
-          historyTokensAfterProgrammatic >= historyTokensBeforeProgrammatic
-        ) {
-          // A semantic pass was announced for this iteration, but the pruner
-          // returned the transcript unchanged (or larger) — the actual thrash
-          // case. Register it for the per-pass semantic streak ONLY: nothing
-          // was compacted, so this must not touch the shipped
-          // `compactionCount`/post-vs-post streak and must not emit a
-          // `context_compaction` event.
-          registerUnproductiveSemanticPass()
         }
 
         // Deterministic trimming is now an emergency brake after semantic
@@ -3302,12 +3209,10 @@ const STEP_CAP_REACHED_MESSAGE = [
 
 /**
  * How many consecutive unproductive compactions must occur before the emitted
- * `reason` calls out compaction thrash, and — for the per-pass semantic-only
- * streak — before the loop stops spawning the semantic pruner for the rest of
- * the turn. One threshold for both signals. The loop still never reacts by
- * lowering budgets or dropping pinned state; suppression only avoids paying
- * for a pass that was measured not to reclaim space, and an announced pass is
- * still announced and still settled.
+ * `reason` calls out compaction thrash. Purely a reporting threshold: the loop
+ * never reacts by lowering budgets, dropping pinned state, or suppressing a
+ * pass, so no-progress telemetry can never bound the agent's ability to gather
+ * or reclaim context.
  */
 const COMPACTION_NO_PROGRESS_STREAK_THRESHOLD = 2
 

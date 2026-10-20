@@ -961,12 +961,8 @@ Actual response here`,
         toolResult: undefined,
         stepsComplete: true,
       })
-      // Empty harvest path: yields set_output with empty message, not STEP.
-      expect(completeResult.value).toEqual({
-        toolName: 'set_output',
-        input: { message: '' },
-        includeToolCall: false,
-      })
+      // Nothing to publish: the generator returns without yielding, not STEP.
+      expect(completeResult.value).toBeUndefined()
 
       // Case 2: hitStepCap === true -> fall through to harvest/fallback.
       const genCap = thinker.handleSteps!({
@@ -981,11 +977,7 @@ Actual response here`,
         stepsComplete: false,
         hitStepCap: true,
       } as Parameters<typeof genCap.next>[0] & { hitStepCap?: boolean })
-      expect(capResult.value).toEqual({
-        toolName: 'set_output',
-        input: { message: '' },
-        includeToolCall: false,
-      })
+      expect(capResult.value).toBeUndefined()
     })
 
     test('recovers message from set_output tool-call when assistant text is empty', () => {

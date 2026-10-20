@@ -190,9 +190,15 @@ function extractSanitizedSpawnRecoveryHint(error: unknown): string | undefined {
         : undefined
   if (typeof raw !== 'string' || !raw) return undefined
   // Only validation-shaped messages are eligible; any other handler
-  // internal (bridge failures, stack traces) stays log-only.
+  // internal (bridge failures, stack traces) stays log-only. The allowlist
+  // also recognizes raw Zod-shaped validation text — a leading `Validation
+  // failed`, the `expected X, received Y` pair, `Unrecognized key`, `Too
+  // small`/`Too big`, and `Required` — so an issue dump is not silently
+  // downgraded to the static failure string. This stays a message-TEXT
+  // fallback only: the authoritative structural channel is
+  // extractSpawnValidationIssues, which needs no text match at all.
   const isValidationHint =
-    /Invalid (params|prompt) for agent|Editor agent requires|Invalid (versioned )?handoff|repair-editor requires|Missing required:|Exact params contract|Recovery:/.test(
+    /Invalid (params|prompt) for agent|Editor agent requires|Invalid (versioned )?handoff|repair-editor requires|Missing required:|Exact params contract|Recovery:|^Validation failed|expected |received |Unrecognized key|Too small|Too big|Required/.test(
       raw,
     )
   if (!isValidationHint) return undefined
@@ -215,6 +221,64 @@ function extractSanitizedSpawnRecoveryHint(error: unknown): string | undefined {
   return String(sanitized)
 }
 
+const SPAWN_VALIDATION_ISSUE_MAX_CHARS = 300
+const SPAWN_VALIDATION_ISSUE_MAX_COUNT = 20
+
+// Bounded, sanitized rendering of one Zod issue path segment or message. The
+// same treatment the recovery hint gets: strip control characters, collapse
+// whitespace, trim, and cap the length so a pathological issue string can
+// never blow up the parent-visible payload.
+function sanitizeSpawnValidationIssueText(value: string): string {
+  let sanitized = value
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (sanitized.length > SPAWN_VALIDATION_ISSUE_MAX_CHARS) {
+    sanitized = `${sanitized.slice(0, SPAWN_VALIDATION_ISSUE_MAX_CHARS).trimEnd()}...[truncated]`
+  }
+  return sanitized
+}
+
+/**
+ * Second, ORTHOGONAL spawn diagnostic channel: extract a bounded, sanitized
+ * issue list from a Zod-shaped validation error via duck typing.
+ *
+ * Deliberately independent of extractSanitizedSpawnRecoveryHint's
+ * message-text allowlist: spawn params actually fail as a Zod issue LIST, and
+ * the allowlist only sees the rendered message text (or nothing at all), so a
+ * parent used to receive the static failure string with zero indication of
+ * which field was wrong. Detection is structural (an `issues` array), so no
+ * `zod` import is needed here.
+ *
+ * Safety: only structural schema paths and issue messages are surfaced —
+ * never raw params/prompt values, never a stack trace.
+ */
+function extractSpawnValidationIssues(
+  error: unknown,
+): Array<{ path: string; message: string }> | undefined {
+  if (
+    !error ||
+    typeof error !== 'object' ||
+    !Array.isArray((error as { issues?: unknown }).issues)
+  ) {
+    return undefined
+  }
+  const extracted: Array<{ path: string; message: string }> = []
+  for (const issue of (error as { issues: unknown[] }).issues) {
+    if (extracted.length >= SPAWN_VALIDATION_ISSUE_MAX_COUNT) break
+    if (!issue || typeof issue !== 'object') continue
+    const record = issue as { path?: unknown; message?: unknown }
+    if (typeof record.message !== 'string') continue
+    const message = sanitizeSpawnValidationIssueText(record.message)
+    if (!message) continue
+    const path = Array.isArray(record.path)
+      ? sanitizeSpawnValidationIssueText(record.path.join('.'))
+      : ''
+    extracted.push({ path, message })
+  }
+  return extracted.length > 0 ? extracted : undefined
+}
+
 export function buildSpawnAgentsHandlerFailureOutput(
   input: unknown,
   // Retained for call-site symmetry with the generic failure-output builder
@@ -229,6 +293,7 @@ export function buildSpawnAgentsHandlerFailureOutput(
   const agents =
     inputRecord && Array.isArray(inputRecord.agents) ? inputRecord.agents : []
   const recoveryHint = extractSanitizedSpawnRecoveryHint(error)
+  const validationIssues = extractSpawnValidationIssues(error)
 
   const reports = (agents.length > 0 ? agents : [{}]).map((agent): JSONObject => {
     const agentType =
@@ -237,28 +302,29 @@ export function buildSpawnAgentsHandlerFailureOutput(
       typeof (agent as Record<string, unknown>).agent_type === 'string'
         ? String((agent as Record<string, unknown>).agent_type)
         : 'unknown'
+    // The per-agent value is assembled additively so an ABSENT channel never
+    // puts an `undefined` into the JSON payload (jsonToolResult<T extends
+    // JSONValue> requires concrete values). `errorMessage` stays the stable
+    // machine-readable marker at exactly the same text; the two diagnostic
+    // channels below are present only when they actually have data.
+    const value: JSONObject = {
+      errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
+    }
     if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
-      // Separate explicit branch: the false branch below has no recoveryHint
-      // key at all, so no undefined ever enters the JSON payload. String() is
-      // the identity on the already-sanitized primitive and keeps the property
-      // typed as string (not string|undefined) so jsonToolResult<T extends
-      // JSONValue> accepts the payload.
-      const hintPrimitive: string = String(recoveryHint)
-      return {
-        agentType,
-        agentName: agentType,
-        value: {
-          errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-          recoveryHint: hintPrimitive,
-        },
-      }
+      // String() is the identity on the already-sanitized primitive and keeps
+      // the property typed as string (not string|undefined).
+      value.recoveryHint = String(recoveryHint)
+    }
+    if (validationIssues) {
+      value.validationIssues = validationIssues.map((issue) => ({
+        path: issue.path,
+        message: issue.message,
+      }))
     }
     return {
       agentType,
       agentName: agentType,
-      value: {
-        errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-      },
+      value,
     }
   })
 

@@ -1055,6 +1055,10 @@ export async function* promptAiSdkStream(
     if (pendingToolCallChunks.length === 0) return
     const drained = pendingToolCallChunks.splice(0)
     for (const pending of drained) {
+      // Delivery — not buffering — is what makes a retry or failover unsafe:
+      // the runtime executes every chunk it receives, so a stream counts as
+      // having yielded content only here, at the yield.
+      anyContentYielded = true
       // The marker is applied through the shared contract helper, so the
       // producer and its consumers agree on one name for the transport fact
       // (see `ToolCallStreamChunk` in common/src/types/contracts/llm.ts).
@@ -1131,6 +1135,13 @@ export async function* promptAiSdkStream(
       for (let attempt = 0; attempt <= MAX_RETRIES_PER_MESSAGE; attempt++) {
         // Track if we've yielded content in THIS attempt (for ChatGPT OAuth fallback)
         let hasYieldedContent = false
+        // Tool-call chunks are buffered until THIS attempt's finishReason
+        // resolves, so every attempt must start with an empty buffer. Without
+        // this reset a stream that fails after buffering leaves its payloads
+        // behind, and the next attempt flushes them as though the failed model
+        // had produced them — a stale partial edit payload would be executed a
+        // second time.
+        pendingToolCallChunks.length = 0
         let response: ReturnType<typeof streamText>
         let aiSDKModel: LanguageModel
         let isChatGptOAuth: boolean
@@ -1587,8 +1598,13 @@ export async function* promptAiSdkStream(
               }
             }
             if (chunkValue.type === 'tool-call') {
+              // The model produced output, but nothing has reached the caller
+              // yet: the chunk is only buffered until finishReason resolves.
+              // `anyContentYielded` is therefore set by
+              // flushPendingToolCallChunks, at the actual yield — otherwise a
+              // stream that emits only tool calls and then throws could never
+              // be retried or failed over.
               hasYieldedContent = true
-              anyContentYielded = true
               const { providerMetadata, ...toolCall } = chunkValue
               pendingToolCallChunks.push({
                 ...toolCall,

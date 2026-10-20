@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import { getInitialAgentState } from '@codebuff/common/types/session-state'
 import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
+import { isReceiptShape } from '@codebuff/common/util/model-payload-recovery'
 
 import {
   buildRuntimeAgentReceipt,
@@ -1301,6 +1302,82 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     })
     expect(receipt.outcome).toBe('ok')
     expect(receipt.status).toBe('completed')
+  })
+})
+
+/**
+ * Reviewer receipt durability across the degenerate ACK-echo retry. A reviewer
+ * child that published a valid receipt and then re-called set_output with the
+ * `{ message: 'Output set' }` tool ACK echoed back as a payload keeps the real
+ * receipt: handleSetOutput's receipt-downgrade guard leaves agentState.output
+ * untouched AND clears lastSetOutputError. The settle path must therefore hand
+ * the parent the published verdict instead of downgrading the run to
+ * schema_invalid, which would re-arm the gate's re-review loop. A genuine
+ * set_output validation rejection must still settle schema_invalid, so the fix
+ * cannot have disabled the legitimate fail-closed signal.
+ */
+describe('reviewer receipt survives the degenerate ACK-echo retry (end-to-end settle)', () => {
+  // Real 64-hex token so the receipt also satisfies the gate-attestable shape.
+  const fingerprint = 'v3:' + 'a'.repeat(64)
+
+  test('settles a published receipt plus an echoed tool ACK with the real verdict', () => {
+    const agentState = getInitialAgentState()
+    agentState.agentType = 'security-reviewer'
+    // Post-guard child state: the child first published this receipt, then
+    // re-called set_output with the degenerate ACK echoed back as a payload, so
+    // the guard kept the receipt as the published output and cleared the stale
+    // set_output error the echo would otherwise have recorded.
+    agentState.output = {
+      schemaVersion: 1,
+      verdict: 'LOOKS_GOOD',
+      snapshotFingerprint: fingerprint,
+      reviewedFiles: ['src/a.ts'],
+      findings: [],
+      coverage: 'covered',
+    }
+    // The precondition the receipt-downgrade guard keys on.
+    expect(isReceiptShape(agentState.output)).toBe(true)
+
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'security-reviewer',
+      agentId: 'sec-ack-echo-1',
+      output: agentState.output,
+      agentState,
+    })
+
+    // The echo retry is only safe because handleSetOutput clears
+    // lastSetOutputError on its guard-hit branch: a stale error left on the
+    // child state would re-derive outcome 'schema_invalid' here, downgrade the
+    // receipt to partial, and re-arm the gate's re-review loop even though a
+    // complete verdict was published.
+    expect(receipt.outcome).not.toBe('schema_invalid')
+    const settledOutput = receipt.output as Record<string, unknown>
+    expect(settledOutput.verdict).toBe('LOOKS_GOOD')
+    expect(settledOutput.snapshotFingerprint).toBe(fingerprint)
+  })
+
+  test('still settles a genuine set_output validation rejection as schema_invalid', () => {
+    const agentState = getInitialAgentState()
+    agentState.agentType = 'code-reviewer'
+    // A real rejection leaves the error on the child state and no receipt
+    // behind: the fail-closed signal must be untouched by the guard.
+    agentState.lastSetOutputError =
+      'Output validation error: snapshotFingerprint is required'
+    const rejectedOutput = {
+      type: 'structuredOutput',
+      value: { verdict: 'LOOKS_GOOD' },
+    }
+    expect(isReceiptShape(agentState.output)).toBe(false)
+    expect(isReceiptShape(rejectedOutput.value)).toBe(false)
+
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'code-reviewer',
+      agentId: 'code-reviewer-rejected-1',
+      output: rejectedOutput,
+      agentState,
+    })
+
+    expect(receipt.outcome).toBe('schema_invalid')
   })
 })
 

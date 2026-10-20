@@ -16,6 +16,7 @@ import {
   normalizeReplacementList,
   normalizeTransactionEditList,
   parseJsonStringWithRepair,
+  unwrapSingleArgTagObject,
 } from '../utils'
 
 describe('coerceToArray', () => {
@@ -94,6 +95,16 @@ describe('coerceToArray', () => {
     ])
   })
 
+  it('does not collapse a bracket-prefixed label array', () => {
+    // Legitimate label arrays (paths/prompts-style) rejoin to a balanced
+    // non-JSON string, so they must keep their array type.
+    expect(coerceToArray(['[draft]', '[final]'])).toEqual([
+      '[draft]',
+      '[final]',
+    ])
+    expect(coerceToArray(['{a}', '{b}'])).toEqual(['{a}', '{b}'])
+  })
+
   it('passes through arrays of objects unchanged', () => {
     expect(coerceToArray([{ old: 'x' }, { old: 'y' }])).toEqual([
       { old: 'x' },
@@ -125,6 +136,43 @@ describe('coerceToObject', () => {
   it('passes through arrays and primitives so validation can reject them', () => {
     expect(coerceToObject(['a'])).toEqual(['a'])
     expect(coerceToObject(1)).toBe(1)
+  })
+})
+
+describe('unwrapSingleArgTagObject', () => {
+  it('unwraps a single-field provider arg-tag envelope', () => {
+    expect(
+      unwrapSingleArgTagObject('prompt</arg_key><arg_value>Implement it'),
+    ).toEqual({ prompt: 'Implement it' })
+    expect(
+      unwrapSingleArgTagObject(
+        '  <arg_key>prompt</arg_key><arg_value>Implement it</arg_value>\n',
+      ),
+    ).toEqual({ prompt: 'Implement it' })
+  })
+
+  it('keeps the extracted value a string', () => {
+    expect(
+      unwrapSingleArgTagObject('timeout_seconds</arg_key><arg_value>30'),
+    ).toEqual({ timeout_seconds: '30' })
+  })
+
+  it('fails closed on multi-field, empty, and oversized payloads', () => {
+    const multiField =
+      'prompt</arg_key><arg_value>Implement it</arg_value><arg_key>paths</arg_key><arg_value>a.ts'
+    const emptyValue = 'prompt</arg_key><arg_value>   '
+    const oversized = `prompt</arg_key><arg_value>${'a'.repeat(65_537)}`
+    expect(unwrapSingleArgTagObject(multiField)).toBe(multiField)
+    expect(unwrapSingleArgTagObject(emptyValue)).toBe(emptyValue)
+    expect(unwrapSingleArgTagObject(oversized)).toBe(oversized)
+  })
+
+  it('leaves non-strings and ordinary prose untouched', () => {
+    expect(unwrapSingleArgTagObject({ prompt: 'Implement it' })).toEqual({
+      prompt: 'Implement it',
+    })
+    const prose = 'Explain how <arg_key> and <arg_value> tags work'
+    expect(unwrapSingleArgTagObject(prose)).toBe(prose)
   })
 })
 
@@ -238,20 +286,32 @@ describe('normalizeSpawnAgentList', () => {
     ).toEqual([{ agent_type: 'basher', params: { command: 'bun test' } }])
   })
 
-  it('rejects tagged params for other agents and multi-field fragments', () => {
-    const nonBasher = {
-      agent_type: 'editor',
-      params: 'command</arg_key><arg_value>bun test',
-    }
+  it('unwraps single-field tagged params for every agent type', () => {
+    expect(
+      normalizeSpawnAgentList([
+        {
+          agent_type: 'editor',
+          params: 'prompt</arg_key><arg_value>Implement the change',
+        },
+        {
+          agent_type: 'file-picker',
+          params:
+            '<arg_key>prompt</arg_key><arg_value>Find the entrypoints</arg_value>',
+        },
+      ]),
+    ).toEqual([
+      { agent_type: 'editor', params: { prompt: 'Implement the change' } },
+      { agent_type: 'file-picker', params: { prompt: 'Find the entrypoints' } },
+    ])
+  })
+
+  it('rejects multi-field tagged param fragments', () => {
     const multiField = {
       agent_type: 'basher',
       params:
         'command</arg_key><arg_value>bun test</arg_value><arg_key>timeout_seconds</arg_key><arg_value>30',
     }
-    expect(normalizeSpawnAgentList([nonBasher, multiField])).toEqual([
-      nonBasher,
-      multiField,
-    ])
+    expect(normalizeSpawnAgentList([multiField])).toEqual([multiField])
   })
 
   it('does not derive a Basher command from prompt prose', () => {

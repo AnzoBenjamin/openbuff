@@ -21,7 +21,6 @@ import {
   shouldRunSemanticPass,
   recordPassAnnounced,
   advanceGovernorIteration,
-  recordPassSettled,
   getSemanticRearmBudgetTokens,
   getSemanticEvictionFloorTokens,
   SEMANTIC_COOLDOWN_ITERATIONS,
@@ -599,25 +598,6 @@ describe('semantic compaction governor', () => {
     const denied = decide(governor, 200_000)
     expect(denied.shouldRunSemanticPass).toBe(false)
     expect(denied.reason).toContain('cap')
-  })
-
-  it('two consecutive no-progress passes spend the turn cap (bounded denial)', () => {
-    const governor = createSemanticCompactionGovernor()
-    recordPassSettled(governor, { productive: false })
-    expect(governor.passesThisTurn).toBe(0)
-    recordPassSettled(governor, { productive: false })
-    expect(governor.passesThisTurn).toBe(SEMANTIC_MAX_PASSES_PER_TURN)
-    expect(decide(governor, 200_000).shouldRunSemanticPass).toBe(false)
-  })
-
-  it('a productive pass resets the no-progress streak without restoring the cap', () => {
-    const governor = createSemanticCompactionGovernor()
-    recordPassSettled(governor, { productive: false })
-    recordPassSettled(governor, { productive: false })
-    recordPassSettled(governor, { productive: true })
-    expect(governor.consecutiveNoProgressPasses).toBe(0)
-    // The spent cap is not refunded: bounded denial for the rest of the turn.
-    expect(governor.passesThisTurn).toBe(SEMANTIC_MAX_PASSES_PER_TURN)
   })
 
   it('exposes rearm and eviction budget helpers with unknown-window fallbacks', () => {

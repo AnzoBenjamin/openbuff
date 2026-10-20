@@ -178,7 +178,6 @@ export const truncateFileTreeBasedOnTokenBudget = (params: {
 
   let iterationCount = 0
   const MAX_ITERATIONS = 10
-  let previousTokenCount = Infinity
 
   while (estimatedFilesToRemove > 0 && iterationCount < MAX_ITERATIONS) {
     // Build a set of files to remove, taking deepest ones first
@@ -208,16 +207,6 @@ export const truncateFileTreeBasedOnTokenBudget = (params: {
 
     currentPrintedTree = printFileTree(currentTree)
     currentTokenCount = countTokensJson(currentPrintedTree)
-
-    // Safety check - if we're not making progress, break
-    if (currentTokenCount >= previousTokenCount) {
-      logger.warn(
-        { currentTokenCount, previousTokenCount, iterationCount },
-        'No progress in reducing tokens, breaking loop',
-      )
-      break
-    }
-    previousTokenCount = currentTokenCount
 
     const tokensToRemove = currentTokenCount - tokenBudget
     estimatedFilesToRemove =

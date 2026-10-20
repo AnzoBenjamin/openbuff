@@ -1,8 +1,15 @@
-import { jsonToolResult } from '@codebuff/common/util/messages'
 import {
   decodeJsonObjectString,
   normalizeStructuredOutputValue,
 } from '@codebuff/common/tools/params/tool/set-output'
+import { detectTransportTruncation } from '@codebuff/common/tools/params/utils'
+import { jsonToolResult } from '@codebuff/common/util/messages'
+import {
+  isReceiptDowngradeBlocked,
+  isReceiptShape,
+  MODEL_PAYLOAD_JSON_CHAR_LIMIT,
+  unwrapArbitraryEnvelope,
+} from '@codebuff/common/util/model-payload-recovery'
 
 import { getAgentTemplate } from '../../../templates/agent-registry'
 import { formatValueForError } from '../../../util/format-value'
@@ -18,12 +25,6 @@ import type {
 } from '@codebuff/common/types/agent-template'
 import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
 import type { AgentState } from '@codebuff/common/types/session-state'
-import {
-  isReceiptDowngradeBlocked,
-  isReceiptShape,
-  MODEL_PAYLOAD_JSON_CHAR_LIMIT,
-  unwrapArbitraryEnvelope,
-} from '@codebuff/common/util/model-payload-recovery'
 
 type ToolName = 'set_output'
 
@@ -100,7 +101,7 @@ export const handleSetOutput = (async (params: {
     // payload ending mid-structure (open bracket or open string) almost
     // certainly lost its tail in transit, and the caller needs chunking /
     // smaller-payload guidance rather than only a formatting retry.
-    const malformedJsonMessage = looksLikeTransportTruncation(rawOutput.data)
+    const malformedJsonMessage = detectTransportTruncation(rawOutput.data)
       ? `${baseGuidance} The payload appears to have been truncated in transport (partial) — send a smaller payload: split the result across multiple smaller set_output calls or persist it to a file and reference the path.`
       : baseGuidance
     // Recorded on agent state because this rejection also ends the turn
@@ -132,6 +133,63 @@ export const handleSetOutput = (async (params: {
       ...params,
       agentId: agentState.agentType,
     })
+  }
+
+  // Fail closed when an agent type is declared but the template could not be
+  // resolved: the output schema is then UNKNOWN, and the passthrough `else`
+  // branch below would store whatever arrived with NO validation at all. That
+  // is exactly how a reviewer-family child publishes a verdict-less receipt —
+  // the receipt is never validated on the way in, the gate's verdict guard then
+  // classifies it `schema_invalid`, and the parent re-reviews forever. A
+  // template that RESOLVES but simply declares no outputSchema stays a
+  // legitimate passthrough (the `else` branch below); only the unresolvable
+  // case is rejected here. The check sits immediately after resolution so it
+  // covers every downstream validation path.
+  if (agentState.agentType && !agentTemplate) {
+    const unresolvableTemplateMessage = `Output was NOT stored because the agent template for agent type "${agentState.agentType}" could not be resolved, so the output schema is unknown. This is a runtime/configuration problem (a missing or unregistered agent template), not a problem with your payload: re-emitting set_output with different fields will not fix it. Report that the agent template could not be resolved so the caller can repair the agent registration/resolution path.`
+    // Recorded on agent state because this rejection also ends the turn
+    // (set_output is in TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so the loop's
+    // missing-output retry is the only place that can report it to the model.
+    agentState.lastSetOutputError = unresolvableTemplateMessage
+    logger.error(
+      { agentType: agentState.agentType, agentId: agentState.agentId },
+      'set_output could not validate its payload because the agent template for the declared agent type could not be resolved',
+    )
+    return {
+      output: jsonToolResult({ message: unresolvableTemplateMessage }),
+    }
+  }
+
+  // Receipt-overwrite guard (Phase 3): the decision is delegated to the shared
+  // `isReceiptDowngradeBlocked` helper in model-payload-recovery.ts so any
+  // consumer can adopt the same policy. The policy: a reviewer-family child's
+  // verdict-less follow-up — usually the `{ message: 'Output set' }` tool ACK
+  // echoed back as a payload — cannot destroy a published verdict-bearing
+  // receipt. Detection stays content-addressed (isReceiptShape), never keyed
+  // on envelope/field names. A full receipt replacement (both sides
+  // receipt-shaped) still replaces — corrections keep working; non-reviewer
+  // agents keep the exact replace-always behavior.
+  // Evaluated on the RAW decoded payload and BEFORE outputSchema validation on
+  // purpose: a degenerate echo can never satisfy a receipt schema, so
+  // validating it first would surface it as a validation rejection, record
+  // lastSetOutputError, and re-arm the missing-output retry loop this guard
+  // exists to prevent. The downgrade attempt must be ACKed instead, leaving
+  // the published receipt untouched. The identical guard below (on the
+  // post-validation `finalOutput`) stays as defense in depth for the
+  // template-resolved-but-no-outputSchema passthrough path.
+  if (
+    isReceiptDowngradeBlocked({
+      existingOutput: agentState.output,
+      nextOutput: decodedOutput,
+      receiptProtected: shouldNormalizeReviewerOutput ||
+        (isReceiptShape(agentState.output) &&
+          (agentState.output as Record<string, unknown>).family ===
+            'reviewer'),
+    })
+  ) {
+    // A repeated bogus call must not resurrect a stale rejection.
+    agentState.lastSetOutputError = undefined
+    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK }) }
   }
 
   const decodedNestedOutputRecord =
@@ -276,41 +334,6 @@ export const handleSetOutput = (async (params: {
 
   return { output: jsonToolResult({ message: 'Output set' }) }
 }) satisfies CodebuffToolHandlerFunction<ToolName>
-
-/**
- * Scans a raw JSON-text string for signs it was cut off mid-structure: tracks
- * string state by counting unescaped quotes (escape-aware, so a valid string
- * containing `\"` never toggles state) and tracks `{`/`[` depth outside
- * strings. A payload that ends inside an open string or with any open bracket
- * almost certainly lost its tail in transport rather than being deliberately
- * malformed JSON. Only ever called on strings that already failed to decode,
- * so it can never misclassify a valid document.
- */
-function looksLikeTransportTruncation(text: string): boolean {
-  let inString = false
-  let escaped = false
-  let depth = 0
-  for (const char of text) {
-    if (inString) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\') {
-        escaped = true
-      } else if (char === '"') {
-        inString = false
-      }
-      continue
-    }
-    if (char === '"') {
-      inString = true
-    } else if (char === '{' || char === '[') {
-      depth += 1
-    } else if (char === '}' || char === ']') {
-      depth -= 1
-    }
-  }
-  return depth > 0 || inString
-}
 
 function getZodIssueCount(error: unknown): number {
   if (

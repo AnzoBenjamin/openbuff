@@ -184,6 +184,7 @@ If the caller passed params.outputSchemaHint, format your final message content 
       // Anchor-extend merge: same break condition as before (the last
       // assistant message's text), but the merged trailing run so a report
       // streamed as per-delta fragments does not harvest a tail fragment.
+      // Computed once per iteration for the break check below.
       const stepCleanedText = trailingAssistantTextFromHistory(
         agentState.messageHistory,
       )
@@ -306,12 +307,10 @@ If the caller passed params.outputSchemaHint, format your final message content 
       return
     }
 
-    // No usable text, tool-call payload, or prior output — keep empty path.
-    yield {
-      toolName: 'set_output',
-      input: { message: cleanedText },
-      includeToolCall: false,
-    }
+    // Nothing to publish: cleanedText is provably empty here (the branch above
+    // already returned any non-empty text) and there is no tool-call payload or
+    // prior output, so an empty set_output would only store a blank message.
+    return
   },
 }
 

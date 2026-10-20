@@ -377,8 +377,6 @@ export type SemanticCompactionGovernor = {
   iterationsSincePass: number
   /** Announced passes this turn; bounded by SEMANTIC_MAX_PASSES_PER_TURN. */
   passesThisTurn: number
-  /** Consecutive passes that settled without reclaiming meaningful space. */
-  consecutiveNoProgressPasses: number
 }
 
 export type GovernorDecision = {
@@ -394,7 +392,6 @@ export function createSemanticCompactionGovernor(): SemanticCompactionGovernor {
     state: 'armed',
     iterationsSincePass: 0,
     passesThisTurn: 0,
-    consecutiveNoProgressPasses: 0,
   }
 }
 
@@ -491,29 +488,6 @@ export function advanceGovernorIteration(
 ): void {
   if (governor.state === 'cooldown') {
     governor.iterationsSincePass += 1
-  }
-}
-
-/**
- * Record a settled pass. A productive pass resets the no-progress streak; an
- * unproductive one increments it, and TWO consecutive no-progress passes cap
- * the turn at its already-spent pass budget. Unlike the old permanent
- * `suppressSemanticCompaction` advisory this stays bounded (no further paid
- * passes this turn, but eviction + the mechanical trim still respond) and the
- * state resets naturally next turn because the governor is loop-local.
- */
-export function recordPassSettled(
-  governor: SemanticCompactionGovernor,
-  params: { productive: boolean },
-): void {
-  const { productive } = params
-  if (productive) {
-    governor.consecutiveNoProgressPasses = 0
-    return
-  }
-  governor.consecutiveNoProgressPasses += 1
-  if (governor.consecutiveNoProgressPasses >= 2) {
-    governor.passesThisTurn = SEMANTIC_MAX_PASSES_PER_TURN
   }
 }
 

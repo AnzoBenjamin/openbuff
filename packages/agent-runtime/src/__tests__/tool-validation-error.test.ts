@@ -114,6 +114,127 @@ describe('tool validation error handling', () => {
     expect(serialized).not.toContain('Original params value')
   })
 
+  it('surfaces a bounded, sanitized validationIssues list from a Zod-shaped error', () => {
+    // Spawn params actually fail as a Zod issue LIST, which the message-text
+    // recoveryHint allowlist cannot see. The structural channel must carry the
+    // failing field paths + messages so the parent learns WHICH field was
+    // wrong instead of only the static failure string.
+    const zodShaped = Object.assign(new Error('Validation failed'), {
+      issues: [
+        {
+          path: ['agents', 0, 'params', 'command'],
+          message: 'Invalid input: expected string, received undefined',
+        },
+        {
+          path: [],
+          message: 'Too small:\n  expected string to have >=1 characters',
+        },
+        // Non-string message and non-array path are dropped / defaulted, never
+        // stringified into the payload.
+        { path: ['agents', 0, 'params', 'secret'], message: 42 },
+      ],
+    })
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'basher', params: {} }] },
+      zodShaped,
+    )
+
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: {
+            errorMessage: string
+            recoveryHint?: unknown
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value[0]
+
+    // The stable machine-readable marker is unchanged.
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    expect(report.value.validationIssues).toEqual([
+      {
+        path: 'agents.0.params.command',
+        message: 'Invalid input: expected string, received undefined',
+      },
+      {
+        path: '',
+        message: 'Too small: expected string to have >=1 characters',
+      },
+    ])
+    // Both diagnostic channels can ride together without clobbering the marker.
+    expect(typeof report.value.recoveryHint).toBe('string')
+    expect(report.value.recoveryHint as string).toContain('Validation failed')
+  })
+
+  it('omits validationIssues entirely when the error is not issue-shaped', () => {
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'editor' }] },
+      new Error('terminal bridge disconnected'),
+    )
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ value: Record<string, unknown> }>
+      }
+    ).value[0]
+
+    // No `undefined` ever enters the JSON payload: the key is absent, not
+    // present-with-undefined.
+    expect(Object.hasOwn(report.value, 'validationIssues')).toBe(false)
+    expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+  })
+
+  it('bounds the validationIssues entry count and per-string length', () => {
+    const issues = Array.from({ length: 30 }, (_, index) => ({
+      path: ['agents', 0, 'params', `field${index}`],
+      message: `expected ${'x'.repeat(4_000)}`,
+    }))
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'basher', params: {} }] },
+      Object.assign(new Error('Validation failed'), { issues }),
+    )
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: { validationIssues?: Array<{ path: string; message: string }> }
+        }>
+      }
+    ).value[0]
+    const reported = report.value.validationIssues ?? []
+
+    // Small fixed count and a short per-string ceiling keep the payload bounded.
+    expect(reported).toHaveLength(20)
+    for (const issue of reported) {
+      expect(typeof issue.path).toBe('string')
+      expect(issue.message.length).toBeLessThanOrEqual(300 + '...[truncated]'.length)
+    }
+  })
+
+  it('extends the recovery-hint allowlist to Zod-style text without weakening redaction', () => {
+    const validationError = new Error(
+      'Unrecognized key: "expectedHash"\n\nOriginal params value:\n{"secret":"should-never-appear"}',
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'edit-transaction' }] },
+      validationError,
+    )
+    const serialized = JSON.stringify(output)
+
+    // The widened allowlist now qualifies plain Zod wording...
+    expect(serialized).toContain('Unrecognized key')
+    // ...while the security boundary still strips the raw params section.
+    expect(serialized).not.toContain('should-never-appear')
+    expect(serialized).not.toContain('Original params value')
+  })
+
   it('preserves basher extractedLines as control-plane output', async () => {
     const { normalizeSpawnedAgentOutput } = await import(
       '../tools/handlers/tool/spawn-agent-utils'
