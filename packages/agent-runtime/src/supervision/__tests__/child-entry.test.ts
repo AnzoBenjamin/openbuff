@@ -181,6 +181,7 @@ describe('child-state rehydration validation (json-roundtrip repair)', () => {
       ancestorRunIds: ['run-1'],
     })
     expect(state.agentId).toBe('child-entry-agent-1')
+    expect(state.agentType).toBe('thinker')
     expect(state.systemPrompt).toBe('be brief')
     expect(state.contextTokenCount).toBe(42)
     expect(state.ancestorRunIds).toEqual(['run-1'])

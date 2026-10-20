@@ -1589,6 +1589,15 @@ describe('loopAgentSteps', () => {
       },
       expectedRevision: -1,
     })
+    agentState.compactionArchive = [
+      {
+        archivedAt: 1,
+        action: 'semantic_compaction',
+        keepRecentSteps: 0,
+        stepBase: 0,
+        messages: [userMessage('Archived decision')],
+      },
+    ]
     let injectedParams: Record<string, any> | undefined
     const qualifiedPruner = buildPrunerStub(
       function* ({ params }: { params?: Record<string, any> }) {
@@ -1642,10 +1651,16 @@ describe('loopAgentSteps', () => {
     })
     expect(injectedParams?.taskMemory?.revision).toBe(0)
     expect(injectedParams?.workspaceState).toBeDefined()
+    expect(injectedParams?.archivePointers).toContain(
+      '[action=semantic_compaction steps=0-0 msgs=1] 1 archived messages',
+    )
     // Because the revision guard matched, the transactional replacement
     // committed: both the transcript and the next memory revision landed.
     expect(JSON.stringify(result.agentState.messageHistory)).toContain(
       '<knowledge_memory>',
+    )
+    expect(result.agentState.taskMemory?.revision).toBeGreaterThan(
+      injectedParams!.taskMemory.revision,
     )
   })
 

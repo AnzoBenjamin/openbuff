@@ -46,6 +46,11 @@ export const EVICTION_ARCHIVE_MESSAGE_CHARS = 64_000
 export const RECALL_MAX_RESULTS = 6
 export const RECALL_SNIPPET_CHARS = 600
 
+/** Bounded index line carried by semantic memory; the archive remains the source. */
+const ARCHIVE_POINTER_LINE_CHARS = 240
+/** Keep the visible index shallow even if archive retention grows later. */
+const ARCHIVE_POINTER_MAX_SNAPSHOTS = 24
+
 const truncateWithCap = (value: string, maxChars: number): string =>
   value.length <= maxChars
     ? value
@@ -55,22 +60,34 @@ const truncate = (value: string): string =>
   truncateWithCap(value, MAX_ARCHIVE_MESSAGE_CHARS)
 
 const archiveMessageWithCap = (message: Message, maxChars: number): Message => {
-  if (message.role !== 'tool') return message
-  const tool = message
+  if (message.role === 'tool') {
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === 'json'
+          ? {
+              ...part,
+              value:
+                typeof part.value === 'string'
+                  ? truncateWithCap(part.value, maxChars)
+                  : truncateWithCap(JSON.stringify(part.value), maxChars),
+            }
+          : part,
+      ),
+    }
+  }
+
+  // Conversation text is just as recoverable as a tool result, but must obey
+  // the archive's per-message size contract. Without this cap a single huge
+  // user or assistant message bypassed the archive bound entirely.
   return {
-    ...tool,
-    content: tool.content.map((part) =>
-      part.type === 'json'
-        ? {
-            ...part,
-            value:
-              typeof part.value === 'string'
-                ? truncateWithCap(part.value, maxChars)
-                : truncateWithCap(JSON.stringify(part.value), maxChars),
-          }
+    ...message,
+    content: message.content.map((part) =>
+      part.type === 'text' || part.type === 'reasoning'
+        ? { ...part, text: truncateWithCap(part.text, maxChars) }
         : part,
     ),
-  }
+  } as Message
 }
 
 const archiveMessage = (message: Message): Message =>
@@ -177,6 +194,36 @@ export function archivePreCompaction(
   archivedSources.add(source)
 }
 
+/**
+ * Build the bounded archive index that semantic compaction places in pinned
+ * knowledge memory. It intentionally carries only provenance and a digest;
+ * `recall_context` retrieves the archived content on demand.
+ */
+export function buildCompactionArchivePointers(
+  archive: ContextArchiveSnapshot[] | undefined,
+): string[] | undefined {
+  if (!archive || archive.length === 0) return undefined
+  const pointers = archive
+    .slice(-ARCHIVE_POINTER_MAX_SNAPSHOTS)
+    .map((snapshot) => {
+      const stepRange =
+        Array.isArray(snapshot.steps) && snapshot.steps.length > 0
+          ? `steps=${snapshot.steps[0]}-${snapshot.steps[snapshot.steps.length - 1]}`
+          : `steps=${snapshot.stepBase ?? 0}-${(snapshot.stepBase ?? 0) + Math.max(snapshot.messages.length - 1, 0)}`
+      const digest = (
+        snapshot.reason ?? `${snapshot.messages.length} archived messages`
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80)
+      return `[action=${snapshot.action} ${stepRange} msgs=${snapshot.messages.length}] ${digest}`.slice(
+        0,
+        ARCHIVE_POINTER_LINE_CHARS,
+      )
+    })
+  return pointers.length > 0 ? pointers : undefined
+}
+
 /** D26: why-clause stored on every `tool_result_eviction` snapshot. */
 export const EVICTION_ARCHIVE_REASON =
   'deterministic tool-result eviction (stale recency)'
@@ -268,13 +315,49 @@ export type RecallContextResult = {
   archivedAt: number[]
 }
 
-const toText = (message: Message): string => {
-  if (message.role !== 'tool') return ''
-  return message.content
-    .map((part) =>
-      part.type === 'json' ? JSON.stringify(part.value) : '[media]',
-    )
+export type ArchiveRecallEntry = {
+  toolName: string
+  toolCallId: string
+  text: string
+}
+
+/**
+ * Convert one archived message to a recall row. Earlier versions indexed only
+ * tool results, leaving the user request and assistant decisions unrecoverable
+ * after a mechanical trim. Conversation entries use stable synthetic provenance
+ * while real tool entries keep their exact call ids.
+ */
+export const getArchiveRecallEntry = (
+  message: Message,
+  step: number,
+): ArchiveRecallEntry => {
+  if (message.role === 'tool') {
+    return {
+      toolName: message.toolName,
+      toolCallId: message.toolCallId,
+      text: message.content
+        .map((part) =>
+          part.type === 'json' ? JSON.stringify(part.value) : '[media]',
+        )
+        .join(' '),
+    }
+  }
+
+  const text = message.content
+    .map((part) => {
+      if (part.type === 'text' || part.type === 'reasoning') return part.text
+      if (part.type === 'tool-call') {
+        return `tool call ${part.toolName}: ${JSON.stringify(part.input)}`
+      }
+      if (part.type === 'file') return part.filename ?? '[file]'
+      return '[media]'
+    })
     .join(' ')
+  return {
+    toolName: 'conversation',
+    toolCallId: `conversation-${message.role}-${step}`,
+    text,
+  }
 }
 
 /**
@@ -341,8 +424,10 @@ export function recallFromArchive(
         }
       }
       const message = snapshot.messages[i]
-      if (message.role !== 'tool') continue
-      const text = toText(message)
+      const step = stepProvenance(snapshot, i)
+      const entry = getArchiveRecallEntry(message, step)
+      const text = entry.text
+      if (!text) continue
       const lowered = text.toLowerCase()
       if (!terms.every((term) => lowered.includes(term))) continue
       const first = Math.min(
@@ -355,9 +440,9 @@ export function recallFromArchive(
         // D26 `tool_result_eviction` snapshots carry the per-message original
         // step in their parallel `steps` array — slice-local indices there
         // would misreport provenance.
-        step: stepProvenance(snapshot, i),
-        toolName: message.toolName,
-        toolCallId: message.toolCallId,
+        step,
+        toolName: entry.toolName,
+        toolCallId: entry.toolCallId,
         snippet: text.slice(start, start + RECALL_SNIPPET_CHARS),
       })
     }

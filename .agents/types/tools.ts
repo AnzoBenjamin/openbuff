@@ -645,10 +645,10 @@ export interface HoverTypeParams {
 }
 
 /**
- * Search archived pre-compaction transcripts for verbatim facts a compaction pass removed from visible context.
+ * Search archived pre-compaction transcripts for verbatim conversation or tool facts a compaction pass removed from visible context.
  */
 export interface RecallContextParams {
-  /** Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
+  /** Case-insensitive search terms for archived pre-compaction transcript content. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
   query: string
 }
 
@@ -1007,6 +1007,10 @@ export interface SpawnAgentsParams {
             files: string[]
             snapshotFingerprint: string
             reviewer?: string
+            severity?: string
+            dimension?: string
+            evidence?: string[]
+            correction?: string
           }[]
           permissions: {
             readablePaths: string[]

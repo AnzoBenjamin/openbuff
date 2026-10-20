@@ -320,6 +320,14 @@ export function getModelContextMessageLimit(
 export function maybePruneContext(params: {
   messages: Message[]
   systemTokens: number
+  /**
+   * Request messages which are compiled from state for this step but are not
+   * part of `messages` (for example task memory, Memory V2, and the step
+   * prompt). They consume the same provider budget, so history trimming must
+   * reserve their tokens rather than judging the history against the whole
+   * message allowance.
+   */
+  nonHistoryMessageTokens?: number
   contextTokenCount: number
   maxTotalTokens?: number
   logger: Logger
@@ -327,6 +335,7 @@ export function maybePruneContext(params: {
   const {
     messages,
     systemTokens,
+    nonHistoryMessageTokens = 0,
     contextTokenCount,
     maxTotalTokens = DEFAULT_MAX_CONTEXT_TOKENS,
     logger,
@@ -338,7 +347,11 @@ export function maybePruneContext(params: {
 
   const report = trimMessagesToFitTokenLimitWithReport({
     messages,
-    systemTokens,
+    // `trimMessagesToFitTokenLimitWithReport` owns only messageHistory. Fold
+    // the per-step compiled messages into its fixed baseline so it cannot
+    // report a zero-change "trim" when task memory or a step prompt pushed the
+    // actual provider request over budget.
+    systemTokens: systemTokens + Math.max(0, nonHistoryMessageTokens),
     maxTotalTokens,
     logger,
   })

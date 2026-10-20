@@ -18,15 +18,15 @@ const inputSchema = z
       .min(2)
       .max(512)
   .describe(
-    'Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching.',
+    'Case-insensitive search terms for archived pre-compaction transcript content. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching.',
   ),
   })
   .describe(
-    'Search archived pre-compaction transcripts for verbatim facts a compaction pass removed from visible context.',
+    'Search archived pre-compaction transcripts for verbatim conversation or tool facts a compaction pass removed from visible context.',
   )
 
 const description = `
-Search the archived pre-compaction transcripts for verbatim facts that a compaction pass removed from the visible context. Use when the retained <knowledge_memory> references a detail you need but the surrounding tool output was compacted away. Results are bounded snippets with provenance (which archive snapshot matched); archived content is PRE-COMPACTION and possibly stale, so verify against live files before editing. Returns an empty match list when nothing was archived or the terms do not appear.
+Search the archived pre-compaction transcripts for verbatim facts that a compaction pass removed from the visible context. Use when the retained <knowledge_memory> references a detail you need but the surrounding conversation or tool output was compacted away. Results are bounded snippets with provenance (which archive snapshot matched); archived content is PRE-COMPACTION and possibly stale, so verify against live files before editing. Returns an empty match list when nothing was archived or the terms do not appear.
 
 Example:
 ${$getNativeToolCallExampleString({

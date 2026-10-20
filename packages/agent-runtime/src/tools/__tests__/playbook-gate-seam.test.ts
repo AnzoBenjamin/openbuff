@@ -216,4 +216,21 @@ describe('executeToolCall playbook gate seam', () => {
       (entriesOf(agentState)[0] as { commandText?: string }).commandText,
     ).toBe('bun run check:ci-local')
   })
+
+  it('uses an injected timestamp when recording evidence', () => {
+    const agentState: Record<string, unknown> = {
+      agentId: 'agent-3',
+      sessionEvidenceLog: createSessionEvidenceLog(),
+    }
+
+    recordToolEvidence({
+      agentState,
+      toolName: 'run_terminal_command',
+      input: { command: 'bun run check:ci-local' },
+      output: ciSuccessOutput(),
+      atMs: 12_345,
+    } as any)
+
+    expect((entriesOf(agentState)[0] as { atMs?: number }).atMs).toBe(12_345)
+  })
 })

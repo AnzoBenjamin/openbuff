@@ -5,6 +5,7 @@ import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-run
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 
 import { mockFileContext } from '../../../../__tests__/test-utils'
+import { buildChildAgentState } from '../../../../supervision/child-entry'
 import {
   handleSetOutput,
   MAX_SET_OUTPUT_JSON_CHARS,
@@ -57,6 +58,55 @@ describe('handleSetOutput', () => {
         value: {
           message: expect.stringContaining('malformed or incomplete JSON text'),
         },
+      },
+    ])
+  })
+
+  test('rejects an empty reviewer receipt from a supervised child', async () => {
+    const template: AgentTemplate = {
+      id: 'compatibility-reviewer',
+      displayName: 'Compatibility Reviewer',
+      spawnerPrompt: 'Review compatibility',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema: z.object({ verdict: z.string() }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: 'Test system prompt',
+      instructionsPrompt: 'Test instructions',
+      stepPrompt: 'Test step prompt',
+    }
+    const agentState = buildChildAgentState({
+      agentType: template.id,
+      prompt: 'Review the assigned file.',
+      spawnParams: undefined,
+      child: { agentId: 'supervised-reviewer-1' },
+    })
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'empty-supervised-review-output',
+      input: {},
+    } as unknown as CodebuffToolCall<'set_output'>
+
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.agentType).toBe(template.id)
+    expect(agentState.output).toBeUndefined()
+    expect(output).toEqual([
+      {
+        type: 'json',
+        value: { message: expect.stringContaining('verdict') },
       },
     ])
   })

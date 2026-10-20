@@ -1621,8 +1621,8 @@ runtime archives the pre-compaction transcript onto the new optional
 (`packages/agent-runtime/src/util/context-archive.ts`, capped at 8 snapshots
 of 200 messages with 4k-char per-message truncation; plain JSON, so sessions
 persisted before the field existed parse without it). The registered
-`recall_context` tool (granted to base2 CORE) searches those archived tool
-bodies with bounded case-insensitive AND-match snippets and returns
+`recall_context` tool (granted to base2 CORE) searches those archived
+conversation and tool bodies with bounded case-insensitive AND-match snippets and returns
 provenance, so pre-compaction content is always marked stale-until-verified;
 the archive itself never enters the model context. As of P2-T2 slice 1, this
 archive — including D26 `tool_result_eviction` snapshots — persists across
@@ -1633,9 +1633,10 @@ sessions via the CLI chat-state restore path (`saveChatState` /
 regression tests in `cli/src/utils/__tests__/run-state-storage.test.ts`,
 `cli/src/utils/__tests__/turn-checkpoint.test.ts`, and
 `sdk/src/__tests__/initial-session-state.test.ts` proving deep-equal restore
-over which recall operates unchanged. Eviction is deliberately
-NOT archived: tombstones already instruct a re-run, and a fresh read of live
-files is more faithful than a stale body. After a semantic pass, the runtime
+over which recall operates unchanged. Eviction snapshots are archived under a
+separate bounded retention policy so tombstoned tool results remain recoverable;
+a fresh read of live files is still preferred before acting on stale content.
+After a semantic pass, the runtime
 verifies the extraction
 (`packages/agent-runtime/src/util/compaction-verification.ts`): expected facts
 (paths read or written, truncated commands) are derived from the

@@ -402,14 +402,16 @@ export function recordToolEvidence<T extends ToolName>(params: {
   toolName: T
   input: Record<string, unknown>
   output: CodebuffToolOutput<T>
+  /** Injected by executeToolCall so evidence timing is replayable in tests. */
+  atMs?: number
 }): void {
-  const { agentState, toolName, input, output } = params
+  const { agentState, toolName, input, output, atMs = realClock.now() } = params
   if (toolName !== 'run_terminal_command') return
   if (outputCarriesToolError(output)) return
   recordSessionEvidence(sessionEvidenceLogFor(agentState), {
     toolName,
     ...(typeof input.command === 'string' ? { commandText: input.command } : {}),
-    atMs: Date.now(),
+    atMs,
   })
 }
 
@@ -2703,7 +2705,7 @@ export async function executeToolCall<T extends ToolName>(
         input: effectiveInput,
         playbooks: playbookContext,
         evidenceLog: sessionEvidenceLogFor(agentState),
-        nowMs: Date.now(),
+        nowMs: (params.clock ?? realClock).now(),
         env: playbookGateEnv,
       })
       let playbookBlocked = false
@@ -3473,6 +3475,7 @@ export async function executeToolCall<T extends ToolName>(
       toolName,
       input: toolCall.input as Record<string, unknown>,
       output: validatedOutput,
+      atMs: (params.clock ?? realClock).now(),
     })
 
     // Record this agent's own reads/edits as task-memory evidence. Only child

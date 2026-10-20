@@ -486,6 +486,79 @@ describe('Spawn Agents Message History', () => {
     })
   })
 
+  it('threads archive pointers and compacted task memory through an inline pruner', async () => {
+    const parentAgent = createMockAgent('parent', true)
+    parentAgent.spawnableAgents = ['context-pruner']
+    const prunerAgent = createMockAgent('context-pruner', true)
+    const sessionState = getInitialSessionState(mockFileContext)
+    const compactedMemory = commitTaskMemory({
+      expectedRevision: -1,
+      draft: {
+        schemaVersion: 1,
+        goal: 'Compacted operational goal',
+        requirements: [],
+        decisions: [],
+        filesInspected: [],
+        editsMade: [],
+        validationResults: [],
+        reviewReceipts: [],
+        blockers: [],
+        nextActions: [],
+        historicalSummary: 'Bounded summary',
+        evidence: [],
+      },
+    })
+    sessionState.mainAgentState.compactionArchive = [
+      {
+        archivedAt: 1,
+        action: 'semantic_compaction',
+        keepRecentSteps: 0,
+        stepBase: 0,
+        messages: [userMessage('archived context')],
+      },
+    ]
+    mockLoopAgentSteps.mockImplementationOnce(async (options: any) => {
+      capturedLoopOptions = options
+      capturedSubAgentState = options.agentState
+      return {
+        agentState: {
+          ...options.agentState,
+          messageHistory: [userMessage('compacted transcript')],
+          taskMemory: compactedMemory,
+        },
+        output: { type: 'lastMessage', value: [] },
+      }
+    })
+    const toolCall: CodebuffToolCall<'spawn_agent_inline'> = {
+      toolName: 'spawn_agent_inline',
+      toolCallId: 'pruner-tool-call',
+      input: { agent_type: 'context-pruner', prompt: '' },
+    }
+
+    await handleSpawnAgentInline({
+      ...handleSpawnAgentsBaseParams,
+      tools: {},
+      agentState: sessionState.mainAgentState,
+      agentTemplate: parentAgent,
+      localAgentTemplates: { 'context-pruner': prunerAgent },
+      toolCall,
+    })
+
+    expect(capturedLoopOptions.spawnParams?.archivePointers).toEqual([
+      '[action=semantic_compaction steps=0-0 msgs=1] 1 archived messages',
+    ])
+    expect(sessionState.mainAgentState.messageHistory).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: [{ type: 'text', text: 'compacted transcript' }],
+      }),
+    ])
+    expect(sessionState.mainAgentState.taskMemory).toMatchObject({
+      goal: 'Compacted operational goal',
+      historicalSummary: 'Bounded summary',
+    })
+  })
+
   it('should handle message history with only system messages', async () => {
     const parentAgent = createMockAgent('parent', true)
     const childAgent = createMockAgent('child-agent', true)

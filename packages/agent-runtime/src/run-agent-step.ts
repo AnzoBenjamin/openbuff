@@ -2799,6 +2799,17 @@ export async function loopAgentSteps(
         const pruningResult = maybePruneContext({
           messages: currentAgentState.messageHistory,
           systemTokens: systemAndToolsTokens,
+          // The trim function rewrites only messageHistory, while the request
+          // also contains compiled task memory, Memory V2, and this step's
+          // prompt. Reserve those already-counted tokens or a history that is
+          // individually below the window will be returned unchanged even
+          // though the actual provider request is over budget.
+          nonHistoryMessageTokens: Math.max(
+            0,
+            currentAgentState.contextTokenCount -
+              systemAndToolsTokens -
+              historyTokensAfterProgrammatic,
+          ),
           contextTokenCount: currentAgentState.contextTokenCount,
           maxTotalTokens: activeMaxContextLength,
           logger,

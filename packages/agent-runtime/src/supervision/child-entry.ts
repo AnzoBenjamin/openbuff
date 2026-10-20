@@ -339,6 +339,10 @@ function logStateFieldDropped(field: string, reason: string): void {
  */
 export function buildChildAgentState(request: SupervisedSpawnRequest) {
   const state = getInitialAgentState()
+  // `set_output` resolves the spawned agent's declared output schema from
+  // AgentState.agentType. The supervised child starts from a fresh state, so
+  // restore its authoritative request identity before it can execute tools.
+  state.agentType = request.agentType
   state.agentId = request.child?.agentId ?? generateCompactId()
   const child =
     request.child ?? ({} as NonNullable<SupervisedSpawnRequest['child']>)

@@ -132,6 +132,28 @@ describe('maybePruneContext', () => {
     expect(finalTokens).toBeLessThan(inputTokens)
   })
 
+  it('reserves compiled per-step messages when trimming history', () => {
+    // The history alone fits a 10k window, but compiled task memory / step
+    // context consumes most of that window. Before the reservation was passed
+    // through, this returned the history unchanged while the real request was
+    // still over budget.
+    const messages: Message[] = [userMessage('history '.repeat(1_000))]
+    const result = maybePruneContext({
+      messages,
+      systemTokens: 1_000,
+      nonHistoryMessageTokens: 8_000,
+      contextTokenCount: 12_000,
+      maxTotalTokens: 10_000,
+      logger: logger as never,
+    })
+
+    expect(result.pruned).toBe(true)
+    expect(result.messages).not.toBe(messages)
+    expect(result.report?.afterTokens).toBeLessThan(
+      result.report!.beforeTokens,
+    )
+  })
+
   it('passes the fit-verification report fields through untouched', () => {
     const longContent = 'x'.repeat(400_000)
     const messages: Message[] = [

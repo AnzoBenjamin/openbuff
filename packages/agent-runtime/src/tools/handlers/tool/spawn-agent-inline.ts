@@ -16,6 +16,7 @@ import {
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import { selectAgentAttempt } from '../../../orchestration/select-agent-attempt'
 import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
+import { buildCompactionArchivePointers } from '../../../util/context-archive'
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   acquireWorkspacePathLease,
@@ -207,6 +208,15 @@ export const handleSpawnAgentInline = (async (
     handoff,
     spawnParams,
   })
+  // Base2 drives the pruner through this inline path, rather than through the
+  // prompt-only runtime helper. Thread the same bounded archive index into both
+  // paths so a semantic rewrite leaves the model a usable recall map.
+  const prunerArchivePointers = isContextPruner
+    ? buildCompactionArchivePointers(parentAgentState.compactionArchive)
+    : undefined
+  const effectiveSpawnParams = prunerArchivePointers
+    ? { ...runtimeSpawnParams, archivePointers: prunerArchivePointers }
+    : runtimeSpawnParams
 
   // Inline context editors need the full parent transcript, but ordinary inline
   // specialists receive only bounded pinned operational memory by default.
@@ -298,7 +308,7 @@ export const handleSpawnAgentInline = (async (
       ancestorRunIds: parentAgentState.ancestorRunIds,
       userInputId: `${userInputId}-inline-${agentType}${childAgentState.agentId}`,
       prompt: prompt || '',
-      spawnParams: runtimeSpawnParams,
+      spawnParams: effectiveSpawnParams,
       agentTemplate: inlineTemplate,
       parentAgentState,
       agentState: childAgentState,
@@ -390,6 +400,11 @@ export const handleSpawnAgentInline = (async (
     // parent. Only explicit history-editor templates may propagate replacements.
     if (editsParentMessageHistory) {
       parentAgentState.messageHistory = result.agentState.messageHistory
+      // Context-pruner uses transactional `set_messages`: preserve the paired
+      // bounded task-memory revision along with its replacement transcript.
+      if (isContextPruner) {
+        parentAgentState.taskMemory = result.agentState.taskMemory
+      }
     }
     // P2-T8: prefer a supervised spawn's own validated receipt verbatim;
     // the in-process path keeps building the receipt here exactly as before.
@@ -399,7 +414,7 @@ export const handleSpawnAgentInline = (async (
         agentType,
         agentId: result.agentState.agentId,
         handoff,
-        spawnParams: runtimeSpawnParams,
+        spawnParams: effectiveSpawnParams,
         output: result.output,
         agentState: result.agentState,
       })

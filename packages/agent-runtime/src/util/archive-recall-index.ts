@@ -42,6 +42,7 @@ import { sanitizeFtsQuery } from '@codebuff/common/util/fts5-query'
 import {
   RECALL_MAX_RESULTS,
   RECALL_SNIPPET_CHARS,
+  getArchiveRecallEntry,
   recallFromArchive,
   stepProvenance,
 } from './context-archive'
@@ -58,9 +59,8 @@ import type {
   ContextArchiveSnapshot,
   RecallContextResult,
 } from './context-archive'
-import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 
-/** One flattened archive tool message, in archive array order. */
+/** One flattened archive message, in archive array order. */
 export type ArchiveRecallRow = {
   archivedAt: number
   step: number
@@ -78,22 +78,7 @@ export type ArchiveRecallRow = {
 const MAX_INDEX_TEXT_CHARS = 16_000_000
 
 /**
- * Serial form of an archived tool message's body — the exact text the
- * `recallFromArchive` scanner matches against, so snippets stay byte-identical
- * between the indexed and fallback paths. Mirrors the scanner's private
- * `toText` (json parts stringified, media parts as '[media]').
- */
-const toText = (message: Message): string => {
-  if (message.role !== 'tool') return ''
-  return message.content
-    .map((part) =>
-      part.type === 'json' ? JSON.stringify(part.value) : '[media]',
-    )
-    .join(' ')
-}
-
-/**
- * Flatten every snapshot's tool messages (any `action`, eviction snapshots
+ * Flatten every snapshot's recallable messages (any `action`, eviction snapshots
  * included) to recall rows, in archive array order (this order IS the FTS
  * `row_index`). Step provenance reuses the SAME logic as `stepProvenance` in
  * context-archive.ts (D26 `steps` arrays for eviction snapshots, `stepBase`
@@ -107,13 +92,15 @@ export const buildArchiveRecallRows = (
   for (const snapshot of archive) {
     for (let i = 0; i < snapshot.messages.length; i++) {
       const message = snapshot.messages[i]
-      if (message.role !== 'tool') continue
+      const step = stepProvenance(snapshot, i)
+      const entry = getArchiveRecallEntry(message, step)
+      if (!entry.text) continue
       rows.push({
         archivedAt: snapshot.archivedAt,
-        step: stepProvenance(snapshot, i),
-        toolName: message.toolName,
-        toolCallId: message.toolCallId,
-        text: toText(message),
+        step,
+        toolName: entry.toolName,
+        toolCallId: entry.toolCallId,
+        text: entry.text,
       })
     }
   }

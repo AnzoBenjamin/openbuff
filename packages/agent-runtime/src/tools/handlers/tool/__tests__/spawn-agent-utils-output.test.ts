@@ -27,6 +27,11 @@ import {
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 
+// `mock.module` is registry-wide across Bun's shared test workers. Snapshot
+// every real export before the test-local override so sibling suites never see
+// a lossy replacement of run-agent-step.
+const realRunAgentStep = { ...(await import('../../../../run-agent-step')) }
+
 /**
  * Direct coverage for the M0-T3 sub-agent output durability contract on
  * `normalizeSpawnedAgentOutput`: a child that ended without set_output (or
@@ -1990,6 +1995,7 @@ describe('executeSubagent cancellation cleanup', () => {
     // Loop mocked so it throws while the parent signal is aborted — exactly
     // the in-process catch/rethrow branch the finding targets.
     mock.module('../../../../run-agent-step', () => ({
+      ...realRunAgentStep,
       loopAgentSteps: async () => {
         throw new Error('parent aborted during step')
       },

@@ -98,6 +98,21 @@ describe('archivePreCompaction', () => {
     expect(serialized.length).toBeLessThan(50_000)
     expect(serialized).toContain('truncated in archive')
   })
+
+  it('caps oversized conversation text too', () => {
+    const marker = 'ARCHIVED-CONVERSATION-MARKER'
+    const state = archive([
+      {
+        role: 'user',
+        content: [{ type: 'text', text: `${marker} ${'x'.repeat(50_000)}` }],
+      },
+    ])
+    const serialized = JSON.stringify(state.compactionArchive![0].messages)
+
+    expect(serialized.length).toBeLessThan(10_000)
+    expect(serialized).toContain(marker)
+    expect(serialized).toContain('truncated in archive')
+  })
 })
 
 describe('recallFromArchive', () => {
@@ -110,6 +125,27 @@ describe('recallFromArchive', () => {
     expect(result.matches[0].toolName).toBe('read_files')
     expect(result.matches[0].snippet).toContain('keystone-fact-3')
     expect(result.snapshotsSearched).toBe(1)
+  })
+
+  it('recalls archived conversation in addition to tool bodies', () => {
+    const marker = 'CONVERSATION-RECOVERY-MARKER-41d'
+    const state = archive([
+      {
+        role: 'user',
+        content: [{ type: 'text', text: `Please preserve ${marker}` }],
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: `Decision recorded: ${marker}` }],
+      },
+    ])
+
+    const result = recallFromArchive(state.compactionArchive, marker)
+    expect(result.matches).toHaveLength(2)
+    expect(result.matches.every((match) => match.toolName === 'conversation')).toBe(
+      true,
+    )
+    expect(result.matches[0].snippet).toContain(marker)
   })
 
   it('requires every term to match', () => {

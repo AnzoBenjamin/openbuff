@@ -71,13 +71,14 @@ const throwingCreateDatabase = (message = 'fts5 unavailable in this build') => (
 }
 
 describe('buildArchiveRecallRows', () => {
-  it('flattens tool messages across snapshots in archive order', () => {
+  it('flattens conversation and tool messages across snapshots in archive order', () => {
     const state = archive(buildTranscript(3))
     const rows = buildArchiveRecallRows(state.compactionArchive)
-    expect(rows).toHaveLength(3)
-    expect(rows.map((r) => r.toolCallId)).toEqual(['call-0', 'call-1', 'call-2'])
-    expect(rows[2].text).toContain('keystone-fact-2')
-    expect(rows[2].archivedAt).toBe(state.compactionArchive![0].archivedAt)
+    const toolRows = rows.filter((row) => row.toolName === 'read_files')
+    expect(rows).toHaveLength(7)
+    expect(toolRows.map((r) => r.toolCallId)).toEqual(['call-0', 'call-1', 'call-2'])
+    expect(toolRows[2].text).toContain('keystone-fact-2')
+    expect(toolRows[2].archivedAt).toBe(state.compactionArchive![0].archivedAt)
     // Scanner-contract provenance (context-archive.ts `stepProvenance`, as
     // used by `recallFromArchive`): step = message index within its OWN
     // snapshot.messages (counting non-tool messages) + stepBase. The archived
@@ -85,13 +86,13 @@ describe('buildArchiveRecallRows', () => {
     // each assistant tool-call precede them — so [2, 4, 6] IS the scanner's
     // numbering. The former [0, 1, 2] expectation was a tool-message ordinal,
     // which contradicts the scanner for the same fixture.
-    expect(rows.map((r) => r.step)).toEqual([2, 4, 6])
+    expect(toolRows.map((r) => r.step)).toEqual([2, 4, 6])
     // Parity with the scanner for the same archive+query: the indexed row step
     // must equal what `recallFromArchive` reports for the same message.
     const scanned = recallFromArchive(state.compactionArchive, 'keystone-fact-1')
     expect(scanned.matches).toHaveLength(1)
     expect(scanned.matches[0].toolCallId).toBe('call-1')
-    expect(scanned.matches[0].step).toBe(rows[1].step)
+    expect(scanned.matches[0].step).toBe(toolRows[1].step)
   })
 
   it('includes eviction snapshots and honors their steps provenance', () => {
@@ -106,8 +107,8 @@ describe('buildArchiveRecallRows', () => {
       },
     ])
     const rows = buildArchiveRecallRows(state.compactionArchive)
-    expect(rows).toHaveLength(3)
-    const evictedRow = rows[2]
+    expect(rows).toHaveLength(6)
+    const evictedRow = rows.find((row) => row.toolCallId === 'evict-a')!
     expect(evictedRow.toolCallId).toBe('evict-a')
     // NOT the slice-local index (0 within the eviction snapshot): the D26
     // `steps` array carries the original-transcript step.
@@ -115,7 +116,7 @@ describe('buildArchiveRecallRows', () => {
     expect(evictedRow.text).toContain('evicted-fact')
   })
 
-  it('is empty for a missing archive and skips non-tool messages', () => {
+  it('is empty for a missing archive and indexes conversation messages', () => {
     expect(buildArchiveRecallRows(undefined)).toEqual([])
     expect(buildArchiveRecallRows([])).toEqual([])
     const rows = buildArchiveRecallRows([
@@ -129,8 +130,13 @@ describe('buildArchiveRecallRows', () => {
         ],
       },
     ])
-    expect(rows).toHaveLength(1)
-    expect(rows[0].toolCallId).toBe('c1')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({
+      toolName: 'conversation',
+      toolCallId: 'conversation-user-0',
+      text: 'noise',
+    })
+    expect(rows[1].toolCallId).toBe('c1')
   })
 })
 
