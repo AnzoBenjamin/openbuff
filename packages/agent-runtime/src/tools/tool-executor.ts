@@ -23,6 +23,7 @@ import {
   removedToolNames,
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
+import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import type { JSONObject } from '@codebuff/common/types/json'
 import {
@@ -295,38 +296,40 @@ export function buildSpawnAgentsHandlerFailureOutput(
   const recoveryHint = extractSanitizedSpawnRecoveryHint(error)
   const validationIssues = extractSpawnValidationIssues(error)
 
-  const reports = (agents.length > 0 ? agents : [{}]).map((agent): JSONObject => {
-    const agentType =
-      agent &&
-      typeof agent === 'object' &&
-      typeof (agent as Record<string, unknown>).agent_type === 'string'
-        ? String((agent as Record<string, unknown>).agent_type)
-        : 'unknown'
-    // The per-agent value is assembled additively so an ABSENT channel never
-    // puts an `undefined` into the JSON payload (jsonToolResult<T extends
-    // JSONValue> requires concrete values). `errorMessage` stays the stable
-    // machine-readable marker at exactly the same text; the two diagnostic
-    // channels below are present only when they actually have data.
-    const value: JSONObject = {
-      errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-    }
-    if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
-      // String() is the identity on the already-sanitized primitive and keeps
-      // the property typed as string (not string|undefined).
-      value.recoveryHint = String(recoveryHint)
-    }
-    if (validationIssues) {
-      value.validationIssues = validationIssues.map((issue) => ({
-        path: issue.path,
-        message: issue.message,
-      }))
-    }
-    return {
-      agentType,
-      agentName: agentType,
-      value,
-    }
-  })
+  const reports = (agents.length > 0 ? agents : [{}]).map(
+    (agent): JSONObject => {
+      const agentType =
+        agent &&
+        typeof agent === 'object' &&
+        typeof (agent as Record<string, unknown>).agent_type === 'string'
+          ? String((agent as Record<string, unknown>).agent_type)
+          : 'unknown'
+      // The per-agent value is assembled additively so an ABSENT channel never
+      // puts an `undefined` into the JSON payload (jsonToolResult<T extends
+      // JSONValue> requires concrete values). `errorMessage` stays the stable
+      // machine-readable marker at exactly the same text; the two diagnostic
+      // channels below are present only when they actually have data.
+      const value: JSONObject = {
+        errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
+      }
+      if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
+        // String() is the identity on the already-sanitized primitive and keeps
+        // the property typed as string (not string|undefined).
+        value.recoveryHint = String(recoveryHint)
+      }
+      if (validationIssues) {
+        value.validationIssues = validationIssues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        }))
+      }
+      return {
+        agentType,
+        agentName: agentType,
+        value,
+      }
+    },
+  )
 
   return jsonToolResult(reports) as CodebuffToolOutput<'spawn_agents'>
 }
@@ -351,7 +354,7 @@ type SpawnGateFilterResult = {
  */
 function filterSpawnAgentsGate(params: {
   agents: unknown
-onResponseChunk: (chunk: string | PrintModeEvent) => void
+  onResponseChunk: (chunk: string | PrintModeEvent) => void
 }): SpawnGateFilterResult {
   const { agents: inputAgents, onResponseChunk } = params
   if (!Array.isArray(inputAgents)) {
@@ -444,7 +447,8 @@ function outputCarriesToolError(output: readonly unknown[]): boolean {
     const record = part as Record<string, unknown>
     if (record.type !== 'json') return false
     const value = record.value
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return false
     return typeof (value as Record<string, unknown>).errorMessage === 'string'
   })
 }
@@ -476,7 +480,9 @@ export function recordToolEvidence<T extends ToolName>(params: {
   if (outputCarriesToolError(output)) return
   recordSessionEvidence(sessionEvidenceLogFor(agentState), {
     toolName,
-    ...(typeof input.command === 'string' ? { commandText: input.command } : {}),
+    ...(typeof input.command === 'string'
+      ? { commandText: input.command }
+      : {}),
     atMs,
   })
 }
@@ -1040,7 +1046,9 @@ const TOOL_JSON_SCHEMA_CACHE = new Map<
   Record<string, unknown> | undefined
 >()
 
-function toolInputJsonSchema(toolName: string): Record<string, unknown> | undefined {
+function toolInputJsonSchema(
+  toolName: string,
+): Record<string, unknown> | undefined {
   if (TOOL_JSON_SCHEMA_CACHE.has(toolName)) {
     return TOOL_JSON_SCHEMA_CACHE.get(toolName)
   }
@@ -2509,19 +2517,25 @@ export async function executeToolCall<T extends ToolName>(
   // is a universal runtime backstop; SDK handlers remain the authoritative
   // containment layer. The declared-scope mismatch warning only applies when
   // the agent actually configured a scope for this access type.
-  if (filesystemAccess) {
+  // Containment needs a project root to compare against. Without one we cannot
+  // prove any path stays inside the project, and `path.resolve('', p)` would
+  // silently resolve against `process.cwd()` — re-anchoring the check on the
+  // wrong boundary rather than failing. Skip the backstop instead; the SDK
+  // handlers remain the authoritative containment layer either way.
+  const scopeProjectRoot = resolveProjectRootOrEmpty(params.fileContext)
+  if (filesystemAccess && scopeProjectRoot === '') {
+    logger.warn(
+      { toolName, agentId: agentTemplate.id },
+      'Skipping the filesystem-scope containment backstop: no project root is available for this call.',
+    )
+  }
+  if (filesystemAccess && scopeProjectRoot !== '') {
     const evaluatedPaths = filesystemAccess.paths.map((rawPath) => {
-      const normalized = normalizeScopedToolPath(
-        rawPath,
-        params.fileContext.projectRoot,
-      )
+      const normalized = normalizeScopedToolPath(rawPath, scopeProjectRoot)
       let canonical = normalized
       if (params.fileContext.fileTreeSource !== 'virtual') {
         try {
-          canonical = canonicalScopedToolPath(
-            normalized,
-            params.fileContext.projectRoot,
-          )
+          canonical = canonicalScopedToolPath(normalized, scopeProjectRoot)
         } catch {
           // SDK handlers remain the authoritative containment layer. Keep
           // lexical scope for missing paths so create operations still work.
@@ -3395,7 +3409,8 @@ export async function executeToolCall<T extends ToolName>(
           handlerResult: mutationRecord,
           receipt: canonicalReceipt,
           capabilityScope: {
-            projectId: params.fileContext.projectRoot,
+            // Empty projectId is intended: readCapabilityMatchesScope then fails to match, so the pass reports "unconfirmed" instead of throwing.
+            projectId: resolveProjectRootOrEmpty(params.fileContext),
             runId: params.runId,
           },
         })
@@ -3495,7 +3510,8 @@ export async function executeToolCall<T extends ToolName>(
         output,
         canonicalReceipt,
         capabilityScope: {
-          projectId: params.fileContext.projectRoot,
+          // Empty projectId is intended: readCapabilityMatchesScope then fails to match, so the pass reports "unconfirmed" instead of throwing.
+          projectId: resolveProjectRootOrEmpty(params.fileContext),
           runId: params.runId,
         },
       })
@@ -3812,15 +3828,23 @@ export async function executeCustomToolCall(
   // avoids per-string filesystem stat storms; symlink-level containment remains
   // the SDK handler's responsibility. It can false-positive on non-path strings
   // that happen to resolve outside the root — an explicitly accepted tradeoff.
+  // The scan compares each value against the project root. With no root there is
+  // no boundary to compare against, and `path.resolve('', value)` would resolve
+  // against `process.cwd()` instead — so skip the scan rather than re-anchor it.
+  const customToolProjectRoot = resolveProjectRootOrEmpty(fileContext)
   const scannedInputStrings: string[] = []
-  collectCustomInputStrings(toolCall.input, scannedInputStrings)
-  const hasEscapingInput = scannedInputStrings.some(
-    (value) =>
-      value.length > 0 &&
-      normalizedEscapesProject(
-        normalizeScopedToolPath(value, fileContext.projectRoot),
-      ),
-  )
+  if (customToolProjectRoot !== '') {
+    collectCustomInputStrings(toolCall.input, scannedInputStrings)
+  }
+  const hasEscapingInput =
+    customToolProjectRoot !== '' &&
+    scannedInputStrings.some(
+      (value) =>
+        value.length > 0 &&
+        normalizedEscapesProject(
+          normalizeScopedToolPath(value, customToolProjectRoot),
+        ),
+    )
   if (hasEscapingInput) {
     onResponseChunk({
       type: 'error',

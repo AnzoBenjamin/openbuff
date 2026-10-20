@@ -1,3 +1,4 @@
+import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { MAX_SPAWN_BATCH_SIZE } from '@codebuff/common/constants/agents'
@@ -103,9 +104,9 @@ function backgroundAgentStatusForChunk(
           (record['toolCall'] as Record<string, unknown> | undefined)?.[
             'toolName'
           ] ?? (record['tool'] as Record<string, unknown> | undefined)?.['name']
-        const raw = record['toolName'] ?? record['tool_name'] ?? record['name'] ?? nested
-        const name =
-          typeof raw === 'string' && raw.length > 0 ? raw : 'unknown'
+        const raw =
+          record['toolName'] ?? record['tool_name'] ?? record['name'] ?? nested
+        const name = typeof raw === 'string' && raw.length > 0 ? raw : 'unknown'
         return `tool:${name.slice(0, 100)}`
       }
       case 'tool_result':
@@ -228,11 +229,13 @@ export const handleSpawnAgents = (async (
         handoff && typeof handoff === 'object' && handoff.schemaVersion === 1
           ? (handoff as AgentHandoff)
           : undefined
+      // Tolerate an absent fileContext/projectRoot: '' keeps lease and
+      // capability scope checks failing closed instead of throwing.
       const effectiveAgentTemplate = deriveSpawnTemplateCapabilities({
         agentTemplate,
         parentAgentTemplate,
         handoff: canonicalHandoff,
-        projectRoot: params.fileContext.projectRoot,
+        projectRoot: resolveProjectRootOrEmpty(params.fileContext),
       })
       const serializedHandoff = handoff ? JSON.stringify(handoff) : ''
       const contextWindowTokens = params.resolveModelContextWindow?.({
@@ -329,7 +332,10 @@ export const handleSpawnAgents = (async (
         ].slice(0, 5)
         return
       }
-      if ('verifiedMemoryExcerpts' in record && record['verifiedMemoryExcerpts'] === undefined) {
+      if (
+        'verifiedMemoryExcerpts' in record &&
+        record['verifiedMemoryExcerpts'] === undefined
+      ) {
         record['verifiedMemoryExcerpts'] = bounded
         return
       }
@@ -387,10 +393,7 @@ export const handleSpawnAgents = (async (
       if (!claimed.duplicate) {
         validated.discoveryShardKey = claimed.shardKey
       }
-      forwardVerifiedExcerpts(
-        validated.subAgentState,
-        verifiedExcerptsForSpawn,
-      )
+      forwardVerifiedExcerpts(validated.subAgentState, verifiedExcerptsForSpawn)
     }
   }
   // Commit the whole batch of claims at once. If any claim is rejected, the
@@ -455,7 +458,7 @@ export const handleSpawnAgents = (async (
     for (const validated of validatedAgents) {
       validated.leaseId = acquireWorkspacePathLease({
         state: parentAgentState,
-        projectRoot: params.fileContext.projectRoot,
+        projectRoot: resolveProjectRootOrEmpty(params.fileContext),
         ownerAgentId: validated.subAgentState.agentId,
         taskId: validated.handoff?.taskId,
         paths: validated.handoff?.permissions.writablePaths ?? [],
@@ -705,7 +708,8 @@ export const handleSpawnAgents = (async (
                 }),
                 result: result.output,
                 workspaceRevision: parentAgentState.workspaceState?.revision,
-                workspaceSnapshotId: parentAgentState.workspaceState?.snapshotId,
+                workspaceSnapshotId:
+                  parentAgentState.workspaceState?.snapshotId,
                 verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
               })
               // Fold the background child's cost into the parent exactly

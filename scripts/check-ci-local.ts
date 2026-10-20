@@ -19,7 +19,7 @@ export const TOOL_DEF_TRACKED_PATHS = [
   'cli/src/data/initial-agent-type-sources.generated.ts',
 ] as const
 
-/** Packages whose full test suites run as Step F of check:ci-local. */
+/** Packages whose full test suites run as Step H of check:ci-local. */
 export const FULL_SUITE_STEPS = [
   { label: 'agents', cwd: 'agents' },
   { label: 'common', cwd: 'common' },
@@ -61,7 +61,7 @@ export function formatSuiteFailedMessage(
 }
 
 export function formatSuccessMessage(): string {
-  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, full agents + common suites).'
+  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, project-root, full agents + common suites).'
 }
 
 export function ciLocalLockPath(root: string): string {
@@ -310,7 +310,9 @@ function stepWasKilledByTimeout(result: CiLocalSpawnResult): boolean {
   // child running without the cap is never blamed on it. The cap is enabled
   // by default, so a signal-death under the default run is almost always the
   // cap itself.
-  return code === 'ETIMEDOUT' || (result.status === null && result.signal != null)
+  return (
+    code === 'ETIMEDOUT' || (result.status === null && result.signal != null)
+  )
 }
 
 /**
@@ -433,7 +435,20 @@ export function runCiLocalChecks(
       return 1
     }
 
-    console.log('→ Step G: full agents + common test suites')
+    console.log('→ Step G: bun --cwd=scripts run guard:project-root')
+    const projectRootGuard = runStep(
+      'bun',
+      ['--cwd=scripts', 'run', 'guard:project-root'],
+      root,
+    )
+    if (projectRootGuard.status !== 0) {
+      console.error(
+        formatStepFailedMessage('guard:project-root', projectRootGuard.status),
+      )
+      return 1
+    }
+
+    console.log('→ Step H: full agents + common test suites')
     for (const step of FULL_SUITE_STEPS) {
       const suite = runStep('bun', ['test'], join(root, step.cwd))
       if (suite.status !== 0) {

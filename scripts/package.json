@@ -9,6 +9,7 @@
     "test": "bun test",
     "guard:byok-wording": "bun run byok-wording-guard.ts",
     "guard:memory-drift": "bun run memory-drift-guard.ts",
+    "guard:project-root": "bun run project-root-guard.ts",
     "guard:sync-agent-config": "bun run sync-agent-config.ts",
     "guard:determinism": "bun run determinism-guard.ts",
     "guard:mock-module": "bun run mock-module-guard.ts",

@@ -145,6 +145,17 @@ describe('CI gate-helpers drift gate (M4-T3)', () => {
   })
 })
 
+describe('CI project-root guard gate', () => {
+  test('build-and-check runs the project-root guard', () => {
+    // The guard tripwire must run in an automated gate, not only exist as a
+    // `guard:project-root` script in scripts/package.json.
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain('bun --cwd=scripts run guard:project-root')
+  })
+})
+
 describe('CI flake ledger wiring (M4-T3)', () => {
   test('retry step records total_attempts into the checked-in ledger', () => {
     expect(CI_WORKFLOW).toContain('id: tests')

@@ -1,4 +1,5 @@
 import { generateCompactId } from '@codebuff/common/util/string'
+import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
 import { mapValues } from 'lodash'
 
 import {
@@ -168,11 +169,13 @@ export const handleSpawnAgentInline = (async (
     }
   }
 
+  // Tolerate an absent fileContext/projectRoot: '' keeps lease and capability
+  // scope checks failing closed instead of throwing.
   const effectiveAgentTemplate = deriveSpawnTemplateCapabilities({
     agentTemplate,
     parentAgentTemplate,
     handoff,
-    projectRoot: params.fileContext.projectRoot,
+    projectRoot: resolveProjectRootOrEmpty(params.fileContext),
   })
   const contextWindowTokens = params.resolveModelContextWindow?.({
     agentId: effectiveAgentTemplate.id,
@@ -257,7 +260,7 @@ export const handleSpawnAgentInline = (async (
   // closes the ledger pair and whose finally releases the lease on every path.
   const leaseId = acquireWorkspacePathLease({
     state: parentAgentState,
-    projectRoot: params.fileContext.projectRoot,
+    projectRoot: resolveProjectRootOrEmpty(params.fileContext),
     ownerAgentId: childAgentState.agentId,
     taskId: handoff?.taskId,
     paths: handoff?.permissions.writablePaths ?? [],
@@ -472,6 +475,10 @@ export const handleSpawnAgentInline = (async (
   } finally {
     // The lease must be released on EVERY path: execute throw, settle throw,
     // and success alike.
-    releaseWorkspacePathLease(parentAgentState, leaseId, (params.clock ?? realClock).now())
+    releaseWorkspacePathLease(
+      parentAgentState,
+      leaseId,
+      (params.clock ?? realClock).now(),
+    )
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>

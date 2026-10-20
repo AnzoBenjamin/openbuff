@@ -85,9 +85,12 @@ jobs:
 
       - name: Memory drift + config sync
         run: |
-          # Both guards are blocking gates (must pass clean).
+          # All guards here are blocking gates (must pass clean).
           bun --cwd=scripts run guard:memory-drift
           bun --cwd=scripts run guard:sync-agent-config
+          # Same guard check:ci-local runs as Step G: an unguarded
+          # `fileContext.projectRoot` dereference fails this step.
+          bun --cwd=scripts run guard:project-root
 
       # M4-T3: the gate-helpers generator's --check mode is the documented
       # freshness contract; fail CI on drift instead of silently rewriting the
