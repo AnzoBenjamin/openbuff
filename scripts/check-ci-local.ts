@@ -19,7 +19,7 @@ export const TOOL_DEF_TRACKED_PATHS = [
   'cli/src/data/initial-agent-type-sources.generated.ts',
 ] as const
 
-/** Packages whose full test suites run as Step H of check:ci-local. */
+/** Packages whose full test suites run as Step I of check:ci-local. */
 export const FULL_SUITE_STEPS = [
   { label: 'agents', cwd: 'agents' },
   { label: 'common', cwd: 'common' },
@@ -61,7 +61,7 @@ export function formatSuiteFailedMessage(
 }
 
 export function formatSuccessMessage(): string {
-  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, project-root, full agents + common suites).'
+  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, project-root, byok-wording, full agents + common suites).'
 }
 
 export function ciLocalLockPath(root: string): string {
@@ -448,7 +448,20 @@ export function runCiLocalChecks(
       return 1
     }
 
-    console.log('→ Step H: full agents + common test suites')
+    console.log('→ Step H: bun --cwd=scripts run guard:byok-wording')
+    const byokWording = runStep(
+      'bun',
+      ['--cwd=scripts', 'run', 'guard:byok-wording'],
+      root,
+    )
+    if (byokWording.status !== 0) {
+      console.error(
+        formatStepFailedMessage('guard:byok-wording', byokWording.status),
+      )
+      return 1
+    }
+
+    console.log('→ Step I: full agents + common test suites')
     for (const step of FULL_SUITE_STEPS) {
       const suite = runStep('bun', ['test'], join(root, step.cwd))
       if (suite.status !== 0) {

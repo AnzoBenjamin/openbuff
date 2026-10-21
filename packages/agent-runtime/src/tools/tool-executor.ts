@@ -2533,7 +2533,7 @@ export async function executeToolCall<T extends ToolName>(
     const evaluatedPaths = filesystemAccess.paths.map((rawPath) => {
       const normalized = normalizeScopedToolPath(rawPath, scopeProjectRoot)
       let canonical = normalized
-      if (params.fileContext.fileTreeSource !== 'virtual') {
+      if (params.fileContext?.fileTreeSource !== 'virtual') {
         try {
           canonical = canonicalScopedToolPath(normalized, scopeProjectRoot)
         } catch {
@@ -3762,7 +3762,7 @@ export async function executeCustomToolCall(
       ...params,
       toolNames: getEffectiveAgentToolNames(agentTemplate),
       mcpServers: agentTemplate.mcpServers,
-      writeTo: cloneDeep(fileContext.customToolDefinitions),
+      writeTo: cloneDeep(fileContext?.customToolDefinitions),
     }),
     rawToolCall: {
       toolName,

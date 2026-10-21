@@ -49,8 +49,7 @@ describe('CI test-job truth (M4-T3)', () => {
     expect(files.length).toBeGreaterThan(0)
     expect(
       files.some(
-        (file) =>
-          file.startsWith('./__tests__/') && file.endsWith('.test.ts'),
+        (file) => file.startsWith('./__tests__/') && file.endsWith('.test.ts'),
       ),
     ).toBe(true)
   })
@@ -76,9 +75,7 @@ describe('CI test-job truth (M4-T3)', () => {
   test('empty test-discovery result fails the job instead of passing', () => {
     // The old empty branch echoed "No tests found" and exited 0 (vacuous
     // green). It must exit 1 now.
-    expect(CI_WORKFLOW).toMatch(
-      /No tests found in .+\n[^`]*exit 1/s,
-    )
+    expect(CI_WORKFLOW).toMatch(/No tests found in .+\n[^`]*exit 1/s)
   })
 })
 
@@ -154,6 +151,13 @@ describe('CI project-root guard gate', () => {
       .filter(Boolean)
     expect(ciLines).toContain('bun --cwd=scripts run guard:project-root')
   })
+
+  test('build-and-check runs the byok-wording guard', () => {
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain('bun --cwd=scripts run guard:byok-wording')
+  })
 })
 
 describe('CI flake ledger wiring (M4-T3)', () => {
@@ -180,9 +184,7 @@ describe('CI sdk dist build gating', () => {
     for (const index of buildIndexes) {
       const stepLines = lines.slice(index - 2, index)
       expect(
-        stepLines.some(
-          (line) => line.trim() === "if: matrix.package == 'cli'",
-        ),
+        stepLines.some((line) => line.trim() === "if: matrix.package == 'cli'"),
       ).toBe(true)
       expect(
         stepLines.some((line) =>

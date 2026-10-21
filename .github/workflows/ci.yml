@@ -91,6 +91,7 @@ jobs:
           # Same guard check:ci-local runs as Step G: an unguarded
           # `fileContext.projectRoot` dereference fails this step.
           bun --cwd=scripts run guard:project-root
+          bun --cwd=scripts run guard:byok-wording
 
       # M4-T3: the gate-helpers generator's --check mode is the documented
       # freshness contract; fail CI on drift instead of silently rewriting the
