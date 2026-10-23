@@ -158,6 +158,49 @@ describe('CI project-root guard gate', () => {
       .filter(Boolean)
     expect(ciLines).toContain('bun --cwd=scripts run guard:byok-wording')
   })
+
+  test('build-and-check runs the dependency-provenance guard', () => {
+    // Provenance reconciliation is only a real gate if CI runs it; a guard
+    // that exists solely as a `guard:dependency-provenance` script in
+    // scripts/package.json never blocks a merge.
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain(
+      'bun --cwd=scripts run guard:dependency-provenance',
+    )
+  })
+
+  test('build-and-check runs the types-declaration guard', () => {
+    // The co-declaration invariant (an untyped runtime dependency must declare
+    // its @types sibling in the same manifest) only blocks a merge if CI runs
+    // it; a lone `guard:types-declaration` script in scripts/package.json
+    // never fails a build. Invoked through the script like its sibling guards,
+    // so the guard's own package manifest stays the single source of the
+    // command.
+    expect(CI_WORKFLOW).toContain(
+      'run: bun --cwd=scripts run guard:types-declaration',
+    )
+  })
+
+  test('build-and-check fails an unreviewed provenance-record diff', () => {
+    // The offline gate proves the record agrees with bun.lock, not that either
+    // matches upstream, so the reviewed record diff is the independent anchor.
+    // The comparison MUST name a base ref: after the shallow checkout the
+    // working tree equals HEAD, so a plain `git diff HEAD` is always empty —
+    // the no-op form of this anchor. The step therefore fetches the base
+    // (PR base branch, or the pushed commit's parent) and diffs against it.
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain(
+      'git diff --exit-code "$base" HEAD -- scripts/dependency-provenance.json',
+    )
+    expect(ciLines).toContain(
+      'git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"',
+    )
+    expect(ciLines).toContain('git fetch --no-tags --deepen=1 origin')
+  })
 })
 
 describe('CI flake ledger wiring (M4-T3)', () => {
@@ -165,6 +208,34 @@ describe('CI flake ledger wiring (M4-T3)', () => {
     expect(CI_WORKFLOW).toContain('id: tests')
     expect(CI_WORKFLOW).toContain('steps.tests.outputs.total_attempts')
     expect(CI_WORKFLOW).toContain('scripts/flake-ledger.json')
+  })
+})
+
+describe('CI bun toolchain alignment', () => {
+  test('setup-bun installs the version engines/packageManager declare', () => {
+    // The reproducibility fields promise the toolchain CI executes; the
+    // provenance and declaration guards are only valid when both agree.
+    // Every manifest declaring a bun engine must declare the CI toolchain;
+    // only the root also carries the `packageManager` corepack-style field.
+    const manifests = ['package.json', 'cli/package.json', 'scripts/package.json']
+    for (const manifest of manifests) {
+      const parsed = JSON.parse(readFileSync(join(repoRoot, manifest), 'utf8')) as {
+        engines?: { bun?: string }
+        packageManager?: string
+      }
+      expect(parsed.engines?.bun).toBe('1.3.5')
+      if (parsed.packageManager !== undefined) {
+        expect(manifest).toBe('package.json')
+        expect(parsed.packageManager).toBe('bun@1.3.5')
+      }
+    }
+
+    // Every setup-bun step in the workflow must pin the declared toolchain.
+    const ciVersions = [...CI_WORKFLOW.matchAll(/bun-version:\s*'([^']+)'/g)].map(
+      (match) => match[1]!,
+    )
+    expect(ciVersions.length).toBeGreaterThan(0)
+    expect(new Set(ciVersions)).toEqual(new Set(['1.3.5']))
   })
 })
 

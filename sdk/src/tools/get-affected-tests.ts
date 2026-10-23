@@ -1,6 +1,6 @@
 import {
-  analyzeTestImpact,
-  getAffectedTestTargets,
+  analyzeTestImpactAsync,
+  getAffectedTestTargetsAsync,
 } from '../services/harness-intelligence'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
@@ -10,20 +10,34 @@ import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 const GRAPH_TIER_NOTE =
   'indexer reverse-dependency graph is not wired into this tool yet; graph tier is empty'
 
-export function getAffectedTests(
+export async function getAffectedTests(
   cwd: string,
   files: string[],
-): CodebuffToolOutput<'get_affected_tests'> {
+  signal?: AbortSignal,
+): Promise<CodebuffToolOutput<'get_affected_tests'>> {
   // The graph tier stays empty here: the sdk has no direct accessor for the
   // indexer reference graph (packages/indexer's `queryReferences` is internal
   // to its query engine), so `analyzeTestImpact` runs with its default
   // no-op reverse-deps seam until a cheap importer lookup is exposed.
+  //
+  // Both halves go through the async discovery twins, which share ONE in-flight
+  // cache entry with each other and with inspect_environment. The aux gate
+  // issues all three in one iteration, so that iteration used to pay a blocking
+  // localStorage-length sync walk per tool; now it pays a single shared walk,
+  // off the event loop.
+  // The signal reaches both halves so a cancelled aux-gate iteration stops
+  // queueing filesystem probes instead of draining them for a caller that has
+  // already given up on the answer.
+  const [targets, impact] = await Promise.all([
+    getAffectedTestTargetsAsync(cwd, files, signal),
+    analyzeTestImpactAsync(cwd, files, {}, signal),
+  ])
   return [
     {
       type: 'json',
       value: {
-        targets: getAffectedTestTargets(cwd, files),
-        impact: analyzeTestImpact(cwd, files).map((entry) => ({
+        targets,
+        impact: impact.map((entry) => ({
           ...entry,
           graphNote: GRAPH_TIER_NOTE,
         })),

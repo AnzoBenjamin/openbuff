@@ -16,7 +16,7 @@ afterEach(() => {
 })
 
 describe('harness intelligence read tools', () => {
-  test('return JSON tool envelopes without executing project scripts', () => {
+  test('return JSON tool envelopes without executing project scripts', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-read-tools-'))
     roots.push(root)
     fs.writeFileSync(
@@ -25,14 +25,16 @@ describe('harness intelligence read tools', () => {
     )
     fs.writeFileSync(path.join(root, 'app.test.ts'), '')
 
-    expect(inspectEnvironment(root)[0]).toMatchObject({
+    expect((await inspectEnvironment(root))[0]).toMatchObject({
       type: 'json',
       value: {
         manifests: ['package.json'],
         tools: { blender: { available: expect.any(Boolean) } },
       },
     })
-    const affected = getAffectedTests(root, ['app.ts'])[0]
+    // The read tools are async now: they share the async discovery traversal
+    // with inspect_environment instead of running their own sync walk.
+    const affected = (await getAffectedTests(root, ['app.ts']))[0]
     // The pre-existing `targets` field is byte-identical, with the tiered
     // `impact` analysis added alongside it.
     expect(affected).toMatchObject({
@@ -59,7 +61,7 @@ describe('harness intelligence read tools', () => {
         ],
       },
     })
-    expect(getBuildTargets(root, ['app.ts'])[0]).toMatchObject({
+    expect((await getBuildTargets(root, ['app.ts']))[0]).toMatchObject({
       value: { targets: [{ scripts: ['test', 'build'] }] },
     })
     // Audit fix (J): the empty graph tier is explained honestly, not faked.
@@ -74,7 +76,7 @@ describe('harness intelligence read tools', () => {
     })
     // Audit fix (I): owningTargets from the build-graph service rides along as
     // an additive optional field without displacing the existing `targets`.
-    const buildTargets = getBuildTargets(root, ['app.ts'])[0]
+    const buildTargets = (await getBuildTargets(root, ['app.ts']))[0]
     expect(buildTargets).toMatchObject({
       value: {
         targets: [{ scripts: ['test', 'build'] }],
@@ -97,7 +99,7 @@ describe('harness intelligence read tools', () => {
       { length: maxFilesPerCall + 1 },
       (_, index) => `f-${index}.ts`,
     )
-    expect(getBuildTargets(root, overCapFiles)[0]).toMatchObject({
+    expect((await getBuildTargets(root, overCapFiles))[0]).toMatchObject({
       value: { truncated: true },
     })
   }, 15_000)

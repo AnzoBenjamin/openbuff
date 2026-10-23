@@ -8,6 +8,8 @@
     "typecheck": "tsc --noEmit -p .",
     "test": "bun test",
     "guard:byok-wording": "bun run byok-wording-guard.ts",
+    "guard:dependency-provenance": "bun run dependency-provenance-guard.ts",
+    "guard:types-declaration": "bun run types-declaration-guard.ts",
     "guard:memory-drift": "bun run memory-drift-guard.ts",
     "guard:project-root": "bun run project-root-guard.ts",
     "guard:sync-agent-config": "bun run sync-agent-config.ts",
@@ -24,11 +26,14 @@
   },
   "sideEffects": false,
   "engines": {
-    "bun": "1.3.11"
+    "bun": "1.3.5"
   },
+  "//dependencies": "Only packages imported by shipped source belong here. Workspace-internal @codebuff/* imports resolve inside the repository.",
+  "//devDependencies": "Maintainer-only tooling: fat-sdk-openrouter-example.ts imports the provider SDK, but nothing this private package ships does. The provenance and types-declaration guards import nothing but node: builtins, so a registry provider SDK must not sit in this package's runtime dependencies.",
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^1.0.19",
     "@codebuff/common": "workspace:*"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@ai-sdk/openai-compatible": "^1.0.19"
+  }
 }

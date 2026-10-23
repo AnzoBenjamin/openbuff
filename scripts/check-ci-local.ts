@@ -19,7 +19,7 @@ export const TOOL_DEF_TRACKED_PATHS = [
   'cli/src/data/initial-agent-type-sources.generated.ts',
 ] as const
 
-/** Packages whose full test suites run as Step I of check:ci-local. */
+/** Packages whose full test suites run as Step K of check:ci-local. */
 export const FULL_SUITE_STEPS = [
   { label: 'agents', cwd: 'agents' },
   { label: 'common', cwd: 'common' },
@@ -61,7 +61,7 @@ export function formatSuiteFailedMessage(
 }
 
 export function formatSuccessMessage(): string {
-  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, project-root, byok-wording, full agents + common suites).'
+  return '✅ CI-local early gates passed (tool defs, memory-drift, sync-agent-config, determinism, mock-module, project-root, byok-wording, dependency-provenance, types-declaration, full agents + common suites).'
 }
 
 export function ciLocalLockPath(root: string): string {
@@ -461,7 +461,51 @@ export function runCiLocalChecks(
       return 1
     }
 
-    console.log('→ Step I: full agents + common test suites')
+    // The provenance guard reconciles every exact-pinned third-party
+    // dependency against the checked-in upstream provenance record, entirely
+    // offline. It runs before the full suites so a pin whose upstream identity
+    // cannot be reconciled fails this gate rather than surfacing later as a
+    // dependency graph nobody can resolve without registry access.
+    console.log(
+      '→ Step I: bun --cwd=scripts run guard:dependency-provenance',
+    )
+    const dependencyProvenance = runStep(
+      'bun',
+      ['--cwd=scripts', 'run', 'guard:dependency-provenance'],
+      root,
+    )
+    if (dependencyProvenance.status !== 0) {
+      console.error(
+        formatStepFailedMessage(
+          'guard:dependency-provenance',
+          dependencyProvenance.status,
+        ),
+      )
+      return 1
+    }
+
+    // The types-declaration guard enforces the runtime-dependency / typings
+    // co-declaration invariant: a workspace member that depends on an
+    // untyped-at-runtime package must declare that package's `@types` sibling
+    // in its own manifest. It reads manifests only, so it stays offline and
+    // deterministic like the guards above.
+    console.log('→ Step J: bun --cwd=scripts run guard:types-declaration')
+    const typesDeclaration = runStep(
+      'bun',
+      ['--cwd=scripts', 'run', 'guard:types-declaration'],
+      root,
+    )
+    if (typesDeclaration.status !== 0) {
+      console.error(
+        formatStepFailedMessage(
+          'guard:types-declaration',
+          typesDeclaration.status,
+        ),
+      )
+      return 1
+    }
+
+    console.log('→ Step K: full agents + common test suites')
     for (const step of FULL_SUITE_STEPS) {
       const suite = runStep('bun', ['test'], join(root, step.cwd))
       if (suite.status !== 0) {

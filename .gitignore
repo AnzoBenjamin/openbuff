@@ -56,3 +56,6 @@ docs/bot-detection.md
 
 # Rust cargo workspace (X-3b) build artifacts; Cargo.lock stays tracked
 /rust/target/
+
+# Captured agent-session logs (transcripts of prior runs, not source)
+openbuffissues.txt

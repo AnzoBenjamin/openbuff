@@ -23,7 +23,7 @@
   },
   "sideEffects": false,
   "engines": {
-    "bun": "1.3.11"
+    "bun": "1.3.5"
   },
   "dependencies": {
     "@codebuff/code-map": "workspace:*",
@@ -31,5 +31,6 @@
     "ignore": "^7.0.5",
     "oxc-resolver": "11.24.2",
     "typescript": "5.5.4"
-  }
+  },
+  "devDependencies": {}
 }

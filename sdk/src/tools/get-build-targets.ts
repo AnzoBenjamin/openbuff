@@ -1,11 +1,12 @@
 import { maxFilesPerCall, resolveOwningTargets } from '../services/build-graph'
-import { getBuildTargets as resolveBuildTargets } from '../services/harness-intelligence'
+import { getBuildTargetsAsync as resolveBuildTargets } from '../services/harness-intelligence'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
-export function getBuildTargets(
+export async function getBuildTargets(
   cwd: string,
   files: string[],
-): CodebuffToolOutput<'get_build_targets'> {
+  signal?: AbortSignal,
+): Promise<CodebuffToolOutput<'get_build_targets'>> {
   // Audit fix (I): best-effort owning-target resolution from the build-graph
   // service, which was previously referenced only by its test. Fail-open: any
   // resolution error (absent ecosystem tooling, unreadable manifests) leaves
@@ -21,7 +22,7 @@ export function getBuildTargets(
     {
       type: 'json',
       value: {
-        targets: resolveBuildTargets(cwd, files),
+        targets: await resolveBuildTargets(cwd, files, signal),
         ...(owningTargets ? { owningTargets } : {}),
         // Truncation honesty (P3 coherence audit): an input file list beyond
         // the per-call cap means some files were silently not considered —

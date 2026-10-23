@@ -19,7 +19,7 @@
     "prebuild:agents": "bun run ../scripts/generate-gate-helpers.ts --write ../agents/base2/base2.ts && bun run ../scripts/generate-pruner-budgets.ts --write ../agents/context-pruner.ts && bun run scripts/prebuild-agents.ts && bun run scripts/generate-init-type-sources.ts",
     "build:binary": "bun ./scripts/build-binary.ts openbuff $npm_package_version",
     "release": "bun run scripts/release.ts",
-    "test": "NODE_ENV=production bun test",
+    "test": "bun run scripts/run-cli-tests.ts",
     "test:tmux-poc": "bun run src/__tests__/tmux-poc.ts",
     "smoke:opentui-05": "bun run src/index-05.tsx",
     "typecheck": "tsc --noEmit -p ."
@@ -28,7 +28,7 @@
     "./src/pre-init/*.ts"
   ],
   "engines": {
-    "bun": "1.3.11"
+    "bun": "1.3.5"
   },
   "dependencies": {
     "@codebuff/common": "workspace:*",

@@ -940,6 +940,13 @@ async function runOnce({
   // Init session state
   let agentId
   if (typeof agent !== 'string') {
+    // cloneDeep, deliberately NOT the platform's structuredClone: an
+    // AgentDefinition carries non-cloneable members — notably the `handleSteps`
+    // generator function — and structuredClone throws DataCloneError on any
+    // function value, whereas cloneDeep copies the object graph and preserves
+    // them. lodash is therefore a deliberate RUNTIME dependency of this shipped
+    // module (declared in sdk/package.json dependencies), not a convenience
+    // import a built-in could replace.
     const clonedDefs = agentDefinitions ? cloneDeep(agentDefinitions) : []
     agentDefinitions = [...clonedDefs, agent]
     agentId = agent.id
@@ -2823,11 +2830,15 @@ export async function handleToolCall({
         workspaceState: getWorkspaceState(),
       })
     } else if (toolName === 'inspect_environment') {
-      result = inspectEnvironment(requireCwd(cwd, 'inspect_environment'))
+      result = await inspectEnvironment(
+        requireCwd(cwd, 'inspect_environment'),
+        signal,
+      )
     } else if (toolName === 'get_affected_tests') {
-      result = getAffectedTests(
+      result = await getAffectedTests(
         requireCwd(cwd, 'get_affected_tests'),
         (input as { files: string[] }).files,
+        signal,
       )
     } else if (toolName === 'go_to_definition') {
       result = await goToDefinition(
@@ -2850,9 +2861,10 @@ export async function handleToolCall({
         input as { query: string },
       )
     } else if (toolName === 'get_build_targets') {
-      result = getBuildTargets(
+      result = await getBuildTargets(
         requireCwd(cwd, 'get_build_targets'),
         (input as { files: string[] }).files,
+        signal,
       )
     } else if (toolName === 'inspect_codebase_structure') {
       result = inspectCodebaseStructureTool(

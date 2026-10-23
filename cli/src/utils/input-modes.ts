@@ -143,7 +143,8 @@ export const INPUT_MODE_CONFIGS: Record<InputMode, InputModeConfig> = {
     label: 'Provider',
     color: 'info',
     placeholder: 'answer the provider wizard prompt...',
-    widthAdjustment: 12,
+    // icon ⚙ (1) + paddingRight 1 + ` Provider ` (11) + paddingRight 1 = 14.
+    widthAdjustment: 14,
     showAgentModeToggle: false,
     disableSlashSuggestions: true,
     blockKeyboardExit: false,
@@ -153,7 +154,9 @@ export const INPUT_MODE_CONFIGS: Record<InputMode, InputModeConfig> = {
     label: 'Models',
     color: 'info',
     placeholder: 'answer the model routing wizard prompt...',
-    widthAdjustment: 10,
+    // icon ⚙ (1) + paddingRight 1 + ` Models ` (8) + paddingRight 1 = 11,
+    // measured against the rendered prompt prefix.
+    widthAdjustment: 11,
     showAgentModeToggle: false,
     disableSlashSuggestions: true,
     blockKeyboardExit: false,

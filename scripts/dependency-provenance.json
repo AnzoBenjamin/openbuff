@@ -1,0 +1,648 @@
+{
+  "source": "https://registry.npmjs.org",
+  "verifiedAt": "2026-10-23T07:24:10.956Z",
+  "packages": {
+    "@ai-sdk/anthropic@2.0.50": {
+      "integrity": "sha512-21PaHfoLmouOXXNINTsZJsMw+wE5oLR2He/1kq/sKokTVKyq7ObGT1LDk6ahwxaz/GoaNaGankMh+EgVcdv2Cw==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@ai-sdk/anthropic/-/anthropic-2.0.50.tgz",
+      "deprecated": false
+    },
+    "@ai-sdk/provider-utils@3.0.20": {
+      "integrity": "sha512-iXHVe0apM2zUEzauqJwqmpC37A5rihrStAih5Ks+JE32iTe4LZ58y17UGBjpQQTCRw9YxMeo2UFLxLpBluyvLQ==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-3.0.20.tgz",
+      "deprecated": false
+    },
+    "@agentclientprotocol/sdk@1.5.0": {
+      "integrity": "sha512-524jwbB2iYWA+kWWyv9fhKbhU89dH/lu9u5EXwVNmfYzopV8BujCDxByBDZhxRUkB7RWIJzISCnwivdDk+bdVg==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-1.5.0.tgz",
+      "deprecated": false
+    },
+    "@ai-sdk/provider-utils@3.0.15": {
+      "integrity": "sha512-kOc6Pxb7CsRlNt+sLZKL7/VGQUd7ccl3/tIK+Bqf5/QhHR0Qm3qRBMz1IwU1RmjJEZA73x+KB5cUckbDl2WF7Q==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-3.0.15.tgz",
+      "deprecated": false
+    },
+    "@ai-sdk/provider-utils@3.0.18": {
+      "integrity": "sha512-ypv1xXMsgGcNKUP+hglKqtdDuMg68nWHucPPAhIENrbFAI+xCHiqPVN8Zllxyv1TNZwGWUghPxJXU+Mqps0YRQ==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@ai-sdk/provider-utils/-/provider-utils-3.0.18.tgz",
+      "deprecated": false
+    },
+    "@ai-sdk/openai-compatible@1.0.25": {
+      "integrity": "sha512-VPylb5ytkOu9Bs1UnVmz4x0wr1VtS30Pw6ghh6GxpGH6lo4GOWqVnYuB+8M755dkof74c5LULZq5C1n/1J4Kvg==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@ai-sdk/openai-compatible/-/openai-compatible-1.0.25.tgz",
+      "deprecated": false
+    },
+    "@ai-sdk/provider@2.0.1": {
+      "integrity": "sha512-KCUwswvsC5VsW2PWFqF8eJgSCu5Ysj7m1TxiHTVA6g7k360bk0RNQENT8KTMAYEs+8fWPD3Uu4dEmzGHc+jGng==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@ai-sdk/provider/-/provider-2.0.1.tgz",
+      "deprecated": false
+    },
+    "@ai-sdk/provider@2.0.0": {
+      "integrity": "sha512-6o7Y2SeO9vFKB8lArHXehNuusnpddKPk7xqL7T2/b+OvXMRIXUO1rR4wcv1hAFUAT9avGZshty3Wlua/XA7TvA==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/@ai-sdk/provider/-/provider-2.0.0.tgz",
+      "deprecated": false
+    },
+    "@auth/drizzle-adapter@1.11.1": {
+      "integrity": "sha512-cQTvDZqsyF7RPhDm/B6SvqdVP9EzQhy3oM4Muu7fjjmSYFLbSR203E6dH631ZHSKDn2b4WZkfMnjPDzRsPSAeA==",
+      "license": "ISC",
+      "tarball": "https://registry.npmjs.org/@auth/drizzle-adapter/-/drizzle-adapter-1.11.1.tgz",
+      "deprecated": false
+    },
+    "@anthropic-ai/claude-code@2.0.56": {
+      "integrity": "sha512-MD97AVZ86D6NJnUY9KpXmGw/DK6wausYR8ITZkaLsz33Trrw48ug1pQze2vRAOTvhcne58y2jQfRLQzDVFkFYw==",
+      "license": "SEE LICENSE IN README.md",
+      "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.0.56.tgz",
+      "deprecated": false
+    },
+    "@jitl/quickjs-wasmfile-release-sync@0.31.0": {
+      "integrity": "sha512-hYduecOByj9AsAfsJhZh5nA6exokmuFC8cls39+lYmTCGY51bgjJJJwReEu7Ff7vBWaQCL6TeDdVlnp2WYz0jw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@jitl/quickjs-wasmfile-release-sync/-/quickjs-wasmfile-release-sync-0.31.0.tgz",
+      "deprecated": false
+    },
+    "@gravity-ai/api@0.1.2": {
+      "integrity": "sha512-txsAhyzvwB/TNrj5R8DoNqw8afM3JY2ahl7aaeaD5ZsxP+7rxff7C7keGI7+gU2KT3d2Mcw4QB1nHhbTSCJYHw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@gravity-ai/api/-/api-0.1.2.tgz",
+      "deprecated": false
+    },
+    "@nx/devkit@20.8.2": {
+      "integrity": "sha512-rr9p2/tZDQivIpuBUpZaFBK6bZ+b5SAjZk75V4tbCUqGW3+5OPuVvBPm+X+7PYwUF6rwSpewxkjWNeGskfCe+Q==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@nx/devkit/-/devkit-20.8.2.tgz",
+      "deprecated": false
+    },
+    "@oclif/core@4.8.0": {
+      "integrity": "sha512-jteNUQKgJHLHFbbz806aGZqf+RJJ7t4gwF4MYa8fCwCxQ8/klJNWc0MvaJiBebk7Mc+J39mdlsB4XraaCKznFw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@oclif/core/-/core-4.8.0.tgz",
+      "deprecated": false
+    },
+    "@oclif/parser@3.8.17": {
+      "integrity": "sha512-l04iSd0xoh/16TGVpXb81Gg3z7tlQGrEup16BrVLsZBK6SEYpYHRJZnM32BwZrHI97ZSFfuSwVlzoo6HdsaK8A==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@oclif/parser/-/parser-3.8.17.tgz",
+      "deprecated": true
+    },
+    "@opentui/react@0.5.12": {
+      "integrity": "sha512-cHzTW0Pyr2kl/sMX7nviP2TM0kLwE8x1Dny5KweqCj0PFBAQsISboTxq0jjjeVAUEYWY89xfDzz+rGpwBzWbRg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@opentui/react/-/react-0.5.12.tgz",
+      "deprecated": false
+    },
+    "@modelcontextprotocol/sdk@1.20.2": {
+      "integrity": "sha512-6rqTdFt67AAAzln3NOKsXRmv5ZzPkgbfaebKBqUbts7vK1GZudqnrun5a8d3M/h955cam9RHZ6Jb4Y1XhnmFPg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.20.2.tgz",
+      "deprecated": false
+    },
+    "@tanstack/react-query@5.90.12": {
+      "integrity": "sha512-graRZspg7EoEaw0a8faiUASCyJrqjKPdqJ9EwuDRUF9mEYJ1YPczI9H+/agJ0mOJkPCJDk0lsz5QTrLZ/jQ2rg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@tanstack/react-query/-/react-query-5.90.12.tgz",
+      "deprecated": false
+    },
+    "@opentui/core@0.5.12": {
+      "integrity": "sha512-ZXBE5gmvdovmV8zJQrOQf6E44v1tJRDEgrM2MYhEglzgXZ+smIUp95O8zeRYGsuIzQIiMPMgQqKtTJuzvAb7BQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@opentui/core/-/core-0.5.12.tgz",
+      "deprecated": false
+    },
+    "@types/bun@1.3.5": {
+      "integrity": "sha512-RnygCqNrd3srIPEWBd5LFeUYG7plCoH2Yw9WaZGyNmdTEei+gWaHqydbaIRkIkcbXwhBT94q78QljxN0Sk838w==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/bun/-/bun-1.3.5.tgz",
+      "deprecated": false
+    },
+    "@types/diff@8.0.0": {
+      "integrity": "sha512-o7jqJM04gfaYrdCecCVMbZhNdG6T1MHg/oQoRFdERLV+4d+V7FijhiEAbFu0Usww84Yijk9yH58U4Jk4HbtzZw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/diff/-/diff-8.0.0.tgz",
+      "deprecated": true
+    },
+    "@types/async@3.2.25": {
+      "integrity": "sha512-O6Th/DI18XjrL9TX8LO9F/g26qAz5vynmQqlXt/qLGrskvzCKXKc5/tATz3G2N6lM8eOf3M8/StB14FncAmocg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/async/-/async-3.2.25.tgz",
+      "deprecated": false
+    },
+    "@types/js-yaml@4.0.9": {
+      "integrity": "sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/js-yaml/-/js-yaml-4.0.9.tgz",
+      "deprecated": false
+    },
+    "@types/lodash@4.17.21": {
+      "integrity": "sha512-FOvQ0YPD5NOfPgMzJihoT+Za5pdkDJWcbpuj1DjaKZIr/gxodQjY/uWEFlTNqW2ugXHUiL8lRQgw63dzKHZdeQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/lodash/-/lodash-4.17.21.tgz",
+      "deprecated": false
+    },
+    "@types/micromatch@4.0.10": {
+      "integrity": "sha512-5jOhFDElqr4DKTrTEbnW8DZ4Hz5LRUEmyrGpCMrD/NphYv3nUnaF08xmSLx1rGGnyEs/kFnhiw6dCgcDqMr5PQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/micromatch/-/micromatch-4.0.10.tgz",
+      "deprecated": false
+    },
+    "@types/node@16.9.1": {
+      "integrity": "sha512-QpLcX9ZSsq3YYUUnD3nFDY8H7wctAhQj/TFKL8Ya8v5fMm3CFXxo8zStsLAl780ltoYoo1WvKUVGBQK+1ifr7g==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/node/-/node-16.9.1.tgz",
+      "deprecated": false
+    },
+    "@types/node@22.18.13": {
+      "integrity": "sha512-Bo45YKIjnmFtv6I1TuC8AaHBbqXtIo+Om5fE4QiU1Tj8QR/qt+8O3BAtOimG5IFmwaWiPmB3Mv3jtYzBA4Us2A==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/node/-/node-22.18.13.tgz",
+      "deprecated": false
+    },
+    "@types/node-fetch@2.6.13": {
+      "integrity": "sha512-QGpRVpzSaUs30JBSGPjOg4Uveu384erbHBoT1zeONvyCfwQxIkUshLAOqN/k9EjGviPRmWTTe6aH2qySWKTVSw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/node-fetch/-/node-fetch-2.6.13.tgz",
+      "deprecated": false
+    },
+    "@types/parse-path@7.1.0": {
+      "integrity": "sha512-EULJ8LApcVEPbrfND0cRQqutIOdiIgJ1Mgrhpy755r14xMohPTEpkV/k28SJvuOs9bHRFW8x+KeDAEPiGQPB9Q==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/parse-path/-/parse-path-7.1.0.tgz",
+      "deprecated": true
+    },
+    "@types/pg@8.15.6": {
+      "integrity": "sha512-NoaMtzhxOrubeL/7UZuNTrejB4MPAJ0RpxZqXQf2qXuVlTPuG6Y8p4u9dKRaue4yjmC7ZhzVO2/Yyyn25znrPQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/pg/-/pg-8.15.6.tgz",
+      "deprecated": false
+    },
+    "@types/pngjs@6.0.5": {
+      "integrity": "sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/pngjs/-/pngjs-6.0.5.tgz",
+      "deprecated": false
+    },
+    "@types/react-dom@19.2.3": {
+      "integrity": "sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/react-dom/-/react-dom-19.2.3.tgz",
+      "deprecated": false
+    },
+    "@types/readable-stream@4.0.22": {
+      "integrity": "sha512-/FFhJpfCLAPwAcN3mFycNUa77ddnr8jTgF5VmSNetaemWB2cIlfCA9t0YTM3JAT0wOcv8D4tjPo7pkDhK3EJIg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/readable-stream/-/readable-stream-4.0.22.tgz",
+      "deprecated": false
+    },
+    "@types/seedrandom@3.0.8": {
+      "integrity": "sha512-TY1eezMU2zH2ozQoAFAQFOPpvP15g+ZgSfTZt31AUUH/Rxtnz3H+A/Sv1Snw2/amp//omibc+AEkTaA8KUeOLQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/seedrandom/-/seedrandom-3.0.8.tgz",
+      "deprecated": false
+    },
+    "@types/ws@8.18.1": {
+      "integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/ws/-/ws-8.18.1.tgz",
+      "deprecated": false
+    },
+    "@typescript-eslint/eslint-plugin@6.21.0": {
+      "integrity": "sha512-oy9+hTPCUFpngkEZUSzbf9MxI65wbKFoQYsgPdILTfbUldp5ovUuphZVe4i30emU9M/kP+T64Di0mxl7dSw3MA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@typescript-eslint/eslint-plugin/-/eslint-plugin-6.21.0.tgz",
+      "deprecated": false
+    },
+    "@typescript-eslint/eslint-plugin@7.18.0": {
+      "integrity": "sha512-94EQTWZ40mzBc42ATNIBimBEDltSJ9RQHCC8vc/PDbxi4k8dVwUAv4o98dk50M1zB+JGFxp43FP7f8+FP8R6Sw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@typescript-eslint/eslint-plugin/-/eslint-plugin-7.18.0.tgz",
+      "deprecated": false
+    },
+    "@vscode/tree-sitter-wasm@0.1.4": {
+      "integrity": "sha512-kQVVg/CamCYDM+/XYCZuNTQyixjZd8ts/Gf84UzjEY0eRnbg6kiy5I9z2/2i3XdqwhI87iG07rkMR2KwhqcSbA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@vscode/tree-sitter-wasm/-/tree-sitter-wasm-0.1.4.tgz",
+      "deprecated": false
+    },
+    "adm-zip@0.5.16": {
+      "integrity": "sha512-TGw5yVi4saajsSEgz25grObGHEUaDrniwvA2qwSC060KfqGPdglhvPMA2lPIoxs3PQIItj2iag35fONcQqgUaQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/adm-zip/-/adm-zip-0.5.16.tgz",
+      "deprecated": false
+    },
+    "ai@5.0.122": {
+      "integrity": "sha512-tbN8j7OQPuML9RQs7nN3l4WQnesZ7g255xgefIAaM7z6RT8eidXPD5/fflhHLIipq8X9ZgTc2pMqXXp0S6O9Qw==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/ai/-/ai-5.0.122.tgz",
+      "deprecated": false
+    },
+    "async@3.2.6": {
+      "integrity": "sha512-htCUDlxyyCLMgaM3xXg0C0LW2xqfuQ6p05pCEIsXuyQ+a1koYKTuBMzRNwmybfLgvJDMd0r1LTn4+E0Ti6C2AA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/async/-/async-3.2.6.tgz",
+      "deprecated": false
+    },
+    "bun-types@1.3.5": {
+      "integrity": "sha512-inmAYe2PFLs0SUbFOWSVD24sg1jFlMPxOjOSSCYqUgn4Hsc3rDc7dFvfVYjFPNHtov6kgUeulV4SxbuIV/stPw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/bun-types/-/bun-types-1.3.5.tgz",
+      "deprecated": false
+    },
+    "@types/react@19.2.14": {
+      "integrity": "sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/react/-/react-19.2.14.tgz",
+      "deprecated": false
+    },
+    "canvas@3.2.1": {
+      "integrity": "sha512-ej1sPFR5+0YWtaVp6S1N1FVz69TQCqmrkGeRvQxZeAB1nAIcjNTHVwrZtYtWFFBmQsF40/uDLehsW5KuYC99mg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/canvas/-/canvas-3.2.1.tgz",
+      "deprecated": false
+    },
+    "commander@14.0.2": {
+      "integrity": "sha512-TywoWNNRbhoD0BXs1P3ZEScW8W5iKrnbithIl0YH+uCmBd0QpPOA8yc82DS3BIE5Ma6FnBVUsJ7wVUDz4dvOWQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/commander/-/commander-14.0.2.tgz",
+      "deprecated": false
+    },
+    "commander@9.5.0": {
+      "integrity": "sha512-KRs7WVDKg86PWiuAqhDrAQnTXZKraVcCc6vFdL14qrZ/DcWwuRo7VoiYXalXO7S5GKpqYiVEwCbgFDfxNHKJBQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/commander/-/commander-9.5.0.tgz",
+      "deprecated": false
+    },
+    "diff@4.0.2": {
+      "integrity": "sha512-58lmxKSA4BNyLz+HHMUzlOEpg09FV+ev6ZMe3vJihgdxzgcwZ8VoEEPmALCZG9LmqfVoNMMKpttIYTVG6uDY7A==",
+      "license": "BSD-3-Clause",
+      "tarball": "https://registry.npmjs.org/diff/-/diff-4.0.2.tgz",
+      "deprecated": false
+    },
+    "diff@8.0.2": {
+      "integrity": "sha512-sSuxWU5j5SR9QQji/o2qMvqRNYRDOcBTgsJ/DeCf4iSN4gW+gNMXM7wFIP+fdXZxoNiAnHUTGjCr+TSWXdRDKg==",
+      "license": "BSD-3-Clause",
+      "tarball": "https://registry.npmjs.org/diff/-/diff-8.0.2.tgz",
+      "deprecated": false
+    },
+    "diff@8.0.3": {
+      "integrity": "sha512-qejHi7bcSD4hQAZE0tNAawRK1ZtafHDmMTMkrrIGgSLl7hTnQHmKCeB45xAcbfTqK2zowkM3j3bHt/4b/ARbYQ==",
+      "license": "BSD-3-Clause",
+      "tarball": "https://registry.npmjs.org/diff/-/diff-8.0.3.tgz",
+      "deprecated": false
+    },
+    "diff@9.0.0": {
+      "integrity": "sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==",
+      "license": "BSD-3-Clause",
+      "tarball": "https://registry.npmjs.org/diff/-/diff-9.0.0.tgz",
+      "deprecated": false
+    },
+    "dts-bundle-generator@9.5.1": {
+      "integrity": "sha512-DxpJOb2FNnEyOzMkG11sxO2dmxPjthoVWxfKqWYJ/bI/rT1rvTMktF5EKjAYrRZu6Z6t3NhOUZ0sZ5ZXevOfbA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/dts-bundle-generator/-/dts-bundle-generator-9.5.1.tgz",
+      "deprecated": false
+    },
+    "eslint-config-prettier@9.1.2": {
+      "integrity": "sha512-iI1f+D2ViGn+uvv5HuHVUamg8ll4tN+JRHGc6IJi4TP9Kl976C57fzPXgseXNs8v0iA8aSJpHsTWjDb9QJamGQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/eslint-config-prettier/-/eslint-config-prettier-9.1.2.tgz",
+      "deprecated": false
+    },
+    "eslint-plugin-import@2.32.0": {
+      "integrity": "sha512-whOE1HFo/qJDyX4SnXzP4N6zOWn79WhnCUY/iDR0mPfQZO8wcYE4JClzI2oZrhBnnMUCBCHZhO6VQyoBU95mZA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/eslint-plugin-import/-/eslint-plugin-import-2.32.0.tgz",
+      "deprecated": false
+    },
+    "eslint-plugin-unused-imports@4.3.0": {
+      "integrity": "sha512-ZFBmXMGBYfHttdRtOG9nFFpmUvMtbHSjsKrS20vdWdbfiVYsO3yA2SGYy9i9XmZJDfMGBflZGBCm70SEnFQtOA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/eslint-plugin-unused-imports/-/eslint-plugin-unused-imports-4.3.0.tgz",
+      "deprecated": false
+    },
+    "gif-encoder-2@1.0.5": {
+      "integrity": "sha512-fsRAKbZuUoZ7FYGjpFElmflTkKwsn/CzAmL/xDl4558aTAgysIDCUF6AXWO8dmai/ApfZACbPVAM+vPezJXlFg==",
+      "license": "Unlicense",
+      "tarball": "https://registry.npmjs.org/gif-encoder-2/-/gif-encoder-2-1.0.5.tgz",
+      "deprecated": false
+    },
+    "gpt-tokenizer@2.9.0": {
+      "integrity": "sha512-YSpexBL/k4bfliAzMrRqn3M6+it02LutVyhVpDeMKrC/O9+pCe/5s8U2hYKa2vFLD5/vHhsKc8sOn/qGqII8Kg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/gpt-tokenizer/-/gpt-tokenizer-2.9.0.tgz",
+      "deprecated": false
+    },
+    "gray-matter@4.0.3": {
+      "integrity": "sha512-5v6yZd4JK3eMI3FqqCouswVqwugaA9r4dNZB1wwcmrD02QkV5H0y7XBQW8QwQqEaZY1pM9aqORSORhJRdNK44Q==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/gray-matter/-/gray-matter-4.0.3.tgz",
+      "deprecated": false
+    },
+    "ignore@5.3.2": {
+      "integrity": "sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ignore/-/ignore-5.3.2.tgz",
+      "deprecated": false
+    },
+    "ignore@6.0.2": {
+      "integrity": "sha512-InwqeHHN2XpumIkMvpl/DCJVrAHgCsG5+cn1XlnLWGwtZBm8QJfSusItfrwx81CTp5agNZqpKU2J/ccC5nGT4A==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ignore/-/ignore-6.0.2.tgz",
+      "deprecated": false
+    },
+    "ignore@7.0.5": {
+      "integrity": "sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ignore/-/ignore-7.0.5.tgz",
+      "deprecated": false
+    },
+    "immer@10.2.0": {
+      "integrity": "sha512-d/+XTN3zfODyjr89gM3mPq1WNX2B8pYsu7eORitdwyA2sBubnTl3laYlBk4sXY5FUa5qTZGBDPJICVbvqzjlbw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/immer/-/immer-10.2.0.tgz",
+      "deprecated": false
+    },
+    "jimp@1.6.0": {
+      "integrity": "sha512-YcwCHw1kiqEeI5xRpDlPPBGL2EOpBKLwO4yIBJcXWHPj5PnA5urGq0jbyhM5KoNpypQ6VboSoxc9D8HyfvngSg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/jimp/-/jimp-1.6.0.tgz",
+      "deprecated": false
+    },
+    "lodash@4.17.23": {
+      "integrity": "sha512-LgVTMpQtIopCi79SJeDiP0TfWi5CNEc/L/aRdTh3yIvmZXTnheWpKjSZhnvMl8iXbC1tFg9gdHHDMLoV7CnG+w==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz",
+      "deprecated": false
+    },
+    "micromatch@4.0.8": {
+      "integrity": "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/micromatch/-/micromatch-4.0.8.tgz",
+      "deprecated": false
+    },
+    "msw@2.12.1": {
+      "integrity": "sha512-arzsi9IZjjByiEw21gSUP82qHM8zkV69nNpWV6W4z72KiLvsDWoOp678ORV6cNfU/JGhlX0SsnD4oXo9gI6I2A==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/msw/-/msw-2.12.1.tgz",
+      "deprecated": false
+    },
+    "next-auth@4.24.13": {
+      "integrity": "sha512-sgObCfcfL7BzIK76SS5TnQtc3yo2Oifp/yIpfv6fMfeBOiBJkDWF3A2y9+yqnmJ4JKc2C+nMjSjmgDeTwgN1rQ==",
+      "license": "ISC",
+      "tarball": "https://registry.npmjs.org/next-auth/-/next-auth-4.24.13.tgz",
+      "deprecated": false
+    },
+    "node-machine-id@1.1.12": {
+      "integrity": "sha512-QNABxbrPa3qEIfrE6GOJ7BYIuignnJw7iQ2YPbc3Nla1HzRJjXzZOiikfF8m7eAMfichLt3M4VgLOetqgDmgGQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/node-machine-id/-/node-machine-id-1.1.12.tgz",
+      "deprecated": false
+    },
+    "open@10.2.0": {
+      "integrity": "sha512-YgBpdJHPyQ2UE5x+hlSXcnejzAvD0b22U2OuAP+8OnlJT+PjWPxtgmGqKKc+RgTM63U9gN0YzrYc71R2WT/hTA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/open/-/open-10.2.0.tgz",
+      "deprecated": false
+    },
+    "open@8.4.2": {
+      "integrity": "sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/open/-/open-8.4.2.tgz",
+      "deprecated": false
+    },
+    "p-limit@3.1.0": {
+      "integrity": "sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/p-limit/-/p-limit-3.1.0.tgz",
+      "deprecated": false
+    },
+    "oxc-resolver@11.24.2": {
+      "integrity": "sha512-FY91FiDBj7ls5MsFS9jN3tjz2o0/zsdSsymlakySaBwVJZorHhkWyICLZMKxlu1R9vYo+sd3z1jwb4J8x7bNDw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/oxc-resolver/-/oxc-resolver-11.24.2.tgz",
+      "deprecated": false
+    },
+    "p-limit@6.2.0": {
+      "integrity": "sha512-kuUqqHNUqoIWp/c467RI4X6mmyuojY5jGutNU0wVTmEOOfcuwLqyMVoAi9MKi2Ak+5i9+nhmrK4ufZE8069kHA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/p-limit/-/p-limit-6.2.0.tgz",
+      "deprecated": false
+    },
+    "pg@8.16.3": {
+      "integrity": "sha512-enxc1h0jA/aq5oSDMvqyW3q89ra6XIIDZgCX9vkMrnz5DFTw/Ny3Li2lFQ+pt3L6MCgm/5o2o8HW9hiJji+xvw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pg/-/pg-8.16.3.tgz",
+      "deprecated": false
+    },
+    "partial-json@0.1.7": {
+      "integrity": "sha512-Njv/59hHaokb/hRUjce3Hdv12wd60MtM9Z5Olmn+nehe0QDAsRtRbJPvJ0Z91TusF0SuZRIvnM+S4l6EIP8leA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/partial-json/-/partial-json-0.1.7.tgz",
+      "deprecated": false
+    },
+    "node-fetch@3.3.2": {
+      "integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz",
+      "deprecated": false
+    },
+    "picocolors@1.1.1": {
+      "integrity": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==",
+      "license": "ISC",
+      "tarball": "https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz",
+      "deprecated": false
+    },
+    "pino@9.4.0": {
+      "integrity": "sha512-nbkQb5+9YPhQRz/BeQmrWpEknAaqjpAqRK8NwJpmrX/JHu7JuZC5G1CeAwJDJfGes4h+YihC6in3Q2nGb+Y09w==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pino/-/pino-9.4.0.tgz",
+      "deprecated": false
+    },
+    "pixelmatch@5.3.0": {
+      "integrity": "sha512-o8mkY4E/+LNUf6LzX96ht6k6CEDi65k9G2rjMtBe9Oo+VPKSvl+0GKHuH/AlG+GA5LPG/i5hrekkxUc3s2HU+Q==",
+      "license": "ISC",
+      "tarball": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-5.3.0.tgz",
+      "deprecated": false
+    },
+    "pngjs@7.0.0": {
+      "integrity": "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pngjs/-/pngjs-7.0.0.tgz",
+      "deprecated": false
+    },
+    "pixelmatch@7.2.0": {
+      "integrity": "sha512-xhcb4yHu9sM/G7foGzoLtXYcC0zHEaOXXjRKhGup0fw78Nf2Tkiapv4EQyMzrbcmQPsllAI7DbFY2UT7PlI9Pg==",
+      "license": "ISC",
+      "tarball": "https://registry.npmjs.org/pixelmatch/-/pixelmatch-7.2.0.tgz",
+      "deprecated": false
+    },
+    "posthog-node@5.11.0": {
+      "integrity": "sha512-9+gmWp/7AEryJMi0+/ywJjKQhpkmcjxf+eT030fTIIPvFTF84zeeagdZBGNC/Nh2Jc0grIAW6O1n5lxXiX3daA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/posthog-node/-/posthog-node-5.11.0.tgz",
+      "deprecated": false
+    },
+    "prettier@3.7.4": {
+      "integrity": "sha512-v6UNi1+3hSlVvv8fSaoUbggEM5VErKmmpGA7Pl3HF8V6uKY7rvClBOJlH6yNwQtfTueNkGVpOv/mtWL9L4bgRA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/prettier/-/prettier-3.7.4.tgz",
+      "deprecated": false
+    },
+    "pngjs@6.0.0": {
+      "integrity": "sha512-TRzzuFRRmEoSW/p1KVAmiOgPco2Irlah+bGFCeNfJXxxYGwSw7YwAOAcd7X28K/m5bjBWKsC29KyoMfHbypayg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/pngjs/-/pngjs-6.0.0.tgz",
+      "deprecated": false
+    },
+    "readable-stream@4.7.0": {
+      "integrity": "sha512-oIGGmcpTLwPga8Bn6/Z75SVaH1z5dUut2ibSyAMVhmUggWpmDn2dapB0n7f8nwaSiRtepAsfJyfXIO5DCVAODg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/readable-stream/-/readable-stream-4.7.0.tgz",
+      "deprecated": false
+    },
+    "react@19.2.0": {
+      "integrity": "sha512-tmbWg6W31tQLeB5cdIBOicJDJRR2KzXsV7uSK9iNfLWQ5bIZfxuPEHp7M8wiHyHnn0DD1i7w3Zmin0FtkrwoCQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/react/-/react-19.2.0.tgz",
+      "deprecated": false
+    },
+    "react-dom@19.2.0": {
+      "integrity": "sha512-UlbRu4cAiGaIewkPyiRGJk0imDN2T3JjieT6spoL2UeSf5od4n5LB/mQ4ejmxhCFT1tYe8IvaFulzynWovsEFQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/react-dom/-/react-dom-19.2.0.tgz",
+      "deprecated": false
+    },
+    "readable-stream@3.6.2": {
+      "integrity": "sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/readable-stream/-/readable-stream-3.6.2.tgz",
+      "deprecated": false
+    },
+    "string-width@4.2.3": {
+      "integrity": "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz",
+      "deprecated": false
+    },
+    "seedrandom@3.0.5": {
+      "integrity": "sha512-8OwmbklUNzwezjGInmZ+2clQmExQPvomqjL7LFqOYqtmuxRgQYqOD3mHaU+MvZn5FLUeVxVfQjwLZW/n/JFuqg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/seedrandom/-/seedrandom-3.0.5.tgz",
+      "deprecated": false
+    },
+    "string-width@7.2.0": {
+      "integrity": "sha512-tsaTIkKW9b4N+AEj+SVA+WhJzV7/zMhcSu78mLKWSk7cXMOSHsBKFWUs0fWwq8QyK3MgJBQRX6Gbi4kYbdvGkQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/string-width/-/string-width-7.2.0.tgz",
+      "deprecated": false
+    },
+    "strip-ansi@6.0.1": {
+      "integrity": "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz",
+      "deprecated": false
+    },
+    "strip-ansi@7.1.2": {
+      "integrity": "sha512-gmBGslpoQJtgnMAvOVqGZpEz9dyoKTCzy2nfz/n8aIFhN/jCE/rCmcxabB6jOOHV+0WNnylOxaxBQPSvcWklhA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/strip-ansi/-/strip-ansi-7.1.2.tgz",
+      "deprecated": false
+    },
+    "ts-node@10.9.2": {
+      "integrity": "sha512-f0FFpIdcHgn8zcPSbf1dRevwt047YMnaiJM3u2w2RewrB+fob/zePZcrOyQoLMMO7aBIddLcQIEK5dYjkLnGrQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ts-node/-/ts-node-10.9.2.tgz",
+      "deprecated": false
+    },
+    "tree-sitter-wasms@0.1.13": {
+      "integrity": "sha512-wT+cR6DwaIz80/vho3AvSF0N4txuNx/5bcRKoXouOfClpxh/qqrF4URNLQXbbt8MaAxeksZcZd1j8gcGjc+QxQ==",
+      "license": "Unlicense",
+      "tarball": "https://registry.npmjs.org/tree-sitter-wasms/-/tree-sitter-wasms-0.1.13.tgz",
+      "deprecated": false
+    },
+    "systeminformation@5.30.7": {
+      "integrity": "sha512-33B/cftpaWdpvH+Ho9U1b08ss8GQuLxrWHelbJT1yw4M48Taj8W3ezcPuaLoIHZz5V6tVHuQPr5BprEfnBLBMw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/systeminformation/-/systeminformation-5.30.7.tgz",
+      "deprecated": false
+    },
+    "tsconfig-paths@4.2.0": {
+      "integrity": "sha512-NoZ4roiN7LnbKn9QqE1amc9DJfzvZXxF4xDavcOWt1BPkdx+m+0gJuPM+S0vCe7zTJMYUP0R8pO2XMr+Y8oLIg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/tsconfig-paths/-/tsconfig-paths-4.2.0.tgz",
+      "deprecated": false
+    },
+    "ts-pattern@5.9.0": {
+      "integrity": "sha512-6s5V71mX8qBUmlgbrfL33xDUwO0fq48rxAu2LBE11WBeGdpCPOsXksQbZJHvHwhrd3QjUusd3mAOM5Gg0mFBLg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ts-pattern/-/ts-pattern-5.9.0.tgz",
+      "deprecated": false
+    },
+    "tsc-alias@1.8.16": {
+      "integrity": "sha512-QjCyu55NFyRSBAl6+MTFwplpFcnm2Pq01rR/uxfqJoLMm6X3O14KEGtaSDZpJYaE1bJBGDjD0eSuiIWPe2T58g==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/tsc-alias/-/tsc-alias-1.8.16.tgz",
+      "deprecated": false
+    },
+    "typescript@5.5.4": {
+      "integrity": "sha512-Mtq29sKDAEYP7aljRgtPOpTvOfbwRWlS6dPRzwjdE+C0R4brX/GUyhHSecbHMFLNBLcJIPt9nl9yG5TZ1weH+Q==",
+      "license": "Apache-2.0",
+      "tarball": "https://registry.npmjs.org/typescript/-/typescript-5.5.4.tgz",
+      "deprecated": false
+    },
+    "web-tree-sitter@0.25.10": {
+      "integrity": "sha512-Y09sF44/13XvgVKgO2cNDw5rGk6s26MgoZPXLESvMXeefBf7i6/73eFurre0IsTW6E14Y0ArIzhUMmjoc7xyzA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.25.10.tgz",
+      "deprecated": false
+    },
+    "typescript-eslint@7.18.0": {
+      "integrity": "sha512-PonBkP603E3tt05lDkbOMyaxJjvKqQrXsnow72sVeOFINDE/qNmnnd+f9b4N+U7W6MXnnYyrhtmF2t08QWwUbA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/typescript-eslint/-/typescript-eslint-7.18.0.tgz",
+      "deprecated": false
+    },
+    "ws@8.18.3": {
+      "integrity": "sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ws/-/ws-8.18.3.tgz",
+      "deprecated": false
+    },
+    "ws@7.5.10": {
+      "integrity": "sha512-+dbF1tHwZpXcbOJdVOkzLDxZP1ailvSxM6ZweXTegylPny803bFhA+vqBYw4s31NSAk4S2Qz+AKXK9a4wkdjcQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ws/-/ws-7.5.10.tgz",
+      "deprecated": false
+    },
+    "yoga-layout@3.2.1": {
+      "integrity": "sha512-0LPOt3AxKqMdFBZA3HBAt/t/8vIKq7VaQYbuA8WxCgung+p9TVyKRYdpvCb80HcdTN2NkbIKbhNwKUfm3tQywQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/yoga-layout/-/yoga-layout-3.2.1.tgz",
+      "deprecated": false
+    },
+    "zod-from-json-schema@0.4.2": {
+      "integrity": "sha512-U+SIzUUT7P6w1UNAz81Sj0Vko77eQPkZ8LbJeXqQbwLmq1MZlrjB3Gj4LuebqJW25/CzS9WA8SjTgR5lvuv+zA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/zod-from-json-schema/-/zod-from-json-schema-0.4.2.tgz",
+      "deprecated": false
+    },
+    "zustand@5.0.8": {
+      "integrity": "sha512-gyPKpIaxY9XcO2vSMrLbiER7QMAMGOQZVRdJ6Zi782jkbzZygq5GI9nG8g+sMgitRtndwaBSl7uiqC49o1SSiw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/zustand/-/zustand-5.0.8.tgz",
+      "deprecated": false
+    },
+    "zod@4.2.1": {
+      "integrity": "sha512-0wZ1IRqGGhMP76gLqz8EyfBXKk0J2qo2+H3fi4mcUP/KtTocoX08nmIAHl1Z2kJIZbZee8KOpBCSNPRgauucjw==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/zod/-/zod-4.2.1.tgz",
+      "deprecated": false
+    }
+  }
+}

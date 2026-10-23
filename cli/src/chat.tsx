@@ -94,7 +94,11 @@ import {
 } from './utils/status-indicator-state'
 import { createPasteHandler, LONG_TEXT_THRESHOLD } from './utils/strings'
 import { setTerminalTitle } from './utils/terminal-title'
-import { computeInputLayoutMetrics } from './utils/text-layout'
+import {
+  computeInputLayoutMetrics,
+  inputWrapColumns,
+  multilineInputMeasurementKey,
+} from './utils/text-layout'
 
 import type { CommandResult } from './commands/command-registry'
 import type { MultilineInputHandle } from './components/multiline-input'
@@ -852,6 +856,7 @@ export const Chat = ({
     onSubmitPrompt,
     isCompactHeight,
     isNarrowWidth,
+    modeWidthAdjustment: getInputModeConfig(inputMode).widthAdjustment,
   })
 
   const {
@@ -1577,27 +1582,69 @@ export const Chat = ({
     fileMatchCount: fileSuggestionItems.length,
   })
 
-  const inputLayoutMetrics = useMemo(() => {
-    // In bash mode, layout is based on the actual input (no ! prefix needed)
-    const text = inputValue ?? ''
-    const layoutContent = text.length > 0 ? text : ' '
-    const safeCursor = Math.max(
-      0,
-      Math.min(cursorPosition, layoutContent.length),
-    )
-    const cursorProbe =
-      safeCursor >= layoutContent.length
-        ? layoutContent
-        : layoutContent.slice(0, safeCursor)
-    const cols = Math.max(1, inputWidth)
-    return computeInputLayoutMetrics({
-      layoutContent,
-      cursorProbe,
-      cols,
-      maxHeight: Math.floor(terminalHeight / 2),
-    })
-  }, [inputValue, cursorPosition, inputWidth, terminalHeight])
-  const isMultilineInput = inputLayoutMetrics.heightLines > 1
+  const { metrics: inputLayoutMetrics, measurementKey: inputMeasurementKey } =
+    useMemo(() => {
+      // In bash mode, layout is based on the actual input (no ! prefix needed)
+      const text = inputValue ?? ''
+      // An empty input still occupies one row, so the row count is measured from a
+      // single space. The measurement KEY is derived from the raw `text` (no
+      // substitution): the box compares it against the key IT derives from the
+      // value prop it was handed, which is also the raw value, so the two
+      // identities agree on the idle empty frame — the space never enters the
+      // identity, only the row count.
+      const layoutContent = text.length > 0 ? text : ' '
+      const safeCursor = Math.max(
+        0,
+        Math.min(cursorPosition, layoutContent.length),
+      )
+      // Measure at the columns the text actually wraps at. MultilineInput draws
+      // inside its own 1-column horizontal wrapper padding, so measuring at the
+      // outer inputWidth here would count fewer rows than the box renders — and
+      // that disagreement is what let a wrapped value still be treated as
+      // single-line (centered) while the box needed several rows.
+      //
+      // `inputWrapColumns` is the ONE definition of that subtraction: the box
+      // derives the columns it checks the forwarded key against from the same
+      // helper, so the two cannot drift by a column and the row count computed
+      // here is exactly the one the box would compute — that equality is what
+      // lets the box reuse this measurement instead of re-wrapping the same
+      // value on every keystroke.
+      const cols = inputWrapColumns(inputWidth)
+      return {
+        metrics: computeInputLayoutMetrics({
+          layoutContent,
+          // The metrics only ever need the offset: slicing the prefix string here
+          // allocated an O(cursor) copy on every keystroke and cursor move just to
+          // hand over its length.
+          cursorOffset: safeCursor,
+          cols,
+          // UNCAPPLED row measurement. The forwarded `totalLines` is a PRE-CLAMP row
+          // fact: chat-input-bar forwards it to two MultilineInput mounts that are
+          // given different `maxHeight`s, and each box derives its own height AND
+          // its own `isScrollable` by comparing that row count against the cap it
+          // actually draws with. Measuring to a cap here would saturate the count at
+          // this caller's cap, and a box with a taller cap would then be told the
+          // content fits on a frame where it must scroll. This caller's own
+          // centering decision is clamped separately below.
+          maxHeight: Number.MAX_SAFE_INTEGER,
+        }),
+        // Supplied to the box as the identity of the measurement: a producer-side
+        // key over the same raw value and columns the box derives its own key
+        // from. The box trusts the forwarded count only while the two keys
+        // match, which is what turns a stale or wrong-width count into one extra
+        // local wrap pass instead of a mis-sized box.
+        measurementKey: multilineInputMeasurementKey(text, cols),
+      }
+    }, [inputValue, cursorPosition, inputWidth])
+  // The screen still owns a ceiling for its own layout decision ("is the input
+  // taller than the box I give it"), applied to the uncapped row fact rather
+  // than baked into the measurement the box consumes.
+  const inputHeightCap = Math.floor(terminalHeight / 2)
+  const inputHeightLines = Math.min(
+    inputLayoutMetrics.heightLines,
+    Math.max(1, inputHeightCap),
+  )
+  const isMultilineInput = inputLayoutMetrics.totalLines > 1
   const shouldCenterInputVertically = !hasSuggestionMenu && !isMultilineInput
   const statusIndicatorState = getStatusIndicatorState({
     statusMessage,
@@ -1955,6 +2002,12 @@ export const Chat = ({
             inputBoxTitle={inputBoxTitle}
             isCompactHeight={isCompactHeight}
             isNarrowWidth={isNarrowWidth}
+            inputWidth={inputWidth}
+            inputMinHeight={1}
+            inputTotalLines={inputLayoutMetrics.totalLines}
+            inputMeasurementKey={inputMeasurementKey}
+            inputInputCap={inputHeightLines}
+            inputGutterEnabled={inputLayoutMetrics.gutterEnabled}
             feedbackMode={feedbackMode}
             handleExitFeedback={handleExitFeedback}
             publishMode={publishMode}

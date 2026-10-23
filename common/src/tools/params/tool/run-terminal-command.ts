@@ -59,6 +59,13 @@ export const terminalCommandOutputSchema = z.union([
     timedOut: z.boolean().optional(),
     spawnFailed: z.boolean().optional(),
     permissionDenied: z.boolean().optional(),
+    /**
+     * The git-commit safety preflight could not inspect the staged diff
+     * (spawn/timeout/output-budget/header-decode failure). Distinct from
+     * permissionDenied: the commit was never judged, so a retry on transient
+     * failure is reasonable.
+     */
+    safetyPreflightFailed: z.boolean().optional(),
     permissionProfile: z
       .enum([
         'read-only',

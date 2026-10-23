@@ -4,6 +4,10 @@ All notable changes to the @openbuff/sdk package will be documented in this file
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** four public exports are now asynchronous and take an optional trailing `AbortSignal`: `inspectEnvironment(cwd, signal?)` and `getAffectedTests(cwd, files, signal?)` and `getBuildTargets(cwd, files, signal?)` (all three re-exported from the sdk index), and `inspectHarnessEnvironment(cwd, signal?)`. Each previously returned its result synchronously and now returns a Promise of the same shape, so callers must `await` the call. The change moves environment discovery off blocking `spawnSync`/sync-`fs` calls onto bounded-concurrency async I/O, and the `signal` argument lets a caller cancel an in-flight inspection. The additive async twins (`getAffectedTestTargetsAsync`, `analyzeTestImpactAsync`, `getBuildTargetsAsync`) and the unchanged sync service-level re-export `getHarnessBuildTargets` are not affected.
+
 ### Added
 
 - New registered `recall_context` tool (`common/src/tools/params/tool/recall-context.ts`, runtime handler `packages/agent-runtime/src/tools/handlers/tool/recall-context.ts`): the recall leg of compaction. It searches archived pre-compaction transcripts (`AgentState.compactionArchive`) for verbatim facts a compaction pass removed from visible context. Input is a single `query` (2..512 chars, case-insensitive AND-match terms); the output carries bounded `matches` (`step`/`toolName`/`toolCallId`/`snippet`), `snapshotsSearched`, and `archivedAt` provenance so pre-compaction content is marked stale-until-verified, or a `message` hint when nothing matched. Results are budgeted per call (max 6 snippets of 600 chars) and the archive itself never enters the model context. Additive: agents that never call it are unaffected, and regenerated tool-definition sources land in the same commit.

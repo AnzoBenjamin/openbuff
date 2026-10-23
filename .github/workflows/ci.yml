@@ -92,6 +92,37 @@ jobs:
           # `fileContext.projectRoot` dereference fails this step.
           bun --cwd=scripts run guard:project-root
           bun --cwd=scripts run guard:byok-wording
+          # Same guard check:ci-local runs as Step I: every exact-pinned
+          # dependency must reconcile with the checked-in upstream provenance
+          # record (scripts/dependency-provenance.json), offline.
+          bun --cwd=scripts run guard:dependency-provenance
+
+      # The offline provenance gate proves the checked-in record AGREES with
+      # bun.lock; both files come from this repository's own workflow, so it
+      # cannot prove upstream identity. This is the independent anchor: a PR
+      # (or direct push) that changes the recorded upstream identity of an
+      # already-approved release fails the build instead of merging silently,
+      # so such a change must arrive in a separate, reviewed commit. The
+      # comparison needs the BASE ref: after the shallow checkout above the
+      # working tree equals HEAD, so a plain `git diff HEAD` would always be
+      # empty and check nothing.
+      - name: Provenance record changes need their own reviewed commit
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            base=FETCH_HEAD
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            git fetch --no-tags --deepen=1 origin
+            base=HEAD~1
+          else
+            echo "No base ref to compare for ${{ github.event_name }}; skipping."
+            exit 0
+          fi
+          git diff --exit-code "$base" HEAD -- scripts/dependency-provenance.json
+
+      - name: Types declaration guard (runtime deps declare their typings)
+        run: bun --cwd=scripts run guard:types-declaration
 
       # M4-T3: the gate-helpers generator's --check mode is the documented
       # freshness contract; fail CI on drift instead of silently rewriting the
