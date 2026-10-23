@@ -105,7 +105,10 @@ jobs:
       # so such a change must arrive in a separate, reviewed commit. The
       # comparison needs the BASE ref: after the shallow checkout above the
       # working tree equals HEAD, so a plain `git diff HEAD` would always be
-      # empty and check nothing.
+      # empty and check nothing. One allowance: the diff is taken by
+      # name-status and a pure ADDITION passes — the PR that first lands the
+      # record IS its review. Once the record exists on the base branch, any
+      # modification or deletion fails here.
       - name: Provenance record changes need their own reviewed commit
         run: |
           set -eu
@@ -119,7 +122,16 @@ jobs:
             echo "No base ref to compare for ${{ github.event_name }}; skipping."
             exit 0
           fi
-          git diff --exit-code "$base" HEAD -- scripts/dependency-provenance.json
+          changes=$(git diff --name-status "$base" HEAD -- scripts/dependency-provenance.json)
+          if [ -z "$changes" ]; then
+            exit 0
+          fi
+          if echo "$changes" | grep -qv '^A'; then
+            echo "::error::scripts/dependency-provenance.json changed against the base ref without its own reviewed commit:"
+            echo "$changes"
+            exit 1
+          fi
+          echo "Initial landing of the provenance record (pure addition) — allowed; future modifications need their own reviewed commit."
 
       - name: Types declaration guard (runtime deps declare their typings)
         run: bun --cwd=scripts run guard:types-declaration

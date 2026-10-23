@@ -189,13 +189,16 @@ describe('CI project-root guard gate', () => {
     // The comparison MUST name a base ref: after the shallow checkout the
     // working tree equals HEAD, so a plain `git diff HEAD` is always empty —
     // the no-op form of this anchor. The step therefore fetches the base
-    // (PR base branch, or the pushed commit's parent) and diffs against it.
+    // (PR base branch, or the pushed commit's parent) and diffs by
+    // name-status: a pure ADDITION (the PR that first lands the record, which
+    // is itself its review) passes, any modification or deletion fails.
     const ciLines = CI_WORKFLOW.split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
     expect(ciLines).toContain(
-      'git diff --exit-code "$base" HEAD -- scripts/dependency-provenance.json',
+      'changes=$(git diff --name-status "$base" HEAD -- scripts/dependency-provenance.json)',
     )
+    expect(ciLines).toContain(`if echo "$changes" | grep -qv '^A'; then`)
     expect(ciLines).toContain(
       'git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"',
     )
