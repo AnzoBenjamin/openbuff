@@ -5,6 +5,8 @@ import { AgentBranchWrapper } from './agent-branch-wrapper'
 import { AgentListBranch } from './agent-list-branch'
 import { AskUserBranch } from './ask-user-branch'
 import { trimNewlines, isReasoningTextBlock } from './block-helpers'
+
+import { collapseHarnessTags } from '../../utils/output-hygiene'
 import { ContentWithMarkdown } from './content-with-markdown'
 import { ImageBlock } from './image-block'
 import { UserBlockTextWithInlineCopy } from './user-content-copy'
@@ -73,9 +75,14 @@ export const SingleBlock = memo(
         }
         const textBlock = block as TextContentBlock
         const isStreamingText = isLoading || !isComplete
-        const filteredContent = isStreamingText
-          ? trimNewlines(textBlock.content)
-          : textBlock.content.trim()
+        // Display-only hygiene: harness-style pseudo-XML the model echoed
+        // (e.g. <system_warning> self-notes) never reaches the screen; the
+        // stored block and persisted transcript keep the raw text.
+        const filteredContent = collapseHarnessTags(
+          isStreamingText
+            ? trimNewlines(textBlock.content)
+            : textBlock.content.trim(),
+        )
         if (!filteredContent) {
           return null
         }

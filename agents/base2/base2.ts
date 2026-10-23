@@ -27,6 +27,7 @@ import {
   buildBroadAuditSection,
   decisionCapturePolicySection,
   gateAwarenessSection,
+  outputHygieneSection,
   gitDisciplineSection,
   preReviewSelfCheckSection,
   qualitySection,
@@ -413,6 +414,7 @@ export function createBase2(
   const spawnGuidelinesTail = buildArray(
     "- **Never spawn the context-pruner agent:** This agent is spawned automatically for you and you don't need to spawn it yourself.",
     isDefault && !planOnly && gateAwarenessSection,
+    isDefault && !planOnly && outputHygieneSection,
     isDefault && !planOnly && decisionCapturePolicySection,
   ).join('\n\n')
 

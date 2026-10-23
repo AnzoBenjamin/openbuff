@@ -1785,7 +1785,13 @@ export async function* promptAiSdkStream(
           }
 
           if (attempt > 0 || failoverIndex > 0) {
-            emitProviderStatus({ status: 'recovered', model: failoverModel })
+            // Deliberately NO `model` on recovery: `failoverModel` names the
+            // outer loop's current candidate, which can be stale after the
+            // inner fallback paths (prompt-too-long retry, OAuth fallback)
+            // complete on a different model, and the CLI printed the wrong id
+            // as a result. 'failover' events carry the authoritative
+            // from→to pair; recovery only needs to say the stream is back.
+            emitProviderStatus({ status: 'recovered' })
           }
           return promptSuccess(messageId)
         } catch (caughtError) {

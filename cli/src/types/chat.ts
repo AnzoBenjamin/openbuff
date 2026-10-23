@@ -20,7 +20,7 @@ export type TextContentBlock = {
   marginTop?: number
   marginBottom?: number
   status?: 'running' | 'complete'
-  textType?: 'reasoning' | 'text'
+  textType?: 'reasoning' | 'text' | 'status'
   isCollapsed?: boolean
   thinkingId?: string
   userOpened?: boolean

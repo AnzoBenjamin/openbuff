@@ -10,6 +10,8 @@ import React, {
 import { AgentBlockGrid } from './agent-block-grid'
 import { AgentBranchItem } from './agent-branch-item'
 import { trimNewlines, sanitizePreview } from './block-helpers'
+
+import { collapseHarnessTags } from '../../utils/output-hygiene'
 import { ContentWithMarkdown } from './content-with-markdown'
 import { ImplementorGroup } from './implementor-row'
 import { ThinkingBlock } from './thinking-block'
@@ -248,9 +250,14 @@ const AgentBody = memo(
             const nestedStatus = textBlock.status
             const isNestedStreamingText =
               p.parentIsStreaming || nestedStatus === 'running'
-            const filteredNestedContent = isNestedStreamingText
-              ? trimNewlines(textBlock.content)
-              : textBlock.content.trim()
+            // Display-only hygiene, mirroring single-block: harness-style
+            // pseudo-XML echoed by the model is collapsed out of the nested
+            // text render without touching the stored block.
+            const filteredNestedContent = collapseHarnessTags(
+              isNestedStreamingText
+                ? trimNewlines(textBlock.content)
+                : textBlock.content.trim(),
+            )
             if (!filteredNestedContent) {
               return null
             }

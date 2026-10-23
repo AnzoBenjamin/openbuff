@@ -2206,9 +2206,25 @@ const handleProviderStatus = (
       : event.status === 'failover'
         ? `Provider failover: ${event.model ?? 'primary model'} → ${event.nextModel ?? 'backup model'}.`
         : `Provider connection recovered${event.model ? ` on ${event.model}` : ''}.`
+  // Transient connection status is NOT assistant prose: it renders as a muted
+  // status line (textType 'status', color honored by the text renderers) and
+  // COALESCES — each event replaces the previous status block, so a retry
+  // storm shows one line instead of one per attempt. The final line stays as
+  // a quiet record that a retry happened at all.
   state.message.updater.updateAiMessageBlocks((blocks) => [
-    ...blocks,
-    { type: 'text' as const, textType: 'text' as const, content },
+    ...blocks.filter(
+      (block) =>
+        !(
+          block.type === 'text' &&
+          (block as { textType?: string }).textType === 'status'
+        ),
+    ),
+    {
+      type: 'text' as const,
+      textType: 'status' as const,
+      color: 'muted',
+      content,
+    },
   ])
 }
 

@@ -138,7 +138,7 @@ const dispatchValidEvent = (
 }
 
 describe('sdk-event-handlers', () => {
-  test('renders provider retry/failover recovery as an ordered resilience timeline', () => {
+  test('renders provider status as a single coalesced muted status line', () => {
     const { ctx, getMessages } = createTestContext()
     const retryStates: boolean[] = []
     ctx.setIsRetrying = (retrying) => retryStates.push(retrying)
@@ -161,16 +161,46 @@ describe('sdk-event-handlers', () => {
     handleEvent({
       type: 'provider_status',
       status: 'recovered',
-      model: 'backup',
     })
 
     expect(retryStates).toEqual([true, true, false])
-    const text = getMessages()[0]
-      .blocks?.map((block) => ('content' in block ? block.content : ''))
-      .join('\n')
-    expect(text).toContain('retrying (attempt 2/4)')
-    expect(text).toContain('primary → backup')
-    expect(text).toContain('recovered on backup')
+    const blocks = getMessages()[0].blocks ?? []
+    const textBlocks = blocks.filter(
+      (block) => 'content' in block && 'textType' in block,
+    ) as Array<{ content: string; textType?: string; color?: string }>
+    // A retry storm shows ONE status line, not one per attempt: each event
+    // replaces the previous status block, and the survivor is the final
+    // (recovered) line. It is a muted status line, not assistant prose.
+    expect(textBlocks).toHaveLength(1)
+    expect(textBlocks[0]!.textType).toBe('status')
+    expect(textBlocks[0]!.color).toBe('muted')
+    expect(textBlocks[0]!.content).toContain('recovered')
+    expect(textBlocks[0]!.content).not.toContain('retrying')
+  })
+
+  test('provider status lines never displace non-status text blocks', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    handleEvent({
+      type: 'provider_status',
+      status: 'retrying',
+      attempt: 1,
+      maxAttempts: 4,
+    })
+
+    // Only status blocks coalesce; the ordinary text path is untouched (the
+    // filter keys on textType === 'status', never on 'text').
+    const blocks = getMessages()[0].blocks ?? []
+    const statusBlocks = blocks.filter(
+      (block) =>
+        'content' in block && (block as { textType?: string }).textType === 'status',
+    )
+    expect(statusBlocks).toHaveLength(1)
+    expect(statusBlocks[0]).toMatchObject({
+      textType: 'status',
+      color: 'muted',
+    })
   })
 
   test('surfaces runtime errors without stack-frame lines', () => {

@@ -1256,3 +1256,123 @@ describe('handleSetOutput', () => {
     })
   })
 })
+
+describe('handleSetOutput enum-prose repair', () => {
+  const enumTemplate = (
+    outputSchema: z.ZodTypeAny,
+    id = 'enum-prose-reviewer',
+  ): AgentTemplate => ({
+    id,
+    displayName: 'Enum Prose Reviewer',
+    spawnerPrompt: 'Review',
+    model: 'claude-3-5-sonnet-20241022',
+    inputSchema: {},
+    outputMode: 'structured_output',
+    outputSchema,
+    includeMessageHistory: false,
+    inheritParentSystemPrompt: false,
+    mcpServers: {},
+    toolNames: ['set_output'],
+    spawnableAgents: [],
+    systemPrompt: 'Test system prompt',
+    instructionsPrompt: 'Test instructions',
+    stepPrompt: 'Test step prompt',
+  })
+
+  const runHandler = async (template: AgentTemplate, data: unknown) => {
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const toolCall = {
+      toolName: 'set_output',
+      toolCallId: 'enum-prose-receipt',
+      input: { data: JSON.stringify(data) },
+    } as unknown as CodebuffToolCall<'set_output'>
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+    return { output, agentState }
+  }
+
+  test('repairs an enum field whose value carries justification prose', async () => {
+    // The dominant observed failure: the model submits "pass: <prose>" where
+    // the schema wants the BARE enum. The repair strips to the bare value and
+    // accepts the receipt instead of burning a retry turn.
+    const template = enumTemplate(
+      z.object({
+        dimensions: z.object({
+          correctness: z.enum(['pass', 'warning', 'block', 'not_applicable']),
+        }),
+        evidence: z.array(z.string()).optional(),
+      }),
+    )
+    const { agentState, output } = await runHandler(template, {
+      dimensions: {
+        correctness: 'pass: no logic errors found in the diff under review',
+      },
+      evidence: ['src/a.ts:10'],
+    })
+
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual({
+      dimensions: { correctness: 'pass' },
+      evidence: ['src/a.ts:10'],
+    })
+  })
+
+  test('leaves a bare valid enum untouched and accepts it directly', async () => {
+    const template = enumTemplate(
+      z.object({ verdict: z.enum(['pass', 'block']) }),
+    )
+    const { agentState, output } = await runHandler(template, {
+      verdict: 'pass',
+    })
+
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual({ verdict: 'pass' })
+  })
+
+  test('still fails, with the bare-value hint, when the value matches no allowed enum', async () => {
+    const template = enumTemplate(
+      z.object({ verdict: z.enum(['pass', 'block']) }),
+    )
+    const { agentState, output } = await runHandler(template, {
+      verdict: 'everything looks fine to me',
+    })
+
+    expect(agentState.output).toBeUndefined()
+    const message = (output as Array<{ type: string; value: { message: string } }>)[0]
+      .value.message
+    expect(message).toContain('Output validation error')
+    expect(message).toContain('BARE value only')
+  })
+
+  test('repair keeps nested paths intact and does not mutate the original object', async () => {
+    const template = enumTemplate(
+      z.object({
+        coverage: z.object({
+          dimensions: z.object({
+            risk: z.enum(['pass', 'warning', 'block']),
+          }),
+        }),
+      }),
+    )
+    const submitted = {
+      coverage: { dimensions: { risk: 'warning — thin evidence for claim 2' } },
+    }
+    const { agentState, output } = await runHandler(template, submitted)
+
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual({
+      coverage: { dimensions: { risk: 'warning' } },
+    })
+    // The caller's object is untouched: repair works on a clone.
+    expect(submitted.coverage.dimensions.risk).toBe(
+      'warning — thin evidence for claim 2',
+    )
+  })
+})

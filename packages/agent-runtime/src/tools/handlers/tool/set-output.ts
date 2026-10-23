@@ -260,6 +260,31 @@ export const handleSetOutput = (async (params: {
         failures.length = 0
         break
       } catch (error) {
+        // One deterministic repair round before giving up on the candidate:
+        // the most common structured-output mistake is an enum field carrying
+        // justification prose ("pass: no new packages..."), which the schema
+        // wants as the BARE value. Repaired candidates that still fail fall
+        // back to the ORIGINAL failure, so the error the model sees describes
+        // its own output, not the repair's.
+        const repaired = repairEnumProseValues(candidate.value, error)
+        if (repaired) {
+          try {
+            finalOutput = agentTemplate.outputSchema.parse(repaired.value)
+            failures.length = 0
+            logger.warn(
+              {
+                agentType: agentState.agentType,
+                agentId: agentState.agentId,
+                source: candidate.source,
+                coercedPaths: repaired.coercedPaths,
+              },
+              'set_output enum-prose repair applied',
+            )
+            break
+          } catch {
+            // fall through to record the original failure
+          }
+        }
         failures.push({ source: candidate.source, error })
       }
     }
@@ -276,7 +301,12 @@ export const handleSetOutput = (async (params: {
         : usedNestedOutput
           ? 'Output validation error: Your output was found inside the nested `output` field but still failed validation. Please fix the reported fields and retry with native object/array values. Issues: '
           : 'Output validation error: Output failed to match the output schema and was ignored. Please fix the reported fields and retry with native object/array values. Issues: '
-      const errorMessage = `${prefix}${bestFailure.error}\n\nOriginal output value:\n${formatValueForError(decodedOutput)}`
+      // Models shown only the enum's allowed values still resubmit
+      // `"pass: <prose>"` shapes; the hint names the contract explicitly.
+      const enumHint = hasEnumValueIssue(bestFailure.error)
+        ? '\nEnum fields take the BARE value only (e.g. "pass", not "pass: <justification>"); put justifications in the schema\'s evidence/notes fields, never inside the enum value.'
+        : ''
+      const errorMessage = `${prefix}${bestFailure.error}${enumHint}\n\nOriginal output value:\n${formatValueForError(decodedOutput)}`
       logger.error(
         {
           outputShape: {
@@ -345,6 +375,131 @@ function getZodIssueCount(error: unknown): number {
     return (error as { issues: unknown[] }).issues.length
   }
   return Infinity
+}
+
+/**
+ * Whether any zod issue in the failure is an enum rejection, used to target
+ * the retry hint: the model repeatedly resubmits `"pass: <prose>"` shapes
+ * unless the error itself demonstrates the bare-value contract.
+ */
+function hasEnumValueIssue(error: unknown): boolean {
+  return zodIssues(error).some(
+    (issue) => issue.code === 'invalid_value' && Array.isArray(issue.values),
+  )
+}
+
+function zodIssues(error: unknown): Array<Record<string, unknown>> {  if (
+    error != null &&
+    typeof error === 'object' &&
+    'issues' in error &&
+    Array.isArray((error as { issues: unknown }).issues)
+  ) {
+    return (
+      error as { issues: Array<Record<string, unknown>> }
+    ).issues.filter((issue) => issue && typeof issue === 'object')
+  }
+  return []
+}
+
+/**
+ * Deterministic repair for the dominant structured-output failure mode: an
+ * enum field submitted as `"pass: <justification prose>"` where the schema
+ * wants the BARE enum value. For every zod `invalid_value` issue whose current
+ * value is a string that starts with one of the allowed enum values followed
+ * by a separator, the clone is rewritten to the bare allowed value — the prose
+ * tail belongs in the schema's evidence/justification fields, which the model
+ * fills separately. Only JSON-like values (the candidates all decode from the
+ * model's JSON output) are navigated; anything else is left untouched.
+ * Returns undefined when nothing was repairable, so the caller keeps the
+ * original failure untouched.
+ */
+function repairEnumProseValues(
+  value: unknown,
+  error: unknown,
+): { value: unknown; coercedPaths: string[] } | undefined {
+  const clone = cloneJsonLike(value)
+  if (clone === undefined) return undefined
+  const coercedPaths: string[] = []
+  for (const issue of zodIssues(error)) {
+    if (issue.code !== 'invalid_value' || !Array.isArray(issue.values)) continue
+    const allowed = issue.values.filter(
+      (entry): entry is string => typeof entry === 'string',
+    )
+    if (allowed.length === 0) continue
+    const path = Array.isArray(issue.path) ? issue.path : []
+    if (
+      !path.every(
+        (key) => typeof key === 'string' || typeof key === 'number',
+      )
+    ) {
+      continue
+    }
+    const current = getPathValue(clone, path)
+    if (typeof current !== 'string') continue
+    // Longest allowed value first, so overlapping enums (e.g. "pass" and
+    // "passed") prefer the longest match.
+    const prefixed = allowed
+      .slice()
+      .sort((left, right) => right.length - left.length)
+      .find(
+        (entry) =>
+          current.toLowerCase().startsWith(entry.toLowerCase()) &&
+          /^[\s:—-]/.test(current.slice(entry.length)),
+      )
+    if (prefixed === undefined) continue
+    if (setPathValue(clone, path, prefixed)) {
+      coercedPaths.push(path.join('.') || '<root>')
+    }
+  }
+  return coercedPaths.length > 0 ? { value: clone, coercedPaths } : undefined
+}
+
+/** Deep-clone a JSON-like value; undefined means "not cloneable, give up". */
+function cloneJsonLike(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) {
+    return value.map((entry) => {
+      const cloned = cloneJsonLike(entry)
+      return cloned === undefined ? entry : cloned
+    })
+  }
+  const out: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const cloned = cloneJsonLike(entry)
+    out[key] = cloned === undefined ? entry : cloned
+  }
+  return out
+}
+
+function getPathValue(
+  value: unknown,
+  path: Array<string | number>,
+): unknown {
+  let current: unknown = value
+  for (const key of path) {
+    if (current === null || typeof current !== 'object') return undefined
+    current = (current as Record<string, unknown>)[key as string]
+  }
+  return current
+}
+
+function setPathValue(
+  value: unknown,
+  path: Array<string | number>,
+  replacement: unknown,
+): boolean {
+  if (path.length === 0) return false
+  let current: unknown = value
+  for (const key of path.slice(0, -1)) {
+    if (current === null || typeof current !== 'object') return false
+    current = (current as Record<string, unknown>)[key as string]
+  }
+  const lastKey = path[path.length - 1]!
+  if (current === null || typeof current !== 'object') return false
+  const holder = current as Record<string, unknown>
+  if (!(lastKey as string in holder)) return false
+  holder[lastKey as string] = replacement
+  return true
 }
 
 // Moved verbatim to common/src/util/model-payload-recovery.ts (C1 of the
