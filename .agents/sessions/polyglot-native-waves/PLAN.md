@@ -1,11 +1,13 @@
 # PLAN — Polyglot Native Adoption (Waves 0–5)
 
+> **Reconciled 2026-10-24:** the substrate landed DIFFERENTLY than planned — as the root `rust/` workspace (crates `openbuff-native`, `openbuff-workspace-harness`, rust-toolchain, rust-workspace CI job; commit b3c719da1 'X-3b openbuff-native substrate + CI matrix') rather than `packages/native-core`. Items below are reconciled against the actual layout; unticked items remain real work.
+
 Evidence base: `.agents/sessions/audit-polyglot-2026-09/AUDIT-REPORT.md` (+ per-shard findings). Spec: `SPEC.md` in this directory.
 
 ## Wave 0 — Foundations (prerequisite for all waves)
 
 - [ ] W0-1 Set up `packages/native-core/` Rust workspace with napi-rs; CI builds prebuilt `.node` packages for the same platform matrix as `cli-release-build.yml` (linux x64/arm64, macOS x64/arm64, win32 x64). Validation: package installs on all 5 targets via optionalDependencies; `bun test` in a consumer package passes with the module loaded and absent.
-- [ ] W0-2 Golden performance benchmarks: capture baseline (token-count throughput, code-search latency, index refresh time, stream-parse throughput) into `scripts/measure-perf-guards-baseline.ts`-style harness. Validation: baseline rows committed; every wave must show before/after parity-or-better.
+- [x] W0-2 <!-- reconciled 2026-10-24: scripts/measure-perf-guards-baseline.ts exists with committed baseline rows (incl. X-2 5MB pathological case) --> Golden performance benchmarks: capture baseline (token-count throughput, code-search latency, index refresh time, stream-parse throughput) into `scripts/measure-perf-guards-baseline.ts`-style harness. Validation: baseline rows committed; every wave must show before/after parity-or-better.
 - [ ] W0-3 Freeze contract specs with golden vectors: cap.v3 token grammar (`common/src/util/content-hash.ts`), broker receipt schema, tool JSON-schema export. Validation: new fixture tests pin byte-exact encode/decode.
 
 ## Wave 1 — Pure-function addons (lowest risk)
