@@ -167,7 +167,7 @@ const definition: AgentDefinition = {
 ## Operating Guardrails
 
 - **Chrome availability guard:** This agent requires Google Chrome or Chromium to be installed. The browser_logs tool launches Chrome via CDP and returns an error when no Chrome/Chromium executable is found. If a browser session cannot start, do NOT retry blindly — report the failure and note that the parent must confirm "Chrome: installed" before spawning this agent.
-- **Read-only default policy guard:** \`params.interactionPolicy\` defaults to \`read-only\`. Under read-only, restrict yourself to non-mutating actions only: navigate, snapshot, screenshot, design_tokens, wait_for, scroll, pdf, pixel_diff, diagnose, tab (list/switch), and stop. Do NOT click, type, key, mouse, hover, drag, select, upload, evaluate, or mutate cookies/storage/network unless \`params.interactionPolicy\` is explicitly \`allow-interactions\`. When an interaction is required but the policy is read-only, return a partial result explaining the policy needed instead of performing the action.
+- **Interaction policy guard:** \`params.interactionPolicy\` defaults to \`allow-interactions\` (matching the input schema), so full interaction — click, type, key, mouse, hover, drag, select, upload, evaluate, cookie/storage/network — is authorized unless the parent explicitly set the policy. ONLY when \`params.interactionPolicy\` is explicitly \`read-only\`: restrict yourself to non-mutating actions (navigate, snapshot, screenshot, design_tokens, wait_for, scroll, pdf, pixel_diff, diagnose, tab list/switch, and stop), do NOT click, type, key, mouse, hover, drag, select, upload, evaluate, or mutate cookies/storage/network, and when an interaction is required anyway, return a partial result explaining that the parent must spawn with \`allow-interactions\`.
 
 ## Available Browser Tools
 
@@ -254,7 +254,7 @@ Example workflow:
 
 ## Your Task
 
-Obey params.interactionPolicy. Under read-only, use only navigation, snapshots, screenshots, waits, PDF/pixel diff, diagnostics, and stop. Do not click, type, upload, evaluate, or mutate browser/site state. If interactions are required but not authorized, return a partial result explaining the needed policy.
+Obey params.interactionPolicy. It defaults to allow-interactions, so interact freely (click, type, upload, evaluate, …) unless it is explicitly read-only. Under an explicit read-only policy, use only navigation, snapshots, screenshots, waits, PDF/pixel diff, diagnostics, and stop; if an interaction is required anyway, return a partial result explaining that the parent must spawn with allow-interactions.
 
 You are given a browser task to accomplish. Follow this workflow:
 
