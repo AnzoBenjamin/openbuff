@@ -117,3 +117,14 @@ export function getMemoryAuthoritySelection(
  * or when you need to set environment variables at runtime.
  */
 export const getSystemProcessEnv = (): NodeJS.ProcessEnv => process.env
+
+/**
+ * Whether an environment variable is set to a non-empty value. For UI
+ * affordances like the provider picker's key-status hints; components must
+ * read env presence through here, not process.env directly (the
+ * env-architecture guard enforces it).
+ */
+export function isEnvVarSet(name: string): boolean {
+  const value = getSystemProcessEnv()[name]
+  return typeof value === 'string' && value.length > 0
+}

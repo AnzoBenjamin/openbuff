@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { MultilineInput } from './multiline-input'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
-import { getSystemProcessEnv } from '../utils/env'
+import { getSystemProcessEnv, isEnvVarSet } from '../utils/env'
 import { createTextPasteHandler } from '../utils/strings'
 import { BORDER_CHARS } from '../utils/ui-constants'
 
@@ -673,7 +673,7 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
                 <text style={{ fg: theme.muted }}>
                 {' '}
                 {item.kind === 'preset' && item.env
-                  ? process.env[item.env]
+                  ? isEnvVarSet(item.env)
                     ? `${item.description} · key set (${item.env})`
                     : `${item.description} · set ${item.env}`
                   : item.description}
