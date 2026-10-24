@@ -17,6 +17,8 @@ import {
   type MemoryVerifyOutcome,
   type MemoryVerifyRequest,
 } from '@codebuff/common/types/memory-v2'
+import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
 
 export type { MemoryAuthorityMode }
 
@@ -174,6 +176,27 @@ export type MemoryObservationStatusReadOutcome =
     }
 
 /**
+ * One bounded recall hit from the persisted compaction-archive search. The
+ * snippet is a bounded substring of the archived tool-message body, centered
+ * on the first match occurrence.
+ */
+export interface ContextArchiveSearchMatch {
+  runId: string
+  archivedAt: number
+  step: number
+  toolName: string
+  toolCallId: string
+  snippet: string
+}
+
+/** Runtime-neutral persisted context-archive search outcome. */
+export interface ContextArchiveSearchOutcome {
+  matches: ContextArchiveSearchMatch[]
+  /** Count of distinct (runId, archivedAt) snapshots actually scanned. */
+  snapshotsSearched: number
+}
+
+/**
  * Runtime-neutral persistence boundary for Memory V2.
  *
  * Implementations own storage and concurrency. Append inputs are event drafts;
@@ -207,6 +230,18 @@ export interface MemoryRepositoryV2 {
   getObservationStatus?(
     params: MemoryObservationStatusReadRequest,
   ): Promise<MemoryObservationStatusReadOutcome>
+  /**
+   * Optional procedural-memory (playbook) surface. Absent on fakes and on
+   * backends without playbook support; callers must narrow before use (see
+   * getStoreStats). The coordinator loads active playbooks through these and
+   * the runtime playbook gate enforces them.
+   */
+  listPlaybooks?(workspaceId: string): Promise<MemoryPlaybook[]>
+  ensureSeedPlaybooks?(workspaceId: string): Promise<void>
+  recordPlaybookGateOutcome?(
+    playbookId: string,
+    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive',
+  ): Promise<void>
   /** Optional privileged GC surface. Absent on fakes; fail-closed when missing. */
   getStoreStats?(request: { projectId: ProjectId }): Promise<MemoryStoreStats>
   selectGCandidates?(request: {
@@ -217,6 +252,39 @@ export interface MemoryRepositoryV2 {
   privilegedCompact?(
     input: PrivilegedCompactionInput,
   ): Promise<PrivilegedCompactionResult>
+  /**
+   * Optional durable persistence of the compaction archive
+   * (AgentState.compactionArchive), keyed by the session run id, enabling
+   * cross-session recall_context. Implementations must be idempotent per
+   * runId: the in-memory archive is the capped truth, so a re-persist of the
+   * same run fully replaces that run's stored rows. Absent on fakes that do
+   * not own durable archive storage; callers must narrow before use.
+   */
+  persistContextArchiveSnapshots?(request: {
+    runId: string
+    snapshots: ContextArchiveSnapshot[]
+  }): Promise<{ persisted: number; skipped: number }>
+  /**
+   * Optional bounded load of persisted compaction-archive snapshots, newest
+   * first (the caller reverses as needed). Without runId, returns snapshots
+   * across all runs. Absent on fakes that do not own durable archive storage;
+   * callers must narrow before use.
+   */
+  loadContextArchiveSnapshots?(request: {
+    runId?: string
+    limit?: number
+  }): Promise<{ snapshots: ContextArchiveSnapshot[] }>
+  /**
+   * Optional bounded search over the persisted compaction archive. Must never
+   * throw on query failure — an unusable index degrades to a bounded scan or
+   * an empty result (fail-open, matching the runtime recall contract).
+   * Absent on fakes that do not own durable archive storage; callers must
+   * narrow before use.
+   */
+  searchContextArchive?(request: {
+    query: string
+    limit?: number
+  }): Promise<ContextArchiveSearchOutcome>
   /** Alias some drivers expose for GC inspection. */
   inspectForGC?(request: {
     projectId: ProjectId

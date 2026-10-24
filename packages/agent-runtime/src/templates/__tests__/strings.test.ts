@@ -1109,6 +1109,124 @@ describe('getAgentPrompt', () => {
         ),
       ).toBe(`${baseline} [context ~200k]`)
     })
+
+    test('appends the optional-params hint with enum values for thinker-like params', () => {
+      // Thinker's spawnerPrompt does not name its optional params, so parents
+      // guess e.g. depth: 3 and burn a failed spawn + retry. The hint must
+      // surface the enum inline so the parent can pick a valid value.
+      const thinkerTemplate = createMockAgentTemplate({
+        id: 'thinker',
+        displayName: 'Theo the Theorizer',
+        spawnerPrompt:
+          'Makes a focused architecture, design, or root-cause decision from a self-contained evidence packet. It has read-only repository access (read_files) to verify evidence but does not inherit conversation history, so include evidence, constraints, options, and unknowns.',
+        inputSchema: {
+          params: {
+            type: 'object',
+            properties: {
+              depth: {
+                type: 'string',
+                enum: ['shallow', 'deep'],
+              },
+              outputSchemaHint: { type: 'string' },
+            },
+            required: [],
+          },
+        } as unknown as AgentTemplate['inputSchema'],
+      })
+
+      expect(formatCompactAgentCatalogLine('thinker', thinkerTemplate)).toBe(
+        '- thinker: Makes a focused architecture, design, or root-cause decision from a self-contained evidence packet. It has read-only repository access (read_files) to verify evidence but does not inherit conversation history, so include evidence, constraints, options, and unknowns. Optional params: depth (enum: "shallow"|"deep"), outputSchemaHint (string).',
+      )
+    })
+
+    test('appends the optional-params hint for zod params schemas too', () => {
+      const researcherTemplate = createMockAgentTemplate({
+        id: 'researcher',
+        displayName: 'Researcher',
+        spawnerPrompt: 'Researches a question in depth',
+        inputSchema: {
+          params: z.object({
+            focus: z.string(),
+            verbose: z.boolean().optional(),
+          }),
+        },
+      })
+
+      expect(
+        formatCompactAgentCatalogLine('researcher', researcherTemplate),
+      ).toBe(
+        '- researcher: Researches a question in depth Required params: `focus`. Optional params: verbose (boolean).',
+      )
+    })
+
+    test('keeps the catalog byte-identical when every param is already named in spawnerPrompt', () => {
+      // Covers the promptNamesParamKey risk: an OPTIONAL param named in the
+      // spawnerPrompt (identifier form) must not double-render as a hint, and
+      // fully-named params must leave the line byte-identical to before.
+      const basherTemplate = createMockAgentTemplate({
+        id: 'basher',
+        displayName: 'Basher',
+        spawnerPrompt:
+          'Runs a shell command, e.g. params: { command: "pwd", timeout_seconds: 30 }',
+        inputSchema: {
+          params: z.object({
+            command: z.string(),
+            timeout_seconds: z.number().optional(),
+          }),
+        },
+      })
+
+      expect(formatCompactAgentCatalogLine('basher', basherTemplate)).toBe(
+        '- basher: Runs a shell command, e.g. params: { command: "pwd", timeout_seconds: 30 }',
+      )
+    })
+
+    test('bounds a long optional-params hint with an ellipsis', () => {
+      const properties: Record<string, unknown> = {}
+      for (let i = 0; i < 40; i++) {
+        properties[`option_${i}`] = { type: 'string' }
+      }
+      const wideTemplate = createMockAgentTemplate({
+        id: 'wide-agent',
+        displayName: 'Wide Agent',
+        spawnerPrompt: 'Accepts many optional knobs',
+        inputSchema: {
+          params: { type: 'object', properties, required: [] },
+        } as unknown as AgentTemplate['inputSchema'],
+      })
+
+      const line = formatCompactAgentCatalogLine('wide-agent', wideTemplate)
+      const marker = ' Optional params: '
+      const start = line.indexOf(marker)
+      expect(start).toBeGreaterThan(-1)
+      const hint = line.slice(start)
+      // The summary is capped at 240 chars: ' Optional params: ' + summary + '.'
+      expect(hint.length).toBeLessThanOrEqual(marker.length + 240 + 1)
+      // Truncation lands with the ellipsis just before the closing period.
+      expect(hint.endsWith('….')).toBe(true)
+    })
+
+    test('renders no optional-params hint and no crash for a params schema that cannot convert', () => {
+      const problematicTemplate = createMockAgentTemplate({
+        id: 'problematic-agent',
+        displayName: 'Problematic Agent',
+        spawnerPrompt: 'Spawn with an exotic params schema',
+        inputSchema: {
+          prompt: z.string(),
+          params: z.function(),
+        } as unknown as AgentTemplate['inputSchema'],
+      })
+
+      expect(() =>
+        formatCompactAgentCatalogLine(
+          'problematic-agent',
+          problematicTemplate,
+        ),
+      ).not.toThrow()
+      expect(
+        formatCompactAgentCatalogLine('problematic-agent', problematicTemplate),
+      ).toBe('- problematic-agent: Spawn with an exotic params schema')
+    })
   })
 
   test('uses harvested-text addendum when set_output is programmatic-only', async () => {

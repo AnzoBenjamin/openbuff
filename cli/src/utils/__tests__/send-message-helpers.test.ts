@@ -279,12 +279,28 @@ describe('autoCollapseBlocks', () => {
         agentName: 'Test',
         agentType: 'test',
         content: '',
-        status: 'running',
+        status: 'complete',
       },
     ]
 
     const result = autoCollapseBlocks(blocks)
     expect((result[0] as AgentContentBlock).isCollapsed).toBe(true)
+  })
+
+  test('keeps running agent blocks visible', () => {
+    const blocks: ContentBlock[] = [
+      {
+        type: 'agent',
+        agentId: '1',
+        agentName: 'Test',
+        agentType: 'test',
+        content: '',
+        status: 'running',
+      },
+    ]
+
+    const result = autoCollapseBlocks(blocks)
+    expect((result[0] as AgentContentBlock).isCollapsed).toBeUndefined()
   })
 
   test('collapses tool blocks', () => {
@@ -309,7 +325,7 @@ describe('autoCollapseBlocks', () => {
         agentName: 'Parent',
         agentType: 'parent',
         content: '',
-        status: 'running',
+        status: 'complete',
         blocks: [
           {
             type: 'agent',
@@ -317,7 +333,7 @@ describe('autoCollapseBlocks', () => {
             agentName: 'Child',
             agentType: 'child',
             content: '',
-            status: 'running',
+            status: 'complete',
           },
         ],
       },
@@ -372,7 +388,7 @@ describe('autoCollapsePreviousMessages', () => {
             agentName: 'Test',
             agentType: 'test',
             content: '',
-            status: 'running',
+            status: 'complete',
           },
         ],
         timestamp: '',
@@ -1693,6 +1709,59 @@ describe('extractSpawnAgentResultContent', () => {
 
     expect(result.content).toBe('')
     expect(result.hasError).toBe(false)
+  })
+
+  test('reconstructs editor report from per-delta assistant fragments in order', () => {
+    // Simulate a transcript whose trailing run of text-only assistant
+    // messages arrives as many per-delta fragments. The walk must stop at
+    // the first non-text assistant message (the image part) and the first
+    // non-assistant message (the user turn), and join the collected
+    // fragments with '' (no separator) in transcript order.
+    const fragmentCount = 500
+    const fragments = Array.from(
+      { length: fragmentCount },
+      (_, i) => `frag${i}-`,
+    )
+    const result = extractSpawnAgentResultContent({
+      type: 'structuredOutput',
+      value: {
+        status: 'complete',
+        changedFiles: ['a.ts', 'b.ts'],
+        output: {
+          messages: [
+            { role: 'user', content: 'do work' },
+            { role: 'assistant', content: [{ type: 'image', image: 'x' }] },
+            ...fragments.map((text) => ({
+              role: 'assistant',
+              content: [{ type: 'text', text }],
+            })),
+          ],
+        },
+      },
+    })
+
+    expect(result.hasError).toBe(false)
+    expect(result.content).toContain('Status: complete')
+    expect(result.content).toContain('Changed files:')
+    expect(result.content).toContain('- a.ts')
+    expect(result.content).toContain('- b.ts')
+    // Joined with '' in transcript order, not reversed and not '\n'-joined.
+    expect(result.content).toContain(fragments.join(''))
+  })
+
+  test('caps the reconstructed editor report at 4000 chars', () => {
+    const result = extractSpawnAgentResultContent({
+      type: 'structuredOutput',
+      value: {
+        output: {
+          messages: [{ role: 'assistant', content: 'x'.repeat(5000) }],
+        },
+      },
+    })
+
+    expect(result.hasError).toBe(false)
+    expect(result.content).toContain('…[truncated]')
+    expect(result.content).not.toContain('x'.repeat(3801))
   })
 })
 

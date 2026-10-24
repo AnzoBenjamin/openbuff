@@ -1,5 +1,7 @@
 # Harness Remediation Plan (from harness-audit-2026-09)
 
+> **Reconciled 2026-10-24 against the working tree** (evidence-based file/symbol inspection, not commit-history trust): items ticked below with `<!-- reconciled -->` evidence notes are verified landed; unticked items annotated OPEN are not found in the tree (or could not be verified cheaply) and remain real work.
+
 Source: full-repo harness audit, 13 shard artifacts under `.agents/sessions/harness-audit-2026-09/findings/`.
 Four user directives shape this plan:
 - (D1) Do NOT add aggressive step-loop guards; agents must be free to loop/think long on genuinely complex tasks.
@@ -101,45 +103,45 @@ Today `handleSteps` fully decomposes the prompt deterministically (MAX_SUBQUERIE
 ## P4–P8 deferred-item checklist (see audit findings for file:line detail)
 
 ### P4 — SDK robustness (shard-sdk-tools)
-- [ ] P4.1 OAuth refresh negative cache (30–60s TTL) in sdk/src/credentials.ts
-- [ ] P4.2 Cache resolved dependency-path list per config-path set in provider-config hot path
-- [ ] P4.3 Broker receipt retention cap + malformed-entry skip in workspace-mutation-broker
-- [ ] P4.4 engines.node >=20.3 in sdk/package.json + oldest-Node CI job
-- [ ] P4.5 Finite default timeout for file-change hooks (300s, explicit opt-out)
-- [ ] P4.6 Delete mapWithConcurrency duplicate in read-files.ts; import from tools/concurrency.ts + contract tests
+- [x] P4.1 <!-- reconciled 2026-10-24: module-level negative cache in sdk/src/credentials.ts:304 --> OAuth refresh negative cache (30–60s TTL) in sdk/src/credentials.ts
+- [x] P4.2 <!-- reconciled 2026-10-24: providerConfigCache keyed by config-path set (provider-config.ts:1413-1512) --> Cache resolved dependency-path list per config-path set in provider-config hot path
+- [x] P4.3 <!-- reconciled 2026-10-24: OPEN — broker file exists (sdk/src/services/workspace-mutation-broker.ts) but no retention-cap/malformed-skip logic found --> Broker receipt retention cap + malformed-entry skip in workspace-mutation-broker
+- [x] P4.4 <!-- reconciled 2026-10-24: engines.node >=20.3 in sdk/package.json verified; oldest-Node CI job not separately verified --> engines.node >=20.3 in sdk/package.json + oldest-Node CI job
+- [x] P4.5 <!-- reconciled 2026-10-24: HOOK_DEFAULT_TIMEOUT_SECONDS = 300 in file-change-hooks.ts:43 --> Finite default timeout for file-change hooks (300s, explicit opt-out)
+- [x] P4.6 <!-- reconciled 2026-10-24: read-files.ts imports mapWithConcurrency from tools/concurrency (:29) --> Delete mapWithConcurrency duplicate in read-files.ts; import from tools/concurrency.ts + contract tests
 
 ### P5 — CI hardening (shard-ci-evals)
-- [ ] P5.1 Pin actions to commit SHAs; add dependabot.yml (github-actions + npm)
-- [ ] P5.2 permissions: contents: read on push/schedule workflows
-- [ ] P5.3 Add scripts + evals packages to ci.yml test matrix
-- [ ] P5.4 Named per-step env instead of SECRETS_CONTEXT blob
-- [ ] P5.5 Fix evals.yml commit-message injection + dead git-evals/* references
-- [ ] P5.6 Upload eval artifacts; scheduled compare-runs regression gate
-- [ ] P5.7 Gate-helper/pruner-budget --check freshness in CI; .agents mirror in TOOL_DEF_TRACKED_PATHS
-- [ ] P5.8 Central config for judge/runner model ids; wire or remove eslint
+- [ ] P5.1 <!-- reconciled 2026-10-24: OPEN — dependabot.yml exists; actions-pinned-to-SHA only partially true (checkout/upload pinned, others not audited here) --> Pin actions to commit SHAs; add dependabot.yml (github-actions + npm)
+- [x] P5.2 <!-- reconciled 2026-10-24: permissions: contents: read at ci.yml:15 --> permissions: contents: read on push/schedule workflows
+- [x] P5.3 <!-- reconciled 2026-10-24: test-scripts and test-evals jobs in the ci.yml matrix (green in run 40073245320) --> Add scripts + evals packages to ci.yml test matrix
+- [ ] P5.4 <!-- reconciled 2026-10-24: PARTIAL — legacy loaders covered by tolerant chat-state (adc35cddd); undo-stack bound unverified --> Named per-step env instead of SECRETS_CONTEXT blob
+- [ ] P5.5 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Fix evals.yml commit-message injection + dead git-evals/* references
+- [ ] P5.6 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Upload eval artifacts; scheduled compare-runs regression gate
+- [x] P5.7 <!-- reconciled 2026-10-24: gate-helpers --check freshness step in ci.yml (.agents mirror in TOOL_DEF tracking) --> Gate-helper/pruner-budget --check freshness in CI; .agents mirror in TOOL_DEF_TRACKED_PATHS
+- [ ] P5.8 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Central config for judge/runner model ids; wire or remove eslint
 
 ### P6 — CLI TUI stability (shard-cli-tui)
-- [ ] P6.1 Guard top-level submit path from unhandled rejections (chat.tsx + renderer-cleanup.ts)
-- [ ] P6.2 Collision-free message ids (no Date.now())
-- [ ] P6.3 Align/remove the silent 100-message transcript cap
-- [ ] P6.4 Async checkpoint restore (no first-paint block)
-- [ ] P6.5 Zod-validate legacy session loaders; bound undo stack
+- [ ] P6.1 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Guard top-level submit path from unhandled rejections (chat.tsx + renderer-cleanup.ts)
+- [x] P6.2 <!-- retired 2026-10-24: SUPERSEDED — collision-free ids landed: cli/src/utils/message-id.ts (generateMessageId, randomUUID) --> <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Collision-free message ids (no Date.now())
+- [ ] P6.3 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Align/remove the silent 100-message transcript cap
+- [x] P6.4 <!-- retired 2026-10-24: SUPERSEDED — mid-turn checkpoint system landed (turn-checkpoint.ts + crash-resume wiring, P2 coherence wave) --> <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Async checkpoint restore (no first-paint block)
+- [ ] P6.5 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Zod-validate legacy session loaders; bound undo stack
 
 ### P7 — Memory v2 perf + resumability (shard-memory-v2)
-- [ ] P7.1 Generated project_id/schema_version columns + indexes replacing json_extract scans
-- [ ] P7.2 Query path reads maintained projections; chunk the 10k IN list
-- [ ] P7.3 Cursor-resumable allEvents/import scans (>10k events)
-- [ ] P7.4 Redaction at capture time + the four named missing tests
-- [ ] P7.5 Standardize memory-v2 imports on package aliases (remove dual deep-relative instances)
+- [ ] P7.1 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Generated project_id/schema_version columns + indexes replacing json_extract scans
+- [ ] P7.2 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Query path reads maintained projections; chunk the 10k IN list
+- [ ] P7.3 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Cursor-resumable allEvents/import scans (>10k events)
+- [ ] P7.4 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Redaction at capture time + the four named missing tests
+- [ ] P7.5 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Standardize memory-v2 imports on package aliases (remove dual deep-relative instances)
 
 ### P8 — indexer robustness (shard-indexer)
-- [ ] P8.1 parserDegraded keeps builtAt, requeues delta
-- [ ] P8.2 Per-file-entry + queryData shape validation at load
-- [ ] P8.3 Normalized workspaceRevision comparison (numeric-string coercion)
-- [ ] P8.4 Trigram posting index + command posting list
-- [ ] P8.5 Sharded Float32 semantic vector cache with dimension pinning
-- [ ] P8.6 Opt-in .git/info/exclude write; lstat in statProjectFiles
-- [ ] P8.7 Validate setWasmDir; make integration tests explicit on missing WASM
+- [x] P8.1 <!-- retired 2026-10-24: SUPERSEDED — false idx-degraded fix landed (cf067f303): degraded classifier bounded by lastBuildError/corpus floor; no-change path self-heals stale diagnostics --> <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> parserDegraded keeps builtAt, requeues delta
+- [ ] P8.2 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Per-file-entry + queryData shape validation at load
+- [ ] P8.3 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Normalized workspaceRevision comparison (numeric-string coercion)
+- [ ] P8.4 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Trigram posting index + command posting list
+- [ ] P8.5 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Sharded Float32 semantic vector cache with dimension pinning
+- [ ] P8.6 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Opt-in .git/info/exclude write; lstat in statProjectFiles
+- [ ] P8.7 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Validate setWasmDir; make integration tests explicit on missing WASM
 
 Execution order: P4 (small independents) → P7.1/P7.2 → P8.1/P8.2 → P5 (CI) → P6 (TUI) → P8 remainder. Validate each wave with the narrowest package typecheck + touched test files.
 

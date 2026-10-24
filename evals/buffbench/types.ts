@@ -1,6 +1,10 @@
 import type { JudgingResult, ScoringStatus } from './judge'
 import type { IdiomTraceabilityEvaluation } from './idiom-traceability-signals'
-import type { ApplyProposalsResult, Proposal } from './proposals'
+import type {
+  ApplyProposalsResult,
+  Proposal,
+  ProposalPromotionDecision,
+} from './proposals'
 import type { ThinkerHarvestEvaluation } from './thinker-harvest-signals'
 
 export interface FileState {
@@ -164,6 +168,14 @@ export interface ProposalDryRunReport {
   skippedCount: number
   summary: string[]
   perProposal: ApplyProposalsResult['perProposal']
+  /**
+   * Audit MEDIUM (promotion gate never invoked in the live pipeline): the
+   * decideProposalPromotion verdict for this dry run, recorded by runTask.
+   * Additive-optional so trace/analysis consumers predating the field are
+   * unaffected. Recorded only — never auto-applied (actual promotion belongs
+   * to the P8-T5 candidate channel).
+   */
+  promotionDecision?: ProposalPromotionDecision
 }
 
 export interface EvalRun {
@@ -197,4 +209,10 @@ export interface AgentEvalResults {
   averageIdiomScore?: number
   averageCost: number
   averageDuration: number
+  /** Standard error of the measured-run overall scores. Optional for back-compat. */
+  scoreStandardError?: number
+  /** averageScore / averageCost, using the same cost unit as averageCost. Optional. */
+  scorePerDollar?: number
+  /** Number of measured (non-synthetic) runs contributing to averageScore. Optional. */
+  measuredRunCount?: number
 }

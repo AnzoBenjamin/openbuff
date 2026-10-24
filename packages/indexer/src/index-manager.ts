@@ -11,6 +11,11 @@ import {
 } from './index-store'
 import { queryIndex, type QueryOptions } from './query'
 import {
+  mergeScipEdgesIntoIndex,
+  parseScipJson,
+  scipPreciseEdges,
+} from './scip-ingest'
+import {
   buildFileVectors,
   fileEmbeddingHash,
   getSemanticConfigFingerprint,
@@ -206,12 +211,12 @@ export class IndexManager {
    * Advance this holder's epoch after forwarding a mutation signal to the
    * registered singleton (see {@link markStale}). The pre-forward epoch is
    * read exactly once and the write is derived from that single captured
-   * value, so the read-modify-write on the shared field is one atomic step:
-   * two concurrent forwarded signals (or a forwarded signal racing a local
-   * mutation) can never both read the same pre-forward epoch and collapse
-   * two distinct mutation signals into a single advance of the documented
-   * strictly-monotonic per-instance epoch (reliability finding
-   * detached-epoch-forward-not-atomic).
+   * value in one synchronous expression — this method is single-threaded
+   * synchronous JS (not lock-atomic), but two forwarded signals (or a
+   * forwarded signal racing a local mutation) can never both read the same
+   * pre-forward epoch and collapse two distinct mutation signals into a
+   * single advance of the documented strictly-monotonic per-instance epoch
+   * (reliability finding detached-epoch-forward-not-atomic).
    */
   private advanceEpochAfterForward(singletonEpoch: number): void {
     const epochBeforeForward = this.mutationEpoch
@@ -394,6 +399,12 @@ export class IndexManager {
       from?: string
       to?: string
       lexicalWeights?: LexicalWeights
+      /**
+       * Blend weight for the personalized-PageRank component (P3-T9); see
+       * {@link QueryOptions.pageRankWeight}. Default: absent (= 0, opt-in) —
+       * omitting it keeps ranking byte-identical to the lexical baseline.
+       */
+      pageRankWeight?: number
     } = {},
   ): {
     results: QueryIndexResult[]
@@ -477,6 +488,12 @@ export class IndexManager {
       from?: string
       to?: string
       lexicalWeights?: LexicalWeights
+      /**
+       * Blend weight for the personalized-PageRank component (P3-T9); see
+       * {@link QueryOptions.pageRankWeight}. Default: absent (= 0, opt-in) —
+       * omitting it keeps ranking byte-identical to the lexical baseline.
+       */
+      pageRankWeight?: number
     } = {},
   ): Promise<{
     results: QueryIndexResult[]
@@ -787,8 +804,156 @@ export class IndexManager {
     )
   }
 
+  /**
+   * P3-T4 production wiring: read accessor for the manager's current index
+   * snapshot, for callers that run an out-of-band enrichment pass (e.g. the
+   * `/index scip` CLI path) against a captured snapshot and then adopt the
+   * merged result via {@link adoptMergedIndex}. Returns null until a build
+   * has produced an index.
+   */
+  getSnapshot(): MetadataIndex | null {
+    // Detached-instance gate: serve the registered singleton's snapshot,
+    // mirroring every other query/readiness seam.
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) return registered.getSnapshot()
+    return this.index
+  }
+
+  /**
+   * P3-T4 production wiring: adopt an externally merged snapshot (e.g. the
+   * merged result of `runScipIngest`) into the live manager — but only when
+   * the manager's CURRENT snapshot is still the one the caller captured,
+   * keyed by the existing content-addressed snapshotId machinery (the same
+   * {@link getSnapshotIdentity} helper the query seams and `_build`'s
+   * verification use). A concurrent rebuild between snapshot capture and
+   * adopt changes the current snapshotId, so the merge is refused (returns
+   * false) and the caller must rerun its scan against the fresh snapshot
+   * instead of silently grafting stale precise edges onto a rebuilt index.
+   *
+   * Persistence: rides the same async `saveIndex` CAS flow `_build` uses,
+   * keyed on the current snapshot's builtAt so a concurrent writer wins
+   * gracefully instead of being clobbered by the merged snapshot. When the
+   * save wins, the persisted snapshot is verified fail-closed (mirroring
+   * `_build`) and merged precise edges survive across sessions. If the
+   * merged edges stay in memory only until the next successful adopt (the
+   * lost-CAS branch serves the concurrent on-disk snapshot, discarding the
+   * adopter's merged edges); any persistence error degrades to the
+   * in-memory-only adoption. Persistence is an upgrade, not a correctness
+   * gate: the boolean result still only reports adopt (true) vs.
+   * stale-snapshot refusal (false) and never reflects persistence success.
+   */
+  async adoptMergedIndex(
+    merged: MetadataIndex,
+    expectedSnapshotId: string,
+  ): Promise<boolean> {
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) {
+      return registered.adoptMergedIndex(merged, expectedSnapshotId)
+    }
+    const current = this.index
+    if (!current) return false
+    if (this.getSnapshotIdentity(current).snapshotId !== expectedSnapshotId) {
+      return false
+    }
+    try {
+      const cacheDir = this.config.cacheDir ?? '.codebuff-index'
+      const persisted = await saveIndex(merged, this.projectRoot, cacheDir, {
+        expectedBuiltAt: current.builtAt,
+      })
+      if (persisted) {
+        // Fail-closed verification: only trust disk when it still holds the
+        // snapshot we just saved. Verified by comparing snapshot content
+        // directly rather than by re-deriving a content digest, so the check
+        // cannot be silently disabled if this module's identity hash and
+        // index-store's ever drift apart. A mismatch falls back to the
+        // in-memory merged index so a concurrent writer can't swap content
+        // under us.
+        let verified: MetadataIndex | null = null
+        try {
+          verified = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          verified = null
+        }
+        if (verified && !isSameIndexSnapshot(verified, merged)) {
+          verified = null
+        }
+        if (!verified) {
+          console.warn(
+            '[indexer] persisted index failed snapshot verification; serving the in-memory index.',
+          )
+        }
+        this.index = verified ?? merged
+      } else {
+        // Our save lost the CAS race: preserve concurrent-newest-wins by
+        // serving the newest on-disk index (unverified). The read is guarded
+        // so a failed read can't discard the merge entirely; the merged
+        // precise edges then stay in memory only for this session.
+        let onDisk: MetadataIndex | null = null
+        try {
+          onDisk = await loadIndex(this.projectRoot, cacheDir)
+        } catch {
+          onDisk = null
+        }
+        this.index = onDisk ?? merged
+        console.debug(
+          '[indexer] merged snapshot adoption lost the saveIndex CAS race; merged precise edges stay in memory only for this session.',
+        )
+      }
+    } catch (err) {
+      // Persistence is an upgrade, not a correctness gate: any error here
+      // degrades to the previous in-memory-only adoption.
+      console.debug('[indexer] merged snapshot persistence failed:', err)
+      this.index = merged
+    }
+    // Mirror _build's snapshot swap: assign, then drop the identity cache so
+    // the adopted snapshot's identity is derived fresh on next use.
+    this.snapshotCache = undefined
+    return true
+  }
+
+  /**
+   * Opt-in SCIP ingestion (P3-T4): parse an already-produced SCIP JSON
+   * document and merge its precise cross-reference edges into the manager's
+   * current index snapshot. The merge is in-memory only — a subsequent
+   * refresh rebuild replaces the snapshot from disk, so callers that want the
+   * merge to survive should pair this with their own persistence story.
+   * Automatic refresh-time scip-* running is deliberately deferred (cost
+   * control); see `scip-runner.ts` for the explicit opt-in runner.
+   *
+   * Fails closed: a malformed dump throws the typed `ScipIngestError` from
+   * scip-ingest; an index that is not built yet throws `Error`.
+   *
+   * @returns the number of precise edges added by the merge.
+   */
+  ingestScipDump(dumpJson: unknown): number {
+    if (!this.index) {
+      throw new Error(
+        'ingestScipDump requires a built index; call waitUntilReady() first.',
+      )
+    }
+    const scip = parseScipJson(dumpJson)
+    // Count exactly what the merge adds (the documented contract): each
+    // deduped precise edge that lands in the merged snapshot — including one
+    // that supersedes a heuristic duplicate of the same (from, to, type)
+    // tuple. A raw graph-edge length delta would net to 0 here (and go
+    // negative when one precise edge supersedes several heuristic
+    // duplicates), because the merge replaces heuristic edges instead of
+    // appending alongside them.
+    const preciseEdges = scipPreciseEdges(scip)
+    const merged = mergeScipEdgesIntoIndex(this.index, preciseEdges)
+    this.index = merged.index
+    return merged.edgesMerged
+  }
+
   getStatus(): IndexStatus {
-    this.scheduleRefreshIfNeeded()
+    // READ-ONLY status peek: no build-loop side effects here. The 2s UI chip
+    // poll (peekIndexStatus in cli/src/utils/index-status.ts) calls this
+    // method synchronously; scheduling ensureBuilt() from a poll tick made
+    // UI reads mutate build-loop state (sticky forceRefresh + the 30s retry
+    // window can pin 'idx stale'/'idx refreshing' with zero CPU activity).
+    // Refresh scheduling belongs to awaiter/query paths that already call
+    // scheduleRefreshIfNeeded() explicitly (waitUntilReady, query,
+    // queryBlended).
     const indexAge = this.index ? Date.now() - this.index.builtAt : 0
     const refreshing = Boolean(this.buildPromise || this.staleRefreshPending)
     const stale = Boolean(
@@ -799,6 +964,22 @@ export class IndexManager {
         isIndexStale(this.index)),
     )
     const diagnostics = this.index?.parseDiagnostics ?? []
+    // Whole-index 'degraded' should reflect a genuine build-level failure or a
+    // non-negligible number of per-file parse failures — NOT budget-driven
+    // coverage truncation (the expected outcome for a large healthy repo,
+    // already surfaced via coverageNotice) and NOT a handful of diagnostics
+    // out of thousands of files. Small repos degrade on a single failure;
+    // large repos tolerate a bounded handful. coverage.parser.truncated is
+    // intentionally excluded from this trigger: budget truncation is a notice,
+    // and failure-driven skips are already counted through `diagnostics`.
+    const corpusSize =
+      this.index?.fileCount || Object.keys(this.index?.files ?? {}).length
+    const parseFailureFloor = Math.min(
+      10,
+      Math.max(1, Math.ceil(corpusSize * 0.05)),
+    )
+    const indexDegraded =
+      Boolean(this.lastBuildError) || diagnostics.length >= parseFailureFloor
     const state: IndexStatus['state'] =
       this.config.enabled === false
         ? 'disabled'
@@ -808,9 +989,7 @@ export class IndexManager {
             : this.lastBuildError
               ? 'failed'
               : 'empty'
-          : diagnostics.length > 0 ||
-              this.lastBuildError ||
-              this.index.coverage?.parser?.truncated
+          : indexDegraded
             ? 'degraded'
             : stale
               ? 'stale'
@@ -959,6 +1138,11 @@ function mergeMutationDeltas(
 ): IndexMutationDelta {
   // P8.3: select the max revision with numeric-aware comparison; plain string
   // territory ("10" < "9") would let an older-dated delta win the merge.
+  // Mixed-type numeric tie (e.g. `9` vs `'9'`, `'09'` vs `9`): compareRevisions
+  // returns 0 and the incoming revision wins verbatim — an arbitrary but
+  // harmless tiebreak, because every consumer (the staleness check in
+  // updateMetadataIndex) compares through the same numeric-aware key, so the
+  // stored revision's string/number type never re-enters a raw comparison.
   const revision =
     current?.revision !== undefined &&
     next.revision !== undefined &&

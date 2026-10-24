@@ -4,7 +4,6 @@ import { memo, useMemo } from 'react'
 import { useTheme } from '../../hooks/use-theme'
 import { calculateDisplaySize } from '../../utils/image-display'
 import {
-  renderInlineImage,
   supportsInlineImages,
   getImageSupportDescription,
 } from '../../utils/terminal-images'
@@ -28,22 +27,18 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
     [width, height, availableWidth],
   )
 
-  // Try to render inline if supported
-  const inlineSequence = useMemo(() => {
+  // D47 Stage 4: gate native <image> rendering on our own protocol detection
+  // module (kept as the source of truth per the migration plan). OpenTUI
+  // 0.5.12's ImageRenderable picks the actual wire protocol itself via
+  // protocol: 'auto' (options verified against
+  // node_modules/@opentui/core/renderables/Image.d.ts).
+  const canRenderNatively = useMemo(() => {
     if (!image.trim()) {
-      return null
+      return false
     }
 
-    if (!supportsInlineImages()) {
-      return null
-    }
-
-    return renderInlineImage(image, {
-      width: displaySize.width,
-      height: displaySize.height,
-      filename,
-    })
-  }, [image, filename, displaySize])
+    return supportsInlineImages()
+  }, [image])
 
   // Format file size
   const formattedSize = useMemo(() => {
@@ -64,8 +59,12 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
     return match ? match[1].toUpperCase() : null
   }, [filename, mediaType])
 
-  if (inlineSequence) {
-    // Render inline image using terminal escape sequence
+  if (canRenderNatively) {
+    // Native inline image via OpenTUI 0.5.12's <image> renderable
+    // (jsx-namespace.d.ts declares `image: ImageProps`). The source is a
+    // data-URI string — ImageSource accepts string (verified against
+    // node_modules/@opentui/core/image.d.ts) — sized in cells by
+    // calculateDisplaySize via the renderable's style width/height.
     return (
       <box style={{ flexDirection: 'column', gap: 0 }}>
         {/* Image caption/metadata */}
@@ -76,8 +75,12 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
           )}
         </text>
 
-        {/* The actual inline image - rendered via escape sequence */}
-        <text style={{ wrapMode: 'none' }}>{inlineSequence}</text>
+        {/* The actual inline image - native renderable */}
+        <image
+          source={`data:${mediaType};base64,${image}`}
+          protocol="auto"
+          style={{ width: displaySize.width, height: displaySize.height }}
+        />
       </box>
     )
   }

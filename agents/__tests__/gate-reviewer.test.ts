@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 
 import {
+  buildLightweightReceiptShape,
+  buildLightweightReviewContract,
+  buildReviewerVerdictRetryNotice,
   classifyReviewerCrash,
   collectParentOwnedRequirementBlockers,
   collectReviewerAdvisories,
@@ -12,12 +15,19 @@ import {
   collectReviewerFingerprintDrift,
   collectReviewerHardBlockers,
   detectReviewerCrash,
+  diagnoseReviewerVerdictRejection,
   getReviewerFinalizationVerdict,
   getSecurityReviewerFinalizationVerdict,
+  isLightweightReceiptEligible,
   isParentOwnedOrOutOfScopeRequirement,
   isTestCoverageReviewerFinding,
   isTransientReviewerCrash,
+  planGateReviewWaves,
+  recoverProseVerdictWithAttestation,
+  recoverStructuredReviewerOutputs,
+  shouldEscalateToFullContract,
   stripReviewerPreamble,
+  waveKey,
 } from '../base2/gate-reviewer'
 
 type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | ''
@@ -2919,6 +2929,29 @@ describe('gate-reviewer helpers', () => {
     expect(detectReviewerCrash({ errorMessage: '   ' })).toBeNull()
   })
 
+  test('detectReviewerCrash skips inner tool-result envelopes (inner tool errors are not agent crashes)', () => {
+    // A tool-result envelope for a failed inner tool call is not a
+    // reviewer-agent crash.
+    expect(
+      detectReviewerCrash({
+        toolCallId: 'call_1',
+        type: 'tool_result',
+        output: { errorMessage: 'inner tool failed' },
+      }),
+    ).toBeNull()
+    expect(
+      detectReviewerCrash({ type: 'tool_result', errorMessage: 'boom' }),
+    ).toBeNull()
+    // A sibling-level genuine crash is still detected even when a sibling is
+    // a tool-result envelope.
+    expect(
+      detectReviewerCrash({
+        a: { errorMessage: 'top' },
+        b: { toolCallId: 'x', errorMessage: 'inner' },
+      }),
+    ).toBe('top')
+  })
+
   test('isTransientReviewerCrash and classifyReviewerCrash taxonomy', () => {
     expect(isTransientReviewerCrash('rate_limit_error')).toBe(true)
     expect(isTransientReviewerCrash('Concurrency limit exceeded')).toBe(true)
@@ -3860,5 +3893,553 @@ describe('getSecurityReviewerFinalizationVerdict', () => {
 
   test('the default finalization verdict still rejects a NON_BLOCKING entry', () => {
     expect(getReviewerFinalizationVerdict(cleanSecurityReview)).toBe('')
+  })
+})
+
+// Wave 3 helpers exist ONLY as exports in gate-reviewer.ts (the generator
+// splices them into base2's <gate-helpers-generated> region), so they are
+// tested directly against the export. They are deliberately NOT part of the
+// INLINE_HELPER_NAMES parity machinery above, which covers base2.ts's own
+// inline collector copies.
+describe('gate-reviewer Wave 3 helpers', () => {
+  // A6 deterministic recovery: a schema-valid verdict JSON embedded in prose
+  // must be repaired into the recognizer's `{ type: 'json', value, ... }`
+  // shape instead of parking the gate in the no-verdict retry loop. The input
+  // carried no coverage, so the R4 mapping lands on the fail-closed 'missing'.
+  test('recoverStructuredReviewerOutputs repairs a verdict JSON embedded in prose', () => {
+    const prosePayload =
+      'I reviewed the change. My verdict follows.\n{"verdict":"BLOCKING","findings":["x"]}\nDone.'
+    expect(recoverStructuredReviewerOutputs(prosePayload)).toEqual({
+      type: 'json',
+      schemaVersion: 1,
+      value: { verdict: 'BLOCKING', coverage: 'missing', schemaVersion: 1 },
+    })
+  })
+
+  // R3: a verdict literal under a NON-slot key (decision / finalVerdict /
+  // reviewVerdict / status) is normalized onto the canonical `verdict` slot,
+  // and a recognized coverage literal passes R4 through unchanged.
+  test('recoverStructuredReviewerOutputs normalizes a non-slot verdict key', () => {
+    expect(
+      recoverStructuredReviewerOutputs(
+        'Decision made: {"decision":"non_blocking","coverage":"covered"}',
+      ),
+    ).toEqual({
+      type: 'json',
+      schemaVersion: 1,
+      value: { verdict: 'NON_BLOCKING', coverage: 'covered', schemaVersion: 1 },
+    })
+  })
+
+  // INV-A.2 (recovery never mints attestation): the repaired node carries ONLY
+  // verdict/coverage/schemaVersion. Even when the embedded JSON reports a
+  // fingerprint and reviewedFiles, recovery drops them, so the unmodified
+  // attestation check still fails closed and prompt-injected text cannot forge
+  // a snapshot receipt.
+  test('recoverStructuredReviewerOutputs never synthesizes attestation payload', () => {
+    expect(
+      recoverStructuredReviewerOutputs(
+        '{"verdict":"LOOKS_GOOD","coverage":"covered","snapshotFingerprint":"v3:' +
+          'a'.repeat(64) +
+          '","reviewedFiles":["src/a.ts"]}',
+      ),
+    ).toEqual({
+      type: 'json',
+      schemaVersion: 1,
+      value: { verdict: 'LOOKS_GOOD', coverage: 'covered', schemaVersion: 1 },
+    })
+  })
+
+  // R0 short-circuit: a result the recognizer already credits is returned
+  // VERBATIM (same reference) so recovery can never perturb a real receipt.
+  test('recoverStructuredReviewerOutputs returns an already-shaped receipt verbatim', () => {
+    const alreadyShaped = {
+      type: 'json',
+      value: {
+        schemaVersion: 1,
+        verdict: 'LOOKS_GOOD',
+        findings: [],
+        coverage: 'covered',
+      },
+    }
+    expect(recoverStructuredReviewerOutputs(alreadyShaped)).toBe(alreadyShaped)
+  })
+
+  // R5: a verdict present ONLY as a prose line is never synthesized from prose
+  // (prompt-injection guard), so with nothing recoverable the input is
+  // returned unchanged.
+  test('recoverStructuredReviewerOutputs returns the input unchanged when nothing is recoverable', () => {
+    const proseOnly = 'BLOCKING: prose line verdict only, no JSON object'
+    expect(recoverStructuredReviewerOutputs(proseOnly)).toBe(proseOnly)
+    const inert = { note: 'no verdict anywhere in this result' }
+    expect(recoverStructuredReviewerOutputs(inert)).toBe(inert)
+  })
+
+  // A7 diagnostic codes, pinned EXACTLY from the source union: a totally
+  // unstructured reply -> 'no_structured_output'; a recognizable prose verdict
+  // line with no object -> 'prose_only'; structured entries without
+  // schemaVersion -> 'unshaped_only'; a shaped receipt reaching the end of the
+  // classifier -> 'recovered' (the source applies this code to ANY shaped
+  // receipt, not only one produced by the recovery pre-pass).
+  test('diagnoseReviewerVerdictRejection pins the exact rejection codes', () => {
+    const noOutput = diagnoseReviewerVerdictRejection(
+      'nothing structured in this reply',
+      're-emit verdict',
+    )
+    expect(noOutput.code).toBe('no_structured_output')
+    expect(noOutput.summary).toBe(
+      'Reviewer returned no structured output; the gate cannot shape a verdict.',
+    )
+    expect(noOutput.recoveryStep).toBe('re-emit verdict')
+    expect(noOutput.attempt).toBe(1)
+
+    const proseOnly = diagnoseReviewerVerdictRejection('LOOKS_GOOD: ok', 'step')
+    expect(proseOnly.code).toBe('prose_only')
+    expect(proseOnly.observed).toEqual(['LOOKS_GOOD: ok'])
+
+    const unshaped = diagnoseReviewerVerdictRejection(
+      { verdict: 'BLOCKING', findings: ['x'] },
+      'step',
+    )
+    expect(unshaped.code).toBe('unshaped_only')
+    expect(unshaped.observed).toEqual(['BLOCKING'])
+
+    const creditable = diagnoseReviewerVerdictRejection(
+      {
+        type: 'json',
+        value: {
+          schemaVersion: 1,
+          verdict: 'LOOKS_GOOD',
+          findings: [],
+          coverage: 'covered',
+        },
+      },
+      'step',
+    )
+    expect(creditable.code).toBe('recovered')
+    expect(creditable.observed).toEqual(['LOOKS_GOOD'])
+  })
+
+  // On a shaped receipt the FIRST concrete invalidity wins over the terminal
+  // 'recovered' code, so a schemaVersion other than 1 is reported verbatim.
+  test('diagnoseReviewerVerdictRejection surfaces an invalid schemaVersion before crediting', () => {
+    expect(
+      diagnoseReviewerVerdictRejection(
+        { schemaVersion: 2, verdict: 'LOOKS_GOOD', coverage: 'covered' },
+        'step',
+      ).code,
+    ).toBe('invalid_schema_version')
+  })
+
+  // A7 value-showing retry notice: a plain string naming the rejected code,
+  // the exact summary, the echoed recovery step, and the set_output
+  // instruction — while referencing the spawn contract's snapshot id instead
+  // of any forgeable fingerprint value.
+  test('buildReviewerVerdictRetryNotice embeds the code, summary, step, and set_output instruction', () => {
+    const diag = diagnoseReviewerVerdictRejection(
+      'nothing structured in this reply',
+      're-emit verdict',
+    )
+    const notice = buildReviewerVerdictRetryNotice(diag, 'code-reviewer')
+    expect(typeof notice).toBe('string')
+    expect(notice).toContain(
+      'Your previous code-reviewer response was rejected by the automated reviewer gate.',
+    )
+    expect(notice).toContain(`Reason (${diag.code}): ${diag.summary}`)
+    expect(notice).toContain('Recovery step: re-emit verdict (attempt 1).')
+    expect(notice).toContain('set_output')
+    expect(notice).toContain('the snapshot id given in your spawn contract')
+  })
+
+  // The diagnose -> notice round trip must tolerate arbitrary non-string
+  // tool results (null, primitives, inert envelopes) without throwing, and
+  // always embed the diagnostic's summary for the reviewer to act on.
+  test('the diagnose + retry-notice round trip tolerates non-string tool results', () => {
+    for (const toolResult of [null, undefined, 42, { nested: { deep: true } }]) {
+      const diag = diagnoseReviewerVerdictRejection(toolResult, 'retry')
+      expect(typeof diag.code).toBe('string')
+      expect(buildReviewerVerdictRetryNotice(diag, 'code-reviewer')).toContain(
+        diag.summary,
+      )
+    }
+  })
+
+  // A8 windowed planning: every uncredited pending file appears EXACTLY once
+  // across the returned waves (total coverage, no duplicates), sorted
+  // deterministically, with at least one wave.
+  test('planGateReviewWaves covers every uncredited pending file exactly once', () => {
+    const pending = ['src/c.ts', 'src/a.ts', 'src/b.ts']
+    const plan = planGateReviewWaves(
+      pending,
+      [],
+      {},
+      () => true,
+      (file) => `marker:${file}`,
+    )
+    expect(plan.waves.length).toBeGreaterThanOrEqual(1)
+    const planned = plan.waves.flat()
+    expect([...planned].sort()).toEqual([...pending].sort())
+    expect(new Set(planned).size).toBe(planned.length)
+    expect(plan.uncredited).toEqual([...pending].sort())
+    expect(plan.deleted).toEqual([])
+  })
+
+  // Pinned partition semantics from the docblock: a file whose prior-wave
+  // credit still matches its live marker needs no re-review, deleted files are
+  // returned separately (attested-by-absence) and excluded from the waves, and
+  // the caller-owned isReviewable predicate filters the universe.
+  test('planGateReviewWaves skips credited files and plans deletions separately', () => {
+    const plan = planGateReviewWaves(
+      ['src/a.ts', 'src/b.ts', 'src/gone.ts', 'src/skip.ts'],
+      ['src/gone.ts'],
+      { 'src/b.ts': 'marker:src/b.ts' },
+      (file) => file !== 'src/skip.ts',
+      (file) => `marker:${file}`,
+    )
+    expect(plan.deleted).toEqual(['src/gone.ts'])
+    expect(plan.uncredited).toEqual(['src/a.ts'])
+    expect(plan.waves).toEqual([['src/a.ts']])
+  })
+
+  // A8 deterministic wave identity: the key is stable across calls for the
+  // same wave (order-independent — the file list is sorted before hashing),
+  // and differs when the fingerprint, wave index, or wave contents differ.
+  test('waveKey is deterministic, order-independent, and distinguishes different waves', () => {
+    const fingerprint = 'v3:' + 'd'.repeat(64)
+    const key = waveKey(fingerprint, 0, ['src/b.ts', 'src/a.ts'])
+    expect(waveKey(fingerprint, 0, ['src/a.ts', 'src/b.ts'])).toBe(key)
+    expect(key.startsWith(`${fingerprint}#w0#`)).toBe(true)
+    expect(waveKey(fingerprint, 1, ['src/a.ts', 'src/b.ts'])).not.toBe(key)
+    expect(waveKey(fingerprint, 0, ['src/c.ts'])).not.toBe(key)
+    expect(
+      waveKey('v3:' + 'e'.repeat(64), 0, ['src/a.ts', 'src/b.ts']),
+    ).not.toBe(key)
+  })
+})
+
+// Fix 1 / Fix 4 followups: the fingerprint-gated prose recovery, the
+// deterministic lightweight-tier predicate, the single reduced-contract
+// composer, and the escalation-only guard. Like the Wave 3 helpers these are
+// exports of gate-reviewer.ts (the generator splices them into base2's
+// <gate-helpers-generated> region), so they are tested against the export.
+describe('gate-reviewer lightweight tier and prose recovery helpers', () => {
+  const fingerprint = 'v3:' + 'a'.repeat(64)
+
+  // Fix 1: a prose verdict is credited ONLY when the same tool result also
+  // echoes the exact expected fingerprint AND a pending file path — the double
+  // signal a prompt-injected in-file line cannot produce.
+  test('recoverProseVerdictWithAttestation credits a prose verdict with both attestation signals', () => {
+    const proseReply =
+      'I reviewed the change.\n' +
+      'LOOKS_GOOD: nothing to raise.\n' +
+      `snapshotFingerprint: ${fingerprint}\n` +
+      'reviewedFiles: ["src/a.ts"]'
+    const recovered = recoverProseVerdictWithAttestation(
+      proseReply,
+      fingerprint,
+      ['src/a.ts'],
+    ) as { value: { verdict?: string } }
+    expect(recovered.value.verdict).toBe('LOOKS_GOOD')
+    // The recovered node is verdict-only: no attestation or evidence payload.
+    expect(recovered).toEqual({
+      type: 'json',
+      value: { verdict: 'LOOKS_GOOD', schemaVersion: 1 },
+      schemaVersion: 1,
+    } as unknown as { value: { verdict?: string } })
+  })
+
+  // Fail closed: without the exact expected fingerprint the prose line is
+  // indistinguishable from prompt-injected file content, so the input passes
+  // through byte-identical (same reference).
+  test('recoverProseVerdictWithAttestation is a no-op when the fingerprint is absent', () => {
+    const proseReply =
+      'LOOKS_GOOD: nothing to raise.\nreviewedFiles: ["src/a.ts"]'
+    expect(
+      recoverProseVerdictWithAttestation(proseReply, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(proseReply)
+    // An empty expected fingerprint can never be attested either.
+    expect(
+      recoverProseVerdictWithAttestation(proseReply, '', ['src/a.ts']),
+    ).toBe(proseReply)
+  })
+
+  // Fail closed: fingerprint present but no pending file path, so the review
+  // did not evidence any coverage of what it claims to have reviewed.
+  test('recoverProseVerdictWithAttestation is a no-op when no pending file path appears', () => {
+    const proseReply =
+      'LOOKS_GOOD: nothing to raise.\n' + `snapshotFingerprint: ${fingerprint}`
+    expect(
+      recoverProseVerdictWithAttestation(proseReply, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(proseReply)
+    // An empty pending set has nothing to cross-check against.
+    expect(
+      recoverProseVerdictWithAttestation(
+        proseReply + '\nreviewedFiles: ["src/a.ts"]',
+        fingerprint,
+        [],
+      ),
+    ).not.toBe(proseReply)
+  })
+
+  // Fail closed: R5 is untouched, so prose alone (no verdict line at all) is
+  // never synthesized even with both attestation signals present.
+  test('recoverProseVerdictWithAttestation is a no-op when there is no prose verdict line', () => {
+    const noVerdictLine =
+      'I reviewed everything and have nothing to report.\n' +
+      `snapshotFingerprint: ${fingerprint}\n` +
+      'reviewedFiles: ["src/a.ts"]'
+    expect(
+      recoverProseVerdictWithAttestation(noVerdictLine, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(noVerdictLine)
+  })
+
+  // R0 short-circuit: an already-shaped receipt is returned byte-identical so
+  // recovery can never perturb a result the recognizer already credits.
+  test('recoverProseVerdictWithAttestation returns an already-shaped receipt byte-identical', () => {
+    const alreadyShaped = {
+      type: 'json',
+      value: {
+        schemaVersion: 1,
+        verdict: 'BLOCKING',
+        findings: ['real blocker'],
+        coverage: 'covered',
+        snapshotFingerprint: fingerprint,
+        reviewedFiles: ['src/a.ts'],
+      },
+    }
+    expect(
+      recoverProseVerdictWithAttestation(alreadyShaped, fingerprint, [
+        'src/a.ts',
+      ]),
+    ).toBe(alreadyShaped)
+  })
+
+  // INV-A.2 (anti-forgery): recovery never mints attestation or evidence, even
+  // when the reviewer's own prose quotes all of it. The node carries ONLY the
+  // verdict (+ schemaVersion), so the unmodified attestation check still has to
+  // be satisfied by the reviewer's own echoed text.
+  test('recoverProseVerdictWithAttestation never synthesizes attestation or evidence fields', () => {
+    const proseReply =
+      'LOOKS_GOOD: all good.\n' +
+      `snapshotFingerprint: ${fingerprint}\n` +
+      'reviewedFiles: ["src/a.ts"]\n' +
+      'findings: ["none"]\n' +
+      'dimensions: { correctness: pass }\n' +
+      'requirementCoverage: [{ requirement: "x", status: "satisfied" }]'
+    const recovered = recoverProseVerdictWithAttestation(
+      proseReply,
+      fingerprint,
+      ['src/a.ts'],
+    ) as Record<string, unknown> & {
+      value: Record<string, unknown>
+    }
+    expect(Object.keys(recovered.value).sort()).toEqual([
+      'schemaVersion',
+      'verdict',
+    ])
+    for (const forbidden of [
+      'snapshotFingerprint',
+      'reviewedFiles',
+      'findings',
+      'dimensions',
+      'requirementCoverage',
+    ]) {
+      expect(forbidden in recovered).toBe(false)
+      expect(forbidden in recovered.value).toBe(false)
+    }
+    // The synthesized verdict is still unreadable as a credit on its own: no
+    // snapshot attestation exists on the node itself.
+    expect(
+      collectReviewerAttestationIssues(
+        { type: 'json', value: recovered.value },
+        fingerprint,
+        ['src/a.ts'],
+      ),
+    ).toEqual([
+      'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
+      'BLOCKING: reviewer did not attest to every pending file: src/a.ts',
+    ])
+  })
+
+  // FU1: DETERMINISTIC eligibility from runtime facts only — no model claim
+  // participates. A small ordinary source-only set is eligible.
+  test('isLightweightReceiptEligible accepts one to five ordinary source files', () => {
+    expect(isLightweightReceiptEligible(['src/a.ts'])).toBe(true)
+    expect(
+      isLightweightReceiptEligible([
+        'src/a.ts',
+        'src/b.ts',
+        'src/c.ts',
+        'src/d.ts',
+        'src/e.ts',
+      ]),
+    ).toBe(true)
+    // The cap is overridable, and the default stays 5.
+    expect(isLightweightReceiptEligible(['src/a.ts'], { maxFiles: 1 })).toBe(
+      true,
+    )
+    expect(
+      isLightweightReceiptEligible(['src/a.ts', 'src/b.ts'], { maxFiles: 1 }),
+    ).toBe(false)
+  })
+
+  test('isLightweightReceiptEligible rejects empty and oversized pending sets', () => {
+    // An empty set never needs a reduced contract.
+    expect(isLightweightReceiptEligible([])).toBe(false)
+    // Six files exceed the default cap of 5.
+    expect(
+      isLightweightReceiptEligible([
+        'src/a.ts',
+        'src/b.ts',
+        'src/c.ts',
+        'src/d.ts',
+        'src/e.ts',
+        'src/f.ts',
+      ]),
+    ).toBe(false)
+    // Non-string / empty entries are rejected rather than coerced.
+    expect(
+      isLightweightReceiptEligible(['src/a.ts', ''], { maxFiles: 5 }),
+    ).toBe(false)
+    expect(
+      isLightweightReceiptEligible(
+        ['src/a.ts', 42 as unknown as string],
+        { maxFiles: 5 },
+      ),
+    ).toBe(false)
+  })
+
+  // FU1: contract-bearing paths are excluded regardless of file count — a
+  // contract change can break consumers, so it always needs the full contract.
+  test('isLightweightReceiptEligible rejects contract-bearing paths', () => {
+    for (const contractPath of [
+      'package.json',
+      'bun.lock',
+      'src/contracts/review.ts',
+      'src/types.ts',
+      'src/shared/types/review.ts',
+      'tsconfig.json',
+      'bunfig.toml',
+      'schemas/review-schema.ts',
+      'agents/schema.ts',
+      'docs/contract.md',
+    ]) {
+      expect(isLightweightReceiptEligible(['src/a.ts', contractPath])).toBe(
+        false,
+      )
+    }
+    // Case-insensitive: an upper-case contract path is excluded too.
+    expect(isLightweightReceiptEligible(['SRC/A.TS', 'PACKAGE.JSON'])).toBe(
+      false,
+    )
+    // A markdown file outside docs/ is not a contract doc.
+    expect(isLightweightReceiptEligible(['README.md'])).toBe(true)
+  })
+
+  // FU1: the single composer for the reduced contract. A full-contract result
+  // must carry every field and no instruction; a lightweight result must carry
+  // exactly the five-field shape read from buildLightweightReceiptShape().
+  test('buildLightweightReviewContract assembles the reduced or full contract', () => {
+    const lightweight = buildLightweightReviewContract(['src/a.ts', 'src/b.ts'])
+    expect(lightweight.lightweight).toBe(true)
+    expect(lightweight.required).toEqual(
+      buildLightweightReceiptShape().required,
+    )
+    expect(lightweight.required).toEqual([
+      'schemaVersion',
+      'verdict',
+      'snapshotFingerprint',
+      'reviewedFiles',
+      'coverage',
+    ])
+    expect(lightweight.instruction.length).toBeGreaterThan(0)
+    expect(lightweight.instruction).toContain('snapshot fingerprint')
+    expect(lightweight.instruction).toContain('BLOCKING')
+
+    // A contract-bearing path falls back to the FULL contract, no instruction.
+    const full = buildLightweightReviewContract(['package.json'])
+    expect(full.lightweight).toBe(false)
+    expect(full.required).toEqual([
+      'schemaVersion',
+      'verdict',
+      'snapshotFingerprint',
+      'reviewedFiles',
+      'coverage',
+      'dimensions',
+      'family',
+    ])
+    expect(full.instruction).toBe('')
+    // An empty set also falls back to the full contract.
+    expect(buildLightweightReviewContract([]).lightweight).toBe(false)
+  })
+
+  // FU1: ESCALATION-ONLY. A clean lightweight LOOKS_GOOD never escalates; every
+  // other outcome does, so the model can only ever increase scrutiny.
+  test('shouldEscalateToFullContract escalates everything but a clean lightweight LOOKS_GOOD', () => {
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'LOOKS_GOOD',
+        findingCount: 0,
+      }),
+    ).toBe(false)
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'BLOCKING',
+        findingCount: 1,
+      }),
+    ).toBe(true)
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'NON_BLOCKING',
+        findingCount: 0,
+      }),
+    ).toBe(true)
+    // A finding reported beside LOOKS_GOOD still escalates.
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: 'LOOKS_GOOD',
+        findingCount: 1,
+      }),
+    ).toBe(true)
+    // An absent verdict is not the clean case: fail closed either way.
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: undefined,
+        findingCount: 1,
+      }),
+    ).toBe(true)
+    expect(
+      shouldEscalateToFullContract({
+        lightweightUsed: true,
+        verdict: undefined,
+        findingCount: 0,
+      }),
+    ).toBe(true)
+    // A full-contract review never escalates, whatever it found.
+    for (const verdict of [
+      'LOOKS_GOOD',
+      'NON_BLOCKING',
+      'BLOCKING',
+      undefined,
+    ] as const) {
+      expect(
+        shouldEscalateToFullContract({
+          lightweightUsed: false,
+          verdict,
+          findingCount: 3,
+        }),
+      ).toBe(false)
+    }
   })
 })

@@ -468,9 +468,33 @@ function mergeEvidenceLists(
 ): TaskMemoryEvidenceV1[] {
   const byId = new Map<string, TaskMemoryEvidenceV1>()
   for (const item of [...prior, ...run]) {
+    // Tier 1D: session-scoped evidence (derived per-read bookkeeping) is
+    // ephemeral by contract — it must never survive into the persisted
+    // record, regardless of which side carried it.
+    if (item.sessionScoped) continue
     if (!byId.has(item.id)) byId.set(item.id, item)
   }
-  return [...byId.values()]
+  // Tier 1D content-level dedup: verbatim restatements of the same fact
+  // under different ids (new timestamps, different sessions) previously
+  // accumulated until the list cap FIFO-evicted the oldest. Collapse entries
+  // sharing kind + normalized summary, keeping the first occurrence (prior
+  // wins, matching the byId semantics above). Applies only to LLM-authored
+  // kinds: read/edit evidence is machine-derived with stable per-path ids
+  // and is distinguished by freshnessHash, so a fresh re-read of a changed
+  // file must NOT be collapsed into the stale entry it supersedes.
+  const byContent = new Map<string, TaskMemoryEvidenceV1>()
+  for (const item of byId.values()) {
+    if (item.kind === 'read' || item.kind === 'edit') {
+      byContent.set(item.id, item)
+      continue
+    }
+    const key =
+      item.kind +
+      '\0' +
+      item.summary.toLowerCase().replace(/\s+/g, ' ').trim()
+    if (!byContent.has(key)) byContent.set(key, item)
+  }
+  return [...byContent.values()]
 }
 
 /**

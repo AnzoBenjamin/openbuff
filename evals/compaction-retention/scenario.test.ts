@@ -14,6 +14,16 @@
  *                     trailing instruction survives (beginning-and-end goal).
  *  - S5 blocker      : open reviewer blocker + structured review receipt survive
  *                     a compaction pass with the receipt fingerprint intact.
+ *  - S7 ceiling      : worst-case pinned payload collapses superseded review
+ *                     history so the hard ceiling stays an enforceable bound.
+ *  - S8 resolved     : a passing review supersedes older receipts from the same
+ *                     reviewer under ceiling pressure.
+ *  - S9 eviction     : ceiling pressure drains ordinary retention lists before
+ *                     touching receipts, blockers, or the task contract.
+ *  - S10 multipass  : three consecutive small-window passes; the open blocker
+ *                     and the review receipt fingerprint survive every pass.
+ *  - S11 multipass  : a baseline pass then a small-window pass; the floor holds
+ *                     across window-size oscillation.
  *
  * The metrics are the deliverable; the assertions are the regression floor.
  */
@@ -300,6 +310,8 @@ interface ScenarioBudget {
    */
   semanticBudget?: { triggerBudgetTokens: number; targetBudgetTokens: number }
   nextRequiredAction?: string
+  /** D25/CQ-T1: archive eviction pointers threaded into the pruner per pass. */
+  archivePointers?: string[]
 }
 
 function createMockAgentState(
@@ -338,6 +350,9 @@ const runHandleSteps = (messages: Message[], budget: ScenarioBudget): any[] => {
     params: {
       ...(budget.semanticBudget
         ? { semanticBudget: budget.semanticBudget }
+        : {}),
+      ...(budget.archivePointers
+        ? { archivePointers: budget.archivePointers }
         : {}),
     },
   })
@@ -404,13 +419,14 @@ interface Measurement extends ScenarioMetrics {
 
 const metrics: ScenarioMetrics[] = []
 
-function measureRetention(args: {
+function runSinglePass(args: {
   id: string
   claim: string
   messages: Message[]
   budget: ScenarioBudget
-  mustSurvive?: string[]
-}): Measurement {
+  mustSurvive: string[]
+  record: boolean
+}): Measurement & { outputMessages: Message[] } {
   const results = runHandleSteps(args.messages, args.budget)
   expect(results).toHaveLength(1)
   expect(results[0].toolName).toBe('set_messages')
@@ -422,7 +438,7 @@ function measureRetention(args: {
   const block = extractKnowledgeMemoryBlock(summaryText)
   expect(block).not.toBe('')
 
-  const mustSurvive = args.mustSurvive ?? MUST_SURVIVE_FACTS
+  const mustSurvive = args.mustSurvive
   const missingFacts = mustSurvive.filter((fact) => !block.includes(fact))
   const historyTokens = estimateTokens(JSON.stringify(args.messages))
   const summaryTokens = estimateTokens(summaryText)
@@ -444,8 +460,79 @@ function measureRetention(args: {
     compressionRatio: summaryTokens / historyTokens,
     retainedEntryCounts,
   }
-  metrics.push(recorded)
-  return { ...recorded, block }
+  // A multi-pass sweep registers one metrics row (its final pass), not one
+  // per cycle; single-pass scenarios always record.
+  if (args.record) {
+    metrics.push(recorded)
+  }
+  return {
+    ...recorded,
+    block,
+    // The compacted transcript the pruner emitted: message 0 is the summary
+    // carrying the pinned <knowledge_memory> block, followed by the retained
+    // history — exactly what the next pass must consume as its input.
+    outputMessages: results[0].input.messages as Message[],
+  }
+}
+
+function measureRetention(args: {
+  id: string
+  claim: string
+  messages: Message[]
+  budget: ScenarioBudget
+  mustSurvive?: string[]
+}): Measurement {
+  return runSinglePass({
+    id: args.id,
+    claim: args.claim,
+    messages: args.messages,
+    budget: args.budget,
+    mustSurvive: args.mustSurvive ?? MUST_SURVIVE_FACTS,
+    record: true,
+  })
+}
+
+/**
+ * Multi-pass drift sweep (CQ-T4/D25): run the pruner once per budget in
+ * sequence, feeding each pass's real `set_messages` output back in as the next
+ * pass's input with the pinned knowledge_memory/taskMemory floor carrying
+ * forward. Asserts after EVERY pass that every must-survive fact is still in
+ * the pinned block, and returns the final pass's measurement — which is also
+ * the single row registered in the metrics table for the scenario.
+ */
+function measureMultiPassRetention(args: {
+  id: string
+  claim: string
+  messages: Message[]
+  budgets: ScenarioBudget[]
+  mustSurvive: string[]
+}): Measurement {
+  expect(args.budgets.length).toBeGreaterThanOrEqual(2)
+
+  const passes: Array<Measurement & { outputMessages: Message[] }> = []
+  let input = args.messages
+  for (let index = 0; index < args.budgets.length; index += 1) {
+    const isFinalPass = index === args.budgets.length - 1
+    const pass = runSinglePass({
+      id: isFinalPass ? args.id : `${args.id}-pass-${index + 1}`,
+      claim: args.claim,
+      messages: input,
+      budget: args.budgets[index],
+      mustSurvive: args.mustSurvive,
+      record: isFinalPass,
+    })
+    // Drift-sweep floor: the pinned block is re-rendered from the carried
+    // knowledge_memory/taskMemory state, so the must-survive facts survive
+    // every pass, not just the first one.
+    expect(pass.recallRate).toBe(1)
+    expect(pass.missingFacts).toEqual([])
+    for (const fact of args.mustSurvive) {
+      expect(pass.block).toContain(fact)
+    }
+    passes.push(pass)
+    input = pass.outputMessages
+  }
+  return passes[passes.length - 1]
 }
 
 /** Extract the pinned `Goal:` body, stopping at the next section header. */
@@ -460,6 +547,16 @@ const extractGoalSection = (block: string): string | undefined =>
 
 /** S1/S4/S5 baseline: no window and no explicit limit => 140k trigger / 100k target. */
 const BASELINE_BUDGET: ScenarioBudget = { contextTokenCount: 200_000 }
+
+/** S6's exact small-window budget, reused verbatim for every multi-pass cycle. */
+const SMALL_WINDOW_BUDGET: ScenarioBudget = {
+  contextTokenCount: 20_000,
+  contextWindowTokens: 8_000,
+  semanticBudget: {
+    triggerBudgetTokens: 2_800,
+    targetBudgetTokens: 2_500,
+  },
+}
 
 describe('compaction retention scenario', () => {
   afterAll(() => {
@@ -538,6 +635,10 @@ describe('compaction retention scenario', () => {
     expect(measurement.block).toContain(SEEDED_NEXT_ACTION)
     // Regression floor only: deeper list evidence is legitimately evicted here.
     expect(measurement.recallRate).toBeGreaterThanOrEqual(0.5)
+    // D25 blocking floor: the open reviewer blocker is never evicted by the
+    // whole-block ceiling loop, even at the 8k-class window.
+    expect(measurement.block).toContain(SEEDED_BLOCKER)
+    expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(1)
   })
 
   test('S3 large window buys strictly deeper list retention than the baseline', () => {
@@ -631,5 +732,425 @@ describe('compaction retention scenario', () => {
     ).toBeGreaterThanOrEqual(1)
     // The reviewer's BLOCKING finding is pinned alongside the seeded blocker.
     expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(2)
+  })
+
+  test('S6 small window keeps both the open blocker and the review receipt fingerprint', () => {
+    // D25 guarantee under pressure: at the SAME 8k-class small-window budget as
+    // S2, both the open blocker and the reviewer attestation fingerprint must
+    // survive the ceiling loop verbatim.
+    const measurement = measureRetention({
+      id: 'S6-small-window-blocker-receipt',
+      claim:
+        'the 8k-class small window keeps both the open blocker and the review receipt fingerprint',
+      messages: seedHistory({ includeReviewReceipt: true }),
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+      },
+      mustSurvive: [SEEDED_BLOCKER, SEEDED_RECEIPT_FINGERPRINT],
+    })
+
+    expect(measurement.recallRate).toBe(1)
+    expect(measurement.block).toContain(SEEDED_BLOCKER)
+    expect(measurement.block).toContain(
+      `snapshot=${SEEDED_RECEIPT_FINGERPRINT}`,
+    )
+    expect(
+      measurement.retainedEntryCounts.reviewReceipts,
+    ).toBeGreaterThanOrEqual(1)
+    expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(1)
+  })
+
+  test('S7 worst-case pinned payload still lands under the hard ceiling', () => {
+    // Ceiling-enforceability regression (performance specialist): blockers and
+    // reviewReceipts are excluded from EVICTION_ORDER (D25/CQ-T1), so once the
+    // ordinary lists drain the loop must reclaim superseded review history —
+    // newest receipt and blocker per reviewer agent type — instead of breaking
+    // with the block over its ceiling. 12 receipts (6 per reviewer type) with
+    // near-cap findings plus near-cap goal/next-action text drive the 8k-class
+    // block past its 1,500-token ceiling before the collapse runs.
+    const ceilingFingerprint = (index: number): string =>
+      `ceiling${String(index).padStart(2, '0')}`.padEnd(64, 'x')
+    const goalText = [
+      'CEIL-GOAL-HEAD: drive the pinned block over its small-window ceiling.',
+      'ceiling filler '.repeat(80),
+      'CEIL-GOAL-TAIL',
+    ].join('\n')
+    const nextRequiredAction =
+      'ceiling action filler '.repeat(32) + 'CEIL-ACTION-TAIL'
+    const messages: Message[] = [
+      { ...createMessage('user', goalText), tags: ['USER_PROMPT'] },
+      ...Array.from({ length: 12 }, (_, index) => index).flatMap((index) => {
+        const agentType =
+          index % 2 === 0 ? 'code-reviewer' : 'security-reviewer'
+        return [
+          createToolCallMessage(`ceiling-review-${index}`, 'spawn_agent_inline', {
+            agent_type: agentType,
+          }),
+          createToolResultMessage(
+            `ceiling-review-${index}`,
+            'spawn_agent_inline',
+            {
+              schemaVersion: 3,
+              family: 'reviewer',
+              verdict: 'BLOCKING',
+              snapshotFingerprint: ceilingFingerprint(index),
+              reviewedFiles: [SEEDED_INSPECTED_PATH],
+              coverage: 'covered',
+              dimensions: { correctness: 'block' },
+              findings: [
+                {
+                  severity: 'critical',
+                  dimension: 'correctness',
+                  summary: `CEIL-FINDING-${index}: ${'z'.repeat(560)}`,
+                  evidence: ['ceiling pressure fixture'],
+                  correction: 'Resolve the ceiling pressure finding.',
+                },
+              ],
+              requirementCoverage: [],
+            },
+          ),
+        ]
+      }),
+    ]
+
+    const measurement = measureRetention({
+      id: 'S7-small-window-ceiling-enforced',
+      claim:
+        'superseded-review collapse brings the worst-case pinned block back under its ceiling',
+      messages,
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+        nextRequiredAction,
+      },
+      mustSurvive: [ceilingFingerprint(10), ceilingFingerprint(11)],
+    })
+
+    // The hard ceiling stays an enforceable upper bound after the D25 exclusion.
+    expect(measurement.blockTokens).toBeLessThanOrEqual(1_500)
+    // The task contract survives the pass (truncated toward its floor only if
+    // the collapse alone cannot close the gap).
+    expect(measurement.block).toContain('Goal:')
+    expect(measurement.block).toContain('CEIL-GOAL-HEAD')
+    expect(measurement.block).toContain('CEIL-GOAL-TAIL')
+    expect(measurement.block).toContain('Next Action:')
+    expect(measurement.block).toContain('CEIL-ACTION-TAIL')
+    // The newest receipt and blocker per reviewer agent type survive verbatim.
+    expect(measurement.block).toContain(`snapshot=${ceilingFingerprint(10)}`)
+    expect(measurement.block).toContain(`snapshot=${ceilingFingerprint(11)}`)
+    expect(measurement.block).toContain('CEIL-FINDING-10')
+    expect(measurement.block).toContain('CEIL-FINDING-11')
+    // Superseded same-reviewer receipts and their blockers are reclaimed.
+    expect(measurement.block).not.toContain(`snapshot=${ceilingFingerprint(8)}`)
+    expect(measurement.block).not.toContain(`snapshot=${ceilingFingerprint(6)}`)
+    expect(measurement.block).not.toContain('CEIL-FINDING-8')
+    expect(measurement.block).not.toContain('CEIL-FINDING-6')
+  })
+
+  test('S8 a passing review supersedes older receipts from the same reviewer', () => {
+    // Resolved-review history regression (performance specialist): review
+    // receipts dedupe only on exact text and each carries a distinct
+    // fingerprint/verdict line, so without eviction pressure the receipts of
+    // resolved reviews stay pinned verbatim forever. Under ceiling pressure the
+    // superseded-review collapse keeps only the newest receipt per reviewer, so
+    // the LOOKS_GOOD verdict replaces the superseded BLOCKING history. The
+    // passing review also clears the reviewer's own blockers; unattributed
+    // residual blockers collapse to their newest line.
+    const resolveFingerprint = (index: number): string =>
+      `resolved${String(index).padStart(2, '0')}`.padEnd(64, 'r')
+    const clearedFingerprint = 'cleared'.padEnd(64, 'g')
+    // 12 unattributed residual blockers (~224 chars each, under the 240-char
+    // cap) keep the block over the 1,500-token ceiling even after the receipt
+    // collapse, so the blocker collapse runs too: zero-padded ids keep the
+    // substring assertions exact.
+    const residualBlockers = Array.from({ length: 12 }, (_, index) =>
+      `BLOCKING: RESOLVE-RESIDUAL-${String(index + 1).padStart(2, '0')} ${'q'.repeat(195)}`,
+    )
+    const goalText = [
+      'RESOLVE-GOAL-HEAD: verify resolved reviews stop consuming pinned budget.',
+      'resolve filler '.repeat(80),
+      'RESOLVE-GOAL-TAIL',
+    ].join('\n')
+    const messages: Message[] = [
+      { ...createMessage('user', goalText), tags: ['USER_PROMPT'] },
+      ...Array.from({ length: 12 }, (_, index) => index).flatMap((index) => {
+        const cleared = index === 11
+        return [
+          createToolCallMessage(`resolve-review-${index}`, 'spawn_agent_inline', {
+            agent_type: 'code-reviewer',
+          }),
+          createToolResultMessage(
+            `resolve-review-${index}`,
+            'spawn_agent_inline',
+            {
+              schemaVersion: 3,
+              family: 'reviewer',
+              verdict: cleared ? 'LOOKS_GOOD' : 'BLOCKING',
+              snapshotFingerprint: cleared
+                ? clearedFingerprint
+                : resolveFingerprint(index),
+              reviewedFiles: [SEEDED_INSPECTED_PATH],
+              coverage: 'covered',
+              dimensions: cleared
+                ? { correctness: 'pass' }
+                : { correctness: 'block' },
+              findings: cleared
+                ? []
+                : [
+                    {
+                      severity: 'critical',
+                      dimension: 'correctness',
+                      summary:
+                        `w${index}`.padEnd(600, 'w') +
+                        ` RESOLVE-FINDING-${index}`,
+                      evidence: ['resolve pressure fixture'],
+                      correction: 'Resolve the pressure finding.',
+                    },
+                  ],
+              requirementCoverage: [],
+            },
+          ),
+        ]
+      }),
+      ...residualBlockers.map((blocker) => createMessage('assistant', blocker)),
+    ]
+
+    const measurement = measureRetention({
+      id: 'S8-resolved-review-reclaimed',
+      claim:
+        'a passing review supersedes older receipts from the same reviewer under ceiling pressure',
+      messages,
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+        nextRequiredAction:
+          'resolve action filler '.repeat(32) + 'RESOLVE-ACTION-TAIL',
+      },
+      mustSurvive: [clearedFingerprint],
+    })
+
+    expect(measurement.blockTokens).toBeLessThanOrEqual(1_500)
+    // The newest (passing) receipt for the reviewer survives verbatim...
+    expect(measurement.block).toContain(`snapshot=${clearedFingerprint}`)
+    expect(measurement.block).toContain('verdict=LOOKS_GOOD')
+    // ...while the superseded BLOCKING receipts are reclaimed.
+    expect(measurement.block).not.toContain(
+      `snapshot=${resolveFingerprint(10)}`,
+    )
+    expect(measurement.block).not.toContain('verdict=BLOCKING')
+    // The passing review cleared the reviewer's own blockers; the unattributed
+    // residual blockers collapse to their newest line.
+    expect(measurement.block).not.toContain('RESOLVE-FINDING-10')
+    expect(measurement.block).toContain('RESOLVE-RESIDUAL-12')
+    expect(measurement.block).not.toContain('RESOLVE-RESIDUAL-01')
+    expect(measurement.block).toContain('Goal:')
+    expect(measurement.block).toContain('Next Action:')
+    expect(measurement.block).toContain('RESOLVE-ACTION-TAIL')
+  })
+
+  test('S9 ceiling pressure drains ordinary lists before touching receipts or blockers', () => {
+    // Eviction-order regression (performance specialist): D25 excludes
+    // reviewReceipts and blockers from EVICTION_ORDER, and the
+    // superseded-review collapse only runs after every ordinary retention list
+    // is drained. S7's fixture starts with empty ordinary lists, so the
+    // ordering preference is asserted here instead: this fixture starts well
+    // over the 8k-class ceiling with ordinary evidence (reads, decisions,
+    // edits, anchors) plus exactly one receipt and one blocker, and the
+    // ordinary capacity alone is enough to get back under the ceiling — so
+    // the loop must resolve the pressure by evicting ordinary lists while the
+    // receipt, the blocker, and the full-length task contract all survive
+    // untouched.
+    const orderingFingerprint = 'ordering'.padEnd(64, 'o')
+    const goalText = [
+      'ORDER-GOAL-HEAD: prove ceiling pressure drains ordinary lists first.',
+      'ordering filler '.repeat(90),
+      'ORDER-GOAL-TAIL',
+    ].join('\n')
+    const longInspectedPaths = Array.from(
+      { length: 40 },
+      (_, index) =>
+        `packages/agent-runtime/src/retention/ceiling/module-${String(index).padStart(2, '0')}/inspected-${'p'.repeat(90)}.ts`,
+    )
+    const decisionLines = Array.from(
+      { length: 20 },
+      (_, index) =>
+        `Decision: keep ceiling-pressure rationale ${index} ${'d'.repeat(180)}`,
+    )
+    const messages: Message[] = [
+      { ...createMessage('user', goalText), tags: ['USER_PROMPT'] },
+      ...createSuccessfulReadMessages(longInspectedPaths),
+      createMessage('assistant', decisionLines.join('\n')),
+      ...createCommittedEditMessages(EDITED_PATHS),
+      ...createValidationMessages(VALIDATION_COMMAND_COUNT),
+      createMessage('assistant', SEEDED_BLOCKER),
+      ...[
+        createToolCallMessage('ordering-review', 'spawn_agent_inline', {
+          agent_type: 'code-reviewer',
+        }),
+        createToolResultMessage('ordering-review', 'spawn_agent_inline', {
+          schemaVersion: 3,
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: orderingFingerprint,
+          reviewedFiles: [SEEDED_INSPECTED_PATH],
+          coverage: 'covered',
+          dimensions: { correctness: 'pass' },
+          findings: [],
+          requirementCoverage: [],
+        }),
+      ],
+    ]
+
+    const measurement = measureRetention({
+      id: 'S9-ceiling-eviction-order',
+      claim:
+        'ceiling pressure evicts ordinary retention lists before touching receipts, blockers, or the task contract',
+      messages,
+      budget: {
+        contextTokenCount: 20_000,
+        contextWindowTokens: 8_000,
+        semanticBudget: {
+          triggerBudgetTokens: 2_800,
+          targetBudgetTokens: 2_500,
+        },
+        nextRequiredAction:
+          'ordering action filler '.repeat(32) + 'ORDER-ACTION-TAIL',
+      },
+      mustSurvive: [SEEDED_BLOCKER, orderingFingerprint],
+    })
+
+    // The hard ceiling is enforced...
+    expect(measurement.blockTokens).toBeLessThanOrEqual(1_500)
+    // ...by evicting ordinary retention lists: postEditAnchors and
+    // filesInspected sit first in EVICTION_ORDER, so at least one eviction
+    // chunk must have been dropped from the 13 retained inspected paths.
+    expect(measurement.retainedEntryCounts.filesInspected).toBeLessThanOrEqual(
+      10,
+    )
+    // ...while the D25-excluded receipt and blocker stay pinned verbatim.
+    expect(measurement.retainedEntryCounts.reviewReceipts).toBe(1)
+    expect(measurement.retainedEntryCounts.blockers).toBeGreaterThanOrEqual(1)
+    expect(measurement.block).toContain(`snapshot=${orderingFingerprint}`)
+    expect(measurement.block).toContain(SEEDED_BLOCKER)
+    // The loop never reached the task-contract fallback (the ordinary capacity
+    // alone closed the gap): the pinned goal keeps its full small-window cap
+    // instead of being halved toward the floor.
+    const goal = extractGoalSection(measurement.block)
+    expect(goal).toBeDefined()
+    expect(goal!.length).toBeGreaterThan(1_000)
+    expect(goal!).toContain('ORDER-GOAL-HEAD')
+    expect(goal!).toContain('ORDER-GOAL-TAIL')
+  })
+
+  test('S10 multi-pass small window: the D25 floor survives three compaction cycles', () => {
+    // Drift sweep (CQ-T4/D25): the exact S6 small-window budget applied three
+    // times in sequence, with each pass's real set_messages output fed back in
+    // as the next pass's input. The pinned knowledge_memory/taskMemory floor
+    // carries forward, so the open blocker and the review receipt fingerprint
+    // must survive every pass, not just the first one.
+    const finalMeasurement = measureMultiPassRetention({
+      id: 'S10-multipass-small-window',
+      claim:
+        'the open blocker and the review receipt fingerprint survive three consecutive small-window passes',
+      messages: seedHistory({ includeReviewReceipt: true }),
+      budgets: [SMALL_WINDOW_BUDGET, SMALL_WINDOW_BUDGET, SMALL_WINDOW_BUDGET],
+      mustSurvive: [SEEDED_BLOCKER, SEEDED_RECEIPT_FINGERPRINT],
+    })
+
+    expect(finalMeasurement.recallRate).toBe(1)
+    expect(finalMeasurement.block).toContain(SEEDED_BLOCKER)
+    expect(finalMeasurement.block).toContain(
+      `snapshot=${SEEDED_RECEIPT_FINGERPRINT}`,
+    )
+    expect(
+      finalMeasurement.retainedEntryCounts.reviewReceipts,
+    ).toBeGreaterThanOrEqual(1)
+    expect(
+      finalMeasurement.retainedEntryCounts.blockers,
+    ).toBeGreaterThanOrEqual(1)
+  })
+
+  test('S12 archive eviction pointers survive small-window passes verbatim', () => {
+    // D25/CQ-T1: one pinned eviction-pointer line per archived compaction
+    // segment is threaded into the pruner params and carried verbatim in the
+    // pinned <knowledge_memory> block. The runtime re-derives the pointer list
+    // from the archive before EVERY pass, so each pass budget re-threads it —
+    // and the pointer section is excluded from ceiling EVICTION_ORDER, so it
+    // survives the 8k-class small-window ceiling loop verbatim.
+    const ARCHIVE_POINTERS = [
+      '[action=semantic_compaction steps=0-214 msgs=215] pre-pass transcript archived before compaction.',
+      '[action=mechanical_trim steps=215-301 msgs=87] deterministic mechanical trim of oldest steps.',
+      '[action=tool_result_eviction steps=12-18 msgs=7] deterministic tool-result eviction (stale recency).',
+    ]
+    const budgetWithPointers = (base: ScenarioBudget): ScenarioBudget => ({
+      ...base,
+      archivePointers: ARCHIVE_POINTERS,
+    })
+
+    const finalMeasurement = measureMultiPassRetention({
+      id: 'S12-archive-pointers-small-window',
+      claim:
+        'pinned archive eviction pointers survive consecutive small-window passes verbatim',
+      messages: seedHistory({ includeReviewReceipt: true }),
+      budgets: [
+        budgetWithPointers(SMALL_WINDOW_BUDGET),
+        budgetWithPointers(SMALL_WINDOW_BUDGET),
+        budgetWithPointers(SMALL_WINDOW_BUDGET),
+      ],
+      mustSurvive: [...ARCHIVE_POINTERS],
+    })
+
+    expect(finalMeasurement.recallRate).toBe(1)
+    expect(finalMeasurement.block).toContain('Archive Pointers:')
+    // Backward-parseable placement: the pointer section leads the block so a
+    // legacy parser (a pre-archive-pointers SECTION_RE) never folds the
+    // pointer lines into the persisted nextAction field.
+    expect(
+      finalMeasurement.block.indexOf('Archive Pointers:'),
+    ).toBeLessThan(finalMeasurement.block.indexOf('Goal:'))
+    for (const pointer of ARCHIVE_POINTERS) {
+      expect(finalMeasurement.block).toContain(`  - ${pointer}`)
+    }
+    // Still bounded by the small-window hard ceiling.
+    expect(finalMeasurement.blockTokens).toBeLessThanOrEqual(1_500)
+  })
+
+  test('S11 multi-pass mixed window: the D25 floor survives window-size oscillation', () => {
+    // Two cycles alternating the baseline budget and the small-window budget:
+    // the pinned floor must hold across window-size oscillation, not just a
+    // fixed window size.
+    const finalMeasurement = measureMultiPassRetention({
+      id: 'S11-multipass-mixed-window',
+      claim:
+        'the open blocker and the review receipt fingerprint survive a baseline pass followed by a small-window pass',
+      messages: seedHistory({ includeReviewReceipt: true }),
+      budgets: [BASELINE_BUDGET, SMALL_WINDOW_BUDGET],
+      mustSurvive: [SEEDED_BLOCKER, SEEDED_RECEIPT_FINGERPRINT],
+    })
+
+    expect(finalMeasurement.recallRate).toBe(1)
+    expect(finalMeasurement.block).toContain(SEEDED_BLOCKER)
+    expect(finalMeasurement.block).toContain(
+      `snapshot=${SEEDED_RECEIPT_FINGERPRINT}`,
+    )
+    expect(
+      finalMeasurement.retainedEntryCounts.reviewReceipts,
+    ).toBeGreaterThanOrEqual(1)
+    expect(
+      finalMeasurement.retainedEntryCounts.blockers,
+    ).toBeGreaterThanOrEqual(1)
   })
 })

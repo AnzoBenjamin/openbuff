@@ -2,6 +2,7 @@ import {
   MAX_AGENT_STEPS_DEFAULT,
   MAX_SPAWN_DEPTH_DEFAULT,
 } from '@codebuff/common/constants/agents'
+import { serializeAgentTemplatesForTransport } from '@codebuff/common/templates/agent-validation'
 import { toolNames } from '@codebuff/common/tools/constants'
 import {
   normalizeAgentIdForLookup,
@@ -9,15 +10,27 @@ import {
 } from '@codebuff/common/util/agent-id-parsing'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { containsStructuralAuditReceipt } from '@codebuff/common/util/audit-receipt'
+import { MODEL_PAYLOAD_JSON_CHAR_LIMIT } from '@codebuff/common/util/model-payload-recovery'
 import {
   agentHandoffSchema,
   agentReceiptSchema,
   agentRoleSchema,
 } from '@codebuff/common/types/agent-handoff'
+import { createHash } from 'node:crypto'
+import {
+  mkdirSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { loopAgentSteps } from '../../../run-agent-step'
 import { getAgentTemplate } from '../../../templates/agent-registry'
+import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
 import { formatValidationIssues } from '../../../util/format-validation-issues'
 import { formatValueForError } from '../../../util/format-value'
 import { getEffectiveAgentToolNames } from '../../../util/agent-tool-names'
@@ -40,6 +53,11 @@ import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { ReceiptOutcome } from '../../../supervision/process-supervisor'
+import type {
+  SettledSubagentResult,
+  SupervisedSpawnRequest,
+} from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type {
   ParamsExcluding,
@@ -48,6 +66,7 @@ import type {
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type {
+  AgentOutput,
   AgentState,
   AgentTemplateType,
   Subgoal,
@@ -91,6 +110,17 @@ export type SubagentContextParams = AgentRuntimeDeps &
     repoUrl: string | undefined
     signal: AbortSignal
     userId: string | undefined
+    /**
+     * P2-T8: injectable supervised-spawn seam. When
+     * `AgentRuntimeDeps.processSupervision` is on, `executeSubagent`
+     * delegates to this seam (backed by supervision/process-supervisor.ts)
+     * instead of calling `loopAgentSteps` in-process. The seam is seeded at
+     * the SDK impl entry seam; tests inject a stub here. Default undefined
+     * ⇒ off ⇒ the in-process path is byte-identical.
+     */
+    spawnSupervised?: (
+      request: SupervisedSpawnRequest,
+    ) => Promise<SettledSubagentResult>
   }
 
 /**
@@ -125,6 +155,16 @@ export function extractSubagentContextParams(
     // AgentRuntimeDeps - Other
     logger: params.logger,
     fetch: params.fetch,
+    // AgentRuntimeDeps - Durable run journal (P2-T2): children journal their
+    // own streams under their own runId through the shared guarded write
+    // points in run-agent-step.ts / run-programmatic-step.ts.
+    journalWriter: params.journalWriter,
+    journalReader: params.journalReader,
+    // AgentRuntimeDeps - Process supervision (P2-T8): the flag plus the
+    // injectable supervised-spawn seam ride the context params into
+    // executeSubagent; the flag-off path is unchanged.
+    processSupervision: params.processSupervision,
+    spawnSupervised: params.spawnSupervised,
 
     // AgentRuntimeScopedDeps - Client (WebSocket)
     handleStepsLogChunk: params.handleStepsLogChunk,
@@ -439,6 +479,10 @@ const HANDOFF_GRANTABLE_READ_ONLY_TOOLS: readonly string[] = [
   'find_files_matching_content',
 ]
 
+const HANDOFF_GRANTABLE_READ_ONLY_TOOL_SET: ReadonlySet<string> = new Set(
+  HANDOFF_GRANTABLE_READ_ONLY_TOOLS,
+)
+
 export function deriveSpawnTemplateCapabilities(params: {
   agentTemplate: AgentTemplate
   parentAgentTemplate: AgentTemplate
@@ -475,7 +519,7 @@ export function deriveSpawnTemplateCapabilities(params: {
       ? handoff.permissions.allowedTools
       : staticTools,
   )
-  const grantableReadOnlyTools = new Set(HANDOFF_GRANTABLE_READ_ONLY_TOOLS)
+  const grantableReadOnlyTools = HANDOFF_GRANTABLE_READ_ONLY_TOOL_SET
   // A handoff may grant the closed allowlist of read-only discovery tools even
   // when they are absent from the child's static tool set. Any other requested
   // tool outside the static set is a genuine authority widening and still
@@ -561,6 +605,60 @@ export function deriveSpawnTemplateCapabilities(params: {
 const REVIEWER_EVIDENCE_ITEM_LIMIT = 3
 const REVIEWER_EVIDENCE_CHARS = 360
 const REVIEWER_REQUIREMENT_EVIDENCE_LIMIT = 2
+/**
+ * Upper size bound for JSON-parsing reviewer payload strings, both the
+ * whole-receipt `structuredOutput.value` branches in normalizeSpawnedAgentOutput
+ * and the per-field coercion in coerceReviewerPayloadFields. Reviewer-family
+ * children sometimes deliver their entire receipt as ONE JSON-encoded string;
+ * the bound keeps a pathological multi-megabyte string from being parsed on
+ * the hot spawn-settle path while every realistic receipt still parses.
+ * Oversize or malformed strings stay on the unchanged fallback path.
+ *
+ * C3 (json-overhaul): previously 2_000_000 here while the shared module
+ * (set-output.ts via model-payload-recovery.ts) used 1M. Unified onto the
+ * single MODEL_PAYLOAD_JSON_CHAR_LIMIT bound source — no pinned test relies
+ * on this file's bound accepting anything in the 1M–2M band, so the tighter
+ * (still multi-megabyte-sized-claims-defeating) shared bound is safe.
+ */
+const MAX_REVIEWER_JSON_VALUE_CHARS = MODEL_PAYLOAD_JSON_CHAR_LIMIT
+
+/**
+ * C3 (json-overhaul): the single bounded parse previously inlined THREE times
+ * inside normalizeSpawnedAgentOutput (the keyless `jsonKey` envelope branch,
+ * the `structuredOutput` string-value branch, and the nested
+ * `value.output`-string branch). Each branch parsed the candidate string with
+ * its own `try { JSON.parse } catch { undefined }` inside a length guard;
+ * this helper replaces those unrolled blocks while keeping every branch's
+ * condition, accept-check, and return shape byte-identical.
+ *
+ * Behavior contract (must match the old inline blocks exactly):
+ *  - non-string or oversize candidates → undefined (branch falls through to
+ *    its unchanged wrapper path);
+ *  - malformed JSON → undefined (never throws onto the hot settle path);
+ *  - valid JSON → the parsed value verbatim (null/arrays are NOT filtered
+ *    here because the callers' subsequent `typeof X === 'object' &&
+ *    !Array.isArray(X)` accept-checks handle them — returning them verbatim
+ *    preserves the old parsed-value semantics exactly).
+ *
+ * WHY not `isReceiptShape`/`unwrapArbitraryEnvelope` from the shared module:
+ * the branches intentionally accept a verdict-BEARING object even when
+ * `snapshotFingerprint` is absent (the reviewer-verdict guard downstream
+ * classifies those), while `isReceiptShape` additionally requires a string
+ * snapshotFingerprint — adopting it would drop currently-accepted payloads
+ * (observable drift). The local `verdict === 'string'` accept-checks stay in
+ * the branches; only the duplicated bounded-parse mechanics unified here.
+ */
+function parseBoundedReceiptCandidate(
+  raw: unknown,
+  maxChars: number,
+): unknown | undefined {
+  if (typeof raw !== 'string' || raw.length > maxChars) return undefined
+  try {
+    return JSON.parse(raw) as unknown
+  } catch {
+    return undefined
+  }
+}
 const PARENT_AGENT_OUTPUT_MAX_CHARS = 256_000
 const PARENT_AGENT_OUTPUT_STRING_CHARS = 4_000
 /**
@@ -586,6 +684,11 @@ const HIGH_FIDELITY_STRING_FIELDS = new Set([
   'fullLogPath',
   'logFile',
   'jobId',
+  // PR-T2 (D20): oversize-fallback artifact pointer — a short verbatim scratch
+  // path the parent reads back via read_files. Same contract as
+  // fullLogPath/logFile: never truncated, so compaction cannot clip the
+  // pointer out of the receipt.
+  'artifactPath',
 ])
 const PARENT_AGENT_OUTPUT_ARRAY_ITEMS = 48
 // extractedLines is control-plane: the basher 80-line extract must survive
@@ -599,6 +702,8 @@ const CONTROL_PLANE_ARRAY_FIELDS = new Set([
   'requirementsAddressed',
   'acceptanceCriteriaAddressed',
   'findingsAddressed',
+  'mutationReceipts',
+  'recovery',
   'errors',
   'unresolved',
   'requestedValidation',
@@ -612,6 +717,91 @@ function truncateReviewerText(value: unknown, maxChars: number): unknown {
   return `${value.slice(0, prefixChars)}...[truncated]...${value.slice(-suffixChars)}`
 }
 
+/**
+ * Coerces reviewer-family payload fields that arrive as JSON-encoded STRINGS
+ * into their native shapes: findings/reviewedFiles/requirementCoverage/
+ * advisories → arrays, dimensions → plain object, schemaVersion → number.
+ *
+ * WHY: reviewer-family children (e.g. compatibility-reviewer) sometimes
+ * string-encode these fields — or the entire receipt — instead of emitting
+ * native JSON. Left as strings, the payload reads as a verdict-less degenerate
+ * receipt, so buildRuntimeAgentReceipt classifies it as retryable
+ * schema_invalid and the parent re-reviews forever even though the payload
+ * carries a real verdict.
+ *
+ * Pure and conservative: returns a NEW object, never mutates the input. Every
+ * candidate string stays within MAX_REVIEWER_JSON_VALUE_CHARS, is parsed
+ * inside try/catch, and is used ONLY when the parsed value matches the
+ * expected shape (a non-null, non-array array for the array keys; a plain
+ * object for `dimensions`) — otherwise the original value is kept. `verdict`,
+ * `coverage`, `snapshotFingerprint`, and unknown keys are never touched.
+ *
+ * Retention (reliability-reviewer: shared-reviewer-parse-memo-bounded-retention):
+ * the bounded parse memo is scoped to a SINGLE call (created per invocation,
+ * never module-scope), so at most one call's memo of parsed payloads is alive
+ * at any moment and nothing is retained for the process lifetime between
+ * settles.
+ */
+const REVIEWER_JSON_PARSE_MEMO_LIMIT = 64
+
+function coerceReviewerPayloadFields(
+  output: Record<string, unknown>,
+): Record<string, unknown> {
+  // Bounded parse memo: compactReviewerOutput may repeatedly parse the SAME
+  // stringified payload across the settle chain (value branch + attestation-
+  // core extraction), so repeated JSON.parses are wasted work. Bounded and
+  // call-scoped: capped LRU-style (cleared whole when over the bound), miss
+  // never caches, a rejected parse is not memoized so one bad string never
+  // poisons the cache, and the map dies with this call instead of living at
+  // module scope.
+  const reviewerJsonParseMemo = new Map<string, unknown>()
+  const parseBoundedJsonString = (raw: unknown): unknown => {
+    if (
+      typeof raw !== 'string' ||
+      raw.length > MAX_REVIEWER_JSON_VALUE_CHARS
+    ) {
+      return undefined
+    }
+    if (reviewerJsonParseMemo.has(raw)) return reviewerJsonParseMemo.get(raw)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return undefined
+    }
+    if (reviewerJsonParseMemo.size >= REVIEWER_JSON_PARSE_MEMO_LIMIT) {
+      reviewerJsonParseMemo.clear()
+    }
+    reviewerJsonParseMemo.set(raw, parsed)
+    return parsed
+  }
+  const coerced: Record<string, unknown> = { ...output }
+  for (const key of [
+    'findings',
+    'reviewedFiles',
+    'requirementCoverage',
+    'advisories',
+  ]) {
+    const parsed = parseBoundedJsonString(output[key])
+    if (Array.isArray(parsed)) coerced[key] = parsed
+  }
+  const parsedDimensions = parseBoundedJsonString(output.dimensions)
+  if (
+    parsedDimensions &&
+    typeof parsedDimensions === 'object' &&
+    !Array.isArray(parsedDimensions)
+  ) {
+    coerced.dimensions = parsedDimensions
+  }
+  if (
+    typeof output.schemaVersion === 'string' &&
+    /^\d+$/.test(output.schemaVersion)
+  ) {
+    coerced.schemaVersion = Number(output.schemaVersion)
+  }
+  return coerced
+}
+
 function compactReviewerOutput(
   output: Record<string, unknown>,
   agentType?: string,
@@ -619,12 +809,21 @@ function compactReviewerOutput(
   const isReviewer =
     output.family === 'reviewer' ||
     agentType?.toLowerCase().includes('reviewer')
-  if (!isReviewer || typeof output.verdict !== 'string') {
+  if (!isReviewer) {
     return output
   }
+  // Coerce stringified reviewer payload fields BEFORE the verdict guard:
+  // reviewer receipts sometimes arrive with findings/reviewedFiles/
+  // requirementCoverage/dimensions/schemaVersion as JSON-encoded strings;
+  // without coercion such a payload reads as a verdict-less degenerate
+  // receipt and the parent re-reviews forever.
+  const coerced = coerceReviewerPayloadFields(output)
+  if (typeof coerced.verdict !== 'string') {
+    return coerced
+  }
 
-  const findings = Array.isArray(output.findings)
-    ? output.findings.map((finding) => {
+  const findings = Array.isArray(coerced.findings)
+    ? coerced.findings.map((finding) => {
         if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
           return finding
         }
@@ -642,10 +841,10 @@ function compactReviewerOutput(
             : {}),
         }
       })
-    : output.findings
+    : coerced.findings
 
-  const requirementCoverage = Array.isArray(output.requirementCoverage)
-    ? output.requirementCoverage.map((requirement) => {
+  const requirementCoverage = Array.isArray(coerced.requirementCoverage)
+    ? coerced.requirementCoverage.map((requirement) => {
         if (
           !requirement ||
           typeof requirement !== 'object' ||
@@ -667,10 +866,10 @@ function compactReviewerOutput(
             : {}),
         }
       })
-    : output.requirementCoverage
+    : coerced.requirementCoverage
 
   return {
-    ...output,
+    ...coerced,
     findings,
     requirementCoverage,
   }
@@ -769,7 +968,20 @@ function extractReviewerAttestationCore(
       ...(typeof record.coverage === 'string'
         ? { coverage: record.coverage }
         : {}),
-      ...(Array.isArray(record.findings) ? { findings: record.findings } : {}),
+      ...(Array.isArray(record.findings)
+        ? {
+            // Bounded copy (code-reviewer:spawn-agent-utils.ts:
+            // attestation-core-raw-findings-unbounded): the RAW findings
+            // array used to be copied verbatim, and the oversize
+            // agentReceipt fallbacks in boundAgentOutputForParent spread
+            // this core into the parent-visible receipt, so megabytes of
+            // raw findings could ride past PARENT_AGENT_OUTPUT_MAX_CHARS.
+            // The copy now runs through the module's standard compaction
+            // (item cap + per-string truncation); the full untruncated
+            // payload stays recoverable via the persisted artifact.
+            findings: compactAgentOutputValue(record.findings),
+          }
+        : {}),
     }
   }
   if (record.type === 'json' || record.type === 'structuredOutput') {
@@ -840,6 +1052,149 @@ function summarizeNestedAgentOutput(value: unknown): unknown {
   }
 }
 
+/**
+ * PR-T2 (D20) Part B: best-effort persistence of the FULL untruncated child
+ * output when the parent-visible shape must fall back to a truncated receipt.
+ * Content-addressed by the sha256 of the serialized payload, so the same
+ * content always maps to the same scratch path (idempotent overwrite).
+ * `tmpdir()` is resolved at call time so TMPDIR overrides in tests are
+ * respected. Returns the artifact path, or undefined on ANY error — the
+ * oversize fallback must stay lossless-of-receipt even when tmp is unwritable.
+ *
+ * Security/retention: artifacts carry FULL untruncated child output, so every
+ * file is written with owner-only 0o600 permissions regardless of the process
+ * umask, and retention is bounded — every persist runs a best-effort TTL sweep
+ * deleting artifacts older than OVERSIZE_ARTIFACT_TTL_MS (24h), inspecting at
+ * most OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES (50) directory entries per call so
+ * the sweep itself stays O(1) on this hot path. A failed sweep never fails the
+ * persist.
+ */
+const OVERSIZE_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000
+const OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES = 50
+
+/*
+ * Rotation offset for the capped sweep window (module scope): each call
+ * resumes from where the previous capped sweep stopped instead of always
+ * starting at the arbitrary readdirSync head. This is what turns the per-call
+ * cap into an across-calls forward-progress guarantee on the persist-hot path
+ * (reliability-reviewer: sweep-cap-no-forward-progress) — with a plain
+ * oldest-first window, entries beyond the first 50 readdir order slots are
+ * never even stat'ed unless older entries get deleted by other sweepers.
+ */
+let oversizeArtifactSweepCursor: { dir: string; nextIndex: number } | undefined
+
+function sweepExpiredOversizeArtifacts(dir: string, now: number): void {
+  try {
+    // Snapshot the directory listing FIRST so unlinkSync in the deletion
+    // phase below cannot mutate readdirSync's visible iteration mid-loop.
+    const allEntries = readdirSync(dir)
+    if (allEntries.length === 0) {
+      oversizeArtifactSweepCursor = { dir, nextIndex: 0 }
+      return
+    }
+    // Phase 1 (capped): stat at most OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES
+    // entries per call, over a modular rotation window anchored at the
+    // rotation cursor (persisted across calls per directory). The window
+    // WRAPS around the end of the directory (reliability-reviewer:
+    // sweep-cap-no-forward-progress): a head-anchored window whose tail
+    // falls off the end of the directory never stat's those entries on any
+    // call, leaving them stale forever. Wrapping guarantees every call
+    // stats a full contiguous (modular) window, so consecutive sweeps
+    // partition-rotate through the ENTIRE directory.
+    const startIndex =
+      oversizeArtifactSweepCursor?.dir === dir
+        ? oversizeArtifactSweepCursor.nextIndex
+        : 0
+    const startIndexMod = startIndex % allEntries.length
+    const windowSize = Math.min(
+      OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES,
+      allEntries.length,
+    )
+    const mtimeEntries: Array<[string, number]> = []
+    for (let offset = 0; offset < windowSize; offset += 1) {
+      const entry = allEntries[(startIndexMod + offset) % allEntries.length]
+      const filePath = join(dir, entry)
+      try {
+        mtimeEntries.push([entry, statSync(filePath).mtimeMs])
+      } catch {
+        // Best-effort per entry: a raced deletion or EACCES on one file
+        // must not stop the sweep.
+      }
+    }
+    // The cursor advances by the window size modulo the (pre-deletion)
+    // directory length, so the next call starts right after this window.
+    oversizeArtifactSweepCursor = {
+      dir,
+      nextIndex: (startIndexMod + windowSize) % allEntries.length,
+    }
+    // Phase 2: order the collected candidate window oldest-first so the cap
+    // always inspects the most-expired entries first.
+    mtimeEntries.sort(([, aMtime], [, bMtime]) => aMtime - bMtime)
+    for (const [entry, mtimeMs] of mtimeEntries) {
+      if (now - mtimeMs <= OVERSIZE_ARTIFACT_TTL_MS) {
+        // Sorted oldest-first: everything after the first non-expired entry
+        // is younger, so the sweep can stop early.
+        break
+      }
+      try {
+        unlinkSync(join(dir, entry))
+      } catch {
+        // Best-effort per entry: a raced deletion or EACCES on one file
+        // must not stop the sweep.
+      }
+    }
+  } catch {
+    // Best-effort: a failed sweep never fails the persist.
+  }
+}
+
+let oversizeArtifactDirEnsured: string | undefined
+
+function persistOversizeArtifact(serialized: string): string | undefined {
+  const dir = join(tmpdir(), 'openbuff-spawn-output')
+  const writeAndSweep = (): string => {
+    const artifactPath = join(
+      dir,
+      `${createHash('sha256').update(serialized).digest('hex')}.json`,
+    )
+    // Owner-only permissions regardless of the process umask: the scratch
+    // directory itself is created 0o700 and these files are written 0o600,
+    // so untruncated child output in a shared tmp directory stays private
+    // to this user.
+    writeFileSync(artifactPath, serialized, { mode: 0o600 })
+    // NOTE(P2-T1): operational TTL sweep (mtime expiry), not a replay-
+    // deterministic timestamp; the injected clock is not threaded to this
+    // module boundary. Deferred per the P2-T1 determinism roadmap.
+    sweepExpiredOversizeArtifacts(dir, Date.now())
+    return artifactPath
+  }
+  try {
+    if (oversizeArtifactDirEnsured !== dir) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      oversizeArtifactDirEnsured = dir
+    }
+    return writeAndSweep()
+  } catch {
+    // Self-heal the ensured cache (reliability-reviewer:
+    // oversize-artifact-dir-flag-never-reset): a failure here may mean the
+    // artifact directory was removed externally between persists or the
+    // mkdir silently raced. Drop the cache, re-run mkdir, and RETRY the
+    // write once within this call so the very next persist still produces
+    // the recovery artifact instead of surfacing a permanent artifactError.
+    try {
+      oversizeArtifactDirEnsured = undefined
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      oversizeArtifactDirEnsured = dir
+      return writeAndSweep()
+    } catch {
+      // Genuinely unwritable (e.g. TMPDIR points at a file): drop the
+      // cache so a future persist re-runs mkdirSync.
+      oversizeArtifactDirEnsured = undefined
+      return undefined
+    }
+  }
+}
+
 function boundAgentOutputForParent(
   value: unknown,
   agentType?: string,
@@ -875,8 +1230,38 @@ function boundAgentOutputForParent(
       summary: 'Agent output was not serializable.',
     }
   }
-  if (serialized === undefined) return compacted
   if (serialized.length <= PARENT_AGENT_OUTPUT_MAX_CHARS) return compacted
+  // PR-T2 (D20) Part B: persist the FULL serialized payload so the truncated
+  // parent-visible shape below stays recoverable via read_files. When
+  // persistence fails, the receipt carries an explicit, bounded diagnostic
+  // (reliability-reviewer: oversize-review-fallback-silent-data-loss) so the
+  // parent knows the data is no longer fully recoverable via the artifact —
+  // the loss is never silent.
+  // The artifact contract is the FULL UNTRUNCATED original output: the
+  // compacted payload loses vines of string/array content, and persisting
+  // the already-compacted fallback shape would make every artifact claim
+  // ('Full untruncated output persisted') a lie. Serialize the RAW value
+  // first and only fall back to the compacted serialization when the raw
+  // form is not serializable (e.g. a circular reference throws under
+  // JSON.stringify).
+  let fullSerialized: string
+  try {
+    fullSerialized = JSON.stringify(value) ?? serialized
+  } catch {
+    fullSerialized = serialized
+  }
+  const artifactPath = persistOversizeArtifact(fullSerialized)
+  const artifactFields = artifactPath
+    ? {
+        artifactPath,
+        artifactBytes: fullSerialized.length,
+        artifact: 'Full untruncated output persisted; read with read_files.',
+      }
+    : {
+        artifactPersisted: false,
+        artifactError:
+          'Oversize agent output could NOT be persisted to the oversize artifact directory (tmp unwritable); the parent-visible payload below is truncated and not fully recoverable via read_files.',
+      }
   if (compacted && typeof compacted === 'object' && !Array.isArray(compacted)) {
     const record = compacted as Record<string, unknown>
     const valueRecord =
@@ -885,13 +1270,25 @@ function boundAgentOutputForParent(
       !Array.isArray(record.value)
         ? (record.value as Record<string, unknown>)
         : record
+    // Reviewer-family gate (reliability-reviewer:
+    // oversize-review-fallback-silent-data-loss): the review-shaped collapse
+    // below keeps ONLY the fixed reviewer receipt fields, so it must apply
+    // ONLY to reviewer-family payloads — a verdict/reviewedFiles/
+    // requirementCoverage shape on its own is not enough (a non-reviewer
+    // agent could carry arbitrary additional payload fields that would then
+    // be dropped when the persisted artifact is the only recovery path).
+    const isReviewerFamilyPayload =
+      valueRecord.family === 'reviewer' ||
+      agentType?.toLowerCase().includes('reviewer')
     if (
-      typeof valueRecord.verdict === 'string' ||
-      Array.isArray(valueRecord.reviewedFiles) ||
-      Array.isArray(valueRecord.requirementCoverage)
+      isReviewerFamilyPayload &&
+      (typeof valueRecord.verdict === 'string' ||
+        Array.isArray(valueRecord.reviewedFiles) ||
+        Array.isArray(valueRecord.requirementCoverage))
     ) {
       return {
         ...(record.type ? { type: record.type } : {}),
+        ...artifactFields,
         value: {
           schemaVersion: valueRecord.schemaVersion,
           verdict: valueRecord.verdict,
@@ -921,7 +1318,68 @@ function boundAgentOutputForParent(
     // parks the run on "did not return the required structured snapshot
     // attestation" despite a complete review.
     ...(attestationCore ?? {}),
+    ...artifactFields,
     summary: `${serialized.slice(0, 48_000)}...[truncated child output]...${serialized.slice(-8_000)}`,
+  }
+}
+
+/**
+ * PR-T2 (D20) Part A: providers often split one logical assistant answer into
+ * dozens of token-sized assistant messages under `lastMessage` mode; naive
+ * compaction then reports 100+ omittedItems and clips the answer mid-sentence.
+ * Conservatively collapse ONLY an unambiguous shape: a `lastMessage` wrapper
+ * whose value is 2+ assistant messages, each carrying exclusively
+ * `{ type: 'text', text: string }` content parts. The texts are concatenated
+ * in order with blank-line separators into a single assistant message. Extra
+ * message fields (e.g. `tags`) are ignored, and the first message's role is
+ * carried over. Any other shape — single message, mixed roles, non-text
+ * parts, wrong envelope — is returned UNCHANGED. Never mutates the input.
+ */
+function mergeLastMessageFragments(output: unknown): unknown {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return output
+  }
+  const record = output as Record<string, unknown>
+  if (record.type !== 'lastMessage' || !Array.isArray(record.value)) {
+    return output
+  }
+  const messages = record.value
+  if (messages.length <= 1) return output
+  const isTextOnlyAssistantMessage = (
+    message: unknown,
+  ): message is {
+    role: string
+    content: Array<{ type: 'text'; text: string }>
+  } => {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return false
+    }
+    const entry = message as Record<string, unknown>
+    if (entry.role !== 'assistant' || !Array.isArray(entry.content)) {
+      return false
+    }
+    return entry.content.every(
+      (part) =>
+        !!part &&
+        typeof part === 'object' &&
+        (part as Record<string, unknown>).type === 'text' &&
+        typeof (part as Record<string, unknown>).text === 'string',
+    )
+  }
+  const texts: string[] = []
+  for (const message of messages) {
+    if (!isTextOnlyAssistantMessage(message)) return output
+    for (const part of message.content) texts.push(part.text)
+  }
+  const firstMessage = messages[0] as { role: string }
+  return {
+    type: 'lastMessage',
+    value: [
+      {
+        role: firstMessage.role,
+        content: [{ type: 'text', text: texts.join('\n\n') }],
+      },
+    ],
   }
 }
 
@@ -929,6 +1387,11 @@ export function normalizeSpawnedAgentOutput(
   output: any,
   agentType?: string,
 ): any {
+  // PR-T2 (D20) Part A: collapse fragmented lastMessage assistant runs FIRST,
+  // before the undefined/error/structured branches, so the merged single
+  // message flows through the normal compaction path. A no-op for every other
+  // shape (the helper returns its input unchanged).
+  output = mergeLastMessageFragments(output)
   // M0-T3 output durability: a child that never called set_output must never
   // surface as an undefined/null/empty value that the parent cannot
   // distinguish from real (possibly compact) output. Emit an explicit partial
@@ -965,6 +1428,136 @@ export function normalizeSpawnedAgentOutput(
   }
   if (output && typeof output === 'object' && !Array.isArray(output)) {
     const record = output as Record<string, unknown>
+    // Some reviewer-family children deliver the receipt inside a KEYLESS
+    // json-part envelope: { jsonKey: 'output', value: '<JSON string (or
+    // native object) of the full receipt>' } — no `type` discriminator at all
+    // (observed live on compatibility-reviewer). Neither structuredOutput
+    // branch below matches it (they require record.type), so the verdict
+    // riding inside stays invisible to the reviewer verdict guard and the
+    // parent re-reviews forever. Recognize it ONLY when the receipt shape is
+    // confirmed by a string `verdict` inside the parsed/native value,
+    // which keeps generic json-part envelopes that are NOT receipts
+    // untouched. Bounded and conservative: malformed JSON, an array, an
+    // oversize string, or a verdict-less value fall through unchanged.
+    if (
+      typeof record.jsonKey === 'string' &&
+      typeof record.verdict !== 'string' &&
+      !record.type
+    ) {
+      let unwrapped: unknown = undefined
+      if (typeof record.value === 'string') {
+        // C3 (json-overhaul): shared bounded-receipt-candidate parse replaces
+        // the inlined bound + try/catch JSON.parse block (behavior identical:
+        // oversize/malformed → undefined → fall through unchanged).
+        unwrapped = parseBoundedReceiptCandidate(
+          record.value,
+          MAX_REVIEWER_JSON_VALUE_CHARS,
+        )
+      } else if (
+        record.value &&
+        typeof record.value === 'object' &&
+        !Array.isArray(record.value)
+      ) {
+        unwrapped = record.value
+      }
+      if (
+        unwrapped &&
+        typeof unwrapped === 'object' &&
+        !Array.isArray(unwrapped) &&
+        typeof (unwrapped as Record<string, unknown>).verdict === 'string'
+      ) {
+        return boundAgentOutputForParent(
+          {
+            type: 'structuredOutput',
+            value: compactReviewerOutput(
+              unwrapped as Record<string, unknown>,
+              agentType,
+            ),
+          },
+          agentType,
+        )
+      }
+    }
+    // Some reviewer-family children deliver the receipt as a single
+    // JSON-encoded STRING value (observed live on compatibility-reviewer).
+    // Such a string can never qualify for the object branch below, so the
+    // verdict riding inside it is invisible to the reviewer verdict guard
+    // and the parent re-reviews forever. Parse it FIRST (bounded, in
+    // try/catch, never throwing) and flow a parsed non-null non-array object
+    // through the EXISTING object-value branch unchanged. Anything else —
+    // malformed JSON, a parsed array, an oversize string — falls through to
+    // the unchanged wrapper path below.
+    if (
+      record.type === 'structuredOutput' &&
+      typeof record.value === 'string'
+    ) {
+      // C3 (json-overhaul): shared bounded-receipt-candidate parse replaces
+      // the inlined bound + try/catch JSON.parse block (behavior identical:
+      // oversize/malformed → undefined → fall through unchanged).
+      const parsed = parseBoundedReceiptCandidate(
+        record.value,
+        MAX_REVIEWER_JSON_VALUE_CHARS,
+      )
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return boundAgentOutputForParent(
+          {
+            ...record,
+            value: compactReviewerOutput(
+              parsed as Record<string, unknown>,
+              agentType,
+            ),
+          },
+          agentType,
+        )
+      }
+    }
+    // Some reviewer-family children wrap the receipt ONE level deeper: the
+    // structuredOutput value is an OBJECT whose `output` key holds the
+    // whole receipt as a JSON-encoded STRING (observed live on
+    // compatibility-reviewer). Without unwrapping, the verdict inside that
+    // string is invisible to the reviewer verdict guard and the parent
+    // re-reviews forever. Recognize the receipt-level wrapper only, bounded
+    // and conservative: value must be a non-null non-array object WITHOUT a
+    // string verdict (a verdict-shaped wrapper is already handled above),
+    // and value.output must be a string within the parse bound. The parsed
+    // object then flows through the EXISTING object-value branch unchanged;
+    // the gate's own walker already recognizes verdict-shaped quoted JSON
+    // inside leaf strings, so a malformed/oversize/array parse simply falls
+    // through to the unchanged wrapper path below.
+    if (
+      record.type === 'structuredOutput' &&
+      record.value &&
+      typeof record.value === 'object' &&
+      !Array.isArray(record.value) &&
+      typeof (record.value as Record<string, unknown>).verdict !== 'string'
+    ) {
+      const nestedOutput = (record.value as Record<string, unknown>).output
+      if (typeof nestedOutput === 'string') {
+        // C3 (json-overhaul): shared bounded-receipt-candidate parse replaces
+        // the inlined bound + try/catch JSON.parse block (behavior identical:
+        // oversize/malformed → undefined → fall through unchanged).
+        const parsedOutput = parseBoundedReceiptCandidate(
+          nestedOutput,
+          MAX_REVIEWER_JSON_VALUE_CHARS,
+        )
+        if (
+          parsedOutput &&
+          typeof parsedOutput === 'object' &&
+          !Array.isArray(parsedOutput)
+        ) {
+          return boundAgentOutputForParent(
+            {
+              ...record,
+              value: compactReviewerOutput(
+                parsedOutput as Record<string, unknown>,
+                agentType,
+              ),
+            },
+            agentType,
+          )
+        }
+      }
+    }
     if (
       record.type === 'structuredOutput' &&
       record.value &&
@@ -1125,11 +1718,34 @@ export async function finalizeOwnedLibrarianClone(params: {
     await rm(cloneDir, { recursive: true, force: true })
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code
-    // Transient filesystem races (ENOENT already removed, ENOTEMPTY busy) must not fail the receipt.
-    params.logger.warn(
-      { cloneDir, code, error: String(error) },
-      'Transient Librarian clone cleanup failure — ignoring',
-    )
+    if (code === 'ENOENT') {
+      // Transient filesystem race: the clone was already removed (e.g. by a
+      // concurrent finalize); the ownership goal holds, so the receipt may
+      // still report the clone as cleaned up.
+      params.logger.debug(
+        { cloneDir, code },
+        'Librarian clone already removed during cleanup — treating as cleaned',
+      )
+    } else {
+      // reliability-reviewer: librarian-cleanup-reports-cleaned-on-failed-rm —
+      // a non-transient rm failure must NOT be reported as cleaned up, or the
+      // receipt misreports ownership state while the clone silently leaks on
+      // disk. Keep the trusted cloneDir, mark the clone as retained, and
+      // surface an explicit cleanup-failure marker for the parent.
+      params.logger.warn(
+        { cloneDir, code, error: String(error) },
+        'Librarian clone cleanup failed — reporting the clone as retained',
+      )
+      const retainedValue = {
+        ...value,
+        cloneDir,
+        cloneRetained: true,
+        cloneCleanupFailed: true,
+      }
+      return wrapper?.type === 'structuredOutput'
+        ? { ...wrapper, value: retainedValue }
+        : retainedValue
+    }
   }
   const cleanedValue = { ...value, cloneDir: '', cloneRetained: false }
   return wrapper?.type === 'structuredOutput'
@@ -1485,6 +2101,94 @@ function stripUndefinedValuedKeys(value: unknown, depth = 0): unknown {
   return out
 }
 
+/**
+ * Conservative "did this general agent produce a usable final answer?" signal
+ * for the relaxed completion contract (buildRuntimeAgentReceiptOrThrow). True
+ * when params.output carries real non-empty answer text — a non-empty string,
+ * or a non-empty summary/answer/text/message/report field (including inside a
+ * structuredOutput wrapper or a text-only lastMessage) — or the most recent
+ * assistant message in the history has non-empty text. The empty placeholder
+ * normalizeSpawnedAgentOutput emits (`{ summary: '', partial: true }`) and the
+ * answerless / step-capped harvest placeholder never qualify: an explicit
+ * `partial` marker is rejected and blank fields do not count, so an answerless
+ * run stays a retryable missing-completion miss.
+ */
+const FINAL_ANSWER_TEXT_FIELDS = [
+  'summary',
+  'answer',
+  'text',
+  'message',
+  'report',
+] as const
+
+function recordHasNonEmptyAnswerText(
+  record: Record<string, unknown>,
+): boolean {
+  // Never credit an explicit partial placeholder as a real final answer.
+  if (record.partial === true) return false
+  return FINAL_ANSWER_TEXT_FIELDS.some(
+    (field) =>
+      typeof record[field] === 'string' &&
+      (record[field] as string).trim().length > 0,
+  )
+}
+
+function lastMessageValueHasNonEmptyAssistantText(value: unknown): boolean {
+  if (!Array.isArray(value)) return false
+  return value.some((message) => {
+    if (!message || typeof message !== 'object') return false
+    const entry = message as Record<string, unknown>
+    if (entry.role !== 'assistant') return false
+    const content = entry.content
+    if (typeof content === 'string') return content.trim().length > 0
+    if (!Array.isArray(content)) return false
+    return content.some(
+      (part) =>
+        !!part &&
+        typeof part === 'object' &&
+        (part as Record<string, unknown>).type === 'text' &&
+        typeof (part as Record<string, unknown>).text === 'string' &&
+        ((part as Record<string, unknown>).text as string).trim().length > 0,
+    )
+  })
+}
+
+function hasNonEmptyFinalAnswerText(
+  output: unknown,
+  messageHistory: unknown,
+): boolean {
+  if (typeof output === 'string') return output.trim().length > 0
+  if (output && typeof output === 'object' && !Array.isArray(output)) {
+    const record = output as Record<string, unknown>
+    if (
+      record.type === 'structuredOutput' &&
+      record.value &&
+      typeof record.value === 'object' &&
+      !Array.isArray(record.value) &&
+      recordHasNonEmptyAnswerText(record.value as Record<string, unknown>)
+    ) {
+      return true
+    }
+    if (
+      record.type === 'lastMessage' &&
+      lastMessageValueHasNonEmptyAssistantText(record.value)
+    ) {
+      return true
+    }
+    if (recordHasNonEmptyAnswerText(record)) return true
+  }
+  // Fallback: the most recent assistant message's text in the history.
+  if (Array.isArray(messageHistory)) {
+    for (let i = messageHistory.length - 1; i >= 0; i -= 1) {
+      const message = messageHistory[i]
+      if (!message || typeof message !== 'object') continue
+      if ((message as Record<string, unknown>).role !== 'assistant') continue
+      return lastMessageValueHasNonEmptyAssistantText([message])
+    }
+  }
+  return false
+}
+
 function buildRuntimeAgentReceiptOrThrow(params: {
   agentType: string
   agentId: string
@@ -1510,18 +2214,35 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     typeof shardId === 'string' &&
     shardId.trim().length > 0 &&
     trimmedSnapshotId.length > 0
-  // Credit the generator harvest from the harvest flag alone. Only a harvest
-  // that recovered REAL answer text may stand in for explicit completion: an answerless / step-capped run marks its output with
-  // noHarvestedAnswer, whose summary is just a placeholder, so it stays a
-  // retryable partial the parent can re-spawn instead of completed with zero
-  // errors.
+  // Relaxed general-agent completion contract: an explicit task_completed
+  // call is no longer required when the agent produced a usable final answer.
+  // A harvest that recovered REAL answer text, OR non-empty final answer text
+  // in the output / last assistant message, credits completion. Only a
+  // genuinely answerless / step-capped run — which marks its harvested output
+  // with noHarvestedAnswer (a placeholder summary) and carries no recoverable
+  // answer text — stays a retryable missing-completion partial the parent can
+  // re-spawn. The audit-shard requirement below is unaffected: audit shards
+  // still MUST emit a write_audit_findings structuralReceipt.
   const harvestedOutput = params.agentState?.output
+  // An answerless / step-capped harvest marks itself with noHarvestedAnswer:
+  // its placeholder summary is diagnostic text, not a real final answer, so
+  // neither the harvest flag nor the answer-text path may credit completion.
+  const answerlessHarvest =
+    harvestedOutput !== undefined && harvestedOutput.noHarvestedAnswer === true
   const hasHarvestedFallback =
     harvestedOutput !== undefined &&
     harvestedOutput.harvestedFromFallback === true &&
-    harvestedOutput.noHarvestedAnswer !== true
+    !answerlessHarvest
+  const hasRecoverableFinalAnswer =
+    !answerlessHarvest &&
+    hasNonEmptyFinalAnswerText(
+      params.output,
+      params.agentState?.messageHistory,
+    )
   const hasExplicitCompletionOrHarvest =
-    containsToolCall(receiptSources, 'task_completed') || hasHarvestedFallback
+    containsToolCall(receiptSources, 'task_completed') ||
+    hasHarvestedFallback ||
+    hasRecoverableFinalAnswer
   const missingExplicitCompletion =
     isGeneralAgent && !hasExplicitCompletionOrHarvest
   const missingAuditReceipt =
@@ -1639,19 +2360,216 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   const foundOutputStatus = findReceiptStatus(params.output)
   const mutationsComplete =
     mutationAgent && hasMutationProgress && errors.length === 0
+  // D19/PR-T1: derive the typed handoff outcome from runtime evidence.
+  // crashed/missing_output/schema_invalid read the RAW params.output (and the
+  // set_output rejection recorded on agent state); truncated reads the
+  // NORMALIZED output. One normalization pass total, reused below as the
+  // receipt's `normalizedOutput`. Precedence when multiple apply:
+  // crashed > missing_output > schema_invalid > truncated > ok.
+  const rawOutputRecord =
+    params.output &&
+    typeof params.output === 'object' &&
+    !Array.isArray(params.output)
+      ? (params.output as Record<string, unknown>)
+      : undefined
+  const crashEnvelopeMessage =
+    rawOutputRecord &&
+    rawOutputRecord.type === 'error' &&
+    typeof rawOutputRecord.message === 'string' &&
+    rawOutputRecord.message.startsWith('Subagent ') &&
+    rawOutputRecord.message.includes(' crashed: ')
+      ? rawOutputRecord.message
+      : undefined
+  const rawOutputMissing =
+    params.output === undefined ||
+    params.output === null ||
+    (typeof params.output === 'string' && !params.output.trim())
+  const lastSetOutputError = params.agentState?.lastSetOutputError
+  const lastSetOutputErrorText =
+    typeof lastSetOutputError === 'string' && lastSetOutputError.trim()
+      ? lastSetOutputError.trim()
+      : undefined
+  const normalizedOutput = normalizeSpawnedAgentOutput(
+    params.output,
+    params.agentType,
+  )
+  const normalizedOutputRecord =
+    normalizedOutput &&
+    typeof normalizedOutput === 'object' &&
+    !Array.isArray(normalizedOutput)
+      ? (normalizedOutput as Record<string, unknown>)
+      : undefined
+  const normalizedTruncationRecord =
+    normalizedOutputRecord?.truncation &&
+    typeof normalizedOutputRecord.truncation === 'object'
+      ? (normalizedOutputRecord.truncation as Record<string, unknown>)
+      : undefined
+  const normalizedOutputTruncated =
+    normalizedOutputRecord?.truncated === true ||
+    (typeof normalizedTruncationRecord?.omittedItems === 'number' &&
+      normalizedTruncationRecord.omittedItems > 0) ||
+    (typeof normalizedTruncationRecord?.omittedChars === 'number' &&
+      normalizedTruncationRecord.omittedChars > 0)
+  // PR-T1 supervised-outcome threading: honor the explicit structured
+  // `supervisedOutcome` stamped on the supervised error envelope so
+  // missing_output / schema_invalid / truncated settles keep their PR-T1
+  // classification (retryable) instead of collapsing into 'crashed'.
+  // params.error still wins: a genuine crash is never downgraded by the
+  // transport-level classification, and an unknown field value fails closed
+  // to the legacy message-shape derivation below.
+  const supervisedOutcomeRaw =
+    rawOutputRecord?.type === 'error' && !params.error
+      ? rawOutputRecord.supervisedOutcome
+      : undefined
+  const supervisedOutcome =
+    supervisedOutcomeRaw === 'missing_output' ||
+    supervisedOutcomeRaw === 'schema_invalid' ||
+    supervisedOutcomeRaw === 'truncated'
+      ? supervisedOutcomeRaw
+      : undefined
+  // Empty-output guard (receipt regression): a child that never called
+  // set_output and produced no harvested answer must never settle as
+  // 'completed' with null output. The empty placeholder
+  // normalizeSpawnedAgentOutput emits — and a blank lastMessage wrapper —
+  // used to read as outcome 'ok' here, so the final status fallback resolved
+  // 'completed' and the parent saw completed-with-null instead of a
+  // retryable failure.
+  const endedWithoutSetOutputOrHarvest =
+    harvestedOutput === undefined || harvestedOutput.noHarvestedAnswer === true
+  // A recoverable final answer in the history (the relaxed early-exit
+  // contract) is real output: the empty-output guard below must not classify
+  // such a run as missing_output. The answerless-harvest case is excluded
+  // upstream by hasNonEmptyFinalAnswerText's noHarvestedAnswer handling.
+  const hasRecoverableOutputAnswer = hasNonEmptyFinalAnswerText(
+    params.output,
+    params.agentState?.messageHistory,
+  )
+  const normalizedOutputIsEmptyPlaceholder =
+    normalizedOutputRecord?.partial === true &&
+    normalizedOutputRecord.summary === ''
+  const blankLastMessageOutput =
+    rawOutputRecord?.type === 'lastMessage' &&
+    Array.isArray(rawOutputRecord.value) &&
+    (rawOutputRecord.value as unknown[]).every((message) => {
+      if (!message || typeof message !== 'object') return false
+      const content = (message as Record<string, unknown>).content
+      return (
+        Array.isArray(content) &&
+        content.every((part) => {
+          if (!part || typeof part !== 'object') return false
+          const text = (part as Record<string, unknown>).text
+          return (
+            (part as Record<string, unknown>).type === 'text' &&
+            (typeof text !== 'string' || text.trim().length === 0)
+          )
+        })
+      )
+    })
+  const missingOutputEvidence =
+    (rawOutputMissing && !hasRecoverableOutputAnswer) ||
+    (endedWithoutSetOutputOrHarvest &&
+      !hasRecoverableOutputAnswer &&
+      (normalizedOutputIsEmptyPlaceholder || blankLastMessageOutput))
+  // Reviewer-family verdict guard: a reviewer child whose structured payload
+  // is degenerate — an object with no verdict field (e.g. just echoed params
+  // plus a snapshotFingerprint) — used to settle as outcome 'ok' and hand the
+  // parent garbage. Classify it as retryable schema_invalid instead. The
+  // guard keys on the structuredOutput payload when present (reviewer
+  // receipts arrive wrapped), falling back to the normalized record itself;
+  // family === 'advisory' specialists (no verdict) stay outcome 'ok', and
+  // non-reviewer agents are untouched (their agentType strings do not contain
+  // 'reviewer').
+  const reviewerOutputRecord =
+    normalizedOutputRecord &&
+    normalizedOutputRecord.type === 'structuredOutput' &&
+    normalizedOutputRecord.value &&
+    typeof normalizedOutputRecord.value === 'object' &&
+    !Array.isArray(normalizedOutputRecord.value)
+      ? (normalizedOutputRecord.value as Record<string, unknown>)
+      : normalizedOutputRecord
+  // The advisory exclusion runs FIRST so the OR-chain below narrows `family`
+  // to 'reviewer' | undefined for TypeScript (comparing that narrowed type
+  // against 'advisory' afterwards is flagged as TS2367); the semantics are
+  // identical: an advisory-family payload is never reviewer-family output.
+  const isReviewerFamilyOutput =
+    reviewerOutputRecord?.family !== 'advisory' &&
+    (reviewerOutputRecord?.family === 'reviewer' ||
+      (reviewerOutputRecord?.family === undefined &&
+        typeof params.agentType === 'string' &&
+        params.agentType.toLowerCase().includes('reviewer')))
+  const reviewerMissingVerdict =
+    isReviewerFamilyOutput === true &&
+    typeof reviewerOutputRecord?.verdict !== 'string'
+  // schema_invalid diagnostic detail: the set_output rejection when one was
+  // recorded, else the supervised crash-envelope message that carries the
+  // schema_invalid settle detail. A degenerate reviewer-family payload names
+  // the real problem (missing verdict) instead of the generic fallback.
+  const schemaInvalidDetail = reviewerMissingVerdict
+    ? `${params.agentType} returned a reviewer-family receipt without a verdict field (degenerate structured output; automated re-review will be triggered)`
+    : (lastSetOutputErrorText ??
+      crashEnvelopeMessage ??
+      'set_output failed schema validation')
+  const outcome:
+    | 'ok'
+    | 'missing_output'
+    | 'schema_invalid'
+    | 'truncated'
+    | 'crashed' =
+    params.error
+      ? 'crashed'
+      : (supervisedOutcome ??
+        (crashEnvelopeMessage
+          ? 'crashed'
+          : missingOutputEvidence
+            ? 'missing_output'
+            : lastSetOutputErrorText || reviewerMissingVerdict
+              ? 'schema_invalid'
+              : normalizedOutputTruncated
+                ? 'truncated'
+                : 'ok'))
+  // D24 fail-closed: a runtime-derived non-ok outcome must never yield a
+  // completed receipt unless runtime-attested mutations are the completion
+  // authority (RF-2). `truncated` stays visible via the outcome field without
+  // downgrading — reviewer receipts legitimately complete while truncated in
+  // transit, and the attestation-core rescue already preserves their verdict.
+  const envelopeUnderminesCompletion =
+    outcome !== 'ok' &&
+    outcome !== 'truncated' &&
+    !mutationsComplete &&
+    params.status === undefined
   const resolvedStatus = completionContractFailed
     ? 'partial'
     : errors.length > 0
       ? 'failed'
       : mutationsComplete
         ? 'completed'
-        : (params.status ??
-          foundOutputStatus ??
-          (mutationAgent ? 'blocked' : 'completed'))
-  const normalizedOutput = normalizeSpawnedAgentOutput(
-    params.output,
-    params.agentType,
-  )
+        : envelopeUnderminesCompletion
+          ? 'partial'
+          : (params.status ??
+            foundOutputStatus ??
+            (mutationAgent ? 'blocked' : 'completed'))
+  if (envelopeUnderminesCompletion) {
+    if (outcome === 'crashed') {
+      // Dedupe: params.error already contributed an equivalent crash error
+      // entry above; only the degrade-envelope crash needs its own diagnostic.
+      if (!params.error) {
+        errors.push({
+          message: `${params.agentType} receipt outcome 'crashed': ${crashEnvelopeMessage}`,
+          retryable: false,
+        })
+      }
+    } else if (outcome === 'missing_output') {
+      errors.push({
+        message: `${params.agentType} receipt outcome 'missing_output': ${params.agentType} ended without calling set_output`,
+        retryable: true,
+      })
+    } else if (outcome === 'schema_invalid') {
+      errors.push({
+        message: `${params.agentType} receipt outcome 'schema_invalid': ${schemaInvalidDetail}`,
+        retryable: true,
+      })
+    }
+  }
   // mutationsComplete requires errors.length === 0, so a mutationAgent blocked due to
   // missing permission (which surfaces as a receipt error) cannot be coerced to completed
   // here; this only reconciles stale blocked/null child output when runtime-attested mutations exist.
@@ -1719,6 +2637,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     role: inferredRole,
     agentId: params.agentId,
     status: resolvedStatus,
+    outcome,
     workspaceRevision:
       latestMutation?.workspaceRevision ??
       params.agentState?.workspaceState?.revision ??
@@ -1820,6 +2739,16 @@ export function reconcileAgentReceiptIntoParent(params: {
   receipt: AgentReceipt
   agentType: string
   objective?: string
+  /**
+   * Parent-side spawn id the ledger pairing keys on (the `spawn_started`
+   * event's spawnId). Defaults to `receipt.agentId` — identical on the
+   * in-process path, where the runtime builds the receipt from the child
+   * state it created. A SUPERVISED spawn's receipt carries the child's own
+   * self-declared agentId instead, so the caller must pass the parent-side
+   * id explicitly or the `spawn_finished` event never pairs with its
+   * `spawn_started` and the spawn dangles in the ledger.
+   */
+  spawnId?: string
 }): void {
   params.parentAgentState.taskMemory = mergeAgentReceiptIntoTaskMemory({
     current: params.parentAgentState.taskMemory,
@@ -1844,7 +2773,7 @@ export function reconcileAgentReceiptIntoParent(params: {
     event: {
       type: 'spawn_finished',
       runId: params.parentAgentState.runId ?? params.parentAgentState.agentId,
-      spawnId: params.receipt.agentId,
+      spawnId: params.spawnId ?? params.receipt.agentId,
       agentType: params.agentType,
       status: params.receipt.status,
       receiptId: params.receipt.receiptId,
@@ -2261,6 +3190,310 @@ export function logAgentSpawn(params: {
   )
 }
 
+// ── Process-supervised spawn (P2-T8 adoption slice) ─────────────────────
+// Flag-gated: reached ONLY when `processSupervision` is on AND an injectable
+// `spawnSupervised` seam is present (see the branch in executeSubagent). The
+// default flag-off path never touches these helpers, so it stays
+// byte-identical. The supervisor module itself is loaded lazily by the seam
+// (never a top-level import in this hot path).
+
+/**
+ * PR-T1: additive structured outcome field on the supervised error envelope.
+ * The crash-envelope MESSAGE deliberately keeps its legacy shape (it is the
+ * conservative fallback if the field is ever lost in transit), but the field
+ * lets buildRuntimeAgentReceiptOrThrow classify missing_output /
+ * schema_invalid / truncated settles per the PR-T1 precedence instead of
+ * collapsing them into 'crashed'. Additive only: consumers that ignore the
+ * field see the byte-identical envelope they saw before.
+ */
+type SupervisedErrorOutput = AgentOutput & {
+  supervisedOutcome?: 'missing_output' | 'schema_invalid' | 'truncated'
+}
+
+/**
+ * Maps a transport-level settle failure (crashed / missing_output /
+ * schema_invalid / truncated) to the structured error output the in-process
+ * catch path produces, with the bounded stderr tail folded into the message
+ * for diagnosability. The settle chain's buildRuntimeAgentReceipt then
+ * classifies the receipt outcome from this envelope (crashed >
+ * missing_output > schema_invalid > truncated > ok) exactly like an
+ * in-process failure, and the stderrTail rides errors[] via the
+ * crash-envelope path — so the orchestration ledger pairing and lease
+ * release run unchanged.
+ *
+ * PR-T1: the non-crash outcomes additionally stamp the explicit
+ * `supervisedOutcome` field on the envelope so the receipt derivation honors
+ * the transport-level classification (retryable missing_output /
+ * schema_invalid) instead of reporting a crashed, non-retryable settle.
+ */
+function mapSettledOutcomeToAgentOutput(params: {
+  agentType: string
+  outcome: ReceiptOutcome
+  stderrTail: string
+  crashReason?: string
+}): SupervisedErrorOutput {
+  const detail = params.stderrTail.trim().slice(0, 2_000)
+  const detailSuffix = detail.length > 0 ? `: ${detail}` : ''
+  // The message deliberately reuses the in-process crash envelope shape
+  // (`Subagent <type> crashed: ...`) as the conservative fallback, while the
+  // structured `supervisedOutcome` field carries the PR-T1 classification to
+  // buildRuntimeAgentReceiptOrThrow. That is how the bounded stderrTail ends
+  // up folded into the synthesized failed receipt's errors[] without any
+  // settle-chain change.
+  switch (params.outcome) {
+    case 'crashed': {
+      if (params.crashReason === 'timeout') {
+        return {
+          type: 'error',
+          message: `Subagent ${params.agentType} crashed: supervised child exceeded its activity deadline and was killed (timeout)${detailSuffix}`,
+        }
+      }
+      // Any other transport crash reason (spawn_failed / internal_error /
+      // nonzero_exit, or a free-form reason) stays on the conservative
+      // "exited before emitting a valid receipt" fallback, but names the
+      // reason so the specific transport failure is visible.
+      const reasonSuffix =
+        typeof params.crashReason === 'string' && params.crashReason.length > 0
+          ? ` (${params.crashReason})`
+          : ''
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised child exited before emitting a valid receipt${reasonSuffix}${detailSuffix}`,
+      }
+    }
+    case 'missing_output':
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised child produced no receipt (missing_output)${detailSuffix}`,
+        supervisedOutcome: 'missing_output',
+      }
+    case 'schema_invalid':
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised receipt failed agentReceiptSchema (schema_invalid)${detailSuffix}`,
+        supervisedOutcome: 'schema_invalid',
+      }
+    case 'truncated':
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised receipt exceeded the supervisor's 8 MiB stdout capture cap (truncated)${detailSuffix}`,
+        supervisedOutcome: 'truncated',
+      }
+    case 'ok':
+      // Unreachable through the callers below; kept total for the enum.
+      return {
+        type: 'error',
+        message: `Subagent ${params.agentType} crashed: supervised child settled as 'ok' without a receipt${detailSuffix}`,
+      }
+  }
+}
+
+/**
+ * Runs one subagent through the injectable supervised-spawn seam and maps
+ * the settled result into the SAME `{ agentState, output }` shape (plus the
+ * additive `supervisedReceipt` carry) the in-process `loopAgentSteps` path
+ * returns, so the existing settle chains (buildRuntimeAgentReceipt →
+ * reconcileAgentReceiptIntoParent, lease release, ledger pairing) run
+ * unchanged.
+ *
+ * Receipt mapping contract (P2-T8):
+ *  - settle outcome 'ok' (or 'truncated', which still carries the validated
+ *    envelope) → `supervisedReceipt` is the child's own validated receipt;
+ *    the settle chains prefer it over a rebuilt one.
+ *  - crashed / missing_output / schema_invalid / truncated-without-envelope →
+ *    a structured error output; the settle chain synthesizes the
+ *    field-complete failed receipt via buildRuntimeAgentReceipt with the
+ *    stderr tail folded into errors[].
+ *  - a child-declared failure (its receipt says failed/crashed, e.g. the
+ *    honest 'unsupported-deps' degradation) still settles as 'ok' at the
+ *    transport level; its failed receipt is carried through verbatim and the
+ *    parent-visible output becomes the failure message.
+ */
+async function runSupervisedSubagent(params: {
+  spawnSupervised: (
+    request: SupervisedSpawnRequest,
+  ) => Promise<SettledSubagentResult>
+  agentState: AgentState
+  logger: Logger
+  onResponseChunk: (chunk: string | PrintModeEvent) => void
+  agentTemplate: AgentTemplate
+  parentAgentState: AgentState
+  ancestorRunIds: string[]
+  prompt: string | undefined
+  spawnParams: Record<string, unknown> | undefined
+  userInputId: string
+  fingerprintId: string
+  clientSessionId: string
+  userId: string | undefined
+  parentSystemPrompt: string | undefined
+  fileContext: ProjectFileContext
+  localAgentTemplates: Record<string, AgentTemplate>
+  resolveModelContextWindow?: (params: {
+    agentId?: string
+    model?: string
+  }) => number | undefined
+}): Promise<{
+  agentState: AgentState
+  output: AgentOutput
+  supervisedReceipt?: AgentReceipt
+}> {
+  const {
+    spawnSupervised,
+    agentState,
+    logger,
+    agentTemplate,
+    parentAgentState,
+    prompt,
+    spawnParams,
+  } = params
+
+  // Supervised children have no bridged resolveModelContextWindow dep
+  // (functions cannot cross the JSON transport), so the parent stamps the
+  // resolved window into the request's child slice here; without it the
+  // child falls back to the unknown-window compaction policy regardless of
+  // the configured route.
+  const contextWindowTokens = params.resolveModelContextWindow?.({
+    agentId: agentTemplate.id,
+    model: agentTemplate.model,
+  })
+
+  const request: SupervisedSpawnRequest = {
+    agentType: agentTemplate.id,
+    prompt,
+    spawnParams,
+    // Supervised spawns gain a wall-clock deadline in-process spawns do not
+    // have; no caller override is threaded in this slice, so the supervisor
+    // default (SETTLE_DEFAULT_TIMEOUT_MS) applies.
+    child: {
+      agentId: agentState.agentId,
+      ...(agentState.messageHistory
+        ? { messageHistory: agentState.messageHistory }
+        : {}),
+      ...(agentState.systemPrompt
+        ? { systemPrompt: agentState.systemPrompt }
+        : {}),
+      ...(agentState.taskMemory !== undefined
+        ? { taskMemory: agentState.taskMemory }
+        : {}),
+      ...(agentState.workspaceState !== undefined
+        ? { workspaceState: agentState.workspaceState }
+        : {}),
+      ...(agentState.contextTokenCount !== undefined
+        ? { contextTokenCount: agentState.contextTokenCount }
+        : {}),
+      ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
+    },
+    fileContext: params.fileContext,
+    localAgentTemplates:
+      // The JSON request file is a transport boundary: schemas/handleSteps
+      // must cross in round-trip-safe form (child re-coerces/materializes).
+      serializeAgentTemplatesForTransport(params.localAgentTemplates),
+    userId: params.userId,
+    clientSessionId: params.clientSessionId,
+    userInputId: params.userInputId,
+    fingerprintId: params.fingerprintId,
+    // parentAgentState.runId may be unset (top-level orchestrators, tests,
+    // some programmatic runs). An empty string is not a valid runId and would
+    // persist as such into the serialized SupervisedSpawnRequest's
+    // ancestorRunIds, so fall back to the parent's stable agentId — the same
+    // convention createAgentState (parentAgentState.runId ?? 'NULL') and
+    // reconcileAgentReceiptIntoParent (parentAgentState.runId ??
+    // parentAgentState.agentId) already use.
+    ancestorRunIds: [
+      ...params.ancestorRunIds,
+      parentAgentState.runId ?? parentAgentState.agentId,
+    ],
+    parentSystemPrompt: params.parentSystemPrompt,
+  }
+
+  let settled: SettledSubagentResult
+  try {
+    settled = await spawnSupervised(request)
+  } catch (error) {
+    // A seam that throws is a supervisor-transport failure, not a child
+    // crash: degrade to the same structured error output the in-process
+    // catch path produces instead of failing the whole parent turn.
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    logger.warn(
+      { agentType: agentTemplate.id, error: errorMessage },
+      'Supervised spawn seam threw; degrading to structured error output',
+    )
+    return {
+      agentState,
+      // Same crash-envelope shape the in-process catch path emits, so
+      // buildRuntimeAgentReceiptOrThrow classifies it as outcome 'crashed'
+      // and the settle chain synthesizes a failed receipt.
+      output: {
+        type: 'error',
+        message: `Subagent ${agentTemplate.id} crashed: supervised spawn seam threw: ${errorMessage}`,
+      },
+    }
+  }
+
+  if (settled.outcome !== 'ok' && settled.outcome !== 'truncated') {
+    return {
+      agentState,
+      output: mapSettledOutcomeToAgentOutput({
+        agentType: agentTemplate.id,
+        outcome: settled.outcome,
+        stderrTail: settled.stderrTail,
+        crashReason: settled.crashReason,
+      }),
+    }
+  }
+
+  // Validate the settled envelope through the canonical receipt schema so an
+  // ok/truncated outcome can never carry a malformed receipt into the settle
+  // chains (an injected or buggy seam degrades to the crashed mapping
+  // instead).
+  const parsedEnvelope = agentReceiptSchema.safeParse(settled.receipt)
+  if (!parsedEnvelope.success) {
+    return {
+      agentState,
+      output: mapSettledOutcomeToAgentOutput({
+        agentType: agentTemplate.id,
+        outcome: 'crashed',
+        stderrTail: settled.stderrTail,
+      }),
+    }
+  }
+  const receipt = parsedEnvelope.data
+
+  const childReportsFailure =
+    receipt.status === 'failed' ||
+    receipt.outcome === 'crashed' ||
+    receipt.outcome === 'missing_output' ||
+    receipt.outcome === 'schema_invalid'
+  // The parent-visible crash envelope carries the child's first error CODE
+  // (e.g. 'unsupported-deps') alongside its message so the structured
+  // degradation reason survives into the settle chain's errors[] diagnostic
+  // instead of living only on the receipt's code field.
+  const firstChildError = receipt.errors[0]
+  const childFailureDetail = firstChildError
+    ? `${firstChildError.code ? `${firstChildError.code}: ` : ''}${firstChildError.message}`
+    : `child receipt status '${receipt.status}'`
+  const output: AgentOutput = childReportsFailure
+    ? {
+        type: 'error',
+        message: `Subagent ${agentTemplate.id} crashed: supervised child reported failure: ${childFailureDetail}`,
+      }
+    : {
+        type: 'structuredOutput',
+        value:
+          receipt.output &&
+          typeof receipt.output === 'object' &&
+          !Array.isArray(receipt.output)
+            ? (receipt.output as Record<string, unknown>)
+            : {
+                message:
+                  typeof receipt.output === 'string'
+                    ? receipt.output
+                    : `Supervised subagent ${agentTemplate.id} completed.`,
+              },
+      }
+  return { agentState, output, supervisedReceipt: receipt }
+}
+
 /**
  * Executes a subagent using loopAgentSteps
  */
@@ -2275,6 +3508,11 @@ export async function executeSubagent(
       ancestorRunIds: string[]
       spawnToolCallId?: string
       spawnIndex?: number
+      // P2-T8 flag-gated process supervision (see SubagentContextParams).
+      processSupervision?: boolean
+      spawnSupervised?: (
+        request: SupervisedSpawnRequest,
+      ) => Promise<SettledSubagentResult>
     } & ParamsExcluding<typeof loopAgentSteps, 'agentType' | 'ancestorRunIds'>,
     'isOnlyChild' | 'clearUserPromptMessagesAfterResponse'
   >,
@@ -2327,76 +3565,230 @@ export async function executeSubagent(
 
   // The subagent runs on the parent's signal (carried by ...withDefaults), so
   // user/parent cancellation still propagates. There is no wall-clock deadline:
-  // productive subagents are bounded only by cancellation, the repeated-step
-  // watchdog, spawn depth, and cost/token budgets.
-  let result
-  let failed = false
-  try {
-    result = await loopAgentSteps({
-      ...withDefaults,
-      onResponseChunk,
-      // Don't propagate parent's image content to subagents.
-      // If subagents need to see images, they get them through includeMessageHistory,
-      // not by creating new image-containing messages for their prompts.
-      content: undefined,
-      ancestorRunIds: [...ancestorRunIds, parentAgentState.runId ?? ''],
-      agentType: agentTemplate.id,
-    })
-  } catch (error) {
-    // Any subagent failure (cancellation, budget exhaustion, thrown error) must
-    // still emit a finish event so the UI never shows a subagent that started
-    // but never finished.
-    failed = true
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    onResponseChunk({
-      type: 'subagent_finish',
-      agentId: withDefaults.agentState.agentId,
-      agentType: agentTemplate.id,
-      displayName: agentTemplate.displayName,
-      onlyChild: isOnlyChild,
-      parentAgentId: parentAgentState.agentId,
-      prompt,
-      params: spawnParams,
-      spawnToolCallId,
-      spawnIndex,
-      error: errorMessage,
-    })
-    // Only GENUINE parent/user cancellation must keep propagating so the run
-    // aborts. Gate this on the PARENT signal actually being aborted — never on
-    // error.name === 'AbortError'/'TimeoutError' alone. A child-internal abort
-    // (an aborted sub-operation, a timed-out provider fetch, or an abort
-    // raised while the settle tail processes a large set_output payload plus
-    // receipt reconciliation) surfaces as an AbortError while the parent
-    // signal is still live. The previous guard re-threw on the error NAME
-    // regardless of the parent signal, so a mutating child (editor /
-    // repair-editor) that had ALREADY committed its edits crashed the entire
-    // parent turn at receipt-delivery time with 'Error executing handleSteps
-    // for agent base2: The operation was aborted'. Reviewers rarely tripped it
-    // because they settle a tiny attestation object fast; the long mutating
-    // settle tail is what widened the window. When the parent signal is NOT
-    // aborted we degrade to the structured error output below instead of
-    // taking down the session.
-    const parentSignalAborted =
-      (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
-    if (parentSignalAborted) {
-      throw error
-    }
-    // Degrade instead of throwing: a re-raised error previously propagated
-    // through Promise.allSettled as a rejected settlement and failed the whole
-    // parent turn — including the common case where the child had already
-    // committed its edits and only the final receipt delivery crashed. A
-    // structured error output keeps the failure visible to the parent (the
-    // spawned-output normalizer maps it to an explicit partial diagnostic;
-    // covered by spawn-agent-utils-output.test.ts) without taking down the
-    // session.
-    result = {
-      agentState: withDefaults.agentState,
-      output: {
-        type: 'error' as const,
-        message: `Subagent ${agentTemplate.id} crashed: ${errorMessage}`,
-      },
-    }
+  // productive subagents are bounded only by cancellation, the configured step
+  // cap and budget enforcement, spawn depth, and cost/token budgets.
+  // `output` is `unknown` (not AgentOutput) on purpose: the post-loop spread
+  // through finalizeOwnedLibrarianClone widens it, and the un-annotated let
+  // previously relied on TS's evolving-let union — freezing AgentOutput here
+  // would reject that reassignment.
+  let result: {
+    agentState: AgentState
+    output: unknown
+    supervisedReceipt?: AgentReceipt
   }
+  let failed = false
+  // P2-T8: flag-gated process supervision. With `processSupervision` AND an
+  // injectable `spawnSupervised` seam present, the child runs in a supervised
+  // Bun subprocess (supervision/child-entry.ts through
+  // supervision/process-supervisor.ts) and its settled receipt rides
+  // `result.supervisedReceipt` into the existing settle chains
+  // (reconcileAgentReceiptIntoParent unchanged). Otherwise — the DEFAULT —
+  // loopAgentSteps runs in-process exactly as before (byte-identical
+  // flag-off path). The flag is seeded at the SDK impl entry seam; no ambient
+  // process.env is read in this module.
+  //
+  // Slice limitations (documented, non-goals for this slice):
+  //  - the supervised child does NOT observe the parent AbortSignal (the
+  //    request is JSON-serialized; signal bridging rides the RPC-bridge
+  //    slice) — it is bounded by the supervisor's wall-clock deadline
+  //    (default SETTLE_DEFAULT_TIMEOUT_MS) instead;
+  //  - process-group teardown IS shipped: the default seam spawns the child
+  //    as a detached group leader and the supervisor kills the WHOLE group on
+  //    deadline (supervision/supervised-spawn.ts; process-supervisor.ts
+  //    killGroup), so shell grandchildren die with the direct child. The
+  //    residual gap: no test yet exercises reaping of REAL shell
+  //    grandchildren;
+  //  - the parent→child RPC bridge for the non-serializable callback deps
+  //    HAS landed in this same series (P2-T8b): the bridged dep set —
+  //    including the LLM prompt methods (promptAiSdk /
+  //    promptAiSdkStream / promptAiSdkStructured) — is proxied to the
+  //    supervised child over the parent-owned socket carried by the
+  //    serialized request's rpcSocketPath, so supported children run real
+  //    steps; only deps outside the bridged set degrade honestly with a
+  //    structured 'unsupported-deps' failed receipt (child-entry.ts)
+  //    rather than half-running.
+  let spawnSupervised =
+    withDefaults.processSupervision === true
+      ? withDefaults.spawnSupervised
+      : undefined
+  /**
+   * Context-pruner carve-out (P2-T8 supervision routing): even under
+   * flag-on supervision a context-pruner child NEVER routes to the
+   * supervised seam. The context-pruner's contract is to copy its PRUNED
+   * history back onto the parent's IN-MEMORY AgentState; a supervised
+   * child prunes a serialized COPY of that state inside its subprocess,
+   * so the pruned history can never reach the parent and supervised
+   * pruning silently no-ops. Verified empirically:
+   * agents/e2e/context-pruner.e2e.test.ts +
+   * context-pruning-threshold.e2e.test.ts settle wasPruned === false under
+   * the default-on seam, and pass 5/0 with supervision opted out.
+   *
+   * Identity is agent-id-based via isContextPrunerAgentId: bare,
+   * publisher-qualified, and version-pinned spellings of the pruner agent
+   * id all match — never string-compare the template id here.
+   */
+  const isPrunerChild = isContextPrunerAgentId(agentTemplate.id)
+  if (spawnSupervised !== undefined && isPrunerChild) {
+    spawnSupervised = undefined
+  }
+  if (
+    spawnSupervised === undefined &&
+    withDefaults.processSupervision === true &&
+    !isPrunerChild
+  ) {
+    // Flag on without a wired seam (tests, or a host that disabled the seam):
+    // fail open to the in-process path rather than crashing the spawn, with a
+    // warn so the misconfiguration is visible. A pruner child running
+    // in-process is DELIBERATE (see the carve-out above), not a
+    // misconfiguration — it must not warn on every compaction pass.
+    withDefaults.logger.warn(
+      { agentType: agentTemplate.id },
+      'processSupervision is enabled but no spawnSupervised seam is wired; running the subagent in-process',
+    )
+  }
+  if (spawnSupervised !== undefined) {
+    result = await runSupervisedSubagent({
+      spawnSupervised,
+      agentState: withDefaults.agentState,
+      logger: withDefaults.logger,
+      onResponseChunk,
+      agentTemplate,
+      parentAgentState,
+      ancestorRunIds,
+      prompt,
+      spawnParams,
+      userInputId: withDefaults.userInputId,
+      fingerprintId: withDefaults.fingerprintId,
+      clientSessionId: withDefaults.clientSessionId,
+      userId: withDefaults.userId,
+      parentSystemPrompt: withDefaults.parentSystemPrompt,
+      fileContext: withDefaults.fileContext,
+      localAgentTemplates: withDefaults.localAgentTemplates,
+      resolveModelContextWindow: withDefaults.resolveModelContextWindow,
+    })
+  } else {
+    try {
+      result = await loopAgentSteps({
+        ...withDefaults,
+        onResponseChunk,
+        // Don't propagate parent's image content to subagents.
+        // If subagents need to see images, they get them through includeMessageHistory,
+        // not by creating new image-containing messages for their prompts.
+        content: undefined,
+        // Same fallback contract as the supervised branch above: an unset
+        // parentAgentState.runId must not leak an empty string (not a valid
+        // runId) into the child's ancestorRunIds.
+        ancestorRunIds: [
+          ...ancestorRunIds,
+          parentAgentState.runId ?? parentAgentState.agentId,
+        ],
+        agentType: agentTemplate.id,
+      })
+    } catch (error) {
+      // Any subagent failure (cancellation, budget exhaustion, thrown error) must
+      // still emit a finish event so the UI never shows a subagent that started
+      // but never finished.
+      failed = true
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      onResponseChunk({
+        type: 'subagent_finish',
+        agentId: withDefaults.agentState.agentId,
+        agentType: agentTemplate.id,
+        displayName: agentTemplate.displayName,
+        onlyChild: isOnlyChild,
+        parentAgentId: parentAgentState.agentId,
+        prompt,
+        params: spawnParams,
+        spawnToolCallId,
+        spawnIndex,
+        error: errorMessage,
+      })
+      // Only GENUINE parent/user cancellation must keep propagating so the run
+      // aborts. Gate this on the PARENT signal actually being aborted — never on
+      // error.name === 'AbortError'/'TimeoutError' alone. A child-internal abort
+      // (an aborted sub-operation, a timed-out provider fetch, or an abort
+      // raised while the settle tail processes a large set_output payload plus
+      // receipt reconciliation) surfaces as an AbortError while the parent
+      // signal is still live. The previous guard re-threw on the error NAME
+      // regardless of the parent signal, so a mutating child (editor /
+      // repair-editor) that had ALREADY committed its edits crashed the entire
+      // parent turn at receipt-delivery time with 'Error executing handleSteps
+      // for agent base2: The operation was aborted'. Reviewers rarely tripped it
+      // because they settle a tiny attestation object fast; the long mutating
+      // settle tail is what widened the window. When the parent signal is NOT
+      // aborted we degrade to the structured error output below instead of
+      // taking down the session.
+      const parentSignalAborted =
+        (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
+      if (parentSignalAborted) {
+        // reliability-reviewer: cancel-rethrow-skips-librarian-clone-cleanup —
+        // A librarian subagent may have already cloned its repo into /tmp when
+        // the parent signal aborts, so rethrowing here must never skip the
+        // clone-cleanup step. Run the same cleanup the success path runs (with
+        // a synthetic cancellation error output) so the clone is not leaked,
+        // then still rethrow so genuine cancellation keeps unwinding the run.
+        try {
+          const cleanedOutput = await finalizeOwnedLibrarianClone({
+            agentType: agentTemplate.id,
+            spawnParams,
+            messageHistory: withDefaults.agentState.messageHistory,
+            output: {
+              type: 'error' as const,
+              message: `Subagent ${agentTemplate.id} was cancelled`,
+            },
+            logger: withDefaults.logger,
+          })
+          withDefaults.logger.debug(
+            {
+              agentType: agentTemplate.id,
+              agentId: withDefaults.agentState.agentId,
+              cancelled: true,
+            },
+            `Cleaned up owned librarian clone resources for cancelled subagent ${agentTemplate.id} (cleanup output: ${JSON.stringify(cleanedOutput)})`,
+          )
+        } catch (cleanupError) {
+          // The cleanup result found nothing to clean (e.g. the subagent never
+          // owned resources); log-and-continue so that this does not mask the
+          // original abort error we still need to re-throw.
+          withDefaults.logger.warn(
+            {
+              agentType: agentTemplate.id,
+              agentId: withDefaults.agentState.agentId,
+              cleanupError:
+                cleanupError instanceof Error
+                  ? cleanupError.message
+                  : String(cleanupError),
+            },
+            `Failed to clean up owned resources of cancelled subagent ${agentTemplate.id}; continuing to rethrow parent cancellation`,
+          )
+        }
+        // reliability-reviewer: cancel-rethrow-skips-librarian-clone-cleanup —
+        // the cancelled/abandoned child runId must still land in the parent's
+        // childRunIds chain (the journal/step-boundary spawn-intent machinery
+        // keys on it) even when this catch path rethrows before the normal
+        // settle tail below would have registered it.
+        if (withDefaults.agentState.runId) {
+          parentAgentState.childRunIds.push(withDefaults.agentState.runId)
+        }
+        throw error
+      }
+      // Degrade instead of throwing: a re-raised error previously propagated
+      // through Promise.allSettled as a rejected settlement and failed the whole
+      // parent turn — including the common case where the child had already
+      // committed its edits and only the final receipt delivery crashed. A
+      // structured error output keeps the failure visible to the parent (the
+      // spawned-output normalizer maps it to an explicit partial diagnostic;
+      // covered by spawn-agent-utils-output.test.ts) without taking down the
+      // session.
+      result = {
+        agentState: withDefaults.agentState,
+        output: {
+          type: 'error' as const,
+          message: `Subagent ${agentTemplate.id} crashed: ${errorMessage}`,
+        },
+      }
+    }
+  } // end flag-off in-process branch (P2-T8 supervised alternative above)
 
   if (!failed) {
     onResponseChunk({

@@ -20,12 +20,16 @@ export type TextContentBlock = {
   marginTop?: number
   marginBottom?: number
   status?: 'running' | 'complete'
-  textType?: 'reasoning' | 'text'
+  textType?: 'reasoning' | 'text' | 'status'
   isCollapsed?: boolean
   thinkingId?: string
   userOpened?: boolean
   /** True if this is a reasoning block from a <think> tag that hasn't been closed yet */
   thinkingOpen?: boolean
+  /** Epoch ms when this reasoning block first received content (duration header). */
+  thinkingStartedAt?: number
+  /** Epoch ms when this reasoning block completed (</think> or message completion). */
+  thinkingEndedAt?: number
   thinkingCollapseState?: ThinkingCollapseState
 }
 /** Renders dynamic React content. NOT serializable - don't use for persistent data. */
@@ -510,6 +514,12 @@ export type DoctorContentBlock = {
   mcpCount: number
   diagnostics: Array<{ filePath?: string; agentId?: string; message: string }>
   providerStatus: string
+  /**
+   * Capability-tier rows for the doctor box's capability section (X-4), built
+   * from the CLI's honest default capability map. Optional so doctor blocks
+   * produced before the section existed keep rendering exactly as before.
+   */
+  capabilities?: import('../utils/capability-tiers').DoctorCapabilityRow[]
 }
 
 export type UpdateContentBlock = {

@@ -50,12 +50,21 @@ export type IndexEdgeType =
   | 'mentions'
   | 'references'
 
+/**
+ * Provenance of a graph edge: tree-sitter extraction is conservative
+ * ('heuristic'); SCIP ingestion (LI-03) merges 'precise' cross-references.
+ * Absent means 'heuristic' so older persisted indexes round-trip unchanged.
+ * Confidence is consumer metadata, never a ranking input.
+ */
+export type EdgeConfidence = 'heuristic' | 'precise'
+
 export interface IndexEdge {
   from: string
   to: string
   type: IndexEdgeType
   weight: number
   label?: string
+  confidence?: EdgeConfidence
 }
 
 export interface IndexGraph {
@@ -251,6 +260,20 @@ export interface RelatedFile {
   score: number
   reason: string
   via?: string
+}
+
+/**
+ * Tuning knobs for personalized PageRank over the code graph (P3-T9). All
+ * optional with deterministic defaults; surfaced as an additive, bounded
+ * ranking signal so existing query_index behavior is unchanged by default.
+ */
+export interface PageRankOptions {
+  /** Damping factor (probability of following a link). Default: 0.85. */
+  damping?: number
+  /** Power-iteration cap. Default: 50. */
+  maxIterations?: number
+  /** L1 convergence epsilon. Default: 1e-6. */
+  epsilon?: number
 }
 
 /** Stable chunk identity entry stored in the derived chunks.json sidecar. */

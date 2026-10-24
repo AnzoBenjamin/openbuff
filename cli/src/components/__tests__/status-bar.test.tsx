@@ -1,4 +1,6 @@
-import { describe, expect, test } from 'bun:test'
+import { createRequire } from 'node:module'
+
+import { describe, expect, mock, test } from 'bun:test'
 import React from 'react'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
@@ -6,6 +8,36 @@ import { SCROLL_GLYPH } from '../scroll-to-bottom-button'
 import { StatusBar } from '../status-bar'
 
 import type { StatusIndicatorState } from '../../utils/status-indicator-state'
+
+/**
+ * Defensive re-registration: sibling test files (build-mode-buttons.test.tsx)
+ * mock.module('../../hooks/use-terminal-layout') registry-wide, and bun cannot
+ * unregister it — the leaked 80-wide mockLayout breaks this file's 152-wide
+ * real-reconciler renders in full-suite runs. Overwrite the registration with
+ * the REAL module's exports so whatever leaked is restored before rendering.
+ */
+const requireReal = createRequire(import.meta.url)
+const requiredLayoutModule = requireReal('../../hooks/use-terminal-layout') as
+  typeof import('../../hooks/use-terminal-layout')
+
+/**
+ * require() may itself resolve to the leaked mock (bun's mock registry covers
+ * require too), so fall back to a cache-busting import that bypasses it. The
+ * sentinel is WIDTH_MD_BREAKPOINT — a real export the mock factory does NOT
+ * provide (the mock also exports computeTerminalLayout, so that would be a
+ * false positive; verified by probe: require returns the 2-key mock, the
+ * ?restore query import returns the full 7-key real module).
+ */
+const realUseTerminalLayout: typeof import('../../hooks/use-terminal-layout') =
+  'WIDTH_MD_BREAKPOINT' in requiredLayoutModule
+    ? requiredLayoutModule
+    : ((await import(
+        '../../hooks/use-terminal-layout?restore' as string
+      )) as typeof import('../../hooks/use-terminal-layout'))
+
+mock.module('../../hooks/use-terminal-layout', () => ({
+  ...realUseTerminalLayout,
+}))
 
 initializeThemeStore()
 
@@ -153,6 +185,25 @@ describe('StatusBar through the real OpenTUI reconciler', () => {
 
       expectRendered(frame, ['working...', CONTEXT_PERCENT, COST_LABEL])
       expect(frame).not.toContain(SCROLL_GLYPH)
+    },
+  )
+
+  renderTest(
+    'renders the capability-tier chip from the honest default capability map',
+    async () => {
+      // No model/cost/git props, so the low-priority static chip fits beside
+      // the context chip within the width budget.
+      const frame = await renderFrame(
+        <StatusBar
+          timerStartTime={null}
+          scrollToLatest={() => {}}
+          statusIndicatorState={STREAMING}
+          contextWindowUsage={{ used: 48_000, max: 100_000 }}
+          isAtBottom
+        />,
+      )
+
+      expectRendered(frame, [CONTEXT_PERCENT, 'sandbox:lexical'])
     },
   )
 })

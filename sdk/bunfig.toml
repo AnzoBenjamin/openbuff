@@ -6,9 +6,8 @@ linkWorkspacePackages = true
 [test]
 # Exclude large test repositories from execution
 exclude = ["../evals/test-repos/**"]
-preload = ["./test/setup-env.ts", "../test/setup-scm-loader.ts"]
-# test/setup-scm-loader.ts registers the .scm text loader required by
-# @codebuff/code-map tree-sitter queries. Running `bun test` from this package
-# directory uses THIS bunfig (not the repo-root one), so without the scm-loader
-# preload any test transitively importing code-map fails at import with a
-# parse error on the .scm file. Mirrors packages/agent-runtime/bunfig.toml.
+# setup-scm-loader preload removed: tree-sitter queries load via fs at
+# query-load time (packages/code-map/src/languages.ts resolveQueryPath), so the
+# .scm text-loader plugin is no longer required for tests that transitively
+# import code-map. Reintroduce it ONLY if a .scm module import ever returns.
+preload = ["./test/setup-env.ts"]

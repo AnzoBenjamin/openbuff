@@ -1,6 +1,10 @@
 import { endsAgentStepParam, toolNames } from '@codebuff/common/tools/constants'
+import {
+  browserActionBlockedMessage,
+  isBrowserActionAllowed,
+} from '@codebuff/common/tools/browser-policy'
 import { toolParams } from '@codebuff/common/tools/list'
-import { decodeJsonObjectString } from '@codebuff/common/tools/params/tool/set-output'
+import { decodeJsonObjectString } from '@codebuff/common/util/model-payload-recovery'
 import {
   detectTransportTruncation,
   describeTruncationRecovery,
@@ -23,6 +27,7 @@ import {
   removedToolNames,
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
+import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import type { JSONObject } from '@codebuff/common/types/json'
 import {
@@ -37,6 +42,11 @@ import { realpathSync } from 'node:fs'
 
 import { getMCPToolData } from '../mcp'
 import { MCP_TOOL_SEPARATOR } from '../mcp-constants'
+import { evaluatePlaybookGate } from '../memory/playbook-gate'
+import {
+  createSessionEvidenceLog,
+  recordSessionEvidence,
+} from '../memory/session-evidence-log'
 import { getAgentShortName, getAgentToolName } from '../templates/prompts'
 import { getEffectiveAgentToolNames } from '../util/agent-tool-names'
 import {
@@ -63,11 +73,13 @@ import {
   bufferToolEvidenceForStep,
   recordToolEvidenceInTaskMemory,
 } from '../util/task-memory'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { ensureZodSchema } from './prompts'
 
 import type { AgentTemplate } from '../templates/types'
 import type { CodebuffToolHandlerFunction } from './handlers/handler-function-type'
 import type { FileProcessingState } from './handlers/tool/write-file'
+import type { SessionEvidenceLog } from '../memory/session-evidence-log'
 import type { ToolName } from '@codebuff/common/tools/constants'
 import type {
   ClientToolCall,
@@ -80,6 +92,7 @@ import type {
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
 import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { ProviderMetadata } from '@codebuff/common/types/messages/provider-metadata'
@@ -182,9 +195,15 @@ function extractSanitizedSpawnRecoveryHint(error: unknown): string | undefined {
         : undefined
   if (typeof raw !== 'string' || !raw) return undefined
   // Only validation-shaped messages are eligible; any other handler
-  // internal (bridge failures, stack traces) stays log-only.
+  // internal (bridge failures, stack traces) stays log-only. The allowlist
+  // also recognizes raw Zod-shaped validation text — a leading `Validation
+  // failed`, the `expected X, received Y` pair, `Unrecognized key`, `Too
+  // small`/`Too big`, and `Required` — so an issue dump is not silently
+  // downgraded to the static failure string. This stays a message-TEXT
+  // fallback only: the authoritative structural channel is
+  // extractSpawnValidationIssues, which needs no text match at all.
   const isValidationHint =
-    /Invalid (params|prompt) for agent|Editor agent requires|Invalid (versioned )?handoff|repair-editor requires|Missing required:|Exact params contract|Recovery:/.test(
+    /Invalid (params|prompt) for agent|Editor agent requires|Invalid (versioned )?handoff|repair-editor requires|Missing required:|Exact params contract|Recovery:|^Validation failed|expected |received |Unrecognized key|Too small|Too big|Required/.test(
       raw,
     )
   if (!isValidationHint) return undefined
@@ -207,6 +226,64 @@ function extractSanitizedSpawnRecoveryHint(error: unknown): string | undefined {
   return String(sanitized)
 }
 
+const SPAWN_VALIDATION_ISSUE_MAX_CHARS = 300
+const SPAWN_VALIDATION_ISSUE_MAX_COUNT = 20
+
+// Bounded, sanitized rendering of one Zod issue path segment or message. The
+// same treatment the recovery hint gets: strip control characters, collapse
+// whitespace, trim, and cap the length so a pathological issue string can
+// never blow up the parent-visible payload.
+function sanitizeSpawnValidationIssueText(value: string): string {
+  let sanitized = value
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (sanitized.length > SPAWN_VALIDATION_ISSUE_MAX_CHARS) {
+    sanitized = `${sanitized.slice(0, SPAWN_VALIDATION_ISSUE_MAX_CHARS).trimEnd()}...[truncated]`
+  }
+  return sanitized
+}
+
+/**
+ * Second, ORTHOGONAL spawn diagnostic channel: extract a bounded, sanitized
+ * issue list from a Zod-shaped validation error via duck typing.
+ *
+ * Deliberately independent of extractSanitizedSpawnRecoveryHint's
+ * message-text allowlist: spawn params actually fail as a Zod issue LIST, and
+ * the allowlist only sees the rendered message text (or nothing at all), so a
+ * parent used to receive the static failure string with zero indication of
+ * which field was wrong. Detection is structural (an `issues` array), so no
+ * `zod` import is needed here.
+ *
+ * Safety: only structural schema paths and issue messages are surfaced —
+ * never raw params/prompt values, never a stack trace.
+ */
+function extractSpawnValidationIssues(
+  error: unknown,
+): Array<{ path: string; message: string }> | undefined {
+  if (
+    !error ||
+    typeof error !== 'object' ||
+    !Array.isArray((error as { issues?: unknown }).issues)
+  ) {
+    return undefined
+  }
+  const extracted: Array<{ path: string; message: string }> = []
+  for (const issue of (error as { issues: unknown[] }).issues) {
+    if (extracted.length >= SPAWN_VALIDATION_ISSUE_MAX_COUNT) break
+    if (!issue || typeof issue !== 'object') continue
+    const record = issue as { path?: unknown; message?: unknown }
+    if (typeof record.message !== 'string') continue
+    const message = sanitizeSpawnValidationIssueText(record.message)
+    if (!message) continue
+    const path = Array.isArray(record.path)
+      ? sanitizeSpawnValidationIssueText(record.path.join('.'))
+      : ''
+    extracted.push({ path, message })
+  }
+  return extracted.length > 0 ? extracted : undefined
+}
+
 export function buildSpawnAgentsHandlerFailureOutput(
   input: unknown,
   // Retained for call-site symmetry with the generic failure-output builder
@@ -221,38 +298,42 @@ export function buildSpawnAgentsHandlerFailureOutput(
   const agents =
     inputRecord && Array.isArray(inputRecord.agents) ? inputRecord.agents : []
   const recoveryHint = extractSanitizedSpawnRecoveryHint(error)
+  const validationIssues = extractSpawnValidationIssues(error)
 
-  const reports = (agents.length > 0 ? agents : [{}]).map((agent): JSONObject => {
-    const agentType =
-      agent &&
-      typeof agent === 'object' &&
-      typeof (agent as Record<string, unknown>).agent_type === 'string'
-        ? String((agent as Record<string, unknown>).agent_type)
-        : 'unknown'
-    if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
-      // Separate explicit branch: the false branch below has no recoveryHint
-      // key at all, so no undefined ever enters the JSON payload. String() is
-      // the identity on the already-sanitized primitive and keeps the property
-      // typed as string (not string|undefined) so jsonToolResult<T extends
-      // JSONValue> accepts the payload.
-      const hintPrimitive: string = String(recoveryHint)
+  const reports = (agents.length > 0 ? agents : [{}]).map(
+    (agent): JSONObject => {
+      const agentType =
+        agent &&
+        typeof agent === 'object' &&
+        typeof (agent as Record<string, unknown>).agent_type === 'string'
+          ? String((agent as Record<string, unknown>).agent_type)
+          : 'unknown'
+      // The per-agent value is assembled additively so an ABSENT channel never
+      // puts an `undefined` into the JSON payload (jsonToolResult<T extends
+      // JSONValue> requires concrete values). `errorMessage` stays the stable
+      // machine-readable marker at exactly the same text; the two diagnostic
+      // channels below are present only when they actually have data.
+      const value: JSONObject = {
+        errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
+      }
+      if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
+        // String() is the identity on the already-sanitized primitive and keeps
+        // the property typed as string (not string|undefined).
+        value.recoveryHint = String(recoveryHint)
+      }
+      if (validationIssues) {
+        value.validationIssues = validationIssues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        }))
+      }
       return {
         agentType,
         agentName: agentType,
-        value: {
-          errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-          recoveryHint: hintPrimitive,
-        },
+        value,
       }
-    }
-    return {
-      agentType,
-      agentName: agentType,
-      value: {
-        errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-      },
-    }
-  })
+    },
+  )
 
   return jsonToolResult(reports) as CodebuffToolOutput<'spawn_agents'>
 }
@@ -277,7 +358,7 @@ type SpawnGateFilterResult = {
  */
 function filterSpawnAgentsGate(params: {
   agents: unknown
-onResponseChunk: (chunk: string | PrintModeEvent) => void
+  onResponseChunk: (chunk: string | PrintModeEvent) => void
 }): SpawnGateFilterResult {
   const { agents: inputAgents, onResponseChunk } = params
   if (!Array.isArray(inputAgents)) {
@@ -341,6 +422,73 @@ function resolveSpawnGateAbort(
     shouldReturn: false,
     returnValue: abortablePreviousToolCallFinished,
   }
+}
+
+/**
+ * The playbook gate's per-session evidence ledger, held additively on agent
+ * state. Created on first use so a session that never sees a playbook (or never
+ * records an eligible tool) never allocates one. The ledger identity is stable
+ * for the session, which is what lets the gate see evidence recorded on an
+ * earlier step.
+ */
+function sessionEvidenceLogFor(agentState: AgentState): SessionEvidenceLog {
+  const state = agentState as AgentState & {
+    sessionEvidenceLog?: SessionEvidenceLog
+  }
+  state.sessionEvidenceLog ??= createSessionEvidenceLog()
+  return state.sessionEvidenceLog
+}
+
+/**
+ * True when a tool result payload carries a terminal failure. The result
+ * contract has no single error field: native failures publish a json part with
+ * an `errorMessage` string (see buildNativeToolResultErrorOutputV1), so any such
+ * part marks the call as not-successful and it is never recorded as evidence.
+ */
+function outputCarriesToolError(output: readonly unknown[]): boolean {
+  return output.some((part) => {
+    if (!part || typeof part !== 'object' || Array.isArray(part)) return false
+    const record = part as Record<string, unknown>
+    if (record.type !== 'json') return false
+    const value = record.value
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return false
+    return typeof (value as Record<string, unknown>).errorMessage === 'string'
+  })
+}
+
+/**
+ * Append one successful tool invocation to the session's playbook-gate evidence
+ * ledger (see ../memory/session-evidence-log.ts).
+ *
+ * Deliberately narrow: only `run_terminal_command` with a string `command` is
+ * recorded, because that is the only evidence shape the Phase 1 gate can verify
+ * (`toolSucceeded` + commandText substring). A result carrying an `errorMessage`
+ * is a failure and records nothing, so a broken command can never satisfy a
+ * playbook.
+ *
+ * Call site: the single post-dispatch output-finalization block in
+ * `executeToolCall` (immediately after `toolResults.push(toolResult)`), which
+ * runs exactly once per executed tool call with the validated output.
+ */
+export function recordToolEvidence<T extends ToolName>(params: {
+  agentState: AgentState
+  toolName: T
+  input: Record<string, unknown>
+  output: CodebuffToolOutput<T>
+  /** Injected by executeToolCall so evidence timing is replayable in tests. */
+  atMs?: number
+}): void {
+  const { agentState, toolName, input, output, atMs = realClock.now() } = params
+  if (toolName !== 'run_terminal_command') return
+  if (outputCarriesToolError(output)) return
+  recordSessionEvidence(sessionEvidenceLogFor(agentState), {
+    toolName,
+    ...(typeof input.command === 'string'
+      ? { commandText: input.command }
+      : {}),
+    atMs,
+  })
 }
 
 export function normalizeNativeToolOutput<T extends ToolName>(params: {
@@ -667,6 +815,7 @@ type TruncationRecoverySummary = {
 function parseStringifiedToolInput(
   input: unknown,
   toolName: string,
+  providerReportedTruncation?: boolean,
 ): {
   input: unknown
   parseError?: string
@@ -691,7 +840,13 @@ function parseStringifiedToolInput(
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error)
-      if (detectTransportTruncation(stringInput, errorMessage)) {
+      // The provider's finishReason === 'length' is authoritative: it is a KNOWN
+      // max-token cut, so the JSON-parse heuristic is only the fallback used
+      // when the provider reported nothing.
+      if (
+        providerReportedTruncation === true ||
+        detectTransportTruncation(stringInput, errorMessage)
+      ) {
         sawTransportTruncation = true
       }
       // A truncated payload is NEVER silently converted into a partial tool
@@ -864,6 +1019,17 @@ function coerceIntString(value: unknown, min?: number): number | undefined {
 // nothing changed. Mirrors the narrow, fail-closed, early-return style of the
 // per-tool repairs above.
 //
+// D21 slice 1 additionally unserializes a JSON-stringified value when the
+// DECLARED schema type of the field is array/object (e.g. `ranges`, `edits`,
+// per-entry objects), so a provider that stringifies a container is repaired
+// the same way as stringified scalars. The declared type is the only key — no
+// tool-name special-casing — so string-typed fields (oldString/newString/
+// content/path/diff/command) can never reach the unserialize branch. Fail
+// closed: an unparseable string, or one that parses to the wrong container
+// shape, is returned unchanged so the strict schema still rejects it. Every
+// successful unserialize is counted in toolArgNormalizationStats and logged
+// (never silent).
+//
 // Known intentional gaps: `allOf` compositions are not traversed (no native
 // tool schema relies on allOf for a coercible scalar), and negative integer
 // strings (e.g. "-1") are not coerced here — those are handled by the
@@ -884,7 +1050,9 @@ const TOOL_JSON_SCHEMA_CACHE = new Map<
   Record<string, unknown> | undefined
 >()
 
-function toolInputJsonSchema(toolName: string): Record<string, unknown> | undefined {
+function toolInputJsonSchema(
+  toolName: string,
+): Record<string, unknown> | undefined {
   if (TOOL_JSON_SCHEMA_CACHE.has(toolName)) {
     return TOOL_JSON_SCHEMA_CACHE.get(toolName)
   }
@@ -902,7 +1070,47 @@ function toolInputJsonSchema(toolName: string): Record<string, unknown> | undefi
   return jsonSchema
 }
 
-function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
+// D21 slice 1 (PR-T3): module-level observability for schema-driven
+// stringified array/object argument unserialize at the dispatch boundary.
+// Every SUCCESSFUL unserialize increments `total` and the per-tool map and
+// emits a diagnostic via the nearest available logger — a normalization
+// repair must never be silent. Exported (plus a test-only reset) so tests can
+// read and isolate counts without leaking state across files.
+export const toolArgNormalizationStats: {
+  total: number
+  byTool: Record<string, number>
+} = { total: 0, byTool: {} }
+
+export function getToolArgNormalizationStats(): {
+  total: number
+  byTool: Record<string, number>
+} {
+  return toolArgNormalizationStats
+}
+
+export function __resetToolArgNormalizationStatsForTest(): void {
+  toolArgNormalizationStats.total = 0
+  toolArgNormalizationStats.byTool = {}
+}
+
+// Fail-closed unserialize of a JSON-stringified array/object FIELD value.
+// Parses the trimmed string as JSON; any parse failure returns undefined so
+// the caller leaves the original string untouched. Never throws and never
+// repairs a truncated payload: partial JSON is never guessed into container
+// structure, matching the fail-closed truncation policy in the parse pipeline.
+function unserializeStringifiedJsonFieldValue(value: string): unknown {
+  try {
+    return JSON.parse(value.trim())
+  } catch {
+    return undefined
+  }
+}
+
+function coerceInputScalarsBySchema(
+  toolName: string,
+  input: unknown,
+  logger?: Logger,
+): unknown {
   if (
     !(toolName in toolParams) ||
     input === null ||
@@ -933,6 +1141,20 @@ function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
       return resolved as Record<string, unknown>
     }
     return schema
+  }
+
+  // Count + log one successful schema-driven unserialize. The counter is the
+  // always-on observability floor; the diagnostic rides the nearest available
+  // logger (debug-level, matching the existing mis-braced-spawn repair seam).
+  // Only metadata is logged — never payload values.
+  const recordUnserialize = (kind: 'array' | 'object'): void => {
+    toolArgNormalizationStats.total += 1
+    toolArgNormalizationStats.byTool[toolName] =
+      (toolArgNormalizationStats.byTool[toolName] ?? 0) + 1
+    logger?.debug(
+      { toolName, kind },
+      'schema-driven tool-arg normalization: unserialized a stringified JSON array/object field before validation',
+    )
   }
 
   const coerceNode = (
@@ -972,6 +1194,37 @@ function coerceInputScalarsBySchema(toolName: string, input: unknown): unknown {
         Number.isFinite(Number(trimmed))
       ) {
         return Number(trimmed)
+      }
+    }
+
+    // D21 slice 1: schema-driven unserialize of stringified containers. When
+    // the DECLARED type is array/object and the provider sent a string, parse
+    // the trimmed string as JSON and flow the parsed container into the normal
+    // traversal branches below, so items/properties keep being visited against
+    // the schema and nested object-strings unserialize too. The declared type
+    // is the only key: string-typed fields (oldString/newString/content/path/
+    // diff/command) never reach here and no tool name is special-cased. Fail
+    // closed: a string that does not parse, or parses to the wrong container
+    // shape, is left unchanged so the strict schema still rejects it — never
+    // thrown, never guessed, and never silent (a success is counted and
+    // logged via recordUnserialize).
+    if (typeof value === 'string') {
+      if (type === 'array') {
+        const parsed = unserializeStringifiedJsonFieldValue(value)
+        if (Array.isArray(parsed)) {
+          recordUnserialize('array')
+          value = parsed
+        }
+      } else if (type === 'object') {
+        const parsed = unserializeStringifiedJsonFieldValue(value)
+        if (
+          parsed !== null &&
+          typeof parsed === 'object' &&
+          !Array.isArray(parsed)
+        ) {
+          recordUnserialize('object')
+          value = parsed
+        }
       }
     }
 
@@ -1984,6 +2237,12 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
     providerOptions?: ProviderMetadata
   }
   logger?: Logger
+  /**
+   * Provider-authoritative truncation fact for the response that produced this
+   * call (finishReason === 'length'). Optional: absent means the JSON-parse
+   * heuristic in `detectTransportTruncation` stays the only signal.
+   */
+  providerReportedTruncation?: boolean
 }): CodebuffToolCall<T> | ToolCallError {
   const { rawToolCall, logger } = params
   const toolName = rawToolCall.toolName
@@ -1991,6 +2250,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
   const processedParameters = parseStringifiedToolInput(
     rawToolCall.input,
     toolName,
+    params.providerReportedTruncation,
   )
   const paramsSchema = toolParams[toolName].inputSchema
 
@@ -2014,6 +2274,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
         repairSetOutputData(toolName, processedParameters.input),
       ),
     ),
+    logger,
   )
   if (toolName === 'spawn_agents') {
     const misbraced = detectMisbracedSpawnPayload({
@@ -2112,6 +2373,20 @@ export type ExecuteToolCallParams<T extends string = ToolName> = {
   queued?: boolean
   prompt: string | undefined
   providerOptions?: ProviderMetadata
+  /**
+   * Provider-authoritative truncation fact (finishReason === 'length') for the
+   * response that emitted this tool call. Threaded to the JSON parser so a
+   * provider-confirmed cut classifies as transport truncation regardless of the
+   * error-message heuristic.
+   */
+  providerReportedTruncation?: boolean
+  /**
+   * The params this agent was spawned with (browser-use's
+   * `interactionPolicy` etc). Threaded from the step loop; the tool executor
+   * is the enforcement point for spawn-param policies because it sees both
+   * the params and every outgoing tool call.
+   */
+  spawnParams?: Record<string, unknown>
   repoId: string | undefined
   repoUrl: string | undefined
   runId: string
@@ -2155,6 +2430,8 @@ export async function executeToolCall<T extends ToolName>(
     onResponseChunk,
     requestToolCall,
     queued,
+    providerReportedTruncation,
+    spawnParams,
   } = params
   const toolCallId = params.toolCallId ?? generateCompactId()
   const abortablePreviousToolCallFinished = makeAbortableBarrier(
@@ -2196,6 +2473,7 @@ export async function executeToolCall<T extends ToolName>(
       providerOptions: params.providerOptions,
     },
     logger,
+    providerReportedTruncation,
   })
 
   // Filter out restricted tools - emit error instead of tool call/result
@@ -2217,6 +2495,28 @@ export async function executeToolCall<T extends ToolName>(
       }),
     })
     return abortablePreviousToolCallFinished
+  }
+
+  // Spawn-param policy enforcement: an explicit read-only browser spawn may
+  // only issue non-mutating browser_logs actions. Prompt text was the only
+  // previous enforcement; this is the data-driven backstop. Unknown action
+  // types fail CLOSED under read-only (allowlist, not blocklist).
+  if (toolName === 'browser_logs' && spawnParams) {
+    const actionType = (toolCall.input as Record<string, unknown> | undefined)
+      ?.type
+    if (!isBrowserActionAllowed(actionType, spawnParams.interactionPolicy)) {
+      const message = browserActionBlockedMessage(actionType)
+      logger.warn(
+        { toolName, actionType, agentId: agentTemplate.id },
+        'Blocked mutating browser_logs action under read-only interactionPolicy',
+      )
+      onResponseChunk({
+        type: 'error',
+        message,
+        autoRecovering: true,
+      })
+      return abortablePreviousToolCallFinished
+    }
   }
 
   if ('error' in toolCall) {
@@ -2251,19 +2551,25 @@ export async function executeToolCall<T extends ToolName>(
   // is a universal runtime backstop; SDK handlers remain the authoritative
   // containment layer. The declared-scope mismatch warning only applies when
   // the agent actually configured a scope for this access type.
-  if (filesystemAccess) {
+  // Containment needs a project root to compare against. Without one we cannot
+  // prove any path stays inside the project, and `path.resolve('', p)` would
+  // silently resolve against `process.cwd()` — re-anchoring the check on the
+  // wrong boundary rather than failing. Skip the backstop instead; the SDK
+  // handlers remain the authoritative containment layer either way.
+  const scopeProjectRoot = resolveProjectRootOrEmpty(params.fileContext)
+  if (filesystemAccess && scopeProjectRoot === '') {
+    logger.warn(
+      { toolName, agentId: agentTemplate.id },
+      'Skipping the filesystem-scope containment backstop: no project root is available for this call.',
+    )
+  }
+  if (filesystemAccess && scopeProjectRoot !== '') {
     const evaluatedPaths = filesystemAccess.paths.map((rawPath) => {
-      const normalized = normalizeScopedToolPath(
-        rawPath,
-        params.fileContext.projectRoot,
-      )
+      const normalized = normalizeScopedToolPath(rawPath, scopeProjectRoot)
       let canonical = normalized
-      if (params.fileContext.fileTreeSource !== 'virtual') {
+      if (params.fileContext?.fileTreeSource !== 'virtual') {
         try {
-          canonical = canonicalScopedToolPath(
-            normalized,
-            params.fileContext.projectRoot,
-          )
+          canonical = canonicalScopedToolPath(normalized, scopeProjectRoot)
         } catch {
           // SDK handlers remain the authoritative containment layer. Keep
           // lexical scope for missing paths so create operations still work.
@@ -2478,6 +2784,63 @@ export async function executeToolCall<T extends ToolName>(
     }
     if (resolved.agents !== effectiveInput.agents) {
       effectiveInput = { ...effectiveInput, agents: resolved.agents }
+    }
+  }
+
+  // Deterministic playbook gate (memory playbook Phase 1). Deliberately placed
+  // OUTSIDE the `canSuggestFollowups === false` condition ABOVE: a learned
+  // playbook applies whether or not the validation/reviewer gate is open, so its
+  // refusal is never conditional on the gate state. It covers the three tools a
+  // playbook may target, is skipped entirely when the coordinator never
+  // installed playbookContext (the common case), and is wrapped in try/catch so
+  // a gate bug can never break tool dispatch (fail OPEN): only a 'blocked'
+  // verdict — which requires BOTH an operator-opted 'block' mode AND a playbook
+  // enforcing 'block' — aborts the call, through the existing abort barrier.
+  const playbookContext = (
+    agentState as AgentState & { playbookContext?: MemoryPlaybook[] }
+  ).playbookContext
+  if (
+    playbookContext &&
+    playbookContext.length > 0 &&
+    (toolName === 'spawn_agents' ||
+      toolName === 'spawn_agent_inline' ||
+      toolName === 'run_terminal_command')
+  ) {
+    try {
+      // The gate reads exactly one key from an environment bag, so project the
+      // client env onto the plain string map it declares instead of widening the
+      // runtime deps contract.
+      const playbookGateEnv: Record<string, string | undefined> = {}
+      for (const [key, value] of Object.entries(params.clientEnv)) {
+        if (typeof value === 'string') playbookGateEnv[key] = value
+      }
+      const verdicts = evaluatePlaybookGate({
+        toolName,
+        input: effectiveInput,
+        playbooks: playbookContext,
+        evidenceLog: sessionEvidenceLogFor(agentState),
+        nowMs: (params.clock ?? realClock).now(),
+        env: playbookGateEnv,
+      })
+      let playbookBlocked = false
+      for (const verdict of verdicts) {
+        if (verdict.outcome === 'allowed') continue
+        onResponseChunk({
+          type: 'error',
+          message: verdict.message,
+          autoRecovering: true,
+        })
+        // A 'warned' verdict is advisory only: it must never abort dispatch.
+        if (verdict.outcome === 'blocked') playbookBlocked = true
+      }
+      if (playbookBlocked) {
+        return abortablePreviousToolCallFinished
+      }
+    } catch (error) {
+      logger.debug(
+        { error, toolName },
+        'Playbook gate failed internally; proceeding with tool dispatch (fail-open)',
+      )
     }
   }
 
@@ -2999,6 +3362,30 @@ export async function executeToolCall<T extends ToolName>(
     toolCallsToAddToMessageHistory.push(finalToolCall)
   }
 
+  // P2-T2 slice-4 hardening: the caller (executeSingleToolCall) appended the
+  // tool_call completion marker BEFORE this seam runs, but a batching journal
+  // writer defers that commit — a kill -9 between here and the handler's own
+  // durability point would leave the marker uncommitted and the resume replay
+  // would re-execute the tool (double execution). Force the writer's pending
+  // batch to commit BEFORE the side effect executes. The method is OPTIONAL
+  // on JournalWriter (a per-append writer flushes eagerly and has nothing
+  // buffered), so probing structurally keeps other implementors unaffected;
+  // a forced-flush failure is fail-open (logged, never fails the tool) like
+  // every other journal write point.
+  if (
+    params.journalWriter &&
+    typeof params.journalWriter.forceFlush === 'function'
+  ) {
+    try {
+      await params.journalWriter.forceFlush()
+    } catch (error) {
+      logger.debug(
+        { error, toolName, toolCallId: toolCall.toolCallId },
+        'Failed to force-flush the run journal before tool execution (non-fatal)',
+      )
+    }
+  }
+
   let canonicalReceipt: unknown
   const toolResultPromise = Promise.resolve().then(() =>
     handler({
@@ -3056,7 +3443,8 @@ export async function executeToolCall<T extends ToolName>(
           handlerResult: mutationRecord,
           receipt: canonicalReceipt,
           capabilityScope: {
-            projectId: params.fileContext.projectRoot,
+            // Empty projectId is intended: readCapabilityMatchesScope then fails to match, so the pass reports "unconfirmed" instead of throwing.
+            projectId: resolveProjectRootOrEmpty(params.fileContext),
             runId: params.runId,
           },
         })
@@ -3156,7 +3544,8 @@ export async function executeToolCall<T extends ToolName>(
         output,
         canonicalReceipt,
         capabilityScope: {
-          projectId: params.fileContext.projectRoot,
+          // Empty projectId is intended: readCapabilityMatchesScope then fails to match, so the pass reports "unconfirmed" instead of throwing.
+          projectId: resolveProjectRootOrEmpty(params.fileContext),
           runId: params.runId,
         },
       })
@@ -3179,7 +3568,7 @@ export async function executeToolCall<T extends ToolName>(
       toolName,
       toolCallId: toolCall.toolCallId,
       content: validatedOutput,
-      sentAt: Date.now(),
+      sentAt: (params.clock ?? realClock).now(),
       ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
     }
 
@@ -3193,6 +3582,17 @@ export async function executeToolCall<T extends ToolName>(
     })
 
     toolResults.push(toolResult)
+
+    // Playbook-gate evidence: this is the single post-dispatch finalization
+    // point for a native tool result, so the ledger records exactly one entry
+    // per successful call (failures carry an `errorMessage` and record nothing).
+    recordToolEvidence({
+      agentState,
+      toolName,
+      input: toolCall.input as Record<string, unknown>,
+      output: validatedOutput,
+      atMs: (params.clock ?? realClock).now(),
+    })
 
     // Record this agent's own reads/edits as task-memory evidence. Only child
     // agents report through mergeAgentReceiptIntoTaskMemory, so without this the
@@ -3218,6 +3618,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
         // Identity result means the derived evidence is byte-identical to what
         // is already stored, so the commit was skipped: assigning would be a
@@ -3232,6 +3633,7 @@ export async function executeToolCall<T extends ToolName>(
           callId: toolCall.toolCallId,
           output: validatedOutput,
           workspaceState: agentState.workspaceState,
+          now: (params.clock ?? realClock).now(),
         })
       }
     } catch (error) {
@@ -3267,6 +3669,8 @@ export function parseRawCustomToolCall(params: {
     providerOptions?: ProviderMetadata
   }
   autoInsertEndStepParam?: boolean
+  /** See `parseRawToolCall`'s `providerReportedTruncation`. */
+  providerReportedTruncation?: boolean
 }): CustomToolCall | ToolCallError {
   const { customToolDefs, rawToolCall, autoInsertEndStepParam = false } = params
   const toolName = rawToolCall.toolName
@@ -3283,7 +3687,11 @@ export function parseRawCustomToolCall(params: {
     }
   }
 
-  const parsedInput = parseStringifiedToolInput(rawToolCall.input, toolName)
+  const parsedInput = parseStringifiedToolInput(
+    rawToolCall.input,
+    toolName,
+    params.providerReportedTruncation,
+  )
 
   if (typeof parsedInput.input === 'string') {
     return stringInputError(
@@ -3388,7 +3796,7 @@ export async function executeCustomToolCall(
       ...params,
       toolNames: getEffectiveAgentToolNames(agentTemplate),
       mcpServers: agentTemplate.mcpServers,
-      writeTo: cloneDeep(fileContext.customToolDefinitions),
+      writeTo: cloneDeep(fileContext?.customToolDefinitions),
     }),
     rawToolCall: {
       toolName,
@@ -3397,6 +3805,7 @@ export async function executeCustomToolCall(
       providerOptions: params.providerOptions,
     },
     autoInsertEndStepParam,
+    providerReportedTruncation: params.providerReportedTruncation,
   })
 
   // Filter out restricted tools - emit error instead of tool call/result
@@ -3453,15 +3862,23 @@ export async function executeCustomToolCall(
   // avoids per-string filesystem stat storms; symlink-level containment remains
   // the SDK handler's responsibility. It can false-positive on non-path strings
   // that happen to resolve outside the root — an explicitly accepted tradeoff.
+  // The scan compares each value against the project root. With no root there is
+  // no boundary to compare against, and `path.resolve('', value)` would resolve
+  // against `process.cwd()` instead — so skip the scan rather than re-anchor it.
+  const customToolProjectRoot = resolveProjectRootOrEmpty(fileContext)
   const scannedInputStrings: string[] = []
-  collectCustomInputStrings(toolCall.input, scannedInputStrings)
-  const hasEscapingInput = scannedInputStrings.some(
-    (value) =>
-      value.length > 0 &&
-      normalizedEscapesProject(
-        normalizeScopedToolPath(value, fileContext.projectRoot),
-      ),
-  )
+  if (customToolProjectRoot !== '') {
+    collectCustomInputStrings(toolCall.input, scannedInputStrings)
+  }
+  const hasEscapingInput =
+    customToolProjectRoot !== '' &&
+    scannedInputStrings.some(
+      (value) =>
+        value.length > 0 &&
+        normalizedEscapesProject(
+          normalizeScopedToolPath(value, customToolProjectRoot),
+        ),
+    )
   if (hasEscapingInput) {
     onResponseChunk({
       type: 'error',
@@ -3564,7 +3981,7 @@ export async function executeCustomToolCall(
         toolName,
         toolCallId: toolCall.toolCallId,
         content: result,
-        sentAt: Date.now(),
+        sentAt: (params.clock ?? realClock).now(),
         ...(lifecycleTags.length > 0 && { tags: lifecycleTags }),
       } satisfies ToolMessage
       logger.debug(

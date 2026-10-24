@@ -208,9 +208,10 @@ export const handleReadSubtree = (async (params: {
   }
 
   const resolveProjectPath = (p: string) => {
-    const projectRoot = fileContext.projectRoot
-      ? nodePath.resolve(fileContext.projectRoot)
-      : ''
+    // One optional-chained read: an absent fileContext yields '' and every
+    // downstream ternary below then fails closed to isInsideProject === false.
+    const rawProjectRoot = fileContext?.projectRoot
+    const projectRoot = rawProjectRoot ? nodePath.resolve(rawProjectRoot) : ''
     const resolvedPath = projectRoot ? nodePath.resolve(projectRoot, p) : ''
     const relativeToRoot = projectRoot
       ? nodePath.relative(projectRoot, resolvedPath)

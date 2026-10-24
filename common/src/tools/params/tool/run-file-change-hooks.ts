@@ -24,6 +24,8 @@ Use cases:
 
 The client will run only the hooks whose filePattern matches the provided files.
 
+When the opt-in OPENBUFF_DIAGNOSTIC_PREFLIGHT diagnostic-delta preflight runs, a diagnostic-delta entry reports diagnostic_delta_passed, or diagnostic_delta_rejected with the new error diagnostics (newDiagnostics) and their suggested fix-its (fixIts).
+
 Example:
 ${$getNativeToolCallExampleString({
   toolName,
@@ -56,6 +58,25 @@ const diagnosticSchema = z.object({
   source: z.string(),
 })
 
+/** Matches LanguageDiagnosticTextEdit from sdk/src/tools/language-diagnostics. */
+const textEditSchema = z.object({
+  file: z.string(),
+  newText: z.string(),
+  range: z.object({
+    start: z.object({
+      line: z.number().int().positive(),
+      column: z.number().int().positive(),
+    }),
+    end: z.object({
+      line: z.number().int().positive(),
+      column: z.number().int().positive(),
+    }),
+  }),
+  applicability: z
+    .enum(['machineApplicable', 'maybeIncorrect', 'unspecified'])
+    .optional(),
+})
+
 export const runFileChangeHooksParams = {
   toolName,
   endsAgentStep,
@@ -79,6 +100,21 @@ export const runFileChangeHooksParams = {
           message: z.string(),
           configuredHookCount: z.number().optional(),
           changedFiles: z.array(z.string()).optional(),
+        }),
+        // Opt-in diagnostic-delta preflight result (requires
+        // OPENBUFF_DIAGNOSTIC_PREFLIGHT and an injected diagnosticDelta hook).
+        // Without this arm, schema-parsing consumers rejected or stripped the
+        // delta entry runFileChangeHooks appends when the preflight runs: the
+        // shape matches no terminal-command arm (no command) and no run-level
+        // arm (different validationStatus, no message).
+        z.object({
+          hookName: z.literal('diagnostic-delta'),
+          validationStatus: z.enum([
+            'diagnostic_delta_rejected',
+            'diagnostic_delta_passed',
+          ]),
+          newDiagnostics: z.array(diagnosticSchema).optional(),
+          fixIts: z.array(textEditSchema).optional(),
         }),
       ])
       .array(),

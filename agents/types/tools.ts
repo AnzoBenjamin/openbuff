@@ -12,8 +12,10 @@ export type ToolName =
   | 'edit_3d_asset'
   | 'find_files'
   | 'find_files_matching_content'
+  | 'find_references'
   | 'git_status'
   | 'git_branch'
+  | 'go_to_definition'
   | 'get_task'
   | 'get_change_review_bundle'
   | 'inspect_workspace'
@@ -30,6 +32,7 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
+  | 'hover_type'
   | 'recall_context'
   | 'record_decision'
   | 'read_docs'
@@ -55,6 +58,7 @@ export type ToolName =
   | 'think_deeply'
   | 'update_plan_status'
   | 'web_search'
+  | 'workspace_symbol'
   | 'write_file'
   | 'write_audit_findings'
   | 'write_todos'
@@ -73,8 +77,10 @@ export interface ToolParamsMap {
   edit_3d_asset: Edit3dAssetParams
   find_files: FindFilesParams
   find_files_matching_content: FindFilesMatchingContentParams
+  find_references: FindReferencesParams
   git_status: GitStatusParams
   git_branch: GitBranchParams
+  go_to_definition: GoToDefinitionParams
   get_task: GetTaskParams
   get_change_review_bundle: GetChangeReviewBundleParams
   inspect_workspace: InspectWorkspaceParams
@@ -91,6 +97,7 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
+  hover_type: HoverTypeParams
   recall_context: RecallContextParams
   record_decision: RecordDecisionParams
   read_docs: ReadDocsParams
@@ -116,6 +123,7 @@ export interface ToolParamsMap {
   think_deeply: ThinkDeeplyParams
   update_plan_status: UpdatePlanStatusParams
   web_search: WebSearchParams
+  workspace_symbol: WorkspaceSymbolParams
   write_file: WriteFileParams
   write_audit_findings: WriteAuditFindingsParams
   write_todos: WriteTodosParams
@@ -217,131 +225,133 @@ export interface EndTurnParams {}
  * Parameters for edit_transaction tool
  */
 export interface EditTransactionParams {
-  edits: (
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'str_replace'
-        replacements: {
-          oldString: string
-          newString: string
-          allowMultiple?: boolean
-          occurrenceIndex?: number
-          /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
-          basedOnRead?: string
-          /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
-          skipIfMissing?: boolean
-        }[]
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        /** A structured edit dispatched by operation kind. */
-        type: 'structured'
-        /** Structured edit operation to apply to this file. */
-        operation:
-          | {
-              /** Deterministic text insertion. */
-              kind: 'insert_text'
-              /** 1-indexed insertion position. */
-              position: {
-                /** 1-indexed target line. */
-                line: number
-                /** 1-indexed target column. */
-                column: number
-              }
-              text: string
+  edits:
+    | string
+    | (
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'str_replace'
+            replacements: {
+              oldString: string
+              newString: string
+              allowMultiple?: boolean
+              occurrenceIndex?: number
+              /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
+              basedOnRead?: string
+              /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
+              skipIfMissing?: boolean
+            }[]
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            /** A structured edit dispatched by operation kind. */
+            type: 'structured'
+            /** Structured edit operation to apply to this file. */
+            operation:
+              | {
+                  /** Deterministic text insertion. */
+                  kind: 'insert_text'
+                  /** 1-indexed insertion position. */
+                  position: {
+                    /** 1-indexed target line. */
+                    line: number
+                    /** 1-indexed target column. */
+                    column: number
+                  }
+                  text: string
+                }
+              | {
+                  /** Language-aware import insertion. */
+                  kind: 'insert_import'
+                  /** Complete language-native import statement to add, e.g. "import { foo } from 'bar'", "from app import value", or "use crate::value". */
+                  importStatement: string
+                }
+              | {
+                  /** Language-aware import removal. */
+                  kind: 'remove_import'
+                  /** Complete language-native import statement to remove. Required unless moduleSpecifier is provided. */
+                  importStatement?: string
+                  /** Module specifier to remove imports from, e.g. "react" or "./helper". */
+                  moduleSpecifier?: string
+                }
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'create'
+            /** Exact bytes to write to the new file. */
+            content: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'delete'
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'move'
+            /** New project-relative path. The destination must be absent. */
+            destinationPath: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'replace_range'
+            readCapability: string
+            startLine?: number
+            endLine?: number
+            occurrence?: {
+              match: string
+              occurrence?: number
             }
-          | {
-              /** Language-aware import insertion. */
-              kind: 'insert_import'
-              /** Complete language-native import statement to add, e.g. "import { foo } from 'bar'", "from app import value", or "use crate::value". */
-              importStatement: string
-            }
-          | {
-              /** Language-aware import removal. */
-              kind: 'remove_import'
-              /** Complete language-native import statement to remove. Required unless moduleSpecifier is provided. */
-              importStatement?: string
-              /** Module specifier to remove imports from, e.g. "react" or "./helper". */
-              moduleSpecifier?: string
-            }
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'create'
-        /** Exact bytes to write to the new file. */
-        content: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'delete'
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'move'
-        /** New project-relative path. The destination must be absent. */
-        destinationPath: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'replace_range'
-        readCapability: string
-        startLine?: number
-        endLine?: number
-        occurrence?: {
-          match: string
-          occurrence?: number
-        }
-        newContent: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'rewrite_symbol'
-        symbol: string
-        content: string
-        occurrence?: number
-        /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
-        readCapability?: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'patch'
-        diff: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'write_file'
-        content: string
-        /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file. */
-        basedOnRead?: string
-      }
-  )[]
+            newContent: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'rewrite_symbol'
+            symbol: string
+            content: string
+            occurrence?: number
+            /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
+            readCapability?: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'patch'
+            diff: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'write_file'
+            content: string
+            /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file. */
+            basedOnRead?: string
+          }
+      )[]
 }
 
 /**
@@ -361,9 +371,9 @@ export interface Edit3dAssetParams {
     | {
         type: 'set_object_transform'
         object: string
-        location?: any[]
-        rotation_degrees?: any[]
-        scale?: any[]
+        location?: [number, number, number]
+        rotation_degrees?: [number, number, number]
+        scale?: [number, number, number]
       }
     | {
         type: 'set_render_resolution'
@@ -394,7 +404,7 @@ export interface FindFilesMatchingContentParams {
   /** Regex pattern (ripgrep syntax) to match file content against. */
   pattern: string
   /** Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored. */
-  flags?: string | string[]
+  flags?: string[]
   /** Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to the project root. */
   cwd?: string
   /** Maximum number of unique files to return. Defaults to 100. */
@@ -403,6 +413,18 @@ export interface FindFilesMatchingContentParams {
   groupBySymbol?: boolean
   /** Maximum seconds to let ripgrep run before returning partial results. Defaults to 15. */
   timeoutSeconds?: number
+}
+
+/**
+ * Parameters for find_references tool
+ */
+export interface FindReferencesParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -429,6 +451,18 @@ export interface GitBranchParams {
   switch?: boolean
   /** When true, skip the dirty-tree refusal check. Defaults to false — the tool refuses to branch when the working tree has uncommitted changes. */
   allow_dirty?: boolean
+}
+
+/**
+ * Parameters for go_to_definition tool
+ */
+export interface GoToDefinitionParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -599,10 +633,22 @@ export interface QueryIndexParams {
 }
 
 /**
- * Search archived pre-compaction transcripts for verbatim facts a compaction pass removed from visible context.
+ * Parameters for hover_type tool
+ */
+export interface HoverTypeParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
+}
+
+/**
+ * Search archived pre-compaction transcripts for verbatim conversation or tool facts a compaction pass removed from visible context.
  */
 export interface RecallContextParams {
-  /** Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
+  /** Case-insensitive search terms for archived pre-compaction transcript content. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
   query: string
 }
 
@@ -870,6 +916,7 @@ export interface SetMessagesParams {
       verifiedAt?: number
       supersedes?: string[]
       stale?: boolean
+      sessionScoped?: boolean
     }[]
     workspaceRevision?: number
     workspaceSnapshotId?: string
@@ -960,6 +1007,10 @@ export interface SpawnAgentsParams {
             files: string[]
             snapshotFingerprint: string
             reviewer?: string
+            severity?: string
+            dimension?: string
+            evidence?: string[]
+            correction?: string
           }[]
           permissions: {
             readablePaths: string[]
@@ -1155,6 +1206,14 @@ export interface WebSearchParams {
   include_links?: boolean
   /** Maximum number of links to extract when include_links is true. Default: 40. */
   max_links?: number
+}
+
+/**
+ * Parameters for workspace_symbol tool
+ */
+export interface WorkspaceSymbolParams {
+  /** Symbol name (or substring) to search for, e.g. "createUser". */
+  query: string
 }
 
 /**

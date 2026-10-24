@@ -1,10 +1,12 @@
-import {
-  startToolTag,
-  endToolTag,
-  toolNameParam,
-} from '@codebuff/common/tools/constants'
+import { startToolTag, endToolTag } from '@codebuff/common/tools/constants'
 import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
 import { escapeRegexForLiteral as escapeRegex } from '@codebuff/common/util/language-profiles'
+
+import {
+  MISSING_TOOL_NAME_REASON,
+  resolveToolName,
+  stripToolNameKeys,
+} from './tool-name-key'
 
 // Module-level constant: building the extraction RegExp inside
 // parseTextWithToolCalls allocated a fresh RegExp per assistant-text parse in
@@ -93,26 +95,20 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
             'Ignored codebuff_tool_call content because it did not parse to a JSON object.',
         })
       } else {
-        const toolName = parsed[toolNameParam]
+        const resolved = resolveToolName(parsed)
 
-        if (typeof toolName === 'string') {
-          // Remove the tool name param from the input
-          const input = { ...parsed }
-          delete input[toolNameParam]
-
-          // Also remove cb_easp if present
-          delete input['cb_easp']
+        if (resolved !== undefined) {
+          const input = stripToolNameKeys(parsed, resolved)
 
           segments.push({
             type: 'tool_call',
-            toolName,
+            toolName: resolved.toolName,
             input,
           })
         } else {
           segments.push({
             type: 'parse_error',
-            message:
-              'Ignored codebuff_tool_call content because cb_tool_name was missing or not a string.',
+            message: `Ignored codebuff_tool_call content because ${MISSING_TOOL_NAME_REASON}`,
           })
         }
       }

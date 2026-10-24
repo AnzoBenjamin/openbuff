@@ -360,7 +360,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
               <ShimmerText
                 text="working..."
                 interval={160}
-                primaryColor={theme.secondary}
+                primaryColor={theme.primary}
               />
             </text>
           </box>

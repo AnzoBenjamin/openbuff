@@ -15,6 +15,14 @@ import type { BaseEnv, ClientEnv } from '@codebuff/common/types/contracts/env'
 export type CliEnv = BaseEnv & {
   OPENBUFF_CONFIG_DIR?: string
   OPENBUFF_MEMORY_AUTHORITY?: string
+  // Optional cap on the missing-output retry loop (maxMissingOutputRetries).
+  OPENBUFF_MAX_MISSING_OUTPUT_RETRIES?: string
+  // P1-T3 attach mode: target of a running `openbuff serve` to attach to.
+  OPENBUFF_SERVE_SOCKET?: string
+  OPENBUFF_SERVE_TOKEN?: string
+  // P2-T7 dash mode: fallback auth token for `openbuff dash` when --token is
+  // omitted (the CLI otherwise generates one and prints it to stderr).
+  OPENBUFF_DASH_TOKEN?: string
   // Terminal detection (for tmux/screen passthrough)
   TERM?: string
   TMUX?: string
@@ -28,6 +36,7 @@ export type CliEnv = BaseEnv & {
   // Display server detection (Linux headless check)
   DISPLAY?: string
   WAYLAND_DISPLAY?: string
+  XDG_SESSION_TYPE?: string
 
   // Terminal-specific
   KITTY_WINDOW_ID?: string

@@ -9,6 +9,7 @@ import type {
 } from './types'
 
 import { MAX_INDEX_AGE_MS } from './index-store'
+import { getPageRankAdjacency, personalizedPageRank } from './pagerank'
 import { getPostingCandidates, getPostingDocumentFrequency } from './query-data'
 
 export interface QueryOptions {
@@ -25,6 +26,14 @@ export interface QueryOptions {
    * project; tests / direct callers may override per-query.
    */
   lexicalWeights?: LexicalWeights
+  /**
+   * Blend weight for the personalized-PageRank component (P3-T9). The
+   * contribution is additive and bounded: the blended score is
+   * `pageRankWeight x pageRank` and PageRank scores sum to 1 across the
+   * whole graph, so the per-file contribution never exceeds this weight.
+   * Default: 0 (opt-in) — omitting it keeps ranking byte-identical.
+   */
+  pageRankWeight?: number
 }
 
 /** Historical hardcoded lexical scoring constants — the ranking baseline. */
@@ -173,6 +182,7 @@ export function queryIndex(
       commandIntent,
       lexicalWeights,
       pathPrefixes,
+      options.pageRankWeight,
     )
   }
   return querySearch(
@@ -185,6 +195,7 @@ export function queryIndex(
     commandIntent,
     lexicalWeights,
     pathPrefixes,
+    options.pageRankWeight,
   )
 }
 
@@ -231,6 +242,7 @@ function querySearch(
   commandIntent: boolean,
   lexicalWeights: Required<LexicalWeights>,
   pathPrefixes?: string[],
+  pageRankWeight = 0,
 ): QueryIndexResult[] {
   if (tokens.length === 0) {
     const results = Object.values(index.files)
@@ -272,7 +284,13 @@ function querySearch(
   }
 
   if (!commandIntent) {
-    const graphScores = scoreGraphNeighborhood(index, adjacency, directResults)
+    blendPageRankScores(index, directResults, pageRankWeight)
+    const graphScores = scoreGraphNeighborhood(
+      index,
+      adjacency,
+      directResults,
+      tokens,
+    )
     for (const [path, related] of graphScores.entries()) {
       if (!matchesFileType(index.files[path], fileTypes)) continue
       if (!pathMatchesPrefixes(path, pathPrefixes)) continue
@@ -317,7 +335,7 @@ function querySearch(
         ? explainResult(result, { ageMs: indexAgeMs, stale })
         : undefined,
     }))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, limit)
 }
 
@@ -337,7 +355,7 @@ function queryNeighbors(
   )
   const related = new Map<string, QueryIndexResult>()
   for (const seedPath of seedPaths) {
-    for (const item of getRelatedFiles(index, adjacency, seedPath, 2)) {
+    for (const item of getRelatedFiles(index, adjacency, seedPath, 2, tokens)) {
       if (
         item.path === seedPath ||
         isNoisyFilePath(item.path) ||
@@ -364,9 +382,12 @@ function queryNeighbors(
       }
     }
   }
+  // Tier 1C: same deterministic path tie-break as querySearch — without it,
+  // equal-score neighbor results were ordered by map-insertion (seed
+  // iteration and edge-walk) order, which is not stable across runs.
   return Array.from(related.values())
     .map((result) => ({ ...result, score: roundScore(result.score) }))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
 }
 
 function queryPath(
@@ -650,17 +671,60 @@ function fileContainsToken(file: IndexedFile, token: string): boolean {
   return false
 }
 
+/**
+ * P3-T9: blend personalized PageRank into the lexical scores as an additive,
+ * bounded component. The personalization seeds are the files that matched
+ * the query tokens (lexical score > 0), so rank diffuses from the query's
+ * own hits toward well-connected files. The added score is
+ * `pageRankWeight x pageRank` and PageRank scores sum to 1 across the whole
+ * graph, so the per-file contribution never exceeds `pageRankWeight`; the
+ * default weight of 0 skips the computation entirely. The directed adjacency
+ * is built once per immutable index object (WeakMap-cached, like
+ * adjacencyCache) and iteration is capped (maxIterations x edges), keeping
+ * the blend safe on large repositories.
+ */
+function blendPageRankScores(
+  index: MetadataIndex,
+  directResults: Map<string, QueryIndexResult>,
+  pageRankWeight: number,
+): void {
+  if (
+    pageRankWeight <= 0 ||
+    !Number.isFinite(pageRankWeight) ||
+    directResults.size === 0
+  ) {
+    return
+  }
+
+  const adjacency = getPageRankAdjacency(index)
+  const seeds = new Map<string, number>()
+  for (const path of directResults.keys()) {
+    const nodeId = fileNodeId(path)
+    if (adjacency.has(nodeId)) seeds.set(nodeId, 1)
+  }
+  if (seeds.size === 0) return
+
+  const scores = personalizedPageRank({ adjacency, seeds })
+  for (const [path, result] of directResults) {
+    const pageRank = scores.get(fileNodeId(path)) ?? 0
+    if (pageRank <= 0) continue
+    result.score += pageRankWeight * pageRank
+    result.matchedOn = addMatchedOn(result.matchedOn, 'graph')
+  }
+}
+
 function scoreGraphNeighborhood(
   index: MetadataIndex,
   adjacency: GraphAdjacency,
   directResults: Map<string, QueryIndexResult>,
+  tokens: string[],
 ): Map<string, { score: number; relatedFiles: RelatedFile[] }> {
   const graphScores = new Map<
     string,
     { score: number; relatedFiles: RelatedFile[] }
   >()
   const sortedDirectResults = Array.from(directResults.values())
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, 25)
 
   for (const result of sortedDirectResults) {
@@ -670,6 +734,7 @@ function scoreGraphNeighborhood(
       adjacency,
       result.path,
       boost,
+      tokens,
     )) {
       const current = graphScores.get(related.path) ?? {
         score: 0,
@@ -695,6 +760,7 @@ function getRelatedFiles(
   adjacency: GraphAdjacency,
   filePath: string,
   boost: number,
+  tokens: string[],
 ): RelatedFile[] {
   const fileId = fileNodeId(filePath)
   const edges = adjacency.get(fileId) ?? []
@@ -712,6 +778,28 @@ function getRelatedFiles(
           via: edge.label,
         })
       }
+      continue
+    }
+
+    // Tier 1C: second-hop expansion through shared concept/import nodes was
+    // the dominant source of unrelated relatedFiles ("everyone imports
+    // react"; shared comment tokens like "error"/"test"). Only expand
+    // through such a node when the query itself references its label; direct
+    // file<->file edges above are always allowed. An empty token list
+    // (neighbors mode seeded purely by an explicit file) carries no query
+    // evidence to require, so the gate is bypassed there.
+    const neighborType = neighborNode?.type
+    const tokenMatchedNeighbor =
+      tokens.length === 0 ||
+      tokens.some((token) =>
+        (neighborNode?.label ?? '')
+          .toLowerCase()
+          .includes(token.toLowerCase()),
+      )
+    if (
+      (neighborType === 'concept' || neighborType === 'import') &&
+      !tokenMatchedNeighbor
+    ) {
       continue
     }
 

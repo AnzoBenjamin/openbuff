@@ -43,6 +43,7 @@ export type {
 export {
   diagnosticParsers,
   parseLanguageDiagnostics,
+  structuredDiagnosticParsers,
 } from './language-diagnostics'
 export type {
   DiagnosticParser,
@@ -50,7 +51,10 @@ export type {
   LanguageDiagnostic,
   LanguageDiagnosticPosition,
   LanguageDiagnosticRange,
+  LanguageDiagnosticRelatedInfo,
   LanguageDiagnosticSeverity,
+  LanguageDiagnosticTextEdit,
+  LanguageDiagnosticTextEditApplicability,
 } from './language-diagnostics'
 
 // Export tools under Tools namespace

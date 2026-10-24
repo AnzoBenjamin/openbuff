@@ -254,6 +254,20 @@ describe('loopAgentSteps', () => {
     expect(result.agentState.contextWindowTokens).toBe(32_000)
   })
 
+  it('preserves a pre-seeded contextWindowTokens when no resolver dep is present', async () => {
+    setup()
+    // A supervised child rehydrates its parent-resolved window from the
+    // transport slice and has no bridged resolveModelContextWindow dep; the
+    // seeding must not clobber that rehydrated seed with undefined.
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState: { ...agentState, contextWindowTokens: 200_000 },
+      resolveModelContextWindow: undefined,
+    })
+
+    expect(result.agentState.contextWindowTokens).toBe(200_000)
+  })
+
   it('forwards a request-time SDK trim as a context_request_trim event', async () => {
     setup()
     const events: any[] = []
@@ -1575,6 +1589,15 @@ describe('loopAgentSteps', () => {
       },
       expectedRevision: -1,
     })
+    agentState.compactionArchive = [
+      {
+        archivedAt: 1,
+        action: 'semantic_compaction',
+        keepRecentSteps: 0,
+        stepBase: 0,
+        messages: [userMessage('Archived decision')],
+      },
+    ]
     let injectedParams: Record<string, any> | undefined
     const qualifiedPruner = buildPrunerStub(
       function* ({ params }: { params?: Record<string, any> }) {
@@ -1628,10 +1651,16 @@ describe('loopAgentSteps', () => {
     })
     expect(injectedParams?.taskMemory?.revision).toBe(0)
     expect(injectedParams?.workspaceState).toBeDefined()
+    expect(injectedParams?.archivePointers).toContain(
+      '[action=semantic_compaction steps=0-0 msgs=1] 1 archived messages',
+    )
     // Because the revision guard matched, the transactional replacement
     // committed: both the transcript and the next memory revision landed.
     expect(JSON.stringify(result.agentState.messageHistory)).toContain(
       '<knowledge_memory>',
+    )
+    expect(result.agentState.taskMemory?.revision).toBeGreaterThan(
+      injectedParams!.taskMemory.revision,
     )
   })
 
@@ -2309,10 +2338,16 @@ describe('loopAgentSteps', () => {
     }
   })
 
-  // Regression: a structured agent that never populates output used to get only
-  // one retry. The fix introduces MAX_MISSING_OUTPUT_RETRIES (= 3) so the loop
-  // retries the missing-output nudge up to the cap before handing back null.
-  it('retries the missing-output nudge up to the cap and then returns null value', async () => {
+  // With the missing-output retry cap removed, the nudge fires on EVERY
+  // turn-end that still lacks required output. An agent that never calls
+  // set_output keeps being nudged until the STEP CAP ends the loop: each
+  // retry is a real LLM step that consumes the configured step budget, so a
+  // configured cap (not a retry counter) is the bound that terminates a
+  // never-completing structured agent. The nudge must never resurrect a
+  // turn that ended via the step cap itself — at the cap no step is
+  // consumed, so resetting shouldEndTurn there spins the loop forever with
+  // zero LLM calls (run-agent-step.ts guards this with !hitStepCap).
+  it('repeats the missing-output nudge until the step cap ends the loop', async () => {
     setup()
     let llmCallCount = 0
     agentTemplate.handleSteps = undefined
@@ -2327,17 +2362,54 @@ describe('loopAgentSteps', () => {
 
     const result = await loopAgentSteps({
       ...baseParams,
-      // More steps than the retry budget so the loop ends because the retry cap
-      // is hit, not because steps ran out.
-      agentState: { ...agentState, stepsRemaining: 20 },
+      // Every available step is consumed by a nudge-and-retry cycle: no
+      // hidden retry cap exists anymore, and this test configures the step
+      // budget as the bound.
+      agentState: { ...agentState, stepsRemaining: 8 },
       promptAiSdkStream: runtimeParams.promptAiSdkStream,
       localAgentTemplates: { 'test-agent': agentTemplate },
     })
 
-    // 1 initial call + 3 retries = MAX_MISSING_OUTPUT_RETRIES (hard-coded 4;
-    // the constant is module-private in run-agent-step.ts). The old one-shot
-    // behavior yielded 2.
-    expect(llmCallCount).toBe(4)
+    expect(llmCallCount).toBe(8)
+    // The structured-output envelope is returned with a null/absent value
+    // rather than throwing.
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: null,
+    })
+  })
+
+  // maxMissingOutputRetries contract: when the knob IS configured, the
+  // missing-output nudge fires at most that many times before the loop ends
+  // via the existing shouldEndTurn break — even though the step budget still
+  // has headroom. The bound is the retry counter, not the step cap: 1 initial
+  // call + 2 retries = 3 LLM calls with stepsRemaining: 20, and the parent
+  // receives the null structured value.
+  it('caps the missing-output nudge at maxMissingOutputRetries and returns a null structured value', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // The LLM only ever returns prose — it never calls set_output.
+      yield { type: 'text' as const, text: 'Still no structured output.' }
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      // Step budget deliberately has headroom: with the knob set, the retry
+      // counter (not the step cap) must be what ends the loop.
+      agentState: { ...agentState, stepsRemaining: 20 },
+      maxMissingOutputRetries: 2,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // 1 initial call + 2 capped retries — the third nudge never fires.
+    expect(llmCallCount).toBe(3)
     // The structured-output envelope is returned with a null/absent value
     // rather than throwing.
     expect(result.output).toEqual({

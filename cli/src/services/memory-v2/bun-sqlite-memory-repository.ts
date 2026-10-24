@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   existsSync,
@@ -35,6 +35,7 @@ import {
   type MemoryHealthRequest,
   type MemoryOperationError,
   type MemoryQueryOutcome,
+  type MemoryProvenance,
   type MemoryRebuildOutcome,
   type MemoryRebuildRequest,
   type MemoryRetrievalRequest,
@@ -54,7 +55,11 @@ import {
   selectCompactionCandidates,
   type GCRelevantEnvelope,
 } from '../../../../common/src/util/compaction-eligibility'
+import type { ContextArchiveSnapshot } from '../../../../common/src/types/context-archive'
+import { sanitizeFtsQuery } from '../../../../common/src/util/fts5-query'
 import type {
+  ContextArchiveSearchMatch,
+  ContextArchiveSearchOutcome,
   GcCandidateSelection,
   MemoryObservationStatusEntry,
   MemoryObservationStatusReadRequest,
@@ -70,6 +75,16 @@ import {
   type ContradictionCandidate,
 } from '../../../../common/src/util/contradiction-detector'
 import type { ConceptCorpusEntry, ConceptExpansion } from './concept-index'
+import {
+  MemoryPlaybookSchema,
+  PlaybookCountersSchema,
+  computeTriggerSignature,
+  type MemoryPlaybook,
+  type PlaybookEnforcement,
+  type PlaybookScope,
+  type PlaybookStatus,
+  type PlaybookTrigger,
+} from '../../../../common/src/types/memory-playbook'
 
 export type RuntimeNeutralMemoryRepositoryV2 = MemoryRepositoryV2
 export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
@@ -82,8 +97,15 @@ export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
  * closing the window where its GC selection (unaware of claim.reinforced)
  * could archive a reinforced observation and where its projection rebuild
  * could leave claim_dedup stale.
+ *
+ * Bumped 3 -> 4 by the context-archive persistence tables (the cross-session
+ * recall_context source): the additive DDL is idempotent, so a v3 store
+ * upgrades in place, while the existing version > SCHEMA_VERSION guard makes
+ * an OLDER binary fail closed on a v4 store — a pre-archive build sharing
+ * this file can never open it, so it cannot compact or rebuild a store whose
+ * context_archive_* side tables it does not maintain.
  */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const DEFAULT_DATABASE_PATH = join('.openbuff', 'memory', 'memory-v2.sqlite')
 const DEFAULT_BUSY_TIMEOUT_MS = 2_500
 const MAX_BUSY_TIMEOUT_MS = 10_000
@@ -93,6 +115,26 @@ const MAX_QUERY_PAYLOAD_BYTES = 8 * 1024 * 1024
 const MAX_REPLAY_EVENTS = 10_000
 const GC_SELECT_LIMIT = 10_000
 const COMPACTION_APPLY_MAX = 100
+/** Context-archive TTL: recall only surfaces recent pre-compaction context. */
+const CONTEXT_ARCHIVE_TTL_MS = 30 * 24 * 3600 * 1000
+/** Max snapshots the TTL prune removes per persist flush (bounded work). */
+const CONTEXT_ARCHIVE_PRUNE_CAP = 500
+/** Default/capped snapshot count for loadContextArchiveSnapshots. */
+const CONTEXT_ARCHIVE_LOAD_LIMIT_DEFAULT = 24
+const CONTEXT_ARCHIVE_LOAD_LIMIT_MAX = 1000
+/** Default/capped match count and internal scan cap for searchContextArchive. */
+const CONTEXT_ARCHIVE_SEARCH_LIMIT_DEFAULT = 6
+const CONTEXT_ARCHIVE_SEARCH_LIMIT_MAX = 64
+const CONTEXT_ARCHIVE_SEARCH_SCAN_CAP = 500
+/** Snippet shape: up to 120 chars of lead-in, 600 chars total. */
+const CONTEXT_ARCHIVE_SNIPPET_CONTEXT = 120
+const CONTEXT_ARCHIVE_SNIPPET_CHARS = 600
+/** Recognized snapshot actions; anything else fails the DDL CHECK anyway. */
+const CONTEXT_ARCHIVE_ACTIONS: ReadonlySet<string> = new Set([
+  'semantic_compaction',
+  'mechanical_trim',
+  'tool_result_eviction',
+])
 /** Metadata key tracking the claim_dedup cold-start backfill cursor. */
 const CLAIM_DEDUP_BACKFILL_KEY = 'claim_dedup_backfill'
 /** Event types the shared P6 compaction-eligibility selection consumes. */
@@ -375,6 +417,46 @@ interface ObservationStatusRow {
   entity_id: string
   task_id: string | null
   state_json: string
+}
+
+interface PlaybookRow {
+  playbook_id: string
+  workspace_id: string
+  task_id: string | null
+  title: string
+  instruction: string
+  trigger_json: string
+  scope_json: string
+  status: string
+  enforcement: string
+  counters_json: string
+  provenance_json: string
+  trigger_signature: string
+  expires_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+type ContextArchiveMessage = ContextArchiveSnapshot['messages'][number]
+
+interface ContextArchiveSnapshotRow {
+  run_id: string
+  archived_at: number
+  action: string
+  keep_recent_steps: number
+  step_base: number | null
+  reason: string | null
+  messages_json: string
+  steps_json: string | null
+}
+
+interface ContextArchiveMessageRow {
+  run_id: string
+  archived_at: number
+  tool_call_id: string | null
+  tool_name: string | null
+  step: number | null
+  body: string
 }
 
 /**
@@ -1168,6 +1250,622 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
     } catch (error) {
       return { status: 'error', error: classifyStorageError(error) }
     }
+  }
+
+  /**
+   * Persist compaction-archive snapshots for one session run into the
+   * durable context_archive_* side tables (the cross-session recall_context
+   * source).
+   *
+   * IDEMPOTENT FULL-REPLACE PER RUN: the in-memory archive is the capped
+   * truth, so the transaction first deletes every stored row for runId
+   * (snapshots, messages, fts rows, watermark) and then inserts the full
+   * incoming set — re-persisting the same run yields the same row count.
+   * The same transaction runs the bounded TTL prune (snapshots older than
+   * CONTEXT_ARCHIVE_TTL_MS, capped at CONTEXT_ARCHIVE_PRUNE_CAP per flush).
+   *
+   * Failure semantics: never throws. An empty runId, an empty snapshot
+   * list, a closed store, or a failed transaction returns
+   * { persisted: 0, skipped: N } — the flush either commits fully or rolls
+   * back fully.
+   */
+  async persistContextArchiveSnapshots(request: {
+    runId: string
+    snapshots: ContextArchiveSnapshot[]
+  }): Promise<{ persisted: number; skipped: number }> {
+    const snapshots = Array.isArray(request?.snapshots) ? request.snapshots : []
+    const skipAll = (): { persisted: number; skipped: number } => ({
+      persisted: 0,
+      skipped: snapshots.length,
+    })
+    if (this.requireOpen() !== null) return skipAll()
+    const runId = typeof request?.runId === 'string' ? request.runId : ''
+    if (runId.length === 0 || snapshots.length === 0) return skipAll()
+
+    const ftsAvailable = contextArchiveFtsAvailable(this.database)
+    const now = new Date().toISOString()
+    const ttlCutoff = Date.now() - CONTEXT_ARCHIVE_TTL_MS
+    const insertSnapshot = this.database.query(
+      `INSERT INTO context_archive_snapshots
+         (run_id, archived_at, action, keep_recent_steps, step_base, reason,
+          messages_json, steps_json, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    )
+    const insertMessage = this.database.query(
+      `INSERT INTO context_archive_messages
+         (run_id, archived_at, msg_index, tool_call_id, tool_name, step, body)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    )
+    const insertFts = ftsAvailable
+      ? this.database.query(
+          `INSERT INTO context_archive_fts (run_id, archived_at, msg_index, body)
+           VALUES (?1, ?2, ?3, ?4)`,
+        )
+      : null
+
+    // One immediate write transaction: bun's transaction() wrapper commits
+    // when the closure returns and rolls back when it throws, so the rows
+    // are durably visible once the method resolves (the previous manual
+    // BEGIN IMMEDIATE/exec('COMMIT') pair rolled back on return, leaving
+    // the flush's rows invisible to every later read).
+    const flush = this.database.transaction(() => {
+      // Bounded TTL prune FIRST — before this run's rows are written. The
+      // prune removes rows from PREVIOUS runs that aged past the cutoff;
+      // running it after the inserts would also delete rows this flush just
+      // wrote whenever their archivedAt predates the cutoff (archivedAt is a
+      // transcript timestamp, not a wall-clock write time — backfills and
+      // replayed sessions legitimately persist old timestamps). The
+      // per-flush snapshot cap keeps a cold store's first prune bounded.
+      const stale = this.database
+        .query(
+          `SELECT run_id, archived_at FROM context_archive_snapshots
+            WHERE archived_at < ?1
+            ORDER BY archived_at
+            LIMIT ?2`,
+        )
+        .all(ttlCutoff, CONTEXT_ARCHIVE_PRUNE_CAP) as Array<{
+        run_id: string
+        archived_at: number
+      }>
+      for (const row of stale) {
+        if (insertFts) {
+          this.database.run(
+            'DELETE FROM context_archive_fts WHERE run_id = ? AND archived_at = ?',
+            [row.run_id, row.archived_at],
+          )
+        }
+        this.database.run(
+          'DELETE FROM context_archive_messages WHERE run_id = ? AND archived_at = ?',
+          [row.run_id, row.archived_at],
+        )
+        this.database.run(
+          'DELETE FROM context_archive_snapshots WHERE run_id = ? AND archived_at = ?',
+          [row.run_id, row.archived_at],
+        )
+      }
+      this.database.run(
+        'DELETE FROM context_archive_watermarks WHERE max_archived_at < ?',
+        [ttlCutoff],
+      )
+
+      // Idempotent full-replace per run: drop the run's previous rows first.
+      if (insertFts) {
+        this.database.run(
+          'DELETE FROM context_archive_fts WHERE run_id = ?',
+          [runId],
+        )
+      }
+      this.database.run(
+        'DELETE FROM context_archive_messages WHERE run_id = ?',
+        [runId],
+      )
+      this.database.run(
+        'DELETE FROM context_archive_snapshots WHERE run_id = ?',
+        [runId],
+      )
+      this.database.run(
+        'DELETE FROM context_archive_watermarks WHERE run_id = ?',
+        [runId],
+      )
+
+      let persisted = 0
+      let maxArchivedAt = Number.NEGATIVE_INFINITY
+      for (const snapshot of snapshots) {
+        const prepared = prepareContextArchiveSnapshot(snapshot)
+        if (prepared === null) continue // skipped: invalid snapshot shape
+        insertSnapshot.run(
+          runId,
+          snapshot.archivedAt,
+          snapshot.action,
+          snapshot.keepRecentSteps,
+          snapshot.stepBase ?? null,
+          snapshot.reason ?? null,
+          prepared.messagesJson,
+          prepared.stepsJson,
+          now,
+        )
+        for (const row of prepared.messageRows) {
+          insertMessage.run(
+            runId,
+            snapshot.archivedAt,
+            row.msgIndex,
+            row.toolCallId,
+            row.toolName,
+            row.step,
+            row.body,
+          )
+          if (insertFts) {
+            insertFts.run(runId, snapshot.archivedAt, row.msgIndex, row.body)
+          }
+        }
+        persisted++
+        maxArchivedAt = Math.max(maxArchivedAt, snapshot.archivedAt)
+      }
+
+      if (Number.isFinite(maxArchivedAt)) {
+        // Observability watermark: the newest persisted archivedAt per run.
+        this.database.run(
+          `INSERT INTO context_archive_watermarks (run_id, max_archived_at, updated_at)
+           VALUES (?1, ?2, ?3)
+           ON CONFLICT(run_id) DO UPDATE SET
+             max_archived_at = excluded.max_archived_at,
+             updated_at = excluded.updated_at`,
+          [runId, maxArchivedAt, now],
+        )
+      }
+
+      return { persisted, skipped: snapshots.length - persisted }
+    })
+    try {
+      return flush.immediate()
+    } catch {
+      // The transaction rolled back or the handle is dead; the typed
+      // skip-all outcome below is the observable result either way.
+      return skipAll()
+    }
+  }
+
+  /**
+   * Load persisted compaction-archive snapshots, newest first (the caller
+   * reverses as needed). Without runId, spans all runs. Stale rows
+   * (unreadable messages_json, unknown action) are dropped rather than
+   * failing the whole read. Never throws; a failed read returns
+   * { snapshots: [] }.
+   */
+  async loadContextArchiveSnapshots(request: {
+    runId?: string
+    limit?: number
+  } = {}): Promise<{ snapshots: ContextArchiveSnapshot[] }> {
+    if (this.requireOpen() !== null) return { snapshots: [] }
+    const runId =
+      typeof request?.runId === 'string' && request.runId.length > 0
+        ? request.runId
+        : null
+    const limit =
+      typeof request?.limit === 'number' &&
+      Number.isFinite(request.limit) &&
+      request.limit >= 0
+        ? Math.min(Math.floor(request.limit), CONTEXT_ARCHIVE_LOAD_LIMIT_MAX)
+        : CONTEXT_ARCHIVE_LOAD_LIMIT_DEFAULT
+    try {
+      const rows = (
+        runId !== null
+          ? this.database
+              .query(
+                `SELECT run_id, archived_at, action, keep_recent_steps, step_base,
+                        reason, messages_json, steps_json
+                   FROM context_archive_snapshots
+                  WHERE run_id = ?1
+                  ORDER BY archived_at DESC
+                  LIMIT ?2`,
+              )
+              .all(runId, limit)
+          : this.database
+              .query(
+                `SELECT run_id, archived_at, action, keep_recent_steps, step_base,
+                        reason, messages_json, steps_json
+                   FROM context_archive_snapshots
+                  ORDER BY archived_at DESC
+                  LIMIT ?1`,
+              )
+              .all(limit)
+      ) as ContextArchiveSnapshotRow[]
+      const snapshots: ContextArchiveSnapshot[] = []
+      for (const row of rows) {
+        const snapshot = parsePersistedSnapshot(row)
+        if (snapshot !== null) snapshots.push(snapshot)
+      }
+      return { snapshots }
+    } catch {
+      return { snapshots: [] }
+    }
+  }
+
+  /**
+   * Bounded search over the persisted compaction archive. The durable FTS5
+   * index serves the query when present; when it is absent (SQLite built
+   * without FTS5) or the MATCH fails for any reason, the search fails open
+   * to a bounded case-insensitive LIKE scan over context_archive_messages
+   * with ALL-terms AND semantics — mirroring the runtime recall contract
+   * that never throws on a bad query. Only archived tool messages are
+   * returned: the recall contract matches tool bodies (same as the runtime
+   * scanner); non-tool rows exist for lineage only.
+   */
+  async searchContextArchive(request: {
+    query: string
+    limit?: number
+  }): Promise<ContextArchiveSearchOutcome> {
+    const empty: ContextArchiveSearchOutcome = {
+      matches: [],
+      snapshotsSearched: 0,
+    }
+    if (this.requireOpen() !== null) return empty
+    const query = typeof request?.query === 'string' ? request.query : ''
+    const limit =
+      typeof request?.limit === 'number' &&
+      Number.isFinite(request.limit) &&
+      request.limit > 0
+        ? Math.min(Math.floor(request.limit), CONTEXT_ARCHIVE_SEARCH_LIMIT_MAX)
+        : CONTEXT_ARCHIVE_SEARCH_LIMIT_DEFAULT
+    const terms = sanitizeFtsQuery(query)
+    // No FTS5-expressible term: nothing can match under the ALL-terms
+    // contract, so report an empty (not failed) search.
+    if (terms === null) return empty
+
+    try {
+      if (contextArchiveFtsAvailable(this.database)) {
+        try {
+          const rows = this.database
+            .query(
+              `SELECT fts.run_id AS run_id, fts.archived_at AS archived_at,
+                      m.tool_name AS tool_name, m.tool_call_id AS tool_call_id,
+                      m.step AS step, m.body AS body
+                 FROM context_archive_fts fts
+                 JOIN context_archive_messages m
+                   ON m.run_id = fts.run_id
+                  AND m.archived_at = fts.archived_at
+                  AND m.msg_index = fts.msg_index
+                WHERE fts MATCH ?1 AND m.tool_name IS NOT NULL
+                ORDER BY rank
+                LIMIT ?2`,
+            )
+            .all(
+              terms.join(' '),
+              CONTEXT_ARCHIVE_SEARCH_SCAN_CAP,
+            ) as ContextArchiveMessageRow[]
+          return {
+            matches: buildArchiveSearchMatches(rows, terms, limit),
+            snapshotsSearched: countDistinctArchiveSnapshots(rows),
+          }
+        } catch {
+          // MATCH failed (e.g. a query shape the sanitizer did not cover):
+          // fall through to the LIKE scan below.
+        }
+      }
+
+      // Fail-open LIKE scan: all terms AND, case-insensitive, bounded.
+      const loweredTerms = query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((term) => term.length > 0)
+      if (loweredTerms.length === 0) return empty
+      const clauses = loweredTerms
+        .map((_, index) => `lower(body) LIKE ?${index + 1} ESCAPE '\\'`)
+        .join(' AND ')
+      const params = loweredTerms.map((term) => `%${escapeLikePattern(term)}%`)
+      const rows = this.database
+        .query(
+          `SELECT run_id, archived_at, tool_name, tool_call_id, step, body
+             FROM context_archive_messages
+            WHERE tool_name IS NOT NULL AND ${clauses}
+            ORDER BY archived_at DESC, msg_index DESC
+            LIMIT ?${loweredTerms.length + 1}`,
+        )
+        .all(
+          ...params,
+          CONTEXT_ARCHIVE_SEARCH_SCAN_CAP,
+        ) as ContextArchiveMessageRow[]
+      return {
+        matches: buildArchiveSearchMatches(rows, loweredTerms, limit),
+        snapshotsSearched: countDistinctArchiveSnapshots(rows),
+      }
+    } catch {
+      // Fail-open contract: a search failure is an empty result, never a
+      // thrown error into the recall path.
+      return empty
+    }
+  }
+
+  /**
+   * Active, unexpired procedural playbooks for one workspace (the runtime
+   * playbook gate's per-turn input). Every row is revalidated through
+   * MemoryPlaybookSchema and its JSON columns, so a corrupt row throws
+   * instead of coercing into a partially-populated rule.
+   */
+  async listPlaybooks(workspaceId: string): Promise<MemoryPlaybook[]> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const rows = this.database
+        .query(
+          `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+             FROM memory_playbooks
+            WHERE workspace_id = ?1
+              AND status = 'active'
+              AND (expires_at IS NULL OR expires_at > ?2)
+            ORDER BY created_at, playbook_id`,
+        )
+        .all(workspaceId, Date.now()) as PlaybookRow[]
+      return rows.map((row) => playbookFromRow(row))
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Insert-or-update a playbook keyed by computeTriggerSignature(trigger,
+   * scope): two playbooks with the same signature are the same rule, so an
+   * existing row keeps its playbookId, createdAt and counters while its
+   * instruction/enforcement/scope/provenance/expiry are refreshed. The
+   * assembled record is validated with MemoryPlaybookSchema BEFORE the write,
+   * so a non-evaluable or schema-invalid payload never reaches the store.
+   */
+  async upsertPlaybookByTriggerSignature(input: {
+    workspaceId: string
+    taskId?: string
+    title: string
+    instruction: string
+    trigger: PlaybookTrigger
+    scope: PlaybookScope
+    status: PlaybookStatus
+    enforcement: PlaybookEnforcement
+    provenance: MemoryProvenance
+    expiresAt?: number
+  }): Promise<MemoryPlaybook> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const triggerSignature = computeTriggerSignature(
+        input.trigger,
+        input.scope,
+      )
+      const now = Date.now()
+      const existing = this.readPlaybookRow(input.workspaceId, triggerSignature)
+      const playbook = MemoryPlaybookSchema.parse({
+        schemaVersion: 1,
+        playbookId: existing?.playbook_id ?? randomUUID(),
+        workspaceId: input.workspaceId,
+        taskId: existing ? (existing.task_id ?? undefined) : input.taskId,
+        title: input.title,
+        instruction: input.instruction,
+        trigger: input.trigger,
+        scope: input.scope,
+        status: input.status,
+        enforcement: input.enforcement,
+        counters: existing
+          ? (JSON.parse(existing.counters_json) as unknown)
+          : PlaybookCountersSchema.parse({}),
+        provenance: input.provenance,
+        triggerSignature,
+        expiresAt: input.expiresAt,
+        createdAt: existing?.created_at ?? now,
+        updatedAt: now,
+      })
+      if (existing) {
+        this.database
+          .query(
+            `UPDATE memory_playbooks
+                SET title = ?1,
+                    instruction = ?2,
+                    status = ?3,
+                    enforcement = ?4,
+                    trigger_json = ?5,
+                    scope_json = ?6,
+                    provenance_json = ?7,
+                    expires_at = ?8,
+                    updated_at = ?9
+              WHERE playbook_id = ?10`,
+          )
+          .run(
+            playbook.title,
+            playbook.instruction,
+            playbook.status,
+            playbook.enforcement,
+            JSON.stringify(playbook.trigger),
+            JSON.stringify(playbook.scope),
+            JSON.stringify(playbook.provenance),
+            playbook.expiresAt ?? null,
+            playbook.updatedAt,
+            playbook.playbookId,
+          )
+      } else {
+        this.database
+          .query(
+            `INSERT INTO memory_playbooks (
+               playbook_id, workspace_id, task_id, title, instruction,
+               trigger_json, scope_json, status, enforcement, counters_json,
+               provenance_json, trigger_signature, expires_at, created_at,
+               updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+          )
+          .run(
+            playbook.playbookId,
+            playbook.workspaceId,
+            playbook.taskId ?? null,
+            playbook.title,
+            playbook.instruction,
+            JSON.stringify(playbook.trigger),
+            JSON.stringify(playbook.scope),
+            playbook.status,
+            playbook.enforcement,
+            JSON.stringify(playbook.counters),
+            JSON.stringify(playbook.provenance),
+            playbook.triggerSignature,
+            playbook.expiresAt ?? null,
+            playbook.createdAt,
+            playbook.updatedAt,
+          )
+      }
+      const stored = this.readPlaybookRow(input.workspaceId, triggerSignature)
+      if (!stored) {
+        throw new MemoryV2StorageError({
+          kind: 'corrupt',
+          message: 'The playbook could not be reloaded after the write.',
+          retryable: false,
+        })
+      }
+      return playbookFromRow(stored)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Fold one gate outcome into a playbook's counters: every outcome bumps
+   * `fired`, the matching counter, and lastFiredAt (a false positive also
+   * stamps lastFalsePositiveAt).
+   */
+  async recordPlaybookGateOutcome(
+    playbookId: string,
+    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive',
+  ): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const row = this.database
+        .query(
+          'SELECT counters_json FROM memory_playbooks WHERE playbook_id = ?1',
+        )
+        .get(playbookId) as { counters_json: string } | null
+      if (!row) {
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: 'The playbook was not found.',
+          retryable: false,
+        })
+      }
+      const now = Date.now()
+      const prior = PlaybookCountersSchema.parse(
+        JSON.parse(row.counters_json) as unknown,
+      )
+      const counters = PlaybookCountersSchema.parse({
+        ...prior,
+        fired: prior.fired + 1,
+        blocked: prior.blocked + (outcome === 'blocked' ? 1 : 0),
+        bypassed: prior.bypassed + (outcome === 'bypassed' ? 1 : 0),
+        compliedAfterBlock:
+          prior.compliedAfterBlock + (outcome === 'compliedAfterBlock' ? 1 : 0),
+        falsePositives:
+          prior.falsePositives + (outcome === 'falsePositive' ? 1 : 0),
+        lastFiredAt: now,
+        ...(outcome === 'falsePositive'
+          ? { lastFalsePositiveAt: now }
+          : {}),
+      })
+      this.database
+        .query(
+          `UPDATE memory_playbooks
+              SET counters_json = ?1, updated_at = ?2
+            WHERE playbook_id = ?3`,
+        )
+        .run(JSON.stringify(counters), now, playbookId)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /** Change a playbook's lifecycle status (e.g. retire a noisy rule). */
+  async setPlaybookStatus(
+    playbookId: string,
+    status: PlaybookStatus,
+  ): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      this.database
+        .query(
+          `UPDATE memory_playbooks
+              SET status = ?1, updated_at = ?2
+            WHERE playbook_id = ?3`,
+        )
+        .run(status, Date.now(), playbookId)
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
+   * Idempotent install of the built-in seed playbooks for one workspace.
+   *
+   * Deliberately NOT part of migrate(): the table is keyed by workspaceId,
+   * which is unknown at migration time, so the caller seeds its own
+   * workspace. No-ops once a playbook with the seed's trigger signature
+   * exists for that workspace, so repeated calls never duplicate the rule.
+   */
+  async ensureSeedPlaybooks(workspaceId: string): Promise<void> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    const trigger: PlaybookTrigger = {
+      tool: 'spawn_agents',
+      spawnAgentType: 'git-committer',
+      requireEvidence: [
+        {
+          kind: 'toolSucceeded',
+          tool: 'run_terminal_command',
+          commandPattern: '*check:ci-local*',
+          withinMs: 14_400_000,
+        },
+      ],
+    }
+    const scope: PlaybookScope = { repos: [] }
+    const triggerSignature = computeTriggerSignature(trigger, scope)
+    try {
+      const existing = this.database
+        .query(
+          `SELECT 1 AS present FROM memory_playbooks
+            WHERE workspace_id = ?1 AND trigger_signature = ?2
+            LIMIT 1`,
+        )
+        .get(workspaceId, triggerSignature) as { present: number } | null
+      if (existing) return
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+    await this.upsertPlaybookByTriggerSignature({
+      workspaceId,
+      title: 'Run the repo CI check before committing',
+      instruction:
+        'Run the repository CI check (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) successfully in this session before spawning git-committer to commit or push.',
+      trigger,
+      scope,
+      status: 'active',
+      enforcement: 'warn',
+      provenance: {
+        origin: 'migration',
+        recordedBy: 'bun-sqlite-memory-v2',
+        sourceEventIds: [],
+        metadata: {},
+      },
+    })
+  }
+
+  private readPlaybookRow(
+    workspaceId: string,
+    triggerSignature: string,
+  ): PlaybookRow | null {
+    return this.database
+      .query(
+        `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+           FROM memory_playbooks
+          WHERE workspace_id = ?1 AND trigger_signature = ?2
+          LIMIT 1`,
+      )
+      .get(workspaceId, triggerSignature) as PlaybookRow | null
   }
 
   async getCapabilities(): Promise<
@@ -2355,6 +3053,22 @@ function migrate(database: Database): void {
     // > its SCHEMA_VERSION) instead of compacting/rebuilding a store whose
     // claim.reinforced protection it cannot see.
     database.exec(CLAIM_DEDUP_DDL)
+    // Additive context-archive persistence (the cross-session recall_context
+    // source): row tables are created idempotently on every open. The FTS5
+    // virtual table is feature-detected — a bundled SQLite without FTS5
+    // skips ONLY the index table and keeps the row tables, so durable recall
+    // degrades to a bounded LIKE scan instead of failing the store open.
+    database.exec(CONTEXT_ARCHIVE_DDL)
+    try {
+      database.exec(CONTEXT_ARCHIVE_FTS_DDL)
+    } catch {
+      // No FTS5 in this build: recall falls back to the LIKE scan at query
+      // time (sqlite_master will not list context_archive_fts).
+    }
+    // Additive procedural-memory table: created idempotently on every open so
+    // existing stores gain it without a structural migration. Nothing here
+    // touches the canonical event log or its append-only triggers.
+    database.exec(MEMORY_PLAYBOOKS_DDL)
     inferAndBindProject(database)
     // A v1->v2 migration replay must stay correct-and-complete: truncating it
     // would leave the projections partially applied while the migration commits,
@@ -2593,6 +3307,275 @@ const CLAIM_DEDUP_DDL = `
   );
   CREATE INDEX IF NOT EXISTS claim_dedup_observation ON claim_dedup(observation_id);
 `
+
+/**
+ * Context-archive persistence side tables (the cross-session recall_context
+ * source). Purely additive: nothing here touches memory_events, claims,
+ * observations, projections, the MIGRATION_1 triggers, or the replay
+ * semantics — recall reads never flow back into the canonical log.
+ *
+ * PRIVACY NOTE: tool bodies persist as sanitized by the CLI's
+ * sanitizeForChatPersistence — saveChatState flushes the already-sanitized
+ * run state, so this store never persists tool bodies less redacted than
+ * the per-session run-state.json written by the same pass
+ * (cli/src/utils/run-state-storage.ts saveChatState); this store lives in
+ * the same user-local, project-bound trust domain.
+ */
+const CONTEXT_ARCHIVE_DDL = `
+  CREATE TABLE IF NOT EXISTS context_archive_snapshots (
+    run_id TEXT NOT NULL,
+    archived_at INTEGER NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('semantic_compaction','mechanical_trim','tool_result_eviction')),
+    keep_recent_steps INTEGER NOT NULL,
+    step_base INTEGER,
+    reason TEXT,
+    messages_json TEXT NOT NULL CHECK(json_valid(messages_json)),
+    steps_json TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(run_id, archived_at)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS context_archive_messages (
+    run_id TEXT NOT NULL,
+    archived_at INTEGER NOT NULL,
+    msg_index INTEGER NOT NULL,
+    tool_call_id TEXT,
+    tool_name TEXT,
+    step INTEGER,
+    body TEXT NOT NULL,
+    PRIMARY KEY(run_id, archived_at, msg_index)
+  );
+  CREATE TABLE IF NOT EXISTS context_archive_watermarks (
+    run_id TEXT PRIMARY KEY,
+    max_archived_at INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+  ) WITHOUT ROWID;
+`
+
+/**
+ * The durable FTS5 index over archived bodies: a REGULAR (not
+ * external-content) fts5 table kept in sync with plain INSERTs on flush and
+ * DELETEs on prune. Duplicate body storage is accepted for robustness — the
+ * row tables remain the source of truth and the index is rebuildable by a
+ * full re-persist. Created only when the bundled SQLite supports FTS5.
+ */
+const CONTEXT_ARCHIVE_FTS_DDL = `
+  CREATE VIRTUAL TABLE IF NOT EXISTS context_archive_fts
+    USING fts5(run_id UNINDEXED, archived_at UNINDEXED, msg_index UNINDEXED, body);
+`
+
+/** Columns every playbook read/write maps back through MemoryPlaybookSchema. */
+const PLAYBOOK_SELECT_COLUMNS = `playbook_id, workspace_id, task_id, title, instruction,
+       trigger_json, scope_json, status, enforcement, counters_json,
+       provenance_json, trigger_signature, expires_at, created_at, updated_at`
+
+/**
+ * Procedural-memory table (memory_playbooks): purely additive, created
+ * idempotently on every open so existing stores gain it without a structural
+ * migration. The unique (workspace_id, trigger_signature) index is the
+ * playbook upsert/dedup key; the (workspace_id, status) index serves the
+ * active-playbook lookup the runtime gate performs every turn.
+ */
+const MEMORY_PLAYBOOKS_DDL = `
+  CREATE TABLE IF NOT EXISTS memory_playbooks (
+    playbook_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    task_id TEXT,
+    title TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    trigger_json TEXT NOT NULL CHECK (json_valid(trigger_json)),
+    scope_json TEXT NOT NULL CHECK (json_valid(scope_json)),
+    status TEXT NOT NULL,
+    enforcement TEXT NOT NULL,
+    counters_json TEXT NOT NULL CHECK (json_valid(counters_json)),
+    provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+    trigger_signature TEXT NOT NULL,
+    expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS memory_playbooks_workspace_status
+    ON memory_playbooks(workspace_id, status);
+  CREATE UNIQUE INDEX IF NOT EXISTS memory_playbooks_workspace_signature
+    ON memory_playbooks(workspace_id, trigger_signature);
+`
+
+/** Whether the durable context_archive_fts index table exists in this store. */
+function contextArchiveFtsAvailable(database: Database): boolean {
+  const row = database
+    .query(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'context_archive_fts'",
+    )
+    .get() as { present: number } | null
+  return row !== null
+}
+
+/**
+ * Serial form of an archived message body. Tool messages mirror the runtime
+ * recall scanner's serialization (json parts stringified, media parts as
+ * '[media]'), so persisted snippets read like in-memory recall snippets;
+ * non-tool messages store their JSON-stringified content for lineage.
+ */
+function contextArchiveMessageBody(message: ContextArchiveMessage): string {
+  if (message.role !== 'tool') return JSON.stringify(message.content)
+  return message.content
+    .map((part) =>
+      part.type === 'json' ? JSON.stringify(part.value) : '[media]',
+    )
+    .join(' ')
+}
+
+/**
+ * Validate and flatten one incoming archive snapshot into insertable rows.
+ * Returns null for an invalid snapshot (skipped, not fatal: the flush
+ * commits the valid remainder). Tool messages carry their provenance step —
+ * `steps[index]` when the snapshot recorded it, else slice-local
+ * `index + stepBase` (the same stepProvenance semantics the runtime scanner
+ * uses); non-tool messages keep NULL tool fields.
+ */
+function prepareContextArchiveSnapshot(snapshot: ContextArchiveSnapshot): {
+  messagesJson: string
+  stepsJson: string | null
+  messageRows: Array<{
+    msgIndex: number
+    toolCallId: string | null
+    toolName: string | null
+    step: number | null
+    body: string
+  }>
+} | null {
+  if (
+    snapshot === null ||
+    typeof snapshot !== 'object' ||
+    typeof snapshot.archivedAt !== 'number' ||
+    !Number.isFinite(snapshot.archivedAt) ||
+    typeof snapshot.action !== 'string' ||
+    !CONTEXT_ARCHIVE_ACTIONS.has(snapshot.action) ||
+    typeof snapshot.keepRecentSteps !== 'number' ||
+    !Array.isArray(snapshot.messages)
+  ) {
+    return null
+  }
+  try {
+    const messagesJson = JSON.stringify(snapshot.messages)
+    const stepsJson = Array.isArray(snapshot.steps)
+      ? JSON.stringify(snapshot.steps)
+      : null
+    const messageRows = snapshot.messages.map((message, index) => {
+      if (message.role === 'tool') {
+        const recordedStep = snapshot.steps?.[index]
+        return {
+          msgIndex: index,
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          step:
+            typeof recordedStep === 'number'
+              ? recordedStep
+              : index + (snapshot.stepBase ?? 0),
+          body: contextArchiveMessageBody(message),
+        }
+      }
+      return {
+        msgIndex: index,
+        toolCallId: null,
+        toolName: null,
+        step: null,
+        body: JSON.stringify(message.content),
+      }
+    })
+    return { messagesJson, stepsJson, messageRows }
+  } catch {
+    // Unserializable message content (e.g. a cyclic value): skip the
+    // snapshot rather than aborting the whole flush.
+    return null
+  }
+}
+
+/**
+ * Deserialize one persisted snapshot row back into a ContextArchiveSnapshot.
+ * Returns null for a row that fails validation (unreadable JSON, unknown
+ * action) — callers drop it instead of failing the whole read.
+ */
+function parsePersistedSnapshot(
+  row: ContextArchiveSnapshotRow,
+): ContextArchiveSnapshot | null {
+  if (!CONTEXT_ARCHIVE_ACTIONS.has(row.action)) return null
+  let messages: unknown
+  try {
+    messages = JSON.parse(row.messages_json)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(messages)) return null
+  let steps: number[] | undefined
+  if (typeof row.steps_json === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(row.steps_json)
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((step) => typeof step === 'number')
+      ) {
+        steps = parsed
+      }
+    } catch {
+      // Absent steps fall back to stepBase numbering at recall time.
+    }
+  }
+  return {
+    archivedAt: row.archived_at,
+    action: row.action as ContextArchiveSnapshot['action'],
+    keepRecentSteps: row.keep_recent_steps,
+    stepBase: row.step_base ?? undefined,
+    reason: row.reason ?? undefined,
+    steps,
+    messages: messages as ContextArchiveSnapshot['messages'],
+  }
+}
+
+/** Escape LIKE wildcards so a user term matches literally. */
+function escapeLikePattern(term: string): string {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`)
+}
+
+/** Count distinct (run_id, archived_at) snapshots among scanned rows. */
+function countDistinctArchiveSnapshots(
+  rows: ContextArchiveMessageRow[],
+): number {
+  const seen = new Set<string>()
+  for (const row of rows) seen.add(`${row.run_id}\u0000${row.archived_at}`)
+  return seen.size
+}
+
+/**
+ * Build bounded matches from scanned message rows: each match carries a
+ * snippet centered on the first occurrence of any query term (mirroring the
+ * runtime scanner's snippet shape). Rows beyond `limit` are dropped but
+ * still count toward snapshotsSearched.
+ */
+function buildArchiveSearchMatches(
+  rows: ContextArchiveMessageRow[],
+  terms: string[],
+  limit: number,
+): ContextArchiveSearchMatch[] {
+  const matches: ContextArchiveSearchMatch[] = []
+  for (const row of rows) {
+    if (matches.length >= limit) break
+    const lowered = row.body.toLowerCase()
+    const offsets = terms
+      .map((term) => lowered.indexOf(term))
+      .filter((offset) => offset >= 0)
+    const first = offsets.length > 0 ? Math.min(...offsets) : 0
+    const start = Math.max(0, first - CONTEXT_ARCHIVE_SNIPPET_CONTEXT)
+    matches.push({
+      runId: row.run_id,
+      archivedAt: row.archived_at,
+      step: row.step ?? 0,
+      toolName: row.tool_name ?? '',
+      toolCallId: row.tool_call_id ?? '',
+      snippet: row.body.slice(start, start + CONTEXT_ARCHIVE_SNIPPET_CHARS),
+    })
+  }
+  return matches
+}
 
 function recordRuntimeCapabilities(
   database: Database,
@@ -3479,6 +4462,32 @@ function storedEventFromRow(row: EventRow): MemoryV2StoredEvent {
     sessionId: event.sessionId ?? undefined,
     artifactId: event.artifactId ?? undefined,
   }
+}
+
+/**
+ * Rebuild one stored playbook row through MemoryPlaybookSchema: every JSON
+ * column is parsed and schema-validated, so a corrupt store throws loudly
+ * instead of surfacing a silently coerced rule to the gate.
+ */
+function playbookFromRow(row: PlaybookRow): MemoryPlaybook {
+  return MemoryPlaybookSchema.parse({
+    schemaVersion: 1,
+    playbookId: row.playbook_id,
+    workspaceId: row.workspace_id,
+    ...(row.task_id === null ? {} : { taskId: row.task_id }),
+    title: row.title,
+    instruction: row.instruction,
+    trigger: JSON.parse(row.trigger_json) as unknown,
+    scope: JSON.parse(row.scope_json) as unknown,
+    status: row.status,
+    enforcement: row.enforcement,
+    counters: JSON.parse(row.counters_json) as unknown,
+    provenance: JSON.parse(row.provenance_json) as unknown,
+    triggerSignature: row.trigger_signature,
+    ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
 }
 
 function readProjectionRows(

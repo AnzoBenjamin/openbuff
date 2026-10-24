@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { applyPatch } from 'diff'
+
+import * as codeMap from '@codebuff/code-map'
 
 import {
   encodeReadCapabilityToken,
@@ -1228,11 +1230,14 @@ function test3() {
   })
 
   it('should reject a near-match auto-correction that would leave unbalanced brackets (Fix B)', async () => {
-    // Regression test for Fix B (isResultDelimiterBalanced): a near-match that
-    // meets the 0.92 threshold must still be rejected when the newStr drops a
-    // closing brace (net bracket delta != 0). The file has a balanced
-    // switch/case structure; the oldString is a near-match to one case body,
-    // and the newString removes the case's closing `}`.
+    // Regression test for Fix B / EV-3: a near-match that meets the 0.92
+    // threshold must still be rejected when the newStr drops a closing brace.
+    // The file has a balanced switch/case structure; the oldString is a
+    // near-match to one case body, and the newString removes the case's
+    // closing `}`. Since EV-3 the rejection comes from the tree-sitter
+    // ERROR-node gate when a grammar is available, and from the bracket
+    // fallback (isResultDelimiterBalanced) otherwise — both reject this
+    // candidate, so the test passes in either environment.
     const initialContent = [
       'switch (status) {',
       '  case "open": {',
@@ -1273,10 +1278,201 @@ function test3() {
     expect('error' in result).toBe(true)
     if ('error' in result) {
       expect(result.error).toContain('The old string')
-      // The delimiter-balance check makes tryNearMatchAutoCorrect return null,
-      // so the rich diagnostic error (with candidate ranges) is emitted.
+      // The EV-3 syntax gate (tree-sitter when available, bracket fallback
+      // otherwise) makes tryNearMatchAutoCorrect return null, so the rich
+      // diagnostic error (with candidate ranges) is emitted.
       expect(result.error).toContain('Closest candidate ranges')
     }
+  })
+
+  describe('near-match auto-correct syntax gate (EV-3)', () => {
+    afterEach(() => {
+      mock.restore()
+    })
+
+    type TreeSitterDetection = Awaited<
+      ReturnType<typeof codeMap.detectSyntaxErrorViaTreeSitter>
+    >
+    const mockTreeSitterDetection = (result: {
+      available: boolean
+      hasError: boolean
+    }) => {
+      spyOn(codeMap, 'detectSyntaxErrorViaTreeSitter').mockImplementation(
+        async () => result as TreeSitterDetection,
+      )
+    }
+
+    it('accepts an auto-correct whose candidate content parses clean', async () => {
+      // No mock: with a grammar available the FULL candidate content parses
+      // clean and the gate accepts; without one, the bracket fallback runs on
+      // a bracket-balanced candidate and accepts too. Either way the
+      // auto-correct lands.
+      const initialContent = [
+        'export function formatGreeting(name: string) {',
+        '  const greeting = `Hello, ${name}!`',
+        '  return greeting',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function formatGreeting(name: string) {',
+        '  const greating = `Hello, ${name}!`',
+        '  return greeting',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function formatGreeting(name: string) {',
+        '  const greeting = `Hello, ${name}!`',
+        '  return greeting.toUpperCase()',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('content' in result).toBe(true)
+      if ('content' in result) {
+        expect(result.content).toBe(newStr)
+        expect(
+          result.messages.some((msg) =>
+            msg.includes('auto-corrected a near-match edit'),
+          ),
+        ).toBe(true)
+      }
+    })
+
+    it('rejects an auto-correct whose candidate has a real syntax error even though bracket counts stay balanced', async () => {
+      // The `}{` swap keeps every naive bracket count identical (the old Fix B
+      // char-counting gate would pass this candidate) but breaks the AST, so
+      // the tree-sitter ERROR-node gate must reject it.
+      mockTreeSitterDetection({ available: true, hasError: true })
+
+      const initialContent = [
+        'export function render(value: number) {',
+        '  const payload = { id: value }',
+        '  return payload',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function render(value: number) {',
+        '  const payload = { id: value }',
+        '  retunr payload',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function render(value: number) {',
+        '  const payload = } id: value {',
+        '  return payload',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('The old string')
+        expect(result.error).toContain('Closest candidate ranges')
+      }
+    })
+
+    it('accepts an auto-correct the naive bracket check would wrongly reject (tree-sitter gate is primary)', async () => {
+      // The extra `}` lives inside a string literal: the char-counting
+      // bracket check would reject this candidate, but the FULL candidate
+      // content parses clean, so the tree-sitter gate (now primary) accepts
+      // it. Proves the bracket check is no longer the primary gate.
+      mockTreeSitterDetection({ available: true, hasError: false })
+
+      const initialContent = [
+        'export function describeState(open: boolean) {',
+        '  const label = "open"',
+        '  return label',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function describeState(open: boolean) {',
+        '  const labe1 = "open"',
+        '  return label',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function describeState(open: boolean) {',
+        '  const label = "close}"',
+        '  return label',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('content' in result).toBe(true)
+      if ('content' in result) {
+        expect(result.content).toBe(newStr)
+        expect(
+          result.messages.some((msg) =>
+            msg.includes('auto-corrected a near-match edit'),
+          ),
+        ).toBe(true)
+      }
+    })
+
+    it('fails open to the bracket-balance fallback when the grammar is unavailable', async () => {
+      // available:false (Node runtime / missing grammar / init error) must
+      // keep the cheap Fix B bracket check as the fallback: the candidate
+      // drops the closing brace, so the fallback rejects it exactly as
+      // before EV-3.
+      mockTreeSitterDetection({ available: false, hasError: false })
+
+      const initialContent = [
+        'export function renderTotals(items: Item[]) {',
+        '  const total = items.length',
+        '  return total',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function renderTotals(items: Item[]) {',
+        '  const totl = items.length',
+        '  return total',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function renderTotals(items: Item[]) {',
+        '  const total = items.length',
+        '  return total',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('The old string')
+        expect(result.error).toContain('Closest candidate ranges')
+      }
+    })
   })
 
   it('should not auto-correct a short oldString below the autocorrect min length (Fix E)', async () => {

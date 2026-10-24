@@ -13,8 +13,10 @@ import os from 'os'
 import path from 'path'
 
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { CHATGPT_OAUTH_ENABLED } from '@codebuff/common/constants/chatgpt-oauth'
 import { getProjectFileTree } from '@codebuff/common/project-file-tree'
 import { createCliRenderer } from '@opentui/core'
+import { createTestRenderer } from '@opentui/core/testing'
 import { createRoot } from '@opentui/react'
 import {
   QueryClient,
@@ -25,11 +27,21 @@ import { red } from 'picocolors'
 import React from 'react'
 
 import { App } from './app'
-import { parseCliArgs } from './cli-args'
+import { applyOscDetectedThemeToStore } from './hooks/use-theme'
 import { initializeApp, switchProjectContext } from './init/init-app'
+import { getRgPath } from './native/ripgrep'
 import { getProjectRoot, startNewChat } from './project-files'
+import {
+  awaitRegistriesReady,
+  resetDeferredRegistryLoads,
+  startDeferredRegistryLoads,
+} from './services/deferred-registries'
+import { connectChatGptOAuth } from './utils/chatgpt-oauth'
 import { trackEvent } from './utils/analytics'
-import { resetCodebuffClient } from './utils/codebuff-client'
+import {
+  resetCodebuffClient,
+  setAttachTarget,
+} from './utils/codebuff-client'
 import { getCliEnv } from './utils/env'
 import { initializeAgentRegistry } from './utils/local-agent-registry'
 import { clearLogFile, logger } from './utils/logger'
@@ -41,9 +53,18 @@ import {
 } from './utils/renderer-cleanup'
 import { initializeSkillRegistry } from './utils/skill-registry'
 import { detectTerminalTheme } from './utils/terminal-color-detection'
+import { detectTerminalImageSupport } from './utils/terminal-images'
 import { setOscDetectedTheme } from './utils/theme-system'
+import { isTrustedProjectRoot, loadTrustedRoots } from './utils/trusted-roots'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
+import { publishWasmBinary } from './pre-init/tree-sitter-wasm'
+import { runAcpServeCommand } from './serve-command'
+import { runMcpCommand } from './commands/mcp-command'
+import { runReplayCommand } from './commands/replay-command'
+import { runHeadlessCommand } from './commands/run-command'
+import { isRendererCommand, parseCliArgs } from './cli-args'
+import { runDashCommand } from './commands/dash-command'
 
 const require = createRequire(import.meta.url)
 
@@ -105,18 +126,81 @@ function createQueryClient(): QueryClient {
   })
 }
 
+/**
+ * Process-level error boundary for the non-renderer command dispatch
+ * (serve/mcp/run/replay/dash). Those paths run outside any top-level error
+ * boundary, so an unhandled rejection or uncaught exception used to crash
+ * with a raw stack trace. The handlers print one clean error line to stderr
+ * and set exitCode 1 instead. The TUI renderer path is untouched: it keeps
+ * its own earlyFatalHandler + installProcessCleanupHandlers lifecycle and
+ * never installs these.
+ *
+ * Guarded to the CLI entry (import.meta.main): test runners (bun test /
+ * vitest) import CLI modules but are never the process entry point, so their
+ * own unhandled rejections must NOT be swallowed here.
+ */
+function installNonRendererErrorHandlers(): void {
+  if (!import.meta.main) {
+    return
+  }
+  const fatalHandler = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    try {
+      console.error('openbuff: fatal error:', message)
+    } catch {
+      // stderr may be closed
+    }
+    process.exitCode = 1
+  }
+  process.on('unhandledRejection', fatalHandler)
+  process.on('uncaughtException', fatalHandler)
+}
+
 async function main(): Promise<void> {
+  // P2-T8d: supervised CHILD mode FIRST — before parseCliArgs and any
+  // renderer/init work. In a compiled `bun build --compile` binary the
+  // default supervised seam cannot `bun run` a child-entry .ts file that
+  // does not exist inside $bunfs, so it re-executes the BINARY ITSELF via
+  // the dedicated argv flag: `openbuff --supervised-child /path/to.json`.
+  // Only that EXACT first-arg convention is intercepted; every other argv
+  // keeps the pre-existing CLI contract untouched. The import is a dynamic
+  // (never static) import so the normal (non-child) CLI startup does not
+  // load the supervisor/bridge modules, and child-entry's own heavy imports
+  // stay lazy the same way. Full process.argv here is
+  // [bun, binary, FLAG, requestPath]; runChildEntryMain reads argv[2] as
+  // the request path — either calling convention — so we rebuild argv with
+  // the flag stripped: [bun, binary, requestPath] (a rebuilt buffer without
+  // the request path degenerates to the existing missing-argv exit-1 path).
+  const { SUPERVISED_SELF_EXEC_FLAG } = await import(
+    '@codebuff/agent-runtime/supervision/self-exec-flag'
+  )
+  if (process.argv[2] === SUPERVISED_SELF_EXEC_FLAG) {
+    const { runChildEntryMain } = await import(
+      '@codebuff/agent-runtime/supervision/child-entry'
+    )
+    const requestPath = process.argv[3]
+    const childArgv = [
+      process.argv[0],
+      process.argv[1],
+      ...(requestPath !== undefined ? [requestPath] : []),
+    ]
+    process.exit(await runChildEntryMain(childArgv))
+  }
+
   // CI/release gate: prove that the packaged OpenTUI native library can be
   // resolved and can create a renderer without depending on terminal output.
-  // Full-screen rendering is not deterministic when stdout is a pipe (notably
-  // on legacy Intel macOS), so the release smoke test uses this explicit probe
-  // for the native FFI boundary and tests full TUI rendering separately where
-  // the platform supports it reliably.
+  // Uses the OpenTUI 0.5 test renderer (createTestRenderer from
+  // @opentui/core/testing): it drives the renderer with a mock stdin and never
+  // takes over the terminal, since full-screen rendering is not deterministic
+  // when stdout is a pipe (notably on legacy Intel macOS). The 0.2.x
+  // `testing: true` renderer config option was removed in 0.5.x, so the probe
+  // can no longer disable terminal takeover that way. The release smoke test
+  // uses this explicit probe for the native FFI boundary and tests full TUI
+  // rendering separately where the platform supports it reliably.
   if (process.argv.includes('--smoke-opentui')) {
     try {
-      const renderer = await createCliRenderer({
+      const { renderer } = await createTestRenderer({
         exitSignals: [],
-        testing: true,
         useThread: process.platform !== 'linux',
       })
       await renderer.destroy()
@@ -198,11 +282,17 @@ async function main(): Promise<void> {
 
     try {
       const { Parser } = await import('web-tree-sitter')
+      // P1-T9: the wasm byte read is deferred out of module import time, so
+      // this is the first actual use — read + publish the bytes now.
+      publishWasmBinary()
       // Pick the best wasm source available, falling back to the
       // sibling-of-execPath lookup if pre-init couldn't reach it. By
       // main() time process.execPath has stabilized to the disk path
       // even on Windows, where it was the bunfs path during pre-init.
-      let effectiveBinary = wasmBinary
+      let effectiveBinary =
+        wasmBinary ??
+        (globalThis as { __CODEBUFF_TREE_SITTER_WASM_BINARY__?: Uint8Array })
+          .__CODEBUFF_TREE_SITTER_WASM_BINARY__
       let effectivePath = wasmPath
       if (!effectiveBinary && !effectivePath) {
         try {
@@ -273,6 +363,37 @@ async function main(): Promise<void> {
   const smokeBootscreen = process.argv.includes('--smoke-bootscreen')
   const cliArgv = process.argv.filter((arg) => arg !== '--smoke-bootscreen')
 
+  // `openbuff login chatgpt` (ChatGPT subscription OAuth login). Handled
+  // here — BEFORE parseCliArgs — because the top-level commander program
+  // has no `login` subcommand: left unhandled, the tokens parse as an
+  // initial prompt and the TUI launches instead of logging in. The ACP
+  // initialize() auth method for terminal-capable clients advertises
+  // exactly this argv (`login chatgpt`), so the advertised method must
+  // resolve to a working command. ONLY that exact argv is intercepted: any
+  // other `login ...` invocation (e.g. the initial prompt `openbuff login
+  // to my account`) keeps the pre-existing CLI contract and launches the
+  // TUI with that prompt. Output goes to stdout/stderr only; the
+  // OAuth flow opens the browser itself and bounds its own wait (5-minute
+  // callback timeout), so nothing here can hang forever.
+  if (
+    CHATGPT_OAUTH_ENABLED &&
+    cliArgv[2] === 'login' &&
+    cliArgv[3]?.trim() === 'chatgpt'
+  ) {
+    try {
+      const { credentials } = connectChatGptOAuth()
+      await credentials
+      console.log('openbuff login: ChatGPT connected.')
+      process.exit(0)
+    } catch (error) {
+      console.error(
+        'openbuff login failed:',
+        error instanceof Error ? error.message : String(error),
+      )
+      process.exit(1)
+    }
+  }
+
   let smokeBootscreenTimer: ReturnType<typeof setTimeout> | null = null
   let smokeBootscreenEmitted = false
   if (smokeBootscreen && !process.stdout.isTTY) {
@@ -291,20 +412,13 @@ async function main(): Promise<void> {
     }, 1500)
   }
 
-  // Run OSC theme detection BEFORE anything else.
-  // This MUST happen before OpenTUI starts because OSC responses come through stdin,
-  // and OpenTUI also listens to stdin. Running detection here ensures stdin is clean.
-  if (process.stdin.isTTY && process.platform !== 'win32') {
-    try {
-      const oscTheme = await detectTerminalTheme()
-      if (oscTheme) {
-        setOscDetectedTheme(oscTheme)
-      }
-    } catch {
-      // Silently ignore OSC detection failures
-    }
-  }
-
+  const parsedArgs = parseCliArgs(cliArgv, {
+    version: loadPackageVersion(),
+    // Inject the attach env fallback (OPENBUFF_SERVE_SOCKET) so parseCliArgs
+    // can validate the documented `--attach` completeness contract without
+    // reading ambient process.env itself.
+    env: getCliEnv(),
+  })
   const {
     initialPrompt,
     agent,
@@ -314,7 +428,60 @@ async function main(): Promise<void> {
     cwd,
     initialMode,
     trustProjectAgents,
-  } = parseCliArgs(cliArgv, { version: loadPackageVersion() })
+    serve,
+    mcp,
+    run,
+    replay,
+    dash,
+    attach,
+  } = parsedArgs
+
+  // Non-renderer command paths (serve/mcp/run/replay/dash) run OUTSIDE any
+  // top-level error boundary, so install process-level unhandledRejection /
+  // uncaughtException handlers BEFORE the command dispatch: an unhandled
+  // rejection prints one clean error line and sets exitCode 1 instead of
+  // crashing with a stack trace (and, on the protocol-wire paths, corrupting
+  // stdout). The TUI renderer path is untouched: isRendererCommand is false
+  // exactly for the non-renderer commands, and every one of those dispatch
+  // blocks below returns from main() before the renderer is created.
+  if (!isRendererCommand(parsedArgs)) {
+    installNonRendererErrorHandlers()
+  }
+
+  // Start OSC theme detection so it runs CONCURRENTLY with CLI init (P1-T9),
+  // but ONLY on paths that end in the OpenTUI renderer. The serve/mcp/run/replay
+  // commands return from main() before the renderer is created and use
+  // stdin/stdout as the ACP/MCP/ndjson protocol wire; the OSC probe puts stdin
+  // into raw mode with a 'data' listener and writes its query to the TTY, so
+  // starting it on those paths would interleave with protocol traffic and
+  // corrupt wire framing. parseCliArgs is pure and synchronous, so starting the
+  // probe here — immediately after arg parsing — still overlaps all of
+  // initializeApp and the rest of startup; the promise is only awaited
+  // immediately before the renderer is created, so the probe never shares stdin
+  // with OpenTUI. The resolved theme is fed to setOscDetectedTheme + the theme
+  // store exactly as before.
+  const oscThemePromise: Promise<'dark' | 'light' | null> =
+    isRendererCommand(parsedArgs) &&
+    process.stdin.isTTY &&
+    process.platform !== 'win32'
+      ? detectTerminalTheme().catch(() => null)
+      : Promise.resolve(null)
+
+  // P1-T3: record the attach target BEFORE any client is created so
+  // getCodebuffClient() (and the TUI's hook) builds the ACP-remote backend.
+  // The socket path and auth token come from --serve-socket/--serve-token,
+  // falling back to OPENBUFF_SERVE_SOCKET/OPENBUFF_SERVE_TOKEN. The parser
+  // reads no ambient env: it validates completeness against the injected
+  // getCliEnv() above, and the fallback VALUES are applied here in the entry.
+  if (attach) {
+    const socketPath = attach.socketPath ?? getCliEnv().OPENBUFF_SERVE_SOCKET
+    if (socketPath) {
+      setAttachTarget({
+        socketPath,
+        token: attach.token ?? getCliEnv().OPENBUFF_SERVE_TOKEN,
+      })
+    }
+  }
 
   const isPublishCommand = cliArgv[2] === 'publish'
   const hasAgentOverride = Boolean(agent?.trim())
@@ -338,14 +505,42 @@ async function main(): Promise<void> {
     initialMode: initialMode ?? 'DEFAULT',
   })
 
-  // Initialize agent registry (loads user agents via SDK).
-  // When --agent is provided, skip local .agents to avoid overrides.
-  if (isPublishCommand || !hasAgentOverride) {
-    await initializeAgentRegistry({ trustProjectAgents })
+  // NEW-2 serve trust (design §12.8): `openbuff serve` loads project-scope
+  // `.agents/**` agent definitions and project `.agents/mcp.json` ONLY when
+  // the user started serve with `--trust-project-agents` OR the project
+  // root's realpath appears in the user-level allowlist
+  // (~/.config/openbuff/trusted-roots.json, owner-only 0600). Trust is never
+  // inferred from `session/new` cwd or any client-supplied field, and every
+  // allowlist read/validation error fails closed (untrusted). On the TUI
+  // path `effectiveTrust` stays equal to the raw `--trust-project-agents`
+  // flag, so non-serve behavior is unchanged.
+  let effectiveTrust = trustProjectAgents
+  if (serve) {
+    // The serve subcommand carries its own --trust-project-agents; the
+    // top-level program hardcodes trustProjectAgents to false for serve runs.
+    effectiveTrust = serve.trustProjectAgents
+    if (!effectiveTrust) {
+      try {
+        effectiveTrust = isTrustedProjectRoot(
+          fs.realpathSync(projectRoot),
+          await loadTrustedRoots(),
+        )
+      } catch {
+        // Fail closed: realpathSync threw (e.g. missing project root) so
+        // serve stays untrusted (effectiveTrust is false here).
+      }
+    }
   }
 
-  // Initialize skill registry (loads skills from .agents/skills)
-  await initializeSkillRegistry({ trustProjectSkills: trustProjectAgents })
+  // P1-T9: the agent/skill registries are NOT awaited here. They are started
+  // (not awaited) just before the renderer mounts below, so the .agents disk
+  // scan overlaps startup instead of serializing ahead of the first render.
+  // Consumers gate on whenRegistriesReady(); the serve/mcp/run/replay command
+  // paths keep their previous (command-managed) behavior by awaiting the
+  // deferred loads via awaitRegistriesReady() in their dispatch blocks below
+  // — before handing control to the command, so the registries are fully
+  // initialized exactly as they were before the deferral.
+  const shouldLoadAgents = isPublishCommand || !hasAgentOverride
 
   // Handle publish command before rendering the app
   if (isPublishCommand) {
@@ -353,9 +548,100 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  // `openbuff serve` never launches the OpenTUI renderer: stdout is the ACP
+  // protocol wire, so we start the bridge and return from main() before the
+  // renderer is created. The stdio/socket transport keeps the event loop alive.
+  if (serve) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the bridge starts
+    // (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
+    await runAcpServeCommand({ ...serve, trustProjectAgents: effectiveTrust })
+    return
+  }
+
+  // `openbuff mcp` never launches the OpenTUI renderer either: stdout is the
+  // MCP protocol wire, so we start the server and return from main() before
+  // the renderer is created. The stdio transport keeps the event loop alive.
+  if (mcp) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the MCP server
+    // starts (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
+    await runMcpCommand(mcp)
+    return
+  }
+
+  // `openbuff run` (P1-T5) never launches the OpenTUI renderer either: stdout
+  // is the machine-readable stream in --json mode, so we run the agent
+  // headlessly and set the process exit code from the run outcome. Prefer
+  // `process.exitCode = code` over `process.exit(code)` so the event loop
+  // drains cleanly (flushing the ndjson stream) before the process exits.
+  if (run) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the headless run
+    // starts (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
+    const code = await runHeadlessCommand(run)
+    process.exitCode = code
+    return
+  }
+
+  // `openbuff replay` (P2-T3) never launches the OpenTUI renderer either:
+  // stdout is the machine-readable stream in --json mode, so we replay the
+  // journaled run deterministically and set the process exit code from the
+  // replay outcome. Prefer `process.exitCode = code` over `process.exit(code)`
+  // so the event loop drains cleanly (flushing the ndjson stream) before the
+  // process exits.
+  if (replay) {
+    // Restore the pre-P1-T9 contract on this non-renderer path: the agent
+    // and skill registries are fully initialized before the replay starts
+    // (previously they were awaited synchronously in main()).
+    await awaitRegistriesReady({ shouldLoadAgents, effectiveTrust })
+    const code = await runReplayCommand(replay)
+    process.exitCode = code
+    return
+  }
+
+  // `openbuff dash` (P2-T7) never launches the OpenTUI renderer either: in
+  // serve mode stdout carries the dashboard URL (a generated token goes to
+  // stderr — stdout may be piped) and in --export mode it carries the written
+  // file paths, so we run the command and set the process exit code from the
+  // outcome. P2-T7 follow-up LANDED: the dash now reads the LIVE run journal
+  // at the shared cli/src/utils/run-journal-path.ts location (opened
+  // read-only, only after the file exists — never created from the dash
+  // side; absent/unopenable falls back to empty data with a stderr
+  // warning), so runs journaled by the TUI (`use-send-message.ts`) and
+  // headless (`run-command.ts`) processes surface in the dashboard.
+  // Explicit journalReader/receipts/gateState seams still win for tests.
+  if (dash) {
+    const code = await runDashCommand(dash)
+    process.exitCode = code
+    return
+  }
+
   if (clearLogs) {
     clearLogFile()
   }
+
+  // P1-T9: pre-warm ripgrep extraction. getRgPath() is memoized and otherwise
+  // only called lazily on the first code_search (codebuff-client.ts), so
+  // starting it here — fire-and-forget, in parallel with renderer creation —
+  // lets the extraction overlap startup instead of taxing the first search.
+  // Best-effort: never blocks the first frame, and a failure only logs (the
+  // lazy path re-runs later and reports the same way).
+  void getRgPath().catch((error) => {
+    logger.debug({ error }, 'ripgrep pre-warm failed')
+  })
+
+  // P1-T9: start the deferred agent/skill registry loads BEFORE the renderer
+  // mounts. The .agents / .agents/skills scans are async, so they overlap
+  // renderer creation instead of serializing ahead of the first frame — but
+  // starting them here (not in a mount effect) binds the whenRegistriesReady()
+  // promise before any consumer subscribes: React runs child effects before
+  // parent effects, so an effect-started load would race (and lose to) the
+  // mount-time registry reads in chat.tsx that gate on it.
+  startDeferredRegistryLoads({ shouldLoadAgents, effectiveTrust })
 
   const queryClient = createQueryClient()
 
@@ -394,6 +680,11 @@ async function main(): Promise<void> {
 
         try {
           await switchProjectContext(newProjectPath)
+          // The deferred registry loads (if any) were bound to the PREVIOUS
+          // project's trust decision; drop them so the next
+          // whenRegistriesReady() consumer re-initializes with the CURRENT
+          // project's trust instead of resolving a stale/foreign decision.
+          resetDeferredRegistryLoads()
           await resetCodebuffClient()
           if (isPublishCommand || !hasAgentOverride) {
             await initializeAgentRegistry({ trustProjectAgents })
@@ -422,6 +713,10 @@ async function main(): Promise<void> {
           setShowProjectPickerScreen(false)
         } catch (error) {
           await switchProjectContext(previousProjectRoot)
+          // A failed switch may have left the loads bound to the NEW
+          // project's context; reset again so the restored project
+          // re-initializes on its own terms.
+          resetDeferredRegistryLoads()
           await resetCodebuffClient()
           logger.error({ error }, 'Failed to switch projects')
           throw error
@@ -474,10 +769,33 @@ async function main(): Promise<void> {
   process.on('uncaughtException', earlyFatalHandler)
   process.on('unhandledRejection', earlyFatalHandler)
 
+  // Resolve the (already-started) OSC probe BEFORE creating the renderer: OSC
+  // responses arrive on stdin, which OpenTUI is about to take over, so the
+  // probe must finish first. This await is not the up-to-600ms serialized cost
+  // it used to be — the probe ran concurrently with all of the init above.
+  {
+    const oscTheme = await oscThemePromise
+    if (oscTheme) {
+      setOscDetectedTheme(oscTheme)
+      // The probe may have resolved after initializeApp() built the theme
+      // store from env/IDE detectors; apply the OSC result to the store so
+      // the rendered theme matches the resolved value exactly.
+      applyOscDetectedThemeToStore()
+    }
+  }
+
   const renderer = await createCliRenderer({
     backgroundColor: 'transparent',
     exitOnCtrlC: false,
     screenMode: 'alternate-screen',
+    // D47 Stage 4: request the raw kitty image transport when our protocol
+    // detection says the terminal runs kitty — our detection module stays the
+    // source of truth (kittyImageTransport verified on CliRendererConfig in
+    // node_modules/@opentui/core/renderer.d.ts). Omitted otherwise so
+    // OpenTUI's own capability probing applies.
+    ...(detectTerminalImageSupport() === 'kitty'
+      ? { kittyImageTransport: 'raw' as const }
+      : {}),
   })
 
   if (smokeBootscreenTimer) {

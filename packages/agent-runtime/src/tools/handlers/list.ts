@@ -21,6 +21,10 @@ import { handleReadLogs } from './tool/read-logs'
 import { handleListJobs } from './tool/list-jobs'
 import { handleListDirectory } from './tool/list-directory'
 import { handleLookupAgentInfo } from './tool/lookup-agent-info'
+import { handleFindReferences } from './tool/find-references'
+import { handleGoToDefinition } from './tool/go-to-definition'
+import { handleHoverType } from './tool/hover-type'
+import { handleWorkspaceSymbol } from './tool/workspace-symbol'
 import { handleQueryIndex } from './tool/query-index'
 import { handleRecallContext } from './tool/recall-context'
 import { handleRecordDecision } from './tool/record-decision'
@@ -102,6 +106,10 @@ export const codebuffToolHandlers = {
   list_directory: handleListDirectory,
   lookup_agent_info: handleLookupAgentInfo,
   query_index: handleQueryIndex,
+  find_references: handleFindReferences,
+  go_to_definition: handleGoToDefinition,
+  hover_type: handleHoverType,
+  workspace_symbol: handleWorkspaceSymbol,
   recall_context: handleRecallContext,
   record_decision: handleRecordDecision,
   read_docs: handleReadDocs,

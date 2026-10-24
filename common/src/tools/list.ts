@@ -21,6 +21,10 @@ import { findFilesMatchingContentParams } from './params/tool/find-files-matchin
 import { globParams } from './params/tool/glob'
 import { listDirectoryParams } from './params/tool/list-directory'
 import { lookupAgentInfoParams } from './params/tool/lookup-agent-info'
+import { findReferencesParams } from './params/tool/find-references'
+import { goToDefinitionParams } from './params/tool/go-to-definition'
+import { hoverTypeParams } from './params/tool/hover-type'
+import { workspaceSymbolParams } from './params/tool/workspace-symbol'
 import { queryIndexParams } from './params/tool/query-index'
 import { recallContextParams } from './params/tool/recall-context'
 import { recordDecisionParams } from './params/tool/record-decision'
@@ -105,6 +109,10 @@ const canonicalToolParams = {
   list_directory: listDirectoryParams,
   lookup_agent_info: lookupAgentInfoParams,
   query_index: queryIndexParams,
+  find_references: findReferencesParams,
+  go_to_definition: goToDefinitionParams,
+  hover_type: hoverTypeParams,
+  workspace_symbol: workspaceSymbolParams,
   recall_context: recallContextParams,
   record_decision: recordDecisionParams,
   read_docs: readDocsParams,
@@ -304,6 +312,22 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   z.object({
     toolName: z.literal('query_index'),
     input: toolParams.query_index.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('find_references'),
+    input: toolParams.find_references.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('go_to_definition'),
+    input: toolParams.go_to_definition.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('hover_type'),
+    input: toolParams.hover_type.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('workspace_symbol'),
+    input: toolParams.workspace_symbol.inputSchema,
   }),
   z.object({
     toolName: z.literal('read_image'),

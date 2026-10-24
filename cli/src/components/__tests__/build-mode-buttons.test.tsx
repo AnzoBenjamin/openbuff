@@ -3,16 +3,30 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
-import { computeTerminalLayout } from '../../hooks/use-terminal-layout'
 import { chatThemes } from '../../utils/theme-system'
 import type { TerminalLayout } from '../../hooks/use-terminal-layout'
 
-// Allow per-test override of the mocked terminal layout.
-let mockLayout: TerminalLayout
+// Capture the real module before registering the mock. A plain specifier may
+// resolve through bun's registry to a previously leaked mock; the `?real`
+// query bypasses the registry and returns the genuine module.
+const realLayoutModule = (await import(
+  /* bun resolves the query suffix to a fresh real-module instance at runtime
+     (bypassing any leaked mock registration); TS cannot type a query-suffixed
+     specifier, hence the cast. */
+  '../../hooks/use-terminal-layout?real' as string
+)) as unknown as typeof import('../../hooks/use-terminal-layout')
+
+const { computeTerminalLayout } = realLayoutModule
+
+// Allow per-test override of the terminal layout; when unset, fall through to
+// the real hook. The mock is registry-wide for the process, so once this suite
+// ends mockLayout returns to undefined and any later file in the same process
+// gets the real hook's behavior — this fixes the leak at its source.
+let mockLayout: TerminalLayout | undefined
 
 mock.module('../../hooks/use-terminal-layout', () => ({
-  computeTerminalLayout,
-  useTerminalLayout: () => mockLayout,
+  ...realLayoutModule,
+  useTerminalLayout: () => mockLayout ?? realLayoutModule.useTerminalLayout(),
 }))
 
 const { BuildModeButtons } = await import('../build-mode-buttons')
@@ -53,13 +67,9 @@ describe('BuildModeButtons', () => {
     expect(markup).toContain('Execute Plan')
   })
 
-  // bun's process-global module registry keeps this file's mock.module
-  // registration alive after the suite ends, so the last mockLayout value
-  // (computeTerminalLayout(30, 10) → 'xs') bleeds into status-bar.test.tsx
-  // and breaks its assertions (reliability finding build-mode-buttons
-  // mockLayout leak → status-bar xs). Restore the default layout when the
-  // suite finishes.
+  // Fall through to the real hook: the registry-wide mock survives this
+  // file, so a stale layout must never leak to sibling files.
   afterAll(() => {
-    mockLayout = computeTerminalLayout(80, 24)
+    mockLayout = undefined
   })
 })

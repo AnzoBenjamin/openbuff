@@ -5,6 +5,7 @@ import { AbortError } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
+import { toToolCallStreamChunkPayload } from '@codebuff/common/types/contracts/llm'
 
 import { processStreamWithTools } from '../tool-stream-parser'
 import { DEFAULT_INCLUDE_REASONING_IN_MESSAGE_HISTORY } from '../constants'
@@ -311,7 +312,11 @@ export async function processStream(
       onTagEnd: async (
         _: string,
         input: Record<string, string>,
-        context?: { toolCallId?: string; providerOptions?: ProviderMetadata },
+        context?: {
+          toolCallId?: string
+          providerOptions?: ProviderMetadata
+          providerReportedTruncation?: boolean
+        },
       ) => {
         if (signal.aborted) {
           return
@@ -668,6 +673,7 @@ export async function processStream(
             fullResponse: fullResponseChunks.join(''),
             previousToolCallFinished: previousPromise,
             providerOptions: context?.providerOptions,
+            providerReportedTruncation: context?.providerReportedTruncation,
             toolCallId,
             toolCalls,
             toolCallsToAddToMessageHistory,
@@ -689,6 +695,7 @@ export async function processStream(
             fullResponse: fullResponseChunks.join(''),
             previousToolCallFinished: previousPromise,
             providerOptions: context?.providerOptions,
+            providerReportedTruncation: context?.providerReportedTruncation,
             toolCallId,
             toolCalls,
             toolCallsToAddToMessageHistory,
@@ -934,7 +941,10 @@ export async function processStream(
       ...agentState.messageHistory,
       ...assistantMessages,
       ...filteredToolCalls.map((toolCall) =>
-        assistantMessage({ ...toolCall, type: 'tool-call' }),
+        // Strip at every boundary into message history: the shared helper is
+        // the enforcement point, so a stream-only transport marker can never
+        // reach persisted history even if a future producer adds one.
+        assistantMessage(toToolCallStreamChunkPayload(toolCall)),
       ),
       ...toolResultsToAddToMessageHistory,
       ...errorMessages,

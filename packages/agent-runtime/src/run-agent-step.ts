@@ -34,6 +34,13 @@ import { additionalSystemPrompts } from './system-prompt/prompts'
 import { getAgentTemplate } from './templates/agent-registry'
 import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
+  buildRunResumeReport,
+  executeReplayActions,
+  isRunResumeReportClean,
+  planReplayActions,
+} from './util/run-journal'
+import type { RunResumeReport } from './util/run-journal'
+import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
 } from './templates/prompts'
@@ -78,7 +85,6 @@ import {
   getSemanticRearmBudgetTokens,
   maybePruneContext,
   recordPassAnnounced,
-  recordPassSettled,
   shouldRunSemanticPass,
 } from './util/context-pruning'
 import {
@@ -86,7 +92,10 @@ import {
   evictStaleToolResults,
   EVICTION_KEEP_RECENT_STEPS,
 } from './util/tool-result-eviction'
-import { archivePreCompaction } from './util/context-archive'
+import {
+  archiveEvictedToolResults,
+  archivePreCompaction,
+} from './util/context-archive'
 import { maybeRunBackgroundConsolidation } from './util/context-consolidation-runner'
 import { verifyExtractionCoverage } from './util/compaction-verification'
 import {
@@ -144,6 +153,7 @@ import type {
   CustomToolDefinitions,
   ProjectFileContext,
 } from '@codebuff/common/util/file'
+import { realClock, realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * M1-T5: redact secrets from a message before it reaches a log sink. Handles
@@ -394,17 +404,23 @@ async function additionalToolDefinitions(
     agentState,
   )
 
+  // `customToolDefinitions` is schema-defaulted, but hand-rolled fileContext
+  // objects (test fixtures, programmatic hosts, new spawn paths) may omit it;
+  // guard locally instead of relying on callers (see the defaulting in
+  // supervision/child-entry.ts, which exists because of this exact site).
   const defs = cloneDeep(
     Object.fromEntries(
-      Object.entries(fileContext.customToolDefinitions).filter(([toolName]) =>
-        effectiveToolNames.includes(toolName),
+      Object.entries(fileContext.customToolDefinitions ?? {}).filter(
+        ([toolName]) => effectiveToolNames.includes(toolName),
       ),
     ),
   )
   return getMCPToolData({
     ...params,
     toolNames: effectiveToolNames,
-    mcpServers: agentTemplate!.mcpServers,
+    // `agentTemplate` is a required non-optional param and `mcpServers` is a
+    // required, schema-defaulted field on AgentTemplate — no assertion needed.
+    mcpServers: agentTemplate.mcpServers,
     writeTo: defs,
   })
 }
@@ -455,6 +471,11 @@ export const runAgentStep = async (
     spawnParams: Record<string, any> | undefined
     system: string
     n?: number
+
+    // P2-T2: 1-based step index within the agent loop (loopAgentSteps passes
+    // totalSteps). Optional and additive: omitted → journal stepNumber 0 exactly
+    // as pre-P2-T2, so other callers are unchanged.
+    stepNumber?: number
 
     trackEvent: TrackEventFn
     promptAiSdk: PromptAiSdkFn
@@ -530,9 +551,14 @@ export const runAgentStep = async (
 
   const startTime = Date.now()
 
+  // Resolve the injectable id generator once at the runtime entry so replay
+  // (P2-T2) can reproduce identity ids deterministically.
+  const idGen = params.idGen ?? realIdGen
+  const clock = params.clock ?? realClock
+
   // Generates a unique ID for each main prompt run (ie: a step of the agent loop)
   // This is used to link logs within a single agent loop
-  const agentStepId = crypto.randomUUID()
+  const agentStepId = idGen.uuid()
   trackEvent({
     event: AnalyticsEvent.AGENT_STEP,
     userId: userId ?? '',
@@ -721,6 +747,7 @@ export const runAgentStep = async (
         runId: agentState.runId,
         userInputId,
         agentStepId,
+        idGen,
         model,
       })
     } catch (err) {
@@ -909,6 +936,37 @@ export const runAgentStep = async (
   let fullResponse = ''
   const toolResults: ToolMessage[] = []
 
+  // P2-T2: journal the LLM request BEFORE the stream so a crash mid-stream is
+  // classifiable as an in-flight LLM call on resume (P2-T2-DESIGN §2/§4a).
+  // Slice 1 kept the payload bounded; the journal now stores the FULL request
+  // payload per §8 ('the journal stores FULL payloads ... bound via retention,
+  // not truncation') since replay re-issues recorded requests.
+  if (agentState.runId && params.journalWriter) {
+    // Fail-open like every other journal write point (the step_boundary and
+    // spawn appends are guarded the same way): a journaling outage — e.g. a
+    // closed connection raced by a detached background child that outlived
+    // the turn which closed the journal — must never fail the agent step
+    // itself. The event is simply not journaled.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_request',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: {
+          model: agentTemplate?.model,
+          system,
+          n: params.n ?? null,
+          messages: agentState.messageHistory,
+        },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_request to run journal (non-fatal)',
+      )
+    }
+  }
+
   // Raw stream from AI SDK
   const stream = getAgentStreamFromTemplate({
     ...params,
@@ -960,6 +1018,29 @@ export const runAgentStep = async (
   toolResults.push(...newToolResults)
 
   fullResponse = fullResponseAfterStream
+
+  // P2-T2: journal the LLM response, closing the llm_request boundary. The
+  // journaled request/response pair defaults to re-issuing the recorded
+  // request from the prior agentState checkpoint — messageId is for telemetry
+  // correlation for body-bearing providers.
+  if (agentState.runId && params.journalWriter) {
+    // Fail-open like every other journal write point: a journaling outage
+    // (e.g. the closed-connection race with a detached background child)
+    // must never fail the agent step itself.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_response',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: { messageId: messageId ?? null, fullResponse },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_response to run journal (non-fatal)',
+      )
+    }
+  }
 
   // Credit broker/owned mutations for concurrent-instance gate isolation.
   // processStream mutates agentState.messageHistory in its finally, but the
@@ -1062,6 +1143,7 @@ export const runAgentStep = async (
       current: agentState.taskMemory,
       draft: compactedMemoryDraft,
       expectedRevision: agentState.taskMemory?.revision ?? -1,
+      now: clock.now(),
     })
     agentState.messageHistory = [
       userMessage({
@@ -1153,7 +1235,8 @@ export const runAgentStep = async (
     shouldEndTurn = true
   }
 
-agentState = {    ...agentState,
+  agentState = {
+    ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
         ? agentState.stepsRemaining - 1
@@ -1289,10 +1372,24 @@ export async function loopAgentSteps(
     // contextTokenCount exceeds this threshold, the loop proactively trims
     // message history via trimMessagesToFitTokenLimit. Defaults to 190k.
     maxContextLength?: number
+    // Optional cap on the missing-output retry loop below: when the knob is
+    // omitted the retry fires on EVERY turn-end that still lacks required
+    // output (bounded only by the configured step cap / cancellation); a
+    // positive integer caps the retries and then the structured agent
+    // returns a null value.
+    maxMissingOutputRetries?: number
     resolveModelContextWindow?: (params: {
       agentId?: string
       model?: string
     }) => number | undefined
+    // P2-T2 replay-driver slice: when wired, ACTS on the resume report built
+    // at loop entry (re-drive children whose journals require live execution,
+    // respawn interrupted background intents). Typically
+    // `(report) => executeRunResumeReport({ report, ... })` from
+    // ./util/run-replay-driver. Additive-optional: undefined (the default)
+    // leaves this path byte-identical; the driver never throws, so a failing
+    // handler is reported in its outcome rather than aborting the loop.
+    resumeDriver?: (report: RunResumeReport) => Promise<unknown>
   } & ParamsExcluding<typeof additionalToolDefinitions, 'agentTemplate'> &
     ParamsExcluding<
       typeof runProgrammaticStep,
@@ -1390,6 +1487,9 @@ export async function loopAgentSteps(
   if (!agentTemplate) {
     throw new Error(`Agent template not found for type: ${agentType}`)
   }
+  // Resolve the injectable clock once at the loop entry (mirrors runAgentStep)
+  // so replay (P2-T2) can reproduce persisted-state timestamps deterministically.
+  const clock = params.clock ?? realClock
   const resolvedModelContextWindow = resolveModelContextWindow?.({
     agentId: agentTemplate.id,
     model: agentTemplate.model,
@@ -1397,15 +1497,21 @@ export async function loopAgentSteps(
   // Seed the state before the first programmatic step. The context-pruner runs
   // before the first LLM request, so waiting for the streaming callback would
   // make the first compaction use the legacy fallback even for 500k/1M models.
-  initialAgentState.contextWindowTokens = resolvedModelContextWindow
-  reconcileInterruptedLedgerSpawns(initialAgentState)
-  reconcileInterruptedPathLeases(initialAgentState)
+  // A supervised child receives its window pre-resolved in the transport slice
+  // and has no bridged resolver dep; do not clobber that rehydrated seed with
+  // undefined.
+  if (resolvedModelContextWindow !== undefined) {
+    initialAgentState.contextWindowTokens = resolvedModelContextWindow
+  }
+  reconcileInterruptedLedgerSpawns(initialAgentState, clock.now())
+  reconcileInterruptedPathLeases(initialAgentState, clock.now())
   // Discovery shard claims are durable parent state too: a shard left 'active'
   // by an interrupted spawn would otherwise make claimDiscoveryShard throw for
   // that question forever, failing the whole spawn batch. Nothing of THIS run
   // is in flight yet here, so an 'active' shard belongs to a previous turn.
   initialAgentState.discoveryCoverage = reconcileInterruptedDiscoveryShards(
     initialAgentState.discoveryCoverage,
+    clock.now(),
   )
   if (
     !initialAgentState.orchestrationLedger?.events.some(
@@ -1416,6 +1522,7 @@ export async function loopAgentSteps(
   ) {
     appendOrchestrationEvent({
       state: initialAgentState,
+      now: clock.now(),
       event: {
         type: 'model_selected',
         runId: initialAgentState.runId ?? initialAgentState.agentId,
@@ -1429,7 +1536,73 @@ export async function loopAgentSteps(
       },
     })
   }
-  reconcileInterruptedBackgroundAgentIntents(initialAgentState)
+  reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
+  // P2-T2: when a journal reader is wired and this state carries a prior
+  // runId, surface what a resume would do (own tail, children, background
+  // intents). P2-audit-fix-8: a caller-injected resumeDriver (production
+  // wiring: sdk/src/services/run-resume-driver.ts) ACTS on the report below;
+  // without one this block stays classify-and-log.
+  if (params.journalReader && initialAgentState.runId) {
+    const resumeReport = buildRunResumeReport({
+      reader: params.journalReader,
+      runId: initialAgentState.runId,
+      intents: initialAgentState.backgroundAgentJobs,
+    })
+    if (!isRunResumeReportClean(resumeReport)) {
+      logger.warn(
+        { resumeReport },
+        'Run journal shows interrupted work from a previous run',
+      )
+      // P2-T2 final REPLAY SLICE: the report is now ACTED ON structurally —
+      // planned (bounded) and executed through caller-injected seams. These
+      // seams are LOGGING-ONLY: replayChild records the child's disposition
+      // and respawnBackground records the intended respawn without touching
+      // live state. They must NOT re-drive children or respawn background
+      // jobs here: reconcileInterruptedBackgroundAgentIntents above already
+      // reconciled the intents, so a real respawn in the seam would
+      // double-respawn, and P2-T8 upgrades these seams without touching the
+      // planner. Unwired/confirmed seams skip, so a clean report fires no
+      // actions and this wiring stays byte-identical for fresh runs.
+      const replayPlan = planReplayActions(resumeReport)
+      if (replayPlan.actions.length > 0) {
+        const replayResult = await executeReplayActions(replayPlan.actions, {
+          logger,
+          replayChild: async (childRunId, verdict) => {
+            logger.debug(
+              { runId: initialAgentState.runId, childRunId, verdict },
+              'Journal replay: child disposition planned (logging-only seam)',
+            )
+          },
+          respawnBackground: async (jobId, agentType) => {
+            logger.debug(
+              { runId: initialAgentState.runId, jobId, agentType },
+              'Journal replay: background respawn intended (logging-only seam; intents already reconciled)',
+            )
+          },
+        })
+        logger.debug(
+          {
+            runId: initialAgentState.runId,
+            plannedActions: replayPlan.actions.length,
+            truncated: replayPlan.truncated,
+            attempted: replayResult.attempted,
+            succeeded: replayResult.succeeded,
+            failed: replayResult.failed,
+          },
+          'Journal replay actions executed',
+        )
+      }
+      // P2-T2 replay-driver slice: when a resumeDriver is wired, ACT on the
+      // report — re-drive children and respawn background intents — before
+      // the loop continues. Additive-optional: undefined (the default) keeps
+      // this path byte-identical; executeRunResumeReport never throws, so a
+      // failing handler is reported in its outcome rather than aborting the
+      // loop.
+      if (params.resumeDriver) {
+        await params.resumeDriver(resumeReport)
+      }
+    }
+  }
 
   if (signal.aborted) {
     return {
@@ -1728,7 +1901,7 @@ export async function loopAgentSteps(
           role: 'user' as const,
           content: buildUserMessageContent(prompt, spawnParams, content),
           tags: ['USER_PROMPT'],
-          sentAt: Date.now(),
+          sentAt: clock.now(),
 
           // James: Deprecate the below, only use tags, which are not prescriptive.
           keepDuringTruncation: true,
@@ -1742,7 +1915,6 @@ export async function loopAgentSteps(
               ],
             ),
           ),
-        ,
       ],
 
       instructionsPrompt &&
@@ -1841,21 +2013,17 @@ export async function loopAgentSteps(
 
     // Anti-thrash compaction telemetry, loop-local so each turn starts clean.
     // `compactionCount` counts every compaction (semantic or mechanical) in
-    // this loop. Two independent signals are tracked:
+    // this loop. One shipped reporting signal is tracked:
     //
     //   - `consecutiveNoProgressCompactions` is the shipped reporting signal
     //     carried on `context_compaction`: a compaction is "no progress" when
     //     it reclaims less than COMPACTION_NO_PROGRESS_FRACTION of the
     //     PREVIOUS compaction's post-compaction history size. Report-only
     //     (telemetry + an honest reason clause); nothing is gated on it.
-    //   - `consecutiveUnproductiveSemanticPasses` is per-pass and
-    //     semantic-only: a pass is unproductive when it reclaimed less than
-    //     COMPACTION_NO_PROGRESS_FRACTION of its OWN pre-compaction history
-    //     size, which also covers an announced pass that returned the
-    //     transcript unchanged. Once it reaches
-    //     COMPACTION_NO_PROGRESS_STREAK_THRESHOLD the loop logs a warning;
-    //     the governor (not the streak) caps further paid passes for the rest
-    //     of this turn via `recordPassSettled`.
+    //   - Per-pass semantic reclaim is no longer tracked or gated at all: a
+    //     progress-based gate was removed because it cut off legitimate
+    //     context reclamation. Only the flat SEMANTIC_MAX_PASSES_PER_TURN
+    //     budget and the governor's cooldown/rearm/emergency pacing apply.
     //
     // Budgets are still never silently lowered and pinned state is never
     // dropped as a reaction: the only remediation is to stop paying for a
@@ -1864,14 +2032,6 @@ export async function loopAgentSteps(
     let consecutiveNoProgressCompactions = 0
     let previousPostCompactionHistoryTokens: number | undefined
     let warnedCompactionNoProgress = false
-    let consecutiveUnproductiveSemanticPasses = 0
-    let warnedSemanticCompactionSuppressed = false
-    // Loop-local streak state backing the persisted advisory. The advisory
-    // field itself is recomputed once per iteration (see the mirror below), so
-    // the streak must live here: a field write inside
-    // registerUnproductiveSemanticPass alone would be overwritten by the next
-    // iteration's recomputation.
-    let streakSuppressionActive = false
     // `suppressSemanticCompaction` is a transient, loop-owned advisory. Reset
     // once here, before the loop, so a persisted or inherited `true` from an
     // earlier turn can never leak in and deadlock a recoverable run.
@@ -1881,38 +2041,6 @@ export async function loopAgentSteps(
     // telemetry locals are: each turn starts clean, and the rearm margin is
     // observable in the token counts themselves, so nothing needs to persist.
     const compactionGovernor = createSemanticCompactionGovernor()
-    const registerUnproductiveSemanticPass = () => {
-      consecutiveUnproductiveSemanticPasses += 1
-      // The governor owns loop pacing: an unproductive pass extends its
-      // cooldown, and a SECOND consecutive unproductive pass spends the
-      // turn's remaining pass budget (bounded denial). The persisted
-      // `suppressSemanticCompaction` advisory keeps its documented
-      // streak-based contract, so crossing the streak threshold also sets
-      // it, making the inline pruner spawn path decline for the rest of the
-      // turn. Eviction and the mechanical trim still respond to pressure,
-      // and next turn starts with a fresh governor and a loop-entry reset.
-      recordPassSettled(compactionGovernor, { productive: false })
-      if (
-        consecutiveUnproductiveSemanticPasses <
-        COMPACTION_NO_PROGRESS_STREAK_THRESHOLD
-      ) {
-        return
-      }
-      // Streak state, not a direct field write: the per-iteration advisory
-      // mirror below is the single writer of the persisted field, so the
-      // streak is folded into that recomputation instead of racing it.
-      streakSuppressionActive = true
-      if (warnedSemanticCompactionSuppressed) return
-      warnedSemanticCompactionSuppressed = true
-      logger.warn(
-        {
-          agentId: currentAgentState.agentId,
-          runId,
-          consecutiveUnproductiveSemanticPasses,
-        },
-        'Semantic compaction passes are not reclaiming space; further passes this turn are capped',
-      )
-    }
     const registerCompaction = (compaction: {
       action: 'semantic_compaction' | 'mechanical_trim'
       preCompactionHistoryTokens: number
@@ -1922,11 +2050,7 @@ export async function loopAgentSteps(
       consecutiveNoProgressCompactions: number
       noProgress: boolean
     } => {
-      const {
-        action,
-        preCompactionHistoryTokens,
-        postCompactionHistoryTokens,
-      } = compaction
+      const { action, postCompactionHistoryTokens } = compaction
       compactionCount += 1
       const previousTokens = previousPostCompactionHistoryTokens
       if (previousTokens !== undefined) {
@@ -1938,29 +2062,6 @@ export async function loopAgentSteps(
         }
       }
       previousPostCompactionHistoryTokens = postCompactionHistoryTokens
-
-      // Per-pass, semantic-only streak: compare this pass's reclaim against
-      // its OWN pre-compaction size, so a healthy long run whose passes each
-      // return history to roughly the same target is not misread as thrash.
-      // `mechanical_trim` registrations neither increment nor reset it.
-      if (action === 'semantic_compaction') {
-        const reclaimed =
-          preCompactionHistoryTokens - postCompactionHistoryTokens
-        if (
-          reclaimed <
-          preCompactionHistoryTokens * COMPACTION_NO_PROGRESS_FRACTION
-        ) {
-          registerUnproductiveSemanticPass()
-        } else {
-          consecutiveUnproductiveSemanticPasses = 0
-          // Clearing the streak flag (not the field directly) is what makes
-          // the documented "cleared by a productive pass" path reachable: the
-          // next iteration's advisory mirror recomputes the field from this
-          // flag plus the current governor decision.
-          streakSuppressionActive = false
-          recordPassSettled(compactionGovernor, { productive: true })
-        }
-      }
 
       const noProgress =
         consecutiveNoProgressCompactions >=
@@ -1996,7 +2097,18 @@ export async function loopAgentSteps(
     // pin anything. One full recount (reset + fresh sum) runs only after a
     // history-rewriting compaction/trim, whose sites below call
     // invalidateHistoryAggregate.
-    const incrementalTokenCounter = new IncrementalTokenCounter()
+    // Audit MEDIUM (token fudge factors dead on the hot path): thread the
+    // routed model so the incremental counter prices NEW messages with the
+    // per-family fudgeFactorForModel factor instead of the Anthropic 1.35
+    // sentinel default. agentTemplate.model is resolved at loop entry — the
+    // same source the model_selected event above records — and may be
+    // undefined when the route is deferred to openbuff.json; undefined keeps
+    // the exact legacy behavior, so this is additive and safe. Every agent
+    // path (root turn, foreground subagents, inline agents) runs through this
+    // single loop entry, so no secondary construction site needs threading.
+    const incrementalTokenCounter = new IncrementalTokenCounter(
+      agentTemplate.model,
+    )
     const invalidateHistoryAggregate = () => {
       // History was rewritten (compaction/trim): the next estimate must
       // recount fully rather than trusting stale per-message memoized counts.
@@ -2152,6 +2264,23 @@ export async function loopAgentSteps(
             // mechanical-trim branches: previously read paths require a
             // fresh read before the next edit.
             revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
+            // History was rewritten by eviction: the per-message price memo must
+            // not carry stale entries for the replaced references, so the
+            // estimate below starts from a fresh memo (M3-T2 full-recall point).
+            invalidateHistoryAggregate()
+            // D26: archive the evicted segments' full content BEFORE the
+            // tombstoned history replaces the originals, so recall_context can
+            // still recover the detail. Cheap in-memory append on agentState;
+            // a no-op when the evictor reported nothing (its `evicted` field is
+            // omitted on the no-op paths).
+            const evictedCandidates = evictionResult.evicted
+            if (evictedCandidates && evictedCandidates.length > 0) {
+              archiveEvictedToolResults(
+                currentAgentState,
+                evictedCandidates,
+                clock.now(),
+              )
+            }
             currentAgentState.messageHistory = evictionResult.messages
             evictedTokensThisIteration = evictionResult.tokensSaved
             evictedCountThisIteration = evictionResult.evictedCount
@@ -2217,31 +2346,21 @@ export async function loopAgentSteps(
             activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
         })
         // The announcement gate is the semantic trigger plus the governor's
-        // per-iteration decision. The persisted `suppressSemanticCompaction`
-        // advisory keeps its documented streak-based contract (owned by the
-        // pass-outcome accounting above), and an OVER-TRIGGER iteration the
-        // governor denies is additionally mirrored into it: the generator-
-        // driven inline spawn path has no other pacing lever, so without the
-        // mirror a handleSteps template could keep spawning pruner children
-        // every iteration while only the announcement was paced.
+        // per-iteration decision. An OVER-TRIGGER iteration the governor
+        // denies is mirrored into the persisted `suppressSemanticCompaction`
+        // advisory: the generator-driven inline spawn path has no other pacing
+        // lever, so without the mirror a handleSteps template could keep
+        // spawning pruner children every iteration while only the announcement
+        // was paced.
         //
         // The mirror is deliberately NON-STICKY: it recomputes the field every
-        // iteration from the CURRENT governor decision plus the loop-local
-        // streak flag. A sticky version (OR-ing the previous field value)
-        // would let the cooldown denials right after an announced pass pin the
-        // advisory for the whole turn, making the documented clearing paths
-        // unreachable — a productive pass could never clear it, and the second
-        // pass the governor re-arms for (context below the rearm budget
-        // regrowing past the trigger) could never spawn. Below the trigger a
-        // quiet iteration clears the field unless the streak holds it. A
-        // denied iteration runs no pass and announces neither half of the
-        // status pair, exactly as before.
+        // iteration from the CURRENT governor decision, so a below-trigger
+        // quiet iteration clears it again. A denied iteration runs no pass and
+        // announces neither half of the status pair, exactly as before.
         const governorWithheldOverTriggerPass =
           exceededSemanticTrigger && !governorDecision.shouldRunSemanticPass
         currentAgentState.suppressSemanticCompaction =
-          governorWithheldOverTriggerPass || streakSuppressionActive
-            ? true
-            : undefined
+          governorWithheldOverTriggerPass ? true : undefined
         const announceSemanticPass =
           exceededSemanticTrigger && governorDecision.shouldRunSemanticPass
         if (announceSemanticPass) {
@@ -2291,6 +2410,7 @@ export async function loopAgentSteps(
             historyBeforeProgrammatic,
             'semantic_compaction',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
         }
         // M3-T2: incremental accounting — heap allocation for every message in
@@ -2583,17 +2703,6 @@ export async function loopAgentSteps(
                 : 'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
           })
           compactedThisIteration = true
-        } else if (
-          announceSemanticPass &&
-          historyTokensAfterProgrammatic >= historyTokensBeforeProgrammatic
-        ) {
-          // A semantic pass was announced for this iteration, but the pruner
-          // returned the transcript unchanged (or larger) — the actual thrash
-          // case. Register it for the per-pass semantic streak ONLY: nothing
-          // was compacted, so this must not touch the shipped
-          // `compactionCount`/post-vs-post streak and must not emit a
-          // `context_compaction` event.
-          registerUnproductiveSemanticPass()
         }
 
         // Deterministic trimming is now an emergency brake after semantic
@@ -2601,6 +2710,17 @@ export async function loopAgentSteps(
         const pruningResult = maybePruneContext({
           messages: currentAgentState.messageHistory,
           systemTokens: systemAndToolsTokens,
+          // The trim function rewrites only messageHistory, while the request
+          // also contains compiled task memory, Memory V2, and this step's
+          // prompt. Reserve those already-counted tokens or a history that is
+          // individually below the window will be returned unchanged even
+          // though the actual provider request is over budget.
+          nonHistoryMessageTokens: Math.max(
+            0,
+            currentAgentState.contextTokenCount -
+              systemAndToolsTokens -
+              historyTokensAfterProgrammatic,
+          ),
           contextTokenCount: currentAgentState.contextTokenCount,
           maxTotalTokens: activeMaxContextLength,
           logger,
@@ -2613,6 +2733,7 @@ export async function loopAgentSteps(
             currentAgentState.messageHistory,
             'mechanical_trim',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages
@@ -2717,6 +2838,12 @@ export async function loopAgentSteps(
         })
 
         // Check if output is required but missing
+        // Omitted knob → unlimited retries (the post-cap-removal default), so
+        // the step cap / cancellation remains the only bound. A configured
+        // positive integer exhausts after that many retries; the loop then
+        // falls through to the existing shouldEndTurn break and the parent
+        // receives a null structured value.
+        const maxMissingOutputRetries = params.maxMissingOutputRetries
         if (
           agentTemplate.outputSchema &&
           // Skip for programmatic agents: the generator (not the model) drives
@@ -2726,7 +2853,15 @@ export async function loopAgentSteps(
           !agentTemplate.handleSteps &&
           currentAgentState.output === undefined &&
           shouldEndTurn &&
-          outputSchemaRetryCount < MAX_MISSING_OUTPUT_RETRIES
+          // A turn ended by the STEP CAP must not be nudged back into the
+          // loop: at the cap runAgentStep short-circuits WITHOUT consuming a
+          // step (stepsRemaining === 0 at entry), so resetting shouldEndTurn
+          // here would spin nudge → short-circuit → nudge forever with zero
+          // LLM calls. The step cap is the documented bound for the
+          // unlimited-retry default, so let the loop break below.
+          !hitStepCap &&
+          (maxMissingOutputRetries === undefined ||
+            outputSchemaRetryCount < maxMissingOutputRetries)
         ) {
           outputSchemaRetryCount += 1
           // The set_output handler records its rejection on this same agent
@@ -2747,7 +2882,7 @@ export async function loopAgentSteps(
           )
 
           // Add system message instructing to use set_output
-          const attemptSuffix = `(attempt ${outputSchemaRetryCount} of ${MAX_MISSING_OUTPUT_RETRIES})`
+          const attemptSuffix = `(attempt ${outputSchemaRetryCount})`
           const outputSchemaMessage = withSystemTags(
             rejection
               ? `Your set_output call was rejected and your output is still unset ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Rejection: ${rejection}`
@@ -2794,6 +2929,7 @@ export async function loopAgentSteps(
           n,
           prompt: currentPrompt,
           runId,
+          stepNumber: totalSteps,
           spawnParams: currentParams,
           system,
           tools,
@@ -2869,6 +3005,32 @@ export async function loopAgentSteps(
           currentAgentState.messageHistory,
           'userPrompt',
         )
+      }
+
+      // P2-T2-DESIGN §4d: journal ONE terminal step_boundary on NORMAL exit
+      // so the tail of a completed run proves completion. Without it the tail
+      // is the final step's llm_response and classifyChildRun reports
+      // child_incomplete_tail for a child that actually finished. Error/abort
+      // exits return through the catch blocks below and deliberately do NOT
+      // append this marker: a non-terminal tail is what keeps an interrupted
+      // run classifying as resumable/incomplete rather than falsely complete.
+      // Fail-open like every other write point: a journal append failure must
+      // never fail the completed run (and run-journal.test.ts proves a
+      // step_boundary tail classifies as clean/child_completed).
+      if (currentAgentState.runId && params.journalWriter) {
+        try {
+          params.journalWriter.append(currentAgentState.runId, {
+            eventType: 'step_boundary',
+            stepNumber: totalSteps,
+            correlation: runId,
+            payload: { status: 'completed', terminal: true },
+          })
+        } catch (journalError) {
+          logger.debug(
+            { error: journalError, runId },
+            'Failed to append terminal step_boundary to run journal (non-fatal)',
+          )
+        }
       }
 
       try {
@@ -3051,12 +3213,10 @@ const STEP_CAP_REACHED_MESSAGE = [
 
 /**
  * How many consecutive unproductive compactions must occur before the emitted
- * `reason` calls out compaction thrash, and — for the per-pass semantic-only
- * streak — before the loop stops spawning the semantic pruner for the rest of
- * the turn. One threshold for both signals. The loop still never reacts by
- * lowering budgets or dropping pinned state; suppression only avoids paying
- * for a pass that was measured not to reclaim space, and an announced pass is
- * still announced and still settled.
+ * `reason` calls out compaction thrash. Purely a reporting threshold: the loop
+ * never reacts by lowering budgets, dropping pinned state, or suppressing a
+ * pass, so no-progress telemetry can never bound the agent's ability to gather
+ * or reclaim context.
  */
 const COMPACTION_NO_PROGRESS_STREAK_THRESHOLD = 2
 
@@ -3066,15 +3226,6 @@ const buildCompactionNoProgressClause = (
   `Compaction is not reclaiming space: ${consecutiveNoProgressCompactions} consecutive compactions reclaimed under ${Math.round(
     COMPACTION_NO_PROGRESS_FRACTION * 100,
   )}%.`
-
-/**
- * Bounded retries for a structured-output agent that ended its turn without
- * setting required output. A failed `set_output` ends the turn (set_output is in
- * TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so a single retry left a reviewer that
- * botched one field with no step to act on the validation error, and the parent
- * received `value: null`. Bounded, not unlimited: each retry is one more LLM step.
- */
-const MAX_MISSING_OUTPUT_RETRIES = 3
 
 /**
  * How many steps before the cap the one-time near-cap checkpoint nudge fires.

@@ -465,4 +465,50 @@ describe('parseFileStructure', () => {
       expect(syms).toEqual([])
     }
   })
+
+  test('assigns sibling depths without nesting (interval-stack sweep)', async () => {
+    const src = [
+      'class A {', // 1
+      '  m1() {', // 2
+      '    return 1', // 3
+      '  }', // 4
+      '  m2() {', // 5
+      '    return 2', // 6
+      '  }', // 7
+      '}', // 8
+      'function top1() { return 1 }', // 9
+      'function top2() { return 2 }', // 10
+    ].join('\n')
+
+    const syms = (await parseFileStructure(src, 'x.ts')) ?? []
+    const byName = Object.fromEntries(syms.map((s) => [s.name, s]))
+    expect(byName.A).toMatchObject({ kind: 'class', depth: 0 })
+    // Sequential siblings inside the class each sit at depth 1; a broken
+    // containment sweep would nest m2 inside m1's already-closed interval.
+    expect(byName.m1).toMatchObject({ kind: 'method', depth: 1 })
+    expect(byName.m2).toMatchObject({ kind: 'method', depth: 1 })
+    expect(byName.top1).toMatchObject({ kind: 'function', depth: 0 })
+    expect(byName.top2).toMatchObject({ kind: 'function', depth: 0 })
+  })
+
+  test('assigns transitive depths through class > method > inner function', async () => {
+    const src = [
+      'class Outer {', // 1
+      '  run() {', // 2
+      '    function inner() {', // 3
+      '      return 1', // 4
+      '    }', // 5
+      '    return inner()', // 6
+      '  }', // 7
+      '}', // 8
+    ].join('\n')
+
+    const syms = (await parseFileStructure(src, 'x.ts')) ?? []
+    const byName = Object.fromEntries(syms.map((s) => [s.name, s]))
+    expect(byName.Outer).toMatchObject({ kind: 'class', depth: 0 })
+    expect(byName.run).toMatchObject({ kind: 'method', depth: 1 })
+    // inner's nearest container is `run` (a method, not a method-container
+    // kind), so it keeps the plain `function` kind at depth 2.
+    expect(byName.inner).toMatchObject({ kind: 'function', depth: 2 })
+  })
 })

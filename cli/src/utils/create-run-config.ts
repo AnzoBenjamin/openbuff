@@ -6,6 +6,9 @@ import { IndexManager } from '@codebuff/indexer'
 import { loadProviderConfigSync } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../project-files'
+import { getCliEnv } from './env'
+import { notifyTerminal } from './terminal-notify'
+import { writeToTty } from './terminal-title'
 import {
   createEventHandler,
   createStreamChunkHandler,
@@ -126,6 +129,32 @@ function resolveMaxAgentSteps(): number {
   return MAX_AGENT_STEPS_DEFAULT
 }
 
+/**
+ * Resolve the optional missing-output retry cap. Unlike maxAgentSteps there
+ * is no -1 sentinel: omitted (or invalid) means unlimited retries, so
+ * returning undefined keeps the runtime's unlimited-by-default contract.
+ * Config wins over the env fallback, mirroring the OPENBUFF_MAX_*_REPAIR_ROUNDS
+ * convention (explicit option values win over the env).
+ */
+function resolveMaxMissingOutputRetries(): number | undefined {
+  try {
+    const configured = loadProviderConfigSync().config.maxMissingOutputRetries
+    if (typeof configured === 'number' && configured > 0) {
+      return Math.floor(configured)
+    }
+  } catch {
+    // Best-effort; never let config loading break run creation.
+  }
+  const envRaw = getCliEnv().OPENBUFF_MAX_MISSING_OUTPUT_RETRIES
+  if (envRaw !== undefined && envRaw.trim() !== '') {
+    const parsed = Number(envRaw.trim())
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed)
+    }
+  }
+  return undefined
+}
+
 const HARNESS_APPROVAL_TARGET_DISPLAY_MAX = 200
 
 export type HarnessApprovalRequest = {
@@ -213,6 +242,7 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     previousRun: previousRunState ?? undefined,
     agentDefinitions,
     maxAgentSteps: resolveMaxAgentSteps(),
+    maxMissingOutputRetries: resolveMaxMissingOutputRetries(),
     handleStreamChunk: createStreamChunkHandler(eventHandlerState),
     handleEvent: createEventHandler(eventHandlerState),
     signal: params.signal,
@@ -222,6 +252,14 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     resumeInterruptedTurn,
     approvalMode,
     requestApproval: async (request: HarnessApprovalRequest) => {
+      // P1-T7: Fire-and-forget terminal notification so the user knows the
+      // run is paused awaiting approval. Never blocks the approval flow.
+      notifyTerminal(
+        { body: `Approval needed: ${request.target.slice(0, 80)}` },
+        { write: (sequence) => {
+            writeToTty(sequence)
+          } },
+      )
       const response = (await AskUserBridge.request('harness-approval', [
         buildHarnessApprovalPrompt(request),
       ])) as {

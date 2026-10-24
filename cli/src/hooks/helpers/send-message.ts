@@ -22,6 +22,8 @@ import {
   type BatchedMessageUpdater,
 } from '../../utils/message-updater'
 import { createModeDividerMessage } from '../../utils/send-message-helpers'
+import { notifyTerminal } from '../../utils/terminal-notify'
+import { writeToTty } from '../../utils/terminal-title'
 import { yieldToEventLoop } from '../../utils/yield-to-event-loop'
 
 import type {
@@ -37,6 +39,10 @@ import type { StreamController } from '../stream-state'
 import type { QueuedMessage, StreamStatus } from '../use-message-queue'
 import type { MessageContent, RunState } from '@openbuff/sdk'
 import type { MutableRefObject, SetStateAction } from 'react'
+import {
+  createTurnSnapshot,
+  logTurnSnapshotFailure,
+} from '../../utils/turn-snapshots'
 
 /** Resets queue state on early return (before streaming starts). */
 export type ResetEarlyReturnStateParams = {
@@ -499,6 +505,29 @@ export const handleRunCompletion = (params: {
     finalizeAfterError()
     return
   }
+
+  // P1-T7: Successful turn — fire-and-forget terminal notification so the
+  // user knows the run finished. Aborts and errors return above, so this
+  // fires exactly once per successful turn.
+  notifyTerminal(
+    { body: 'Turn complete' },
+    { write: (sequence) => {
+        writeToTty(sequence)
+      } },
+  )
+
+  // P2-T4: Successful turn — fire-and-forget git-plumbing snapshot of the
+  // tracked tree on refs/openbuff/turns. Aborts and errors return above, so
+  // this fires exactly once per successful turn. createTurnSnapshot never
+  // rejects; the catch is belt-and-suspenders so a snapshot failure can
+  // never break the turn path. Turn END is not a race (finding a), so this
+  // stays fire-and-forget — but the structured outcome is no longer dropped
+  // silently (finding b): an 'error' outcome logs one latched warning so a
+  // broken snapshot pipeline is visible instead of /undo-turn later saying
+  // 'nothing-to-undo' with no explanation.
+  void createTurnSnapshot({ label: 'turn' })
+    .then((outcome) => logTurnSnapshotFailure(outcome, 'turn'))
+    .catch(() => undefined)
 
   finalizeQueueState({
     setStreamStatus,

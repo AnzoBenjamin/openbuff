@@ -85,9 +85,56 @@ jobs:
 
       - name: Memory drift + config sync
         run: |
-          # Both guards are blocking gates (must pass clean).
+          # All guards here are blocking gates (must pass clean).
           bun --cwd=scripts run guard:memory-drift
           bun --cwd=scripts run guard:sync-agent-config
+          # Same guard check:ci-local runs as Step G: an unguarded
+          # `fileContext.projectRoot` dereference fails this step.
+          bun --cwd=scripts run guard:project-root
+          bun --cwd=scripts run guard:byok-wording
+          # Same guard check:ci-local runs as Step I: every exact-pinned
+          # dependency must reconcile with the checked-in upstream provenance
+          # record (scripts/dependency-provenance.json), offline.
+          bun --cwd=scripts run guard:dependency-provenance
+
+      # The offline provenance gate proves the checked-in record AGREES with
+      # bun.lock; both files come from this repository's own workflow, so it
+      # cannot prove upstream identity. This is the independent anchor: a PR
+      # (or direct push) that changes the recorded upstream identity of an
+      # already-approved release fails the build instead of merging silently,
+      # so such a change must arrive in a separate, reviewed commit. The
+      # comparison needs the BASE ref: after the shallow checkout above the
+      # working tree equals HEAD, so a plain `git diff HEAD` would always be
+      # empty and check nothing. One allowance: the diff is taken by
+      # name-status and a pure ADDITION passes — the PR that first lands the
+      # record IS its review. Once the record exists on the base branch, any
+      # modification or deletion fails here.
+      - name: Provenance record changes need their own reviewed commit
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            base=FETCH_HEAD
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            git fetch --no-tags --deepen=1 origin
+            base=HEAD~1
+          else
+            echo "No base ref to compare for ${{ github.event_name }}; skipping."
+            exit 0
+          fi
+          changes=$(git diff --name-status "$base" HEAD -- scripts/dependency-provenance.json)
+          if [ -z "$changes" ]; then
+            exit 0
+          fi
+          if echo "$changes" | grep -qv '^A'; then
+            echo "::error::scripts/dependency-provenance.json changed against the base ref without its own reviewed commit:"
+            echo "$changes"
+            exit 1
+          fi
+          echo "Initial landing of the provenance record (pure addition) — allowed; future modifications need their own reviewed commit."
+
+      - name: Types declaration guard (runtime deps declare their typings)
+        run: bun --cwd=scripts run guard:types-declaration
 
       # M4-T3: the gate-helpers generator's --check mode is the documented
       # freshness contract; fail CI on drift instead of silently rewriting the
@@ -187,7 +234,8 @@ jobs:
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
           echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
-      - name: Build SDK before tests
+      - name: Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)
+        if: matrix.package == 'cli'
         run: cd sdk && bun run build
 
       - name: Prebuild CLI agents
@@ -214,7 +262,10 @@ jobs:
               # This avoids xargs exit code issues with orphaned child processes
               # M1-T6: search the whole package (not just src/) so packages
               # whose tests live in __tests__/ (e.g. scripts) actually run.
-              TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f -name '*.test.ts' ! -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ')
+              # 2026-10-03b: include '*.test.tsx' too — the OpenTUI render
+              # tests (36 files, 463 tests) were previously invisible to CI;
+              # the full tsx suite passes under the pinned bun 1.3.5.
+              TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ')
               if [ -n "$TEST_FILES" ]; then
                 # --isolate: per-file test isolation prevents cross-file
                 # mock.module / module-state leakage (e.g. indexer's
@@ -224,7 +275,7 @@ jobs:
                 # M4-T3: an empty glob is a truth failure, not a pass. A
                 # missing/pruned test directory must fail the job instead of
                 # reporting a vacuous green suite.
-                echo "No tests found in ${{ matrix.package }} (expected '*.test.ts' files; find glob or checkout is broken)" >&2
+                echo "No tests found in ${{ matrix.package }} (expected '*.test.ts'/'*.test.tsx' files; find glob or checkout is broken)" >&2
                 exit 1
               fi
             fi
@@ -338,7 +389,8 @@ jobs:
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
           echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
-      - name: Build SDK before integration tests
+      - name: Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)
+        if: matrix.package == 'cli'
         run: cd sdk && bun run build
 
       - name: Prebuild CLI agents

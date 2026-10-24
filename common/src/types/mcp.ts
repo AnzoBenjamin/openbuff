@@ -22,3 +22,17 @@ export const mcpConfigSchema = z.union([
   mcpConfigStdioSchema,
 ])
 export type MCPConfig = z.infer<typeof mcpConfigSchema>
+
+/**
+ * Who authored an MCP server config; decides whether `$VAR` references are
+ * expanded from this process's environment ('user'/'project' = trusted local,
+ * 'client' = untrusted protocol peer).
+ *
+ * Defined here (a Client-free module) rather than in `mcp/client.ts` so
+ * trusted-loader modules (e.g. the SDK's `load-mcp-config`) can name it
+ * WITHOUT pulling the `@modelcontextprotocol/sdk` `Client` type graph — and
+ * its zod-v3 `objectOutputType` reference — into the SDK's public `.d.ts`
+ * bundle. The full origin-registry semantics live in `common/src/mcp/client.ts`,
+ * which re-exports this type.
+ */
+export type MCPConfigOrigin = 'user' | 'project' | 'client'

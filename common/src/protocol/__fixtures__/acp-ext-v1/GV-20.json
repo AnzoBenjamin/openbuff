@@ -1,0 +1,27 @@
+{
+  "_note": "Semantic vector (§12.7 GV-20, §12.3 SSRF): a client http MCP URL pointing at the link-local metadata address 169.254.169.254 is refused with -32602 before any connection is attempted.",
+  "mcpServer": {
+    "name": "metadata",
+    "origin": "client",
+    "config": {
+      "type": "http",
+      "url": "http://169.254.169.254/",
+      "params": {},
+      "headers": {}
+    }
+  },
+  "error": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32602,
+      "message": "MCP server URL host is a private/loopback address",
+      "data": {
+        "openbuff.dev": {
+          "code": "mcp_url_blocked"
+        }
+      }
+    }
+  },
+  "expectedConnectionAttempts": 0
+}

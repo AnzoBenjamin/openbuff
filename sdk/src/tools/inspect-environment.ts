@@ -1,7 +1,10 @@
 import { inspectHarnessEnvironment } from '../services/harness-intelligence'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
-export function inspectEnvironment(
+export async function inspectEnvironment(
   cwd: string,
-): CodebuffToolOutput<'inspect_environment'> {
-  return [{ type: 'json', value: inspectHarnessEnvironment(cwd) }]
+  signal?: AbortSignal,
+): Promise<CodebuffToolOutput<'inspect_environment'>> {
+  return [
+    { type: 'json', value: await inspectHarnessEnvironment(cwd, signal) },
+  ]
 }

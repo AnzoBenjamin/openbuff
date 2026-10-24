@@ -21,6 +21,7 @@ import {
 } from '../utils/status-bar-chips'
 import type { CompactionNotice } from '../types/chat'
 import type { StatusIndicatorState } from '../utils/status-indicator-state'
+import { buildCliCapabilityMapV1, formatSandboxCapabilityChipLabel } from '../utils/capability-tiers'
 
 /** A small status-bar action button with hover-bold styling. */
 const StatusActionButton = ({
@@ -54,6 +55,16 @@ const StatusActionButton = ({
 
 const SHIMMER_INTERVAL_MS = 160
 
+/**
+ * The CLI's honest sandbox posture, rendered as a low-priority chip. Static:
+ * built from the same default the ACP capability map advertises, so the chip
+ * never claims a stronger tier than the protocol does (e.g. 'sandbox:lexical').
+ */
+const CAPABILITIES_CHIP = {
+  label: formatSandboxCapabilityChipLabel(buildCliCapabilityMapV1().sandbox),
+  tone: 'secondary',
+} as const
+
 const chipForeground = (
   theme: ReturnType<typeof useTheme>,
   tone: StatusBarChipTone,
@@ -61,6 +72,8 @@ const chipForeground = (
   switch (tone) {
     case 'muted':
       return theme.muted
+    case 'primary':
+      return theme.primary
     case 'secondary':
       return theme.secondary
     case 'warning':
@@ -161,6 +174,7 @@ export const StatusBar = ({
     modelName,
     diffStats,
     indexChip: formatIndexStatusChip(indexStatus ?? null),
+    capabilitiesChip: CAPABILITIES_CHIP,
     elapsedSeconds,
     showTimer: shouldShowTimer,
     showStop,
@@ -204,7 +218,7 @@ export const StatusBar = ({
                 : statusIndicatorState.phaseLabel || 'thinking...'
             }
             interval={SHIMMER_INTERVAL_MS}
-            primaryColor={theme.secondary}
+            primaryColor={theme.primary}
           />
         )
 
@@ -217,7 +231,7 @@ export const StatusBar = ({
                 : statusIndicatorState.phaseLabel || 'working...'
             }
             interval={SHIMMER_INTERVAL_MS}
-            primaryColor={theme.secondary}
+            primaryColor={theme.primary}
           />
         )
 

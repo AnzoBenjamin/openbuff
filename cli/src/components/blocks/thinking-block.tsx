@@ -67,6 +67,8 @@ export const ThinkingBlock = memo(
           isThinkingComplete={isThinkingComplete}
           onToggle={handleToggle}
           availableWidth={availWidth}
+          thinkingStartedAt={firstBlock?.thinkingStartedAt}
+          thinkingEndedAt={firstBlock?.thinkingEndedAt}
         />
       </box>
     )

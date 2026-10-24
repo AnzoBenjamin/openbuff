@@ -370,12 +370,12 @@ After text`
       {
         type: 'parse_error',
         message:
-          'Ignored codebuff_tool_call content because cb_tool_name was missing or not a string.',
+          'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
       },
     ])
   })
 
-  it('should trim whitespace from text segments', () => {
+  it('should preserve whitespace around text segments', () => {
     const text = `   
   Text with whitespace  
    
@@ -436,5 +436,128 @@ After text`
     // Text segments are untrimmed raw slices (module docstring contract) —
     // the single newline after </codebuff_tool_call> opens the raw slice.
     expect(result[2]).toEqual({ type: 'text', text: '\nend of text' })
+  })
+})
+
+describe('parseTextWithToolCalls tool-name aliases', () => {
+  it('should recover a tool call whose name key was respelled', () => {
+    const text = `<codebuff_tool_call>
+{
+  "tool_name": "read_files",
+  "paths": ["test.ts"]
+}
+</codebuff_tool_call>`
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result).toEqual([
+      {
+        type: 'tool_call',
+        toolName: 'read_files',
+        input: { paths: ['test.ts'] },
+      },
+    ])
+  })
+
+  it('should accept every alias spelling and trim the resolved name', () => {
+    for (const key of ['tool_name', 'toolName', 'tool', 'name']) {
+      const text = `<codebuff_tool_call>\n{"${key}": "  write_file  ", "path": "x.ts"}\n</codebuff_tool_call>`
+
+      const result = parseTextWithToolCalls(text)
+
+      expect(result).toEqual([
+        {
+          type: 'tool_call',
+          toolName: 'write_file',
+          input: { path: 'x.ts' },
+        },
+      ])
+    }
+  })
+
+  it('should resolve aliases in list order when several are present', () => {
+    const text = `<codebuff_tool_call>
+{
+  "name": "wrong_tool",
+  "tool": "read_files",
+  "paths": ["test.ts"]
+}
+</codebuff_tool_call>`
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result).toEqual([
+      {
+        type: 'tool_call',
+        toolName: 'read_files',
+        // Only the supplying spelling (`tool`) is removed. A non-matching
+        // alias spelling stays behind as an unknown key rather than being
+        // guessed away, because it may be a real param (see skill.name).
+        input: { name: 'wrong_tool', paths: ['test.ts'] },
+      },
+    ])
+  })
+
+  it('should prefer cb_tool_name over a conflicting alias', () => {
+    const text = `<codebuff_tool_call>
+{
+  "cb_tool_name": "read_files",
+  "name": "not-a-tool",
+  "paths": ["test.ts"]
+}
+</codebuff_tool_call>`
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result).toEqual([
+      {
+        type: 'tool_call',
+        toolName: 'read_files',
+        input: { name: 'not-a-tool', paths: ['test.ts'] },
+      },
+    ])
+  })
+
+  it('should keep a param that shares an alias spelling (skill.name)', () => {
+    // `skill` declares a real `name` param, so alias stripping must not delete
+    // it. Removing every alias spelling turned this valid call into a
+    // missing-field error the model never caused.
+    const text = `<codebuff_tool_call>
+{
+  "cb_tool_name": "skill",
+  "name": "git-release"
+}
+</codebuff_tool_call>`
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result).toEqual([
+      {
+        type: 'tool_call',
+        toolName: 'skill',
+        input: { name: 'git-release' },
+      },
+    ])
+  })
+
+  it('should report the pinned parse_error when every alias value is blank or non-string', () => {
+    const text = `<codebuff_tool_call>
+{
+  "cb_tool_name": "   ",
+  "tool_name": "",
+  "toolName": 42,
+  "name": null
+}
+</codebuff_tool_call>`
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result).toEqual([
+      {
+        type: 'parse_error',
+        message:
+          'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
+      },
+    ])
   })
 })

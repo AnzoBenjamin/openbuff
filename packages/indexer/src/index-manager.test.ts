@@ -5,7 +5,16 @@ import { join } from 'path'
 import { afterAll, describe, expect, test } from 'bun:test'
 
 import { IndexManager } from './index-manager'
-import { MAX_INDEX_AGE_MS } from './index-store'
+import {
+  MAX_INDEX_AGE_MS,
+  computeIndexSnapshotId,
+  loadIndex,
+} from './index-store'
+import {
+  mergeScipEdgesIntoIndex,
+  parseScipJson,
+  scipPreciseEdges,
+} from './scip-ingest'
 import type { EmbedFn } from './semantic'
 import type { MetadataIndex } from './types'
 
@@ -488,5 +497,364 @@ describe('IndexManager.detached holder forwarding', () => {
       pendingMutationDelta: unknown
     }
     expect(holderInternal.pendingMutationDelta).toBeUndefined()
+  })
+})
+
+describe('IndexManager.query pageRankWeight option', () => {
+  // Mirrors the queryIndex blend pin in pagerank.test.ts (P3 coherence
+  // audit): the higher-level IndexManager surface must be able to opt in to
+  // PageRank ranking the same way direct queryIndex callers can.
+  test('absent option is byte-identical to weight 0, and a nonzero weight boosts the well-connected file', async () => {
+    const root = makeProject()
+    // Hub-and-satellite fixture: both satellites reference the hub, so the
+    // hub is the best-connected file; hub and isolated both match 'common'
+    // lexically, the satellites do not.
+    writeFileSync(join(root, 'src', 'hub.ts'), 'export const common = 1\n')
+    writeFileSync(
+      join(root, 'src', 'satellite-a.ts'),
+      "import { common } from './hub'\nexport const a = common\n",
+    )
+    writeFileSync(
+      join(root, 'src', 'satellite-b.ts'),
+      "import { common } from './hub'\nexport const b = common\n",
+    )
+    writeFileSync(
+      join(root, 'src', 'isolated.ts'),
+      'export const commonUnrelated = 2\n',
+    )
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const defaultResults = mgr.query('common', { limit: 10 })
+    const zeroResults = mgr.query('common', { limit: 10, pageRankWeight: 0 })
+    // Absent option = weight 0: the results (paths + scores) are identical.
+    expect(zeroResults.results).toEqual(defaultResults.results)
+
+    const boostedResults = mgr.query('common', {
+      limit: 10,
+      pageRankWeight: 1,
+    })
+    const scoreOf = (
+      results: typeof defaultResults.results,
+      filePath: string,
+    ): number => results.find((r) => r.path === filePath)?.score ?? 0
+    // The hub is referenced by two satellites: a nonzero PageRank weight
+    // raises its blended score above the lexical-only baseline.
+    expect(scoreOf(boostedResults.results, 'src/hub.ts')).toBeGreaterThan(
+      scoreOf(defaultResults.results, 'src/hub.ts'),
+    )
+  })
+})
+
+describe('IndexManager.ingestScipDump', () => {
+  test('returns the number of precise edges added, superseding heuristic duplicates', async () => {
+    const root = makeProject()
+    writeFileSync(join(root, 'src', 'util.ts'), 'export function helper() {}\n')
+    writeFileSync(
+      join(root, 'src', 'app.ts'),
+      "import { helper } from './util'\n\nexport function run() { return helper() }\n",
+    )
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index?: MetadataIndex }
+    const referenceEdgesBetween = (index: MetadataIndex | undefined) =>
+      (index?.graph.edges ?? []).filter(
+        (edge) =>
+          edge.type === 'references' &&
+          edge.from === 'file:src/app.ts' &&
+          edge.to === 'file:src/util.ts',
+      )
+
+    // Precondition: the built index holds the heuristic import edge this
+    // dump supersedes (otherwise the supersede path is not exercised).
+    const before = referenceEdgesBetween(internal.index)
+    expect(before.length).toBeGreaterThanOrEqual(1)
+    expect(before[0]?.confidence ?? 'heuristic').toBe('heuristic')
+
+    const symbol = 'scip-typescript npm pkg 1.0.0 src/util.ts/helper().'
+    const dump = {
+      documents: [
+        {
+          relative_path: 'src/util.ts',
+          language: 'typescript',
+          occurrences: [{ range: [0, 0, 0, 8], symbol, symbol_roles: 1 }],
+        },
+        {
+          relative_path: 'src/app.ts',
+          occurrences: [{ range: [2, 0, 2, 8], symbol }],
+        },
+      ],
+    }
+
+    // Documented contract: "the number of precise edges added by the merge" —
+    // 1 here even though the superseded heuristic edge nets the raw
+    // graph-edge length delta to 0 (and negative when one precise edge
+    // supersedes several heuristic duplicates).
+    expect(mgr.ingestScipDump(dump)).toBe(1)
+
+    // Supersede, not doubling: exactly one references edge between the two
+    // files remains, and it is now the precise one.
+    const after = referenceEdgesBetween(internal.index)
+    expect(after).toHaveLength(1)
+    expect(after[0]?.confidence).toBe('precise')
+  })
+})
+
+describe('IndexManager.adoptMergedIndex', () => {
+  test('refuses a stale snapshot without mutating the live index', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const base = mgr.getSnapshot()
+    expect(base).not.toBeNull()
+
+    // A mismatched expectedSnapshotId must be refused without mutating the
+    // live snapshot (the adopt/refuse contract is unchanged by persistence).
+    await expect(
+      mgr.adoptMergedIndex(base!, 'stale-snapshot-id'),
+    ).resolves.toBe(false)
+    expect(mgr.getSnapshot()).toBe(base)
+  })
+
+  test('persists the merged snapshot so merged precise edges survive on disk', async () => {
+    const root = makeProject()
+    writeFileSync(join(root, 'src', 'util.ts'), 'export function helper() {}\n')
+    writeFileSync(
+      join(root, 'src', 'app.ts'),
+      "import { helper } from './util'\n\nexport function run() { return helper() }\n",
+    )
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const base = mgr.getSnapshot()
+    expect(base).not.toBeNull()
+    // The pre-scan snapshot identity the caller would capture (same seam the
+    // /index scip CLI path uses).
+    const snapshotId = mgr.query('helper').snapshot?.snapshotId
+    expect(snapshotId).toBeDefined()
+
+    // Derive a merged snapshot the same way runScipIngest does: precise edges
+    // parsed from a SCIP dump, merged into the captured base snapshot.
+    const symbol = 'scip-typescript npm pkg 1.0.0 src/util.ts/helper().'
+    const dump = {
+      documents: [
+        {
+          relative_path: 'src/util.ts',
+          language: 'typescript',
+          occurrences: [{ range: [0, 0, 0, 8], symbol, symbol_roles: 1 }],
+        },
+        {
+          relative_path: 'src/app.ts',
+          occurrences: [{ range: [2, 0, 2, 8], symbol }],
+        },
+      ],
+    }
+    const merged = mergeScipEdgesIntoIndex(
+      base!,
+      scipPreciseEdges(parseScipJson(dump)),
+    ).index
+
+    // The adoption now persists through _build's saveIndex CAS flow, so it is
+    // async but still reports plain adopt/refuse semantics.
+    await expect(mgr.adoptMergedIndex(merged, snapshotId!)).resolves.toBe(true)
+
+    // The merged precise edge round-trips through the persisted store: a
+    // fresh session loading the index from disk (loadIndex, the same seam a
+    // new IndexManager instance's _build uses) sees the precise edge instead
+    // of the superseded heuristic one.
+    const persisted = await loadIndex(root, '.codebuff-index')
+    expect(persisted).not.toBeNull()
+    const persistedEdges = (persisted!.graph.edges ?? []).filter(
+      (edge) =>
+        edge.type === 'references' &&
+        edge.from === 'file:src/app.ts' &&
+        edge.to === 'file:src/util.ts',
+    )
+    expect(persistedEdges).toHaveLength(1)
+    expect(persistedEdges[0]?.confidence).toBe('precise')
+  })
+})
+
+describe('IndexManager cross-root index isolation', () => {
+  // Regression pin: an IndexManager constructed for projectRoot A must never
+  // load or serve a MetadataIndex persisted under projectRoot B's cache
+  // directory, even when B's snapshot exists on disk. A stale home-directory
+  // index (/home/ben/.codebuff-index) once coexisted with repo indexing and
+  // is implicated in a UI-chip stall; isolation relies on the exact
+  // projectRoot string (getInstance keys on it, _build loads via
+  // loadIndex(this.projectRoot, cacheDir)), so this pins that a future
+  // refactor (root canonicalization, shared-cache reuse) cannot silently
+  // bleed snapshots across roots.
+  test('never loads or serves the index persisted under another root even when that snapshot exists on disk', async () => {
+    // Root B: a distinct fixture root with a file/symbol that exists only
+    // there. Hermetic — both roots live under tmpdir(), never /home/ben.
+    const rootB = mkdtempSync(join(tmpdir(), 'openbuff-indexer-cross-root-b-'))
+    roots.push(rootB)
+    mkdirSync(join(rootB, 'src'), { recursive: true })
+    writeFileSync(
+      join(rootB, 'src', 'home-ben.ts'),
+      'export function homeBenOnlySymbol() {}\n',
+    )
+
+    // Persist B's snapshot through the real IndexManager/saveIndex path so
+    // the on-disk layout (including the store's ownership marker) matches
+    // production, instead of hand-writing cache files.
+    const mgrB = IndexManager.getInstance(rootB, {
+      cacheDir: '.codebuff-index',
+    })
+    expect(await mgrB.waitUntilReady(10_000)).toBe(true)
+    const persistedB = await loadIndex(rootB, '.codebuff-index')
+    expect(persistedB).not.toBeNull()
+    expect(persistedB!.files['src/home-ben.ts']).toBeDefined()
+    const persistedBBuiltAt = persistedB!.builtAt
+
+    // Root A: a different projectRoot with a symbol unique to it. Same exact
+    // config as B, so ONLY the projectRoot string differs in the instance
+    // key — mirroring the runtime isolation seam.
+    const rootA = makeProject()
+    const mgrA = IndexManager.getInstance(rootA, {
+      cacheDir: '.codebuff-index',
+    })
+    await mgrA.waitUntilReady(10_000)
+
+    // A's own root must be fully served...
+    const own = mgrA.query('loginUser')
+    expect(own.ready).toBe(true)
+    expect(own.results.some((result) => result.path === 'src/auth.ts')).toBe(
+      true,
+    )
+
+    // ...and B's snapshot content must never be loaded into A's index: no
+    // B-only file or symbol surfaces through A, and A indexes exactly its
+    // one own-root file (not B's, so no cross-root merge occurred either).
+    const cross = mgrA.query('homeBenOnlySymbol')
+    expect(
+      cross.results.some((result) => result.path === 'src/home-ben.ts'),
+    ).toBe(false)
+    const internal = mgrA as unknown as { index: MetadataIndex | null }
+    expect(internal.index).not.toBeNull()
+    // A's in-memory index identity stays pinned to A's exact projectRoot
+    // string — the same string getInstance keys on and _build loads with.
+    expect(internal.index!.projectRoot).toBe(rootA)
+    expect(internal.index!.files['src/home-ben.ts']).toBeUndefined()
+
+    // Distinct roots must hold distinct identities: A's served snapshot ID
+    // is not the computed snapshot ID of the index persisted under B's cache
+    // directory (the loadIndex seam _build uses when loading from disk).
+    expect(own.snapshot?.snapshotId).not.toBe(
+      computeIndexSnapshotId(persistedB!),
+    )
+
+    // Inverse direction: A's build must not have written into B's cache
+    // directory — B's persisted snapshot still holds B's own content.
+    const persistedBAgain = await loadIndex(rootB, '.codebuff-index')
+    expect(persistedBAgain).not.toBeNull()
+    expect(persistedBAgain!.files['src/home-ben.ts']).toBeDefined()
+    expect(persistedBAgain!.builtAt).toBe(persistedBBuiltAt)
+    // ...and its own manager still serves B's content with no A leakage.
+    expect(
+      mgrB.query('homeBenOnlySymbol').results.some(
+        (result) => result.path === 'src/home-ben.ts',
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('IndexManager.getStatus degraded classifier', () => {
+  // The degraded trigger is a parse-diagnostic floor scaled to corpus size
+  // (ceil(fileCount * 0.05), clamped to [1, 10]) OR a recorded build error;
+  // coverage.parser.truncated is NOT a degraded trigger. getStatus reads the
+  // injected in-memory index synchronously, so the mutation and the
+  // getStatus() read happen with no await between them (a lingering
+  // background refresh must not overwrite the injected fields first).
+  test('a handful of parse diagnostics on a large corpus stays ready', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.fileCount = 2000
+    internal.index.parseDiagnostics = Array.from({ length: 6 }, (_, i) => ({
+      filePath: `src/f${i}.ts`,
+      stage: 'parse' as const,
+      message: 'Parser or query not found',
+    }))
+    // 6 diagnostics is below the floor (ceil(2000 * 0.05) clamped to 10), so
+    // the large corpus stays ready.
+    expect(mgr.getStatus().state).toBe('ready')
+  })
+
+  test('enough diagnostics to cross the floor degrades', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.fileCount = 2000
+    internal.index.parseDiagnostics = Array.from({ length: 10 }, (_, i) => ({
+      filePath: `src/f${i}.ts`,
+      stage: 'parse' as const,
+      message: 'Parser or query not found',
+    }))
+    // 10 diagnostics meets the clamped floor of 10, so the corpus degrades.
+    expect(mgr.getStatus().state).toBe('degraded')
+  })
+
+  test('a single diagnostic on a tiny corpus degrades', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.fileCount = 1
+    internal.index.parseDiagnostics = [
+      {
+        filePath: 'src/f0.ts',
+        stage: 'parse' as const,
+        message: 'Parser or query not found',
+      },
+    ]
+    // The floor clamps to 1 for a tiny repo, so a single diagnostic degrades.
+    expect(mgr.getStatus().state).toBe('degraded')
+  })
+
+  test('budget-driven parser truncation alone stays ready', async () => {
+    const root = makeProject()
+    const mgr = IndexManager.getInstance(root, {})
+    await mgr.waitUntilReady(10_000)
+
+    const internal = mgr as unknown as { index: MetadataIndex }
+    internal.index.parseDiagnostics = []
+    internal.index.coverage = {
+      truncated: true,
+      maxFiles: 10,
+      skippedFiles: 5,
+      skippedPrefixes: ['vendor'],
+      parser: {
+        truncated: true,
+        fileBudgetExceeded: true,
+        skippedFiles: 5,
+        requestedFiles: 15,
+        parsedFiles: 10,
+        reusedFiles: 0,
+        freshParsedFiles: 10,
+        parsedBytes: 100,
+        skippedKnownBytes: 50,
+        skippedPrefixes: ['vendor'],
+        skippedLanguages: ['.ts'],
+        byteBudgetExceeded: false,
+        oversizedFiles: 0,
+        maxFiles: 10,
+        maxFileBytes: 1000,
+        maxTotalBytes: 10000,
+      },
+    }
+    // Budget-driven truncation is no longer a degraded trigger: with no parse
+    // diagnostics the index stays ready, but the coverage notice still fires.
+    const status = mgr.getStatus()
+    expect(status.state).toBe('ready')
+    expect(status.message).toContain('Index coverage is partial')
   })
 })

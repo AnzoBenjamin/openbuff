@@ -16,6 +16,30 @@ export const MAX_FILE_CHANGES_PER_TRANSACTION = 128
 export const MAX_TRANSACTION_UNIQUE_PATHS = 128
 export const MAX_TRANSACTION_FILE_BYTES = 16 * 1024 * 1024
 export const MAX_TRANSACTION_INPUT_BYTES = 64 * 1024 * 1024
+/**
+ * Transport-safe byte band for a single assistant response / tool-call payload.
+ *
+ * The schema-level {@link MAX_TRANSACTION_INPUT_BYTES} (64 MiB) is deliberately
+ * NOT the transport band: it only rejects payloads that could not be processed
+ * at all. Transport truncation happens far below it — a provider or intermediary
+ * cuts the response mid-payload long before 64 MiB — so this constant is the
+ * number to reason about when deciding whether a payload survived the wire.
+ *
+ * This constant is the SINGLE SOURCE for the band's default value. The provider
+ * config surface does not restate the number: `DEFAULT_MAX_OUTPUT_BYTES` in
+ * `sdk/src/provider-config.ts` republishes THIS binding (a live alias, not a
+ * copy of its value), so the two cannot drift apart.
+ * `modelCapabilities.<model>.maxOutputBytes` (and the
+ * provider-level `defaultCapabilities.maxOutputBytes`) is that same band for
+ * one model — an optional per-model tuning of one concept, not a second,
+ * unrelated ceiling.
+ *
+ * A streamed tool-call chunk reports that a payload may have been cut through
+ * its `transportTruncated` marker (`ToolCallStreamChunk` in
+ * `types/contracts/llm.ts`); the band it is compared against is this value, or
+ * the configured per-model override.
+ */
+export const MAX_TRANSPORT_SAFE_PAYLOAD_BYTES = 256 * 1024
 export const MAX_TRANSACTION_PREPARED_BYTES = 64 * 1024 * 1024
 export const MAX_TRANSACTION_ROLLBACK_BYTES = 64 * 1024 * 1024
 
@@ -169,7 +193,28 @@ type ServerActionSubagentResponseChunk = {
   agentId: string
   agentType: string
   chunk: string
-  prompt?: string
+  /**
+   * When set to 'reasoning', `chunk` is a reasoning/thinking delta rather
+   * than display text. Omitted keeps the existing text semantics.
+   */
+  /**
+   * `| undefined` keeps this action assignable from the producer contract's
+   * param read types (`SendSubagentChunkFn` in types/contracts/client.ts):
+   * the SDK builds this action from the dep's destructured params via
+   * property shorthand, so every optional member may be explicitly present
+   * as undefined.
+   */
+  chunkKind?: 'reasoning' | undefined
+  /**
+   * Reasoning provenance, mirroring PrintModeReasoningDelta.ancestorRunIds.
+   * Only meaningful alongside `chunkKind: 'reasoning'`.
+   */
+  ancestorRunIds?: string[] | undefined
+  /**
+   * Aligned with `SendSubagentChunkFn.prompt` (types/contracts/client.ts),
+   * which declares the same `string | undefined` shape.
+   */
+  prompt?: string | undefined
   forwardToPrompt?: boolean
 }
 

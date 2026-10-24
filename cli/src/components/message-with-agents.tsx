@@ -12,19 +12,15 @@ import { useChatStore } from '../state/chat-store'
 import { useMessageBlockStore } from '../state/message-block-store'
 import { splitByAgentSize } from '../utils/block-processor'
 import { getCliEnv } from '../utils/env'
-import {
-  AGENT_CONTENT_HORIZONTAL_PADDING,
-  MAX_AGENT_DEPTH,
-} from '../utils/layout-helpers'
-import {
-  renderMarkdown,
-  hasMarkdown,
-  type MarkdownPalette,
-} from '../utils/markdown-renderer'
+import { MAX_AGENT_DEPTH } from '../utils/layout-helpers'
+import { logger } from '../utils/logger'
 import { wrapTextPreservingNewlines } from '../utils/text-layout'
 
 import type { ChatMessage } from '../types/chat'
 import type { FeedbackCategory } from '@codebuff/common/constants/feedback'
+import { hasMarkdown, type MarkdownPalette } from '../utils/markdown-renderer'
+import { createMarkdownSyntaxStyle } from '../utils/opentui-syntax-style'
+import { getSharedTreeSitterClient } from '../utils/tree-sitter-client'
 
 interface AgentChildrenGridProps {
   agentChildren: ChatMessage[]
@@ -366,6 +362,49 @@ export const MessageWithAgents = memo(
   },
 )
 
+/**
+ * Renders agent markdown content through OpenTUI 0.5's native <markdown>
+ * renderable. Native setup failures (syntax style construction or shared
+ * tree-sitter client creation) degrade to a plain-text <text> element
+ * (native wrapMode handles wrapping) instead of crashing the agent message
+ * render, matching the degrade-to-plain-text contract documented for
+ * ContentWithMarkdown.
+ */
+const renderAgentNativeMarkdown = (
+  key: string,
+  content: string,
+  isStreaming: boolean,
+  palette: MarkdownPalette | undefined,
+  fallbackFg: string | undefined,
+): ReactNode => {
+  try {
+    return (
+      <markdown
+        key={key}
+        content={content}
+        syntaxStyle={createMarkdownSyntaxStyle(palette ?? {})}
+        treeSitterClient={getSharedTreeSitterClient() ?? undefined}
+        streaming={isStreaming}
+        conceal
+        concealCode={false}
+        internalBlockMode="top-level"
+      />
+    )
+  } catch (error) {
+    logger.error(
+      error,
+      'Native markdown rendering failed to set up; degrading to plain text',
+    )
+    // D47 Stage 4: the <text> element's native wrapMode: 'word' handles
+    // wrapping, so the raw content is passed through without JS pre-wrap.
+    return (
+      <text key={key} style={{ wrapMode: 'word', fg: fallbackFg }}>
+        {content}
+      </text>
+    )
+  }
+}
+
 interface AgentMessageProps {
   message: ChatMessage
   depth: number
@@ -430,23 +469,18 @@ const AgentMessage = memo(
           )
         : ''
 
-    const agentCodeBlockWidth = Math.max(
-      10,
-      availableWidth - AGENT_CONTENT_HORIZONTAL_PADDING,
-    )
+    // D47 Stage 2: the legacy remark renderer was removed, so markdown agent
+    // content renders through the native <markdown> renderable (with native
+    // setup failures degrading to plain text). D47 Stage 4: plain text is
+    // passed through unwrapped — the native wrapMode: 'word' on the <text>
+    // element handles wrapping.
     const agentPalette: MarkdownPalette | undefined = markdownPalette
       ? {
           ...markdownPalette,
           codeTextFg: theme?.foreground ?? markdownPalette.codeTextFg,
         }
       : undefined
-    const agentMarkdownOptions = {
-      codeBlockWidth: agentCodeBlockWidth,
-      palette: agentPalette!,
-    }
-    const displayContent = hasMarkdown(rawDisplayContent)
-      ? renderMarkdown(rawDisplayContent, agentMarkdownOptions)
-      : wrapTextPreservingNewlines(rawDisplayContent, agentContentWidth)
+    const isMarkdownContent = hasMarkdown(rawDisplayContent)
 
     const handleTitleClick = (): void => {
       onToggleCollapsed(message.id)
@@ -530,14 +564,23 @@ const AgentMessage = memo(
                   {finishedPreview}
                 </text>
               )}
-              {!isCollapsed && (
-                <text
-                  key={`agent-content-${message.id}`}
-                  style={{ wrapMode: 'word', fg: theme?.foreground }}
-                >
-                  {displayContent}
-                </text>
-              )}
+              {!isCollapsed &&
+                (isMarkdownContent ? (
+                  renderAgentNativeMarkdown(
+                    `agent-content-${message.id}`,
+                    rawDisplayContent,
+                    isStreaming,
+                    agentPalette,
+                    theme?.foreground,
+                  )
+                ) : (
+                  <text
+                    key={`agent-content-${message.id}`}
+                    style={{ wrapMode: 'word', fg: theme?.foreground }}
+                  >
+                    {rawDisplayContent}
+                  </text>
+                ))}
             </Button>
           </box>
         </box>

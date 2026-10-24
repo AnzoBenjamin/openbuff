@@ -1,8 +1,15 @@
-import { jsonToolResult } from '@codebuff/common/util/messages'
 import {
   decodeJsonObjectString,
   normalizeStructuredOutputValue,
 } from '@codebuff/common/tools/params/tool/set-output'
+import { detectTransportTruncation } from '@codebuff/common/tools/params/utils'
+import { jsonToolResult } from '@codebuff/common/util/messages'
+import {
+  isReceiptDowngradeBlocked,
+  isReceiptShape,
+  MODEL_PAYLOAD_JSON_CHAR_LIMIT,
+  unwrapArbitraryEnvelope,
+} from '@codebuff/common/util/model-payload-recovery'
 
 import { getAgentTemplate } from '../../../templates/agent-registry'
 import { formatValueForError } from '../../../util/format-value'
@@ -28,7 +35,17 @@ type ToolName = 'set_output'
  * here — before any decode attempt — with explicit recovery guidance instead of
  * failing silently (M0-T3 sub-agent output durability).
  */
-export const MAX_SET_OUTPUT_JSON_CHARS = 1_000_000
+export const MAX_SET_OUTPUT_JSON_CHARS = MODEL_PAYLOAD_JSON_CHAR_LIMIT
+
+/**
+ * Ack returned when a receipt-bearing reviewer's second set_output call carries
+ * a degenerate, verdict-less payload (typically the `{ message: 'Output set' }
+ * tool ACK echoed back as a payload). The existing receipt is intentionally NOT
+ * overwritten, and this ack teaches the model the difference between the
+ * tool-confirmation and a receipt payload so it does not repeat the echo.
+ */
+export const RECEIPT_GUARD_ACK =
+  'Your structured receipt was already published successfully; this additional set_output call was ignored because it did not carry a full receipt (verdict + snapshotFingerprint). Do not echo the {"message":"Output set"} confirmation back as a payload. If your review outcome changed, re-emit the COMPLETE receipt object (every required schema field).'
 
 export const handleSetOutput = (async (params: {
   previousToolCallFinished: Promise<void>
@@ -44,7 +61,20 @@ export const handleSetOutput = (async (params: {
   const { previousToolCallFinished, toolCall, agentState, logger } = params
   await previousToolCallFinished
 
-  const rawOutput = toolCall.input as Record<string, unknown>
+  const envelopeOutput = toolCall.input as Record<string, unknown>
+  // Unwrap a model-supplied keyless JSON envelope UP FRONT: some models deliver
+  // the receipt as `{ jsonKey: 'output', value: JSON.stringify(receipt) }` (or
+  // `value` as a native receipt). When this envelope is not decoded here, it
+  // falls through to schema validation as-is and FAILS (jsonKey-envelope
+  // rejected at schema validation → retry loop; observed 2026-10-19 on
+  // compatibility-reviewer), so the model repeats set_output and often
+  // degenerates into a bare `{ message: 'Output set' }` echo. Decoding the
+  // envelope first makes the FIRST call succeed and avoids the retry loop.
+  const unwrappedEnvelope =
+    unwrapArbitraryEnvelope(envelopeOutput)
+  const rawOutput: Record<string, unknown> =
+    unwrappedEnvelope ?? envelopeOutput
+
   // Reject oversized string payloads BEFORE any decode/parse attempt: a giant
   // inlined payload is far more likely to be cut off in transport than to be
   // intentionally encoded as one string, and the caller needs explicit bound +
@@ -71,7 +101,7 @@ export const handleSetOutput = (async (params: {
     // payload ending mid-structure (open bracket or open string) almost
     // certainly lost its tail in transit, and the caller needs chunking /
     // smaller-payload guidance rather than only a formatting retry.
-    const malformedJsonMessage = looksLikeTransportTruncation(rawOutput.data)
+    const malformedJsonMessage = detectTransportTruncation(rawOutput.data)
       ? `${baseGuidance} The payload appears to have been truncated in transport (partial) — send a smaller payload: split the result across multiple smaller set_output calls or persist it to a file and reference the path.`
       : baseGuidance
     // Recorded on agent state because this rejection also ends the turn
@@ -103,6 +133,63 @@ export const handleSetOutput = (async (params: {
       ...params,
       agentId: agentState.agentType,
     })
+  }
+
+  // Fail closed when an agent type is declared but the template could not be
+  // resolved: the output schema is then UNKNOWN, and the passthrough `else`
+  // branch below would store whatever arrived with NO validation at all. That
+  // is exactly how a reviewer-family child publishes a verdict-less receipt —
+  // the receipt is never validated on the way in, the gate's verdict guard then
+  // classifies it `schema_invalid`, and the parent re-reviews forever. A
+  // template that RESOLVES but simply declares no outputSchema stays a
+  // legitimate passthrough (the `else` branch below); only the unresolvable
+  // case is rejected here. The check sits immediately after resolution so it
+  // covers every downstream validation path.
+  if (agentState.agentType && !agentTemplate) {
+    const unresolvableTemplateMessage = `Output was NOT stored because the agent template for agent type "${agentState.agentType}" could not be resolved, so the output schema is unknown. This is a runtime/configuration problem (a missing or unregistered agent template), not a problem with your payload: re-emitting set_output with different fields will not fix it. Report that the agent template could not be resolved so the caller can repair the agent registration/resolution path.`
+    // Recorded on agent state because this rejection also ends the turn
+    // (set_output is in TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so the loop's
+    // missing-output retry is the only place that can report it to the model.
+    agentState.lastSetOutputError = unresolvableTemplateMessage
+    logger.error(
+      { agentType: agentState.agentType, agentId: agentState.agentId },
+      'set_output could not validate its payload because the agent template for the declared agent type could not be resolved',
+    )
+    return {
+      output: jsonToolResult({ message: unresolvableTemplateMessage }),
+    }
+  }
+
+  // Receipt-overwrite guard (Phase 3): the decision is delegated to the shared
+  // `isReceiptDowngradeBlocked` helper in model-payload-recovery.ts so any
+  // consumer can adopt the same policy. The policy: a reviewer-family child's
+  // verdict-less follow-up — usually the `{ message: 'Output set' }` tool ACK
+  // echoed back as a payload — cannot destroy a published verdict-bearing
+  // receipt. Detection stays content-addressed (isReceiptShape), never keyed
+  // on envelope/field names. A full receipt replacement (both sides
+  // receipt-shaped) still replaces — corrections keep working; non-reviewer
+  // agents keep the exact replace-always behavior.
+  // Evaluated on the RAW decoded payload and BEFORE outputSchema validation on
+  // purpose: a degenerate echo can never satisfy a receipt schema, so
+  // validating it first would surface it as a validation rejection, record
+  // lastSetOutputError, and re-arm the missing-output retry loop this guard
+  // exists to prevent. The downgrade attempt must be ACKed instead, leaving
+  // the published receipt untouched. The identical guard below (on the
+  // post-validation `finalOutput`) stays as defense in depth for the
+  // template-resolved-but-no-outputSchema passthrough path.
+  if (
+    isReceiptDowngradeBlocked({
+      existingOutput: agentState.output,
+      nextOutput: decodedOutput,
+      receiptProtected: shouldNormalizeReviewerOutput ||
+        (isReceiptShape(agentState.output) &&
+          (agentState.output as Record<string, unknown>).family ===
+            'reviewer'),
+    })
+  ) {
+    // A repeated bogus call must not resurrect a stale rejection.
+    agentState.lastSetOutputError = undefined
+    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK }) }
   }
 
   const decodedNestedOutputRecord =
@@ -173,6 +260,31 @@ export const handleSetOutput = (async (params: {
         failures.length = 0
         break
       } catch (error) {
+        // One deterministic repair round before giving up on the candidate:
+        // the most common structured-output mistake is an enum field carrying
+        // justification prose ("pass: no new packages..."), which the schema
+        // wants as the BARE value. Repaired candidates that still fail fall
+        // back to the ORIGINAL failure, so the error the model sees describes
+        // its own output, not the repair's.
+        const repaired = repairEnumProseValues(candidate.value, error)
+        if (repaired) {
+          try {
+            finalOutput = agentTemplate.outputSchema.parse(repaired.value)
+            failures.length = 0
+            logger.warn(
+              {
+                agentType: agentState.agentType,
+                agentId: agentState.agentId,
+                source: candidate.source,
+                coercedPaths: repaired.coercedPaths,
+              },
+              'set_output enum-prose repair applied',
+            )
+            break
+          } catch {
+            // fall through to record the original failure
+          }
+        }
         failures.push({ source: candidate.source, error })
       }
     }
@@ -189,7 +301,12 @@ export const handleSetOutput = (async (params: {
         : usedNestedOutput
           ? 'Output validation error: Your output was found inside the nested `output` field but still failed validation. Please fix the reported fields and retry with native object/array values. Issues: '
           : 'Output validation error: Output failed to match the output schema and was ignored. Please fix the reported fields and retry with native object/array values. Issues: '
-      const errorMessage = `${prefix}${bestFailure.error}\n\nOriginal output value:\n${formatValueForError(decodedOutput)}`
+      // Models shown only the enum's allowed values still resubmit
+      // `"pass: <prose>"` shapes; the hint names the contract explicitly.
+      const enumHint = hasEnumValueIssue(bestFailure.error)
+        ? '\nEnum fields take the BARE value only (e.g. "pass", not "pass: <justification>"); put justifications in the schema\'s evidence/notes fields, never inside the enum value.'
+        : ''
+      const errorMessage = `${prefix}${bestFailure.error}${enumHint}\n\nOriginal output value:\n${formatValueForError(decodedOutput)}`
       logger.error(
         {
           outputShape: {
@@ -216,6 +333,29 @@ export const handleSetOutput = (async (params: {
     finalOutput = hasOnlyDataField ? decodedOutput.data : decodedOutput
   }
 
+  // Receipt-overwrite guard (Phase 3): the decision is delegated to the shared
+  // `isReceiptDowngradeBlocked` helper in model-payload-recovery.ts so any
+  // consumer can adopt the same policy. The policy: a reviewer-family child's
+  // verdict-less follow-up — usually the `{ message: 'Output set' }` tool ACK
+  // echoed back as a payload — cannot destroy a published verdict-bearing
+  // receipt. Detection stays content-addressed (isReceiptShape), never keyed
+  // on envelope/field names. A full receipt replacement (both sides
+  // receipt-shaped) still replaces — corrections keep working; non-reviewer
+  // agents keep the exact replace-always behavior.
+  if (
+    isReceiptDowngradeBlocked({
+      existingOutput: agentState.output,
+      nextOutput: finalOutput,
+      receiptProtected: shouldNormalizeReviewerOutput ||
+        (isReceiptShape(agentState.output) &&
+          (agentState.output as Record<string, unknown>).family ===
+            'reviewer'),
+    })
+  ) {
+    // A repeated bogus call must not resurrect a stale rejection.
+    agentState.lastSetOutputError = undefined
+    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK }) }
+  }
   // Set the output (completely replaces previous output)
   agentState.output = finalOutput as Record<string, unknown>
   // A successful receipt supersedes any earlier rejection, so a later generic
@@ -224,41 +364,6 @@ export const handleSetOutput = (async (params: {
 
   return { output: jsonToolResult({ message: 'Output set' }) }
 }) satisfies CodebuffToolHandlerFunction<ToolName>
-
-/**
- * Scans a raw JSON-text string for signs it was cut off mid-structure: tracks
- * string state by counting unescaped quotes (escape-aware, so a valid string
- * containing `\"` never toggles state) and tracks `{`/`[` depth outside
- * strings. A payload that ends inside an open string or with any open bracket
- * almost certainly lost its tail in transport rather than being deliberately
- * malformed JSON. Only ever called on strings that already failed to decode,
- * so it can never misclassify a valid document.
- */
-function looksLikeTransportTruncation(text: string): boolean {
-  let inString = false
-  let escaped = false
-  let depth = 0
-  for (const char of text) {
-    if (inString) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\') {
-        escaped = true
-      } else if (char === '"') {
-        inString = false
-      }
-      continue
-    }
-    if (char === '"') {
-      inString = true
-    } else if (char === '{' || char === '[') {
-      depth += 1
-    } else if (char === '}' || char === ']') {
-      depth -= 1
-    }
-  }
-  return depth > 0 || inString
-}
 
 function getZodIssueCount(error: unknown): number {
   if (
@@ -271,3 +376,133 @@ function getZodIssueCount(error: unknown): number {
   }
   return Infinity
 }
+
+/**
+ * Whether any zod issue in the failure is an enum rejection, used to target
+ * the retry hint: the model repeatedly resubmits `"pass: <prose>"` shapes
+ * unless the error itself demonstrates the bare-value contract.
+ */
+function hasEnumValueIssue(error: unknown): boolean {
+  return zodIssues(error).some(
+    (issue) => issue.code === 'invalid_value' && Array.isArray(issue.values),
+  )
+}
+
+function zodIssues(error: unknown): Array<Record<string, unknown>> {  if (
+    error != null &&
+    typeof error === 'object' &&
+    'issues' in error &&
+    Array.isArray((error as { issues: unknown }).issues)
+  ) {
+    return (
+      error as { issues: Array<Record<string, unknown>> }
+    ).issues.filter((issue) => issue && typeof issue === 'object')
+  }
+  return []
+}
+
+/**
+ * Deterministic repair for the dominant structured-output failure mode: an
+ * enum field submitted as `"pass: <justification prose>"` where the schema
+ * wants the BARE enum value. For every zod `invalid_value` issue whose current
+ * value is a string that starts with one of the allowed enum values followed
+ * by a separator, the clone is rewritten to the bare allowed value — the prose
+ * tail belongs in the schema's evidence/justification fields, which the model
+ * fills separately. Only JSON-like values (the candidates all decode from the
+ * model's JSON output) are navigated; anything else is left untouched.
+ * Returns undefined when nothing was repairable, so the caller keeps the
+ * original failure untouched.
+ */
+function repairEnumProseValues(
+  value: unknown,
+  error: unknown,
+): { value: unknown; coercedPaths: string[] } | undefined {
+  const clone = cloneJsonLike(value)
+  if (clone === undefined) return undefined
+  const coercedPaths: string[] = []
+  for (const issue of zodIssues(error)) {
+    if (issue.code !== 'invalid_value' || !Array.isArray(issue.values)) continue
+    const allowed = issue.values.filter(
+      (entry): entry is string => typeof entry === 'string',
+    )
+    if (allowed.length === 0) continue
+    const path = Array.isArray(issue.path) ? issue.path : []
+    if (
+      !path.every(
+        (key) => typeof key === 'string' || typeof key === 'number',
+      )
+    ) {
+      continue
+    }
+    const current = getPathValue(clone, path)
+    if (typeof current !== 'string') continue
+    // Longest allowed value first, so overlapping enums (e.g. "pass" and
+    // "passed") prefer the longest match.
+    const prefixed = allowed
+      .slice()
+      .sort((left, right) => right.length - left.length)
+      .find(
+        (entry) =>
+          current.toLowerCase().startsWith(entry.toLowerCase()) &&
+          /^[\s:—-]/.test(current.slice(entry.length)),
+      )
+    if (prefixed === undefined) continue
+    if (setPathValue(clone, path, prefixed)) {
+      coercedPaths.push(path.join('.') || '<root>')
+    }
+  }
+  return coercedPaths.length > 0 ? { value: clone, coercedPaths } : undefined
+}
+
+/** Deep-clone a JSON-like value; undefined means "not cloneable, give up". */
+function cloneJsonLike(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) {
+    return value.map((entry) => {
+      const cloned = cloneJsonLike(entry)
+      return cloned === undefined ? entry : cloned
+    })
+  }
+  const out: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const cloned = cloneJsonLike(entry)
+    out[key] = cloned === undefined ? entry : cloned
+  }
+  return out
+}
+
+function getPathValue(
+  value: unknown,
+  path: Array<string | number>,
+): unknown {
+  let current: unknown = value
+  for (const key of path) {
+    if (current === null || typeof current !== 'object') return undefined
+    current = (current as Record<string, unknown>)[key as string]
+  }
+  return current
+}
+
+function setPathValue(
+  value: unknown,
+  path: Array<string | number>,
+  replacement: unknown,
+): boolean {
+  if (path.length === 0) return false
+  let current: unknown = value
+  for (const key of path.slice(0, -1)) {
+    if (current === null || typeof current !== 'object') return false
+    current = (current as Record<string, unknown>)[key as string]
+  }
+  const lastKey = path[path.length - 1]!
+  if (current === null || typeof current !== 'object') return false
+  const holder = current as Record<string, unknown>
+  if (!(lastKey as string in holder)) return false
+  holder[lastKey as string] = replacement
+  return true
+}
+
+// Moved verbatim to common/src/util/model-payload-recovery.ts (C1 of the
+// json-overhaul) so the receipt-shape concept has one canonical home.
+// Re-exported so existing importers of this module keep working.
+export { unwrapArbitraryEnvelope }

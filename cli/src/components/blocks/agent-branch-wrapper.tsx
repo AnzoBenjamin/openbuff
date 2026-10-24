@@ -10,6 +10,8 @@ import React, {
 import { AgentBlockGrid } from './agent-block-grid'
 import { AgentBranchItem } from './agent-branch-item'
 import { trimNewlines, sanitizePreview } from './block-helpers'
+
+import { collapseHarnessTags } from '../../utils/output-hygiene'
 import { ContentWithMarkdown } from './content-with-markdown'
 import { ImplementorGroup } from './implementor-row'
 import { ThinkingBlock } from './thinking-block'
@@ -43,7 +45,7 @@ import type {
   HtmlContentBlock,
   ToolContentBlock,
 } from '../../types/chat'
-import type { MarkdownPalette } from '../../utils/markdown-renderer'
+import { hasMarkdown, type MarkdownPalette } from '../../utils/markdown-renderer'
 
 /**
  * Compute preview text for collapsed agent display.
@@ -248,15 +250,41 @@ const AgentBody = memo(
             const nestedStatus = textBlock.status
             const isNestedStreamingText =
               p.parentIsStreaming || nestedStatus === 'running'
-            const filteredNestedContent = isNestedStreamingText
-              ? trimNewlines(textBlock.content)
-              : textBlock.content.trim()
+            // Display-only hygiene, mirroring single-block: harness-style
+            // pseudo-XML echoed by the model is collapsed out of the nested
+            // text render without touching the stored block.
+            const filteredNestedContent = collapseHarnessTags(
+              isNestedStreamingText
+                ? trimNewlines(textBlock.content)
+                : textBlock.content.trim(),
+            )
             if (!filteredNestedContent) {
               return null
             }
             const markdownOptionsForLevel = p.getAgentMarkdownOptions(0)
             const explicitColor = textBlock.color
             const nestedTextColor = explicitColor ?? p.theme.foreground
+
+            // D47 Stage 2: a renderable cannot nest inside a text element.
+            // When the content contains markdown, ContentWithMarkdown returns
+            // a native <markdown> renderable, so render it at box level
+            // (native wrapMode handles wrapping). Plain content degrades to a
+            // plain string and keeps its <text> wrapper for the fg color path.
+            if (hasMarkdown(filteredNestedContent)) {
+              return (
+                <box
+                  key={`${p.keyPrefix}-text-${index}`}
+                  style={{ width: '100%' }}
+                >
+                  <ContentWithMarkdown
+                    content={filteredNestedContent}
+                    isStreaming={isNestedStreamingText}
+                    codeBlockWidth={markdownOptionsForLevel.codeBlockWidth}
+                    palette={markdownOptionsForLevel.palette}
+                  />
+                </box>
+              )
+            }
 
             return (
               <text

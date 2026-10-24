@@ -149,32 +149,6 @@ function parseReasoningEffort(value: string | undefined): ReasoningEffortInput {
   return normalized as OpenbuffReasoningEffort
 }
 
-function reasoningEffortMenu(): string {
-  return [
-    'Reasoning effort?',
-    '1. default (use the agent/provider default)',
-    '2. low (fast tool loops; recommended for editor tasks)',
-    '3. medium (balanced)',
-    '4. high (best for planning/review/selection)',
-    '5. minimal (cheapest/fastest where supported)',
-    '6. none (disable where supported)',
-    '',
-    'Type a number or name.',
-  ].join('\n')
-}
-
-function resolveReasoningEffortChoice(value: string): ReasoningEffortInput {
-  const numeric = Number(value.trim())
-  if (
-    Number.isInteger(numeric) &&
-    numeric >= 1 &&
-    numeric <= REASONING_EFFORTS.length
-  ) {
-    return parseReasoningEffort(REASONING_EFFORTS[numeric - 1])
-  }
-  return parseReasoningEffort(value)
-}
-
 export function setRouteModel(
   config: ProviderConfigFileInput,
   target: ModelRouteTarget,
@@ -303,7 +277,17 @@ export function resolveModelNameForAgent(agentId: string): string | null {
 
 export function formatOpenbuffModelStatus(): string {
   const loadedConfig = loadProviderConfigSync()
-  const lines = ['Openbuff model routing', '']
+  const failover = getFailoverModels()
+  const lines = [
+    'Openbuff model routing',
+    '',
+    ...(failover.length > 0
+      ? [
+          `Failover chain: ${failover.join(' → ')}`,
+          '',
+        ]
+      : []),
+  ]
 
   for (const [mode, agentId] of Object.entries(AGENT_MODE_TO_ID)) {
     const route = resolveConfiguredAgentModelConfig({
@@ -441,23 +425,83 @@ export function getKnownModelOptions(): KnownModelOption[] {
   return models.sort((a, b) => a.model.localeCompare(b.model))
 }
 
-export function getKnownModels(): string[] {
-  return getKnownModelOptions().map((option) => option.model)
+/**
+ * User-facing model display: a configured route is either a bare model id or
+ * a `{ model, reasoningEffort }` object; screens show the model part. Shared
+ * so pickers, status surfaces, and command output agree on one rendering.
+ */
+export function displayModelId(route: unknown): string | undefined {
+  if (!route) return undefined
+  if (typeof route === 'string') return route
+  if (typeof route === 'object' && 'model' in route) {
+    const model = (route as { model?: unknown }).model
+    if (typeof model === 'string' && model) return model
+  }
+  return undefined
 }
 
-function formatModelChoices(): string {
-  const modelOptions = getKnownModelOptions()
-  if (!modelOptions.length) {
-    return 'No provider models are configured yet. Run `/provider add` first.'
+/**
+ * The configured failover chain tried after the primary model fails
+ * (see provider-config `failoverModels`). Previously this existed only as a
+ * hand-edited openbuff.json key with no surface to view or change it.
+ */
+export function getFailoverModels(): string[] {
+  const config = getEditableConfig() as { failoverModels?: string[] }
+  return Array.isArray(config.failoverModels)
+    ? config.failoverModels.filter((m): m is string => typeof m === 'string')
+    : []
+}
+
+/** Replace the failover chain; returns the config path written. */
+export function setFailoverModels(models: string[]): string {
+  const config = getEditableConfig() as { failoverModels?: string[] }
+  config.failoverModels = models
+  return writeMergedConfig(config)
+}
+
+/**
+ * Live connection test for a configured provider: runs the same model
+ * discovery call `/provider models <id> --refresh` uses. A cheap models-list
+ * request proves the endpoint AND the API key work before the user relies on
+ * them mid-session.
+ */
+export async function testProviderConnection(providerId: string): Promise<{
+  ok: boolean
+  message: string
+}> {
+  const loadedConfig = loadProviderConfigSync()
+  const provider = loadedConfig.config.providers[providerId]
+  if (!provider) {
+    return { ok: false, message: `Provider '${providerId}' is not configured.` }
   }
-  return modelOptions
-    .map((option, index) => {
-      const summary = option.capabilitiesSummary
-        ? ` | ${option.capabilitiesSummary}`
-        : ''
-      return `${index + 1}. ${option.model}${summary}`
+  const discoveryConfig = getProviderDiscoveryConfig(providerId, provider)
+  if (!discoveryConfig) {
+    return {
+      ok: false,
+      message: `Provider '${providerId}' does not support live discovery; set its env key (${'apiKeyEnv' in provider && typeof provider.apiKeyEnv === 'string' ? provider.apiKeyEnv : 'its API key env'}).`,
+    }
+  }
+  try {
+    const result = await discoverProviderModels({
+      providerId,
+      loadedConfig,
+      fetch: globalThis.fetch as ModelDiscoveryFetch,
     })
-    .join('\n')
+    const count = Array.isArray(result.models) ? result.models.length : 0
+    return {
+      ok: true,
+      message: `✓ ${providerId}: connection OK, ${count} model${count === 1 ? '' : 's'} discoverable`,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: `✗ ${providerId}: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+}
+
+export function getKnownModels(): string[] {
+  return getKnownModelOptions().map((option) => option.model)
 }
 
 function resolveModelChoice(input: string): string {
@@ -473,7 +517,7 @@ function resolveModelChoice(input: string): string {
 export function configureOpenbuffModelFromArgs(args: string): string {
   const parts = args.trim().split(/\s+/).filter(Boolean)
   if (parts[0] === 'configure' || parts[0] === 'wizard') {
-    return startOpenbuffModelsWizard()
+    return 'Run `/models` to open the model routing picker — the typed routing wizard was retired.'
   }
 
   if (parts[0] === 'recommend') {
@@ -726,340 +770,8 @@ export function addCustomOpenbuffProvider(provider: {
   ].join('\n')
 }
 
-function providerPresetMenu(): string {
-  const presets = Object.values(OPENBUFF_PROVIDER_PRESETS)
-  return [
-    'Choose a provider to add:',
-    ...presets.map(
-      (preset, index) => `${index + 1}. ${preset.label} (${preset.id})`,
-    ),
-    `${presets.length + 1}. Custom OpenAI/Anthropic-compatible provider`,
-    '',
-    'Type a number or preset id. Press Escape to cancel.',
-  ].join('\n')
-}
-
-type ProviderWizardState =
-  | { step: 'provider' }
-  | { step: 'custom-id' }
-  | { step: 'custom-type'; id: string }
-  | { step: 'custom-base-url'; id: string; type: CustomOpenbuffProviderType }
-  | {
-      step: 'custom-api-key-env'
-      id: string
-      type: CustomOpenbuffProviderType
-      baseURL: string
-    }
-  | {
-      step: 'custom-models'
-      id: string
-      type: CustomOpenbuffProviderType
-      baseURL: string
-      apiKeyEnv?: string
-    }
-
-let providerWizardState: ProviderWizardState | null = null
-
-type ModelsWizardState =
-  | { step: 'target' }
-  | { step: 'mode' }
-  | { step: 'agent-id' }
-  | { step: 'agent-model'; agentId: string }
-  | { step: 'default-model' }
-  | { step: 'mode-model'; mode: 'default' | 'plan' | 'executePlan' }
-  | { step: 'reasoning-effort'; target: ModelRouteTarget; model: string }
-
-let modelsWizardState: ModelsWizardState | null = null
-
-export function startOpenbuffProviderWizard(): string {
-  providerWizardState = { step: 'provider' }
-  return ['Openbuff provider wizard', '', providerPresetMenu()].join('\n')
-}
-
-export function startOpenbuffModelsWizard(): string {
-  modelsWizardState = { step: 'target' }
-  return [
-    'Openbuff model routing wizard',
-    '',
-    'What do you want to route?',
-    '1. default fallback model',
-    '2. mode (default/plan/execute-plan)',
-    '3. agent/subagent override',
-    '',
-    'Type a number. Press Escape to cancel.',
-  ].join('\n')
-}
-
-export function handleOpenbuffProviderWizardInput(input: string): {
-  done: boolean
-  message: string
-} {
-  const value = input.trim()
-  if (!providerWizardState) {
-    return { done: true, message: 'Provider wizard is not active.' }
-  }
-
-  if (providerWizardState.step === 'provider') {
-    const presets = Object.values(OPENBUFF_PROVIDER_PRESETS)
-    const numeric = Number(value)
-    const customIndex = presets.length + 1
-    const preset =
-      Number.isInteger(numeric) && numeric >= 1 && numeric <= presets.length
-        ? presets[numeric - 1]
-        : presets.find((candidate) => candidate.id === value)
-
-    if (preset) {
-      providerWizardState = null
-      return { done: true, message: setupOpenbuffProviderFromArgs(preset.id) }
-    }
-
-    if (
-      value.toLowerCase() === 'custom' ||
-      (Number.isInteger(numeric) && numeric === customIndex)
-    ) {
-      providerWizardState = { step: 'custom-id' }
-      return {
-        done: false,
-        message:
-          'Custom provider id? Use a short id such as `zai`, `anthropic`, `local`, or `my-provider`.',
-      }
-    }
-
-    return {
-      done: false,
-      message: `Unknown provider choice.\n\n${providerPresetMenu()}`,
-    }
-  }
-
-  if (providerWizardState.step === 'custom-id') {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value)) {
-      return {
-        done: false,
-        message: 'Use letters, numbers, dashes, or underscores.',
-      }
-    }
-    providerWizardState = { step: 'custom-type', id: value }
-    return {
-      done: false,
-      message:
-        'Provider type? Type `openai-compatible` for /v1/chat/completions endpoints, or `anthropic-compatible` for Claude Messages API endpoints.',
-    }
-  }
-
-  if (providerWizardState.step === 'custom-type') {
-    const type = parseCustomOpenbuffProviderType(value)
-    if (!type) {
-      return {
-        done: false,
-        message:
-          'Use `openai-compatible` or `anthropic-compatible` (aliases: openai, anthropic, claude).',
-      }
-    }
-    providerWizardState = {
-      step: 'custom-base-url',
-      id: providerWizardState.id,
-      type,
-    }
-    return {
-      done: false,
-      message:
-        type === 'anthropic-compatible'
-          ? 'Base URL? Example: https://api.anthropic.com or https://cc.freemodel.dev'
-          : 'Base URL? Example: https://api.example.com/v1 or http://localhost:11434/v1',
-    }
-  }
-
-  if (providerWizardState.step === 'custom-base-url') {
-    if (!value) {
-      return { done: false, message: 'Provider base URL is required.' }
-    }
-
-    try {
-      const url = new URL(value)
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        return { done: false, message: 'Base URL must use http or https.' }
-      }
-    } catch {
-      return {
-        done: false,
-        message:
-          'Enter a valid base URL such as https://api.example.com/v1 or http://localhost:11434/v1.',
-      }
-    }
-
-    providerWizardState = {
-      step: 'custom-api-key-env',
-      id: providerWizardState.id,
-      type: providerWizardState.type,
-      baseURL: value,
-    }
-    return {
-      done: false,
-      message:
-        'API key env var? Example: MY_PROVIDER_API_KEY. Type `none` for a local unauthenticated provider.',
-    }
-  }
-
-  if (providerWizardState.step === 'custom-api-key-env') {
-    const apiKeyEnv = value.toLowerCase() === 'none' ? undefined : value
-    if (apiKeyEnv && !/^[A-Z_][A-Z0-9_]*$/.test(apiKeyEnv)) {
-      return {
-        done: false,
-        message:
-          'Use an environment variable name like MY_PROVIDER_API_KEY, or type `none` for a local unauthenticated provider.',
-      }
-    }
-
-    providerWizardState = {
-      step: 'custom-models',
-      id: providerWizardState.id,
-      type: providerWizardState.type,
-      baseURL: providerWizardState.baseURL,
-      apiKeyEnv,
-    }
-    return {
-      done: false,
-      message:
-        providerWizardState.type === 'anthropic-compatible'
-          ? 'Model ids? Enter comma-separated Claude model names, e.g. claude-sonnet-4-5,claude-opus-4-5'
-          : 'Model ids? Enter comma-separated model names, e.g. qwen-coder,glm-4.6',
-    }
-  }
-
-  const models = value
-    .split(',')
-    .map((model) => model.trim())
-    .filter(Boolean)
-  if (!models.length) {
-    return { done: false, message: 'Enter at least one model id.' }
-  }
-
-  try {
-    const configMessage = addCustomOpenbuffProvider({
-      id: providerWizardState.id,
-      type: providerWizardState.type,
-      baseURL: providerWizardState.baseURL,
-      apiKeyEnv: providerWizardState.apiKeyEnv,
-      models,
-    })
-    providerWizardState = null
-    return {
-      done: true,
-      message: configMessage,
-    }
-  } catch (error) {
-    return {
-      done: false,
-      message: `Failed to add custom provider: ${error instanceof Error ? error.message : String(error)}`,
-    }
-  }
-}
-export function handleOpenbuffModelsWizardInput(input: string): {
-  done: boolean
-  message: string
-} {
-  const value = input.trim()
-  if (!modelsWizardState) {
-    return { done: true, message: 'Model wizard is not active.' }
-  }
-
-  if (modelsWizardState.step === 'target') {
-    if (value === '1' || value.toLowerCase() === 'default') {
-      modelsWizardState = { step: 'default-model' }
-      return {
-        done: false,
-        message: `Choose default model:\n\n${formatModelChoices()}`,
-      }
-    }
-    if (value === '2' || value.toLowerCase() === 'mode') {
-      modelsWizardState = { step: 'mode' }
-      return {
-        done: false,
-        message: 'Which mode? Type one of: default, plan, execute-plan',
-      }
-    }
-    if (value === '3' || value.toLowerCase() === 'agent') {
-      modelsWizardState = { step: 'agent-id' }
-      return {
-        done: false,
-        message:
-          'Agent/subagent id? Examples: editor, code-reviewer, thinker, file-picker, base2',
-      }
-    }
-    return {
-      done: false,
-      message: 'Choose 1 for default, 2 for mode, or 3 for agent/subagent.',
-    }
-  }
-
-  if (modelsWizardState.step === 'mode') {
-    const rawMode = value.toLowerCase()
-    const mode = rawMode === 'execute-plan' ? 'executePlan' : rawMode
-    if (!['default', 'plan', 'executePlan'].includes(mode)) {
-      return {
-        done: false,
-        message: 'Type one of: default, plan, execute-plan',
-      }
-    }
-    modelsWizardState = {
-      step: 'mode-model',
-      mode: mode as 'default' | 'plan' | 'executePlan',
-    }
-    return {
-      done: false,
-      message: `Choose model for ${mode}:\n\n${formatModelChoices()}`,
-    }
-  }
-
-  if (modelsWizardState.step === 'agent-id') {
-    modelsWizardState = { step: 'agent-model', agentId: value }
-    return {
-      done: false,
-      message: `Choose model for ${value}:\n\n${formatModelChoices()}`,
-    }
-  }
-
-  if (modelsWizardState.step === 'reasoning-effort') {
-    const config = getEditableConfig()
-    setRouteModel(
-      config,
-      modelsWizardState.target,
-      modelsWizardState.model,
-      resolveReasoningEffortChoice(value),
-    )
-    modelsWizardState = null
-    const configPath = writeMergedConfig(config)
-    return {
-      done: true,
-      message: [`Updated ${configPath}`, '', formatOpenbuffModelStatus()].join(
-        '\n',
-      ),
-    }
-  }
-
-  const model = resolveModelChoice(value)
-  let targetForReasoning: ModelRouteTarget
-  if (modelsWizardState.step === 'default-model') {
-    targetForReasoning = { type: 'default' }
-  } else if (modelsWizardState.step === 'mode-model') {
-    targetForReasoning = { type: 'mode', mode: modelsWizardState.mode }
-  } else if (modelsWizardState.step === 'agent-model') {
-    targetForReasoning = { type: 'agent', agentId: modelsWizardState.agentId }
-  } else {
-    return { done: true, message: 'Model wizard is not active.' }
-  }
-
-  modelsWizardState = {
-    step: 'reasoning-effort',
-    target: targetForReasoning,
-    model,
-  }
-  return { done: false, message: reasoningEffortMenu() }
-}
-
 export async function handleOpenbuffProviderCommand(args: string): Promise<{
   message: string
-  startWizard?: true
   connectCodex?: true
 }> {
   const parts = args.trim().split(/\s+/).filter(Boolean)
@@ -1070,7 +782,10 @@ export async function handleOpenbuffProviderCommand(args: string): Promise<{
 
   if (command === 'add' || command === 'wizard') {
     if (rest.length === 0) {
-      return { message: startOpenbuffProviderWizard(), startWizard: true }
+      return {
+        message:
+          'Run `/provider` (or `/setup`) to open the provider picker — the typed setup wizard was retired.',
+      }
     }
     return { message: setupOpenbuffProviderFromArgs(rest.join(' ')) }
   }

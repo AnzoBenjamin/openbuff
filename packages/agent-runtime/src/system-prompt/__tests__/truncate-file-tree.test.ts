@@ -3,7 +3,10 @@ import { existsSync, readFileSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
+import {
+  getStubProjectFileContext,
+  printFileTree,
+} from '@codebuff/common/util/file'
 
 import { knowledgeFilesPrompt } from '../prompts'
 import { truncateFileTreeBasedOnTokenBudget } from '../truncate-file-tree'
@@ -189,6 +192,106 @@ describe('truncateFileTreeBasedOnTokenBudget preferPathOnly', () => {
     expect(result.printedTree).not.toContain(UNIQUE_SYMBOL)
     // Depth-based still emits path-only names (no symbol tokens).
     expect(result.printedTree).not.toMatch(/\bUniqueSymbol\w*\b/)
+  })
+})
+
+describe('truncateFileTreeBasedOnTokenBudget depth-based sampling', () => {
+  afterEach(() => {
+    mock.restore()
+  })
+
+  it('keeps the depth-based estimate finite when the sample prices every file name at zero tokens', () => {
+    // Char-count token mock keeps the estimate self-consistent with the printed
+    // tree; countTokens returns 0 for the sampled names, so the sample average
+    // is 0 and the estimate would divide by zero without the documented
+    // fallback (pre-fix: NaN average -> Infinity estimate -> every file wiped).
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation((text) => {
+      const s = typeof text === 'string' ? text : JSON.stringify(text)
+      return Math.max(1, s.length)
+    })
+    spyOn(tokenCounter, 'countTokens').mockImplementation(() => 0)
+
+    const files: FileTreeNode[] = Array.from(
+      { length: 200 },
+      (_, index): FileTreeNode => {
+        const name = `file${String(index).padStart(3, '0')}.ts`
+        return { name, type: 'file', filePath: `src/${name}` }
+      },
+    )
+    const tree: FileTreeNode[] = [
+      { name: 'src', type: 'directory', filePath: 'src', children: files },
+    ]
+
+    // Budget below the path-only render so the depth-based level is reached,
+    // but close enough that the finite estimate removes only part of the tree.
+    const pathOnlyTokens = printFileTree(tree).length
+    const result = truncateFileTreeBasedOnTokenBudget({
+      fileContext: {
+        ...getStubProjectFileContext(),
+        fileTree: tree,
+        fileTokenScores: {},
+      },
+      tokenBudget: pathOnlyTokens - 500,
+      logger,
+      preferPathOnly: true,
+    })
+
+    expect(result.truncationLevel).toBe('depth-based')
+    expect(result.printedTree.length).toBeGreaterThan(0)
+    expect(result.printedTree).toContain('src')
+    expect(Number.isFinite(result.tokenCount)).toBe(true)
+  })
+
+  it('returns the path-only render of the filtered tree when it has no files left', () => {
+    // Every token count is above any budget, so the depth-based level is
+    // reached even for a tree that filters down to nothing.
+    spyOn(tokenCounter, 'countTokensJson').mockImplementation(() => 10_000)
+    spyOn(tokenCounter, 'countTokens').mockImplementation(() => 0)
+
+    let warnCount = 0
+    const captureLogger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {
+        warnCount += 1
+      },
+      error: () => {},
+    }
+
+    const generatedOnlyTree: FileTreeNode[] = [
+      {
+        name: 'dist',
+        type: 'directory',
+        filePath: 'dist',
+        children: [
+          {
+            name: 'bundle.min.js',
+            type: 'file',
+            filePath: 'dist/bundle.min.js',
+          },
+        ],
+      },
+    ]
+
+    const result = truncateFileTreeBasedOnTokenBudget({
+      fileContext: {
+        ...getStubProjectFileContext(),
+        fileTree: generatedOnlyTree,
+        fileTokenScores: {},
+      },
+      tokenBudget: 100,
+      logger: captureLogger,
+      preferPathOnly: true,
+    })
+
+    // The empty filtered tree still renders through printFileTree rather than
+    // leaking the '' seed out to the agent.
+    expect(result.truncationLevel).toBe('depth-based')
+    expect(result.printedTree).toBe(printFileTree([]))
+    expect(Number.isFinite(result.tokenCount)).toBe(true)
+    // The removal loop only runs when the estimate is a positive finite number:
+    // its bounded-iteration warning proves the NaN estimate is gone.
+    expect(warnCount).toBeGreaterThan(0)
   })
 })
 

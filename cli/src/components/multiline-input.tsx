@@ -23,6 +23,12 @@ import {
   markReturnKeySeenForKey,
 } from '../utils/terminal-enter-detection'
 import { LONG_TEXT_THRESHOLD } from '../utils/strings'
+import {
+  computeMultilineInputHeight,
+  createPlaceholderLineMemo,
+  inputWrapColumns,
+  multilineInputMeasurementKey,
+} from '../utils/text-layout'
 import { supportsTruecolor } from '../utils/theme-system'
 import { calculateNewCursorPosition } from '../utils/word-wrap-utils'
 
@@ -90,6 +96,69 @@ function findNextWordBoundary(text: string, cursor: number): number {
 }
 
 export const CURSOR_CHAR = '▍'
+
+/**
+ * The `placeholder` argument MultilineInput hands to
+ * `computeMultilineInputHeight`.
+ *
+ * The box draws the placeholder only while the input is empty, so this is the
+ * exact string whose row count the height has to cover — and it is `undefined`,
+ * NOT `''`, when no placeholder is being drawn. That distinction is what makes
+ * the memo key the real drawn string: keying the idle frame on `''` (or on the
+ * unstripped placeholder) would leave the memo permanently cold for the state
+ * the input sits in between submits, re-wrapping the placeholder on every
+ * render.
+ *
+ * Exported as a test seam so the wiring can be pinned without rendering the
+ * component under the OpenTUI app context; the component calls it, so a test
+ * that exercises it covers the shipped expression.
+ */
+export function multilineInputPlaceholderArg(
+  isPlaceholder: boolean,
+  displayValue: string,
+): string | undefined {
+  return isPlaceholder ? displayValue : undefined
+}
+
+/**
+ * The string the box actually draws: the value (or the placeholder) with every
+ * tab expanded to TAB_WIDTH spaces.
+ *
+ * Fast-pathed, not always-expanding, because this runs on EVERY render-body
+ * evaluation and the idle input is the state the box sits in between submits.
+ * `String.prototype.replace` without a tab match still allocates a fresh string,
+ * so the idle frame paid an O(placeholder) copy per render even when the memo
+ * had made its row count free — and that fresh identity also re-ran the
+ * scroll effect, which keys on the rendered text. Returning `text` itself when
+ * there is no tab makes the idle frame allocate nothing and keeps the reference
+ * stable across renders, so the effect that keys on the DRAWN rows does not fire
+ * for a frame that changed nothing.
+ *
+ * Exported as a test seam so the fast path can be pinned without rendering the
+ * component under the OpenTUI app context; the component calls it.
+ */
+export function expandTabsForRendering(text: string): string {
+  if (text.indexOf('\t') === -1) return text
+  return text.replace(/\t/g, ' '.repeat(TAB_WIDTH))
+}
+
+/**
+ * The columns MultilineInput wraps the drawn text at, from the width its caller
+ * reserved. `undefined` when no width was reserved, which is how the height
+ * computation knows to fall back to the rendered row count.
+ *
+ * Delegates the padding subtraction to `inputWrapColumns` rather than deriving
+ * it again: this is the third of the three sites that must agree on the columns
+ * (the chat screen, `computeMultilineInputHeight`, and here), and a local copy
+ * that drifted by a single column would silently turn the caller-measurement
+ * reuse path off and restore a wrap pass on every render.
+ */
+export function multilineInputWrapColumns(
+  wrapWidth: number | undefined,
+): number | undefined {
+  return wrapWidth === undefined ? undefined : inputWrapColumns(wrapWidth)
+}
+
 const CONTROL_CHAR_REGEX = /[\u0000-\u0008\u000b-\u000c\u000e-\u001f\u007f]/
 const TAB_WIDTH = 4
 
@@ -187,6 +256,49 @@ interface MultilineInputProps {
   shouldBlinkCursor?: boolean
   maxHeight?: number
   minHeight?: number
+  /**
+   * Columns the caller reserved for this component, wrapper padding included.
+   * Supplying it makes the wrapped row count (and therefore the box height)
+   * measurable on the very first render, instead of depending on the text
+   * renderable's lineInfo which does not exist yet at that point.
+   */
+  wrapWidth?: number
+  /**
+   * Wrapped row count the caller already measured for `value` at the columns
+   * implied by `wrapWidth`. When supplied, the render body uses it directly and
+   * performs no wrap measurement of its own, so a keystroke costs one wrap pass
+   * for the whole input row instead of one per consumer of the same value.
+   */
+  measuredTotalLines?: number
+  /**
+   * Whether that same caller measurement decided to render the trailing gutter
+   * row. Forwarded so the gutter term of the height comes from the one fixed
+   * measurement as well: recomputing it here from the cursor row makes the box
+   * depend on the text renderable's lineInfo, which is null before the first
+   * commit, so two-row content rendered at height 2 and then grew to 3.
+   */
+  measuredGutterEnabled?: boolean
+  /**
+   * The caller's own effective cap on the forwarded row count. The forwarded
+   * count is a PRE-CLAMP row fact shared by every mount (one measurement serves
+   * both a compact and a full-height box), so scrollability must be decided from
+   * the same basis the caller's layout used: comparing the row count against
+   * only this box's `maxHeight` lets the box report content as fitting while the
+   * caller's layout has already clamped it to scroll. Omitted means this mount is
+   * the only authority and its own `maxHeight` is the cap.
+   */
+  callerHeightCap?: number
+  /**
+   * Identity of the forwarded `measuredTotalLines`, produced by the CALLER via
+   * `multilineInputMeasurementKey` over the same raw value and columns the
+   * count was measured at. When present it is authoritative: the count is
+   * trusted only while this key equals the one the box derives from the value
+   * and wrap columns it actually draws at, so a stale or wrong-width count
+   * degrades to one local wrap pass. Without it the box fabricates the key
+   * from its own props (legacy behavior — that check can only ever agree with
+   * itself, so callers able to measure should always supply the key).
+   */
+  measurementKey?: string
   cursorPosition: number
   showScrollbar?: boolean
 }
@@ -210,6 +322,11 @@ export const MultilineInput = forwardRef<
     shouldBlinkCursor,
     maxHeight = 5,
     minHeight = 1,
+    wrapWidth,
+    measuredTotalLines,
+    measuredGutterEnabled,
+    callerHeightCap,
+    measurementKey,
     onKeyIntercept,
     cursorPosition,
     showScrollbar = false,
@@ -225,6 +342,14 @@ export const MultilineInput = forwardRef<
 
   const scrollBoxRef = useRef<ScrollBoxRenderable | null>(null)
   const [lastActivity, setLastActivity] = useState(Date.now())
+
+  // Per-INSTANCE placeholder memo. Two MultilineInputs are mounted in one frame
+  // by chat-input-bar's compact and full-height branches (and a dialog can mount
+  // a third at another width), so the memo cannot be module state: a shared slot
+  // would let one box read a row count measured at the other box's columns. This
+  // ref belongs to this mounted box, and computeMultilineInputHeight stays a pure
+  // function of the memo it is handed.
+  const placeholderMemoRef = useRef(createPlaceholderLineMemo())
 
   const stickyColumnRef = useRef<number | null>(null)
 
@@ -308,19 +433,13 @@ export const MultilineInput = forwardRef<
       )
     : 0
 
-  // Auto-scroll to cursor when content changes
-  useEffect(() => {
-    const scrollBox = scrollBoxRef.current
-    if (scrollBox && focused) {
-      const scrollPosition = clamp(
-        scrollBox.verticalScrollBar.scrollPosition,
-        Math.max(0, cursorRow - scrollBox.viewport.height + 1),
-        Math.min(scrollBox.scrollHeight - scrollBox.viewport.height, cursorRow),
-      )
-
-      scrollBox.verticalScrollBar.scrollPosition = scrollPosition
-    }
-  }, [scrollBoxRef.current, cursorPosition, focused, cursorRow])
+  // The wrap columns this box derives from the width its caller reserved. Kept
+  // as `inputWrapColumns` rather than a local subtraction so it cannot drift from
+  // the columns chat.tsx measured the forwarded row count at: a one-column
+  // disagreement turns the reuse path off for that frame and silently restores a
+  // wrap pass on every render.
+  const wrapColumns =
+    wrapWidth === undefined ? undefined : inputWrapColumns(wrapWidth)
 
   // Helper to get current selection in original text coordinates
   const getSelectionRange = useCallback((): {
@@ -516,11 +635,10 @@ export const MultilineInput = forwardRef<
   const displayValue = isPlaceholder ? placeholder : value
   const showCursor = focused
 
-  // Replace tabs with spaces for proper rendering
-  const displayValueForRendering = displayValue.replace(
-    /\t/g,
-    ' '.repeat(TAB_WIDTH),
-  )
+  // Expand tabs for proper rendering. Fast-pathed on "is there a tab at all":
+  // the idle frame (an unbroken placeholder, no tabs) then keeps ONE string
+  // reference across renders instead of re-allocating the drawn text per render.
+  const displayValueForRendering = expandTabsForRendering(displayValue)
 
   // Calculate cursor position in the expanded string (accounting for tabs)
   let renderCursorPosition = 0
@@ -1138,32 +1256,131 @@ export const MultilineInput = forwardRef<
     ),
   )
 
-  const layoutMetrics = (() => {
-    const safeMaxHeight = Math.max(1, maxHeight)
-    const effectiveMinHeight = Math.max(1, Math.min(minHeight, safeMaxHeight))
+  // Height comes from the value wrapped at the width the caller reserved, not
+  // from lineInfo: lineInfo is null on the first render and is only re-read
+  // when this component re-renders, so using it alone sized the box shorter
+  // than its wrapped content and the excess rows were painted above the box.
+  // lineInfo stays the source for cursor row / visual-line navigation only.
+  const layoutMetrics = computeMultilineInputHeight({
+    value,
+    // The placeholder is drawn through the same wrapped text renderable, so the
+    // height has to cover it too. The caller's measurement covers only the value
+    // it was given (chat.tsx measures a single space for an empty input), so a
+    // two-row placeholder in a one-row box would paint its excess rows outside
+    // the scrollbox — the very overflow this height exists to prevent. When no
+    // placeholder is drawn the argument is `undefined` (never `''`), so the
+    // memo namespace is keyed on the real drawn string.
+    placeholder: multilineInputPlaceholderArg(
+      isPlaceholder,
+      displayValueForRendering,
+    ),
+    wrapWidth,
+    lineInfoLines: lineInfo?.lineStartCols.length,
+    // The forwarded count is accepted together with the identity it was
+    // measured under, so a stale measurement (the caller's value prop has
+    // already moved on, or the count was taken at other columns) fails the key
+    // comparison in computeMultilineInputHeight and falls back to a local wrap
+    // instead of sizing the box for text it is not drawing.
+    //
+    // The producer-supplied key is the real check: it is derived from what the
+    // CALLER measured, not from this component's own props, so it can actually
+    // disagree. The fallback fabrication (the value this call hands over) only
+    // serves callers that forward a count without a key — a key derived here
+    // can only ever agree with itself, which is why the shipped caller always
+    // supplies one.
+    //
+    // Both sides key on the raw `value` with no empty-input substitution: the
+    // producer measures a single space for an empty input but derives its key
+    // from the raw text it forwards, so the identities agree on the idle empty
+    // frame. `multilineInputWrapColumns` keeps the `undefined` wrapWidth case
+    // explicit (the helper encodes it as 'unwrapped') instead of asserting it
+    // away.
+    measuredTotalLines,
+    measurementKey:
+      measuredTotalLines === undefined
+        ? undefined
+        : (measurementKey ??
+          multilineInputMeasurementKey(
+            value,
+            multilineInputWrapColumns(wrapWidth),
+          )),
+    measuredGutterEnabled,
+    callerHeightCap,
+    placeholderMemo: placeholderMemoRef.current,
+    maxHeight,
+    minHeight,
+    cursorRow,
+  })
 
-    const totalLines = lineInfo === null ? 0 : lineInfo.lineStartCols.length
+  // Auto-scroll to cursor when content changes. This effect is the single
+  // writer of the box's scroll offset: the scrollbox itself must not use
+  // sticky-bottom, because when the real wrapped content is taller than the
+  // height the box was given, sticky-bottom pins the view to the end and the
+  // overflow rows paint upward past the box.
+  //
+  // The dependency list names the FACTS that can change the legal range of the
+  // offset — the wrapped row count, the reserved wrap width, the height the box
+  // was given, and the caret's row — rather than the text identities. Keying it
+  // on `value`/`displayValueForRendering` made the list depend on full-length
+  // string comparisons that React performs per render (and on a fresh identity
+  // whenever the drawn text was re-derived), so a render that moved neither the
+  // row count nor the viewport still read `viewport.height`/`scrollHeight` and
+  // re-clamped. `totalLines` is already computed for the box height; a keystroke
+  // that changes the text but not the row count cannot move maxTop, so it must
+  // not re-clamp. It is not a blank value: the drawn rows of '""' and of"x""
+  // both count one row, while every edit that can move the range changes it.
+  // `scrollBoxRef.current` is deliberately absent: its cell identity never
+  // changes without a remount. `scrollHeight` and `viewport.height` (what maxTop
+  // is derived from) are read inside the effect body for the same reason: they
+  // only change when the wrapped content or the viewport does, so a reflow that
+  // moves no cursor (a terminal resize changing the wrap width, or a height
+  // change from the forwarded measurement) still re-clamps instead of leaving
+  // the stored offset above the new maxTop and showing rows that no longer exist.
+  useEffect(() => {
+    const scrollBox = scrollBoxRef.current
+    if (scrollBox) {
+      const viewportHeight = scrollBox.viewport.height
+      // Max reachable offset: the last full viewport of content. clamp() is
+      // Math.min(Math.max(v, min), max), so the requested offset must land in
+      // [0, maxTop]; anything outside bounds is clamped, never escaped.
+      const maxTop = Math.max(0, scrollBox.scrollHeight - viewportHeight)
+      const currentTop = scrollBox.verticalScrollBar.scrollPosition
+      if (!focused) {
+        // Focus-independent RE-CLAMP. Without stickyScroll the offset is only
+        // recovered by this effect, so gating the whole body on `focused` left an
+        // unfocused box whose content shrank or reflowed holding a stale offset
+        // above the new maxTop — rows that no longer exist — until the next
+        // focus. Keep the user's offset, just make it legal.
+        const clampedTop = clamp(currentTop, 0, maxTop)
+        if (clampedTop !== currentTop) {
+          scrollBox.verticalScrollBar.scrollPosition = clampedTop
+        }
+        return
+      }
+      // The caret's own row is a TARGET, not a lower bound on the offset: the
+      // reachable offsets are [0, maxTop], so the caret row is put into view by
+      // scrolling to the offset that shows it, capped at maxTop. Using the raw
+      // row as the clamp floor instead left the final viewport-height of rows
+      // unreachable, so a caret on the last rows never came into view.
+      const cursorTop = Math.max(0, cursorRow - viewportHeight + 1)
+      const targetTop = Math.min(cursorTop, maxTop)
+      // Only pull the view to the caret when the caret is actually outside it;
+      // otherwise keep the user's own scroll position and just keep the offset
+      // legal after a reflow.
+      const scrollPosition =
+        cursorRow < currentTop || cursorRow >= currentTop + viewportHeight
+          ? targetTop
+          : clamp(currentTop, 0, maxTop)
 
-    // Add bottom gutter when cursor is on line 2 of exactly 2 lines
-    const gutterEnabled =
-      totalLines === 2 && cursorRow === 1 && totalLines + 1 <= safeMaxHeight
-
-    const rawHeight = Math.min(
-      totalLines + (gutterEnabled ? 1 : 0),
-      safeMaxHeight,
-    )
-
-    const heightLines = Math.max(effectiveMinHeight, rawHeight)
-
-    // Content is scrollable when total lines exceed max height
-    const isScrollable = totalLines > safeMaxHeight
-
-    return {
-      heightLines,
-      gutterEnabled,
-      isScrollable,
+      scrollBox.verticalScrollBar.scrollPosition = scrollPosition
     }
-  })()
+  }, [
+    layoutMetrics.totalLines,
+    layoutMetrics.heightLines,
+    wrapWidth,
+    cursorRow,
+    focused,
+  ])
 
   const inputColor = isPlaceholder
     ? theme.muted
@@ -1178,8 +1395,7 @@ export const MultilineInput = forwardRef<
     <scrollbox
       ref={scrollBoxRef}
       scrollX={false}
-      stickyScroll={true}
-      stickyStart="bottom"
+      stickyScroll={false}
       scrollbarOptions={{ visible: false }}
       verticalScrollbarOptions={{
         visible: showScrollbar && layoutMetrics.isScrollable,

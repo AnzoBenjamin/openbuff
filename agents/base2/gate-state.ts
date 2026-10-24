@@ -28,6 +28,20 @@ export type Base2ReviewReceipt = {
   snapshotFingerprint: string
   reviewedFiles: string[]
   reviewedFileCount?: number
+  /**
+   * PR-T5 (D23) Slice 1 — per-file content bindings for the reviewed files.
+   * One entry per reviewed file whose `readGateFileContentMarker` is a
+   * creditable content marker (`sha256:<hex>:<length>` for a present file,
+   * `missing` for a stable deletion); files whose marker is not creditable
+   * (`unreadable:*`, ...) are skipped entirely rather than storing error
+   * strings. `hash` is the full content marker captured at receipt time, so a
+   * downstream consumer (e.g. the memory-drift-guard review receipt) can
+   * verify the exact reviewed bytes. ADDITIVE and optional: legacy receipts
+   * without this field stay valid, and `fitReceiptToStorageBound` bounds the
+   * list (slices to 4 entries on compaction, clean-drops it at the extreme
+   * bound) so a wide review cannot break the serialized-size invariant.
+   */
+  reviewedFileHashes?: Array<{ path: string; hash: string }>
   coverage?: 'covered' | 'missing' | 'n/a'
   dimensions: Record<string, string>
   findings: Array<{
@@ -219,46 +233,6 @@ export type Base2GateState = {
    * JSON-serializable record (never a Map/Set).
    */
   gatePassedFileMarkers?: Record<string, string>
-  /**
-   * Content fingerprint of the reviewable-source subset the last time the
-   * final code-reviewer gate passed.
-   *
-   * SOFT-DEPRECATED and WRITE-ONLY as of the receipt-driven reviewer skip.
-   *
-   * Readers: NONE. There is no production reader of this field anywhere —
-   * base2.ts only writes it on the gate-pass path and defaults it to `''` when
-   * hydrating serialized state, and no CLI/renderer/telemetry surface reads it
-   * (the pinned active-work message and the gate telemetry payload are built
-   * from `gatePassedFingerprint`, `gatePassedFiles`, `pendingGateFiles`,
-   * `currentPhase`, and `reviewReceipts`). It is referenced only by test
-   * fixtures that seed serialized state.
-   *
-   * Why it lost its reader: it used to be a required conjunct of the reviewer
-   * skip, but a single scalar is overwritten on every gate pass, so an earlier
-   * wave's reviewable set re-arming produced false misses. That decision now
-   * reads the durable `reviewReceipts` ledger, matching a LOOKS_GOOD receipt by
-   * its GATE-COMPUTED `gateId` (`${reviewer}:${expectedFingerprint}`) plus the
-   * reviewed file set, and an attestability check on the current fingerprint.
-   * The reviewer-reported `snapshotFingerprint` on a receipt is drift-tolerated
-   * and is deliberately NOT used as content evidence.
-   *
-   * Migration/removal path for consumers:
-   * 1. Do not add new readers. Anything that needs "was this reviewable set
-   *    already reviewed?" must match a `reviewReceipts` entry on `gateId` +
-   *    `reviewedFiles`, exactly like base2's reviewer-skip rule.
-   * 2. The field stays written for one deprecation window so a session
-   *    serialized by an older base2 keeps round-tripping unchanged (no
-   *    migration step, no rollback risk: it is additive and optional).
-   * 3. Removal: once no serialized state in circulation is read by a base2 that
-   *    still declares it, drop the write in base2.ts's gate-pass path, drop the
-   *    `??= ''` default, drop this field, and drop the test-fixture seeds. Older
-   *    serialized state stays loadable because unknown persisted keys are
-   *    ignored.
-   *
-   * Backward-compatible: older serialized state lacks this field (treated as
-   * unset).
-   */
-  reviewedReviewableFingerprint?: string
   lastReviewerGateSkipReason: string
   /**
    * Durable one-line mid-turn gate-progress note (e.g. "gate: validation
@@ -291,6 +265,12 @@ export type Base2ActiveWorkState = Base2GateState & {
     snapshotFingerprint: string
     /** Reviewer family that produced this blocking finding. */
     reviewer?: 'code-reviewer' | 'security-reviewer' | SpecialistReviewerAgent
+    // Repair-payload carrier: the reviewer's structured finding fields so
+    // repair handoffs carry the actual finding payload, not just id/text.
+    severity?: string
+    dimension?: string
+    evidence?: string[]
+    correction?: string
     createdAt: string
   }>
   /**
@@ -414,6 +394,108 @@ export type Base2ActiveWorkState = Base2GateState & {
   reviewerRepairRoundCount?: number
   /** Number of consecutive schema-valid agent runs that produced no verdict. */
   reviewerNoVerdictCount?: number
+  /**
+   * Wave 3 (A8) STATE-BASED convergence for the no-verdict reviewer loop: maps
+   * a `${agentType}\n${snapshotFingerprint}` key to the diagnostic `code` of the
+   * LAST rejection recorded for that (family, snapshot) pair. When a fresh
+   * rejection for the same pair carries the SAME code, the reviewer is not
+   * re-spawned at all — the gate transitions straight to the existing
+   * bypass-offer flow (ensureReviewerBypassChallenge + nextRequiredAction), the
+   * same shape as the exhausted-retry path. This is deliberately STATE-based,
+   * never budget-based: MAX_REVIEWER_NO_VERDICT_RETRIES /
+   * MAX_SPECIALIST_NO_VERDICT_RETRIES stay exactly as configured (unlimited /
+   * Infinity by default) and no budget constant is read or changed here. The
+   * fingerprint component means a fresh edit re-arms a full retry cycle (the
+   * pair changed), while an identical rejection over unchanged bytes converges
+   * without another spawn. BOUNDED at every write site
+   * (`boundNoVerdictDiagnosticCodes`, most recent 128 keys) so this durable
+   * record cannot grow without bound across a long session: the convergence key
+   * embeds the snapshot fingerprint, so every fresh edit of the reviewed bytes
+   * mints NEW keys rather than replacing old ones. Pruning is order-preserving
+   * and drops the OLDEST entries, so the pair recorded by the pass that just
+   * rejected is retained for the next convergence comparison. MUST stay a plain
+   * JSON-serializable record (never a Map/Set). Backward-compatible: older
+   * serialized state lacks this field (defaulted to `{}` during hydration).
+   */
+  noVerdictDiagnosticCodes?: Record<string, string>
+  /**
+   * Wave 3 (A8) windowed review credit for changes whose pending reviewable set
+   * exceeds the 40-file wave cap. Maps a `waveKey(fingerprint, waveIndex,
+   * waveFiles)` string to the completion record for that wave. Per-FILE credit
+   * still lives ONLY in the path-keyed marker ledgers
+   * (specialistReviewFileMarkers / securityReviewFileMarkers /
+   * reviewedFileHashes) — this map records WHICH waves finished so finalization
+   * can require every planned wave present with live markers, surviving the
+   * bounded `reviewReceipts` eviction. BOUNDED at every write site
+   * (`boundWaveCompletions`, most recent 256 keys) so the durable record cannot
+   * grow without bound: the wave key embeds the snapshot fingerprint, so every
+   * fresh edit of a wide change mints NEW keys rather than replacing old ones.
+   * Pruning is order-preserving and drops the OLDEST entries, so the current
+   * snapshot's waves (written last, during the pass that just completed) are
+   * retained. MUST stay a plain JSON-serializable record (never a Map/Set).
+   * Backward-compatible: older serialized state lacks this field (defaulted to
+   * `{}` during hydration).
+   */
+  waveCompletions?: Record<
+    string,
+    {
+      fingerprint: string
+      waveIndex: number
+      files: string[]
+      /**
+       * Union of every file any pass has credited toward this wave under the
+       * CURRENT fingerprint. Credit accumulates per wave across passes so a
+       * cross-specialist wave can complete. Optional for backward-compat with
+       * older serialized state; hydrated to `[]` when absent.
+       */
+      creditedFiles?: string[]
+      /**
+       * Per-file LIVE content marker recorded at the moment each file in
+       * `creditedFiles` was credited, keyed by path. DRIFT-INVALIDATION: a file
+       * edited and later reverted to its original bytes yields the SAME content
+       * marker, so a presence-only `creditedFiles` set would honor stale credit.
+       * The finalization check re-reads each file's live marker and re-opens the
+       * wave when it no longer equals the recorded one. Optional for
+       * backward-compat with older serialized state; treated as `{}` when absent.
+       */
+      creditedFileMarkers?: Record<string, string>
+      /**
+       * Set only once the wave is FULLY covered (`creditedFiles` ⊇ `files`).
+       * A partially-credited entry keeps this undefined so the finalization
+       * check still reports the wave missing (fail closed).
+       */
+      completedAt?: string
+      /**
+       * Wall-clock stamp refreshed on EVERY write of this wave entry, including
+       * a re-write of an existing key. Object insertion order does NOT move an
+       * existing key to the end when it is re-written, so `boundWaveCompletions`
+       * ranks fingerprints by their bucket's NEWEST `lastTouchedAt` (falling
+       * back to first-seen position for legacy entries that lack it) instead of
+       * by first-seen order — otherwise a stale fingerprint's waves re-touched
+       * by a later pass kept their early position and could be evicted even
+       * though they were the most recently touched, defeating the
+       * revert-invalidation promise for a reverted >40-file change. Optional
+       * for backward-compat with older serialized state.
+       */
+      lastTouchedAt?: string
+    }
+  >
+  /**
+   * Wave-universe per-file credit ledger, keyed by specialist agentType then by
+   * normalized REVIEWABLE file path. This is the ONLY source the post-spawn
+   * wave finalization check reads for its live-marker requirement, and it is
+   * populated exclusively by `recordWaveCompletionsForFiles` over the SAME
+   * (reviewable) universe the activation threshold and the planner use — NOT
+   * the raw R4-widened `specialistReviewFileMarkers` set, which also carries
+   * NON-reviewable manifest/lockfile/CI paths. Keying completion on the widened
+   * set could desynchronize credit accounting (a manifest path credited into
+   * markers but excluded from the wave universe). Absent in older serialized
+   * state → `{}`, which fails closed (no wave credit validated) exactly like an
+   * empty wave ledger. MUST stay a plain JSON-serializable record of plain
+   * records (never a Map/Set). Backward-compatible: older serialized state
+   * lacks this field (treated as no wave credit).
+   */
+  specialistWaveCreditMarkers?: Record<string, Record<string, string>>
   /** One-use, snapshot-bound reviewer bypass challenge. */
   reviewerBypassChallenge?: {
     id: string

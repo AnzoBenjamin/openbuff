@@ -114,6 +114,11 @@ export const createReviewer = (
         type: 'string',
         enum: ['covered', 'missing', 'n/a'],
       },
+      // Fix 2: dimension keys are OPTIONAL. The gate already tolerates a
+      // missing dimension entry via `entry.dimensions ?? {}` and only
+      // elevates one whose value starts with block/blocks/blocking/blocker,
+      // so the nested `required` array added rejection surface for no
+      // semantic gain. The five keys stay declared in `properties`.
       dimensions: {
         type: 'object',
         properties: {
@@ -123,13 +128,6 @@ export const createReviewer = (
           apiCompatibility: { type: 'string' },
           performance: { type: 'string' },
         },
-        required: [
-          'correctness',
-          'security',
-          'tests',
-          'apiCompatibility',
-          'performance',
-        ],
       },
       requirementCoverage: {
         type: 'array',
@@ -147,16 +145,19 @@ export const createReviewer = (
         },
       },
     },
+    // Fix 2: require ONLY the fields the gate actually consumes to make its
+    // decision. `findings` is read as `?? []` and `requirementCoverage` as
+    // `?? []`, so requiring them added rejection surface for zero semantic
+    // gain; `dimensions` stays required because the gate reads it for
+    // `block`-prefixed hard blockers. Their inner item schemas are unchanged.
     required: [
       'schemaVersion',
-      'family',
       'verdict',
       'snapshotFingerprint',
       'reviewedFiles',
-      'findings',
       'coverage',
       'dimensions',
-      'requirementCoverage',
+      'family',
     ],
   },
 

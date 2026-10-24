@@ -1,5 +1,6 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
 import { models } from '@codebuff/common/old-constants'
+import { withTransportTruncation } from '@codebuff/common/types/contracts/llm'
 import { buildArray } from '@codebuff/common/util/array'
 import { normalizeProviderRequestBodyForCacheDebug } from '@codebuff/common/util/cache-debug'
 import {
@@ -31,8 +32,10 @@ import {
 import { resolveModelsToTry, isFailoverEligibleError } from './failover'
 import { buildSpawnAgentsInputForDirectAgentCall } from './direct-agent-tool-repair'
 import {
+  getMaxOutputBytesForModel,
   loadProviderConfigSync,
   resolveConfiguredAgentModelConfig,
+  resolveConfiguredProviderModel,
 } from '../provider-config'
 import { refreshChatGptOAuthToken } from '../credentials'
 import {
@@ -61,6 +64,10 @@ import type {
 } from '@codebuff/common/types/contracts/llm'
 import type { ParamsOf } from '@codebuff/common/types/function-params'
 import type { JSONObject } from '@codebuff/common/types/json'
+import type {
+  StreamChunk,
+  ToolCallStreamChunk,
+} from '@codebuff/common/types/contracts/llm'
 import type { OpenRouterProviderOptions } from '@codebuff/internal/openrouter-ai-sdk'
 import type { GenerateObjectResult, LanguageModel } from 'ai'
 import type z from 'zod/v4'
@@ -1035,6 +1042,30 @@ export async function* promptAiSdkStream(
   const agentChunkMetadata =
     params.agentId != null ? { agentId: params.agentId } : undefined
 
+  // Tool-call chunks are held here until the provider's finishReason is known.
+  // `finishReason === 'length'` (max-token cut) is the provider's AUTHORITATIVE
+  // truncation fact, and it only resolves after the stream ends — so the only
+  // way to ride that fact on the tool-call chunks the runtime parses is to
+  // publish them once the finish reason has resolved. Text and reasoning chunks
+  // are untouched and still stream through immediately.
+  const pendingToolCallChunks: ToolCallStreamChunk[] = []
+  async function* flushPendingToolCallChunks(
+    truncated: boolean,
+  ): AsyncGenerator<StreamChunk> {
+    if (pendingToolCallChunks.length === 0) return
+    const drained = pendingToolCallChunks.splice(0)
+    for (const pending of drained) {
+      // Delivery — not buffering — is what makes a retry or failover unsafe:
+      // the runtime executes every chunk it receives, so a stream counts as
+      // having yielded content only here, at the yield.
+      anyContentYielded = true
+      // The marker is applied through the shared contract helper, so the
+      // producer and its consumers agree on one name for the transport fact
+      // (see `ToolCallStreamChunk` in common/src/types/contracts/llm.ts).
+      yield truncated ? withTransportTruncation(pending) : pending
+    }
+  }
+
   if (params.signal.aborted) {
     logger.info(
       {
@@ -1104,6 +1135,13 @@ export async function* promptAiSdkStream(
       for (let attempt = 0; attempt <= MAX_RETRIES_PER_MESSAGE; attempt++) {
         // Track if we've yielded content in THIS attempt (for ChatGPT OAuth fallback)
         let hasYieldedContent = false
+        // Tool-call chunks are buffered until THIS attempt's finishReason
+        // resolves, so every attempt must start with an empty buffer. Without
+        // this reset a stream that fails after buffering leaves its payloads
+        // behind, and the next attempt flushes them as though the failed model
+        // had produced them — a stale partial edit payload would be executed a
+        // second time.
+        pendingToolCallChunks.length = 0
         let response: ReturnType<typeof streamText>
         let aiSDKModel: LanguageModel
         let isChatGptOAuth: boolean
@@ -1346,6 +1384,11 @@ export async function* promptAiSdkStream(
             params.stopSequences,
           )
 
+          // The provider's AUTHORITATIVE finish reason, preferring the in-stream
+          // `finish` chunk (captured in the loop below) over the late-resolved
+          // `response.finishReason` promise.
+          let streamFinishReason: Awaited<typeof response.finishReason> | undefined
+
           for await (const chunkValue of response.fullStream) {
             if (chunkValue.type !== 'text-delta') {
               const flushed = stopSequenceHandler.flush()
@@ -1360,6 +1403,11 @@ export async function* promptAiSdkStream(
               }
             }
             if (chunkValue.type === 'error') {
+              // Publish already-received tool calls before handling the error so
+              // an error chunk can never silently swallow a tool call the model
+              // already emitted (pre-buffering behavior relied on the tool-call
+              // chunks having been yielded before the error).
+              yield* flushPendingToolCallChunks(false)
               // Error chunks from fullStream are non-network errors (tool failures, model issues, rate limits, etc.)
               // Network errors which cannot be recovered from are thrown, not yielded as chunks.
 
@@ -1550,15 +1598,29 @@ export async function* promptAiSdkStream(
               }
             }
             if (chunkValue.type === 'tool-call') {
+              // The model produced output, but nothing has reached the caller
+              // yet: the chunk is only buffered until finishReason resolves.
+              // `anyContentYielded` is therefore set by
+              // flushPendingToolCallChunks, at the actual yield — otherwise a
+              // stream that emits only tool calls and then throws could never
+              // be retried or failed over.
               hasYieldedContent = true
-              anyContentYielded = true
               const { providerMetadata, ...toolCall } = chunkValue
-              yield {
+              pendingToolCallChunks.push({
                 ...toolCall,
                 ...(providerMetadata
                   ? { providerOptions: providerMetadata }
                   : {}),
-              }
+              })
+            }
+            if (chunkValue.type === 'finish') {
+              // Capture the provider's finish reason as soon as the stream
+              // reports it. Some providers only report it on the in-stream
+              // `finish` chunk (the late-resolved `response.finishReason`
+              // promise can disagree or resolve to 'unknown'), and a missed
+              // 'length' would leave the buffered tool calls unflagged — the
+              // exact silent max-token cut this signal exists to remove.
+              streamFinishReason = chunkValue.finishReason
             }
           }
           const flushed = stopSequenceHandler.flush()
@@ -1571,7 +1633,59 @@ export async function* promptAiSdkStream(
             }
           }
 
-          const finishReason = await response.finishReason
+          const finishReason =
+            streamFinishReason ?? (await response.finishReason)
+          // Band diagnostic (config-side envelope, not a producer comparison):
+          // the marker below is set solely from the provider's 'length' report.
+          // When pending payloads exceed the configured transport band WITHOUT
+          // that report, the configured band looks stale for this model —
+          // surface it for operators instead of leaving the number unobserved.
+          // Runs once per stream and only when tool calls are pending; the
+          // check must precede the flush, which drains the pending buffer.
+          if (finishReason !== 'length' && pendingToolCallChunks.length > 0) {
+            const configured = resolveConfiguredProviderModel({
+              model: failoverModel,
+              loadedConfig,
+            })
+            if (configured) {
+              // Pass providerId so a per-model override keyed by the
+              // provider-mapped or unprefixed id is found through the same
+              // capability-key candidates resolveModelCapabilities uses.
+              const band = getMaxOutputBytesForModel(
+                configured.provider,
+                failoverModel,
+                configured.providerId,
+              )
+              // Serialized UTF-8 byte count, matching the byte-band semantics
+              // of MAX_TRANSPORT_SAFE_PAYLOAD_BYTES (string .length counts
+              // UTF-16 code units and undercounts non-ASCII payloads).
+              const serializedBytes = pendingToolCallChunks.reduce(
+                (total, pending) => {
+                  try {
+                    const serialized = JSON.stringify(pending.input)
+                    return serialized === undefined
+                      ? total
+                      : total + Buffer.byteLength(serialized, 'utf8')
+                  } catch {
+                    return total
+                  }
+                },
+                0,
+              )
+              if (serializedBytes > band) {
+                logger.warn(
+                  { model: failoverModel, band, serializedBytes },
+                  'Tool-call payloads exceeded the configured maxOutputBytes transport band without a provider length report; the configured band for this model looks stale.',
+                )
+              }
+            }
+          }
+          // Only 'length' marks the payloads as cut; every other value (stop,
+          // tool-calls, error, content-filter, unknown) leaves them unflagged.
+          // Flushing happens BEFORE the content-policy check so a
+          // content-filter throw still leaves the tool calls published, exactly
+          // as when they were yielded inline.
+          yield* flushPendingToolCallChunks(finishReason === 'length')
           const contentPolicyError = getProviderContentPolicyFinishError({
             finishReason,
             model: failoverModel,
@@ -1671,7 +1785,13 @@ export async function* promptAiSdkStream(
           }
 
           if (attempt > 0 || failoverIndex > 0) {
-            emitProviderStatus({ status: 'recovered', model: failoverModel })
+            // Deliberately NO `model` on recovery: `failoverModel` names the
+            // outer loop's current candidate, which can be stale after the
+            // inner fallback paths (prompt-too-long retry, OAuth fallback)
+            // complete on a different model, and the CLI printed the wrong id
+            // as a result. 'failover' events carry the authoritative
+            // from→to pair; recovery only needs to say the stream is back.
+            emitProviderStatus({ status: 'recovered' })
           }
           return promptSuccess(messageId)
         } catch (caughtError) {

@@ -10,6 +10,8 @@ import { createTextPasteHandler } from '../utils/strings'
 import { BORDER_CHARS } from '../utils/ui-constants'
 import {
   getEditableConfig,
+  getFailoverModels,
+  setFailoverModels,
   getKnownModelOptions,
   persistModelToProviderConfig,
   setRouteModel,
@@ -127,7 +129,7 @@ interface ModelRoutePickerProps {
 }
 
 type PickerPane = 'left' | 'right'
-type RightView = 'model-select' | 'reasoning-select'
+type RightView = 'model-select' | 'reasoning-select' | 'failover-edit'
 
 const isHeaderItem = (item: SelectableListItem | undefined): boolean =>
   item?.id.startsWith('section-') ?? false
@@ -149,6 +151,7 @@ function filterOrphanHeaders(
     ['section-default', ['route-default']],
     ['section-modes', ['route-mode-']],
     ['section-agents', ['route-agent-']],
+    ['section-failover', ['failover-']],
   ])
 
   return filtered.filter((item) => {
@@ -207,6 +210,10 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const statusClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [configKey, setConfigKey] = useState(0) // Force refresh after writes
+  const [failoverEditIndex, setFailoverEditIndex] = useState<number | null>(
+    null,
+  )
+  const [failoverAppendMode, setFailoverAppendMode] = useState(false)
 
   // Load current config
   const config = useMemo(() => {
@@ -293,6 +300,35 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
         }),
       })
     }
+
+    items.push({
+      id: 'section-failover',
+      label: 'Failover chain',
+      secondary: '',
+      currentModel: undefined,
+      currentReasoningEffort: undefined,
+      isHeader: true,
+    })
+
+    // Failover chain: models tried, in order, after the primary fails. This
+    // previously existed only as a hand-edited openbuff.json key.
+    const failoverModels = getFailoverModels()
+    failoverModels.forEach((model, index) => {
+      items.push({
+        id: `failover-${index}`,
+        label: `failover:${index + 1}`,
+        secondary: model,
+        currentModel: model,
+        currentReasoningEffort: undefined,
+      })
+    })
+    items.push({
+      id: 'failover-add',
+      label: 'failover:+ add model',
+      secondary: 'tried in order after the primary fails',
+      currentModel: undefined,
+      currentReasoningEffort: undefined,
+    })
 
     return items
   }, [config])
@@ -390,11 +426,31 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
   }, [selectableReasoningItems, rightSearchQuery])
 
   // Right Pane Items & Empty Messages
+  const failoverEditItems = useMemo<SelectableListItem[]>(() => {
+    const chain = getFailoverModels()
+    const index = failoverEditIndex
+    const model = index !== null ? chain[index] : undefined
+    return [
+      {
+        id: 'failover-op-up',
+        label: `Move up${index !== null && index === 0 ? ' (already first)' : ''}`,
+        secondary: model ?? '',
+      },
+      {
+        id: 'failover-op-down',
+        label: `Move down${index !== null && index === chain.length - 1 ? ' (already last)' : ''}`,
+        secondary: model ?? '',
+      },
+      { id: 'failover-op-remove', label: 'Remove from chain', secondary: model ?? '' },
+    ]
+  }, [failoverEditIndex, configKey])
+
   const rightItems = useMemo(() => {
+    if (rightView === 'failover-edit') return failoverEditItems
     return rightView === 'model-select'
       ? filteredModels
       : filteredReasoningOptions
-  }, [rightView, filteredModels, filteredReasoningOptions])
+  }, [rightView, filteredModels, filteredReasoningOptions, failoverEditItems])
 
   const rightEmptyMessage = useMemo(() => {
     if (rightView === 'model-select') {
@@ -463,9 +519,18 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
           const focused = filteredRoutes[leftFocusedIndex]
           if (focused && !isHeaderItem(focused)) {
             setActivePane('right')
-            setRightView('model-select')
             setRightSearchQuery('')
             setRightFocusedIndex(0)
+            if (focused.id === 'failover-add') {
+              setFailoverAppendMode(true)
+              setRightView('model-select')
+            } else if (focused.id.startsWith('failover-')) {
+              setFailoverEditIndex(Number(focused.id.slice('failover-'.length)))
+              setRightView('failover-edit')
+            } else {
+              setFailoverAppendMode(false)
+              setRightView('model-select')
+            }
           }
           return true
         }
@@ -496,7 +561,84 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
           const focusedItem = rightItems[rightFocusedIndex]
           if (!focusedItem) return true
 
+          if (rightView === 'failover-edit') {
+            const chain = getFailoverModels()
+            const index = failoverEditIndex
+            if (index === null || chain[index] === undefined) {
+              setActivePane('left')
+              return true
+            }
+            let next = [...chain]
+            let msg = ''
+            if (focusedItem.id === 'failover-op-up' && index > 0) {
+              ;[next[index - 1], next[index]] = [next[index]!, next[index - 1]!]
+              msg = `✓ Moved ${chain[index]} up`
+            } else if (
+              focusedItem.id === 'failover-op-down' &&
+              index < chain.length - 1
+            ) {
+              ;[next[index + 1], next[index]] = [next[index]!, next[index + 1]!]
+              msg = `✓ Moved ${chain[index]} down`
+            } else if (focusedItem.id === 'failover-op-remove') {
+              next = next.filter((_, i) => i !== index)
+              msg = `✓ Removed ${chain[index]} from failover chain`
+            }
+            if (msg) {
+              try {
+                setFailoverModels(next)
+                setConfigKey((k) => k + 1)
+                setStatusMessage(msg)
+                setActivePane('left')
+                setFailoverEditIndex(null)
+                onConfigUpdated?.()
+              } catch (error) {
+                setStatusMessage(
+                  `✗ ${error instanceof Error ? error.message : String(error)}`,
+                )
+              }
+            } else {
+              setActivePane('left')
+            }
+            return true
+          }
+
           if (rightView === 'model-select') {
+            if (failoverAppendMode) {
+              // Append the chosen model to the failover chain; no reasoning
+              // step (failover inherits the route's reasoning config).
+              try {
+                const modelOption = availableModels.find(
+                  (opt) => opt.model === focusedItem.id,
+                )
+                if (modelOption?.discovered) {
+                  const slashIndex = focusedItem.id.indexOf('/')
+                  if (slashIndex > 0 && slashIndex < focusedItem.id.length - 1) {
+                    persistModelToProviderConfig(
+                      focusedItem.id.slice(0, slashIndex),
+                      focusedItem.id.slice(slashIndex + 1),
+                    )
+                  }
+                }
+                const chain = getFailoverModels()
+                if (chain.includes(focusedItem.id)) {
+                  setStatusMessage(
+                    `${focusedItem.id} is already in the failover chain`,
+                  )
+                } else {
+                  setFailoverModels([...chain, focusedItem.id])
+                  setConfigKey((k) => k + 1)
+                  setStatusMessage(`✓ Added ${focusedItem.id} to failover chain`)
+                  onConfigUpdated?.()
+                }
+                setActivePane('left')
+                setFailoverAppendMode(false)
+              } catch (error) {
+                setStatusMessage(
+                  `✗ ${error instanceof Error ? error.message : String(error)}`,
+                )
+              }
+              return true
+            }
             // Model Selected! Progress to reasoning select
             const modelOption = availableModels.find(
               (opt) => opt.model === focusedItem.id,
@@ -590,7 +732,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
     activePane === 'left'
       ? '↑↓ Navigate routes · Tab/Enter Edit selected · Esc Close'
       : activePane === 'right'
-        ? `Right Panel editing: ${rightView === 'model-select' ? 'Choose Model' : 'Choose Reasoning'} · Tab/Esc back`
+        ? `Right Panel editing: ${rightView === 'model-select' ? 'Choose Model' : rightView === 'failover-edit' ? 'Edit Failover Entry' : 'Choose Reasoning'} · Tab/Esc back`
         : '↑↓ Navigate · Enter select'
 
   return (

@@ -8,7 +8,10 @@ import { renderToolComponent } from '../tools/registry'
 import { ToolCallItem } from '../tools/tool-call-item'
 
 import type { ContentBlock } from '../../types/chat'
-import type { MarkdownPalette } from '../../utils/markdown-renderer'
+import {
+  hasMarkdown,
+  type MarkdownPalette,
+} from '../../utils/markdown-renderer'
 
 interface ToolBranchProps {
   toolBlock: Extract<ContentBlock, { type: 'tool' }>
@@ -130,11 +133,23 @@ export const ToolBranch = memo(
       />
     )
 
+    // D47 Stage 2: a renderable cannot nest inside a text element. The
+    // fallback text always carries a fenced input block built from the tool
+    // input, so ContentWithMarkdown returns a native <markdown> renderable
+    // whenever hasMarkdown(fullContent) is true — and rendering that inside
+    // the <text> wrapper threw during commit, which the per-block error
+    // boundary in blocks-renderer.tsx replaced with "Could not render this
+    // tool block." (reported for the unregistered recall_context / list_jobs
+    // / check_background_agent fallbacks). Branch like single-block.tsx:
+    // content with markdown renders at box level (native wrapMode handles
+    // wrapping); plain content keeps the <text> wrapper for the fg path.
     const renderableDisplayContent =
       displayContent === null ||
       displayContent === undefined ||
       displayContent === false ||
-      displayContent === '' ? null : (
+      displayContent === '' ? null : hasMarkdown(fullContent) ? (
+        <box style={{ width: '100%' }}>{displayContent}</box>
+      ) : (
         <text
           fg={theme.foreground}
           style={{ wrapMode: 'word' }}

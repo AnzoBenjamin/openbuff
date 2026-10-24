@@ -43,7 +43,12 @@ export const handleReadOutline = (async (params: {
   // or when the CLI is launched from a parent repo). The agent session
   // carries the canonical project root in `fileContext`, so the containment
   // check stays anchored to that regardless of `process.cwd()`.
-  if (!isPathInsideProject(fileContext.projectRoot, path)) {
+  // A missing fileContext or a missing projectRoot would make the containment
+  // check throw a raw TypeError out of the handler instead of returning a tool
+  // error. Both are treated as "cannot prove this path is inside the project",
+  // which fails closed to the same stable message the containment refusal uses.
+  const projectRoot = fileContext?.projectRoot
+  if (!projectRoot || !isPathInsideProject(projectRoot, path)) {
     return {
       output: jsonToolResult({
         path,

@@ -1,6 +1,7 @@
 import { match } from 'ts-pattern'
 
 import {
+  appendTextToAgentBlock,
   appendTextToRootStream,
   appendToolToAgentBlock,
   closeNativeReasoningBlock,
@@ -80,6 +81,7 @@ import type {
 } from '@codebuff/common/types/print-mode'
 import type { ToolName } from '@openbuff/sdk'
 import type { MutableRefObject } from 'react'
+import { hasAgentBlock } from './message-block-helpers'
 
 export type SetStreamingAgentsFn = (
   updater: (prev: Set<string>) => Set<string>,
@@ -254,8 +256,8 @@ const handleSubagentStart = (
   )
 
   if (spawnAgentMatch) {
-    state.message.updater.updateAiMessageBlocks((blocks) =>
-      resolveSpawnAgentToReal({
+    state.message.updater.updateAiMessageBlocks((blocks) => {
+      const resolvedBlocks = resolveSpawnAgentToReal({
         blocks,
         match: spawnAgentMatch,
         realAgentId: event.agentId,
@@ -263,8 +265,40 @@ const handleSubagentStart = (
         parentAgentId: event.parentAgentId,
         params: event.params,
         prompt: event.prompt,
-      }),
-    )
+      })
+      // A tool_call can carry the real child id before subagent_start, so its
+      // card may already have fallen back to ROOT. The spawn-match path returns
+      // before the organic-agent insertion/adoption path below; adopt that
+      // card into the newly resolved agent block in this same updater.
+      const orphanedToolIds = new Set(
+        resolvedBlocks
+          .filter(
+            (block): block is ToolContentBlock =>
+              block.type === 'tool' && block.agentId === event.agentId,
+          )
+          .map((block) => block.toolCallId),
+      )
+      return adoptOrphanedToolBlock(
+        resolvedBlocks,
+        event.agentId,
+        orphanedToolIds,
+      )
+    })
+
+    // Show a prompt activity hint for spawn_agents children while they run.
+    // Use textType 'reasoning' so applySpawnAgentResultToBlock's
+    // hasStreamedTextContent guard (which checks textType === 'text') still
+    // allows final structured content to be injected on completion.
+    const spawnPromptText = event.prompt?.trim()
+    if (spawnPromptText) {
+      const snippet =
+        spawnPromptText.length > 200
+          ? spawnPromptText.slice(0, 200) + '\u2026'
+          : spawnPromptText
+      state.message.updater.updateAiMessageBlocks((blocks) =>
+        appendTextToAgentBlock(blocks, event.agentId, snippet, 'reasoning'),
+      )
+    }
 
     updateStreamingAgents(state, {
       remove: spawnAgentMatch.tempId,
@@ -299,18 +333,56 @@ const handleSubagentStart = (
       parentAgentType,
     })
 
-    if (event.parentAgentId) {
-      const { blocks: nestedBlocks, parentFound } = nestBlockUnderParent(
-        blocks,
-        event.parentAgentId,
-        newAgentBlock,
-      )
-      if (parentFound) {
-        return nestedBlocks
+    // A tool card for this agent may already be rendered at ROOT: under the
+    // batched message updater its `tool_call` updater can flush BEFORE this
+    // agent-block updater, and with no agent block present yet it fell back to
+    // a root append. Re-parent those orphaned cards into the new agent block in
+    // this SAME updater, so the transcript never shows a duplicate/orphan.
+    const orphanedToolIds = new Set(
+      blocks
+        .filter(
+          (block): block is ToolContentBlock =>
+            block.type === 'tool' && block.agentId === event.agentId,
+        )
+        .map((block) => block.toolCallId),
+    )
+    const withAgentBlock = ((): ContentBlock[] => {
+      if (event.parentAgentId) {
+        const { blocks: nestedBlocks, parentFound } = nestBlockUnderParent(
+          blocks,
+          event.parentAgentId,
+          newAgentBlock,
+        )
+        if (parentFound) {
+          return adoptOrphanedToolBlock(
+            nestedBlocks,
+            event.agentId,
+            orphanedToolIds,
+          )
+        }
       }
-    }
-    return [...blocks, newAgentBlock]
+      return adoptOrphanedToolBlock(
+        [...blocks, newAgentBlock],
+        event.agentId,
+        orphanedToolIds,
+      )
+    })()
+    return withAgentBlock
   })
+
+  // Show the agent prompt as a live activity hint while it runs. Only for
+  // organic subagents (no spawn_agents match): spawn_agents children get
+  // their final formatted content via handleSpawnAgentsResult, and
+  // applySpawnAgentResultToBlock checks hasStreamedTextContent before
+  // appending — adding a prompt block here would suppress that final output.
+  const promptText = event.prompt?.trim()
+  if (promptText) {
+    const snippet =
+      promptText.length > 200 ? promptText.slice(0, 200) + '…' : promptText
+    state.message.updater.updateAiMessageBlocks((blocks) =>
+      appendTextToAgentBlock(blocks, event.agentId, snippet),
+    )
+  }
 
   updateStreamingAgents(state, { add: event.agentId })
 }
@@ -466,29 +538,118 @@ const handleRegularToolCall = (
     lifecycle: event.queued === true ? 'queued' : 'running',
   }
 
-  if (event.parentAgentId && event.agentId) {
-    state.message.updater.updateAiMessageBlocks((blocks) =>
-      appendToolToAgentBlock(blocks, event.agentId as string, newToolBlock),
-    )
-    return
-  }
+  // Nest under the child's agent block whenever the event carries an agentId
+  // (keyed by the child's OWN id), NOT only when parentAgentId is also set. A
+  // supervised/direct-child tool event can carry the child's agentId with no
+  // parentAgentId, and gating on parentAgentId appended the block at ROOT
+  // instead of nesting it under the child. Root-append when there is no
+  // agentId at all, AND when the referenced agent block does not (yet) exist:
+  // appendToolToAgentBlock is a no-op with no matching target, so nesting
+  // unconditionally would silently drop the tool card for an event whose
+  // agent block was never created, was already completed, or was hidden.
+  //
+  // RACE SAFETY: the production message updater is
+  // `createBatchedMessageUpdater`, which QUEUES the updater and runs it at the
+  // next 100ms flush (or on dispose). A decision hoisted into a closure flag
+  // read after the updater returns would still be false at the synchronous
+  // check. The decision is therefore made INSIDE the single updater that
+  // appends the block — it reads the real, current block tree atomically with
+  // the append — and the append is IDEMPOTENT by toolCallId: when a queued
+  // flush runs after a `tool_result` already materialized the card, or a
+  // second flush runs for the same id, the block is not appended again. When
+  // the agent block genuinely does not exist yet, the block is appended at
+  // ROOT (never dropped) and `adoptOrphanedToolBlock` moves it under the agent
+  // once that block appears, so there is never a duplicate or an orphan.
+  const agentId = event.agentId
+  state.message.updater.updateAiMessageBlocks((blocks) => {
+    if (hasToolBlockById(blocks, newToolBlock.toolCallId)) return blocks
+    if (agentId && hasAgentBlock(blocks, agentId)) {
+      return appendToolToAgentBlock(blocks, agentId, newToolBlock)
+    }
+    return [...blocks, newToolBlock]
+  })
+}
 
-  state.message.updater.updateAiMessageBlocks((blocks) => [
-    ...blocks,
-    newToolBlock,
-  ])
+// Depth bound for the tool-block tree walk below, mirroring
+// MAX_BLOCK_UPDATE_DEPTH in message-block-helpers.ts (the sibling tree walks
+// `hasAgentBlock`/`updateBlocksRecursively`/`findAgentTypeById` all cap at the
+// same value). hasToolBlockById runs on the hot path of every queued tool_call
+// updater flush, so a pathologically deep (or cyclic) block tree must degrade
+// instead of overflowing the stack and aborting the message-update flush.
+const MAX_TOOL_BLOCK_WALK_DEPTH = 200
+
+/**
+ * Recursively detects an existing tool block with `toolCallId` anywhere in the
+ * tree (root or nested), so a queued updater that runs more than once — or a
+ * result updater that ran before its tool_call's flush — cannot append a second
+ * copy of the same card.
+ *
+ * Depth-capped like the sibling tree walks in message-block-helpers.ts: past
+ * the cap the walk stops descending and reports "not found". A tool block that
+ * deep is beyond any legitimate agent nesting depth, and returning false there
+ * at worst appends at root (the pre-existing orphan path that
+ * `adoptOrphanedToolBlock` repairs) instead of crashing the flush.
+ */
+const hasToolBlockById = (
+  blocks: ContentBlock[],
+  toolCallId: string,
+  _depth = 0,
+): boolean =>
+  blocks.some((block) =>
+    block.type === 'tool'
+      ? block.toolCallId === toolCallId
+      : block.type === 'agent' &&
+          block.blocks &&
+          _depth < MAX_TOOL_BLOCK_WALK_DEPTH
+        ? hasToolBlockById(block.blocks, toolCallId, _depth + 1)
+        : false,
+  )
+
+/**
+ * Moves any ROOT-level tool blocks whose `toolCallId` is in `toolCallIds` under
+ * the agent block identified by `agentId`, returning the original array when
+ * nothing moved.
+ *
+ * This is the counterpart to the race-safe root fallback in
+ * `handleRegularToolCall`: under the batched message updater a tool card can be
+ * appended at ROOT before its owning agent block exists (the agent's own
+ * updater is queued behind it). Once the agent block appears, this re-parents
+ * the already-rendered card instead of leaving an orphaned duplicate at root.
+ */
+const adoptOrphanedToolBlock = (
+  blocks: ContentBlock[],
+  agentId: string,
+  toolCallIds: Set<string>,
+): ContentBlock[] => {
+  if (toolCallIds.size === 0) return blocks
+  const adoptable = blocks.filter(
+    (block): block is ToolContentBlock =>
+      block.type === 'tool' && toolCallIds.has(block.toolCallId),
+  )
+  if (adoptable.length === 0) return blocks
+  const remaining = blocks.filter(
+    (block) => !(block.type === 'tool' && toolCallIds.has(block.toolCallId)),
+  )
+  let adopted = remaining
+  for (const toolBlock of adoptable) {
+    adopted = appendToolToAgentBlock(adopted, agentId, toolBlock)
+  }
+  return adopted
 }
 
 const handleToolCall = (state: EventHandlerState, event: PrintModeToolCall) => {
   // Close any open native reasoning blocks when a tool call happens
   // (agent may go directly from thinking to tool calls without emitting text)
-  // This must happen BEFORE any early returns (spawn_agents, hidden tools)
-  if (event.parentAgentId && event.agentId) {
+  // This must happen BEFORE any early returns (spawn_agents, hidden tools).
+  // An agentId means the tool call belongs to that agent's block, so its
+  // reasoning closes there regardless of whether parentAgentId is present; a
+  // root tool call (no agentId) closes root-level reasoning instead.
+  if (event.agentId) {
     // For agent tool calls, close reasoning in that specific agent
     state.message.updater.updateAiMessageBlocks((blocks) =>
       closeNativeReasoningInAgent(blocks, event.agentId as string),
     )
-  } else if (!event.parentAgentId) {
+  } else {
     // For root tool calls, close reasoning at root level
     state.message.updater.updateAiMessageBlocks(closeNativeReasoningBlock)
   }
@@ -502,8 +663,15 @@ const handleToolCall = (state: EventHandlerState, event: PrintModeToolCall) => {
     return
   }
 
-  handleRegularToolCall(state, event)
+  // REGISTRATION ORDER INVARIANT (race-safe nest-vs-root): register the id in
+  // the synchronously-updated streaming registry BEFORE `handleRegularToolCall`
+  // queues its block append. The queued updater may flush after a later
+  // `tool_result` for the same id; that result's updater consults the registry
+  // (already populated here) to recognize the agent block is inbound instead of
+  // appending an orphaned ROOT copy. Registering after the call left the
+  // registry empty at result time under the batched updater.
   updateStreamingAgents(state, { add: event.toolCallId })
+  handleRegularToolCall(state, event)
 }
 
 /**
@@ -518,13 +686,20 @@ const handleToolStart = (
   state: EventHandlerState,
   event: PrintModeToolStart,
 ) => {
-  const flipQueued = (blocks: ContentBlock[]): ContentBlock[] =>
+  const flipQueued = (
+    blocks: ContentBlock[],
+    depth = 0,
+  ): ContentBlock[] =>
     blocks.map((block) => {
       if (block.type === 'tool' && block.toolCallId === event.toolCallId) {
         if (isTerminalToolBlock(block)) return block
         return { ...block, queued: false, lifecycle: 'running' as const }
-      } else if (block.type === 'agent' && block.blocks) {
-        const updatedBlocks = flipQueued(block.blocks)
+      } else if (
+        block.type === 'agent' &&
+        block.blocks &&
+        depth < MAX_TOOL_BLOCK_WALK_DEPTH
+      ) {
+        const updatedBlocks = flipQueued(block.blocks, depth + 1)
         // Avoid creating a new agent block ref when nothing changed (shallow reference check to avoid node:util and O(N^2)).
         if (
           updatedBlocks.length === block.blocks.length &&
@@ -2031,9 +2206,25 @@ const handleProviderStatus = (
       : event.status === 'failover'
         ? `Provider failover: ${event.model ?? 'primary model'} → ${event.nextModel ?? 'backup model'}.`
         : `Provider connection recovered${event.model ? ` on ${event.model}` : ''}.`
+  // Transient connection status is NOT assistant prose: it renders as a muted
+  // status line (textType 'status', color honored by the text renderers) and
+  // COALESCES — each event replaces the previous status block, so a retry
+  // storm shows one line instead of one per attempt. The final line stays as
+  // a quiet record that a retry happened at all.
   state.message.updater.updateAiMessageBlocks((blocks) => [
-    ...blocks,
-    { type: 'text' as const, textType: 'text' as const, content },
+    ...blocks.filter(
+      (block) =>
+        !(
+          block.type === 'text' &&
+          (block as { textType?: string }).textType === 'status'
+        ),
+    ),
+    {
+      type: 'text' as const,
+      textType: 'status' as const,
+      color: 'muted',
+      content,
+    },
   ])
 }
 

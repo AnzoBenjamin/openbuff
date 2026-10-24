@@ -851,6 +851,51 @@ describe('editor / repair-editor / test-writer cohesion', () => {
       'manual spawns omit params.snapshot_id entirely',
     )
   })
+
+  test('createSpecialist findings use text (not summary) to match the reviewer family', () => {
+    const specialist = createSpecialist({
+      id: 'dependency-reviewer',
+      displayName: 'Dependency Reviewer',
+      purpose: 'Review dependency and lockfile correctness.',
+      focus: ['Manifest and lockfile correctness'],
+    })
+    const outputSchema = specialist.outputSchema as {
+      properties?: {
+        findings?: {
+          items?: {
+            properties?: Record<string, unknown>
+            required?: string[]
+          }
+        }
+      }
+    }
+    const findingProperties =
+      outputSchema.properties?.findings?.items?.properties ?? {}
+    expect(Object.keys(findingProperties)).toContain('text')
+    expect(Object.keys(findingProperties)).not.toContain('summary')
+    const findingRequired =
+      outputSchema.properties?.findings?.items?.required ?? []
+    expect(findingRequired).toContain('text')
+    expect(findingRequired).not.toContain('summary')
+  })
+
+  test('createSpecialist instructionsPrompt appends a worked-output example and per-field type checklist', () => {
+    const specialist = createSpecialist({
+      id: 'migration-reviewer',
+      displayName: 'Migration Reviewer',
+      purpose: 'Review schema and data migrations.',
+      focus: ['Migration safety'],
+    })
+    const instructions = specialist.instructionsPrompt
+    // Worked minimal clean-output example marker (reviewer family shape).
+    expect(instructions).toContain('"schemaVersion": 1')
+    expect(instructions).toContain('"family": "reviewer"')
+    expect(instructions).toContain('"verdict": "LOOKS_GOOD"')
+    // Per-field type checklist phrase.
+    expect(instructions).toContain(
+      'Per-field type checklist before calling set_output',
+    )
+  })
 })
 
 describe('caller-facing omit-for-manual guidance surfaces (RF-1-55de1919)', () => {

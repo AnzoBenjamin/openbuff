@@ -57,6 +57,20 @@ import {
   setupOpenbuffProviderFromArgs,
 } from '../utils/openbuff-provider'
 import { flushAnalytics } from '../utils/analytics'
+import {
+  attachSession,
+  detachOnExit,
+  detachSession,
+} from '../utils/attach-session'
+import {
+  cancelTurnBisection,
+  isTurnBisectionRunning,
+  listTurnSnapshots,
+  restoreToTurn,
+  runTurnBisection,
+  undoLastTurn,
+} from '../utils/turn-snapshots'
+import { getAttachTarget } from '../utils/codebuff-client'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
 import { withTimeout } from '../utils/terminal-color-detection'
 import { capturePendingAttachments } from '../utils/pending-attachments'
@@ -73,6 +87,7 @@ import type { QueuedMessage } from '../hooks/use-message-queue'
 import type { ChatMessage, ContentBlock } from '../types/chat'
 import type { SendMessageFn } from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
+import { buildCliCapabilityMapV1, buildDoctorCapabilityRows } from '../utils/capability-tiers'
 
 export type RouterParams = {
   abortControllerRef: React.MutableRefObject<AbortController | null>
@@ -207,19 +222,35 @@ const clearInput = (params: RouterParams) => {
 // leave async resources (in-flight tool subprocesses, open file handles,
 // timers) half torn down when that handler defers or swallows the signal.
 const EXIT_FLUSH_TIMEOUT_MS = 1000
-const exitWithAnalyticsFlush = (signal?: AbortSignal): void => {
+const exitWithAnalyticsFlush = (
+  signal?: AbortSignal,
+  beforeExit?: Promise<unknown>,
+): void => {
   // The flush window is bounded by withTimeout (reliability finding
   // exit-flush-not-tied-to-timeout): the /exit handler aborts the stream
   // controller before calling this, and withTimeout only honors aborts that
   // fire while the window is open — so this pre-aborted signal never
   // collapses the documented EXIT_FLUSH_TIMEOUT_MS flush bound (reliability
   // finding exit-flush-window-collapsed-by-pre-aborted-signal).
-  withTimeout(
+  const flush = withTimeout(
     flushAnalytics(),
     EXIT_FLUSH_TIMEOUT_MS,
     undefined,
     signal,
-  ).finally(() => {
+  )
+  // The optional beforeExit step (the attach-mode detach) runs alongside the
+  // flush and is awaited bounded inside the chain, so process.exit can never
+  // race the async detach; a detach rejection or timeout never blocks or
+  // delays the exit beyond the same EXIT_FLUSH_TIMEOUT_MS bound.
+  const boundedBeforeExit = beforeExit
+    ? withTimeout(beforeExit, EXIT_FLUSH_TIMEOUT_MS, undefined).catch(
+        () => undefined,
+      )
+    : undefined
+  const exitChain = boundedBeforeExit
+    ? Promise.all([flush, boundedBeforeExit])
+    : flush
+  exitChain.finally(() => {
     process.exit(0)
   })
 }
@@ -477,7 +508,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
         const commandWithBang = '!' + trimmedArgs
         params.saveToHistory(commandWithBang)
         clearInput(params)
-        runBashCommand(trimmedArgs)
+        void runBashCommand(trimmedArgs)
         return
       }
 
@@ -494,7 +525,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
       try {
-        runBashCommand(buildSafeGitCommand('diff', trimmedArgs))
+        void runBashCommand(buildSafeGitCommand('diff', trimmedArgs))
       } catch (error) {
         appendLocalMessage(
           params,
@@ -510,7 +541,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
       try {
-        runBashCommand(buildSafeGitCommand('status', trimmedArgs, ['--short']))
+        void runBashCommand(buildSafeGitCommand('status', trimmedArgs, ['--short']))
       } catch (error) {
         appendLocalMessage(
           params,
@@ -548,10 +579,378 @@ const ALL_COMMANDS: CommandDefinition[] = [
           // Skip the failed entry; keep draining the remaining prompts.
         }
       }
-      params.abortControllerRef.current?.abort()
+      // Attach mode: detach instead of aborting so the remote run KEEPS
+      // RUNNING after the CLI exits. The detach is kicked off here and
+      // awaited bounded inside the exit chain (never fire-and-forget:
+      // process.exit must not race it).
+      const attachTarget = getAttachTarget()
+      const beforeExit = attachTarget ? detachOnExit() : undefined
+      if (!attachTarget) {
+        // Non-attach mode keeps the existing abort behavior.
+        params.abortControllerRef.current?.abort()
+      }
       cancelAllBashCommands()
       params.stopStreaming()
-      exitWithAnalyticsFlush(params.abortControllerRef.current?.signal)
+      exitWithAnalyticsFlush(
+        params.abortControllerRef.current?.signal,
+        beforeExit,
+      )
+    },
+  }),
+  defineCommand({
+    name: 'detach',
+    handler: (params) => {
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Between-turns only: an in-flight run must never be aborted by /detach.
+      // RouterParams has no single in-flight flag, so gate on the same
+      // busy-check the guarded-submit path (sendPromptCommand) uses.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current
+      ) {
+        appendLocalMessage(
+          params,
+          '/detach: a turn is in progress - wait for it to finish, then run /detach again.',
+        )
+        return
+      }
+      // Fire-and-forget and fail-closed: detachSession never rejects (every
+      // failure is a structured outcome), so nothing here can throw out of the
+      // handler and crash the TUI.
+      void detachSession().then((outcome) => {
+        switch (outcome.status) {
+          case 'detached':
+            appendLocalMessage(
+              params,
+              `/detach: detached session ${outcome.sessionId}. It keeps running; run /attach to reattach (the next message resumes the detached session).`,
+            )
+            break
+          case 'no-session':
+            appendLocalMessage(
+              params,
+              '/detach: no live session to detach from.',
+            )
+            break
+          case 'unavailable':
+            appendLocalMessage(
+              params,
+              '/detach: detach is unavailable - only sessions started in attach mode (--attach) can be detached.',
+            )
+            break
+          case 'error':
+            appendLocalMessage(params, `/detach: ${outcome.message}`)
+            break
+        }
+      })
+    },
+  }),
+  defineCommand({
+    name: 'attach',
+    handler: (params) => {
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Fire-and-forget and fail-closed, like /detach: attachSession never
+      // rejects. The NEXT run() auto-resumes the detached session, so /attach
+      // only re-establishes the connection/session binding.
+      void attachSession().then((outcome) => {
+        switch (outcome.status) {
+          case 'attached':
+            appendLocalMessage(
+              params,
+              `/attach: reattached to session ${outcome.sessionId}.`,
+            )
+            break
+          case 'no-session-id':
+            appendLocalMessage(
+              params,
+              '/attach: no detached session to attach to - run /detach first.',
+            )
+            break
+          case 'unavailable':
+            appendLocalMessage(
+              params,
+              '/attach: attach is unavailable - only sessions started in attach mode (--attach) can be reattached.',
+            )
+            break
+          case 'error':
+            appendLocalMessage(params, `/attach: ${outcome.message}`)
+            break
+        }
+      })
+    },
+  }),
+  defineCommandWithArgs({
+    name: 'undo-turn',
+    handler: (params) => {
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Between-turns only: the tracked working tree must never be mutated
+      // mid-stream, so gate on the same busy-check the /detach handler uses.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current ||
+        isTurnBisectionRunning()
+      ) {
+        appendLocalMessage(
+          params,
+          '/undo-turn: a turn is in progress - wait for it to finish, then run /undo-turn again.',
+        )
+        return
+      }
+      // Fire-and-forget and fail-closed, like /detach: undoLastTurn never
+      // rejects (every failure is a structured outcome).
+      void undoLastTurn().then((outcome) => {
+        switch (outcome.status) {
+          case 'undone':
+            appendLocalMessage(
+              params,
+              `/undo-turn: restored tracked files to the previous turn snapshot (${outcome.toSha.slice(0, 12)}); the real index, HEAD, and untracked files are unchanged.`,
+            )
+            break
+          case 'nothing-to-undo':
+            appendLocalMessage(
+              params,
+              '/undo-turn: no earlier turn snapshot to undo to.',
+            )
+            break
+          case 'unavailable':
+            appendLocalMessage(
+              params,
+              '/undo-turn: turn snapshots are unavailable - this project is not a git repository with commits.',
+            )
+            break
+          case 'error':
+            appendLocalMessage(params, `/undo-turn: ${outcome.message}`)
+            break
+        }
+      })
+    },
+  }),
+  defineCommandWithArgs({
+    name: 'restore',
+    handler: (params, args) => {
+      const target = args.trim()
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // Same busy-check as /detach and /undo-turn: never mutate the tracked
+      // working tree mid-stream.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current ||
+        isTurnBisectionRunning()
+      ) {
+        appendLocalMessage(
+          params,
+          '/restore: a turn is in progress - wait for it to finish, then run /restore again.',
+        )
+        return
+      }
+      if (!target) {
+        appendLocalMessage(
+          params,
+          '/restore: provide a snapshot sha or a 1-based index (run /bisect-turn list to see snapshots).',
+        )
+        return
+      }
+      // Fire-and-forget and fail-closed, like /detach: both helpers never
+      // reject (every failure is a structured outcome).
+      void (async () => {
+        // A bare number resolves as a 1-based index into the newest-first
+        // snapshot list; anything else is treated as a sha.
+        if (/^\d+$/.test(target)) {
+          const snapshots = await listTurnSnapshots()
+          const index = Number.parseInt(target, 10)
+          const entry = snapshots[index - 1]
+          if (!entry) {
+            appendLocalMessage(
+              params,
+              `/restore: no snapshot at index ${target} (${snapshots.length} snapshot${snapshots.length === 1 ? '' : 's'} available).`,
+            )
+            return undefined
+          }
+          return entry.sha
+        }
+        return target
+      })()
+        .then((sha) =>
+          sha === undefined
+            ? undefined
+            : restoreToTurn(sha).then((outcome) => {
+                switch (outcome.status) {
+                  case 'restored':
+                    appendLocalMessage(
+                      params,
+                      `/restore: restored tracked files to turn snapshot ${outcome.sha.slice(0, 12)}; the real index, HEAD, and untracked files are unchanged.`,
+                    )
+                    break
+                  case 'not-found':
+                    appendLocalMessage(
+                      params,
+                      `/restore: no turn snapshot found for ${target}.`,
+                    )
+                    break
+                  case 'unavailable':
+                    appendLocalMessage(
+                      params,
+                      '/restore: turn snapshots are unavailable - this project is not a git repository with commits.',
+                    )
+                    break
+                  case 'error':
+                    appendLocalMessage(params, `/restore: ${outcome.message}`)
+                    break
+                }
+              }),
+        )
+        .catch(() => {
+          appendLocalMessage(
+            params,
+            '/restore: failed to resolve the requested turn snapshot.',
+          )
+        })
+    },
+  }),
+  defineCommandWithArgs({
+    name: 'bisect-turn',
+    handler: (params, args) => {
+      const target = args.trim()
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      // `stop` and `list` MUST stay reachable while a bisection is running:
+      // `stop` is the only escape hatch from a run that can hold the tracked
+      // tree for many 10-minute-bounded probes, and `list` is read-only.
+      // Both therefore precede the busy-check by contract.
+      if (target === 'stop') {
+        cancelTurnBisection()
+        appendLocalMessage(
+          params,
+          '/bisect-turn: cancellation requested - the running bisection stops after its current probe and restores the newest snapshot.',
+        )
+        return
+      }
+      if (target === 'list') {
+        void listTurnSnapshots().then((snapshots) => {
+          if (snapshots.length === 0) {
+            appendLocalMessage(
+              params,
+              '/bisect-turn: no turn snapshots yet - snapshots are taken after each successful turn.',
+            )
+            return
+          }
+          const lines = snapshots
+            .slice(0, 20)
+            .map(
+              (entry, i) =>
+                `${i + 1}. ${entry.sha.slice(0, 12)} ${entry.label || '(unlabeled)'}`,
+            )
+          appendLocalMessage(
+            params,
+            `/bisect-turn: ${snapshots.length} snapshots, newest first:\n${lines.join('\n')}`,
+          )
+        })
+        return
+      }
+      // The bisection RUN is the only mutating path: same busy-check as
+      // /undo-turn and /restore, plus isTurnBisectionRunning so a second
+      // bisection can never interleave checkout rewrites.
+      if (
+        params.isStreaming ||
+        params.streamMessageIdRef.current ||
+        params.isChainInProgressRef.current
+      ) {
+        appendLocalMessage(
+          params,
+          '/bisect-turn: a turn is in progress - wait for it to finish, then run /bisect-turn again.',
+        )
+        return
+      }
+      if (isTurnBisectionRunning()) {
+        appendLocalMessage(
+          params,
+          '/bisect-turn: a bisection is already in flight - run /bisect-turn stop to cancel it before starting another.',
+        )
+        return
+      }
+      // Anything else is the test command (empty => the default suite).
+      // `--keep-best` (anywhere in the args) opts into leaving the tracked
+      // tree at the last passing snapshot after a 'found' outcome, instead
+      // of restoring the newest. The flag is stripped before the remainder
+      // becomes the test command.
+      const keepBestState = target.includes('--keep-best')
+      const command =
+        target.replace(/(^|\s)--keep-best(\s|$)/g, ' ').trim() || 'bun test'
+      void (async () => {
+        const snapshots = await listTurnSnapshots()
+        appendLocalMessage(
+          params,
+          `/bisect-turn: bisecting ${snapshots.length} snapshots with '${command}'${keepBestState ? ' (--keep-best: stays at the last passing snapshot on success)' : ''} - the tracked working tree is temporarily rewritten during each probe (HEAD, the real index, and untracked files are untouched) and restored to the newest snapshot afterward.`,
+        )
+        return runTurnBisection({ command, keepBestState })
+      })()
+        .then((outcome) => {
+          switch (outcome.status) {
+            case 'found': {
+              const failingName =
+                outcome.failingLabel || '(unlabeled snapshot)'
+              const bestSha12 = outcome.bestSha?.slice(0, 12)
+              const tail =
+                outcome.bestSha !== undefined
+                  ? keepBestState
+                    ? `; the tracked tree is now at the last passing snapshot ${bestSha12}.`
+                    : `; the last passing snapshot is ${bestSha12} - run /restore ${bestSha12} to go back to it.`
+                  : '.'
+              appendLocalMessage(
+                params,
+                `/bisect-turn: first failing turn is ${failingName} (${outcome.failingSha.slice(0, 12)}) after ${outcome.probesRun} probes${tail}`,
+              )
+              break
+            }
+            case 'inconclusive':
+              appendLocalMessage(
+                params,
+                outcome.reason === 'baseline-fails'
+                  ? '/bisect-turn: inconclusive - the test suite already fails at the OLDEST snapshot, so bisection cannot localize the breakage.'
+                  : '/bisect-turn: inconclusive - the test suite passed at every snapshot, so no failing turn was found.',
+              )
+              break
+            case 'no-snapshots':
+              appendLocalMessage(
+                params,
+                '/bisect-turn: no turn snapshots yet - snapshots are taken after each successful turn.',
+              )
+              break
+            case 'too-few-snapshots':
+              appendLocalMessage(
+                params,
+                `/bisect-turn: only ${outcome.count} snapshot${outcome.count === 1 ? '' : 's'} - at least 3 are needed to bisect.`,
+              )
+              break
+            case 'cancelled':
+              appendLocalMessage(
+                params,
+                '/bisect-turn: cancelled - the newest snapshot was restored.',
+              )
+              break
+            case 'unavailable':
+              appendLocalMessage(
+                params,
+                '/bisect-turn: turn snapshots are unavailable - this project is not a git repository with commits.',
+              )
+              break
+            case 'error':
+              appendLocalMessage(params, `/bisect-turn: ${outcome.message}`)
+              break
+          }
+        })
+        .catch(() => {
+          appendLocalMessage(
+            params,
+            '/bisect-turn: bisection failed unexpectedly.',
+          )
+        })
     },
   }),
   defineCommandWithArgs({
@@ -821,6 +1220,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
           message: diagnostic.message,
         })),
         providerStatus,
+        capabilities: buildDoctorCapabilityRows(buildCliCapabilityMapV1()),
       }
       appendLocalBlocks(params, [block])
       params.saveToHistory(params.inputValue.trim())
@@ -880,7 +1280,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'image',
-    aliases: ['img', 'attach'],
+    aliases: ['img'],
     handler: async (params, args) => {
       const trimmedArgs = args.trim()
 

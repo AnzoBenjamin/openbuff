@@ -1113,7 +1113,19 @@ describe('recorded tool evidence round trip', () => {
       callId: 'roundtrip-read-1',
       output: [{ type: 'json', value: readResult }],
     })
-    const recorded = memory!.evidence.find(
+    // Tier 1D: derived read evidence is now session-scoped and the store
+    // drops it at merge time. This test pins the hash round-trip contract,
+    // so it explicitly opts the read back into persistence; the drop itself
+    // is pinned by the dedicated test below.
+    const persistable = {
+      ...memory!,
+      evidence: memory!.evidence.map((item) =>
+        item.id === 'read:read-me.ts'
+          ? { ...item, sessionScoped: false }
+          : item,
+      ),
+    }
+    const recorded = persistable.evidence.find(
       (item) => item.id === 'read:read-me.ts',
     )!
     // Stored in the store's canonical bare-hex form, so `digest ===
@@ -1121,7 +1133,7 @@ describe('recorded tool evidence round trip', () => {
     expect(recorded.freshnessHash).toBe(sha256('export const a = 1\n'))
 
     expect(
-      await saveMergedTaskMemory({ rootDir, runMemory: memory }),
+      await saveMergedTaskMemory({ rootDir, runMemory: persistable }),
     ).toBeDefined()
     const reconciled = await reconcileTaskMemoryEvidence({
       memory: (await loadPersistedTaskMemory({ rootDir }))!,
@@ -1143,6 +1155,36 @@ describe('recorded tool evidence round trip', () => {
     expect(
       afterChange.evidence.find((item) => item.id === 'read:read-me.ts')!.stale,
     ).toBe(true)
+  })
+
+  test('session-scoped read evidence stays ephemeral across saves', async () => {
+    await writeFile(path.join(rootDir, 'ephemeral.ts'), 'export const e = 1\n')
+    const readResult = await getFilesStructured({
+      filePaths: ['ephemeral.ts'],
+      cwd: rootDir,
+      fs: createNodeFileSystem(),
+      capabilityIssuer: { projectId: rootDir, runId: 'roundtrip-ephemeral' },
+    })
+    const memory = recordToolEvidenceInTaskMemory({
+      toolName: 'read_files',
+      callId: 'roundtrip-ephemeral-1',
+      output: [{ type: 'json', value: readResult }],
+    })
+    expect(
+      memory!.evidence.some((item) => item.sessionScoped === true),
+    ).toBe(true)
+
+    await saveMergedTaskMemory({ rootDir, runMemory: memory })
+    const loaded = await loadPersistedTaskMemory({ rootDir })
+    expect(loaded).toBeDefined()
+    // The derived read never persists: no sessionScoped flag and no read-id
+    // entries survive the merge.
+    expect(loaded!.evidence.some((item) => item.sessionScoped === true)).toBe(
+      false,
+    )
+    expect(
+      loaded!.evidence.some((item) => item.id.startsWith('read:')),
+    ).toBe(false)
   })
 
   test('a real mutation afterHash reconciles fresh in the next session', async () => {

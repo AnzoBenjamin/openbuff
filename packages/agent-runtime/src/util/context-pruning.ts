@@ -320,6 +320,14 @@ export function getModelContextMessageLimit(
 export function maybePruneContext(params: {
   messages: Message[]
   systemTokens: number
+  /**
+   * Request messages which are compiled from state for this step but are not
+   * part of `messages` (for example task memory, Memory V2, and the step
+   * prompt). They consume the same provider budget, so history trimming must
+   * reserve their tokens rather than judging the history against the whole
+   * message allowance.
+   */
+  nonHistoryMessageTokens?: number
   contextTokenCount: number
   maxTotalTokens?: number
   logger: Logger
@@ -327,6 +335,7 @@ export function maybePruneContext(params: {
   const {
     messages,
     systemTokens,
+    nonHistoryMessageTokens = 0,
     contextTokenCount,
     maxTotalTokens = DEFAULT_MAX_CONTEXT_TOKENS,
     logger,
@@ -338,7 +347,11 @@ export function maybePruneContext(params: {
 
   const report = trimMessagesToFitTokenLimitWithReport({
     messages,
-    systemTokens,
+    // `trimMessagesToFitTokenLimitWithReport` owns only messageHistory. Fold
+    // the per-step compiled messages into its fixed baseline so it cannot
+    // report a zero-change "trim" when task memory or a step prompt pushed the
+    // actual provider request over budget.
+    systemTokens: systemTokens + Math.max(0, nonHistoryMessageTokens),
     maxTotalTokens,
     logger,
   })
@@ -364,8 +377,6 @@ export type SemanticCompactionGovernor = {
   iterationsSincePass: number
   /** Announced passes this turn; bounded by SEMANTIC_MAX_PASSES_PER_TURN. */
   passesThisTurn: number
-  /** Consecutive passes that settled without reclaiming meaningful space. */
-  consecutiveNoProgressPasses: number
 }
 
 export type GovernorDecision = {
@@ -381,7 +392,6 @@ export function createSemanticCompactionGovernor(): SemanticCompactionGovernor {
     state: 'armed',
     iterationsSincePass: 0,
     passesThisTurn: 0,
-    consecutiveNoProgressPasses: 0,
   }
 }
 
@@ -478,29 +488,6 @@ export function advanceGovernorIteration(
 ): void {
   if (governor.state === 'cooldown') {
     governor.iterationsSincePass += 1
-  }
-}
-
-/**
- * Record a settled pass. A productive pass resets the no-progress streak; an
- * unproductive one increments it, and TWO consecutive no-progress passes cap
- * the turn at its already-spent pass budget. Unlike the old permanent
- * `suppressSemanticCompaction` advisory this stays bounded (no further paid
- * passes this turn, but eviction + the mechanical trim still respond) and the
- * state resets naturally next turn because the governor is loop-local.
- */
-export function recordPassSettled(
-  governor: SemanticCompactionGovernor,
-  params: { productive: boolean },
-): void {
-  const { productive } = params
-  if (productive) {
-    governor.consecutiveNoProgressPasses = 0
-    return
-  }
-  governor.consecutiveNoProgressPasses += 1
-  if (governor.consecutiveNoProgressPasses >= 2) {
-    governor.passesThisTurn = SEMANTIC_MAX_PASSES_PER_TURN
   }
 }
 

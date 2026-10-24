@@ -1,0 +1,67 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": false,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "close": {}
+      },
+      "_meta": {
+        "openbuff.dev": {
+          "extVersion": 1,
+          "extensions": [
+            "capabilities",
+            "receipts",
+            "lanes",
+            "gate",
+            "events"
+          ],
+          "capabilities": {
+            "kind": "openbuff.capabilities",
+            "version": 1,
+            "generation": 1,
+            "sandbox": {
+              "tier": "lexical",
+              "enforced": false,
+              "network": "unrestricted"
+            },
+            "index": {
+              "state": "ready",
+              "files": 4213
+            },
+            "lsp": [],
+            "sidecars": [],
+            "lanes": {
+              "supported": false
+            },
+            "journal": {
+              "resume": false,
+              "replay": false
+            },
+            "gate": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    },
+    "agentInfo": {
+      "name": "openbuff",
+      "title": "Openbuff",
+      "version": "2.0.0"
+    },
+    "authMethods": []
+  }
+}

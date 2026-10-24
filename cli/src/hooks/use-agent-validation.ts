@@ -1,6 +1,7 @@
 import { validateAgents } from '@openbuff/sdk'
 import { useCallback, useState } from 'react'
 
+import { whenRegistriesReady } from '../services/deferred-registries'
 import {
   getAgentRegistryDiagnostics,
   loadAgentDefinitions,
@@ -40,6 +41,12 @@ export const useAgentValidation = (): UseAgentValidationResult => {
     setIsValidating(true)
 
     try {
+      // P1-T9 gating: this hook reads the agent registry via
+      // loadAgentDefinitions, so the deferred registry loads must have
+      // settled BEFORE it runs — otherwise a mid-startup validation observes
+      // an empty/partial registry. Resolves immediately once ready (or when
+      // no deferred load ran, e.g. on the serve/mcp/run/replay paths).
+      await whenRegistriesReady()
       const agentDefinitions = loadAgentDefinitions()
 
       const validationResult = await validateAgents(agentDefinitions, {

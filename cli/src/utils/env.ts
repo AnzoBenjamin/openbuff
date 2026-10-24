@@ -76,6 +76,15 @@ export const getCliEnv = (): CliEnv => ({
   CODEBUFF_PERF_TEST: process.env.CODEBUFF_PERF_TEST,
   OPENBUFF_CONFIG_DIR: process.env.OPENBUFF_CONFIG_DIR,
   OPENBUFF_MEMORY_AUTHORITY: process.env.OPENBUFF_MEMORY_AUTHORITY,
+  // Optional cap on the missing-output retry loop (maxMissingOutputRetries).
+  OPENBUFF_MAX_MISSING_OUTPUT_RETRIES:
+    process.env.OPENBUFF_MAX_MISSING_OUTPUT_RETRIES,
+  // P1-T3 attach mode: target of a running `openbuff serve` to attach to.
+  OPENBUFF_SERVE_SOCKET: process.env.OPENBUFF_SERVE_SOCKET,
+  OPENBUFF_SERVE_TOKEN: process.env.OPENBUFF_SERVE_TOKEN,
+  // P2-T7 dash mode: fallback auth token for `openbuff dash` when --token is
+  // omitted (the CLI otherwise generates one and prints it to stderr).
+  OPENBUFF_DASH_TOKEN: process.env.OPENBUFF_DASH_TOKEN,
 })
 
 export type MemoryAuthoritySelection = {
@@ -108,3 +117,14 @@ export function getMemoryAuthoritySelection(
  * or when you need to set environment variables at runtime.
  */
 export const getSystemProcessEnv = (): NodeJS.ProcessEnv => process.env
+
+/**
+ * Whether an environment variable is set to a non-empty value. For UI
+ * affordances like the provider picker's key-status hints; components must
+ * read env presence through here, not process.env directly (the
+ * env-architecture guard enforces it).
+ */
+export function isEnvVarSet(name: string): boolean {
+  const value = getSystemProcessEnv()[name]
+  return typeof value === 'string' && value.length > 0
+}
