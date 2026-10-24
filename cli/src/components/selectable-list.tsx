@@ -24,6 +24,12 @@ import { useTheme } from '../hooks/use-theme'
 import type { ScrollBoxRenderable } from '@opentui/core'
 
 export interface SelectableListItem {
+  /**
+   * Character positions in `label` matched by the caller's fuzzy query.
+   * Rendered bold (fzf-style) so ranking is visible; optional, so lists
+   * without a query render exactly as before.
+   */
+  labelIndices?: number[]
   id: string
   label: string
   icon?: string
@@ -201,18 +207,73 @@ export const SelectableList = forwardRef<
                     {item.icon}
                   </text>
                 )}
-                <text
-                  style={{
-                    fg:
-                      item.accent && !isHighlighted ? theme.primary : textColor,
-                    attributes:
-                      item.accent || isHighlighted
-                        ? TextAttributes.BOLD
-                        : undefined,
-                  }}
-                >
-                  {item.label}
-                </text>
+                {(() => {
+                  // fzf-style matched-character emphasis: when the caller
+                  // supplies the fuzzy match positions, the matched
+                  // subsequence renders bold so the user can see WHY a row
+                  // ranked, without re-deriving the match by eye.
+                  if (!item.labelIndices || item.labelIndices.length === 0) {
+                    return (
+                      <text
+                        style={{
+                          fg:
+                            item.accent && !isHighlighted
+                              ? theme.primary
+                              : textColor,
+                          attributes:
+                            item.accent || isHighlighted
+                              ? TextAttributes.BOLD
+                              : undefined,
+                        }}
+                      >
+                        {item.label}
+                      </text>
+                    )
+                  }
+                  const matched = new Set(item.labelIndices)
+                  const segments: Array<{
+                    text: string
+                    matched: boolean
+                  }> = []
+                  let current = ''
+                  let currentMatched = false
+                  for (let i = 0; i < item.label.length; i++) {
+                    const isMatched = matched.has(i)
+                    if (isMatched === currentMatched) {
+                      current += item.label[i]
+                    } else {
+                      segments.push({ text: current, matched: currentMatched })
+                      current = item.label[i] ?? ''
+                      currentMatched = isMatched
+                    }
+                  }
+                  if (current) {
+                    segments.push({ text: current, matched: currentMatched })
+                  }
+                  return (
+                    <text
+                      style={{
+                        fg:
+                          item.accent && !isHighlighted
+                            ? theme.primary
+                            : textColor,
+                      }}
+                    >
+                      {segments.map((segment, index) =>
+                        segment.matched ? (
+                          <span
+                            key={index}
+                            attributes={TextAttributes.BOLD}
+                          >
+                            {segment.text}
+                          </span>
+                        ) : (
+                          <span key={index}>{segment.text}</span>
+                        ),
+                      )}
+                    </text>
+                  )
+                })()}
                 {item.secondary && !item.hideSecondary && (
                   <text style={{ fg: theme.muted }}>{item.secondary}</text>
                 )}

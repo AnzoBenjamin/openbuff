@@ -26,6 +26,10 @@ export type TextContentBlock = {
   userOpened?: boolean
   /** True if this is a reasoning block from a <think> tag that hasn't been closed yet */
   thinkingOpen?: boolean
+  /** Epoch ms when this reasoning block first received content (duration header). */
+  thinkingStartedAt?: number
+  /** Epoch ms when this reasoning block completed (</think> or message completion). */
+  thinkingEndedAt?: number
   thinkingCollapseState?: ThinkingCollapseState
 }
 /** Renders dynamic React content. NOT serializable - don't use for persistent data. */

@@ -80,9 +80,11 @@ describe('QueryIndexComponent', () => {
 
     expect(markup).toContain('explain: authentication — 1 result')
     expect(markup).toContain('docs/authentication.md')
-    expect(markup).toContain('12.35')
-    expect(markup).toContain('heading, concept')
-    expect(markup).toContain('hash abcdef012345')
+    // Humanized rows: matched-on stays, raw score floats and content hashes
+    // are agent telemetry and no longer render.
+    expect(markup).toContain('matched: heading, concept')
+    expect(markup).not.toContain('12.35')
+    expect(markup).not.toContain('hash abcdef012345')
     expect(markup).toContain('related to src/auth.ts')
     expect(markup).toContain('Matched on heading, concept.')
     expect(markup).not.toContain('Status:')

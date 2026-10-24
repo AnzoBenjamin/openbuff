@@ -124,6 +124,7 @@ const createReasoningBlock = (
   thinkingCollapseState: 'preview',
   thinkingOpen,
   thinkingId,
+  thinkingStartedAt: Date.now(),
 })
 
 /**
@@ -257,6 +258,7 @@ const appendTextWithThinkParsingToBlocks = (
       nextBlocks[nextBlocks.length - 1] = {
         ...currentLastBlock,
         thinkingOpen: false,
+        thinkingEndedAt: Date.now(),
       }
     }
   }
@@ -331,6 +333,7 @@ const appendNativeReasoningToBlocks = (
     textType: 'reasoning',
     thinkingCollapseState: 'preview',
     thinkingId: generateThinkingId(),
+    thinkingStartedAt: Date.now(),
   }
 
   return [...nextBlocks, newBlock]
@@ -403,6 +406,7 @@ export const closeNativeReasoningBlock = (
   nextBlocks[lastReasoningIndex] = {
     ...reasoningBlock,
     thinkingOpen: false,
+    thinkingEndedAt: Date.now(),
   }
   return nextBlocks
 }

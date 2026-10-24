@@ -19,6 +19,7 @@ import { RunFileChangeHooksComponent } from './run-file-change-hooks'
 import { RunTerminalCommandComponent } from './run-terminal-command'
 import { SkillComponent } from './skill'
 import { SpawnAgentsComponent } from './spawn-agents'
+import { SetOutputComponent } from './set-output'
 import { StrReplaceComponent } from './str-replace'
 import { SuggestFollowupsComponent } from './suggest-followups'
 import { TaskCompleteComponent } from './task-completed'
@@ -120,6 +121,7 @@ const toolComponentRegistry = new Map<
   ['apply_smart_patch', ApplyPatchComponent],
   [SkillComponent.toolName, SkillComponent],
   [SpawnAgentsComponent.toolName, SpawnAgentsComponent],
+  [SetOutputComponent.toolName, SetOutputComponent],
 ])
 
 /**

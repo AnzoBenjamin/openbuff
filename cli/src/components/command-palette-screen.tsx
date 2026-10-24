@@ -20,6 +20,10 @@ import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
 import { BORDER_CHARS } from '../utils/ui-constants'
 import { fuzzyMatch } from '../utils/fuzzy-match'
+import {
+  getRecentCommandIds,
+  recordCommandUse,
+} from '../utils/command-mru'
 
 import { getAllPathsWithDirectories } from '@codebuff/common/project-file-tree'
 
@@ -178,13 +182,21 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
   const filteredEntries = useMemo(() => {
     const trimmed = searchQuery.trim()
     if (!trimmed) {
+      // fzf-style history merge: recently-used commands float to the top of
+      // the empty-query view, so repeat workflows are one Enter away. MRU
+      // order is read once per keystroke-batch (tiny fail-open JSON).
+      const recent = new Set(getRecentCommandIds())
       const commandEntries = allEntries.filter(
         (entry) => entry.kind === 'command',
       )
+      const ranked = [
+        ...commandEntries.filter((entry) => recent.has(entry.command.id)),
+        ...commandEntries.filter((entry) => !recent.has(entry.command.id)),
+      ]
       const fileEntries = allEntries
         .filter((entry) => entry.kind === 'file')
         .slice(0, LAYOUT.MAX_EMPTY_FILE_ITEMS)
-      return [...commandEntries, ...fileEntries]
+      return [...ranked, ...fileEntries]
     }
 
     const scored: { entry: PaletteEntry; score: number }[] = []
@@ -198,10 +210,31 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
     return scored.slice(0, LAYOUT.MAX_RENDERED_ITEMS).map((s) => s.entry)
   }, [allEntries, searchQuery])
 
-  const items = useMemo(
-    () => filteredEntries.map(entryToListItem),
-    [filteredEntries],
-  )
+  const items = useMemo(() => {
+    const trimmed = searchQuery.trim()
+    const listItems = filteredEntries.map(entryToListItem)
+    if (!trimmed) return listItems
+    // fzf-style emphasis: bold the matched subsequence in each visible row.
+    // Re-running the matcher on displayed rows only is bounded by list height
+    // and keeps the scoring pipeline untouched.
+    return listItems.map((item, index) => {
+      const entry = filteredEntries[index]
+      const text =
+        entry?.kind === 'command' ? entry.command.label : entry?.filePath
+      if (!text) return item
+      const fuzzy = fuzzyMatch(text, trimmed)
+      if (!fuzzy) return item
+      // Map indices from the scored text onto the displayed label: file rows
+      // display the same path; command rows display the id, which the label
+      // contains, so only in-range indices carry over.
+      const offset = text.indexOf(item.label)
+      if (offset === -1) return item
+      const labelIndices = fuzzy.indices
+        .filter((idx) => idx >= offset && idx < offset + item.label.length)
+        .map((idx) => idx - offset)
+      return labelIndices.length > 0 ? { ...item, labelIndices } : item
+    })
+  }, [filteredEntries, searchQuery])
 
   // Clamp focused index when the filtered list shrinks
   const clampedFocusedIndex = Math.min(
@@ -216,6 +249,7 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
       const entry = filteredEntries[idx]
       if (!entry) return
       if (entry.kind === 'command') {
+        recordCommandUse(entry.command.id)
         onExecuteCommand(`/${entry.command.id}`)
       } else {
         onSelectFile(entry.filePath, entry.isDirectory)
@@ -310,7 +344,7 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
             Command Palette
           </text>
           <text style={{ fg: theme.muted }}>
-            {'  '}Type to search commands and files · Enter to run · Esc to
+            {'  '}Type to search · ↑↓ select · Enter run · Esc to
             close
           </text>
         </box>

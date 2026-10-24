@@ -227,6 +227,26 @@ export function parseDiffIntoHunks(diffText: string): ParsedDiff {
 }
 
 /** Right-align a line number into `width` columns; null -> blank gutter. */
+/**
+ * Added/removed line counts for a unified diff, for quick-scan summaries
+ * (`+12 -3`) on cards and previews without expanding the hunks.
+ */
+export function computeDiffStats(diffText: string): {
+  added: number
+  removed: number
+} {
+  const { hunks } = parseDiffIntoHunks(diffText)
+  let added = 0
+  let removed = 0
+  for (const hunk of hunks) {
+    for (const line of hunk.bodyLines) {
+      if (line.type === 'add') added += 1
+      else if (line.type === 'del') removed += 1
+    }
+  }
+  return { added, removed }
+}
+
 export function formatLineNumber(num: number | null, width = 4): string {
   if (num === null || num === undefined) return ' '.repeat(width)
   const s = String(num)
@@ -315,6 +335,7 @@ export const DiffViewer = ({
   }
 
   const { fileHeaders, hunks } = parsedDiff
+  const stats = computeDiffStats(diffText)
 
   // File headers stay plain muted text (bold for the ---/+++ file pair);
   // they are not part of any hunk, so they never reach the native <diff>.
@@ -376,6 +397,16 @@ export const DiffViewer = ({
     <box
       style={{ flexDirection: 'column', gap: 0, width: '100%', flexGrow: 1 }}
     >
+      {stats.added + stats.removed > 0 ? (
+        <text style={{ wrapMode: 'none' }}>
+          <span fg={theme.success}>+{stats.added}</span>
+          <span fg={theme.muted}> </span>
+          <span fg={theme.error}>-{stats.removed}</span>
+          <span fg={theme.muted}>
+            {hunks.length > 1 ? ` · ${hunks.length} hunks` : ''}
+          </span>
+        </text>
+      ) : null}
       {fileHeaders.map((line, idx) => renderFileHeader(line, idx))}
       {hunks.map((hunk) => {
         const collapsed = collapsedHunks.has(hunk.index)

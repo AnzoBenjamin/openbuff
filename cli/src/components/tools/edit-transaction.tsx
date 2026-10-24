@@ -1,6 +1,6 @@
 import { TextAttributes } from '@opentui/core'
 
-import { DiffViewer } from './diff-viewer'
+import { DiffViewer, computeDiffStats } from './diff-viewer'
 import { defineToolComponent } from './types'
 import { useTheme } from '../../hooks/use-theme'
 import {
@@ -266,10 +266,24 @@ export const EditTransactionComponent = defineToolComponent({
     const queued = isQueued(toolBlock)
     const mutation = getCanonicalMutationResult(toolBlock.outputRaw)
     const title = 'Edit transaction'
+    // Quick-scan size signal on the collapsed line: +N -M totals across the
+    // transaction's per-file diffs, so the cost of an edit is visible without
+    // expanding the card.
+    const diffStats = files.reduce(
+      (acc, file) => {
+        const stats = computeDiffStats(typeof file.diff === 'string' ? file.diff : '')
+        return { added: acc.added + stats.added, removed: acc.removed + stats.removed }
+      },
+      { added: 0, removed: 0 },
+    )
+    const sizeSuffix =
+      diffStats.added + diffStats.removed > 0
+        ? ` (+${diffStats.added} -${diffStats.removed})`
+        : ''
     const collapsedPreview = error
       ? error.split('\n')[0]
       : files.length > 0
-        ? `${title} • ${files.length} file${files.length === 1 ? '' : 's'}`
+        ? `${title} • ${files.length} file${files.length === 1 ? '' : 's'}${sizeSuffix}`
         : queued
           ? `${title} queued...`
           : `${title} pending...`

@@ -20,6 +20,10 @@ interface ThinkingProps {
   isThinkingComplete: boolean
   onToggle: () => void
   availableWidth?: number
+  /** Epoch ms the reasoning started; enables the `Thinking · 6s` duration header. */
+  thinkingStartedAt?: number
+  /** Epoch ms the reasoning completed; undefined while streaming (live ticker). */
+  thinkingEndedAt?: number
 }
 
 export const Thinking = memo(
@@ -28,9 +32,28 @@ export const Thinking = memo(
     thinkingCollapseState,
     isThinkingComplete,
     onToggle,
+    thinkingStartedAt,
+    thinkingEndedAt,
     availableWidth,
   }: ThinkingProps): ReactNode => {
     const theme = useTheme()
+    // Duration header: a STATIC `Thought · 6s` from the block's start/end
+    // stamps once complete. Deliberately no live ticker while streaming — a
+    // self-rescheduling interval keeps the event loop alive in render tests
+    // that never unmount the component (it hung `bun test --isolate`), and
+    // the streaming state already carries its own activity indicator.
+    // Restored sessions from before the stamps existed simply omit it.
+    const durationMs =
+      isThinkingComplete &&
+      thinkingStartedAt !== undefined &&
+      thinkingEndedAt !== undefined
+        ? thinkingEndedAt - thinkingStartedAt
+        : undefined
+    const durationLabel =
+      durationMs === undefined
+        ? ''
+        : ` · ${Math.max(1, Math.round(durationMs / 1000))}s`
+
     const { contentMaxWidth } = useTerminalDimensions()
 
     // Special case: single **bold** string under 100 chars gets compact rendering
@@ -82,7 +105,12 @@ export const Thinking = memo(
       >
         <text style={{ fg: theme.foreground }}>
           <span>{toggleIndicator}</span>
-          <span attributes={TextAttributes.BOLD}>Thinking</span>
+          <span attributes={TextAttributes.BOLD}>
+            {isThinkingComplete ? 'Thought' : 'Thinking'}
+          </span>
+          {durationLabel ? (
+            <span fg={theme.muted}>{durationLabel}</span>
+          ) : null}
         </text>
         {showPreview && (
           <box
