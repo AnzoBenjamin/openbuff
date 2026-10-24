@@ -35,11 +35,23 @@ function measureNonAsciiWidth(segment: string): number {
   return stringWidth(segment)
 }
 
+/**
+ * Side channel for the wrap fast path: set by the most recent `measureWidth`
+ * call. Single-threaded synchronous usage only — the reader consumes it
+ * immediately after its own `measureWidth` call, before any other measurement
+ * can interleave (the same non-reentrancy contract the sticky matchers above
+ * carry).
+ */
+let lastMeasureWidthWasAscii = false
+
 export function measureWidth(segment: string): number {
   measureWidthCalls += 1
-  return ASCII_PRINTABLE_REGEX.test(segment)
-    ? segment.length
-    : measureNonAsciiWidth(segment)
+  if (ASCII_PRINTABLE_REGEX.test(segment)) {
+    lastMeasureWidthWasAscii = true
+    return segment.length
+  }
+  lastMeasureWidthWasAscii = false
+  return measureNonAsciiWidth(segment)
 }
 
 /**
@@ -291,16 +303,20 @@ function measureLines(
   ) => {
     if (!segment) return
 
+    // Width + ASCII-ness in ONE regex pass (the same pass measureWidth's own
+    // fast path runs): the oversize hard-wrap gate below needs the ASCII
+    // verdict anyway, and running the regex twice per segment (once in
+    // measureWidth, once in the gate) measurably tightened the wall-clock
+    // baseline's headroom. A printable-ASCII segment is exactly one column
+    // per code unit, so it hard-wraps by subtraction; the ASCII CLASS is the
+    // gate, NOT `segment.length === segmentWidth` — that equality also holds
+    // for an all-astral segment (2 code units per 2-column grapheme), which
+    // would then break surrogate pairs mid-character.
     const segmentWidth = measureWidth(segment)
+    const isAsciiSegment = lastMeasureWidthWasAscii
     if (segmentWidth > cols) {
       if (flushBeforeOversize && current > 0) emitHardWrap(segmentStart)
-      // A printable-ASCII segment is exactly one column per code unit, so it
-      // hard-wraps by subtraction: the oversize path skips the Array.from copy
-      // and the per-grapheme string-width calls it used to make. The gate is
-      // the ASCII class itself, NOT `segment.length === segmentWidth` — that
-      // equality also holds for an all-astral segment (2 code units per
-      // 2-column grapheme), which would then break surrogate pairs mid-character.
-      if (ASCII_PRINTABLE_REGEX.test(segment)) {
+      if (isAsciiSegment) {
         let remaining = segment.length
         let offset = 0
         while (remaining > cols && cols > 0) {
