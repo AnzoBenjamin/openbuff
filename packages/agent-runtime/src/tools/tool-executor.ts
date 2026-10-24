@@ -1,4 +1,8 @@
 import { endsAgentStepParam, toolNames } from '@codebuff/common/tools/constants'
+import {
+  browserActionBlockedMessage,
+  isBrowserActionAllowed,
+} from '@codebuff/common/tools/browser-policy'
 import { toolParams } from '@codebuff/common/tools/list'
 import { decodeJsonObjectString } from '@codebuff/common/util/model-payload-recovery'
 import {
@@ -2376,6 +2380,13 @@ export type ExecuteToolCallParams<T extends string = ToolName> = {
    * error-message heuristic.
    */
   providerReportedTruncation?: boolean
+  /**
+   * The params this agent was spawned with (browser-use's
+   * `interactionPolicy` etc). Threaded from the step loop; the tool executor
+   * is the enforcement point for spawn-param policies because it sees both
+   * the params and every outgoing tool call.
+   */
+  spawnParams?: Record<string, unknown>
   repoId: string | undefined
   repoUrl: string | undefined
   runId: string
@@ -2420,6 +2431,7 @@ export async function executeToolCall<T extends ToolName>(
     requestToolCall,
     queued,
     providerReportedTruncation,
+    spawnParams,
   } = params
   const toolCallId = params.toolCallId ?? generateCompactId()
   const abortablePreviousToolCallFinished = makeAbortableBarrier(
@@ -2483,6 +2495,28 @@ export async function executeToolCall<T extends ToolName>(
       }),
     })
     return abortablePreviousToolCallFinished
+  }
+
+  // Spawn-param policy enforcement: an explicit read-only browser spawn may
+  // only issue non-mutating browser_logs actions. Prompt text was the only
+  // previous enforcement; this is the data-driven backstop. Unknown action
+  // types fail CLOSED under read-only (allowlist, not blocklist).
+  if (toolName === 'browser_logs' && spawnParams) {
+    const actionType = (toolCall.input as Record<string, unknown> | undefined)
+      ?.type
+    if (!isBrowserActionAllowed(actionType, spawnParams.interactionPolicy)) {
+      const message = browserActionBlockedMessage(actionType)
+      logger.warn(
+        { toolName, actionType, agentId: agentTemplate.id },
+        'Blocked mutating browser_logs action under read-only interactionPolicy',
+      )
+      onResponseChunk({
+        type: 'error',
+        message,
+        autoRecovering: true,
+      })
+      return abortablePreviousToolCallFinished
+    }
   }
 
   if ('error' in toolCall) {

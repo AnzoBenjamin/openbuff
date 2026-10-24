@@ -1,5 +1,7 @@
 # SPEC — Language-fit audit (2026-09-28)
 
+> **Enforcement half DONE 2026-10-24:** the read-only interactionPolicy is now enforced at the tool layer — `common/src/tools/browser-policy.ts` (READ_ONLY_BROWSER_ACTIONS allowlist, fail-closed) + a guard in the agent-runtime tool executor keyed off `spawnParams.interactionPolicy` (the params flow run-agent-step → processStream → executeToolCall). The agent.yaml declarative pilot remains a separate, unstarted format-migration decision.
+
 ## Question
 For every existing subsystem and every roadmap requirement (polyglot-roadmap-v2 R-A..R-G): is the current/planned language the best implementation? If not, what is the best language, what does it unlock now, and what further features does that move unlock?
 
