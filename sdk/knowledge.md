@@ -1,0 +1,4 @@
+# SDK Package Knowledge
+
+- _Knowledge refresh 2026-10-24g (broker retention staleness guard touch): touched sdk/src — `sdk/src/services/workspace-mutation-broker.ts` gained the hr-09 P4.3 retention cap: `RECEIPT_RETENTION_LIMIT = 1000` (deliberately above RECEIPT_LIST_LIMIT=500 so the newest full listing window is always intact) and `pruneOldReceipts()` runs after every `finalizeReceipt`, deleting the oldest finalized receipts beyond the cap (best-effort — failed unlinks other than ENOENT are swallowed and retried on the next finalize; the pending dir is never touched). Test: 1002 sequential conditionalCommits settle the receipts dir at exactly 1000 with the two oldest pruned and listReceipts still returning the newest 500 (broker suite 9/9). This entry keeps sdk knowledge current for the pre-push memory-drift guard._
+

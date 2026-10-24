@@ -72,6 +72,54 @@ describe('WorkspaceMutationBroker', () => {
     ).toEqual(['committed', 'rejected'])
   })
 
+  test('prunes oldest finalized receipts beyond the retention cap (hr-09 P4.3)', async () => {
+    const { workspace, stateDir } = await makeWorkspace('broker-retention')
+    const file = path.join(workspace, 'counter.txt')
+    await writeFile(file, Buffer.from('0\n'))
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+
+    // Drive commits past the retention cap (1000): each conditionalCommit
+    // finalizes exactly one receipt, and each finalize prunes the oldest
+    // beyond the cap. 1002 receipts => the directory settles at 1000, and
+    // the SURVIVORS are the newest (sorted by zero-padded revision).
+    let content = Buffer.from('0\n')
+    for (let i = 1; i <= 1002; i++) {
+      const next = Buffer.from(`${i}\n`)
+      const result = await broker.conditionalCommit(
+        file,
+        next,
+        hashFileContent(content),
+      )
+      expect(result.applied).toBe(true)
+      content = next
+    }
+
+    // The broker derives repository/workspace ids from the workspace path
+    // (broker.repositoryId exposes it); reuse the live broker's own layout.
+    const receiptsDir = path.join(
+      stateDir,
+      broker.repositoryId,
+      'mutation-brokers',
+      broker.repositoryId,
+      'receipts',
+    )
+    const names = (await fs.promises.readdir(receiptsDir)).sort()
+    expect(names.length).toBe(1000)
+    // The newest listing window is intact: the last listing-limit receipts
+    // are all present, and the two OLDEST (revisions 1 and 2) were pruned.
+    expect(names[0]).not.toContain('-0000000000000001-')
+    expect(names[1]).not.toContain('-0000000000000002-')
+    const listed = await broker.listReceipts()
+    expect(listed.length).toBe(500)
+    expect(listed[listed.length - 1]).toMatchObject({
+      brokerRevision: 1002,
+      state: 'committed',
+    })
+  })
+
   test('serializes compare-and-swap across Openbuff processes', async () => {
     const { workspace, stateDir } = await makeWorkspace('broker-process-race')
     const file = path.join(workspace, 'file.txt')

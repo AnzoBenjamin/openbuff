@@ -146,6 +146,22 @@ export const SpawnAgentsComponent = defineToolComponent({
     const results = Array.isArray(toolBlock.outputRaw)
       ? (toolBlock.outputRaw as unknown[])
       : []
+    // P2-T2: the runtime's scheduling reasons (capability tier, context fit,
+    // handoff constraints) render as a dim line under the verdicts, so WHY an
+    // agent ran is visible without expanding anything.
+    const schedulingReasons = results.some(
+      (result) =>
+        result &&
+        typeof result === 'object' &&
+        Array.isArray((result as { schedulingReasons?: unknown }).schedulingReasons),
+    )
+      ? (
+          (results[0] as { schedulingReasons?: unknown[] }).schedulingReasons ?? []
+        ).filter(
+          (reason): reason is string =>
+            typeof reason === 'string' && reason.trim().length > 0,
+        )
+      : []
     const summaries = results.map(summarizeSpawnResult)
     const width = Math.max(20, options.availableWidth - 4)
 
@@ -162,6 +178,18 @@ export const SpawnAgentsComponent = defineToolComponent({
           </text>,
         )
       })
+      if (schedulingReasons.length > 0) {
+        lines.push(
+          <text key="scheduling-reasons" style={{ wrapMode: 'word' }}>
+            <span fg={theme.muted}>
+              {wrapTextPreservingNewlines(
+                schedulingReasons.join(' · '),
+                width,
+              )}
+            </span>
+          </text>,
+        )
+      }
     } else {
       const body =
         agents

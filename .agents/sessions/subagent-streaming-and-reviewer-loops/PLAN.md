@@ -2,8 +2,6 @@
 
 > **Reconciled 2026-10-24 against the working tree** (evidence-based file/symbol inspection, not commit-history trust): items ticked below with `<!-- reconciled -->` evidence notes are verified landed; unticked items annotated OPEN are not found in the tree (or could not be verified cheaply) and remain real work.
 
-<!-- current-task: P1-T1 Fix 1a: direct-child reasoning routes to its agent block -->
-
 ## Status legend
 `[ ]` pending · `[~]` in progress · `[x]` done · `[/]` cancelled · `[!]` blocked
 
@@ -53,7 +51,7 @@
   - Acceptance: A4 — `dependency-reviewer` spawns for a manifest-only change; manifest stays out of code-reviewer attestation
   - Validate: `cd agents && bun run typecheck && bun test` (gate/specialist tests)
   - Risk: `handleSteps` is serialized via `.toString()` + `new Function(...)` — no module-scope imports inside it; mirrored helpers must be regenerated via `scripts/generate-gate-helpers.ts`
-- [ ] P2-T2 <!-- reconciled 2026-10-24: OPEN — no skipReason in the routing path (only acp session-data has an unrelated one) --> Record an explicit skip reason when nothing routes
+- [x] P2-T2 <!-- reconciled 2026-10-24: OPEN — no skipReason in the routing path (only acp session-data has an unrelated one) --> Record an explicit skip reason when nothing routes
   - Target: `agents/base2/base2.ts` (no-routing branch) + `agents/guides/specialist-routing.md` vocabulary table sync
   - Depends on: P2-T1
   - Acceptance: A5 — a no-routing outcome records a non-empty `lastReviewerGateSkipReason`

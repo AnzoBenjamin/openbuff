@@ -1015,6 +1015,10 @@ export const handleSpawnAgents = (async (
             agentType,
             value: receipt.output as JSONValue,
             agentReceipt: receipt as unknown as JSONValue,
+            // P2-T2: why the runtime scheduled this spawn (capability tier,
+            // context window, handoff constraints). Structured so surfaces can
+            // render WHY an agent ran instead of guessing from the type.
+            schedulingReasons: validated.schedulingReasons,
           }
         } else {
           const agentTypeStr = validated.input.agent_type
@@ -1044,6 +1048,7 @@ export const handleSpawnAgents = (async (
             agentName: agentTypeStr,
             value: { errorMessage: `Error spawning agent: ${result.reason}` },
             agentReceipt: receipt as unknown as JSONValue,
+            schedulingReasons: validated.schedulingReasons,
           }
         }
         if (result.status === 'fulfilled') {

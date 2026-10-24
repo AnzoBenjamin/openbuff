@@ -105,7 +105,7 @@ Today `handleSteps` fully decomposes the prompt deterministically (MAX_SUBQUERIE
 ### P4 — SDK robustness (shard-sdk-tools)
 - [x] P4.1 <!-- reconciled 2026-10-24: module-level negative cache in sdk/src/credentials.ts:304 --> OAuth refresh negative cache (30–60s TTL) in sdk/src/credentials.ts
 - [x] P4.2 <!-- reconciled 2026-10-24: providerConfigCache keyed by config-path set (provider-config.ts:1413-1512) --> Cache resolved dependency-path list per config-path set in provider-config hot path
-- [ ] P4.3 <!-- reconciled 2026-10-24: OPEN — broker file exists (sdk/src/services/workspace-mutation-broker.ts) but no retention-cap/malformed-skip logic found --> Broker receipt retention cap + malformed-entry skip in workspace-mutation-broker
+- [x] P4.3 <!-- reconciled 2026-10-24: OPEN — broker file exists (sdk/src/services/workspace-mutation-broker.ts) but no retention-cap/malformed-skip logic found --> Broker receipt retention cap + malformed-entry skip in workspace-mutation-broker
 - [x] P4.4 <!-- reconciled 2026-10-24: engines.node >=20.3 in sdk/package.json verified; oldest-Node CI job not separately verified --> engines.node >=20.3 in sdk/package.json + oldest-Node CI job
 - [x] P4.5 <!-- reconciled 2026-10-24: HOOK_DEFAULT_TIMEOUT_SECONDS = 300 in file-change-hooks.ts:43 --> Finite default timeout for file-change hooks (300s, explicit opt-out)
 - [x] P4.6 <!-- reconciled 2026-10-24: read-files.ts imports mapWithConcurrency from tools/concurrency (:29) --> Delete mapWithConcurrency duplicate in read-files.ts; import from tools/concurrency.ts + contract tests
