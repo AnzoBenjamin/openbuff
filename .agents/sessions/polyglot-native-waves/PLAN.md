@@ -1,5 +1,7 @@
 # PLAN — Polyglot Native Adoption (Waves 0–5)
 
+> **RETIRED 2026-10-24 — superseded as written.** The substrate landed as the root `rust/` workspace (crates openbuff-native + openbuff-workspace-harness, rust-toolchain, rust-workspace CI; commit b3c719da1), not the planned packages/native-core layout, and the remaining live work (tokenizer wave) is tracked more accurately by polyglot-roadmap-v2 P3-T10, which maintains its own PARTIAL/REMAINING status. Unticked items below are retired as written; do not execute this plan.
+
 > **Reconciled 2026-10-24:** the substrate landed DIFFERENTLY than planned — as the root `rust/` workspace (crates `openbuff-native`, `openbuff-workspace-harness`, rust-toolchain, rust-workspace CI job; commit b3c719da1 'X-3b openbuff-native substrate + CI matrix') rather than `packages/native-core`. Items below are reconciled against the actual layout; unticked items remain real work.
 
 Evidence base: `.agents/sessions/audit-polyglot-2026-09/AUDIT-REPORT.md` (+ per-shard findings). Spec: `SPEC.md` in this directory.

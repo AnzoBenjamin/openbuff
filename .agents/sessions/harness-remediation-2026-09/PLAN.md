@@ -114,7 +114,7 @@ Today `handleSteps` fully decomposes the prompt deterministically (MAX_SUBQUERIE
 - [ ] P5.1 <!-- reconciled 2026-10-24: OPEN — dependabot.yml exists; actions-pinned-to-SHA only partially true (checkout/upload pinned, others not audited here) --> Pin actions to commit SHAs; add dependabot.yml (github-actions + npm)
 - [x] P5.2 <!-- reconciled 2026-10-24: permissions: contents: read at ci.yml:15 --> permissions: contents: read on push/schedule workflows
 - [x] P5.3 <!-- reconciled 2026-10-24: test-scripts and test-evals jobs in the ci.yml matrix (green in run 40073245320) --> Add scripts + evals packages to ci.yml test matrix
-- [ ] P5.4 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Named per-step env instead of SECRETS_CONTEXT blob
+- [ ] P5.4 <!-- reconciled 2026-10-24: PARTIAL — legacy loaders covered by tolerant chat-state (adc35cddd); undo-stack bound unverified --> Named per-step env instead of SECRETS_CONTEXT blob
 - [ ] P5.5 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Fix evals.yml commit-message injection + dead git-evals/* references
 - [ ] P5.6 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Upload eval artifacts; scheduled compare-runs regression gate
 - [x] P5.7 <!-- reconciled 2026-10-24: gate-helpers --check freshness step in ci.yml (.agents mirror in TOOL_DEF tracking) --> Gate-helper/pruner-budget --check freshness in CI; .agents mirror in TOOL_DEF_TRACKED_PATHS
@@ -122,9 +122,9 @@ Today `handleSteps` fully decomposes the prompt deterministically (MAX_SUBQUERIE
 
 ### P6 — CLI TUI stability (shard-cli-tui)
 - [ ] P6.1 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Guard top-level submit path from unhandled rejections (chat.tsx + renderer-cleanup.ts)
-- [ ] P6.2 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Collision-free message ids (no Date.now())
+- [x] P6.2 <!-- retired 2026-10-24: SUPERSEDED — collision-free ids landed: cli/src/utils/message-id.ts (generateMessageId, randomUUID) --> <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Collision-free message ids (no Date.now())
 - [ ] P6.3 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Align/remove the silent 100-message transcript cap
-- [ ] P6.4 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Async checkpoint restore (no first-paint block)
+- [x] P6.4 <!-- retired 2026-10-24: SUPERSEDED — mid-turn checkpoint system landed (turn-checkpoint.ts + crash-resume wiring, P2 coherence wave) --> <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Async checkpoint restore (no first-paint block)
 - [ ] P6.5 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Zod-validate legacy session loaders; bound undo stack
 
 ### P7 — Memory v2 perf + resumability (shard-memory-v2)
@@ -135,7 +135,7 @@ Today `handleSteps` fully decomposes the prompt deterministically (MAX_SUBQUERIE
 - [ ] P7.5 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Standardize memory-v2 imports on package aliases (remove dual deep-relative instances)
 
 ### P8 — indexer robustness (shard-indexer)
-- [ ] P8.1 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> parserDegraded keeps builtAt, requeues delta
+- [x] P8.1 <!-- retired 2026-10-24: SUPERSEDED — false idx-degraded fix landed (cf067f303): degraded classifier bounded by lastBuildError/corpus floor; no-change path self-heals stale diagnostics --> <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> parserDegraded keeps builtAt, requeues delta
 - [ ] P8.2 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Per-file-entry + queryData shape validation at load
 - [ ] P8.3 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Normalized workspaceRevision comparison (numeric-string coercion)
 - [ ] P8.4 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Trigram posting index + command posting list

@@ -1,5 +1,7 @@
 # PLAN: Memory Overhaul Implementation
 
+> **Partially superseded 2026-10-24 — Phases 2–4 need a REWRITE, not literal execution.** Phase 2's decision-capture half already landed via other sessions (decisionCapturePolicySection in the base2 prompts, record_decision, decision-rationale.ts from the retrieval-quality 1D work), and the memory-v2 architecture has since gained context-archive, consolidation, and task-memory V2 migration — the remaining phase text predates all of that. Re-derive Phases 2–4 against the current architecture before scheduling any of it.
+
 > **Reconciled 2026-10-24 against the working tree** (evidence-based file/symbol inspection, not commit-history trust): items ticked below with `<!-- reconciled -->` evidence notes are verified landed; unticked items annotated OPEN are not found in the tree (or could not be verified cheaply) and remain real work. Phases 2–4 remain OPEN (no evidence in tree).
 
 <!-- current-task: P1-T1 playbook schema + contract types -->

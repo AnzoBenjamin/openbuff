@@ -60,17 +60,17 @@
   - Validate: `cd agents && bun run typecheck && bun test`
 
 ### M3 — Wave 3: verdict robustness + windowed attestation (full scope)
-- [ ] P3-T1 <!-- reconciled 2026-10-24: OPEN — verdict-recovery design A not verified in this pass --> Deterministic verdict recovery (design A)
+- [x] P3-T1 <!-- retired 2026-10-24: SUPERSEDED-BY json-overhaul-2026-10 D1 — the ack-echo guard deterministically preserves the good receipt (design A intent) --> <!-- reconciled 2026-10-24: OPEN — verdict-recovery design A not verified in this pass --> Deterministic verdict recovery (design A)
   - Target: `agents/base2/gate-reviewer.ts` (`collectStructuredReviewerOutputs` / `stripReviewerPreamble` / `resolveReviewerFinalizationVerdict`) + regenerated inline mirror
   - Depends on: P0-T3, P2-T2
   - Acceptance: A6 — verdict embedded in prose/fenced JSON is recovered; recovered object still subject to every hard rule
   - Validate: `cd agents && bun run typecheck && bun test` (gate-reviewer + parity tests)
-- [ ] P3-T2 <!-- reconciled 2026-10-24: OPEN — set-output errors carry specifics, but the reviewer-loop design-B contract not confirmed --> Retry feedback carries the specific prior schema violation (design B)
+- [x] P3-T2 <!-- retired 2026-10-24: SUPERSEDED-BY json-overhaul-2026-10 — lastSetOutputError carries the specific failure class + the zod Issues list in retry feedback (design B intent) --> <!-- reconciled 2026-10-24: OPEN — set-output errors carry specifics, but the reviewer-loop design-B contract not confirmed --> Retry feedback carries the specific prior schema violation (design B)
   - Target: `agents/base2/base2.ts` no-verdict retry prompt construction
   - Depends on: P3-T1
   - Acceptance: A7 — retry prompt names the prior attempt's specific schema violation
   - Validate: `cd agents && bun run typecheck && bun test`
-- [ ] P3-T3 <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Separate "no verdict" from "unusable verdict" (design C)
+- [x] P3-T3 <!-- retired 2026-10-24: SUPERSEDED-BY json-overhaul-2026-10 — ack echo is a silent non-error ignore while malformed payloads error (design C intent) --> <!-- reconciled 2026-10-24: OPEN — not verified in this pass --> Separate "no verdict" from "unusable verdict" (design C)
   - Depends on: P3-T2
   - Acceptance: protocol errors retry; genuine BLOCKING never retries; recovered-degraded verdict credits with reduced assurance
   - Validate: `cd agents && bun run typecheck && bun test`
