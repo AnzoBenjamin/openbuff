@@ -11,8 +11,6 @@ import {
   addCustomOpenbuffProvider,
   configureOpenbuffModelFromArgs,
   handleOpenbuffProviderCommand,
-  handleOpenbuffProviderWizardInput,
-  startOpenbuffProviderWizard,
 } from '../openbuff-provider'
 
 const originalProjectRoot = process.cwd()
@@ -182,45 +180,37 @@ describe('openbuff-provider custom setup', () => {
     expect(message).toContain('buffbench-rust-v1')
   })
 
-  test('custom provider wizard validates URL and API key env before writing', () => {
-    expect(startOpenbuffProviderWizard()).toContain('Openbuff provider wizard')
-    expect(handleOpenbuffProviderWizardInput('custom')).toMatchObject({
-      done: false,
-    })
-    expect(handleOpenbuffProviderWizardInput('claude-gateway')).toMatchObject({
-      done: false,
-    })
-    expect(
-      handleOpenbuffProviderWizardInput('anthropic-compatible'),
-    ).toMatchObject({
-      done: false,
-    })
+  test('addCustomOpenbuffProvider validates URL and API key env before writing', () => {
+    // The typed wizard that used to wrap this API was retired; the
+    // validation contract (reject invalid URLs and invalid env-var names
+    // BEFORE any config write) lives here.
+    const base = {
+      id: 'claude-gateway',
+      type: 'anthropic-compatible' as const,
+      models: ['claude-sonnet-4-5'] as string[],
+    }
 
-    const invalidUrl = handleOpenbuffProviderWizardInput('not-a-url')
-    expect(invalidUrl.done).toBe(false)
-    expect(invalidUrl.message).toContain('valid base URL')
+    expect(() =>
+      addCustomOpenbuffProvider({ ...base, baseURL: 'not-a-url' }),
+    ).toThrow(/cannot be parsed as a URL/)
     expect(fs.existsSync(path.join(tempDir!, 'openbuff.json'))).toBe(false)
 
-    expect(
-      handleOpenbuffProviderWizardInput('https://cc.freemodel.dev'),
-    ).toMatchObject({
-      done: false,
-    })
-
-    const invalidEnv = handleOpenbuffProviderWizardInput('bad-key')
-    expect(invalidEnv.done).toBe(false)
-    expect(invalidEnv.message).toContain('environment variable name')
+    expect(() =>
+      addCustomOpenbuffProvider({
+        ...base,
+        baseURL: 'https://cc.freemodel.dev',
+        apiKeyEnv: 'bad-key',
+      }),
+    ).toThrow(/environment variable name/)
     expect(fs.existsSync(path.join(tempDir!, 'openbuff.json'))).toBe(false)
 
-    expect(
-      handleOpenbuffProviderWizardInput('FREEMODEL_API_KEY'),
-    ).toMatchObject({
-      done: false,
+    const message = addCustomOpenbuffProvider({
+      ...base,
+      baseURL: 'https://cc.freemodel.dev',
+      apiKeyEnv: 'FREEMODEL_API_KEY',
+      models: ['claude-sonnet-4-5'],
     })
-    const done = handleOpenbuffProviderWizardInput('claude-sonnet-4-5')
-
-    expect(done.done).toBe(true)
-    expect(done.message).toContain(
+    expect(message).toContain(
       "Custom anthropic-compatible provider 'claude-gateway' added",
     )
     expect(readOpenbuffConfig()).toMatchObject({

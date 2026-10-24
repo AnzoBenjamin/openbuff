@@ -192,9 +192,9 @@ describe('estimatedAgentModeToggleWidth', () => {
     ).toBe(stringWidth('< DEFAULT') + 6)
   })
 
-  test('a mode without the toggle estimates zero (openbuff:provider)', () => {
+  test('a mode without the toggle estimates zero (bash)', () => {
     expect(
-      estimatedAgentModeToggleWidth('openbuff:provider', 'DEFAULT', false, false),
+      estimatedAgentModeToggleWidth('bash', 'DEFAULT', false, false),
     ).toBe(0)
   })
 

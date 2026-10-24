@@ -13,8 +13,6 @@ export type InputMode =
   | 'image'
   | 'help'
   | 'connect:chatgpt'
-  | 'openbuff:provider'
-  | 'openbuff:models'
 
 // Theme color keys that are valid color values (must match ChatTheme keys)
 export type ThemeColorKey =
@@ -138,31 +136,11 @@ export const INPUT_MODE_CONFIGS: Record<InputMode, InputModeConfig> = {
     disableSlashSuggestions: true,
     blockKeyboardExit: false,
   },
-  'openbuff:provider': {
-    icon: '⚙',
-    label: 'Provider',
-    color: 'info',
-    placeholder: 'answer the provider wizard prompt...',
-    // icon ⚙ (1) + paddingRight 1 + ` Provider ` (11) + paddingRight 1 = 14.
-    widthAdjustment: 14,
-    showAgentModeToggle: false,
-    disableSlashSuggestions: true,
-    blockKeyboardExit: false,
-  },
-  'openbuff:models': {
-    icon: '⚙',
-    label: 'Models',
-    color: 'info',
-    placeholder: 'answer the model routing wizard prompt...',
-    // icon ⚙ (1) + paddingRight 1 + ` Models ` (8) + paddingRight 1 = 11,
-    // measured against the rendered prompt prefix.
-    widthAdjustment: 11,
-    showAgentModeToggle: false,
-    disableSlashSuggestions: true,
-    blockKeyboardExit: false,
-  },
 }
 
 export function getInputModeConfig(mode: InputMode): InputModeConfig {
-  return INPUT_MODE_CONFIGS[mode]
+  // Total on purpose: persisted sessions can carry input modes that were
+  // later retired (e.g. the typed setup wizards); they render as default
+  // instead of crashing the mode lookups.
+  return INPUT_MODE_CONFIGS[mode] ?? INPUT_MODE_CONFIGS.default
 }

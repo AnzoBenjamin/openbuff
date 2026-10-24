@@ -64,8 +64,11 @@ import { getInputModeConfig } from './utils/input-modes'
 import {
   addCustomOpenbuffProvider,
   handleOpenbuffProviderCommand,
+  loadProviderConfigSync,
+  displayModelId,
   resolveModelNameForAgent,
   setupOpenbuffProviderFromArgs,
+  testProviderConnection,
 } from './utils/openbuff-provider'
 import { getDiffStatsAsync, type DiffStats } from './utils/git'
 import {
@@ -491,7 +494,8 @@ export const Chat = ({
   // Resolve the model name for the active agent mode from the provider config.
   const modelName = useMemo(() => {
     const agentId = AGENT_MODE_TO_ID[agentMode]
-    return agentId ? resolveModelNameForAgent(agentId) : null
+    if (!agentId) return null
+    return displayModelId(resolveModelNameForAgent(agentId)) ?? null
   }, [agentMode])
 
   // Current isStreaming value, readable from the effects below so they do
@@ -1693,6 +1697,33 @@ export const Chat = ({
       setInputFocused(true)
 
       if (selection.type === 'cancel') return
+
+      if (selection.type === 'test-connections') {
+        const loadedConfig = loadProviderConfigSync()
+        const providerIds = Object.keys(loadedConfig.config.providers)
+        if (providerIds.length === 0) {
+          setMessages((prev) => [
+            ...prev,
+            getSystemMessage('No providers configured yet — add one first.'),
+          ])
+          return
+        }
+        setMessages((prev) => [
+          ...prev,
+          getSystemMessage(
+            `Testing ${providerIds.length} provider${providerIds.length === 1 ? '' : 's'}…`,
+          ),
+        ])
+        const results: string[] = []
+        for (const providerId of providerIds) {
+          results.push((await testProviderConnection(providerId)).message)
+        }
+        setMessages((prev) => [
+          ...prev,
+          getSystemMessage(results.join('\n')),
+        ])
+        return
+      }
 
       let message: string
       try {
