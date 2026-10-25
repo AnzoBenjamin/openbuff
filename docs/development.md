@@ -152,3 +152,13 @@ of the test suite): it re-runs the `run_event_counts` side-table invariants
 maxEvents dimension of run-journal retention
 (`packages/agent-runtime/src/util/run-journal.ts`) — retained so
 performance-review spawns can re-run those checks directly.
+
+`scripts/measure-send-freeze.bench.ts` is the paired permanent in-tree
+benchmark (not part of the test suite): it times the synchronous per-send
+costs on the TUI send path — sdk `validateAgents`, the cached
+`loadProviderConfigSync` fast path, and journal open+close plus the
+production open→append(existing runId)→close shape against synthetic dbs
+across sizes, two byte-over payload shapes, and a count-over cap run — and
+appends every run to `scripts/measure-send-freeze-results.json` under stable
+`stableKey`s (with a seeded `beforeBaseline`), so before/after pairs are
+machine-diffable without fuzzy label matching.
