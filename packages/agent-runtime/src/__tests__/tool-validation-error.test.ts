@@ -2947,6 +2947,102 @@ describe('tool validation error handling', () => {
     expect(errorText).toContain('</system>')
   })
 
+  it('persists an unterminated end-of-stream tool call as a TOOL_CALL_ERROR so the model can retry', async () => {
+    // EOF variant of the test above: a <codebuff_tool_call> that never gets
+    // its closing tag used to be dropped with ZERO feedback unless it
+    // overflowed the 64 KiB buffer. finalizeStreamParserState now reports it
+    // through the same error channel, so the existing wrapper routing
+    // (TOOL_CALL_ERROR persistence + hadToolCallError retry) applies with no
+    // wrapper changes
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    async function* mockStream() {
+      yield {
+        type: 'text' as const,
+        text: '<codebuff_tool_call>\n{"cb_tool_name": "read_files",\n',
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    const result = await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithReadFiles,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithReadFiles },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    // The EOF report is the only chunk: the unterminated payload was held
+    // inside the parser state, never executed and never leaked as text.
+    expect(responseChunks).toHaveLength(1)
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain('ended before the closing tag')
+    expect(errorEvents[0].message).toContain(
+      'Original tool call input (excerpt):',
+    )
+    expect(errorEvents[0].message).toContain('Re-emit the complete tool call')
+
+    // Fail-safe unchanged: the EOF payload never executes.
+    expect(
+      responseChunks.filter(
+        (chunk): chunk is PrintModeEvent =>
+          typeof chunk !== 'string' &&
+          (chunk.type === 'tool_call' || chunk.type === 'tool_result'),
+      ).length,
+    ).toBe(0)
+
+    // The turn-control retry safety net is armed exactly like an executor
+    // error, so run-agent-step.ts hasNoToolResults forces a retry step.
+    expect(result.hadToolCallError).toBe(true)
+
+    // The dropped call is persisted as a TOOL_CALL_ERROR user message the
+    // next model turn can see — the transcript channel executor errors use.
+    const toolCallErrorMessages = agentState.messageHistory.filter(
+      (message) =>
+        message.role === 'user' && message.tags?.includes('TOOL_CALL_ERROR'),
+    )
+    expect(toolCallErrorMessages).toHaveLength(1)
+    const errorText = toolCallErrorMessages[0].content
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('')
+    expect(errorText).toContain('<system>Error during tool call: ')
+    expect(errorText).toContain('ended before the closing tag')
+    expect(errorText).toContain('Original tool call input (excerpt):')
+    expect(errorText).toContain('{"cb_tool_name": "read_files",')
+    expect(errorText).toContain('</system>')
+  })
+
   it('should summarize missing spawned agent params clearly', async () => {
     const { validateAgentInput } =
       await import('../tools/handlers/tool/spawn-agent-utils')

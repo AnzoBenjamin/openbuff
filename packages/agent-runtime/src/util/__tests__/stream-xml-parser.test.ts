@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 
 import {
   createStreamParserState,
+  finalizeStreamParserState,
   parseStreamChunk,
   toBoundedRawExcerpt,
 } from '../stream-xml-parser'
@@ -490,6 +491,107 @@ use {x} like this: {"cb_tool_name": "test_tool", "path": "foo.ts"} hope that hel
       expect(toBoundedRawExcerpt(content)).toBe(
         `${'y'.repeat(250)}…[1 chars truncated]…${'y'.repeat(250)}`,
       )
+    })
+  })
+
+  describe('finalizeStreamParserState', () => {
+    // End-of-stream gap closure
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md):
+    // a <codebuff_tool_call> whose closing tag never arrives used to be
+    // dropped with ZERO feedback unless it overflowed the buffer, and the
+    // outside-call partial-tag carry vanished at EOF.
+    it('reports one tool_call_unterminated_eof with a bounded excerpt and resets state', () => {
+      const payload = '\n{"cb_tool_name": "test_tool",\n'
+      const state = createStreamParserState()
+      // The stream ends mid-call, under the buffer limit: no overflow error
+      // fired, so the payload is retained inside the parser state.
+      const parsed = parseStreamChunk(`<codebuff_tool_call>${payload}`, state)
+      expect(parsed.errors).toEqual([])
+      expect(state.insideToolCall).toBe(true)
+
+      const finalized = finalizeStreamParserState(state)
+
+      expect(finalized.filteredText).toBe('')
+      expect(finalized.errors).toEqual([
+        {
+          code: 'tool_call_unterminated_eof',
+          message: `Discarded unterminated codebuff_tool_call content at end of stream after ${payload.length} buffered characters: the response ended before the closing tag.`,
+          bufferedLength: payload.length,
+          // Bounded excerpt of the dropped payload, captured BEFORE the
+          // reset destroys it — the only surviving evidence of what the
+          // model emitted
+          // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+          rawExcerpt: payload,
+        },
+      ])
+      // Reset: the payload is reported as dropped tool-call content and
+      // never leaks as text.
+      expect(state.buffer).toBe('')
+      expect(state.insideToolCall).toBe(false)
+      expect(state.discardingUntilEndTag).toBe(false)
+    })
+
+    it('bounds the EOF excerpt of a large unterminated payload', () => {
+      const payload = 'x'.repeat(600)
+      const state = createStreamParserState()
+      parseStreamChunk(`<codebuff_tool_call>${payload}`, state)
+
+      const finalized = finalizeStreamParserState(state)
+
+      expect(finalized.errors).toHaveLength(1)
+      expect(finalized.errors[0].code).toBe('tool_call_unterminated_eof')
+      expect(finalized.errors[0].bufferedLength).toBe(payload.length)
+      // Fail-safe excerpt bound: a large dropped payload cannot balloon the
+      // error message, exactly like the other parser error sites.
+      expect(finalized.errors[0].rawExcerpt).toBe(toBoundedRawExcerpt(payload))
+    })
+
+    it('emits no duplicate error when discarding after a buffer overflow at EOF', () => {
+      const state = createStreamParserState({ maxToolCallBufferLength: 8 })
+      const overflow = parseStreamChunk('<codebuff_tool_call>123456789', state)
+      expect(overflow.errors).toHaveLength(1)
+      expect(overflow.errors[0].code).toBe('tool_call_buffer_exceeded')
+      expect(state.insideToolCall).toBe(true)
+      expect(state.discardingUntilEndTag).toBe(true)
+
+      const finalized = finalizeStreamParserState(state)
+
+      // The overflow already reported this content: no duplicate error and
+      // nothing leaks as text at EOF.
+      expect(finalized.filteredText).toBe('')
+      expect(finalized.errors).toEqual([])
+      expect(state.buffer).toBe('')
+      expect(state.insideToolCall).toBe(false)
+      expect(state.discardingUntilEndTag).toBe(false)
+    })
+
+    it('returns empty for a clean state at end of stream', () => {
+      expect(finalizeStreamParserState(createStreamParserState())).toEqual({
+        filteredText: '',
+        errors: [],
+      })
+
+      const state = createStreamParserState()
+      parseStreamChunk('fully emitted prose', state)
+      expect(finalizeStreamParserState(state)).toEqual({
+        filteredText: '',
+        errors: [],
+      })
+    })
+
+    it('flushes the outside-call partial-tag carry as filteredText at EOF', () => {
+      const state = createStreamParserState()
+      // A lone '<' may still become a start tag, so the parser holds it back.
+      const parsed = parseStreamChunk('partial text <', state)
+      expect(parsed.filteredText).toBe('partial text ')
+      expect(state.buffer).toBe('<')
+
+      const finalized = finalizeStreamParserState(state)
+
+      // Real prose bytes never vanish at EOF: the held carry is flushed.
+      expect(finalized.filteredText).toBe('<')
+      expect(finalized.errors).toEqual([])
+      expect(state.buffer).toBe('')
     })
   })
 })

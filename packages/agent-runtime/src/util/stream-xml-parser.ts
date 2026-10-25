@@ -27,6 +27,7 @@ export type ParsedToolCall = {
 export type StreamParserError = {
   code:
     | 'tool_call_buffer_exceeded'
+    | 'tool_call_unterminated_eof'
     | 'invalid_tool_call_json'
     | 'missing_tool_name'
   message: string
@@ -285,6 +286,69 @@ export function parseStreamChunk(
   }
 
   return { filteredText, toolCalls, errors }
+}
+
+/**
+ * Finalize the parser state at end of stream.
+ *
+ * Closes the silent end-of-stream gaps: an unterminated
+ * <codebuff_tool_call> whose closing tag never arrives used to be dropped
+ * with ZERO feedback unless it overflowed the buffer (only then
+ * tool_call_buffer_exceeded fired), and the outside-call partial-tag carry
+ * vanished at EOF
+ * (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+ *
+ * - Inside a call, not discarding: report one tool_call_unterminated_eof
+ *   error carrying the buffered length and a bounded excerpt of the payload.
+ *   The payload must NOT leak as filteredText — it is reported dropped
+ *   tool-call content, never prose.
+ * - Inside a call while discarding after a buffer overflow: the overflow
+ *   already reported this content, so emit NO duplicate error and leak
+ *   nothing — just reset.
+ * - Outside a call with a held partial-tag carry: flush it as filteredText
+ *   so real prose bytes like a trailing '<' do not vanish at EOF.
+ *
+ * @param state - Mutable parser state (reset in place)
+ * @returns Final filtered text (only the outside-call carry) and any errors
+ */
+export function finalizeStreamParserState(state: StreamParserState): {
+  filteredText: string
+  errors: StreamParserError[]
+} {
+  if (state.insideToolCall) {
+    const errors: StreamParserError[] = []
+    if (!state.discardingUntilEndTag) {
+      // Capture the bounded excerpt BEFORE the reset below destroys the
+      // buffered payload: it is the only surviving evidence of what the
+      // model emitted, and without an EOF report the dropped call was
+      // indistinguishable from a successful one
+      // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+      errors.push({
+        code: 'tool_call_unterminated_eof',
+        message: `Discarded unterminated ${toolXmlName} content at end of stream after ${state.buffer.length} buffered characters: the response ended before the closing tag.`,
+        bufferedLength: state.buffer.length,
+        rawExcerpt: toBoundedRawExcerpt(state.buffer),
+      })
+    }
+    // Reset in both inside-call cases: the buffered payload is dropped
+    // tool-call content, never prose, so it never returns as filteredText.
+    // In discard mode the tool_call_buffer_exceeded overflow already
+    // reported it, hence no duplicate error above.
+    state.buffer = ''
+    state.insideToolCall = false
+    state.discardingUntilEndTag = false
+    return { filteredText: '', errors }
+  }
+
+  // Outside a call the buffer holds a partial-tag suffix of real prose
+  // bytes; flush it so a trailing '<' does not vanish at EOF.
+  if (state.buffer) {
+    const filteredText = state.buffer
+    state.buffer = ''
+    return { filteredText, errors: [] }
+  }
+
+  return { filteredText: '', errors: [] }
 }
 
 /**

@@ -4,6 +4,7 @@ import { toToolCallStreamChunkPayload } from '@codebuff/common/types/contracts/l
 
 import {
   createStreamParserState,
+  finalizeStreamParserState,
   parseStreamChunk,
 } from './util/stream-xml-parser'
 
@@ -60,6 +61,27 @@ function summarizeToolInput(input: unknown): Record<string, unknown> {
 
   return {
     inputType: input === null ? 'null' : typeof input,
+  }
+}
+
+/**
+ * Actionable next-step guidance per parser error code. Composed onto the
+ * base message only at the emission boundary (never baked into the parser,
+ * so the base messages stay byte-identical): the overflow error used to
+ * carry no guidance at all, and a call dropped at end of stream needs an
+ * explicit retry directive the model can act on
+ * (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+ */
+export function streamParserErrorGuidance(
+  code: StreamParserError['code'],
+): string | undefined {
+  switch (code) {
+    case 'tool_call_buffer_exceeded':
+      return 'This tool call exceeded the streaming buffer limit. Split large payloads across multiple smaller tool calls (for example, write files in smaller chunks) instead of inlining the entire payload.'
+    case 'tool_call_unterminated_eof':
+      return 'The response ended before this tool call was complete. Re-emit the complete tool call, keeping the payload small enough to finish within the response.'
+    default:
+      return undefined
   }
 }
 
@@ -198,13 +220,18 @@ export async function* processStreamWithTools(params: {
     // instead of guessing which call was malformed
     // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
     for (const error of errors) {
-      onResponseChunk({
-        type: 'error',
-        message:
-          error.rawExcerpt !== undefined
-            ? `${error.message}\n\nOriginal tool call input (excerpt): ${error.rawExcerpt}`
-            : error.message,
-      })
+      let message =
+        error.rawExcerpt !== undefined
+          ? `${error.message}\n\nOriginal tool call input (excerpt): ${error.rawExcerpt}`
+          : error.message
+      // Guidance is appended after the excerpt composition, so base messages
+      // stay byte-identical while the model still gets a concrete next step
+      // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+      const guidance = streamParserErrorGuidance(error.code)
+      if (guidance !== undefined) {
+        message += `\n\n${guidance}`
+      }
+      onResponseChunk({ type: 'error', message })
     }
   }
 
@@ -277,6 +304,20 @@ export async function* processStreamWithTools(params: {
       break
     }
     yield* processChunk(value)
+  }
+
+  // End of stream: close the silent EOF gaps in the parser state. A call
+  // left unterminated at end of stream is reported back (never executed,
+  // never leaked as text) and the outside-call partial-tag carry is flushed
+  // as real prose, so neither vanishes silently. The error flows through the
+  // existing wrapper routing (TOOL_CALL_ERROR persistence + hadToolCallError
+  // retry)
+  // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+  const finalized = finalizeStreamParserState(xmlParserState)
+  emitParserErrors(finalized.errors)
+  if (finalized.filteredText) {
+    onResponseChunk({ type: 'text', text: finalized.filteredText })
+    yield { type: 'text', text: finalized.filteredText } as StreamChunk
   }
   return result
 }
