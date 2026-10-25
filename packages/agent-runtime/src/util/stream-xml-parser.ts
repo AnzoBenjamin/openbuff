@@ -220,6 +220,11 @@ export function parseStreamChunk(
 
       const bufferedLength = state.buffer.length + pending.length
       if (bufferedLength > state.maxToolCallBufferLength) {
+        // Invariant: the buffer limit bounds BUFFERED (unterminated) bytes
+        // only. A call whose end tag is found in the same scan (the endIndex
+        // branch above) parses and is emitted regardless of size — the limit
+        // never fires for a complete call, only for one still waiting for
+        // its closing tag.
         // Overflow recovery: the unterminated payload exceeded the budget.
         // Stay insideToolCall purely for scoping but enter discard mode so the
         // eventual end tag is consumed SILENTLY — the buffered garbage is never
@@ -475,6 +480,11 @@ function normalizeToolCallJsonContent(
  * one pre-validation parse per candidate must never turn a pathological
  * payload into an unbounded scan — cap the number of '{' candidates tried at
  * 32, which is already far beyond any realistic prose+payload mix.
+ *
+ * Worst-case bound: a candidate's balanced scan can walk the remaining
+ * payload to its very end before giving up, so pathological input costs at
+ * most `maxCandidates` full-payload balanced scans — O(maxCandidates·N) —
+ * which is 32·N in production.
  */
 const MAX_JSON_CANDIDATES = 32
 

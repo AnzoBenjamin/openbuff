@@ -1793,6 +1793,15 @@ export async function* promptAiSdkStream(
             // from→to pair; recovery only needs to say the stream is back.
             emitProviderStatus({ status: 'recovered' })
           }
+          // Stream-only finish marker (the `finish` StreamChunk variant in
+          // common/src/types/contracts/llm.ts): publishes the provider's
+          // authoritative finish reason so the runtime's stream parser can
+          // tell a max-token cut from an oversized payload in its tool-call
+          // error reports. Yielded ONLY here, at successful completion —
+          // nothing after this point can re-enter the retry/failover paths,
+          // so the marker can never block a retry or failover
+          // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+          yield { type: 'finish', finishReason }
           return promptSuccess(messageId)
         } catch (caughtError) {
           const error =

@@ -10,7 +10,7 @@ import type { Model } from '../../old-constants'
 import type { Message } from '../messages/codebuff-message'
 import type { RequestContextTrimInfo } from '../print-mode'
 import type { PromptResult } from '../../util/error'
-import type { generateText, streamText, ToolCallPart } from 'ai'
+import type { FinishReason, generateText, streamText, ToolCallPart } from 'ai'
 import type z from 'zod/v4'
 
 /**
@@ -111,6 +111,16 @@ export type StreamChunk =
     }
   | ToolCallStreamChunk
   | { type: 'error'; message: string }
+  /**
+   * Stream-only evidence of the provider's finish reason for the response
+   * (`finishReason === 'length'` is the max-token cut). It is consumed by
+   * the runtime's stream parser BEFORE anything downstream — the parser's
+   * finalize-time error emission annotates truncation-caused tool-call
+   * failures with this fact — and is never forwarded or persisted: like the
+   * `transportTruncated` marker above, it lives only on the stream, and the
+   * runtime's forwarded stream excludes this chunk entirely.
+   */
+  | { type: 'finish'; finishReason: FinishReason }
 
 export type CacheDebugUsageData = {
   inputTokens: number

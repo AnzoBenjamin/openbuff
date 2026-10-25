@@ -331,6 +331,50 @@ Thinking about the task...
       expect(allToolCalls[0].toolName).toBe('test')
     })
 
+    it('should report empty codebuff_tool_call content with the untrimmed between-tags excerpt', () => {
+      // Direct pin for the empty-content branch in parseToolCallContent:
+      // whitespace-only content trims to nothing, so the call is reported as
+      // invalid JSON — never silently dropped — and rawExcerpt is the
+      // UNTRIMMED between-tags content, so the model sees the whitespace-only
+      // block it actually emitted.
+      const state = createStreamParserState()
+      const result = parseStreamChunk(
+        '<codebuff_tool_call>   </codebuff_tool_call>',
+        state,
+      )
+
+      expect(result.filteredText).toBe('')
+      expect(result.toolCalls).toEqual([])
+      expect(result.errors).toEqual([
+        {
+          code: 'invalid_tool_call_json',
+          message: 'Ignored empty codebuff_tool_call content.',
+          rawExcerpt: '   ',
+        },
+      ])
+    })
+
+    it('should parse a single-chunk complete call whose scanned bytes exceed the buffer limit', () => {
+      // Invariant pin for the overflow branch: maxToolCallBufferLength bounds
+      // BUFFERED (unterminated) bytes only. A call whose end tag is found in
+      // the same scan parses regardless of size, so the limit never fires for
+      // a complete call — only for one still waiting for its closing tag.
+      const state = createStreamParserState({ maxToolCallBufferLength: 32 })
+      const chunk = `<codebuff_tool_call>${JSON.stringify({
+        cb_tool_name: 'test_tool',
+      })}</codebuff_tool_call>`
+      // The whole call arrives in one chunk, so the bytes the overflow check
+      // would see exceed the limit — the pin has teeth.
+      expect(chunk.length).toBeGreaterThan(32)
+
+      const result = parseStreamChunk(chunk, state)
+
+      expect(result.filteredText).toBe('')
+      expect(result.errors).toEqual([])
+      expect(result.toolCalls).toHaveLength(1)
+      expect(result.toolCalls[0].toolName).toBe('test_tool')
+    })
+
     it('should report invalid JSON inside a completed tool call', () => {
       const state = createStreamParserState()
       const chunk = `<codebuff_tool_call>

@@ -13,6 +13,17 @@
  *    YIELDED, so a stream that emitted only tool calls and then threw could
  *    never be retried or failed over — the call died emitting zero chunks
  *    (the observed "No output generated" death).
+ *
+ * Also pinned: the stream-only `finish` marker and the producer-side
+ * transport-truncation marker it feeds. `promptAiSdkStream` yields
+ * `{ type: 'finish', finishReason }` exactly once, as the LAST chunk before
+ * the generator's return value, so the runtime's stream parser can annotate
+ * max-token truncation on its tool-call error reports without the marker
+ * ever reaching a downstream consumer. A finish reason of `'length'` (the
+ * max-token cut) additionally marks the flushed tool-call chunks with
+ * `transportTruncated: true` via `withTransportTruncation`; every other
+ * finish reason flushes them with no marker property, covering both
+ * branches of the flush ternary.
  */
 import fs from 'fs'
 import os from 'os'
@@ -34,7 +45,10 @@ import * as retryConfig from '../../retry-config'
 import { promptAiSdkStream } from '../llm'
 import * as modelProvider from '../model-provider'
 
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type {
+  StreamChunk,
+  ToolCallStreamChunk,
+} from '@codebuff/common/types/contracts/llm'
 import type { ModelResult } from '../model-provider'
 
 const logger = {
@@ -174,19 +188,23 @@ describe('promptAiSdkStream tool-call buffering across attempts', () => {
     }
   }
 
-  /** Drives the generator to completion, collecting yielded tool-call ids. */
-  async function collectToolCallIds(): Promise<string[]> {
-    const toolCallIds: string[] = []
+  /**
+   * Drives the generator to completion, collecting the yielded tool-call
+   * chunks: the full chunk objects, so tests can also assert on the
+   * transport-truncation marker, not just the ids.
+   */
+  async function collectToolCallChunks(): Promise<ToolCallStreamChunk[]> {
+    const toolCallChunks: ToolCallStreamChunk[] = []
     const iterator = promptAiSdkStream(
       makePromptParams() as never,
     )[Symbol.asyncIterator]()
     let next = await iterator.next()
     while (!next.done) {
       const chunk = next.value as StreamChunk
-      if (chunk.type === 'tool-call') toolCallIds.push(chunk.toolCallId)
+      if (chunk.type === 'tool-call') toolCallChunks.push(chunk)
       next = await iterator.next()
     }
-    return toolCallIds
+    return toolCallChunks
   }
 
   test('drops the failed attempt\'s buffered tool calls when the retry succeeds', async () => {
@@ -227,13 +245,20 @@ describe('promptAiSdkStream tool-call buffering across attempts', () => {
       return response
     }) as unknown as typeof ai.streamText)
 
-    const toolCallIds = await collectToolCallIds()
+    const toolCallChunks = await collectToolCallChunks()
+    const toolCallIds = toolCallChunks.map((chunk) => chunk.toolCallId)
 
     // Buffering a tool call is not delivery, so the failure was retried...
     expect(streamTextCalls).toBe(2)
     expect(backoffSpy).toHaveBeenCalledTimes(1)
     // ...and only the successful attempt's payload reached the caller.
     expect(toolCallIds).toEqual(['call-success'])
+    // The successful attempt finished with 'tool-calls' (not the max-token
+    // cut), so its flushed chunks take the unmarked branch of the flush
+    // ternary: no transportTruncated property at all.
+    for (const chunk of toolCallChunks) {
+      expect(Object.hasOwn(chunk, 'transportTruncated')).toBe(false)
+    }
   })
 
   test('fails over after a stream that buffered a tool call and then failed', async () => {
@@ -274,7 +299,8 @@ describe('promptAiSdkStream tool-call buffering across attempts', () => {
       return response
     }) as unknown as typeof ai.streamText)
 
-    const toolCallIds = await collectToolCallIds()
+    const toolCallChunks = await collectToolCallChunks()
+    const toolCallIds = toolCallChunks.map((chunk) => chunk.toolCallId)
 
     // A buffered-but-never-delivered tool call no longer blocks failover.
     expect(preferModelParamCalls).toEqual([false, true])
@@ -282,5 +308,69 @@ describe('promptAiSdkStream tool-call buffering across attempts', () => {
     expect(backoffSpy).not.toHaveBeenCalled()
     // Only the backup attempt's payload reached the caller.
     expect(toolCallIds).toEqual(['call-backup'])
+    // The backup attempt also finished with 'tool-calls' (not the
+    // max-token cut), so its flushed chunks carry no truncation marker
+    // either: the other branch of the flush ternary.
+    for (const chunk of toolCallChunks) {
+      expect(Object.hasOwn(chunk, 'transportTruncated')).toBe(false)
+    }
+  })
+
+  test('yields the stream-only finish chunk as the last yielded chunk before the return value', async () => {
+    writeProviderConfig({})
+    getModelSpy = spyOn(
+      modelProvider,
+      'getModelForRequest',
+    ).mockImplementation(async () => makeModelResult({ model: 'local/primary' }))
+
+    // The in-stream finish chunk reports 'length' (the max-token cut) while
+    // the late-resolved response.finishReason says 'tool-calls': the yielded
+    // marker must carry the AUTHORITATIVE in-stream reason. It must be the
+    // final yield before the generator's return value, so the retry/failover
+    // semantics built on anyContentYielded are untouched.
+    const responses = [
+      fakeStreamResponse({
+        chunks: [
+          toolCallChunk({ toolCallId: 'call-success', input: '{"edits":[]}' }),
+          { type: 'finish', finishReason: 'length' },
+        ],
+      }),
+    ]
+    let streamTextCalls = 0
+    streamTextSpy = spyOn(ai, 'streamText').mockImplementation((() => {
+      const response = responses[streamTextCalls]
+      streamTextCalls++
+      return response
+    }) as unknown as typeof ai.streamText)
+
+    const iterator = promptAiSdkStream(
+      makePromptParams() as never,
+    )[Symbol.asyncIterator]()
+    const yielded: StreamChunk[] = []
+    let next = await iterator.next()
+    while (!next.done) {
+      yielded.push(next.value as StreamChunk)
+      next = await iterator.next()
+    }
+
+    const finishChunks = yielded.filter(
+      (chunk): chunk is Extract<StreamChunk, { type: 'finish' }> =>
+        chunk.type === 'finish',
+    )
+    // Exactly one finish chunk, carrying the provider's in-stream reason.
+    expect(finishChunks).toEqual([{ type: 'finish', finishReason: 'length' }])
+    // It is the last chunk yielded before the return value, and the flushed
+    // tool call was yielded ahead of it.
+    expect(yielded[yielded.length - 1]).toEqual({
+      type: 'finish',
+      finishReason: 'length',
+    })
+    // The flushed tool call carries the transport-truncation marker: the
+    // in-stream finish chunk reported 'length' (the max-token cut), so the
+    // flush marked the buffered payload via `withTransportTruncation`.
+    expect(yielded[0]).toMatchObject({
+      type: 'tool-call',
+      transportTruncated: true,
+    })
   })
 })
