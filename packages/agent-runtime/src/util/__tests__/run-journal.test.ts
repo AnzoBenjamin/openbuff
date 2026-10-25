@@ -2342,15 +2342,17 @@ describe('P2-T2 slice 4: hot-path batching', () => {
 
 describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, bounded reads', () => {
   /**
-   * Journal over a COUNTING createDatabase seam: tallies the per-run greedy
-   * byte scan (the O(n)-per-append query byte retention used to run on EVERY
-   * append) and can fail every BEGIN IMMEDIATE with a NON-busy error to
-   * exercise the close() drain-throw path.
+   * Journal over a COUNTING createDatabase seam: tallies PREPARES of the
+   * over-cap byte walk's phase-1 seq-page statement (the statement the
+   * O(rows-walked) two-phase walk uses on over-cap appends — the O(n)
+   * greedy per-append scan byte retention used to run on EVERY append)
+   * and can fail every BEGIN IMMEDIATE with a NON-busy error to exercise
+   * the close() drain-throw path.
    */
   const makeCountingJournal = (
     overrides: Partial<Parameters<typeof createRunJournal>[0]> = {},
   ) => {
-    let byteScans = 0
+    let walkPrepares = 0
     let failBegins = false
     const journal = createRunJournal({
       path: ':memory:',
@@ -2369,10 +2371,15 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
             ).run(sql, ...params)
           },
           query: (sql: string) => {
+            // The two-phase over-cap walk's phase-1 seq page — the only
+            // statement that pages the run's index on the byte path (the
+            // old combined (seq, LENGTH) page statement no longer exists).
             if (
-              sql.startsWith('SELECT seq, LENGTH(CAST(payload AS BLOB)) AS len')
+              sql.startsWith(
+                'SELECT seq FROM run_events WHERE run_id = ? AND seq > ?',
+              )
             ) {
-              byteScans += 1
+              walkPrepares += 1
             }
             return (
               db as unknown as {
@@ -2392,7 +2399,7 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
     })
     return {
       journal,
-      scanned: () => byteScans,
+      scanned: () => walkPrepares,
       setFailBegins: (value: boolean) => {
         failBegins = value
       },
@@ -2405,9 +2412,9 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
     })
     try {
       for (let i = 0; i < 50; i++) journal.append('run-fast', stepEvent(i))
-      // 50 appends with a far-away byte cap: the greedy per-run ordered scan
-      // must run ZERO times (the SQL-seeded cached total stays under the cap
-      // and each append only O(1)-increments it).
+      // 50 appends with a far-away byte cap: the over-cap walk is never
+      // even PREPARED (the side-table-seeded cached total stays under the
+      // cap and each append only O(1)-increments it).
       expect(scanned()).toBe(0)
       // Behavior equivalence: nothing was dropped.
       expect(journal.events('run-fast').map((e) => e.seq)).toEqual(
@@ -2415,6 +2422,309 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
       )
     } finally {
       journal.close()
+    }
+  })
+
+  it('byte-cap cache seeding is lazy per runId: open no longer scans every journaled run', async () => {
+    // The deleted eager open-time seed ran ONE GROUP-BY-over-all-runs
+    // SUM(LENGTH(CAST(payload AS BLOB))) when a byte-capped journal opened —
+    // O(all runs ever journaled) on the synchronous open path. After the fix
+    // open is O(1): no run's byte total is read at open, and each runId's
+    // total is seeded lazily on first use (the per-run recompute query in
+    // enforceRetention, plus the O(1) per-append increment in insertEvent).
+    const path = tmpDbPath()
+    // Seed an on-disk db with events on 'other-run' under a far-away byte
+    // cap so nothing is deleted; reopening this db must not scan these rows.
+    const seeder = makeJournalWith(
+      { retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 } },
+      path,
+    )
+    try {
+      for (let i = 0; i < 30; i++) seeder.append('other-run', stepEvent(i))
+    } finally {
+      await seeder.close()
+    }
+
+    // Counting wrapper mirroring makeCountingJournal above, tallying two
+    // distinct query prefixes: the deleted eager open-time seed ('SELECT
+    // run_id, COALESCE(SUM' — GROUP BY over ALL runs) and the per-run lazy
+    // recompute ('SELECT COALESCE(SUM' — one runId).
+    let seedScans = 0
+    let perRunRecomputes = 0
+    const journal = createRunJournal({
+      path,
+      clock: fixedClock,
+      retention: { maxEvents: 20_000, maxBytes: 4096 },
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            if (sql.startsWith('SELECT run_id, COALESCE(SUM')) {
+              seedScans += 1
+            }
+            if (sql.startsWith('SELECT COALESCE(SUM')) {
+              perRunRecomputes += 1
+            }
+            return (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+    })
+    try {
+      // Open-time invariant: the eager seed scan must never run at open...
+      expect(seedScans).toBe(0)
+      // ...and nothing is read lazily at open either (open is O(1)).
+      expect(perRunRecomputes).toBe(0)
+
+      // ~1024-byte payloads ({"blob":"…"} serializes to exactly 1024 bytes):
+      // 10 events exceed the 4096-byte cap, so retention must enforce the
+      // cap for 'late-run' — seeding its byte total lazily on first use.
+      const bigPayload = { blob: 'x'.repeat(1013) }
+      for (let i = 0; i < 10; i++) {
+        journal.append('late-run', stepEvent(i, bigPayload))
+      }
+
+      // The per-run lazy seeding/recompute fired for 'late-run', while the
+      // eager open-time seed never ran at all.
+      expect(seedScans).toBe(0)
+      expect(perRunRecomputes).toBeGreaterThan(0)
+
+      // Retention behavior is unchanged: the newest seq survives and the
+      // retained payload bytes fit the cap.
+      const lateEvents = journal.events('late-run')
+      expect(lateEvents[lateEvents.length - 1].seq).toBe(9)
+      const totalBytes = lateEvents.reduce(
+        (sum, e) => sum + JSON.stringify(e.payload).length,
+        0,
+      )
+      expect(totalBytes).toBeLessThanOrEqual(4096)
+
+      // The other run's rows are untouched by lazy seeding.
+      expect(journal.events('other-run')).toHaveLength(30)
+    } finally {
+      await journal.close()
+    }
+  })
+
+  it('reopen enforces the byte cap over historical bytes via the persisted run_byte_totals side table', async () => {
+    // Regression for the lazy-seed ordering defect: insertEvent used to seed
+    // an absent per-run byte total with ONLY the new event's bytes and ran
+    // BEFORE enforceRetention, so any runId that already had rows in the db
+    // (kill-9 crash-resume, a persistent runId re-opened per send) never had
+    // its historical bytes counted — the cap never fired. The persisted
+    // run_byte_totals side table (maintained inside the same transaction as
+    // each append) makes the historical total durable: journal B's FIRST
+    // append to the reopened runId must enforce the cap over historical +
+    // new bytes.
+    const path = tmpDbPath()
+    // Journal A: 10 ~1024-byte-payload events on 'persist-run' under a
+    // far-away byte cap so nothing is deleted; its side row lands at the
+    // exact historical total (10 × 1024 = 10240).
+    const seeder = makeJournalWith(
+      { retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 } },
+      path,
+    )
+    try {
+      const bigPayload = { blob: 'x'.repeat(1013) }
+      for (let i = 0; i < 10; i++) {
+        seeder.append('persist-run', stepEvent(i, bigPayload))
+      }
+    } finally {
+      await seeder.close()
+    }
+
+    // Journal B over the same path, with a counting wrapper mirroring
+    // makeCountingJournal above: tallies the persisted side-table reads
+    // ('SELECT total_bytes' — a prefix no other journal SQL uses, so the
+    // counted SUM prefixes keep their exact meanings) to prove the cap
+    // decision now consumes the persisted historical total.
+    let sideReads = 0
+    const journal = createRunJournal({
+      path,
+      clock: fixedClock,
+      retention: { maxEvents: 20_000, maxBytes: 4096 },
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            if (sql.startsWith('SELECT total_bytes')) {
+              sideReads += 1
+            }
+            return (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+    })
+    try {
+      // ONE append to the reopened runId: a fresh ~1024-byte payload.
+      journal.append('persist-run', stepEvent(10, { blob: 'x'.repeat(1013) }))
+
+      // Seq continues from the historical rows (gap-free MAX(seq) + 1).
+      const events = journal.events('persist-run')
+      expect(events[events.length - 1].seq).toBe(10)
+      // Historical + new bytes exceeded the 4096 cap, so the oldest rows
+      // were deleted. Under the broken ordering the total would have been
+      // seeded as just the new event's 1024 bytes — under the cap — and
+      // nothing would have been deleted (11 rows, ~11KB retained).
+      expect(events.length).toBeLessThan(11)
+      // The retained tail fits the cap.
+      const totalBytes = events.reduce(
+        (sum, e) => sum + JSON.stringify(e.payload).length,
+        0,
+      )
+      expect(totalBytes).toBeLessThanOrEqual(4096)
+      // The cap decision was served from the persisted side table.
+      expect(sideReads).toBeGreaterThanOrEqual(1)
+    } finally {
+      await journal.close()
+    }
+  })
+
+  it('a stale inflated run_byte_totals row self-heals on the first scan-only enforcement pass', async () => {
+    // Regression for the stale-side-row defect: a crash between a retention
+    // DELETE and the side-row re-persist leaves an inflated run_byte_totals
+    // row, and getRunPayloadBytes trusts any present side row. Without a
+    // scan-only self-heal, a stale-over-cap / exact-under-cap state re-ran
+    // the full ordered greedy scan on EVERY append with no cut and no
+    // correction — a per-send O(n) payload scan. The self-heal in the
+    // byte-cap scan branch re-persists the exact total even when the pass
+    // cuts nothing, restoring the O(1) fast path.
+    const path = tmpDbPath()
+    const bigPayload = { blob: 'x'.repeat(1013) }
+    // Journal A: 4 ~1024-byte-payload events on 'stale-run' under a
+    // far-away byte cap so nothing is deleted; its side row lands at the
+    // exact historical total (4 × 1024).
+    const seeder = makeJournalWith(
+      { retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 } },
+      path,
+    )
+    try {
+      for (let i = 0; i < 4; i++) {
+        seeder.append('stale-run', stepEvent(i, bigPayload))
+      }
+    } finally {
+      await seeder.close()
+    }
+
+    // Simulate the crash window: inflate the persisted side row directly on
+    // the db file, exactly as a crash between a retention DELETE and the
+    // side-row re-persist would leave it.
+    const raw = new Database(path)
+    raw.run(
+      "UPDATE run_byte_totals SET total_bytes = 999999 WHERE run_id = 'stale-run'",
+    )
+    raw.close()
+
+    // Journal B over the same file with a counting wrapper mirroring
+    // makeCountingJournal above: tallies the per-run greedy byte scan. The
+    // 8192 cap sits ABOVE the exact total (4 + 3 events × 1024 = 7168) but
+    // BELOW the inflated 999999 side row, so the first append's scan must
+    // cut nothing yet self-heal the side row.
+    let scans = 0
+    const journal = createRunJournal({
+      path,
+      clock: fixedClock,
+      retention: { maxEvents: 20_000, maxBytes: 8192 },
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            // The two-phase walk's phase-1 page statement (seq only; the
+            // eager excessBoundary statement lacks the 'AND seq > ?' tail,
+            // so this prefix uniquely identifies the walk's lazy prepare).
+            if (
+              sql.startsWith(
+                'SELECT seq FROM run_events WHERE run_id = ? AND seq > ?',
+              )
+            ) {
+              scans += 1
+            }
+            return (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+    })
+    try {
+      for (let i = 0; i < 3; i++) {
+        journal.append('stale-run', stepEvent(4 + i, bigPayload))
+      }
+
+      // Only the FIRST append ran the scan: the scan-only pass self-healed
+      // the inflated side row (no cut — the exact total is under the cap),
+      // so the later appends take the O(1) fast path instead of re-scanning
+      // per append.
+      expect(scans).toBe(1)
+      // No rows were deleted by any pass.
+      const events = journal.events('stale-run')
+      expect(events).toHaveLength(7)
+      expect(events[events.length - 1].seq).toBe(6)
+      await journal.close()
+
+      // The side row now holds the EXACT total — the sum over the retained
+      // events — not the inflated 999999.
+      const exactTotal = events.reduce(
+        (sum, e) => sum + JSON.stringify(e.payload).length,
+        0,
+      )
+      const verify = new Database(path)
+      const row = verify
+        .query('SELECT total_bytes FROM run_byte_totals WHERE run_id = ?')
+        .get('stale-run') as { total_bytes: number } | undefined
+      verify.close()
+      expect(row?.total_bytes).toBe(exactTotal)
+    } finally {
+      await journal.close()
     }
   })
 
@@ -2434,9 +2744,11 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
       expect(totalBytes).toBeLessThanOrEqual(60)
       expect(events.length).toBeGreaterThan(0)
       expect(events[events.length - 1].seq).toBe(19)
-      // The scan runs only on appends that find the total over the cap —
-      // not once per append.
-      expect(scanned()).toBeLessThan(20)
+      // The over-cap walk's phase-1 seq-page statement was PREPARED
+      // exactly ONCE (lazily, on the first over-cap append) and reused for
+      // every subsequent over-cap append — a per-append query-object
+      // regression would tally one per over-cap append instead.
+      expect(scanned()).toBe(1)
     } finally {
       journal.close()
     }
@@ -2620,6 +2932,700 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
         journal
           .toolResultForInput('run-tri', 'read_files', { path: 'a.ts' }, 0),
       ).toBeUndefined()
+    } finally {
+      journal.close()
+    }
+  })
+})
+
+describe('P2 perf: per-send open gate + prepared per-append statements', () => {
+  /** The over-cap retention DELETE both cap branches issue, as a SQL prefix. */
+  const RETENTION_DELETE_SQL =
+    'DELETE FROM run_events WHERE run_id = ? AND seq <= ?'
+
+  /**
+   * Journal over a COUNTING createDatabase seam that records (a) every
+   * connection-level run() SQL string, (b) every query() call (each one is a
+   * statement PREPARE — the per-append allocation the perf finding names),
+   * and (c) executions of the prepared hot-path statements, so the tests can
+   * prove the per-send open gate skips the persistent schema/DDL re-run on an
+   * already-initialized db and that insertEvent reuses one prepared statement
+   * per connection instead of allocating a fresh query object per append.
+   */
+  const makeCountingDbJournal = (
+    overrides: Partial<Parameters<typeof createRunJournal>[0]> = {},
+    path = ':memory:',
+  ) => {
+    const runSqls: string[] = []
+    const prepares: string[] = []
+    const gets: Record<string, number> = {}
+    const alls: Record<string, number> = {}
+    const stmtRuns: Record<string, number> = {}
+    const tagOf = (sql: string): string => {
+      if (sql.startsWith('SELECT MAX(seq)')) return 'maxSeq'
+      if (sql.startsWith('SELECT total_bytes')) return 'sideRowSelect'
+      if (sql.startsWith('UPDATE run_byte_totals')) return 'sideRowUpdate'
+      if (sql.startsWith('INSERT OR REPLACE INTO run_byte_totals')) {
+        return 'sideRowInsert'
+      }
+      if (sql.startsWith('SELECT event_count')) return 'eventCountSelect'
+      if (sql.startsWith('UPDATE run_event_counts')) return 'eventCountUpdate'
+      if (sql.startsWith('INSERT OR REPLACE INTO run_event_counts')) {
+        return 'eventCountInsert'
+      }
+      if (sql.startsWith('SELECT COUNT(*)')) return 'countEvents'
+      if (sql.startsWith('INSERT INTO run_events')) return 'insertRunEvent'
+      if (
+        sql.startsWith(
+          'SELECT seq FROM run_events WHERE run_id = ? ORDER BY seq ASC',
+        )
+      ) {
+        return 'excessBoundary'
+      }
+      if (
+        sql.startsWith(
+          'SELECT seq FROM run_events WHERE run_id = ? AND seq > ?',
+        )
+      ) {
+        return 'byteWalkSeqPage'
+      }
+      if (
+        sql.startsWith(
+          'SELECT LENGTH(CAST(payload AS BLOB)) AS len FROM run_events WHERE run_id = ? AND seq = ?',
+        )
+      ) {
+        return 'byteRowLen'
+      }
+      if (sql.startsWith(RETENTION_DELETE_SQL)) {
+        return 'deletePrefix'
+      }
+      return 'other'
+    }
+    const journal = createRunJournal({
+      path,
+      clock: fixedClock,
+      retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 },
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            runSqls.push(sql)
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            prepares.push(sql)
+            const tag = tagOf(sql)
+            const stmt = (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                  run?: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+            return {
+              get: (...params: unknown[]) => {
+                gets[tag] = (gets[tag] ?? 0) + 1
+                return stmt.get(...params)
+              },
+              all: (...params: unknown[]) => {
+                alls[tag] = (alls[tag] ?? 0) + 1
+                return stmt.all(...params)
+              },
+              run: (...params: unknown[]) => {
+                stmtRuns[tag] = (stmtRuns[tag] ?? 0) + 1
+                // Real bun:sqlite statements expose run(); proxy it so the
+                // prepared-UPDATE path executes through the statement, which
+                // is the exact reuse createRunJournal must exercise.
+                if (stmt.run) return stmt.run(...params)
+                return (
+                  db as unknown as {
+                    run: (sql: string, ...params: unknown[]) => unknown
+                  }
+                ).run(sql, ...params)
+              },
+            }
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+      ...overrides,
+    })
+    return {
+      journal,
+      runSqls: () => runSqls,
+      prepares: () => prepares,
+      prepareCount: (prefix: string) =>
+        prepares.filter((sql) => sql.startsWith(prefix)).length,
+      gets: () => gets,
+      alls: () => alls,
+      stmtRuns: () => stmtRuns,
+    }
+  }
+
+  it('a reopen of an already-initialized file journal skips SCHEMA_SQL and journal_mode=WAL (per-send open gate)', () => {
+    const path = tmpDbPath()
+    // First open: the fresh db must apply the persistent state (SCHEMA_SQL
+    // DDL + journal_mode=WAL) and stamp the marker.
+    const first = makeCountingDbJournal({}, path)
+    try {
+      first.journal.append('gate-run', stepEvent(0))
+      expect(first.runSqls().some((sql) => sql === 'PRAGMA journal_mode=WAL;'))
+        .toBe(true)
+      expect(first.runSqls().some((sql) => sql.includes('CREATE TABLE'))).toBe(
+        true,
+      )
+      expect(
+        first.runSqls().some((sql) => sql.startsWith('PRAGMA user_version =')),
+      ).toBe(true)
+    } finally {
+      first.journal.close()
+    }
+
+    // Second open over the SAME file: the cheap marker read must gate BOTH
+    // the WAL pragma and the whole 5-statement SCHEMA_SQL off.
+    const second = makeCountingDbJournal({}, path)
+    try {
+      expect(second.runSqls().some((sql) => sql === 'PRAGMA journal_mode=WAL;'))
+        .toBe(false)
+      expect(second.runSqls().some((sql) => sql.includes('CREATE '))).toBe(
+        false,
+      )
+      expect(
+        second.runSqls().some((sql) => sql.startsWith('PRAGMA user_version =')),
+      ).toBe(false)
+      // The gate itself still ran (one cheap marker read per open).
+      expect(second.runSqls().some((sql) => sql === 'PRAGMA busy_timeout = 5000;'))
+        .toBe(true)
+      expect(second.runSqls().some((sql) => sql.startsWith('PRAGMA synchronous')))
+        .toBe(true)
+      // And the reopened journal stays fully functional: appends and reads
+      // still work over the skipped schema.
+      second.journal.append('gate-run', stepEvent(1))
+      expect(second.journal.events('gate-run').map((e) => e.seq)).toEqual([0, 1])
+    } finally {
+      second.journal.close()
+    }
+  })
+
+  it('an on-disk journal with a user_version marker below the schema version is re-initialized on reopen', () => {
+    const path = tmpDbPath()
+    // Seed the marker WITHOUT any schema (the crash-window shape: the marker
+    // stamped while the schema round-trip failed) — or equivalently any legacy
+    // state where user_version < SCHEMA_USER_VERSION.
+    const raw = new Database(path)
+    raw.run('PRAGMA user_version = 0;')
+    raw.close()
+
+    const reopened = makeCountingDbJournal({}, path)
+    try {
+      // Marker 0 < 1: the gate must NOT trust it and must re-run the schema.
+      expect(reopened.runSqls().some((sql) => sql.includes('CREATE '))).toBe(
+        true,
+      )
+      expect(
+        reopened.runSqls().some((sql) => sql.startsWith('PRAGMA user_version =')),
+      ).toBe(true)
+      // The journal is functional afterwards.
+      reopened.journal.append('gate-legacy', stepEvent(0))
+      expect(reopened.journal.events('gate-legacy')).toHaveLength(1)
+    } finally {
+      reopened.journal.close()
+    }
+  })
+
+  it('insertEvent prepares the hot per-append statements once per connection and reuses them', () => {
+    const { journal, prepareCount, gets, stmtRuns } = makeCountingDbJournal({
+      retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 },
+    })
+    try {
+      // 5 appends to the same runId under a far-away byte cap: every append
+      // runs the MAX(seq) SELECT and the side-row SELECT, plus ONE side-row
+      // UPDATE (the byte-cache maintenance).
+      for (let i = 0; i < 5; i++) journal.append('prepared-run', stepEvent(i))
+      // Each hot statement was PREPARED (query() called) exactly ONCE for the
+      // whole connection — the perf finding's "allocates fresh query objects
+      // per append" is gone.
+      expect(prepareCount('SELECT MAX(seq)')).toBe(1)
+      expect(prepareCount('SELECT total_bytes')).toBe(1)
+      expect(prepareCount('UPDATE run_byte_totals')).toBe(1)
+      // The prepared statements were actually EXECUTED per append (the reuse
+      // is not dead code). The FIRST append seeds the side row via the
+      // once-prepared INSERT OR REPLACE (no UPDATE yet); appends 2-5 take
+      // the O(1) UPDATE branch through the prepared statement.
+      expect(gets()['maxSeq'] ?? 0).toBe(5)
+      expect(gets()['sideRowSelect'] ?? 0).toBe(5)
+      expect(stmtRuns()['sideRowUpdate'] ?? 0).toBe(4)
+      // The byte side-row UPSERT is prepared ONCE per connection too, and the
+      // append-1 seed executed through it — the per-call db.run re-prepare
+      // the finding named is gone.
+      expect(prepareCount('INSERT OR REPLACE INTO run_byte_totals')).toBe(1)
+      expect(stmtRuns()['sideRowInsert'] ?? 0).toBe(1)
+      // Behavior is unchanged: gap-free seq under the reused prepared MAX.
+      expect(journal.events('prepared-run').map((e) => e.seq)).toEqual([
+        0, 1, 2, 3, 4,
+      ])
+      // The side-table cache still works: no greedy byte scan ran.
+      expect(
+        prepareCount('SELECT seq, LENGTH(CAST(payload AS BLOB)) AS len'),
+      ).toBe(0)
+      // The retention DELETE is prepared LAZILY: an append path that never
+      // crosses a cap never prepares it either.
+      expect(prepareCount(RETENTION_DELETE_SQL)).toBe(0)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('the reused side-row UPDATE executes through the prepared statement, not a per-append re-prepare', () => {
+    const { journal, prepareCount, stmtRuns } = makeCountingDbJournal({
+      retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 },
+    })
+    try {
+      for (let i = 0; i < 3; i++) journal.append('update-run', stepEvent(i))
+      // Every UPDATE execution went through the prepared statement's run()
+      // (stmtRuns counts it), and only ONE UPDATE PREPARE happened for the
+      // whole connection. The FIRST append seeds the side row via
+      // INSERT OR REPLACE instead (no UPDATE), so 2 of the 3 appends UPDATE.
+      expect(stmtRuns()['sideRowUpdate'] ?? 0).toBe(2)
+      expect(prepareCount('UPDATE run_byte_totals')).toBe(1)
+      // The total still matches exactly.
+      const totalBytes = journal
+        .events('update-run')
+        .reduce((sum, e) => sum + JSON.stringify(e.payload).length, 0)
+      expect(totalBytes).toBe(3 * JSON.stringify(stepEvent(0).payload).length)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('the per-append fast path reuses the same prepared statements as the side-table cache read', () => {
+    const { journal, prepareCount, gets, stmtRuns } = makeCountingDbJournal({
+      retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 },
+    })
+    try {
+      journal.append('shared-run', stepEvent(0))
+      // The per-append side-row SELECT was prepared once and consumed by
+      // BOTH the insertEvent fast path and the seed decision.
+      expect(prepareCount('SELECT total_bytes')).toBe(1)
+      expect(gets()['sideRowSelect'] ?? 0).toBe(1)
+      // The FIRST append found no side row and seeded it via the
+      // once-prepared INSERT OR REPLACE — no prepared UPDATE ran yet.
+      expect(stmtRuns()['sideRowUpdate'] ?? 0).toBe(0)
+      expect(stmtRuns()['sideRowInsert'] ?? 0).toBe(1)
+      // A second append keeps reusing the same statement objects: the side
+      // row now exists, so the O(1) prepared UPDATE branch runs.
+      journal.append('shared-run', stepEvent(1))
+      expect(prepareCount('SELECT total_bytes')).toBe(1)
+      expect(gets()['sideRowSelect'] ?? 0).toBe(2)
+      expect(stmtRuns()['sideRowUpdate'] ?? 0).toBe(1)
+      expect(journal.events('shared-run').map((e) => e.seq)).toEqual([0, 1])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('a prepared-statement-less database double still appends correctly (fallback path)', () => {
+    // A hand-rolled double whose query() returns only { get, all } (no run)
+    // must keep working: createRunJournal's fallback routes the side-row
+    // UPDATE through the connection-level run instead of the statement.
+    const runSqls: string[] = []
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: fixedClock,
+      retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 },
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            runSqls.push(sql)
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            const stmt = (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                  run?: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+            return { get: stmt.get.bind(stmt), all: stmt.all.bind(stmt) }
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+    })
+    try {
+      for (let i = 0; i < 3; i++) journal.append('fallback-run', stepEvent(i))
+      // The side-row UPDATE was routed through db.run (fallback), which the
+      // real bun:sqlite Database executes fine. The FIRST append seeded the
+      // side row via INSERT OR REPLACE (also the connection-level fallback:
+      // this double's statements expose no run()), so 2 of the 3 appends
+      // issued the UPDATE.
+      expect(
+        runSqls.filter((sql) => sql.startsWith('UPDATE run_byte_totals')),
+      ).toHaveLength(2)
+      expect(
+        runSqls.filter((sql) =>
+          sql.startsWith('INSERT OR REPLACE INTO run_byte_totals'),
+        ),
+      ).toHaveLength(1)
+      expect(journal.events('fallback-run').map((e) => e.seq)).toEqual([0, 1, 2])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('a prepared-statement-less database double still deletes over-cap rows through the connection-level fallback', () => {
+    // The over-cap retention DELETE executes through the prepared statement's
+    // run() when the statement exposes one; a hand-rolled double whose
+    // query() returns only { get, all } must keep deleting correctly by
+    // falling back to the connection-level run — the same compatibility
+    // contract the side-row UPDATE/INSERT fallback above follows.
+    const runSqls: string[] = []
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: fixedClock,
+      retention: { maxEvents: 2 },
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            runSqls.push(sql)
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            const stmt = (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                  run?: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+            return { get: stmt.get.bind(stmt), all: stmt.all.bind(stmt) }
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+    })
+    try {
+      for (let i = 0; i < 3; i++) {
+        journal.append('fallback-delete-run', stepEvent(i))
+      }
+      // The third append went over the cap of 2, so exactly one deleting
+      // pass ran — and because this double's statements expose no run(), the
+      // DELETE took the connection-level fallback instead of the prepared
+      // statement's run().
+      expect(
+        runSqls.filter((sql) => sql.startsWith(RETENTION_DELETE_SQL)),
+      ).toHaveLength(1)
+      // ...and it still deleted exactly the over-cap excess (the OLDEST row),
+      // keeping the newest two events.
+      expect(journal.events('fallback-delete-run').map((e) => e.seq)).toEqual([
+        1, 2,
+      ])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('a batched drain reuses the prepared statements across all buffered events', () => {
+    const { journal, prepareCount, gets } = makeCountingDbJournal({
+      batching: { maxBatchEvents: 4, maxBatchDelayMs: 60_000 },
+      retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 },
+    })
+    try {
+      for (let i = 0; i < 4; i++) journal.append('batch-run', stepEvent(i))
+      // The drain ran inside one connection with ONE prepared MAX per runId.
+      expect(prepareCount('SELECT MAX(seq)')).toBe(1)
+      expect((gets()['maxSeq'] ?? 0)).toBe(4)
+      expect(journal.events('batch-run').map((e) => e.seq)).toEqual([0, 1, 2, 3])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('maxEvents retention uses a persisted count side table: under-cap appends skip the boundary walk and over-cap appends delete exactly the excess', () => {
+    // NO maxBytes key: the byte dimension must stay completely untouched.
+    const { journal, prepareCount, gets, stmtRuns, runSqls } =
+      makeCountingDbJournal({
+        retention: { maxEvents: 5 },
+      })
+    try {
+      for (let i = 0; i < 10; i++) journal.append('count-run', stepEvent(i))
+      // Exactly the five over-cap appends (6-10) ran the boundary query;
+      // appends 1-5 took the O(1) count fast path and never walked it (the
+      // old DESC/OFFSET walk ran on EVERY enforcement pass).
+      expect(gets()['excessBoundary'] ?? 0).toBe(5)
+      const events = journal.events('count-run')
+      expect(events).toHaveLength(5)
+      expect(events[events.length - 1].seq).toBe(9)
+      // Each event-count statement was PREPARED exactly once for the whole
+      // connection — the per-call re-prepare the perf finding named is gone.
+      expect(prepareCount('SELECT event_count')).toBe(1)
+      expect(
+        prepareCount(
+          'SELECT seq FROM run_events WHERE run_id = ? ORDER BY seq ASC',
+        ),
+      ).toBe(1)
+      // The byte dimension was untouched: without a byte cap its statements
+      // are never even prepared.
+      expect(prepareCount('SELECT total_bytes')).toBe(0)
+      // Appends 2-10 O(1)-incremented the side row through the prepared
+      // UPDATE; the first append seeded it via the prepared INSERT OR
+      // REPLACE (the seed-branch COUNT already includes the just-inserted
+      // event inside the open transaction).
+      expect(stmtRuns()['eventCountUpdate'] ?? 0).toBe(9)
+      // The seed (1) plus each of the five over-cap appends' post-delete
+      // re-persist, which now runs through the SAME prepared INSERT OR
+      // REPLACE — the old raw db.run was invisible to this tally.
+      expect(stmtRuns()['eventCountInsert'] ?? 0).toBe(6)
+      // The decisive WORK bound: COUNT(*) ran exactly once per runId (the
+      // append-1 seed) plus once per OVER-CAP append (the documented,
+      // deliberate pre-delete authoritative count) — NEVER a second
+      // post-delete COUNT. 1 seed + 5 over-cap = 6.
+      expect(gets()['countEvents'] ?? 0).toBe(6)
+      // The over-cap retention DELETE was PREPARED exactly ONCE for the whole
+      // connection and each of the five deleting appends executed through it
+      // — the per-call connection-level db.run re-parse the finding named is
+      // gone, and ZERO connection-level DELETE SQL ran on the steady-state
+      // over-cap path.
+      expect(prepareCount(RETENTION_DELETE_SQL)).toBe(1)
+      expect(stmtRuns()['deletePrefix'] ?? 0).toBe(5)
+      expect(
+        runSqls().filter((sql) => sql.startsWith(RETENTION_DELETE_SQL)),
+      ).toHaveLength(0)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('a stale inflated run_event_counts row self-heals and the authoritative count drives the delete', async () => {
+    // Regression for the crash-window durability class: a crash between a
+    // retention DELETE and the side-row re-persist can leave an inflated
+    // run_event_counts row. The stale count is only the fast-path check —
+    // the authoritative COUNT(*) drives the delete decision (so the inflated
+    // row can never over-delete) — and the over-cap pass re-persists the
+    // exact count, healing the row.
+    const path = tmpDbPath()
+    // Journal A: 6 events on 'count-run' under a far-away event cap so
+    // nothing is deleted; its side row lands at the exact count (6).
+    const seeder = makeJournalWith({ retention: { maxEvents: 20_000 } }, path)
+    try {
+      for (let i = 0; i < 6; i++) seeder.append('count-run', stepEvent(i))
+    } finally {
+      await seeder.close()
+    }
+
+    // Simulate the crash window: inflate the persisted side row directly on
+    // the db file, exactly as a crash between a retention DELETE and the
+    // side-row re-persist would leave it.
+    const raw = new Database(path)
+    raw.run(
+      "UPDATE run_event_counts SET event_count = 999 WHERE run_id = 'count-run'",
+    )
+    raw.close()
+
+    // Journal B over the same file: 7 rows exist (seqs 0-5 plus the new 6)
+    // when its single append's enforcement runs. The inflated side count
+    // (now 1000 after the O(1) increment) is over the cap of 5, but the
+    // authoritative COUNT(*) (7) drives the delete of exactly the 2 excess
+    // oldest rows — never 995 rows.
+    const journalB = makeCountingDbJournal(
+      { retention: { maxEvents: 5 } },
+      path,
+    )
+    try {
+      journalB.journal.append('count-run', stepEvent(6))
+      const events = journalB.journal.events('count-run')
+      expect(events).toHaveLength(5)
+      expect(events[events.length - 1].seq).toBe(6)
+      expect(journalB.gets()['excessBoundary'] ?? 0).toBe(1)
+      // The once-per-staleness-event heal (writes the exact pre-delete
+      // count) and the post-delete re-persist (writes the exact post-delete
+      // count) BOTH ran through the ONCE-prepared run_event_counts upsert —
+      // zero connection-level count-upsert SQL on the heal path.
+      expect(journalB.stmtRuns()['eventCountInsert'] ?? 0).toBe(2)
+      expect(
+        journalB
+          .runSqls()
+          .filter((sql) =>
+            sql.startsWith('INSERT OR REPLACE INTO run_event_counts'),
+          ),
+      ).toHaveLength(0)
+    } finally {
+      await journalB.journal.close()
+    }
+
+    // The side row now holds the EXACT post-delete count (5), not the
+    // inflated value.
+    const verify = new Database(path)
+    const row = verify
+      .query('SELECT event_count FROM run_event_counts WHERE run_id = ?')
+      .get('count-run') as { event_count: number } | undefined
+    verify.close()
+    expect(row?.event_count).toBe(5)
+  })
+
+  it('byte over-cap steady state is O(deleted rows): the paged walk stops at the boundary and re-persists the exact total in O(1)', async () => {
+    const path = tmpDbPath()
+    // Journal A: 6 ~1024-byte events on 'over-run' under a far-away byte
+    // cap so nothing is deleted; its side row lands at the exact 6 × 1024.
+    const seeder = makeJournalWith(
+      { retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 } },
+      path,
+    )
+    try {
+      const bigPayload = { blob: 'x'.repeat(1013) }
+      for (let i = 0; i < 6; i++) {
+        seeder.append('over-run', stepEvent(i, bigPayload))
+      }
+    } finally {
+      await seeder.close()
+    }
+
+    // Journal B over the same file with an 8192-byte cap: appends 1-2 land
+    // under the cap (7 × 1024 = 7168, then exactly 8192); appends 3-4 each
+    // re-cross it, so each runs the paged walk once.
+    const { journal, prepareCount, alls, gets, stmtRuns, runSqls } =
+      makeCountingDbJournal(
+        { retention: { maxEvents: 20_000, maxBytes: 8192 } },
+        path,
+      )
+    try {
+      const bigPayload = { blob: 'x'.repeat(1013) }
+      for (let i = 0; i < 4; i++) {
+        journal.append('over-run', stepEvent(6 + i, bigPayload))
+      }
+      // Exactly the two over-cap appends walked — one bounded seq page
+      // each (the whole run fits in a single 512-row page): the walk
+      // consumes the rows being DELETED, never the retained window.
+      expect(alls()['byteWalkSeqPage'] ?? 0).toBe(2)
+      // The decisive WORK bound: one per-row LENGTH read per row the
+      // walk CONSUMED. Each of the two over-cap appends deleted exactly
+      // one row, so 2 reads total — the byte work is O(deleted rows),
+      // never a full page of payload LENGTH evaluations.
+      expect(gets()['byteRowLen'] ?? 0).toBe(2)
+      // The walk statements were prepared exactly ONCE each (lazily, on
+      // the first over-cap pass) for the whole connection.
+      expect(
+        prepareCount('SELECT seq FROM run_events WHERE run_id = ? AND seq > ?'),
+      ).toBe(1)
+      expect(
+        prepareCount(
+          'SELECT LENGTH(CAST(payload AS BLOB)) AS len FROM run_events WHERE run_id = ? AND seq = ?',
+        ),
+      ).toBe(1)
+      const events = journal.events('over-run')
+      expect(events[events.length - 1].seq).toBe(9)
+      const totalBytes = events.reduce(
+        (sum, e) => sum + JSON.stringify(e.payload).length,
+        0,
+      )
+      expect(totalBytes).toBeLessThanOrEqual(8192)
+      // Steady state: three more over-cap appends, one bounded walk each —
+      // the per-append cost stays O(deleted rows) (~1 row), not O(retained).
+      for (let i = 4; i < 7; i++) {
+        journal.append('over-run', stepEvent(6 + i, bigPayload))
+      }
+      expect(alls()['byteWalkSeqPage'] ?? 0).toBe(5)
+      // Steady-state byte work: three more over-cap appends each consumed
+      // exactly one row => 3 more per-row LENGTH reads (2 + 3 = 5 total).
+      expect(gets()['byteRowLen'] ?? 0).toBe(5)
+      // The steady-state over-cap re-persist executed through the ONCE-
+      // prepared byte UPSERT on every deleting append (5 deleting appends =>
+      // 5 executions, 1 prepare) — the per-call db.run re-prepare the finding
+      // named is gone, and the connection-level fallback never fired (the
+      // real statement exposes run(), so no db.run byte-upsert appears).
+      expect(prepareCount('INSERT OR REPLACE INTO run_byte_totals')).toBe(1)
+      expect(stmtRuns()['sideRowInsert'] ?? 0).toBe(5)
+      expect(
+        runSqls().filter((sql) =>
+          sql.startsWith('INSERT OR REPLACE INTO run_byte_totals'),
+        ),
+      ).toHaveLength(0)
+      // The byte branch's over-cap DELETE ran through the SAME once-prepared
+      // statement the count branch uses: one DELETE prepare for the whole
+      // connection, one execution per deleting append (5), and ZERO
+      // connection-level DELETE SQL on the steady-state over-cap path.
+      expect(prepareCount(RETENTION_DELETE_SQL)).toBe(1)
+      expect(stmtRuns()['deletePrefix'] ?? 0).toBe(5)
+      expect(
+        runSqls().filter((sql) => sql.startsWith(RETENTION_DELETE_SQL)),
+      ).toHaveLength(0)
+      // The count dimension ran NO COUNT(*) for any of the five byte-branch
+      // deletes: the post-delete count re-persist is ARITHMETIC (base
+      // count minus the byte walk's consumed rows), never a second
+      // O(retained) COUNT. The side row was seeded by journal A, so this
+      // connection never even ran the seed COUNT.
+      expect(gets()['countEvents'] ?? 0).toBe(0)
+      const finalEvents = journal.events('over-run')
+      expect(finalEvents[finalEvents.length - 1].seq).toBe(12)
+    } finally {
+      await journal.close()
+    }
+
+    // The side row holds the EXACT remaining total — the O(1) re-persist
+    // (walked deleted bytes subtracted from the surviving total, no SUM
+    // recompute) — verified against the live db.
+    const raw = new Database(path)
+    try {
+      const row = raw
+        .query('SELECT total_bytes FROM run_byte_totals WHERE run_id = ?')
+        .get('over-run') as { total_bytes: number } | undefined
+      expect(row?.total_bytes).toBe(8192)
+      const live = raw
+        .query('SELECT COUNT(*) AS n FROM run_events WHERE run_id = ?')
+        .get('over-run') as { n: number }
+      expect(live.n).toBe(8)
+      // The count side row stayed EXACT through every byte-branch delete —
+      // the arithmetic re-persist (no post-delete COUNT) verified against
+      // the live row count.
+      const countRow = raw
+        .query('SELECT event_count FROM run_event_counts WHERE run_id = ?')
+        .get('over-run') as { event_count: number } | undefined
+      expect(countRow?.event_count).toBe(live.n)
+    } finally {
+      raw.close()
+    }
+  })
+
+  it('the hot run_events INSERT executes through the once-prepared statement', () => {
+    const { journal, prepareCount, stmtRuns } = makeCountingDbJournal({
+      retention: { maxEvents: 5 },
+    })
+    try {
+      for (let i = 0; i < 3; i++) journal.append('insert-run', stepEvent(i))
+      // The main INSERT was PREPARED (query() called) exactly ONCE for the
+      // whole connection — the highest-frequency statement is no longer
+      // re-prepared per append.
+      expect(prepareCount('INSERT INTO run_events')).toBe(1)
+      // Every append EXECUTED through the prepared statement's run().
+      expect(stmtRuns()['insertRunEvent'] ?? 0).toBe(3)
+      expect(journal.events('insert-run').map((e) => e.seq)).toEqual([0, 1, 2])
     } finally {
       journal.close()
     }

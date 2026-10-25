@@ -61,6 +61,32 @@ let mcpServersCache: Record<string, MCPConfig> = {}
 let agentRegistryDiagnostics: AgentValidationError[] = []
 let projectAgentsTrusted = false
 
+// ============================================================================
+// Registry epoch (cache-invalidation key for registry-derived caches)
+// ============================================================================
+
+/**
+ * Monotonic counter bumped on EVERY registry (re)load or reset. Consumers
+ * key expensive registry-derived caches on it (via getAgentRegistryEpoch —
+ * e.g. the per-send local agent validation in use-agent-validation.ts) so a
+ * cached result is reused between reloads and invalidated exactly when the
+ * registry content can change, instead of being recomputed on every use.
+ */
+let agentRegistryEpoch = 0
+
+/** Private: advance the epoch whenever registry-derived content is replaced. */
+const bumpAgentRegistryEpoch = (): void => {
+  agentRegistryEpoch += 1
+}
+
+/**
+ * The current registry epoch. Consumers must read it once per operation and
+ * key BOTH their cache read and write on that same value, so a hit is only
+ * ever served for a result derived from the registry generation that is
+ * still current.
+ */
+export const getAgentRegistryEpoch = (): number => agentRegistryEpoch
+
 /**
  * Initialize the agent registry by loading user agents via the SDK.
  * This must be called at CLI startup before any sync agent loading functions.
@@ -76,6 +102,10 @@ export async function initializeAgentRegistry(options?: {
   trustProjectAgents?: boolean
 }): Promise<void> {
   // Derived listings must never outlive the definitions they were built from.
+  // The epoch bump comes FIRST: any cache keyed on getAgentRegistryEpoch()
+  // invalidates before this reload's (possibly different) content becomes
+  // observable, so a consumer can never serve a pre-reload cached result.
+  bumpAgentRegistryEpoch()
   cachedAgentsByMode.clear()
   cachedAgentsDir = null
   try {
@@ -109,7 +139,15 @@ export async function initializeAgentRegistry(options?: {
     ]
   }
 
-  // Load MCP config from mcp.json files in .agents directories
+  // Load MCP config from mcp.json files in .agents directories. The MCP
+  // cache is REGISTRY-DERIVED content — loadAgentDefinitions() merges it
+  // into the base agent definitions that feed validateAgents() and the
+  // epoch-keyed validation cache — so this replacement must land BEFORE
+  // the landing bump below (mcp-cache-epoch-gap): bumping first and
+  // assigning afterwards would leave a window in which an epoch-keyed
+  // consumer reads the FINAL epoch while mcpServersCache still holds the
+  // OLD mcp.json, caching a stale verdict that no later bump invalidates
+  // until the next reload.
   try {
     const mcpConfig = loadMCPConfigSync({
       includeProjectConfig: options?.trustProjectAgents ?? false,
@@ -128,6 +166,26 @@ export async function initializeAgentRegistry(options?: {
   } catch (error) {
     activeLogger().warn({ error }, 'Failed to load MCP config from .agents directories')
   }
+
+  // Landing bump: the load-start bump above already invalidated pre-reload
+  // caches, but a mid-reload send (whenRegistriesReady() does not gate on
+  // the project-switch path) can read the start epoch, validate the OLD
+  // registry content, and cache that verdict before this reload lands.
+  // Bumping here keys it to a dead epoch, so a hit is only ever served for
+  // the registry generation that is still current. The bump is the LAST
+  // step of the reload and runs AFTER the MCP config assignment above, so
+  // every registry-derived replacement of this generation (user agents,
+  // diagnostics, MCP servers) is already in place: a verdict cached under
+  // the FINAL epoch is derived from the CURRENT registry — including the
+  // current mcp.json — never from a pre-reload one. The same holds for a
+  // failed reload: the diagnostics assigned in the catch above are part
+  // of the landed generation too. The mode-listing cache is NOT
+  // epoch-keyed, so it is cleared at the landing bump as well: a
+  // loadLocalAgents() call during the awaited window above may have
+  // repopulated it from stale content, and that listing must not outlive
+  // the content replacement.
+  cachedAgentsByMode.clear()
+  bumpAgentRegistryEpoch()
 }
 
 /**
@@ -448,6 +506,9 @@ export const getProjectAgentTrustStatus = (): boolean => projectAgentsTrusted
  * re-evaluate the filesystem state between cases.
  */
 export const __resetLocalAgentRegistryForTests = (): void => {
+  // Same invalidation contract as initializeAgentRegistry: a reset replaces
+  // registry-derived content, so epoch-keyed caches must miss afterwards.
+  bumpAgentRegistryEpoch()
   cachedAgentsByMode.clear()
   cachedAgentsDir = null
   userAgentsCache = {}

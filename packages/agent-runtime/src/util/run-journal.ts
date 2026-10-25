@@ -45,16 +45,25 @@ import type { AgentState } from '@codebuff/common/types/session-state'
 import { stableHash } from '@codebuff/common/util/stable-hash'
 
 /**
+ * Narrow structural subset of one prepared bun:sqlite statement. `run` is
+ * OPTIONAL so a hand-rolled test double that only stubs all/get still
+ * satisfies the database shape; prepared-statement reuse probes for it and
+ * falls back to the connection-level run() when absent.
+ */
+type SqliteStatement = {
+  all: (...params: unknown[]) => unknown[]
+  get: (...params: unknown[]) => unknown
+  run?: (...params: unknown[]) => unknown
+}
+
+/**
  * Narrow structural subset of the bun:sqlite `Database` API this module uses,
  * so packages whose tsconfig lacks bun-types still typecheck; the acquired
  * database is narrowed to this shape before use. Mirrors archive-recall-index.
  */
 type SqliteDb = {
   run: (sql: string, ...params: unknown[]) => unknown
-  query: (sql: string) => {
-    all: (...params: unknown[]) => unknown[]
-    get: (...params: unknown[]) => unknown
-  }
+  query: (sql: string) => SqliteStatement
   close: () => void
 }
 
@@ -202,6 +211,12 @@ type RunEventRow = {
   created_at: number
 }
 
+/** Cast shapes for the prepared hot-path statements' single-row reads. */
+type MaxSeqRow = { max_seq: number | null } | undefined
+type SideTotalRow = { total_bytes: number } | undefined
+type EventCountRow = { event_count: number } | undefined
+type CountRow = { count: number } | undefined
+
 /**
  * Structural probe for the OPTIONAL bounded-read extensions the built-in
  * sqlite journal provides (mirroring how the P2-T7 `runIds` extension is
@@ -219,6 +234,34 @@ type BoundedReadJournalReader = JournalReader & {
   ): JournalEventRow[]
 }
 
+/**
+ * Schema, applied when the db is not yet marked initialized (the
+ * PRAGMA user_version gate in createRunJournal — the CREATE ... IF NOT
+ * EXISTS statements are idempotent, so a legacy db predating the marker is
+ * also brought up safely on its first reopen). run_byte_totals is the
+ * persisted per-run payload-byte-total side table backing the byte-cap
+ * dimension of retention: it is maintained transactionally per append by
+ * byte-capped writers (inside the same BEGIN IMMEDIATE...COMMIT as the
+ * run_events INSERT), read lazily per runId on first use, and keeps both
+ * open and the common append O(1) with exact historical totals across
+ * reopen. Writers without a byte cap never touch it. A crash between a
+ * retention DELETE and the side-row write leaves a bounded, self-healing
+ * staleness — the first enforcement pass that runs the byte-cap greedy scan
+ * recomputes the exact total from the scanned rows and rewrites the side
+ * row, even when that pass deletes nothing (scan-only) — the same
+ * durability class as the rest of retention. run_event_counts is the
+ * persisted per-run event-count side table backing the maxEvents dimension
+ * of retention, with the same contract: it is maintained transactionally
+ * per append by event-capped writers (inside the same
+ * BEGIN IMMEDIATE...COMMIT as the run_events INSERT), read lazily per
+ * runId on first use, and keeps the per-append maxEvents enforcement O(1)
+ * (one PK read + one UPDATE instead of an OFFSET boundary walk over the
+ * run's index entries). Writers without an event cap never touch it; a
+ * crash between a retention DELETE and the side-row write leaves the same
+ * bounded, self-healing staleness — the next over-cap enforcement pass
+ * derives the delete boundary from the authoritative COUNT(*) and rewrites
+ * the side row.
+ */
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS run_events (
   run_id TEXT NOT NULL,
@@ -233,7 +276,24 @@ CREATE TABLE IF NOT EXISTS run_events (
 CREATE INDEX IF NOT EXISTS idx_run_events_run_step ON run_events (run_id, step_number, seq);
 CREATE INDEX IF NOT EXISTS idx_run_events_correlation ON run_events (run_id, correlation);
 CREATE INDEX IF NOT EXISTS idx_run_events_run_type_seq ON run_events (run_id, event_type, seq);
+CREATE TABLE IF NOT EXISTS run_byte_totals (run_id TEXT PRIMARY KEY, total_bytes INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS run_event_counts (run_id TEXT PRIMARY KEY, event_count INTEGER NOT NULL);
 `
+
+/**
+ * Persistence marker for the per-send open gate: the open that applies
+ * SCHEMA_SQL (and journal_mode=WAL) stamps PRAGMA user_version with this
+ * value, and every later open of the same file skips both after a single
+ * cheap marker read. The marker is stamped ONLY after the schema it vouches
+ * for, so a crash in between leaves it at 0 and the next open re-runs the
+ * idempotent schema instead of trusting a half-initialized db. Legacy dbs
+ * written before this marker read 0 and self-heal the same way. Bumped
+ * 1 → 2 when run_event_counts was added: a db initialized before that
+ * table existed carries marker 1 < 2, so its next open re-runs the
+ * idempotent schema once — creating the new table — and re-stamps the
+ * marker.
+ */
+const SCHEMA_USER_VERSION = 2
 
 /**
  * Synchronous default database acquisition. bun supports
@@ -418,7 +478,10 @@ export type RunJournalBatching = {
 
 /**
  * Build/open a journal. `path` ':memory:' for tests; `opts.createDatabase` is
- * the injectable seam. Constructs the schema idempotently and injects the
+ * the injectable seam. Constructs the schema when the db is not yet marked
+ * initialized (a PRAGMA user_version gate skips the persistent SCHEMA_SQL
+ * DDL and journal_mode=WAL on an already-initialized db, so the per-send
+ * open pays one cheap marker read instead of re-running them) and injects the
  * Clock for created_at (default realClock). `retention` bounds each run's
  * table (oldest rows deleted; seq gaps are expected); `batching` buffers
  * appends and drains them on a count/delay schedule (default: flush per
@@ -471,12 +534,203 @@ export function createRunJournal(params: {
   // Harmless for :memory: databases.
   db.run('PRAGMA busy_timeout = 5000;')
 
-  // WAL + NORMAL durability for on-disk dbs; harmless to skip for :memory:.
+  // synchronous (like busy_timeout above) is a CONNECTION-scoped setting that
+  // resets on every new connection: both are in-memory flags with no I/O
+  // cost, so they are re-applied on EVERY open. Skipping them would silently
+  // change durability (synchronous) and lock-wait (busy_timeout) behavior
+  // for every reopened connection; only the PERSISTENT fixed I/O below is
+  // gated per send.
   if (path !== ':memory:') {
-    db.run('PRAGMA journal_mode=WAL;')
     db.run('PRAGMA synchronous=NORMAL;')
   }
-  db.run(SCHEMA_SQL)
+
+  // Per-send open gate: SCHEMA_SQL (6 CREATE ... IF NOT EXISTS statements)
+  // and journal_mode=WAL are PERSISTENT database state — once applied they
+  // cost real I/O on every reopen while changing nothing. Gate both on the
+  // cheap PRAGMA user_version marker so an already-initialized db pays one
+  // marker read instead of re-running the DDL round-trip. :memory: dbs are
+  // always fresh (the marker is never stamped for them) and keep the
+  // unconditional path.
+  let schemaInitialized = false
+  if (path !== ':memory:') {
+    const marker = db
+      .query('PRAGMA user_version')
+      .get() as { user_version: number } | undefined
+    schemaInitialized = (marker?.user_version ?? 0) >= SCHEMA_USER_VERSION
+  }
+  if (!schemaInitialized) {
+    // WAL is persisted in the db header, so re-issuing it on an already-WAL
+    // db is pure per-send overhead. The marker below is stamped only after
+    // WAL + SCHEMA_SQL succeeded on this same open, so marker >= 1 proves
+    // both are already in place.
+    if (path !== ':memory:') {
+      db.run('PRAGMA journal_mode=WAL;')
+    }
+    db.run(SCHEMA_SQL)
+    if (path !== ':memory:') {
+      // Stamp the marker ONLY after the schema it vouches for is applied: a
+      // crash between the two leaves it at 0 and the next open re-runs the
+      // idempotent schema instead of trusting a half-initialized db.
+      db.run(`PRAGMA user_version = ${SCHEMA_USER_VERSION};`)
+    }
+  }
+
+  // Hot per-append/retention statements (P2 perf): prepared ONCE per
+  // connection and reused by insertEvent/enforceRetention/getRunPayloadBytes
+  // instead of re-issuing db.query(...) — a fresh query object — on every
+  // append attempt or enforcement pass. Prepared AFTER the schema gate above
+  // so the referenced tables exist on a fresh db (SQLite resolves tables at
+  // prepare time). Each retention dimension's statements are prepared only
+  // when that dimension's cap is set: a writer without the cap never touches
+  // that dimension's side table and never pays the prepare. The UPDATE /
+  // INSERT writes execute through the prepared statement's run() when the
+  // underlying statement exposes one (the real bun:sqlite statement does); a
+  // structural double that only stubs all/get falls back to the
+  // connection-level run, keeping that path behavior-identical. The over-cap
+  // retention DELETE both dimensions share is prepared LAZILY on the first
+  // deleting pass (see runDeleteRunEventsPrefix) — the same run()-or-fallback
+  // execution — so a writer that never crosses a cap never pays its prepare.
+  const selectMaxSeq = db.query(
+    'SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ?',
+  )
+  // The main run_events INSERT is the highest-frequency statement on the
+  // per-send path, so it is prepared once per connection like every other
+  // hot statement (no cap gating: the INSERT is unconditional). A
+  // structural double whose statement lacks run() falls back to the
+  // connection-level run, keeping that path behavior-identical.
+  const insertRunEventSql =
+    'INSERT INTO run_events (run_id, seq, step_number, event_type, correlation, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  const insertRunEvent = db.query(insertRunEventSql)
+  const runInsertEvent = (...params: unknown[]): void => {
+    if (typeof insertRunEvent.run === 'function') {
+      insertRunEvent.run(...params)
+      return
+    }
+    db.run(insertRunEventSql, ...params)
+  }
+  const selectSideRowTotal =
+    maxBytesCap !== undefined
+      ? db.query('SELECT total_bytes FROM run_byte_totals WHERE run_id = ?')
+      : undefined
+  const updateSideRowTotalSql =
+    'UPDATE run_byte_totals SET total_bytes = ? WHERE run_id = ?'
+  const updateSideRowTotal =
+    maxBytesCap !== undefined ? db.query(updateSideRowTotalSql) : undefined
+  const runSideRowUpdate = (...params: unknown[]): void => {
+    if (updateSideRowTotal && typeof updateSideRowTotal.run === 'function') {
+      updateSideRowTotal.run(...params)
+      return
+    }
+    db.run(updateSideRowTotalSql, ...params)
+  }
+  // The byte side-row UPSERT (the seed branch and EVERY over-cap
+  // steady-state re-persist — it executes on each deleting append) is the
+  // UPDATE's twin: prepared ONCE per connection behind the same cap gate and
+  // the same structural-double fallback, so no per-append or per-enforcement
+  // pass re-parses its SQL through a connection-level db.run.
+  const insertSideRowTotalSql =
+    'INSERT OR REPLACE INTO run_byte_totals (run_id, total_bytes) VALUES (?, ?)'
+  const insertSideRowTotal =
+    maxBytesCap !== undefined ? db.query(insertSideRowTotalSql) : undefined
+  const runSideRowInsert = (...params: unknown[]): void => {
+    if (insertSideRowTotal && typeof insertSideRowTotal.run === 'function') {
+      insertSideRowTotal.run(...params)
+      return
+    }
+    db.run(insertSideRowTotalSql, ...params)
+  }
+  const selectEventCount =
+    maxEventsCap !== undefined
+      ? db.query('SELECT event_count FROM run_event_counts WHERE run_id = ?')
+      : undefined
+  const updateEventCountSql =
+    'UPDATE run_event_counts SET event_count = ? WHERE run_id = ?'
+  const updateEventCount =
+    maxEventsCap !== undefined ? db.query(updateEventCountSql) : undefined
+  const runEventCountUpdate = (...params: unknown[]): void => {
+    if (updateEventCount && typeof updateEventCount.run === 'function') {
+      updateEventCount.run(...params)
+      return
+    }
+    db.run(updateEventCountSql, ...params)
+  }
+  const insertEventCountRowSql =
+    'INSERT OR REPLACE INTO run_event_counts (run_id, event_count) VALUES (?, ?)'
+  const insertEventCountRow =
+    maxEventsCap !== undefined ? db.query(insertEventCountRowSql) : undefined
+  const runEventCountInsert = (...params: unknown[]): void => {
+    if (insertEventCountRow && typeof insertEventCountRow.run === 'function') {
+      insertEventCountRow.run(...params)
+      return
+    }
+    db.run(insertEventCountRowSql, ...params)
+  }
+  const countRunEvents =
+    maxEventsCap !== undefined
+      ? db.query('SELECT COUNT(*) AS count FROM run_events WHERE run_id = ?')
+      : undefined
+  const selectExcessBoundary =
+    maxEventsCap !== undefined
+      ? db.query(
+          'SELECT seq FROM run_events WHERE run_id = ? ORDER BY seq ASC LIMIT 1 OFFSET ?',
+        )
+      : undefined
+  // Byte-cap walk statements, TWO-PHASE so the walk's byte work is
+  // bounded by the rows it CONSUMES, never by a page's payload bytes:
+  // phase 1 pages SEQ ONLY (a covering (run_id, seq) index scan — no
+  // payload byte is touched), phase 2 reads ONE row's payload LENGTH by
+  // primary key per row the walk actually consumes. A combined
+  // (seq, LENGTH) page evaluates LENGTH on EVERY row of each page — on
+  // ~500KB payloads that is ~256MB of payload touches per append even
+  // when the steady-state cut lands on the first row, reintroducing the
+  // per-append full scan the side tables exist to eliminate. Both are
+  // prepared LAZILY on the first walk (memoized for the connection's
+  // lifetime) so under-cap writers never prepare statements they never
+  // execute — the same once-per-connection contract as the eager
+  // statements above without the eager prepare cost.
+  const BYTE_WALK_PAGE_SIZE = 512
+  let bytePrefixSeqPageStmt: SqliteStatement | undefined
+  const getBytePrefixSeqPage = (): SqliteStatement => {
+    if (!bytePrefixSeqPageStmt) {
+      bytePrefixSeqPageStmt = db.query(
+        'SELECT seq FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?',
+      )
+    }
+    return bytePrefixSeqPageStmt
+  }
+  let byteRowLenStmt: SqliteStatement | undefined
+  const getByteRowLen = (): SqliteStatement => {
+    if (!byteRowLenStmt) {
+      byteRowLenStmt = db.query(
+        'SELECT LENGTH(CAST(payload AS BLOB)) AS len FROM run_events WHERE run_id = ? AND seq = ?',
+      )
+    }
+    return byteRowLenStmt
+  }
+  // The shared over-cap retention DELETE ('DELETE FROM run_events WHERE
+  // run_id = ? AND seq <= ?' — issued by BOTH cap branches' deleting paths, at
+  // the same per-deleting-append frequency as the re-persists that run beside
+  // it) is prepared LAZILY on the first deleting pass and memoized for the
+  // connection's lifetime, so an uncapped or never-over-cap writer never pays
+  // the prepare — the same once-per-connection contract as the eager
+  // statements above. It then executes through the prepared statement's
+  // run(), mirroring runSideRowInsert/runEventCountInsert; a structural
+  // double whose statement lacks run() falls back to the connection-level
+  // run, keeping that path behavior-identical.
+  const deleteRunEventsPrefixSql =
+    'DELETE FROM run_events WHERE run_id = ? AND seq <= ?'
+  let deleteRunEventsPrefixStmt: SqliteStatement | undefined
+  const runDeleteRunEventsPrefix = (runId: string, seq: number): void => {
+    if (!deleteRunEventsPrefixStmt) {
+      deleteRunEventsPrefixStmt = db.query(deleteRunEventsPrefixSql)
+    }
+    const stmt = deleteRunEventsPrefixStmt
+    if (typeof stmt.run === 'function') {
+      stmt.run(runId, seq)
+      return
+    }
+    db.run(deleteRunEventsPrefixSql, runId, seq)
+  }
 
   const parseRow = (row: RunEventRow): JournalEventRow => ({
     eventType: row.event_type,
@@ -502,12 +756,22 @@ export function createRunJournal(params: {
   let lastError: unknown
 
   /**
-   * Cached per-run payload-byte totals (slice-4 hardening): seeded ONCE at
-   * open with a single SQL SUM over LENGTH(CAST(payload AS BLOB)) per runId,
-   * then maintained in memory — insertEvent adds each committed event's
-   * serialized byte length, and any retention DELETE recomputes the exact
-   * total from SQL. Without this cache EVERY append with byte retention ran
-   * a full per-run ordered scan (O(n) per append).
+   * Cached per-run payload-byte totals, backed by the persisted
+   * run_byte_totals side table: the side row is the durable source of truth
+   * (maintained inside the same transaction as each append by byte-capped
+   * writers, so a runId's total is exact — historical rows included — and
+   * survives reopen), while this in-memory map is the O(1) hot mirror read
+   * and written on the append and retention paths. The map is seeded lazily
+   * per runId on first use — from the side row when one exists (one PK
+   * read), else from the exact per-run SQL SUM (legacy dbs predating the
+   * side table, or a brand-new runId) — then maintained: insertEvent adds
+   * each committed event's serialized byte length inside its own
+   * transaction, and any retention DELETE recomputes the exact total from
+   * SQL and re-persists it. Without a per-run total cache EVERY append with
+   * byte retention ran a full per-run ordered scan (O(n) per append), and
+   * the old eager open-time seed additionally scanned ALL runs ever
+   * journaled, making open O(total journal size); open is now O(1) and each
+   * run only pays for itself when its byte cap is first enforced.
    */
   const runPayloadBytes = new Map<string, number>()
   const recomputeRunPayloadBytes = (runId: string): number => {
@@ -518,13 +782,134 @@ export function createRunJournal(params: {
       .get(runId) as { total: number } | undefined
     return row?.total ?? 0
   }
-  if (maxBytesCap !== undefined) {
-    const rows = db
-      .query(
-        'SELECT run_id, COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) AS total FROM run_events GROUP BY run_id',
-      )
-      .all() as Array<{ run_id: string; total: number }>
-    for (const row of rows) runPayloadBytes.set(row.run_id, row.total)
+
+  /**
+   * Side-table-first lazy read: the cached total for runId, or undefined
+   * when neither the in-memory mirror nor the persisted side table has one
+   * (the signal enforceRetention uses to fall back to the exact SQL SUM
+   * recompute, kept unchanged below). O(1) on a map hit, one PK read on a
+   * side-table hit — never a payload scan.
+   */
+  const getRunPayloadBytes = (runId: string): number | undefined => {
+    const cached = runPayloadBytes.get(runId)
+    if (cached !== undefined) return cached
+    const row = selectSideRowTotal?.get(runId) as SideTotalRow
+    if (row) {
+      runPayloadBytes.set(runId, row.total_bytes)
+      return row.total_bytes
+    }
+    return undefined
+  }
+
+  /**
+   * Cached per-run event counts, backed by the persisted run_event_counts
+   * side table: the same contract as the byte total above — the side row is
+   * the durable source of truth (maintained inside the same transaction as
+   * each append by event-capped writers, so a runId's count is exact and
+   * survives reopen), while this in-memory map is the O(1) hot mirror read
+   * and written on the append and retention paths, seeded lazily per runId
+   * on first use (from the side row when one exists — one PK read — else
+   * from the exact per-run SQL COUNT for a legacy db predating the side
+   * table). Without it every maxEvents-capped append walked up to cap-1
+   * (run_id, seq) index entries through an OFFSET boundary query; with it an
+   * under-cap append performs no boundary walk at all.
+   */
+  const runEventCounts = new Map<string, number>()
+
+  /**
+   * Side-table-first lazy read mirroring getRunPayloadBytes: the cached
+   * count for runId, or undefined when neither the in-memory mirror nor the
+   * persisted side table has one (the signal enforceRetention uses to fall
+   * back to the exact SQL COUNT below). O(1) on a map hit, one PK read on a
+   * side-table hit — never an index walk.
+   */
+  const getRunEventCount = (runId: string): number | undefined => {
+    const cached = runEventCounts.get(runId)
+    if (cached !== undefined) return cached
+    const row = selectEventCount?.get(runId) as EventCountRow
+    if (row) {
+      runEventCounts.set(runId, row.event_count)
+      return row.event_count
+    }
+    return undefined
+  }
+
+  /**
+   * Bounded oldest-first TWO-PHASE walk backing byte-cap enforcement and
+   * byte accounting: phase 1 pages SEQ ONLY (a covering (run_id, seq)
+   * index scan — no payload byte is touched), phase 2 reads one row's
+   * payload LENGTH by primary key per row the walk actually CONSUMES, so
+   * the byte work is O(rows consumed) — never a page of payload LENGTH
+   * evaluations (a combined (seq, LENGTH) page pays LENGTH on EVERY row
+   * of each page: on ~500KB payloads that is ~256MB of payload touches
+   * per append even when the steady-state cut lands on the first row,
+   * reintroducing the per-append full scan the side tables exist to
+   * eliminate). The walk stops at the first row whose cumulative sum
+   * reaches `excessBytes` (the cut boundary — that row is the LAST
+   * DELETED), at the newest row (never deleted), or at the end of the
+ * run. Returns the cut seq, the authoritative bytes of the walked
+ * prefix (the deleted rows when a cut was found), the exact bytes of
+ * EVERY row walked (the surviving run's exact total when the newest
+ * row was reached), the NUMBER OF ROWS the walk visited (the base for
+ * the count side row's O(1) post-delete re-persist: visited minus the
+ * newest row when the walk stopped at it is exactly the rows with
+ * seq <= cutSeq), whether the newest row stopped the walk, and the
+ * last walked seq below the newest row (the cut for the
+ * newest-row-alone-over-cap case). O(rows walked) — bounded by the
+ * rows being deleted, never by the retained window.
+   */
+  const walkBytePrefix = (
+    runId: string,
+    excessBytes: number,
+    newestSeq: number,
+  ): {
+    cutSeq: number
+    prefixBytes: number
+    walkedBytes: number
+    walkedRows: number
+    hitNewest: boolean
+    lastBelowNewest: number
+  } => {
+    let lastSeq = -1
+    let cumulative = 0
+    let walkedBytes = 0
+    let walkedRows = 0
+    let cutSeq = -1
+    let hitNewest = false
+    while (!hitNewest && cutSeq < 0) {
+      const page = (getBytePrefixSeqPage().all(
+        runId,
+        lastSeq,
+        BYTE_WALK_PAGE_SIZE,
+      ) ?? []) as Array<{ seq: number }>
+      if (page.length === 0) break
+      for (const row of page) {
+        const lenRow = getByteRowLen().get(runId, row.seq) as
+          | { len: number }
+          | undefined
+        const len = lenRow?.len ?? 0
+        walkedBytes += len
+        walkedRows += 1
+        if (row.seq === newestSeq) {
+          hitNewest = true
+          break
+        }
+        cumulative += len
+        lastSeq = row.seq
+        if (cumulative >= excessBytes) {
+          cutSeq = row.seq
+          break
+        }
+      }
+    }
+    return {
+      cutSeq,
+      prefixBytes: cumulative,
+      walkedBytes,
+      walkedRows,
+      hitNewest,
+      lastBelowNewest: lastSeq,
+    }
   }
 
   /**
@@ -536,10 +921,15 @@ export function createRunJournal(params: {
    * classifying the retained tail correctly. The NEWEST row is always
    * retained even when it alone exceeds maxBytes, so a kill-9'd tail event
    * (e.g. an in-flight tool_call) is never deleted out from under the resume
-   * classifier. The byte-cap dimension reads a CACHED per-run total (seeded
-   * at open, maintained per append) and only scans rows when the total is
-   * actually over the cap, so retention stays O(1) per append in the common
-   * case.
+   * classifier. BOTH dimensions read their per-run aggregate
+   * side-table-first (persisted in run_byte_totals / run_event_counts inside
+   * each append's transaction, mirrored in the in-memory caches) and only
+   * pay scan/COUNT work when the aggregate is actually over the cap, so
+   * retention stays O(1) per append in the common case for BOTH the byte
+   * and the event-count dimension. A crash between a retention DELETE and a
+   * side-row re-persist leaves a bounded, self-healing staleness: the next
+   * enforcement pass that finds the aggregate over the cap recomputes the
+   * exact value from SQL and rewrites the side row.
    */
   const enforceRetention = (runId: string): void => {
     if (maxEventsCap === undefined && maxBytesCap === undefined) return
@@ -550,21 +940,125 @@ export function createRunJournal(params: {
     // bound by one event.
     try {
       let deletedRows = false
+      // Byte-cap accounting for the O(1) post-delete re-persist (see the
+      // shared re-persist below): the count branch contributes the walked
+      // bytes of the rows IT deleted (bounded by the count excess), the
+      // byte branch contributes its own walked prefix, and
+      // effectiveByteTotal is the surviving set's byte total those
+      // subtractions apply to (the side total minus the count-deleted
+      // bytes, corrected in place when a walk observes the exact total).
+      let countDeletedBytes: number | undefined = undefined
+      let byteDeletedBytes: number | undefined = undefined
+      let effectiveByteTotal = 0
+      // Deleted-ROW counts for the O(1) count re-persist below: the count
+      // branch contributes its excess (the rows with seq <= boundary.seq),
+      // the byte branch the rows its final cut walk consumed — so the
+      // post-delete count is exact by subtraction, never a second
+      // O(retained) COUNT(*).
+      let countDeletedRows = 0
+      let byteDeletedRowsCount = 0
+      // The count branch's aggregates, hoisted for the shared re-persist:
+      // passCount is the fast-path (side/cached) count this pass started
+      // from, exactCountAtPass the authoritative pre-delete COUNT(*) when
+      // the count was over the cap. Either is an exact subtraction base.
+      let passCount: number | undefined = undefined
+      let exactCountAtPass: number | undefined = undefined
       if (maxEventsCap !== undefined) {
-        // The (maxEvents)-th newest row bounds the kept window; delete
-        // everything strictly older (one indexed scan + one range DELETE).
-        const boundary = db
-          .query(
-            'SELECT seq FROM run_events WHERE run_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ?',
-          )
-          .get(runId, maxEventsCap - 1) as { seq: number } | undefined
-        if (boundary) {
-          db.run(
-            'DELETE FROM run_events WHERE run_id = ? AND seq < ?',
-            runId,
-            boundary.seq,
-          )
-          deletedRows = true
+        // Event-count fast path: the per-run event count is read
+        // side-table-first (persisted in run_event_counts inside each
+        // append's transaction, mirrored in the in-memory cache), so an
+        // under-cap append performs NO boundary walk at all — O(1) per
+        // append. Only an over-cap count pays the enforcement work below.
+        let count = getRunEventCount(runId)
+        if (count === undefined) {
+          // Legacy db (no side row yet) or a never-seeded runId: one exact
+          // COUNT, then the map caches it (the side row itself is seeded by
+          // the next append's insertEvent maintenance).
+          const row = countRunEvents?.get(runId) as CountRow
+          count = row?.count ?? 0
+          runEventCounts.set(runId, count)
+        }
+        // The fast-path count for this pass — the post-delete arithmetic's
+        // base whenever the count never went over the cap.
+        passCount = count
+        if (count > maxEventsCap) {
+          // AUTHORITATIVE count for the delete decision: the cached/side
+          // count is only the fast-path check and must never drive deletes
+          // (a stale count could over-delete), mirroring the byte
+          // dimension's rule.
+          const exactRow = countRunEvents?.get(runId) as CountRow
+          const exactCount = exactRow?.count ?? 0
+          // The authoritative pre-delete base for the post-delete arithmetic.
+          exactCountAtPass = exactCount
+          const excess = exactCount - maxEventsCap
+          if (excess > 0) {
+            // The excess-th OLDEST row bounds the deleted window: the ASC
+            // OFFSET(excess - 1) walk's length is the number of rows being
+            // DELETED (amortized O(1) per deletion) instead of always ~cap,
+            // and OFFSET beyond the row count is impossible because
+            // excess <= exactCount - 1 < exactCount — so a stale inflated
+            // count can never over-delete, and the newest row (OFFSET
+            // exactCount - 1) is never the boundary.
+            const boundary = selectExcessBoundary?.get(
+              runId,
+              excess - 1,
+            ) as { seq: number } | undefined
+            if (boundary) {
+              if (maxBytesCap !== undefined) {
+                // Byte accounting for the rows this count-delete is about
+                // to remove: one bounded oldest-first walk over exactly the
+                // deleted prefix (its length IS the count excess) BEFORE
+                // the delete (the rows are gone afterwards), so the shared
+                // re-persist below can update the byte side row in O(1)
+                // instead of an O(retained) SUM after a count delete too.
+                let sumSeq = -1
+                let summed = 0
+                for (;;) {
+                  const page = (getBytePrefixSeqPage().all(
+                    runId,
+                    sumSeq,
+                    BYTE_WALK_PAGE_SIZE,
+                  ) ?? []) as Array<{ seq: number }>
+                  if (page.length === 0) break
+                  let summedPage = false
+                  for (const row of page) {
+                    const lenRow = getByteRowLen().get(runId, row.seq) as
+                      | { len: number }
+                      | undefined
+                    summed += lenRow?.len ?? 0
+                    sumSeq = row.seq
+                    if (row.seq >= boundary.seq) {
+                      summedPage = true
+                      break
+                    }
+                  }
+                  if (summedPage) break
+                }
+                countDeletedBytes = summed
+              }
+              runDeleteRunEventsPrefix(runId, boundary.seq)
+              deletedRows = true
+              // The rows this count-delete removed — exactly the excess
+              // (the boundary walk's OFFSET guaranteed they exist).
+              countDeletedRows = excess
+            }
+          }
+          // Self-heal a stale side row: a crash between a retention DELETE
+          // and the side-row re-persist can leave an inflated
+          // run_event_counts row. That staleness is bounded and self-healing
+          // on the next over-cap pass: the authoritative pre-delete COUNT
+          // this pass already ran exposes it, and the rewrite below happens
+          // once per staleness event, never per append (the deletedRows
+          // block below re-persists the post-delete count ARITHMETICALLY
+          // when this pass deleted rows).
+          if (exactCount !== count) {
+            runEventCounts.set(runId, exactCount)
+            // The heal fires ONCE per staleness event; route it through the
+            // once-prepared run_event_counts upsert (mirroring the byte
+            // side's runSideRowInsert heal) instead of re-parsing the SQL
+            // through a connection-level db.run.
+            runEventCountInsert(runId, exactCount)
+          }
         }
       }
       if (maxBytesCap !== undefined) {
@@ -574,52 +1068,126 @@ export function createRunJournal(params: {
         // TEXT column counts characters, so multibyte payloads would be
         // under-counted and the retained tail could exceed the byte budget.
         //
-        // The per-run total is CACHED (seeded once at open via SQL SUM,
-        // incremented O(1) per append in insertEvent) so the common append
-        // never runs a full ordered scan; the scan below happens only when
-        // the cached total is actually over the cap, and the exact total is
-        // recomputed from SQL after any delete. Delete the oldest rows
-        // greedily until the remaining payload bytes fit the cap, keeping as
-        // many NEWEST rows as possible and never deleting the newest row.
-        let total = runPayloadBytes.get(runId)
+        // The per-run total is read side-table-first (one PK read from the
+        // persisted run_byte_totals on a cold cache, then the in-memory
+        // mirror), so historical bytes committed by earlier sessions are
+        // ALWAYS included for a runId that already has rows — the byte cap
+        // stays enforceable across kill-9 resume and per-send reopen. The
+        // recompute right below runs only for a runId with no side row and
+        // no cache entry, the common append never runs a full ordered scan,
+        // and open stays O(1) instead of scanning every run ever journaled
+        // at open. Over cap, a BOUNDED oldest-first walk replaces the old
+        // full-run scan: it consumes only the rows being DELETED (steady
+        // state re-crosses the cap by ~one event, so ~one row per append),
+        // its own prefix sums drive the cut, and the exact remaining total
+        // is re-persisted in O(1) from the walked bytes after any delete.
+        // The newest row is never deleted: the walk stops AT it and cuts
+        // below it instead, keeping as many NEWEST rows as the cap allows.
+        let total = getRunPayloadBytes(runId)
         if (total === undefined) {
           total = recomputeRunPayloadBytes(runId)
           runPayloadBytes.set(runId, total)
         }
-        if (total > maxBytesCap) {
-          const rows = db
-            .query(
-              'SELECT seq, LENGTH(CAST(payload AS BLOB)) AS len FROM run_events WHERE run_id = ? ORDER BY seq ASC',
-            )
-            .all(runId) as Array<{ seq: number; len: number }>
-          // Authoritative total for the cut decision, summed from the rows the
-          // scan already fetched: the cached total is only the fast-path check
-          // and must never drive deletes (a stale cache could over-delete).
-          let exactTotal = 0
-          for (const row of rows) exactTotal += row.len
-          let deletedBytes = 0
-          let cutSeq = -1
-          for (let i = 0; i < rows.length; i++) {
-            if (exactTotal - deletedBytes <= maxBytesCap) break
-            if (i === rows.length - 1) break // never delete the newest row
-            deletedBytes += rows[i].len
-            cutSeq = rows[i].seq
+        // The count branch may have already deleted rows this pass: their
+        // bytes are still in the side total, so the surviving set's total
+        // subtracts them before the byte walk decides anything.
+        const countBytes = countDeletedBytes ?? 0
+        const survivingTotal = total - countBytes
+        effectiveByteTotal = survivingTotal
+        if (survivingTotal > maxBytesCap) {
+          // Bounded oldest-first walk — O(rows DELETED), never O(retained):
+          // steady state re-crosses the cap by ~one event's bytes, so the
+          // walk consumes ~one row and never touches the retained suffix.
+          // The cached/side total is only the fast-path trigger; the
+          // walk's own prefix sums drive the cut, and the newest row is
+          // never deleted (the walk stops AT it and cuts below it).
+          const newestSeq =
+            (selectMaxSeq.get(runId) as MaxSeqRow)?.max_seq ?? -1
+          const excess = survivingTotal - maxBytesCap
+          const first = walkBytePrefix(runId, excess, newestSeq)
+          let cutSeq = first.cutSeq
+          let prefixBytes = first.prefixBytes
+          // The walk whose cut wins also supplies the deleted-ROW count for
+          // the O(1) count re-persist below: rows visited minus the newest
+          // row when the walk stopped at it is exactly the rows with
+          // seq <= cutSeq.
+          let cutWalk = first
+          if (first.hitNewest && cutSeq < 0) {
+            // The walk reached the NEWEST row without crossing the assumed
+            // excess, so walkedBytes is the EXACT surviving total (every
+            // row was consumed): either the side row was stale-inflated or
+            // the newest row alone exceeds the cap. Self-heal the side row
+            // from the walked exact value first — the scan-only heal — so
+            // a stale-over-cap / exact-under-cap state costs one full walk
+            // ONCE (the staleness event) instead of on every append.
+            if (first.walkedBytes !== survivingTotal) {
+              effectiveByteTotal = first.walkedBytes
+              runPayloadBytes.set(runId, first.walkedBytes)
+              runSideRowInsert(runId, first.walkedBytes)
+            }
+            if (first.walkedBytes > maxBytesCap) {
+              const exactExcess = first.walkedBytes - maxBytesCap
+              if (exactExcess < excess) {
+                // Stale-inflated side row: re-walk with the EXACT excess
+                // so the inflated assumption can never over-delete (this
+                // pass already paid the once-per-staleness-event full
+                // walk; the re-walk is bounded by the true deleted prefix).
+                const second = walkBytePrefix(runId, exactExcess, newestSeq)
+                cutSeq = second.cutSeq
+                prefixBytes = second.prefixBytes
+                cutWalk = second
+                if (second.hitNewest && cutSeq < 0) {
+                  cutSeq = second.lastBelowNewest
+                }
+              } else {
+                // Side row was exact: the newest row alone exceeds the cap
+                // — delete everything older than it.
+                cutSeq = first.lastBelowNewest
+              }
+            }
           }
           if (cutSeq >= 0) {
-            db.run(
-              'DELETE FROM run_events WHERE run_id = ? AND seq <= ?',
-              runId,
-              cutSeq,
-            )
+            runDeleteRunEventsPrefix(runId, cutSeq)
             deletedRows = true
+            byteDeletedBytes = prefixBytes
+            // The rows this byte-delete removed, from the walk whose cut
+            // won: visited rows minus the newest row when the walk stopped
+            // at it — exactly the rows with seq <= cutSeq.
+            byteDeletedRowsCount =
+              cutWalk.walkedRows - (cutWalk.hitNewest ? 1 : 0)
           }
         }
       }
       // Any DELETE (from either cap) invalidates the cached byte total:
-      // recompute the exact total from SQL once per enforcement pass that
-      // deleted rows, so the next append's O(1) increment stays accurate.
+      // re-persist the exact remaining total so the next append's O(1)
+      // increment stays accurate AND survives reopen. Every deleting
+      // branch contributed the AUTHORITATIVE walked bytes of exactly the
+      // rows it deleted, so the remaining total is the (walk-corrected)
+      // surviving total minus those — O(1), with no O(retained) SUM
+      // recompute on any steady-state over-cap path. A crash between the
+      // DELETE and this write leaves a bounded, self-healing staleness:
+      // the next enforcement pass's walk observes the exact surviving
+      // total and rewrites the side row.
       if (deletedRows && maxBytesCap !== undefined) {
-        runPayloadBytes.set(runId, recomputeRunPayloadBytes(runId))
+        const exact = effectiveByteTotal - (byteDeletedBytes ?? 0)
+        runPayloadBytes.set(runId, exact)
+        runSideRowInsert(runId, exact)
+      }
+      // A retention DELETE (from either cap) also changes ROW counts: when
+      // the event cap is set, re-persist the run_event_counts side row so
+      // the next append's O(1) increment and the under-cap fast path stay
+      // accurate. The post-delete count is EXACT BY SUBTRACTION — never a
+      // second O(retained) COUNT(*): the base is the count branch's
+      // authoritative pre-delete COUNT(*) when the count went over the
+      // cap, else its fast-path (side/cached) count, and each deleting
+      // branch contributed the exact number of rows it removed (the count
+      // branch's excess; the byte walk's consumed rows) — the same O(1)
+      // re-persist contract the byte side row already follows.
+      if (deletedRows && maxEventsCap !== undefined) {
+        const base = exactCountAtPass ?? passCount ?? 0
+        const next = base - countDeletedRows - byteDeletedRowsCount
+        runEventCounts.set(runId, next)
+        runEventCountInsert(runId, next)
       }
     } catch {
       // Skip this enforcement pass; the next append retries.
@@ -659,18 +1227,14 @@ export function createRunJournal(params: {
       try {
         db.run('BEGIN IMMEDIATE;')
         try {
-          const maxRow = db
-            .query(
-              'SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ?',
-            )
-            .get(runId) as { max_seq: number | null } | undefined
+          const maxRow = selectMaxSeq.get(runId) as MaxSeqRow
           const nextSeq = (maxRow?.max_seq ?? -1) + 1
-          // Serialize ONCE and reuse: the cached per-run byte total must count
-          // the SAME serialization that is inserted (Buffer.byteLength of this
-          // string equals LENGTH(CAST(payload AS BLOB)) in SQLite).
+          // Serialize ONCE and reuse: the persisted per-run byte total must
+          // count the SAME serialization that is inserted
+          // (Buffer.byteLength of this string equals LENGTH(CAST(payload AS
+          // BLOB)) in SQLite).
           const serializedPayload = JSON.stringify(event.payload)
-          db.run(
-            'INSERT INTO run_events (run_id, seq, step_number, event_type, correlation, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          runInsertEvent(
             runId,
             nextSeq,
             event.stepNumber,
@@ -679,18 +1243,58 @@ export function createRunJournal(params: {
             serializedPayload,
             clock.now(),
           )
-          db.run('COMMIT;')
-          // Maintain the cached per-run byte total (O(1) per append) so the
-          // retention fast path never needs a full ordered scan. Guarded on
-          // the byte cap being set: without byte retention this is a no-op
-          // and the default path stays byte-identical.
+          // Maintain the PERSISTED per-run byte total inside the same
+          // transaction as the append so the total is always exact and
+          // survives reopen: the cap stays enforceable for resumed and
+          // persistent runIds (historical bytes included) while steady-state
+          // appends stay O(1) (one PK read + one UPDATE; no payload scan).
+          // Guarded on the byte cap being set: without byte retention this
+          // is a no-op and the default path stays byte-identical.
           if (maxBytesCap !== undefined) {
-            runPayloadBytes.set(
-              runId,
-              (runPayloadBytes.get(runId) ?? 0) +
-                Buffer.byteLength(serializedPayload, 'utf8'),
-            )
+            const newBytes = Buffer.byteLength(serializedPayload, 'utf8')
+            const sideRow = selectSideRowTotal?.get(runId) as SideTotalRow
+            if (sideRow) {
+              const next = sideRow.total_bytes + newBytes
+              runSideRowUpdate(next, runId)
+              runPayloadBytes.set(runId, next)
+            } else {
+              // Seed branch, once per runId per db (legacy dbs predating the
+              // side table, or a brand-new runId): run_events already
+              // includes the just-inserted event inside this transaction, so
+              // the SUM is the complete exact total — historical rows
+              // included.
+              const exact = recomputeRunPayloadBytes(runId)
+              runSideRowInsert(runId, exact)
+              runPayloadBytes.set(runId, exact)
+            }
           }
+          // Maintain the PERSISTED per-run event count inside the same
+          // transaction as the append — the same contract as the byte side
+          // table: exact, transactional, survives reopen, O(1) steady state
+          // (one PK read + one UPDATE; no COUNT scan, no boundary walk).
+          // Guarded on the event cap being set: without maxEvents retention
+          // this is a no-op and the default path stays byte-identical.
+          if (maxEventsCap !== undefined) {
+            const countRow = selectEventCount?.get(runId) as EventCountRow
+            if (countRow) {
+              const next = countRow.event_count + 1
+              runEventCountUpdate(next, runId)
+              runEventCounts.set(runId, next)
+            } else {
+              // Seed branch, once per runId per db (legacy dbs predating the
+              // side table, or a brand-new runId): run_events already
+              // includes the just-inserted event inside this transaction, so
+              // the COUNT is the complete exact total.
+              const exactRow = countRunEvents?.get(runId) as CountRow
+              const exact = exactRow?.count ?? 0
+              // Param order matches the SQL's (run_id, event_count) columns:
+              // the key comes FIRST. A swapped order here inserts rows keyed
+              // by the count, so every lookup by runId misses and re-seeds.
+              runEventCountInsert(runId, exact)
+              runEventCounts.set(runId, exact)
+            }
+          }
+          db.run('COMMIT;')
           return
         } catch (error) {
           // A failed INSERT/COMMIT leaves the transaction open, and the
@@ -836,9 +1440,20 @@ export function createRunJournal(params: {
         if (!keep.has(existingRunId)) {
           db.run('DELETE FROM run_events WHERE run_id = ?', existingRunId)
           // The pruned run's cached byte total is stale after the delete;
-          // drop it so a later append recomputes from SQL instead of
+          // drop the in-memory mirror and the persisted run_byte_totals side
+          // row so a later append recomputes from SQL instead of
           // over-counting deleted bytes.
           runPayloadBytes.delete(existingRunId)
+          db.run('DELETE FROM run_byte_totals WHERE run_id = ?', existingRunId)
+          // The pruned run's cached event count is stale after the delete;
+          // drop the in-memory mirror and the persisted run_event_counts
+          // side row alongside the byte side row (a no-op when the run never
+          // had an event-capped writer).
+          runEventCounts.delete(existingRunId)
+          db.run(
+            'DELETE FROM run_event_counts WHERE run_id = ?',
+            existingRunId,
+          )
         }
       }
       pending = pending.filter((item) => keep.has(item.runId))
