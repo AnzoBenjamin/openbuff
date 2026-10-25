@@ -552,10 +552,23 @@ describe('processStreamWithTags', () => {
     }
 
     expect(responseChunks).toHaveLength(1)
+    // Capture the message BEFORE toMatchObject: bun's toMatchObject replaces
+    // the matched property with the asymmetric-matcher object, so reading
+    // .message afterwards yields the matcher (which stringifies to '{}') and
+    // toContain type-errors instead of comparing strings.
+    const message = responseChunks[0].message
     expect(responseChunks[0]).toMatchObject({
       type: 'error',
       message: expect.stringContaining('JSON parsing failed'),
     })
+    // The base message stays byte-identical; the bounded raw excerpt is
+    // composed onto it at this emission boundary (mirroring the executor's
+    // pinned 'Original tool call input:' self-correcting pattern) so the
+    // model can diff its broken JSON instead of guessing which call failed
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    expect(message).toContain(
+      'Original tool call input (excerpt): \n{"cb_tool_name": "test_tool",\n',
+    )
   })
 
   it('should surface non-JSON tool-call input through the structured error channel and forward the raw string', async () => {
@@ -812,6 +825,102 @@ describe('processStreamWithTags', () => {
     expect(capped.executed).toEqual([])
     expect(capped.errors).toHaveLength(1)
     expect(capped.errors[0]).toContain('JSON parsing failed')
+  })
+
+  it('fails safe on model-degeneration output (aborted tool-call tag fragments never execute)', async () => {
+    // Real production degeneration specimen: coherent prose, ~200 carriage
+    // returns, aborted tool-call tag fragments (<to, <tool_call, <tool_c)
+    // and a foreign-protocol fragment (<parameter name="path"> ...
+    // window=1, 475). None of these bytes form the canonical start tag, so
+    // no processor may fire, no tool may execute, no parser error may
+    // surface, and every byte must still reach the text channel exactly
+    // once.
+    const specimen =
+      'The symbol read failed due to parameter shape. Let me read the run-journal implementation to confirm the close() shape cited in the finding.' +
+      '\r'.repeat(200) +
+      '<to' +
+      '<tool_call' +
+      '<tool_c' +
+      '<parameter name="path">scripts/diag-count-side-table.ts' +
+      'window=1, 475'
+
+    // Feed the specimen in artificially small chunks: 8 chars per chunk for
+    // production-like streaming, plus 1 char per chunk so every '<' lands on
+    // its own chunk boundary and the partial-tag carry (a lone '<' held
+    // until the next byte mismatches the start tag) is actually exercised.
+    const runAtChunkSize = async (chunkSize: number) => {
+      const streamChunks: StreamChunk[] = []
+      for (let i = 0; i < specimen.length; i += chunkSize) {
+        streamChunks.push(textChunk(specimen.slice(i, i + chunkSize)))
+      }
+
+      const events: any[] = []
+      const processors = {
+        test_tool: {
+          params: ['param1'] as string[],
+          onTagStart: (tagName: string, attributes: Record<string, string>) => {
+            events.push({ tagName, type: 'start', attributes })
+          },
+          onTagEnd: (tagName: string, params: Record<string, any>) => {
+            events.push({ tagName, type: 'end', params })
+          },
+        },
+      }
+
+      const executedToolCalls: string[] = []
+      const responseErrors: string[] = []
+      const responseText: string[] = []
+      let yieldedText = ''
+
+      for await (const chunk of processStreamWithTools({
+        ...agentRuntimeImpl,
+        stream: createMockStream(streamChunks),
+        processors,
+        defaultProcessor: (toolName: string) => {
+          events.push({ name: toolName, type: 'default-processor' })
+          return {
+            onTagStart: () => {},
+            onTagEnd: () => {},
+          }
+        },
+        onResponseChunk: (chunk: any) => {
+          if (chunk.type === 'error') responseErrors.push(chunk.message)
+          if (chunk.type === 'text') responseText.push(chunk.text)
+        },
+        executeXmlToolCall: async ({ toolName }) => {
+          executedToolCalls.push(toolName)
+        },
+      })) {
+        if (chunk.type === 'text') {
+          yieldedText += chunk.text
+        }
+      }
+
+      return {
+        events,
+        executedToolCalls,
+        responseErrors,
+        responseText,
+        yieldedText,
+      }
+    }
+
+    for (const chunkSize of [1, 8]) {
+      const outcome = await runAtChunkSize(chunkSize)
+
+      // No processor hook, no default-processor lookup and no executor may
+      // ever fire: the aborted fragments are not the canonical start tag.
+      expect(outcome.events).toEqual([])
+      expect(outcome.executedToolCalls).toEqual([])
+      // No start tag matched, so the parser has nothing to report.
+      expect(outcome.responseErrors).toEqual([])
+      // The degeneration output is still visible text, byte for byte: a
+      // carried '<' is flushed once the next byte mismatches, so the
+      // re-joined emitted text equals the specimen exactly.
+      expect(outcome.responseText.length).toBeGreaterThan(0)
+      expect(outcome.responseText.join('')).toBe(specimen)
+      expect(outcome.yieldedText).toBe(specimen)
+    }
   })
 })
 

@@ -32,6 +32,13 @@ export type StreamParserError = {
   message: string
   bufferedLength?: number
   maxBufferLength?: number
+  /**
+   * Bounded excerpt of the raw tool-call bytes that failed to parse, quoted
+   * back to the model at the emission boundaries so it can diff its broken
+   * JSON instead of repeating the identical malformed shape
+   * (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+   */
+  rawExcerpt?: string
 }
 
 export type StreamParserState = {
@@ -63,6 +70,32 @@ export type ParseResult = {
   toolCalls: ParsedToolCall[]
   /** Structured parser errors encountered while extracting tool calls */
   errors: StreamParserError[]
+}
+
+/**
+ * Hard cap on `rawExcerpt`: raw tool-call bytes are model-controlled and a
+ * single 64 KiB overflow must not balloon the error message or the
+ * transcript, so every excerpt is hard-capped at 500 characters
+ * (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+ */
+export const MAX_TOOL_CALL_RAW_EXCERPT_LENGTH = 500
+
+/**
+ * Bounded excerpt of raw tool-call bytes for error reporting. Content up to
+ * `MAX_TOOL_CALL_RAW_EXCERPT_LENGTH` characters is returned verbatim; longer
+ * content keeps the first and last 250 characters around a
+ * `…[N chars truncated]…` marker (N = length − 500), so both the opening and
+ * the failure point of a large payload stay visible.
+ */
+export function toBoundedRawExcerpt(content: string): string {
+  if (content.length <= MAX_TOOL_CALL_RAW_EXCERPT_LENGTH) {
+    return content
+  }
+  const half = MAX_TOOL_CALL_RAW_EXCERPT_LENGTH / 2
+  const truncated = content.length - MAX_TOOL_CALL_RAW_EXCERPT_LENGTH
+  const head = content.slice(0, half)
+  const tail = content.slice(-half)
+  return `${head}…[${truncated} chars truncated]…${tail}`
 }
 
 /**
@@ -193,11 +226,18 @@ export function parseStreamChunk(
         // never leaks into the visible text stream. A trailing partial end tag
         // survives as the discard-mode carry so an end tag split exactly across
         // this boundary is still fully consumed.
+        // Capture the bounded excerpt from the buffered payload BEFORE the
+        // discard reset below destroys it: once `state.buffer` is reduced to
+        // the partial-tag carry the payload is unrecoverable, and the excerpt
+        // is the only surviving evidence of what the model emitted
+        // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+        const rawExcerpt = toBoundedRawExcerpt(state.buffer + pending)
         errors.push({
           code: 'tool_call_buffer_exceeded',
           message: `Discarded unterminated ${toolXmlName} content after ${bufferedLength} buffered characters (limit ${state.maxToolCallBufferLength}). Discarding content until the end tag.`,
           bufferedLength,
           maxBufferLength: state.maxToolCallBufferLength,
+          rawExcerpt,
         })
         state.discardingUntilEndTag = true
         const partialEnd = findPartialTagMatch(scan, endToolTag)
@@ -254,12 +294,18 @@ function parseToolCallContent(content: string): {
   toolCall?: ParsedToolCall
   error?: StreamParserError
 } {
+  // Bounded excerpt of the raw block, captured once so every error site can
+  // quote the offending bytes back to the model: without them the model
+  // cannot diff its broken JSON and repeats the identical malformed shape
+  // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+  const rawExcerpt = toBoundedRawExcerpt(content)
   const normalized = normalizeToolCallJsonContent(content)
   if (normalized === null) {
     return {
       error: {
         code: 'invalid_tool_call_json',
         message: `Ignored empty ${toolXmlName} content.`,
+        rawExcerpt,
       },
     }
   }
@@ -274,6 +320,7 @@ function parseToolCallContent(content: string): {
         error: {
           code: 'invalid_tool_call_json',
           message: `Ignored ${toolXmlName} content because it did not parse to a JSON object.`,
+          rawExcerpt,
         },
       }
     }
@@ -289,6 +336,7 @@ function parseToolCallContent(content: string): {
         error: {
           code: 'missing_tool_name',
           message: `Ignored ${toolXmlName} content because ${MISSING_TOOL_NAME_REASON}`,
+          rawExcerpt,
         },
       }
     }
@@ -303,6 +351,7 @@ function parseToolCallContent(content: string): {
         message: `Ignored ${toolXmlName} content because JSON parsing failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
+        rawExcerpt,
       },
     }
   }

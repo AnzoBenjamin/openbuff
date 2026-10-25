@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 
-import { createStreamParserState, parseStreamChunk } from '../stream-xml-parser'
+import {
+  createStreamParserState,
+  parseStreamChunk,
+  toBoundedRawExcerpt,
+} from '../stream-xml-parser'
 
 describe('stream-xml-parser', () => {
   describe('parseStreamChunk', () => {
@@ -101,6 +105,10 @@ After text`
         expect(result.errors[0].message).toBe(
           'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
         )
+        // The raw block is quoted back as a bounded excerpt so the model can
+        // diff its malformed input instead of repeating it
+        // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+        expect(result.errors[0].rawExcerpt).toBe('\n{"paths": ["a.ts"]}\n')
       })
     })
 
@@ -335,6 +343,12 @@ Thinking about the task...
       expect(result.errors).toHaveLength(1)
       expect(result.errors[0].code).toBe('invalid_tool_call_json')
       expect(result.errors[0].message).toContain('JSON parsing failed')
+      // The raw block is quoted back as a bounded excerpt so the model can
+      // diff its malformed input
+      // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+      expect(result.errors[0].rawExcerpt).toBe(
+        '\n{"cb_tool_name": "test_tool",\n',
+      )
     })
 
     it('should report and discard unterminated tool call buffers past the limit', () => {
@@ -351,6 +365,11 @@ Thinking about the task...
             'Discarded unterminated codebuff_tool_call content after 9 buffered characters (limit 8). Discarding content until the end tag.',
           bufferedLength: 9,
           maxBufferLength: 8,
+          // Bounded excerpt of the payload, captured BEFORE the discard reset
+          // destroys it — the only surviving evidence of what the model
+          // emitted
+          // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+          rawExcerpt: '123456789',
         },
       ])
       expect(state.buffer).toBe('')
@@ -358,6 +377,36 @@ Thinking about the task...
       // only returns to normal mode after the closing tag is consumed.
       expect(state.insideToolCall).toBe(true)
       expect(state.discardingUntilEndTag).toBe(true)
+    })
+
+    it('captures the overflow excerpt from retained and fresh bytes before discarding', () => {
+      const state = createStreamParserState({ maxToolCallBufferLength: 8 })
+
+      // First chunk stays under the limit and is retained in the buffer.
+      const result1 = parseStreamChunk('<codebuff_tool_call>12345', state)
+      expect(result1.errors).toEqual([])
+
+      // Second chunk overflows: the excerpt must combine the retained buffer
+      // with the fresh bytes BEFORE the discard reset destroys them, or the
+      // payload is unrecoverable
+      // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+      const result2 = parseStreamChunk('6789', state)
+      expect(result2.errors).toEqual([
+        {
+          code: 'tool_call_buffer_exceeded',
+          message:
+            'Discarded unterminated codebuff_tool_call content after 9 buffered characters (limit 8). Discarding content until the end tag.',
+          bufferedLength: 9,
+          maxBufferLength: 8,
+          rawExcerpt: '123456789',
+        },
+      ])
+
+      // Fail-safe unchanged: the discarded payload never leaks as filtered
+      // text and the end tag is still consumed silently.
+      const result3 = parseStreamChunk('</codebuff_tool_call>done', state)
+      expect(result3.filteredText).toBe('done')
+      expect(result3.errors).toEqual([])
     })
 
     it('should swallow the end tag after a buffer overflow instead of leaking it into text', () => {
@@ -413,6 +462,34 @@ use {x} like this: {"cb_tool_name": "test_tool", "path": "foo.ts"} hope that hel
       expect(result.toolCalls[0].input).toEqual({
         content: 'literal { brace',
       })
+    })
+  })
+
+  describe('toBoundedRawExcerpt', () => {
+    // The excerpt is the only surviving evidence of a malformed tool call,
+    // and its bound is part of the fail-safe contract: a 64 KiB overflow must
+    // not balloon the error message or the transcript
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    it('returns content up to 500 characters verbatim', () => {
+      expect(toBoundedRawExcerpt('')).toBe('')
+      expect(toBoundedRawExcerpt('short')).toBe('short')
+      expect(toBoundedRawExcerpt('x'.repeat(500))).toBe('x'.repeat(500))
+    })
+
+    it('truncates longer content to first 250 + marker + last 250', () => {
+      const content = 'abcdefghij'.repeat(100) // 1000 characters
+      expect(toBoundedRawExcerpt(content)).toBe(
+        `${content.slice(0, 250)}…[${
+          content.length - 500
+        } chars truncated]…${content.slice(-250)}`,
+      )
+    })
+
+    it('reports exactly length-minus-500 truncated characters', () => {
+      const content = 'y'.repeat(501)
+      expect(toBoundedRawExcerpt(content)).toBe(
+        `${'y'.repeat(250)}…[1 chars truncated]…${'y'.repeat(250)}`,
+      )
     })
   })
 })

@@ -192,10 +192,18 @@ export async function* processStreamWithTools(params: {
   }
 
   function emitParserErrors(errors: StreamParserError[]) {
+    // Compose the bounded raw excerpt into the forwarded message at this
+    // emission boundary (mirroring the executor's pinned 'Original tool call
+    // input:' self-correcting pattern) so the model can diff its broken JSON
+    // instead of guessing which call was malformed
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
     for (const error of errors) {
       onResponseChunk({
         type: 'error',
-        message: error.message,
+        message:
+          error.rawExcerpt !== undefined
+            ? `${error.message}\n\nOriginal tool call input (excerpt): ${error.rawExcerpt}`
+            : error.message,
       })
     }
   }

@@ -16,6 +16,7 @@ import {
 import { remintConfirmedPostEditAnchors } from './util/read-authorization'
 import { isContextPrunerAgentId } from './util/context-pruner-identity'
 import { createWarnLatch } from './util/warn-latch'
+import { withSystemTags } from './util/messages'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
 import type { ExecuteToolCallParams } from './tools/tool-executor'
@@ -653,6 +654,15 @@ export async function runProgrammaticStep(
             addProgrammaticToolResultContext,
             onResponseChunk,
           })
+        } else {
+          // Zero segments (e.g. a whitespace-only STEP_TEXT) executed
+          // nothing: reset toolResult so generator.next() receives the
+          // results of exactly the previous yield, per the StepGenerator
+          // contract. Leaving the prior iteration's results in place
+          // replayed stale output for a yield that ran no tools (reviewer
+          // advisory: stale toolResult fed to generator.next() on a
+          // zero-segment STEP_TEXT).
+          toolResult = []
         }
         continue
       }
@@ -1177,7 +1187,25 @@ async function executeSegmentsArray(
       // Stream assistant text
       onResponseChunk(segment.text)
     } else if (segment.type === 'parse_error') {
-      onResponseChunk({ type: 'error', message: segment.message })
+      // Compose the same excerpt-annotated message the streaming emission
+      // boundary (tool-stream-parser emitParserErrors) builds, and persist it
+      // into the transcript too: streaming it alone leaves a silent hole in
+      // the model's own history where the tool call was, so it cannot
+      // self-correct the malformed JSON on the next turn. Follows this file's
+      // readonly messageHistory convention (recreate the array, then push).
+      // .agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md
+      const message =
+        segment.rawExcerpt !== undefined
+          ? `${segment.message}\n\nOriginal tool call input (excerpt): ${segment.rawExcerpt}`
+          : segment.message
+      onResponseChunk({ type: 'error', message })
+      agentState.messageHistory = [...agentState.messageHistory]
+      agentState.messageHistory.push(
+        userMessage({
+          content: withSystemTags(message),
+          tags: ['TOOL_CALL_ERROR'],
+        }),
+      )
     } else {
       // Handle tool call segment
       const toolResult = await executeSingleToolCall(segment, params)

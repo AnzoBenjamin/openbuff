@@ -2009,6 +2009,67 @@ describe('runProgrammaticStep', () => {
       expect(result.agentState.output?.error).toBeUndefined()
     })
 
+    it('should feed an empty toolResult to the next step after a zero-segment STEP_TEXT', async () => {
+      // Reviewer advisory fix: a STEP_TEXT whose text parses to zero
+      // segments (e.g. whitespace-only) previously skipped the toolResult
+      // reassignment, so the next generator.next() replayed the PREVIOUS
+      // iteration's results for a yield that executed nothing. The
+      // generator below records the toolResult context of every step; the
+      // whitespace-only STEP_TEXT must observe [] — not the read_files
+      // results from the first iteration.
+      const receivedToolResults: unknown[] = []
+      const mockGenerator = (function* () {
+        // Iteration 1: a real tool call. The runtime executes it and feeds
+        // its (non-empty) results to the next step.
+        const afterReadFiles = yield {
+          toolName: 'read_files',
+          input: { paths: ['test.txt'] },
+        }
+        receivedToolResults.push(
+          (afterReadFiles as { toolResult: unknown }).toolResult,
+        )
+        // Iteration 2: a whitespace-only STEP_TEXT parses to zero
+        // segments, so nothing executes and the NEXT step must see an
+        // empty toolResult.
+        const afterEmptyStepText = yield { type: 'STEP_TEXT', text: ' \n\t ' }
+        receivedToolResults.push(
+          (afterEmptyStepText as { toolResult: unknown }).toolResult,
+        )
+        yield { toolName: 'end_turn', input: {} }
+      })() as StepGenerator
+
+      mockTemplate.handleSteps = () => mockGenerator
+      mockTemplate.toolNames = ['read_files', 'end_turn']
+
+      executeToolCallSpy.mockImplementation(
+        async (
+          options: ParamsOf<typeof executeToolCall>,
+        ): ReturnType<typeof executeToolCall> => {
+          if (options.toolName === 'read_files') {
+            options.toolResults.push({
+              role: 'tool',
+              toolName: 'read_files',
+              toolCallId: options.toolCallId ?? 'read-files-call-id',
+              content: jsonToolResult({
+                files: [{ path: 'test.txt', content: 'hello' }],
+              }),
+            })
+          }
+        },
+      )
+
+      const result = await runProgrammaticStep(mockParams)
+
+      expect(result.endTurn).toBe(true)
+      expect(result.agentState.output?.error).toBeUndefined()
+      // Non-vacuous fixture: the read_files step DID produce results...
+      expect(receivedToolResults).toHaveLength(2)
+      expect((receivedToolResults[0] as unknown[]).length).toBeGreaterThan(0)
+      // ...and the zero-segment STEP_TEXT fed an empty toolResult instead
+      // of replaying them.
+      expect(receivedToolResults[1]).toEqual([])
+    })
+
     it('should surface malformed STEP_TEXT tool calls as response errors', async () => {
       const mockGenerator = (function* () {
         yield {
@@ -2032,6 +2093,31 @@ describe('runProgrammaticStep', () => {
         type: 'error',
         message: expect.stringContaining('JSON parsing failed'),
       })
+
+      // Class C
+      // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md):
+      // the same excerpt-annotated failure is ALSO persisted into the
+      // transcript as a TOOL_CALL_ERROR user message. Streaming it alone left
+      // a silent hole in the model's own history where the tool call was, so
+      // the next turn could not self-correct the malformed JSON.
+      const toolCallErrorMessages = result.agentState.messageHistory.filter(
+        (message) =>
+          message.role === 'user' && message.tags?.includes('TOOL_CALL_ERROR'),
+      )
+      expect(toolCallErrorMessages).toHaveLength(1)
+      const errorText = toolCallErrorMessages[0].content
+        .map((part) => ('text' in part ? part.text : ''))
+        .join('')
+      // withSystemTags wraps the composed message so it reads as system
+      // feedback rather than user prose.
+      expect(errorText).toContain('<system>Ignored codebuff_tool_call content')
+      expect(errorText).toContain('JSON parsing failed')
+      expect(errorText).toContain('</system>')
+      // The raw trimmed block is quoted back as a bounded excerpt, mirroring
+      // the executor's pinned 'Original tool call input:' self-correcting shape.
+      expect(errorText).toContain(
+        'Original tool call input (excerpt): {"cb_tool_name": "read_files",',
+      )
     })
 
     it('should repair separators in STEP_TEXT tool calls before execution', async () => {

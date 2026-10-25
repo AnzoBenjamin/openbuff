@@ -2844,6 +2844,109 @@ describe('tool validation error handling', () => {
     expect(errorUserMessage).toBeDefined()
   })
 
+  it('persists streaming XML parser errors into message history so the model can self-correct', async () => {
+    // Class A gap
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md):
+    // emitParserErrors forwards a malformed codebuff_tool_call parse error ONLY
+    // through the wrapper onResponseChunk callback — it is never yielded into
+    // the stream, so the consumption loop's error branch never fired for it
+    // and the wrapper's old `// do nothing` branch left the dropped call
+    // indistinguishable from a successful one: no TOOL_CALL_ERROR transcript
+    // entry, no hadToolCallError, no retry. The wrapper now records the failure
+    // exactly as createResponseHandler and the loop branch do, so the finally
+    // block persists it into the next model turn's prompt.
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    async function* mockStream() {
+      yield {
+        type: 'text' as const,
+        text: '<codebuff_tool_call>\n{"cb_tool_name": "read_files",\n</codebuff_tool_call>',
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    const result = await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithReadFiles,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithReadFiles },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    // The parser error still reaches the client, now carrying the bounded raw
+    // excerpt composed at emitParserErrors so the model can diff its JSON. The
+    // malformed block is the whole response, so the error is the only chunk.
+    expect(responseChunks).toHaveLength(1)
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain('JSON parsing failed')
+    expect(errorEvents[0].message).toContain(
+      'Original tool call input (excerpt):',
+    )
+
+    // Fail-safe unchanged: the malformed bytes never execute.
+    expect(
+      responseChunks.filter(
+        (chunk): chunk is PrintModeEvent =>
+          typeof chunk !== 'string' &&
+          (chunk.type === 'tool_call' || chunk.type === 'tool_result'),
+      ).length,
+    ).toBe(0)
+
+    // The turn-control retry safety net is armed: a malformed-only response
+    // now reports hadToolCallError exactly like an executor error, so
+    // run-agent-step.ts hasNoToolResults forces a retry step.
+    expect(result.hadToolCallError).toBe(true)
+
+    // The failure is persisted as a TOOL_CALL_ERROR user message the next
+    // model turn can see — the transcript channel executor errors already use.
+    const toolCallErrorMessages = agentState.messageHistory.filter(
+      (message) =>
+        message.role === 'user' && message.tags?.includes('TOOL_CALL_ERROR'),
+    )
+    expect(toolCallErrorMessages).toHaveLength(1)
+    const errorText = toolCallErrorMessages[0].content
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('')
+    expect(errorText).toContain('<system>Error during tool call: ')
+    expect(errorText).toContain('JSON parsing failed')
+    expect(errorText).toContain('Original tool call input (excerpt):')
+    expect(errorText).toContain('{"cb_tool_name": "read_files",')
+    expect(errorText).toContain(
+      'Please check the tool name and arguments and try again.',
+    )
+    expect(errorText).toContain('</system>')
+  })
+
   it('should summarize missing spawned agent params clearly', async () => {
     const { validateAgentInput } =
       await import('../tools/handlers/tool/spawn-agent-utils')

@@ -353,8 +353,32 @@ After text`
     expect(result[1]).toMatchObject({
       type: 'parse_error',
       message: expect.stringContaining('JSON parsing failed'),
+      // The raw trimmed block is quoted back as a bounded excerpt so the
+      // model can diff its malformed input
+      // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+      rawExcerpt: `{
+  "cb_tool_name": "read_files",
+  "paths": ["test.ts"
+}`,
     })
     expect(result[2]).toEqual({ type: 'text', text: '\n\nAfter text' })
+  })
+
+  it('should report non-object JSON content with a bounded raw excerpt', () => {
+    const text = `<codebuff_tool_call>
+["not", "an", "object"]
+</codebuff_tool_call>`
+
+    const result = parseTextWithToolCalls(text)
+
+    expect(result).toEqual([
+      {
+        type: 'parse_error',
+        message:
+          'Ignored codebuff_tool_call content because it did not parse to a JSON object.',
+        rawExcerpt: '["not", "an", "object"]',
+      },
+    ])
   })
 
   it('should report tool calls without cb_tool_name', () => {
@@ -371,6 +395,12 @@ After text`
         type: 'parse_error',
         message:
           'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
+        // Bounded excerpt of the raw trimmed block, quoted back to the model
+        // so it can diff its malformed input
+        // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+        rawExcerpt: `{
+  "paths": ["test.ts"]
+}`,
       },
     ])
   })
@@ -557,7 +587,65 @@ describe('parseTextWithToolCalls tool-name aliases', () => {
         type: 'parse_error',
         message:
           'Ignored codebuff_tool_call content because no tool-name key was present as a non-empty string.',
+        rawExcerpt: `{
+  "cb_tool_name": "   ",
+  "tool_name": "",
+  "toolName": 42,
+  "name": null
+}`,
       },
     ])
+  })
+})
+
+describe('parseTextWithToolCalls degeneration regression', () => {
+  // Real production degeneration specimen: coherent prose, ~200 carriage
+  // returns, aborted tool-call tag fragments (<to, <tool_call, <tool_c) and
+  // a foreign-protocol fragment (<parameter name="path"> ... window=1, 475).
+  // None of it forms the canonical <codebuff_tool_call> framing, so nothing
+  // here may execute as a tool call and the parse must not crash.
+  const specimen =
+    'The symbol read failed due to parameter shape. Let me read the run-journal implementation to confirm the close() shape cited in the finding.' +
+    '\r'.repeat(200) +
+    '<to' +
+    '<tool_call' +
+    '<tool_c' +
+    '<parameter name="path">scripts/diag-count-side-table.ts' +
+    'window=1, 475'
+
+  it('should carry the aborted fragments without ever forming a canonical tag', () => {
+    // Fixture guard: the regression point is precisely that these fragments
+    // are NOT the start/end tag, so the specimen must never grow one.
+    expect(specimen).toContain('<to')
+    expect(specimen).toContain('<tool_call')
+    expect(specimen).toContain('<tool_c')
+    expect(specimen).toContain('<parameter name="path">')
+    expect(specimen).not.toContain('<codebuff_tool_call>')
+    expect(specimen).not.toContain('</codebuff_tool_call>')
+  })
+
+  it('should parse zero tool calls from the degeneration specimen', () => {
+    expect(parseToolCallsFromText(specimen)).toHaveLength(0)
+  })
+
+  it('should emit only a text segment for the degeneration specimen', () => {
+    const result = parseTextWithToolCalls(specimen)
+
+    // No tool_call and no parse_error segment: the aborted fragments never
+    // open a block, so the whole specimen is one text segment.
+    expect(result.map((segment) => segment.type)).toEqual(['text'])
+  })
+
+  it('should reproduce the degeneration specimen exactly as one raw text segment', () => {
+    const result = parseTextWithToolCalls(specimen)
+
+    // Raw-slice contract: only wholly-whitespace segments are dropped, and
+    // this specimen has real words, so the single surviving segment is the
+    // untrimmed specimen itself.
+    expect(result).toEqual([{ type: 'text', text: specimen }])
+    const joinedText = result
+      .map((segment) => (segment.type === 'text' ? segment.text : ''))
+      .join('')
+    expect(joinedText).toBe(specimen)
   })
 })

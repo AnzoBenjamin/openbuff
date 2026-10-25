@@ -776,11 +776,38 @@ export async function processStream(
     },
     onResponseChunk: (chunk) => {
       if (chunk.type === 'text') {
+        // Dual-channel text delivery is intentional; each client consumes
+        // exactly one form, so nothing renders twice. Print mode renders
+        // this event form (its handleEvent prints {type:'text'} and it
+        // passes no handleStreamChunk), while the TUI renders the string
+        // form the consumption loop emits below (handleStreamChunk) and
+        // drops this event form (its createEventHandler has no 'text'
+        // case). Do not remove either channel (reviewer advisory on
+        // double-delivery: confirmed intended, pinned here).
         if (chunk.text) {
           assistantMessages.push(assistantMessage(chunk.text))
         }
       } else if (chunk.type === 'error') {
-        // do nothing
+        // Streaming XML parser errors (invalid_tool_call_json /
+        // missing_tool_name / tool_call_buffer_exceeded) reach the model only
+        // through this callback: emitParserErrors never yields them into the
+        // stream, so the consumption loop's error branch never fires for them
+        // and a dropped malformed call was indistinguishable from a
+        // successful one — the model repeated the identical malformed shape
+        // indefinitely. Record it exactly as that branch and
+        // createResponseHandler already do, so the finally block persists a
+        // TOOL_CALL_ERROR user message the next model turn can see and retry
+        // from, and hadToolCallError arms the turn-control retry safety net.
+        // .agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md
+        hadToolCallError = true
+        errorMessages.push(
+          userMessage({
+            content: withSystemTags(
+              `Error during tool call: ${chunk.message}. Please check the tool name and arguments and try again.`,
+            ),
+            tags: ['TOOL_CALL_ERROR'],
+          }),
+        )
       } else {
         chunk satisfies never
         throw new Error(
