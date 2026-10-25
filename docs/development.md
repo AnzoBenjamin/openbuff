@@ -143,3 +143,12 @@ optional.
 ## CLI Command References
 
 Use the `openbuff` namespace for new commands and help text. Do not reintroduce `codebuff` command parsers.
+
+## Diagnostics scripts
+
+`scripts/diag-count-side-table.ts` is a permanent in-tree diagnostic (not part
+of the test suite): it re-runs the `run_event_counts` side-table invariants
+(exactness after appends and over-cap enforcement, retention caps) backing the
+maxEvents dimension of run-journal retention
+(`packages/agent-runtime/src/util/run-journal.ts`) — retained so
+performance-review spawns can re-run those checks directly.

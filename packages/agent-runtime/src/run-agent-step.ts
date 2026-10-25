@@ -19,7 +19,13 @@ import { CACHE_DEBUG_FULL_LOGGING } from './constants'
 
 import { getMCPToolData } from './mcp'
 import { getAgentStreamFromTemplate } from './prompt-agent-stream'
+import path from 'node:path'
+
 import { getEffectiveAgentToolNames } from './util/agent-tool-names'
+import {
+  recordTokenObservation,
+  setTokenCalibrationStorePath,
+} from './util/token-calibration'
 import {
   clearAgentGeneratorForRun,
   runProgrammaticStep,
@@ -779,9 +785,21 @@ export const runAgentStep = async (
   // counts into step locals for the runtime aggregate hit-rate metric
   // (P0-3). The cache-debug snapshot enrichment (for CACHE_DEBUG_FULL_LOGGING)
   // is an additional side-effect layered on top, gated by correlation.
+  // P3-T10: set right before each stream call; the usage callback below
+  // records it against the provider-reported actual.
+  let preRequestInputTokenEstimate = 0
   const onCacheDebugUsageReceived = (usage: CacheDebugUsageData) => {
     stepCacheInputTokens += usage.cachedInputTokens ?? 0
     stepCacheTotalInputTokens += usage.inputTokens ?? 0
+    // P3-T10 calibration loop: provider-reported inputTokens vs the step's
+    // pre-request estimate. Deterministic estimator side (same serialized
+    // shape every step), so the converged family factor absorbs the
+    // tokenizer/envelope divergence uniformly across providers.
+    try {
+      recordTokenObservation(model, preRequestInputTokenEstimate, usage.inputTokens)
+    } catch {
+      // Never let calibration affect the request path.
+    }
     if (cacheDebugCorrelation) {
       enrichCacheDebugSnapshotWithUsage({
         correlation: cacheDebugCorrelation,
@@ -855,7 +873,19 @@ export const runAgentStep = async (
 
   // Handle n parameter for generating multiple responses
   if (params.n !== undefined) {
-    const result = await promptAiSdk({
+// P3-T10: attach the per-project calibration store (fail-open when no
+    // project root) and snapshot the estimator's view of this request's
+    // input BEFORE the call, so usage can be compared when it arrives.
+    setTokenCalibrationStorePath(
+      params.fileContext?.projectRoot
+        ? path.join(params.fileContext.projectRoot, '.openbuff', 'token-calibration.json')
+        : undefined,
+    )
+    preRequestInputTokenEstimate = countTokensJson(
+      { system, messages: agentState.messageHistory },
+      model,
+    )
+        const result = await promptAiSdk({
       ...params,
       messages: agentState.messageHistory,
       model,

@@ -89,6 +89,8 @@ const BPE_SPECIAL_TOKEN_ESCAPE = /<\|/g
  *   - Anything else (unknown model string): 1.0 — the unadjusted gpt-4o BPE
  *     estimate, the honest neutral default.
  */
+import { observedCalibrationFactor } from './token-calibration'
+
 const ANTHROPIC_TOKEN_FUDGE_FACTOR = 1.35
 const OPENAI_TOKEN_FUDGE_FACTOR = 1.0
 const GEMINI_TOKEN_FUDGE_FACTOR = 1.1
@@ -100,6 +102,14 @@ const GEMINI_TOKEN_FUDGE_FACTOR = 1.1
 function fudgeFactorForModel(model: string | undefined): number {
   if (typeof model !== 'string' || model.length === 0) {
     return 1.0
+  }
+  // P3-T10 calibration loop: once enough estimator-vs-actual observations
+  // exist for this model's family, the empirically converged factor REPLACES
+  // the static table. Until then (and whenever the store is absent) the
+  // static factors below remain the estimate — the loop only ever refines.
+  const calibrated = observedCalibrationFactor(model)
+  if (calibrated !== undefined) {
+    return calibrated
   }
   const normalized = model.toLowerCase()
   if (normalized.includes('claude') || normalized.includes('anthropic')) {
