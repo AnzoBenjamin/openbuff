@@ -28,6 +28,16 @@ import {
   createContainedProjectDirectory,
   readContainedProjectFile,
 } from '../services/memory-v2/contained-file-io'
+import {
+  evaluatePlaybookLifecycle,
+  type PlaybookLifecycleAction,
+} from '../services/memory-v2/playbook-lifecycle'
+import {
+  parsePlaybookProposal,
+  PlaybookProposalError,
+  renderPlaybookProposalLines,
+  type PlaybookProposal,
+} from '../services/memory-v2/playbook-proposal'
 import { getProjectMemoryV2Provider } from '../services/memory-v2/provider'
 import { formatAge, pluralizeEntries } from '../utils/format-helpers'
 
@@ -37,6 +47,10 @@ import type {
   V1MigrationAuditOutcome,
   WorkspaceMoveRecord,
 } from '@openbuff/sdk'
+import {
+  computeTriggerSignature,
+  type MemoryPlaybook,
+} from '@codebuff/common/types/memory-playbook'
 import {
   selectCompactionCandidates,
   type GCRelevantEnvelope,
@@ -214,7 +228,7 @@ function memoryBlockToString(
 }
 
 const MEMORY_USAGE =
-  'Usage: /memory [status|authority|diagnose|audit-migration|query <text>|inspect [eventId]|consolidate [--apply] [--task <id>]|repair [--apply]|revalidate <observationId> <path> [--apply]|correct <observationId> <replacement-summary> [--apply]|forget <observationId...> [--apply]|pin <observationId> [--apply]|export [--format json|markdown] [--include-stale]|import <project-relative-json-path> [--apply]|compact-memory [--apply --confirm]|prune]'
+  'Usage: /memory [status|authority|diagnose|audit-migration|query <text>|inspect [eventId]|consolidate [--apply] [--task <id>]|repair [--apply]|revalidate <observationId> <path> [--apply]|correct <observationId> <replacement-summary> [--apply]|forget <observationId...> [--apply]|pin <observationId> [--apply]|export [--format json|markdown] [--include-stale]|import <project-relative-json-path> [--apply]|compact-memory [--apply --confirm]|playbooks [--apply]|playbooks propose <project-relative-json-path> [--apply]|prune]'
 const RELEASE_N_AUTHORITY_WARNING =
   'Release N: json-v1 and shadow-v2 remain supported but are deprecated; sqlite-v2-opt-in is the default and replacement.'
 const CLI_SESSION_ID = 'memory-cli'
@@ -513,6 +527,7 @@ async function runV2Command(
       'export',
       'import',
       'compact-memory',
+      'playbooks',
     ].includes(parsed.command)
   )
     return commandError(MEMORY_USAGE)
@@ -889,6 +904,21 @@ async function runV2Command(
       )
     }
 
+    if (parsed.command === 'playbooks') {
+      // Sub-dispatch: parseArgs strips --apply, so args[0] is the sub-verb and
+      // args[1] the proposal path. Bare `playbooks` keeps the existing
+      // lifecycle report (backwards compatible); any other sub-verb is a
+      // usage error rather than a silently ignored argument.
+      if (parsed.args[0] === 'propose')
+        return runPlaybooksPropose(
+          v2,
+          parsed.args[1] ?? '',
+          parsed.apply,
+          deps.getRootDir(),
+        )
+      if (parsed.args.length > 0) return commandError(MEMORY_USAGE)
+      return runPlaybooks(v2, parsed.apply)
+    }
     if (parsed.command === 'compact-memory')
       return runCompact(v2, parsed.args, parsed.apply, parsed.confirm, deps.getRootDir())
     if (parsed.command === 'export')
@@ -1368,6 +1398,383 @@ async function runImport(
           : 'The input could not be validated safely.'
     return commandError(`Memory import rejected: ${message}`)
   }
+}
+
+/** Bounded playbook rows rendered by the /memory playbooks report. */
+const PLAYBOOKS_SHOWN = 30
+/**
+ * Bounded proposed transitions rendered by the same report. `report()` caps
+ * output at 100 lines, so an unbounded transition list would silently drop
+ * tail entries from the preview while `--apply` still performed them; the
+ * enumeration and the apply batch share this bound so what was shown is what
+ * apply performs — a hidden transition is strictly worse than a counted one.
+ */
+const PLAYBOOK_TRANSITIONS_SHOWN = 60
+
+function describePlaybookLifecycleAction(
+  action: PlaybookLifecycleAction,
+): string {
+  switch (action.kind) {
+    case 'promote':
+      return `Promote ${action.title} → active/warn (${action.reason})`
+    case 'verify':
+      return `Verify ${action.title} → verified (${action.reason})`
+    default:
+      return `Retire ${action.title} → retired/${
+        action.kind === 'retire-noise' ? 'noise' : 'dud'
+      } (${action.reason})`
+  }
+}
+
+/**
+ * `/memory playbooks` — the Phase-4 operator report over the procedural
+ * memory surface: every playbook row for this workspace regardless of
+ * status/expiry, plus the pure lifecycle evaluator's proposed transitions.
+ * Dry-run by default; `--apply` performs the proposed transitions through the
+ * repository's optional operator members. Enforcement is never flipped to
+ * 'block' here: promote flips inject-only → warn only, and verified → block
+ * stays an operator decision (see the design doc's warn→block verdict).
+ */
+async function runPlaybooks(
+  v2: Extract<Awaited<ReturnType<typeof getV2>>, { status: 'available' }>,
+  apply: boolean,
+): Promise<import('../types/chat').MemoryContentBlock> {
+  if (typeof v2.repository.listAllPlaybooks !== 'function')
+    return commandError(
+      'Memory playbooks are not available for this memory repository.',
+    )
+  const rows = await v2.repository.listAllPlaybooks(v2.projectId)
+  const nowMs = Date.now()
+  const actions = evaluatePlaybookLifecycle(rows, { nowMs })
+  // The evaluator's output is deterministically playbookId code-point
+  // sorted, so the bounded prefix below is the same batch in preview and
+  // apply: the operator consents against exactly what --apply performs, and
+  // a hidden transition is strictly worse than a counted one.
+  const shownActions = actions.slice(0, PLAYBOOK_TRANSITIONS_SHOWN)
+  const hiddenActionCount = actions.length - shownActions.length
+  const lines = [
+    `Playbooks: ${rows.length} total.`,
+    ...rows.slice(0, PLAYBOOKS_SHOWN).map(
+      (row) =>
+        `- [${row.status}/${row.enforcement}] ${row.title} — fired ${row.counters.fired}, blocked ${row.counters.blocked}, complied ${row.counters.compliedAfterBlock}, FP ${row.counters.falsePositives}, bypassed ${row.counters.bypassed}, last fired ${formatAge(
+          Math.max(0, nowMs - (row.counters.lastFiredAt ?? row.createdAt)),
+        )} ago`,
+    ),
+    ...(rows.length > PLAYBOOKS_SHOWN
+      ? [`Showing the first ${PLAYBOOKS_SHOWN} of ${rows.length} playbooks.`]
+      : []),
+    ...(actions.length === 0
+      ? ['No lifecycle transitions proposed.']
+      : [
+          'Proposed lifecycle transitions:',
+          ...shownActions.map(
+            (action) => `- ${describePlaybookLifecycleAction(action)}`,
+          ),
+          ...(hiddenActionCount > 0
+            ? [
+                `Showing the first ${PLAYBOOK_TRANSITIONS_SHOWN} of ${actions.length} proposed transitions; --apply performs the shown batch.`,
+              ]
+            : []),
+        ]),
+  ]
+  if (!apply)
+    return report(
+      'Memory playbooks',
+      lines,
+      'secondary',
+      actions.length > 0
+        ? [
+            {
+              label: 'Insert apply command',
+              command: '/memory playbooks --apply',
+            },
+          ]
+        : undefined,
+    )
+  if (
+    typeof v2.repository.setPlaybookStatus !== 'function' ||
+    typeof v2.repository.upsertPlaybookByTriggerSignature !== 'function'
+  )
+    return commandError(
+      'Memory playbook lifecycle changes are not available for this memory repository.',
+    )
+  if (actions.length === 0)
+    return report(
+      'Memory playbooks',
+      [
+        'Outcome: no-op.',
+        'No lifecycle transitions are proposed for this workspace.',
+      ],
+      'secondary',
+    )
+  // Actions derive from these same rows, so every action's row is present.
+  // Promote refreshes the row through the signature upsert, so the row's
+  // CURRENT title/instruction/trigger/scope/provenance/expiry are passed
+  // verbatim — the upsert refreshes exactly those fields, and copying them
+  // byte-for-byte avoids clobbering operator edits while flipping enforcement
+  // to 'warn'.
+  const rowsById = new Map(
+    rows.map((row) => [row.playbookId, row] as const),
+  )
+  for (const action of shownActions) {
+    if (action.kind === 'promote') {
+      const row = rowsById.get(action.playbookId)!
+      await v2.repository.upsertPlaybookByTriggerSignature({
+        workspaceId: v2.projectId,
+        title: row.title,
+        instruction: row.instruction,
+        trigger: row.trigger,
+        scope: row.scope,
+        status: 'active',
+        enforcement: 'warn',
+        provenance: row.provenance,
+        // The row's CURRENT expiry is part of those current contents: the
+        // repository's UPDATE binds expires_at unconditionally from this
+        // field, so omitting it would silently clear an operator-set expiry.
+        ...(row.expiresAt !== undefined ? { expiresAt: row.expiresAt } : {}),
+      })
+    } else {
+      await v2.repository.setPlaybookStatus(action.playbookId, action.to)
+    }
+  }
+  return report(
+    'Memory playbooks',
+    [
+      'Outcome: applied.',
+      ...shownActions.map(
+        (action) => `Applied: ${describePlaybookLifecycleAction(action)}.`,
+      ),
+      // Never a silent partial apply: the unperformed remainder is counted
+      // explicitly so the operator knows the shown batch was a batch.
+      ...(hiddenActionCount > 0
+        ? [
+            `${hiddenActionCount} more proposed transitions remain; re-run /memory playbooks --apply for the next batch.`,
+          ]
+        : []),
+    ],
+    'success',
+  )
+}
+
+/**
+ * The concrete delta `--apply` performs against an existing same-signature
+ * row, one phrase per changing dimension: the inject-only demotion, the
+ * status change, and the expiry disposition. The preview renders these as
+ * delta lines and the apply report repeats the same lines, so the operator
+ * consents against the existing row's delta — never against the proposal's
+ * desired state alone. An unchanged dimension yields no phrase, so the
+ * delta enumerates exactly what changes.
+ */
+function playbookProposalDeltaPhrases(
+  existing: MemoryPlaybook,
+  proposal: PlaybookProposal,
+): Array<{ label: string; phrase: string }> {
+  const phrases: Array<{ label: string; phrase: string }> = []
+  // Shadow-channel semantics are unchanged: the verb still writes
+  // inject-only, so re-proposing a lifecycle-promoted rule DEMOTES it — the
+  // demotion is surfaced here, never refused or silently performed.
+  if (existing.enforcement !== 'inject-only')
+    phrases.push({
+      label: 'Enforcement',
+      phrase: `${existing.enforcement} → inject-only (shadow channel)`,
+    })
+  if (existing.status !== 'active')
+    phrases.push({ label: 'Status', phrase: `${existing.status} → active` })
+  const proposed = proposal.expiresAt
+  const current = existing.expiresAt
+  // Never a silent clear: every expiry disposition is stated —
+  // preserved-from-existing, newly-set, or changed.
+  if (proposed === undefined && current !== undefined)
+    phrases.push({
+      label: 'Expiry',
+      phrase: `${current} preserved from the existing rule`,
+    })
+  else if (proposed !== undefined && current === undefined)
+    phrases.push({ label: 'Expiry', phrase: `newly set to ${proposed}` })
+  else if (
+    proposed !== undefined &&
+    current !== undefined &&
+    proposed !== current
+  )
+    phrases.push({ label: 'Expiry', phrase: `${current} → ${proposed}` })
+  return phrases
+}
+
+/**
+ * `/memory playbooks propose <project-relative-json-path> [--apply]` — the
+ * Phase-4 candidate authoring path: an operator authors a candidate rule
+ * from a contained, bounded JSON proposal file. Dry-run by default
+ * (validate and preview the exact rule, no writes); `--apply` writes it
+ * through the repository's trigger-signature upsert, which refreshes an
+ * existing same-signature row in place rather than inserting a duplicate.
+ *
+ * Because that refresh is a write against an existing rule, the verb
+ * consults the existing row first and surfaces its concrete delta — the
+ * inject-only demotion (a lifecycle-promoted 'warn' rule rides back down
+ * to the shadow channel), the status change, and the expiry disposition —
+ * in both the preview and the apply report, and forwards the existing
+ * row's expiry when the proposal omits one: the repository's UPDATE binds
+ * expires_at unconditionally from the upsert's `playbook.expiresAt ??
+ * null`, so omitting the field would silently clear an operator-set expiry
+ * — the exact defect class the promote path was repaired for. The operator
+ * consents against the delta, never against the proposal's desired state
+ * alone.
+ *
+ * Candidates always ride the inject-only shadow channel — status 'active',
+ * enforcement 'inject-only' — per the design doc's §Candidate pipeline: a
+ * status 'candidate' row is invisible to both gate and band and could
+ * never accumulate counters, while an active/inject-only row is rendered by
+ * the band and shadow-fired by the gate — so authoring can never enforce,
+ * and promotion to 'warn' stays the lifecycle evaluator's decision. The
+ * proposal is strict-parsed with the store's own field limits, so anything
+ * that previews cleanly also passes the store's write-time
+ * MemoryPlaybookSchema validation.
+ */
+async function runPlaybooksPropose(
+  v2: Extract<Awaited<ReturnType<typeof getV2>>, { status: 'available' }>,
+  proposalPath: string,
+  apply: boolean,
+  root: string,
+): Promise<import('../types/chat').MemoryContentBlock> {
+  if (!proposalPath || !proposalPath.toLowerCase().endsWith('.json'))
+    return commandError(MEMORY_USAGE)
+  let text: string
+  try {
+    text = readContainedProjectFile(root, proposalPath, EXPORT_MAX_BYTES).text
+  } catch (error) {
+    // Sanitized contained-read failure (runImport's convention): the user
+    // sees the fixed cause, never the file contents or an absolute path.
+    const message =
+      error instanceof ContainedFileIoError && error.code === 'invalid-path'
+        ? 'Proposal requires a project-relative JSON path.'
+        : error instanceof ContainedFileIoError &&
+            ['missing', 'not-regular', 'too-large'].includes(error.code)
+          ? 'Proposal file is missing, not regular, or too large.'
+          : 'The proposal could not be validated safely.'
+    return commandError(`Memory playbook proposal rejected: ${message}`)
+  }
+  let proposal: PlaybookProposal
+  try {
+    proposal = parsePlaybookProposal(JSON.parse(text))
+  } catch (error) {
+    // A malformed body and a schema-invalid one both fail here with clean,
+    // bounded messages — never zod's raw multi-line dump, never file text.
+    return commandError(
+      error instanceof PlaybookProposalError
+        ? error.message
+        : 'The proposal could not be validated safely.',
+    )
+  }
+  // Fail closed before anything is shown or written: the existing-row read
+  // is load-bearing for the preservation/delta contract — without it this
+  // verb could not see the same-signature row it is about to refresh, would
+  // silently clear its operator-set expiry, and would demote a promoted
+  // rule with no delta surfaced. A repository without the read must refuse
+  // authoring cleanly, mirroring the writer-absent check below.
+  if (typeof v2.repository.listAllPlaybooks !== 'function')
+    return commandError(
+      'Memory playbooks are not available for this memory repository.',
+    )
+  const rows = await v2.repository.listAllPlaybooks(v2.projectId)
+  const { title, instruction, trigger, scope } = proposal
+  const triggerSignature = computeTriggerSignature(trigger, scope)
+  const existing = rows.find(
+    (row) => row.triggerSignature === triggerSignature,
+  )
+  // Expiry preservation (the promote-repair precedent): an explicitly
+  // proposed expiry is honored as intent, and a proposal without one
+  // forwards the existing row's operator-set expiry instead of dropping
+  // the field — never a silent clear.
+  const effectiveExpiresAt = proposal.expiresAt ?? existing?.expiresAt
+  const deltaPhrases = existing
+    ? playbookProposalDeltaPhrases(existing, proposal)
+    : []
+  const deltaLines = deltaPhrases.map(
+    ({ label, phrase }) => `${label}: ${phrase}.`,
+  )
+  const deltaSummary = deltaPhrases.length
+    ? deltaPhrases.map(({ phrase }) => phrase).join('; ')
+    : 'no enforcement, status, or expiry change; row contents are refreshed from the proposal'
+  // The preview renders the EFFECTIVE state — the row a write would
+  // produce — so the Expires-at line shows the preserved expiry when the
+  // proposal omits one.
+  const effectiveProposal: PlaybookProposal = {
+    ...proposal,
+    ...(effectiveExpiresAt !== undefined
+      ? { expiresAt: effectiveExpiresAt }
+      : {}),
+  }
+  if (!apply)
+    return report(
+      'Memory playbook proposal',
+      [
+        ...renderPlaybookProposalLines(effectiveProposal),
+        ...(existing
+          ? [
+              `Existing rule found: "${existing.title}" (${existing.status}/${existing.enforcement}${existing.expiresAt !== undefined ? `, expires at ${existing.expiresAt}` : ''}).`,
+              ...deltaLines,
+              `Would update the existing rule (signature ${triggerSignature}): ${deltaSummary}.`,
+            ]
+          : [
+              `Would create: active/inject-only shadow candidate (signature ${triggerSignature}).`,
+            ]),
+        'Preview only; no writes were performed.',
+      ],
+      'secondary',
+      [
+        {
+          label: 'Insert apply command',
+          command: `/memory playbooks propose ${proposalPath} --apply`,
+        },
+      ],
+    )
+  // Fail closed before the only write: a repository without the signature
+  // writer must refuse authoring cleanly, never throw mid-write.
+  if (typeof v2.repository.upsertPlaybookByTriggerSignature !== 'function')
+    return commandError(
+      'Memory playbook authoring is not available for this memory repository.',
+    )
+  await v2.repository.upsertPlaybookByTriggerSignature({
+    workspaceId: v2.projectId,
+    title,
+    instruction,
+    trigger,
+    scope,
+    status: 'active',
+    enforcement: 'inject-only',
+    // Conditional spread (the promote-repair precedent): the repository's
+    // UPDATE binds expires_at from this field unconditionally, so the field
+    // is present only when one side actually carries an expiry — never a
+    // silent clear.
+    ...(effectiveExpiresAt !== undefined
+      ? { expiresAt: effectiveExpiresAt }
+      : {}),
+    provenance: {
+      origin: 'user',
+      recordedBy: 'memory-cli',
+      sourceEventIds: [],
+      metadata: {},
+    },
+  })
+  if (!existing)
+    return report(
+      'Memory playbook proposal',
+      [
+        'Outcome: applied.',
+        `Created candidate: ${title} (active/inject-only — shadow channel).`,
+      ],
+      'success',
+    )
+  return report(
+    'Memory playbook proposal',
+    [
+      'Outcome: applied.',
+      `Updated existing rule "${existing.title}" (signature ${triggerSignature}).`,
+      ...deltaLines,
+      'Id, createdAt, and counters are preserved; row contents are refreshed from the proposal.',
+    ],
+    'success',
+  )
 }
 
 async function canonicalInventory(

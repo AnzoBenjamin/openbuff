@@ -28,6 +28,10 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import {
+  createSessionEvidenceLog,
+  recordSessionEvidence,
+} from '../../../memory/session-evidence-log'
 import { loopAgentSteps } from '../../../run-agent-step'
 import { getAgentTemplate } from '../../../templates/agent-registry'
 import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
@@ -53,6 +57,7 @@ import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { SessionEvidenceLog } from '../../../memory/session-evidence-log'
 import type { ReceiptOutcome } from '../../../supervision/process-supervisor'
 import type {
   SettledSubagentResult,
@@ -2783,6 +2788,108 @@ export function reconcileAgentReceiptIntoParent(params: {
   })
 }
 
+/**
+ * Folds a settled child's in-process playbook-gate evidence ledger into the
+ * parent's, closing the basher-delegation blind spot: a child (e.g. basher)
+ * that ran a gated command such as `npm run check:ci-local` records the
+ * success on its OWN additive ledger, which otherwise dies with the child
+ * state — so a parent-level rule ("CI ran before spawn") never sees work the
+ * parent delegated. Called at every spawn settle, immediately before
+ * reconcileAgentReceiptIntoParent.
+ *
+ * The ledger is read through the same additive `sessionEvidenceLog` cast
+ * tool-executor.ts uses, reimplemented locally — importing it from
+ * tool-executor would create a cycle (tool-executor imports this module).
+ * Children keep their OWN ledger while they run; only this settle merge
+ * crosses.
+ *
+ * SUPERVISED children close the same gap through the RECEIPT transport: the
+ * subprocess serializes the LAST ≤50 entries of its own ledger into the
+ * receipt's `sessionEvidence` (child-entry.ts buildSupervisedSuccessReceipt)
+ * and mergeSupervisedEvidenceIntoParent folds them into the parent at the
+ * supervised acceptance point — the same never-throw contract as here. This
+ * state-ledger merge still no-ops for a supervised settle by construction
+ * (`result.agentState` is the parent-built state carrying no ledger); both
+ * routes land the child's evidence on the parent's ledger.
+ *
+ * Never throws: settle bookkeeping must never fail the spawn settle chain.
+ * recordSessionEvidence enforces the SESSION_EVIDENCE_LOG_MAX_ENTRIES cap,
+ * and entries are re-recorded as copies so later child-ledger mutation
+ * cannot reach the parent's ledger.
+ */
+export function mergeChildEvidenceIntoParent(params: {
+  parentAgentState: AgentState
+  childAgentState: AgentState
+}): void {
+  try {
+    const childLog = (
+      params.childAgentState as AgentState & {
+        sessionEvidenceLog?: SessionEvidenceLog
+      }
+    ).sessionEvidenceLog
+    if (
+      !childLog ||
+      !Array.isArray(childLog.entries) ||
+      childLog.entries.length === 0
+    ) {
+      return
+    }
+    const parentState = params.parentAgentState as AgentState & {
+      sessionEvidenceLog?: SessionEvidenceLog
+    }
+    parentState.sessionEvidenceLog ??= createSessionEvidenceLog()
+    const parentLog = parentState.sessionEvidenceLog
+    for (const entry of childLog.entries) {
+      recordSessionEvidence(parentLog, { ...entry })
+    }
+  } catch {
+    // Never throws (contract): the evidence merge is best-effort settle
+    // bookkeeping and must never fail the spawn settle chain.
+  }
+}
+
+/**
+ * Folds a SUPERVISED child's receipt-carried evidence snapshot into the
+ * parent's ledger — the receipt-transport leg of the child-gating evidence
+ * merge. A supervised child runs in a subprocess whose in-memory ledger
+ * dies with it, so the child serializes the LAST ≤50 entries of its own
+ * ledger into the receipt's `sessionEvidence` (child-entry.ts
+ * buildSupervisedSuccessReceipt) and this fold lands them on the parent.
+ * Wired at the supervised acceptance point inside runSupervisedSubagent —
+ * immediately after the settled receipt validates, before the result rides
+ * into every downstream settle path (spawn-agents background/foreground,
+ * inline) — so all handlers inherit the folded evidence regardless of
+ * settle site. Entries arrive schema-validated: the fold runs only for a
+ * receipt that passed agentReceiptSchema.safeParse.
+ *
+ * The parent ledger is created lazily through the same additive
+ * `sessionEvidenceLog` cast mergeChildEvidenceIntoParent uses. Never
+ * throws: settle bookkeeping must never fail the spawn settle chain — the
+ * same contract. recordSessionEvidence enforces the
+ * SESSION_EVIDENCE_LOG_MAX_ENTRIES cap, and entries are re-recorded as
+ * copies so later receipt mutation cannot reach the parent's ledger.
+ */
+export function mergeSupervisedEvidenceIntoParent(params: {
+  parentAgentState: AgentState
+  receipt: AgentReceipt
+}): void {
+  try {
+    const sessionEvidence = params.receipt.sessionEvidence ?? []
+    if (sessionEvidence.length === 0) return
+    const parentState = params.parentAgentState as AgentState & {
+      sessionEvidenceLog?: SessionEvidenceLog
+    }
+    parentState.sessionEvidenceLog ??= createSessionEvidenceLog()
+    const parentLog = parentState.sessionEvidenceLog
+    for (const entry of sessionEvidence) {
+      recordSessionEvidence(parentLog, { ...entry })
+    }
+  } catch {
+    // Never throws (contract): the evidence merge is best-effort settle
+    // bookkeeping and must never fail the spawn settle chain.
+  }
+}
+
 const REQUIRED_EDITOR_BRIEF_FIELDS = [
   'Requirements',
   'Target files',
@@ -3125,6 +3232,18 @@ export function createAgentState(
         : parentAgentState.taskMemory
           ? structuredClone(parentAgentState.taskMemory)
           : undefined,
+    // Active procedural playbooks (the playbook gate and the compiled band
+    // both key on agentState.playbookContext) transfer to EVERY child —
+    // deliberately NOT gated on messageHistoryMode like taskMemory above: a
+    // transcript-isolated child (includeMessageHistory: false, e.g.
+    // git-committer) is precisely the case the parent's rules must reach, so
+    // its own run_terminal_command git calls stay gated and its band renders
+    // (the band module has no parentId guard by design). Cloned so a child
+    // cannot mutate the parent's rule rows; playbook rows originate as
+    // parsed store JSON, so they are structuredClone-safe.
+    playbookContext: parentAgentState.playbookContext
+      ? structuredClone(parentAgentState.playbookContext)
+      : undefined,
     workspaceState: parentAgentState.workspaceState
       ? structuredClone(parentAgentState.workspaceState)
       : undefined,
@@ -3375,6 +3494,9 @@ async function runSupervisedSubagent(params: {
       ...(agentState.taskMemory !== undefined
         ? { taskMemory: agentState.taskMemory }
         : {}),
+      ...(agentState.playbookContext !== undefined
+        ? { playbookContext: agentState.playbookContext }
+        : {}),
       ...(agentState.workspaceState !== undefined
         ? { workspaceState: agentState.workspaceState }
         : {}),
@@ -3458,6 +3580,15 @@ async function runSupervisedSubagent(params: {
     }
   }
   const receipt = parsedEnvelope.data
+
+  // Acceptance-point evidence fold: the validated supervised receipt carries
+  // the child's serialized ledger snapshot (`sessionEvidence`), and folding
+  // it HERE — immediately after validation, before the result rides into
+  // every downstream settle path (spawn-agents background/foreground,
+  // inline) — means parent-level rules see work performed in the subprocess
+  // regardless of handler. Never throws, and runs ONLY for a validated
+  // accepted receipt: the crashed/invalid settles returned above.
+  mergeSupervisedEvidenceIntoParent({ parentAgentState, receipt })
 
   const childReportsFailure =
     receipt.status === 'failed' ||

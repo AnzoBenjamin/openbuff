@@ -9,17 +9,21 @@ import type {
 import type { SessionEvidenceLog } from './session-evidence-log'
 
 /**
- * Playbook gate (memory playbook Phase 1).
+ * Playbook gate (memory playbook Phase 1 + Phase 4 comply detection).
  *
  * Deterministically gates a small set of high-consequence tool calls behind a
  * learned procedural rule: when an active playbook's trigger matches the call
  * and a required piece of evidence is missing, the gate produces a `warned`
- * (default) or `blocked` verdict. No model call, no I/O, no prose parsing, and
- * no regex built from playbook-supplied strings — every match is an exact
- * string or argv-token comparison.
+ * (default) or `blocked` verdict; when every required evidence entry is
+ * satisfied it produces an `allowed` verdict carrying the playbook. `allowed`
+ * verdicts feed the comply-detection correlation (blocked(sig) → allowed(sig)
+ * in-session → 'compliedAfterBlock', see ./session-gate-history.ts); they
+ * never surface to the user and never abort dispatch. No model call, no I/O,
+ * no prose parsing, and no regex built from playbook-supplied strings — every
+ * match is an exact string or argv-token comparison.
  */
 export type PlaybookGateVerdict =
-  | { outcome: 'allowed' }
+  | { outcome: 'allowed'; playbook: MemoryPlaybook }
   | { outcome: 'warned' | 'blocked'; playbook: MemoryPlaybook; message: string }
 
 const PLAYBOOK_GATE_ENV_KEY = 'OPENBUFF_PLAYBOOK_GATE'
@@ -201,7 +205,7 @@ const evidenceIsSatisfied = (params: {
  * Agent-facing description of one required-evidence entry, e.g.
  * "a successful run_terminal_command matching *check:ci-local*".
  */
-const describeRequiredEvidence = (params: {
+export const describeRequiredEvidence = (params: {
   evidence: RequiredEvidence
   trigger: PlaybookTrigger
 }): string => {
@@ -213,6 +217,32 @@ const describeRequiredEvidence = (params: {
       : `a successful ${tool}`
   }
   return `a ${evidence.kind} assertion (not yet verifiable by this runtime)`
+}
+
+/**
+ * Agent-facing description of the trigger a playbook applies to, e.g.
+ * "spawn_agents spawning agent git-committer" or "run_terminal_command
+ * git-push". Shared with the compiled active-playbooks band
+ * (./playbook-context.ts) so the band's "Applies to" line describes a rule
+ * in exactly the words the gate's verdict message implies — one normalized
+ * description per rule, never two competing ones.
+ */
+export const describePlaybookTrigger = (playbook: MemoryPlaybook): string => {
+  const { trigger } = playbook
+  if (
+    trigger.tool === 'spawn_agents' ||
+    trigger.tool === 'spawn_agent_inline'
+  ) {
+    return trigger.spawnAgentType
+      ? `${trigger.tool} spawning agent ${trigger.spawnAgentType}`
+      : trigger.tool
+  }
+  if (trigger.tool === 'run_terminal_command') {
+    return trigger.terminalAction
+      ? `${trigger.tool} ${trigger.terminalAction}`
+      : trigger.tool
+  }
+  return trigger.tool
 }
 
 const formatPlaybookVerdictMessage = (params: {
@@ -229,11 +259,15 @@ const formatPlaybookVerdictMessage = (params: {
 }
 
 /**
- * Evaluate every installed playbook against one tool call and return the
- * verdicts that must be surfaced. An empty array means "proceed silently":
- * no playbook applied, or every applicable playbook was satisfied. An
- * `allowed` verdict is never emitted — a satisfied playbook simply contributes
- * nothing — so callers only ever act on `warned`/`blocked` entries.
+ * Evaluate every installed playbook against one tool call. An applicable
+ * playbook whose required evidence is fully satisfied yields an `allowed`
+ * verdict carrying the playbook; missing evidence yields `warned`/`blocked`.
+ * `allowed` verdicts feed the comply-detection correlation (see
+ * ./session-gate-history.ts) — they never surface to the user and never abort
+ * dispatch, so a caller that ignores them behaves exactly as before. An empty
+ * array means "proceed silently": no playbook applied. Inject-only, expired,
+ * and retired playbooks stay entirely skipped — they are invisible to the
+ * gate and never yield any verdict.
  */
 export const evaluatePlaybookGate = (params: {
   toolName: string
@@ -256,6 +290,10 @@ export const evaluatePlaybookGate = (params: {
     if (playbook.expiresAt !== undefined && playbook.expiresAt <= nowMs) {
       continue
     }
+    // An inject-only playbook surfaces NO verdict: the compiled band
+    // (./playbook-context.ts) is its only channel, so the gate stays silent
+    // and dispatch is unaffected in every mode.
+    if (playbook.enforcement === 'inject-only') continue
     if (!playbookTriggerMatches({ playbook, toolName, input })) continue
 
     const missing = playbook.trigger.requireEvidence
@@ -271,7 +309,14 @@ export const evaluatePlaybookGate = (params: {
       .map((evidence) =>
         describeRequiredEvidence({ evidence, trigger: playbook.trigger }),
       )
-    if (missing.length === 0) continue
+    if (missing.length === 0) {
+      // Phase 4 comply detection: a satisfied applicable playbook yields an
+      // `allowed` verdict so the caller can correlate blocked(sig) →
+      // allowed(sig) within one session. The verdict never surfaces to the
+      // user and never aborts dispatch.
+      verdicts.push({ outcome: 'allowed', playbook })
+      continue
+    }
 
     verdicts.push({
       // Downgrade-only: a 'block' enforcement aborts ONLY in 'block' mode.

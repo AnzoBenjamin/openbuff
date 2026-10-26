@@ -25,6 +25,7 @@ import type {
 } from './llm'
 import type { Logger } from './logger'
 import type { CodebuffFileSystem } from '../filesystem'
+import type { PlaybookGateOutcomeEvent } from '../memory-playbook'
 
 /** Deterministic id generation (P2-T1). */
 export interface IdGen {
@@ -171,6 +172,14 @@ export type SupervisedSpawnRequest = {
     systemPrompt?: string
     taskMemory?: unknown
     workspaceState?: unknown
+    /**
+     * Active procedural playbooks for the child's own gate/band; rehydrated
+     * and schema-validated child-side. Additive-optional so requests serialized
+     * before this field existed stay valid. (OPENBUFF_PLAYBOOK_GATE is
+     * deliberately not threaded through the supervised-child env allowlist,
+     * so a supervised child resolves the default warn mode.)
+     */
+    playbookContext?: unknown
     contextTokenCount?: number
     /**
      * The parent-resolved BYOK context window for the child's agent route,
@@ -363,6 +372,21 @@ export type AgentRuntimeDeps = {
   journalWriter?: JournalWriter
   /** Run-journal reader for crash classification + replay short-circuit. */
   journalReader?: JournalReader
+
+  // Procedural memory (playbooks)
+  /**
+   * Playbook-gate verdict producer (memory playbook Phase 4 seam):
+   * fire-and-forget notification so effectiveness counters can be persisted.
+   * Optional + additive: absent means no reporting (exactly today's behavior).
+   * Implementations must never throw and never reject; a failed report must
+   * not affect the gated tool call. The event is the canonical
+   * {@link PlaybookGateOutcomeEvent} (../memory-playbook), the single source
+   * of truth for the gate-outcome union: widening PlaybookGateOutcome reaches
+   * this contract without a hand-edit.
+   */
+  onPlaybookGateOutcome?: (
+    event: PlaybookGateOutcomeEvent,
+  ) => void | Promise<void>
 
   // Process supervision (P2-T8)
   /**

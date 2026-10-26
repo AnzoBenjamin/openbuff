@@ -43,10 +43,16 @@ import { realpathSync } from 'node:fs'
 import { getMCPToolData } from '../mcp'
 import { MCP_TOOL_SEPARATOR } from '../mcp-constants'
 import { evaluatePlaybookGate } from '../memory/playbook-gate'
+import { reportPlaybookGateOutcome } from '../memory/playbook-outcome-reporter'
 import {
   createSessionEvidenceLog,
   recordSessionEvidence,
 } from '../memory/session-evidence-log'
+import {
+  correlateCompliedAfterBlock,
+  recordSessionGateOutcome,
+  sessionGateHistoryFor,
+} from '../memory/session-gate-history'
 import { getAgentShortName, getAgentToolName } from '../templates/prompts'
 import { getEffectiveAgentToolNames } from '../util/agent-tool-names'
 import {
@@ -2814,21 +2820,78 @@ export async function executeToolCall<T extends ToolName>(
       for (const [key, value] of Object.entries(params.clientEnv)) {
         if (typeof value === 'string') playbookGateEnv[key] = value
       }
+      // One clock read shared by the gate evaluation and the verdict history
+      // below, so every recorded verdict is stamped with exactly the time the
+      // gate evaluated it.
+      const gateNowMs = (params.clock ?? realClock).now()
       const verdicts = evaluatePlaybookGate({
         toolName,
         input: effectiveInput,
         playbooks: playbookContext,
         evidenceLog: sessionEvidenceLogFor(agentState),
-        nowMs: (params.clock ?? realClock).now(),
+        nowMs: gateNowMs,
         env: playbookGateEnv,
       })
+      const gateHistory = sessionGateHistoryFor(agentState)
       let playbookBlocked = false
       for (const verdict of verdicts) {
-        if (verdict.outcome === 'allowed') continue
+        // Phase 4 comply detection: every verdict the gate produced lands in
+        // the per-agent-state gate history FIRST, so a later satisfied call
+        // can correlate blocked(sig) → allowed(sig) within the session.
+        recordSessionGateOutcome(gateHistory, {
+          playbookId: verdict.playbook.playbookId,
+          triggerSignature: verdict.playbook.triggerSignature,
+          outcome: verdict.outcome,
+          atMs: gateNowMs,
+        })
+        if (verdict.outcome === 'allowed') {
+          // An `allowed` verdict is behavior-invisible: no error chunk, no
+          // dispatch change, and NO store report for the allowed outcome
+          // itself (the outcome mapping's counter effect is '—'). Its only
+          // effects are the history entry above and, when this same trigger
+          // signature was BLOCKED earlier in the session, exactly ONE
+          // 'compliedAfterBlock' report through the same isolation seam —
+          // never for a heeded warn.
+          if (
+            correlateCompliedAfterBlock(gateHistory, {
+              triggerSignature: verdict.playbook.triggerSignature,
+            })
+          ) {
+            reportPlaybookGateOutcome({
+              deps: {
+                onPlaybookGateOutcome: params.onPlaybookGateOutcome,
+                logger,
+              },
+              event: {
+                playbookId: verdict.playbook.playbookId,
+                triggerSignature: verdict.playbook.triggerSignature,
+                outcome: 'compliedAfterBlock',
+              },
+            })
+          }
+          continue
+        }
         onResponseChunk({
           type: 'error',
           message: verdict.message,
           autoRecovering: true,
+        })
+        // Producer outcome report (Phase 4 counter seam): fires for every
+        // warned/blocked verdict, immediately after its error chunk and inside
+        // the SAME loop iteration — never after the abort return below. The
+        // reporter isolates the emission, so a throwing or rejecting producer
+        // can never reach this block's fail-open catch and let a BLOCKED call
+        // proceed. Additive-optional: an absent dep reports nothing.
+        reportPlaybookGateOutcome({
+          deps: {
+            onPlaybookGateOutcome: params.onPlaybookGateOutcome,
+            logger,
+          },
+          event: {
+            playbookId: verdict.playbook.playbookId,
+            triggerSignature: verdict.playbook.triggerSignature,
+            outcome: verdict.outcome,
+          },
         })
         // A 'warned' verdict is advisory only: it must never abort dispatch.
         if (verdict.outcome === 'blocked') playbookBlocked = true

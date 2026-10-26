@@ -129,12 +129,15 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import { getCiEnv } from '@codebuff/common/env-ci'
 import { clientProcessEnv } from '@codebuff/common/env-schema'
+import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 import { getInitialAgentState } from '@codebuff/common/types/session-state'
+import type { AgentState } from '@codebuff/common/types/session-state'
 import { taskMemoryV1Schema } from '@codebuff/common/types/task-memory'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { readFileSync } from 'node:fs'
 
 import { createBridgeStderrLogger } from './bridge-protocol'
+import type { SessionEvidenceLog } from '../memory/session-evidence-log'
 import type { SupervisedSpawnRequest } from './process-supervisor'
 import type { ChildBridgeClient } from './child-bridge-client'
 
@@ -367,6 +370,26 @@ export function buildChildAgentState(request: SupervisedSpawnRequest) {
       logStateFieldDropped('taskMemory', `failed schema validation: ${parsed.error.message}`)
     }
   }
+  if (child.playbookContext !== undefined) {
+    // Same dropped-field contract as taskMemory above, per-entry: the wire is
+    // JSON, so validate each playbook through the canonical schema and keep
+    // only the survivors (possibly fewer than sent). The band compiler and
+    // the gate both revalidate anyway, so a partial drop is safe; a non-array
+    // value or zero survivors leaves the fresh default (undefined) in place.
+    if (Array.isArray(child.playbookContext)) {
+      const validPlaybooks = child.playbookContext.flatMap((entry) => {
+        const parsed = MemoryPlaybookSchema.safeParse(entry)
+        return parsed.success ? [parsed.data] : []
+      })
+      if (validPlaybooks.length > 0) {
+        state.playbookContext = validPlaybooks
+      } else {
+        logStateFieldDropped('playbookContext', 'no entry passed MemoryPlaybookSchema validation')
+      }
+    } else {
+      logStateFieldDropped('playbookContext', 'not an array of memory playbooks')
+    }
+  }
   if (child.workspaceState !== undefined) {
     if (isRehydratableWorkspaceState(child.workspaceState)) {
       state.workspaceState = child.workspaceState as typeof state.workspaceState
@@ -493,6 +516,88 @@ function buildFailedChildReceipt(params: {
       partial: true,
     },
   })
+}
+
+/**
+ * Bound on the `sessionEvidence` snapshot a supervised child's receipt
+ * carries. Must stay in lockstep with agentReceiptSchema's `sessionEvidence`
+ * `.max(50)` bound (common/src/types/agent-handoff.ts).
+ */
+export const SESSION_EVIDENCE_RECEIPT_MAX_ENTRIES = 50
+
+/**
+ * Serializes a child agent state's additive evidence ledger (see
+ * ../memory/session-evidence-log.ts) into the bounded `sessionEvidence`
+ * snapshot the supervised receipt carries to the parent. A supervised
+ * child's ledger is subprocess-local and dies with the process, so the
+ * receipt is the only transport that can land its gate evidence on the
+ * parent's ledger (folded back out parent-side at the supervised acceptance
+ * point — spawn-agent-utils.ts mergeSupervisedEvidenceIntoParent).
+ *
+ * The ledger is read through the same additive `sessionEvidenceLog` cast
+ * tool-executor.ts uses (the member is additive on AgentState; importing it
+ * from tool-executor would create a cycle). Bounded to the LAST
+ * SESSION_EVIDENCE_RECEIPT_MAX_ENTRIES entries, oldest→newest order
+ * preserved — the tail a parent's freshness-bound rules care about.
+ * Returns undefined when the ledger is absent or empty (the field is omitted
+ * so receipts stay lean), and on any read failure: a serialization bug must
+ * never break the exactly-one-envelope process contract.
+ */
+export function serializeSessionEvidenceForReceipt(
+  agentState: unknown,
+): AgentReceipt['sessionEvidence'] {
+  try {
+    const log = (
+      agentState as AgentState & { sessionEvidenceLog?: SessionEvidenceLog }
+    ).sessionEvidenceLog
+    if (
+      !log ||
+      !Array.isArray(log.entries) ||
+      log.entries.length === 0
+    ) {
+      return undefined
+    }
+    return log.entries
+      .slice(-SESSION_EVIDENCE_RECEIPT_MAX_ENTRIES)
+      .map((entry) => ({ ...entry }))
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Builds the supervised child's SUCCESS receipt: the same in-process receipt
+ * derivation (buildRuntimeAgentReceipt — runtime-derived status, outcome,
+ * evidence and review core), with the child's own evidence-ledger snapshot
+ * attached as `sessionEvidence` (see
+ * {@link serializeSessionEvidenceForReceipt}) when the ledger holds entries.
+ * Exported so the supervised evidence transport is directly testable.
+ */
+export function buildSupervisedSuccessReceipt(params: {
+  agentType: string
+  agentId: string
+  output: unknown
+  agentState?: unknown
+  buildRuntimeAgentReceipt: (buildParams: {
+    agentType: string
+    agentId: string
+    output: unknown
+    agentState?: unknown
+    error?: unknown
+  }) => AgentReceipt
+}): AgentReceipt {
+  const receipt = params.buildRuntimeAgentReceipt({
+    agentType: params.agentType,
+    agentId: params.agentId,
+    output: params.output,
+    agentState: params.agentState,
+  })
+  const sessionEvidence = serializeSessionEvidenceForReceipt(
+    params.agentState,
+  )
+  return sessionEvidence === undefined
+    ? receipt
+    : { ...receipt, sessionEvidence }
 }
 
 /**
@@ -868,12 +973,18 @@ export async function runSupervisedChildEntry(
       )
     }
 
-    // Mirror the in-process settle chain's receipt derivation exactly.
-    return buildRuntimeAgentReceiptFn({
+    // Mirror the in-process settle chain's receipt derivation exactly, then
+    // carry the child's own evidence-ledger snapshot through the receipt (see
+    // buildSupervisedSuccessReceipt): the subprocess-local ledger dies with
+    // this process. Crash receipts carry no evidence by construction —
+    // buildFailedChildReceipt runs where the thrown loop's agentState is
+    // unreachable.
+    return buildSupervisedSuccessReceipt({
       agentType: request.agentType,
       agentId,
       output: loopResult.output,
       agentState: loopResult.agentState,
+      buildRuntimeAgentReceipt: buildRuntimeAgentReceiptFn,
     })
   } catch (error) {
     return buildFailedChildReceipt({

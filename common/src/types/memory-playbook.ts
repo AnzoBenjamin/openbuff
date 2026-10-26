@@ -98,6 +98,26 @@ export type PlaybookTriggerOutcome =
   | 'bypassed'
 
 /**
+ * One deterministic playbook-gate outcome, reported so effectiveness counters
+ * can accumulate. Fired by the runtime gate seam and consumed by the store's
+ * counter fold; 'warned' is the default-mode outcome and bumps only
+ * fired/lastFiredAt.
+ */
+export type PlaybookGateOutcome =
+  | 'blocked'
+  | 'warned'
+  | 'bypassed'
+  | 'compliedAfterBlock'
+  | 'falsePositive'
+
+/** One gate-outcome event: which playbook fired and how the gate resolved. */
+export type PlaybookGateOutcomeEvent = {
+  playbookId: string
+  triggerSignature: string
+  outcome: PlaybookGateOutcome
+}
+
+/**
  * Recursively sorts object keys and drops `undefined` members so
  * JSON.stringify produces a byte-stable canonical form regardless of the key
  * order the caller happened to use.

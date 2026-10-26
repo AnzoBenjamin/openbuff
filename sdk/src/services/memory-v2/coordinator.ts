@@ -4,7 +4,6 @@ import { deriveClaimId } from '@codebuff/common/util/claim-identity'
 import { STABLE_CHUNK_ID_RE } from '@codebuff/common/util/contradiction-detector'
 import { classifyMemoryArtifactPath } from '@codebuff/common/util/memory-artifact-policy'
 
-import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
 import {
   MemoryAppendOutcomeSchema,
   MemoryAppendRequestSchema,
@@ -1329,29 +1328,6 @@ export class MemoryV2Coordinator {
     mcp?: boolean
   }): Promise<void> {
     return this.bestEffort(() => this.captureToolObservation(params))
-  }
-
-  /**
-   * Persist one playbook-gate outcome for the effectiveness counters that
-   * drive promotion/retirement (Phase 1: counters only). Best-effort by
-   * construction — a failed counter bump must never fail the tool call that
-   * the gate already decided. The event-journal leg (`playbook.blocked` /
-   * `playbook.bypassed`) is deferred to Phase 3 with the other append-only
-   * hygiene work so this stays a single bounded UPDATE on the hot path.
-   */
-  async recordPlaybookGateOutcome(params: {
-    playbookId: string
-    triggerSignature: string
-    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive'
-  }): Promise<void> {
-    return this.bestEffort(async () => {
-      const repository = this.config.repository
-      if (!repository?.recordPlaybookGateOutcome) return
-      await repository.recordPlaybookGateOutcome(
-        params.playbookId,
-        params.outcome,
-      )
-    })
   }
 
   async verifyCapturedPaths(params: {

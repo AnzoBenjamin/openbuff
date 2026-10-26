@@ -18,7 +18,12 @@ import {
   type MemoryVerifyRequest,
 } from '@codebuff/common/types/memory-v2'
 import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
-import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
+import type {
+  MemoryPlaybook,
+  PlaybookGateOutcome,
+  PlaybookStatus,
+} from '@codebuff/common/types/memory-playbook'
+import type { PlaybookUpsertInput } from '@codebuff/common/types/contracts/playbook-store'
 
 export type { MemoryAuthorityMode }
 
@@ -240,8 +245,22 @@ export interface MemoryRepositoryV2 {
   ensureSeedPlaybooks?(workspaceId: string): Promise<void>
   recordPlaybookGateOutcome?(
     playbookId: string,
-    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive',
+    outcome: PlaybookGateOutcome,
   ): Promise<void>
+  /**
+   * Optional operator lifecycle surface (Phase 4). Absent on fakes and on
+   * backends without playbook support; callers must narrow before use (see
+   * getStoreStats). `listAllPlaybooks` returns every playbook row for a
+   * workspace regardless of status/expiry — the lifecycle evaluator's input
+   * — while `setPlaybookStatus` and `upsertPlaybookByTriggerSignature`
+   * apply the evaluator's proposed transitions (promote flips enforcement
+   * inject-only → warn only; verified → block stays operator-manual).
+   */
+  listAllPlaybooks?(workspaceId: string): Promise<MemoryPlaybook[]>
+  setPlaybookStatus?(playbookId: string, status: PlaybookStatus): Promise<void>
+  upsertPlaybookByTriggerSignature?(
+    input: PlaybookUpsertInput,
+  ): Promise<MemoryPlaybook>
   /** Optional privileged GC surface. Absent on fakes; fail-closed when missing. */
   getStoreStats?(request: { projectId: ProjectId }): Promise<MemoryStoreStats>
   selectGCandidates?(request: {

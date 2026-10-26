@@ -25,6 +25,7 @@ import {
   validateVersionedAgentHandoff,
   buildRuntimeAgentReceipt,
   reconcileAgentReceiptIntoParent,
+  mergeChildEvidenceIntoParent,
   createCombinedAbortSignal,
 } from './spawn-agent-utils'
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
@@ -679,6 +680,15 @@ export const handleSpawnAgents = (async (
                   output: result.output,
                   agentState: result.agentState,
                 })
+              // Fold the child's in-process playbook-gate evidence into the
+              // parent's ledger before reconciling, so delegated work (e.g.
+              // CI run inside basher) satisfies the parent's rules. No-op for
+              // a supervised settle: result.agentState is the parent-built
+              // state carrying no ledger.
+              mergeChildEvidenceIntoParent({
+                parentAgentState,
+                childAgentState: result.agentState,
+              })
               reconcileAgentReceiptIntoParent({
                 parentAgentState,
                 receipt,
@@ -770,6 +780,13 @@ export const handleSpawnAgents = (async (
                 // status 'failed', so the cancelled case requests 'cancelled'
                 // with no error and carries the reason on the intent instead.
                 error: cancelled ? undefined : error,
+              })
+              // Same evidence fold on the failure path: an in-process child
+              // may have recorded gate evidence before it rejected, and the
+              // pre-allocated subAgentState is the object it recorded onto.
+              mergeChildEvidenceIntoParent({
+                parentAgentState,
+                childAgentState: subAgentState,
               })
               reconcileAgentReceiptIntoParent({
                 parentAgentState,
@@ -999,6 +1016,14 @@ export const handleSpawnAgents = (async (
               output,
               agentState,
             })
+          // Fold the child's in-process playbook-gate evidence into the
+          // parent's ledger before reconciling, so delegated work (e.g. CI
+          // run inside basher) satisfies the parent's rules. No-op for a
+          // supervised settle: agentState is the parent-built state.
+          mergeChildEvidenceIntoParent({
+            parentAgentState,
+            childAgentState: agentState,
+          })
           reconcileAgentReceiptIntoParent({
             parentAgentState,
             receipt,
@@ -1032,6 +1057,12 @@ export const handleSpawnAgents = (async (
             agentState: validated.subAgentState,
             status: 'failed',
             error: result.reason,
+          })
+          // Same best-effort evidence fold as the fulfilled branch: an
+          // in-process child may have recorded gate evidence before it threw.
+          mergeChildEvidenceIntoParent({
+            parentAgentState,
+            childAgentState: validated.subAgentState,
           })
           reconcileAgentReceiptIntoParent({
             parentAgentState,

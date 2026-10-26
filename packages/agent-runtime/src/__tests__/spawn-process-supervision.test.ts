@@ -15,10 +15,16 @@
  * for the flag-off parity probe; the seam is injected directly through the
  * context params (no module mock needed — extractSubagentContextParams
  * forwards it).
+ *
+ *  - Supervised evidence transport: a receipt carrying `sessionEvidence`
+ *    (the child's bounded ledger snapshot) folds its entries into the
+ *    parent's ledger at the acceptance point, so parent-level rules see
+ *    work performed in the subprocess.
  */
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 
 import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 import { writeFileSync } from 'node:fs'
@@ -30,6 +36,7 @@ import {
   executeSubagent,
   extractSubagentContextParams,
 } from '../tools/handlers/tool/spawn-agent-utils'
+import { handleSpawnAgents } from '../tools/handlers/tool/spawn-agents'
 import { mockFileContext } from './test-utils'
 
 import type { SettledSubagentResult } from '@codebuff/common/types/contracts/agent-runtime'
@@ -37,6 +44,11 @@ import type { SupervisedSpawnRequest } from '@codebuff/common/types/contracts/ag
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
+import type {
+  SessionEvidenceEntry,
+  SessionEvidenceLog,
+} from '../memory/session-evidence-log'
 
 // Fixture envelope semantics mirror supervision/__fixtures__/settle-child.ts:
 // the required fields of agentReceiptSchema, nothing else.
@@ -124,6 +136,51 @@ function makeTemplate(id: string, spawnableAgents: string[] = []): AgentTemplate
   }
 }
 
+/**
+ * Schema-valid playbook fixture (shape copied from
+ * memory/__tests__/playbook-gate.test.ts's makePlaybook/seededCommitterPlaybook
+ * helpers) — the rules a parent threads into a supervised child slice.
+ */
+const makePlaybook = (playbookId = 'pb-1'): MemoryPlaybook =>
+  MemoryPlaybookSchema.parse({
+    schemaVersion: 1,
+    playbookId,
+    workspaceId: 'ws-1',
+    title: 'Run local CI before spawning the git committer',
+    instruction: 'Run `npm run check:ci-local` and fix failures.',
+    trigger: {
+      tool: 'spawn_agents',
+      spawnAgentType: 'git-committer',
+      requireEvidence: [
+        {
+          kind: 'toolSucceeded',
+          tool: 'run_terminal_command',
+          commandPattern: '*check:ci-local*',
+          withinMs: 30 * 60 * 1_000,
+        },
+      ],
+    },
+    scope: { repos: [] },
+    status: 'active',
+    enforcement: 'block',
+    counters: {
+      fired: 0,
+      blocked: 0,
+      compliedAfterBlock: 0,
+      falsePositives: 0,
+      bypassed: 0,
+    },
+    provenance: {
+      origin: 'derived',
+      recordedBy: 'test',
+      sourceEventIds: [],
+      metadata: {},
+    },
+    triggerSignature: `sig-${playbookId}`,
+    createdAt: 1,
+    updatedAt: 2,
+  })
+
 const parentState = {
   agentId: 'sup-parent-1',
   agentType: 'parent',
@@ -160,6 +217,19 @@ function buildExecuteParams(overrides: Record<string, unknown> = {}) {
     fileContext: mockFileContext,
     ...overrides,
   } as never
+}
+
+/**
+ * The session evidence ledger is an additive AgentState field (see the
+ * intersection casts inside spawn-agent-utils.ts), so the parent ledger is
+ * read through the same additive cast here (mirrors
+ * spawn-agents-message-history.test.ts).
+ */
+function parentSessionEvidenceEntries(state: AgentState): SessionEvidenceEntry[] {
+  return (
+    (state as AgentState & { sessionEvidenceLog?: SessionEvidenceLog })
+      .sessionEvidenceLog?.entries ?? []
+  )
 }
 
 describe('processSupervision flag routing (P2-T8)', () => {
@@ -255,6 +325,66 @@ describe('processSupervision flag routing (P2-T8)', () => {
     })
   })
 
+  it('flag on: a supervised receipt carrying sessionEvidence folds its entries into the parent ledger on settle', async () => {
+    loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      },
+    )
+    // The supervised child's subprocess-local ledger dies with it; the
+    // receipt's sessionEvidence snapshot is the only transport for the gate
+    // evidence its tools recorded. Two entries mirror what the child-side
+    // serializer emits for two successful run_terminal_command calls.
+    const sessionEvidence: AgentReceipt['sessionEvidence'] = [
+      {
+        toolName: 'run_terminal_command',
+        commandText: 'bun run check:ci-local',
+        atMs: 1_735_689_600_000,
+      },
+      {
+        toolName: 'run_terminal_command',
+        commandText: 'git status --short',
+        atMs: 1_735_689_700_000,
+      },
+    ]
+    const parent = getInitialSessionState(mockFileContext).mainAgentState
+    await handleSpawnAgents({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fingerprintId: 'test-fingerprint',
+      fileContext: mockFileContext,
+      repoId: undefined,
+      repoUrl: undefined,
+      previousToolCallFinished: Promise.resolve(),
+      sendSubagentChunk: () => {},
+      signal: new AbortController().signal,
+      system: 'Test system prompt',
+      tools: {},
+      userId: TEST_USER_ID,
+      userInputId: 'test-input',
+      writeToClient: () => {},
+      processSupervision: true,
+      spawnSupervised: async () =>
+        settledOk({ ...OK_RECEIPT, sessionEvidence }),
+      agentState: parent,
+      agentTemplate: makeTemplate('parent', ['thinker']),
+      localAgentTemplates: { thinker: makeTemplate('thinker') },
+      toolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'sup-evidence-fold-1',
+        input: { agents: [{ agent_type: 'thinker', prompt: 'Probe' }] },
+      },
+    } as never)
+    expect(loopSpy).not.toHaveBeenCalled()
+    // The acceptance-point fold (runSupervisedSubagent, immediately after
+    // the receipt validates) landed the subprocess evidence on the parent's
+    // ledger in order — the state-ledger settle merge alone would no-op here
+    // (the parent-built child state carries no ledger), so deleting the
+    // fold drops both entries and this case fails.
+    expect(parentSessionEvidenceEntries(parent)).toEqual(sessionEvidence)
+  })
+
   it('flag on: the supervised request carries the parent-resolved context window into the child slice', async () => {
     loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
       async () => {
@@ -279,6 +409,63 @@ describe('processSupervision flag routing (P2-T8)', () => {
     // The stamped window must be JSON-native: it has to survive the temp-file
     // transport round trip intact (see runSupervisedSubagent's child slice).
     expect(() => JSON.stringify(seenRequests[0])).not.toThrow()
+  })
+
+  it('flag on: the supervised request threads the child playbook rules into the child slice', async () => {
+    loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      },
+    )
+    const seenRequests: SupervisedSpawnRequest[] = []
+    const playbooks = [makePlaybook('pb-1'), makePlaybook('pb-2')]
+    await executeSubagent(
+      buildExecuteParams({
+        processSupervision: true,
+        agentState: {
+          ...childState,
+          playbookContext: playbooks,
+        },
+        spawnSupervised: async (request: SupervisedSpawnRequest) => {
+          seenRequests.push(request)
+          // A crashed settle keeps this test focused on the request shape
+          // instead of the full ok-receipt settle chain.
+          return settledCrash('settle outcome not asserted here')
+        },
+      }),
+    )
+    expect(seenRequests).toHaveLength(1)
+    // The parent's active playbook rules ride the child slice so the child's
+    // own gate/band see them after rehydration.
+    expect(seenRequests[0].child?.playbookContext).toEqual(playbooks)
+    // The rules must be JSON-native: they have to survive the temp-file
+    // transport round trip intact (see runSupervisedSubagent's child slice).
+    expect(() => JSON.stringify(seenRequests[0])).not.toThrow()
+  })
+
+  it('flag on: without playbook rules the child slice omits the playbookContext key entirely', async () => {
+    loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      },
+    )
+    const seenRequests: SupervisedSpawnRequest[] = []
+    await executeSubagent(
+      buildExecuteParams({
+        processSupervision: true,
+        spawnSupervised: async (request: SupervisedSpawnRequest) => {
+          seenRequests.push(request)
+          return settledCrash('settle outcome not asserted here')
+        },
+      }),
+    )
+    expect(seenRequests).toHaveLength(1)
+    // Additive contract: a request from a parent without playbook rules stays
+    // byte-identical to the pre-playbook shape — the key is absent from the
+    // child slice, not present-with-undefined.
+    expect(
+      Object.hasOwn(seenRequests[0].child ?? {}, 'playbookContext'),
+    ).toBe(false)
   })
 
   it('flag on: crashed settle maps to the crash-envelope output with the stderr tail folded in', async () => {

@@ -152,6 +152,7 @@ import type {
   TextPart,
   ToolResultOutput,
 } from '@codebuff/common/types/messages/content-part'
+import type { PlaybookGateOutcomeEvent } from '@codebuff/common/types/memory-playbook'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { SessionState } from '@codebuff/common/types/session-state'
 import type { JobOwner } from '@codebuff/common/util/job-registry'
@@ -1303,12 +1304,23 @@ async function runOnce({
   const resumeDriver = journalReader
     ? createRunResumeDriver({ journalWriter, journalReader, logger })
     : undefined
+  // Memory-overhaul P4 build-order item 2: wire the playbook-gate outcome
+  // producer against this run's Memory V2 repository, so gate verdicts reach
+  // the persisted effectiveness counters in production runs. The helper
+  // returns undefined — and the deps below then carry NO key at all — when
+  // no repository is configured or the store lacks the optional counter-fold
+  // member, so such a run stays byte-identical to an unwired one.
+  const onPlaybookGateOutcome = buildPlaybookGateOutcomeReporter(
+    memoryV2?.repository,
+    logger,
+  )
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
     apiKey,
     journalWriter,
     journalReader,
     ...(resumeDriver ? { resumeDriver } : {}),
+    ...(onPlaybookGateOutcome ? { onPlaybookGateOutcome } : {}),
     handleStepsLogChunk: () => {
       // Does nothing for now
     },
@@ -1828,6 +1840,51 @@ async function runOnce({
     logger,
   })
   return terminalState
+}
+
+/**
+ * Memory-overhaul P4 build-order item 2: builds the playbook-gate outcome
+ * reporter wired into this run's agent-runtime deps, so gate verdicts reach
+ * the persisted effectiveness counters in production runs (design record
+ * .agents/sessions/memory-overhaul-2026-10/design-phase2-4-rederived.md
+ * §P4 build order).
+ *
+ * PURE helper, exported for tests (the applyListJobsDigestGate precedent):
+ * it references only the `repository` PARAMETER and the supplied `logger`,
+ * never runOnce closure state. Returns `undefined` when no Memory V2
+ * repository is configured or the repository lacks the optional
+ * `recordPlaybookGateOutcome` member (fakes and backends without playbook
+ * support), in which case the runtime deps carry no `onPlaybookGateOutcome`
+ * key at all and the run stays byte-identical to an unwired one.
+ *
+ * The returned closure forwards the STORE signature —
+ * `recordPlaybookGateOutcome(event.playbookId, event.outcome)` — never the
+ * whole event (`triggerSignature` is not a store parameter), and satisfies
+ * the AgentRuntimeDeps contract: it NEVER throws and NEVER rejects. A
+ * synchronous store throw is caught and a rejected store promise gets a
+ * `.catch()`; both log at debug and no-op. That is the deliberate
+ * wiring-site decision: a failed report must not affect the gated tool call,
+ * including a store throw like 'The playbook was not found.' (mid-session
+ * retirement). The store member is bound to the repository once here so the
+ * receiver survives the detached call (it may be a class method).
+ */
+export function buildPlaybookGateOutcomeReporter(
+  repository: MemoryV2ClientConfig['repository'] | undefined,
+  logger?: Logger,
+): ((event: PlaybookGateOutcomeEvent) => void) | undefined {
+  if (!repository?.recordPlaybookGateOutcome) {
+    return undefined
+  }
+  const record = repository.recordPlaybookGateOutcome.bind(repository)
+  const logFailure = (error: unknown) =>
+    logger?.debug?.({ error }, 'Failed to record playbook gate outcome')
+  return (event) => {
+    try {
+      record(event.playbookId, event.outcome).catch(logFailure)
+    } catch (error) {
+      logFailure(error)
+    }
+  }
 }
 
 /**

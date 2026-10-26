@@ -81,10 +81,15 @@ import {
   computeTriggerSignature,
   type MemoryPlaybook,
   type PlaybookEnforcement,
+  type PlaybookGateOutcome,
   type PlaybookScope,
   type PlaybookStatus,
   type PlaybookTrigger,
 } from '../../../../common/src/types/memory-playbook'
+import type {
+  PlaybookStoreContract,
+  PlaybookUpsertInput,
+} from '../../../../common/src/types/contracts/playbook-store'
 
 export type RuntimeNeutralMemoryRepositoryV2 = MemoryRepositoryV2
 export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
@@ -524,7 +529,9 @@ export class MemoryV2StorageError extends Error {
   }
 }
 
-export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
+export class BunSQLiteMemoryRepository
+  implements MemoryRepositoryV2, PlaybookStoreContract
+{
   readonly databasePath: string
   private closed = false
 
@@ -1604,6 +1611,32 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
   }
 
   /**
+   * Every playbook row for one workspace regardless of status/expiry — the
+   * Phase-4 lifecycle evaluator's input, where the gate-facing read above
+   * filters retired and expired rows out. Same revalidation as listPlaybooks:
+   * every row is rebuilt through MemoryPlaybookSchema, so a corrupt row
+   * throws instead of coercing into a partially-populated rule.
+   */
+  async listAllPlaybooks(workspaceId: string): Promise<MemoryPlaybook[]> {
+    const unavailable = this.requireOpen()
+    if (unavailable) throw new MemoryV2StorageError(unavailable.error)
+    try {
+      const rows = this.database
+        .query(
+          `SELECT ${PLAYBOOK_SELECT_COLUMNS}
+             FROM memory_playbooks
+            WHERE workspace_id = ?1
+            ORDER BY created_at, playbook_id`,
+        )
+        .all(workspaceId) as PlaybookRow[]
+      return rows.map((row) => playbookFromRow(row))
+    } catch (error) {
+      if (error instanceof MemoryV2StorageError) throw error
+      throw new MemoryV2StorageError(classifyStorageError(error))
+    }
+  }
+
+  /**
    * Insert-or-update a playbook keyed by computeTriggerSignature(trigger,
    * scope): two playbooks with the same signature are the same rule, so an
    * existing row keeps its playbookId, createdAt and counters while its
@@ -1611,18 +1644,9 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
    * assembled record is validated with MemoryPlaybookSchema BEFORE the write,
    * so a non-evaluable or schema-invalid payload never reaches the store.
    */
-  async upsertPlaybookByTriggerSignature(input: {
-    workspaceId: string
-    taskId?: string
-    title: string
-    instruction: string
-    trigger: PlaybookTrigger
-    scope: PlaybookScope
-    status: PlaybookStatus
-    enforcement: PlaybookEnforcement
-    provenance: MemoryProvenance
-    expiresAt?: number
-  }): Promise<MemoryPlaybook> {
+  async upsertPlaybookByTriggerSignature(
+    input: PlaybookUpsertInput,
+  ): Promise<MemoryPlaybook> {
     const unavailable = this.requireOpen()
     if (unavailable) throw new MemoryV2StorageError(unavailable.error)
     try {
@@ -1724,12 +1748,13 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
 
   /**
    * Fold one gate outcome into a playbook's counters: every outcome bumps
-   * `fired`, the matching counter, and lastFiredAt (a false positive also
-   * stamps lastFalsePositiveAt).
+   * `fired` and lastFiredAt, the matching specific counter when one applies
+   * ('warned' has none), and a false positive also stamps
+   * lastFalsePositiveAt.
    */
   async recordPlaybookGateOutcome(
     playbookId: string,
-    outcome: 'blocked' | 'bypassed' | 'compliedAfterBlock' | 'falsePositive',
+    outcome: PlaybookGateOutcome,
   ): Promise<void> {
     const unavailable = this.requireOpen()
     if (unavailable) throw new MemoryV2StorageError(unavailable.error)
@@ -1803,55 +1828,44 @@ export class BunSQLiteMemoryRepository implements MemoryRepositoryV2 {
    *
    * Deliberately NOT part of migrate(): the table is keyed by workspaceId,
    * which is unknown at migration time, so the caller seeds its own
-   * workspace. No-ops once a playbook with the seed's trigger signature
-   * exists for that workspace, so repeated calls never duplicate the rule.
+   * workspace. Each seed is checked independently and skipped when a
+   * playbook with that seed's trigger signature already exists for the
+   * workspace, so repeated calls never duplicate a rule and existing rows
+   * are never refreshed — a workspace that already carries an earlier seed
+   * gains only the newer ones.
    */
   async ensureSeedPlaybooks(workspaceId: string): Promise<void> {
     const unavailable = this.requireOpen()
     if (unavailable) throw new MemoryV2StorageError(unavailable.error)
-    const trigger: PlaybookTrigger = {
-      tool: 'spawn_agents',
-      spawnAgentType: 'git-committer',
-      requireEvidence: [
-        {
-          kind: 'toolSucceeded',
-          tool: 'run_terminal_command',
-          commandPattern: '*check:ci-local*',
-          withinMs: 14_400_000,
-        },
-      ],
+    for (const seed of SEED_PLAYBOOKS) {
+      const triggerSignature = computeTriggerSignature(
+        seed.trigger,
+        seed.scope,
+      )
+      try {
+        const existing = this.database
+          .query(
+            `SELECT 1 AS present FROM memory_playbooks
+              WHERE workspace_id = ?1 AND trigger_signature = ?2
+              LIMIT 1`,
+          )
+          .get(workspaceId, triggerSignature) as { present: number } | null
+        if (existing) continue
+      } catch (error) {
+        if (error instanceof MemoryV2StorageError) throw error
+        throw new MemoryV2StorageError(classifyStorageError(error))
+      }
+      await this.upsertPlaybookByTriggerSignature({
+        workspaceId,
+        title: seed.title,
+        instruction: seed.instruction,
+        trigger: seed.trigger,
+        scope: seed.scope,
+        status: seed.status,
+        enforcement: seed.enforcement,
+        provenance: seed.provenance,
+      })
     }
-    const scope: PlaybookScope = { repos: [] }
-    const triggerSignature = computeTriggerSignature(trigger, scope)
-    try {
-      const existing = this.database
-        .query(
-          `SELECT 1 AS present FROM memory_playbooks
-            WHERE workspace_id = ?1 AND trigger_signature = ?2
-            LIMIT 1`,
-        )
-        .get(workspaceId, triggerSignature) as { present: number } | null
-      if (existing) return
-    } catch (error) {
-      if (error instanceof MemoryV2StorageError) throw error
-      throw new MemoryV2StorageError(classifyStorageError(error))
-    }
-    await this.upsertPlaybookByTriggerSignature({
-      workspaceId,
-      title: 'Run the repo CI check before committing',
-      instruction:
-        'Run the repository CI check (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) successfully in this session before spawning git-committer to commit or push.',
-      trigger,
-      scope,
-      status: 'active',
-      enforcement: 'warn',
-      provenance: {
-        origin: 'migration',
-        recordedBy: 'bun-sqlite-memory-v2',
-        sourceEventIds: [],
-        metadata: {},
-      },
-    })
   }
 
   private readPlaybookRow(
@@ -3398,6 +3412,80 @@ const MEMORY_PLAYBOOKS_DDL = `
   CREATE UNIQUE INDEX IF NOT EXISTS memory_playbooks_workspace_signature
     ON memory_playbooks(workspace_id, trigger_signature);
 `
+
+/**
+ * Built-in seed playbooks installed per workspace by
+ * {@link BunSQLiteMemoryRepository.ensureSeedPlaybooks}. Each seed is keyed
+ * by its computeTriggerSignature(trigger, scope); the per-seed existence
+ * check in that method skips a seed already present for the workspace, so
+ * existing rows are never refreshed — a workspace that already carries the
+ * CI-before-commit seed gains only the CI-before-push seed.
+ */
+const SEED_PLAYBOOKS: ReadonlyArray<{
+  trigger: PlaybookTrigger
+  scope: PlaybookScope
+  title: string
+  instruction: string
+  status: PlaybookStatus
+  enforcement: PlaybookEnforcement
+  provenance: MemoryProvenance
+}> = [
+  {
+    trigger: {
+      tool: 'spawn_agents',
+      spawnAgentType: 'git-committer',
+      requireEvidence: [
+        {
+          kind: 'toolSucceeded',
+          tool: 'run_terminal_command',
+          commandPattern: '*check:ci-local*',
+          withinMs: 14_400_000,
+        },
+      ],
+    },
+    scope: { repos: [] },
+    title: 'Run the repo CI check before committing',
+    instruction:
+      'Run the repository CI check (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) successfully in this session before spawning git-committer to commit or push.',
+    status: 'active',
+    enforcement: 'warn',
+    provenance: {
+      origin: 'migration',
+      recordedBy: 'bun-sqlite-memory-v2',
+      sourceEventIds: [],
+      metadata: {},
+    },
+  },
+  {
+    // The orchestrator itself must run the CI check (its own
+    // run_terminal_command, visible to the evidence scan) before a direct
+    // git push; a subagent's runs are not visible to this check.
+    trigger: {
+      tool: 'run_terminal_command',
+      terminalAction: 'git-push',
+      requireEvidence: [
+        {
+          kind: 'toolSucceeded',
+          tool: 'run_terminal_command',
+          commandPattern: '*check:ci-local*',
+          withinMs: 14_400_000,
+        },
+      ],
+    },
+    scope: { repos: [] },
+    title: 'Run the repo CI check before pushing directly',
+    instruction:
+      "Before any direct `git push` from the orchestrator, run the repository CI check yourself with run_terminal_command in this session (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) as its own command and let it succeed first. Do not delegate the check to a subagent — a subagent's runs are not visible to this check — and do not push on a red or skipped check.",
+    status: 'active',
+    enforcement: 'warn',
+    provenance: {
+      origin: 'migration',
+      recordedBy: 'bun-sqlite-memory-v2',
+      sourceEventIds: [],
+      metadata: {},
+    },
+  },
+]
 
 /** Whether the durable context_archive_fts index table exists in this store. */
 function contextArchiveFtsAvailable(database: Database): boolean {

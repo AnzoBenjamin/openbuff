@@ -2,6 +2,7 @@ import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
+import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 import { promptSuccess } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { afterEach, describe, expect, it, mock } from 'bun:test'
@@ -2276,6 +2277,118 @@ describe('loopAgentSteps', () => {
       expect(tags.filter((tag) => tag === 'TASK_MEMORY_CONTEXT')).toHaveLength(1)
       expect(tags).not.toContain('MEMORY_V2_CONTEXT')
     }
+  })
+
+  it('injects exactly one bounded active-playbooks band beside the authoritative V2 context', async () => {
+    setup()
+    const memoryV2Context = MemoryTurnContextV2Schema.parse({
+      schemaVersion: 2,
+      userInputId: 'test-user-input',
+      queryId: 'query:playbook-band',
+      taskId: 'task:playbook-band',
+      result: {
+        schemaVersion: 2,
+        queryId: 'query:playbook-band',
+        projectId: 'project:loop',
+        generatedAt: '2026-09-10T19:41:53.753Z',
+        matchedTasks: [],
+        verifiedKnowledge: [],
+        reusableDiscovery: [],
+        rereadRequired: [],
+        historicalContext: [],
+        degradation: { state: 'none' },
+        rankingReasons: [],
+      },
+    })
+    agentState.memoryV2Context = memoryV2Context
+    agentState.memoryAuthority = {
+      schemaVersion: 1,
+      userInputId: 'test-user-input',
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+      v1CompatibilityShadowAvailable: true,
+      v1Import: { status: 'no-record' },
+    }
+    agentState.playbookContext = [
+      MemoryPlaybookSchema.parse({
+        schemaVersion: 1,
+        playbookId: 'pb-loop-1',
+        workspaceId: 'ws-1',
+        title: 'Run local CI before spawning the git committer',
+        instruction: 'Run `bun run check:ci-local` and fix failures.',
+        trigger: {
+          tool: 'spawn_agents',
+          spawnAgentType: 'git-committer',
+          requireEvidence: [
+            {
+              kind: 'toolSucceeded',
+              tool: 'run_terminal_command',
+              commandPattern: '*check:ci-local*',
+              withinMs: 30 * 60 * 1_000,
+            },
+          ],
+        },
+        scope: { repos: [] },
+        status: 'active',
+        enforcement: 'warn',
+        counters: {
+          fired: 0,
+          blocked: 0,
+          compliedAfterBlock: 0,
+          falsePositives: 0,
+          bypassed: 0,
+        },
+        provenance: {
+          origin: 'derived',
+          recordedBy: 'test',
+          sourceEventIds: [],
+          metadata: {},
+        },
+        triggerSignature: 'sig-loop-1',
+        createdAt: 1,
+        updatedAt: 2,
+      }),
+    ]
+    let sentMessages: AgentState['messageHistory'] = []
+    const promptAiSdkStream = mock(async function* (params) {
+      sentMessages = params.messages
+      yield { type: 'text' as const, text: 'done' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('playbook-band-message')
+    })
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // The band rides beside the authoritative V2 context, exactly once, and
+    // the compiled band stays within its dedicated character budget.
+    const tags = sentMessages.flatMap((message) => message.tags ?? [])
+    expect(tags).toContain('MEMORY_V2_CONTEXT')
+    expect(tags).toContain('ACTIVE_PLAYBOOKS_CONTEXT')
+    const bandMessages = sentMessages.filter((message) =>
+      message.tags?.includes('ACTIVE_PLAYBOOKS_CONTEXT'),
+    )
+    expect(bandMessages).toHaveLength(1)
+    const bandJson = JSON.stringify(bandMessages[0])
+    expect(bandJson).toContain('<active_playbooks>')
+    expect(bandJson.length).toBeLessThanOrEqual(1_600)
+
+    // The band mirrors the gate's enforcement predicate, not the prompt: with
+    // no playbooks installed, no ACTIVE_PLAYBOOKS_CONTEXT message ever ships.
+    sentMessages = []
+    await loopAgentSteps({
+      ...baseParams,
+      agentState: { ...agentState, playbookContext: [], stepsRemaining: 10 },
+      promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+    const emptyTags = sentMessages.flatMap((message) => message.tags ?? [])
+    expect(emptyTags).not.toContain('ACTIVE_PLAYBOOKS_CONTEXT')
   })
 
   it('rebuilds one bounded V2 context message per model iteration without accumulation', async () => {

@@ -1,7 +1,11 @@
 import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 import { describe, expect, test } from 'bun:test'
 
-import { evaluatePlaybookGate, resolvePlaybookGateMode } from '../playbook-gate'
+import {
+  describePlaybookTrigger,
+  evaluatePlaybookGate,
+  resolvePlaybookGateMode,
+} from '../playbook-gate'
 import {
   createSessionEvidenceLog,
   recordSessionEvidence,
@@ -257,17 +261,26 @@ describe('evaluatePlaybookGate', () => {
     expect(downgraded[0]?.outcome).toBe('warned')
   })
 
-  test('(d) matching evidence recorded in-session allows the call', () => {
-    expect(
-      evaluatePlaybookGate({
-        toolName: 'spawn_agents',
-        input: spawnCommitterInput,
-        playbooks: [seededCommitterPlaybook({ enforcement: 'block' })],
-        evidenceLog: logWithCiSuccess(NOW - 1_000),
-        nowMs: NOW,
-        env: BLOCK_ENV,
-      }),
-    ).toEqual([])
+  test('(d) matching evidence recorded in-session yields an allowed verdict carrying the playbook', () => {
+    const playbook = seededCommitterPlaybook({ enforcement: 'block' })
+    const allowed = evaluatePlaybookGate({
+      toolName: 'spawn_agents',
+      input: spawnCommitterInput,
+      playbooks: [playbook],
+      evidenceLog: logWithCiSuccess(NOW - 1_000),
+      nowMs: NOW,
+      env: BLOCK_ENV,
+    })
+    expect(allowed).toHaveLength(1)
+    expect(allowed[0]?.outcome).toBe('allowed')
+    if (allowed[0]?.outcome !== 'allowed') {
+      throw new Error('expected an allowed verdict')
+    }
+    // The verdict carries the playbook itself, so the caller can attribute
+    // the comply-detection correlation to the exact rule that was satisfied.
+    expect(allowed[0].playbook).toBe(playbook)
+    // No message on an allowed verdict: it never surfaces to the user.
+    expect('message' in allowed[0]).toBe(false)
   })
 
   test('(e) evidence older than withinMs still warns', () => {
@@ -428,5 +441,91 @@ describe('evaluatePlaybookGate', () => {
       env: BLOCK_ENV,
     })
     expect(blocked[0]?.outcome).toBe('blocked')
+  })
+
+  test('(j) an inject-only playbook surfaces no verdict in either mode, even when satisfied', () => {
+    // The compiled band is an inject-only rule's only channel: the gate must
+    // neither warn nor block, even in block mode with the trigger unsatisfied.
+    const playbook = seededCommitterPlaybook({ enforcement: 'inject-only' })
+    expect(
+      evaluatePlaybookGate({
+        toolName: 'spawn_agents',
+        input: spawnCommitterInput,
+        playbooks: [playbook],
+        evidenceLog: emptyLog(),
+        nowMs: NOW,
+        env: DEFAULT_ENV,
+      }),
+    ).toEqual([])
+    expect(
+      evaluatePlaybookGate({
+        toolName: 'spawn_agents',
+        input: spawnCommitterInput,
+        playbooks: [playbook],
+        evidenceLog: emptyLog(),
+        nowMs: NOW,
+        env: BLOCK_ENV,
+      }),
+    ).toEqual([])
+    // Satisfied evidence changes nothing: an inject-only playbook is entirely
+    // invisible to the gate, so it never yields an `allowed` verdict either
+    // and can never feed the comply-detection correlation.
+    expect(
+      evaluatePlaybookGate({
+        toolName: 'spawn_agents',
+        input: spawnCommitterInput,
+        playbooks: [playbook],
+        evidenceLog: logWithCiSuccess(NOW - 1_000),
+        nowMs: NOW,
+        env: BLOCK_ENV,
+      }),
+    ).toEqual([])
+  })
+})
+
+describe('describePlaybookTrigger', () => {
+  test('describes spawn and terminal triggers in the verdict vocabulary', () => {
+    expect(describePlaybookTrigger(seededCommitterPlaybook())).toBe(
+      'spawn_agents spawning agent git-committer',
+    )
+    expect(
+      describePlaybookTrigger(
+        makePlaybook({
+          trigger: {
+            tool: 'spawn_agent_inline',
+            spawnAgentType: 'git-committer',
+            requireEvidence: [{ kind: 'toolSucceeded', tool: 'read_files' }],
+          },
+        }),
+      ),
+    ).toBe('spawn_agent_inline spawning agent git-committer')
+    expect(
+      describePlaybookTrigger(
+        makePlaybook({
+          trigger: {
+            tool: 'run_terminal_command',
+            terminalAction: 'git-push',
+            requireEvidence: [
+              {
+                kind: 'toolSucceeded',
+                tool: 'run_terminal_command',
+                commandPattern: '*check:ci-local*',
+              },
+            ],
+          },
+        }),
+      ),
+    ).toBe('run_terminal_command git-push')
+    expect(
+      describePlaybookTrigger(
+        makePlaybook({
+          trigger: {
+            tool: 'run_terminal_command',
+            terminalAction: 'any',
+            requireEvidence: [],
+          },
+        }),
+      ),
+    ).toBe('run_terminal_command any')
   })
 })

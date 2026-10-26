@@ -221,6 +221,29 @@ export const agentReceiptSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * Supervised-child gate-evidence transport: a supervised child's
+     * subprocess-local evidence ledger dies with the child process, so the
+     * child serializes a bounded snapshot of its own sessionEvidenceLog into
+     * the receipt and the parent folds it into its ledger when the
+     * supervised receipt is accepted — the parent's settle merge then sees
+     * work performed in the subprocess. Bounded to the LAST ≤50 entries,
+     * oldest→newest order preserved, serialized child-side from the child's
+     * own sessionEvidenceLog. Optional, so every existing receipt stays valid
+     * and no consumer migration is required.
+     */
+    sessionEvidence: z
+      .array(
+        z
+          .object({
+            toolName: z.string().min(1),
+            commandText: z.string().optional(),
+            atMs: z.number().int().nonnegative(),
+          })
+          .strict(),
+      )
+      .max(50)
+      .optional(),
   })
   .strict()
 

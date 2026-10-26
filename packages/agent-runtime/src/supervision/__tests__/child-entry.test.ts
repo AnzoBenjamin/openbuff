@@ -6,9 +6,13 @@
  *  - Missing argv / corrupt request file → exit 1 with NO envelope written.
  *  - Honest degradation: every request yields the structured
  *    'unsupported-deps' FAILED receipt (never a crash, never a half-run).
+ *  - Supervised success receipts carry the child's bounded evidence-ledger
+ *    snapshot (`sessionEvidence`): entries verbatim in order, LAST ≤50 bound,
+ *    field omitted for an absent/empty ledger, schema-valid throughout.
  *  - Real-process + default-seam end-to-end (skipIf no Bun.spawn).
  */
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
+import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 import { createInitialWorkspaceState } from '@codebuff/common/types/workspace-state'
 
 import { describe, expect, it } from 'bun:test'
@@ -21,16 +25,25 @@ import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 import {
   buildChildAgentState,
   buildChildOnResponseChunk,
+  buildSupervisedSuccessReceipt,
   buildUnsupportedDepsReceipt,
   missingChildCallbackDeps,
   rehydrateLocalAgentTemplates,
   abortAndAwaitChildLoop,
   runChildEntryMain,
   runSupervisedChildEntry,
+  SESSION_EVIDENCE_RECEIPT_MAX_ENTRIES,
 } from '../child-entry'
 import { buildDefaultSpawnSupervised } from '../supervised-spawn'
+import { buildRuntimeAgentReceipt } from '../../tools/handlers/tool/spawn-agent-utils'
+import {
+  createSessionEvidenceLog,
+  recordSessionEvidence,
+} from '../../memory/session-evidence-log'
 
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
+import type { AgentState } from '@codebuff/common/types/session-state'
 import type { SupervisedSpawnRequest } from '@codebuff/common/types/contracts/agent-runtime'
 import type {
   SendActionFn,
@@ -38,6 +51,7 @@ import type {
 } from '@codebuff/common/types/contracts/client'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import type { SessionEvidenceLog } from '../../memory/session-evidence-log'
 
 const canSpawn =
   typeof Bun !== 'undefined' && typeof Bun.spawn === 'function'
@@ -58,6 +72,51 @@ function makeRequest(
     ...overrides,
   }
 }
+
+/**
+ * Schema-valid playbook fixture (shape copied from
+ * memory/__tests__/playbook-gate.test.ts's makePlaybook/seededCommitterPlaybook
+ * helpers) — the rules a parent threads into the serialized child slice.
+ */
+const makePlaybook = (playbookId = 'pb-1'): MemoryPlaybook =>
+  MemoryPlaybookSchema.parse({
+    schemaVersion: 1,
+    playbookId,
+    workspaceId: 'ws-1',
+    title: 'Run local CI before spawning the git committer',
+    instruction: 'Run `npm run check:ci-local` and fix failures.',
+    trigger: {
+      tool: 'spawn_agents',
+      spawnAgentType: 'git-committer',
+      requireEvidence: [
+        {
+          kind: 'toolSucceeded',
+          tool: 'run_terminal_command',
+          commandPattern: '*check:ci-local*',
+          withinMs: 30 * 60 * 1_000,
+        },
+      ],
+    },
+    scope: { repos: [] },
+    status: 'active',
+    enforcement: 'block',
+    counters: {
+      fired: 0,
+      blocked: 0,
+      compliedAfterBlock: 0,
+      falsePositives: 0,
+      bypassed: 0,
+    },
+    provenance: {
+      origin: 'derived',
+      recordedBy: 'test',
+      sourceEventIds: [],
+      metadata: {},
+    },
+    triggerSignature: `sig-${playbookId}`,
+    createdAt: 1,
+    updatedAt: 2,
+  })
 
 describe('child-entry cancellation and cleanup ordering', () => {
   it('aborts immediately but does not finish cleanup until the loop settles', async () => {
@@ -159,6 +218,103 @@ describe('child-entry honest degradation (P2-T8)', () => {
   })
 })
 
+describe('supervised success receipt evidence transport (sessionEvidence)', () => {
+  /**
+   * A child state carrying the additive evidence ledger tool-executor.ts
+   * records onto (one entry per command, in order) — the state the
+   * supervised child's loop owns when it finishes.
+   */
+  function makeChildStateWithLedger(
+    commands: string[],
+  ): AgentState & { sessionEvidenceLog?: SessionEvidenceLog } {
+    const state = buildChildAgentState(
+      makeRequest(),
+    ) as AgentState & { sessionEvidenceLog?: SessionEvidenceLog }
+    if (commands.length > 0) {
+      const log = createSessionEvidenceLog()
+      state.sessionEvidenceLog = log
+      commands.forEach((commandText, index) => {
+        recordSessionEvidence(log, {
+          toolName: 'run_terminal_command',
+          commandText,
+          atMs: 1_000 + index,
+        })
+      })
+    }
+    return state
+  }
+
+  /**
+   * Builds the success receipt exactly as runSupervisedChildEntry does: the
+   * REAL in-process receipt derivation wrapped by
+   * buildSupervisedSuccessReceipt. The agentState crosses the loop boundary
+   * as unknown there, hence the cast on the wrapped builder's param.
+   */
+  function buildReceipt(agentState: unknown): AgentReceipt {
+    return buildSupervisedSuccessReceipt({
+      agentType: 'thinker',
+      agentId: 'child-entry-agent-1',
+      output: { type: 'structuredOutput', value: { summary: 'done' } },
+      agentState,
+      buildRuntimeAgentReceipt: (buildParams) =>
+        buildRuntimeAgentReceipt({
+          agentType: buildParams.agentType,
+          agentId: buildParams.agentId,
+          output: buildParams.output,
+          agentState: buildParams.agentState as AgentState | undefined,
+        }),
+    })
+  }
+
+  it('carries the child ledger entries verbatim, oldest→newest order preserved, and still validates', () => {
+    const receipt = buildReceipt(
+      makeChildStateWithLedger(['cmd-a', 'cmd-b', 'cmd-c']),
+    )
+    // A supervised child's subprocess-local ledger dies with the process;
+    // the receipt is the only transport, so the entries must ride VERBATIM
+    // in order.
+    expect(receipt.sessionEvidence).toEqual([
+      { toolName: 'run_terminal_command', commandText: 'cmd-a', atMs: 1_000 },
+      { toolName: 'run_terminal_command', commandText: 'cmd-b', atMs: 1_001 },
+      { toolName: 'run_terminal_command', commandText: 'cmd-c', atMs: 1_002 },
+    ])
+    // The evidence-carrying receipt still validates against the strict
+    // schema — the field is additive-optional, never a breaking change.
+    expect(agentReceiptSchema.safeParse(receipt).success).toBe(true)
+  })
+
+  it('serializes exactly the LAST 50 entries when the ledger holds more', () => {
+    const commands = Array.from(
+      { length: SESSION_EVIDENCE_RECEIPT_MAX_ENTRIES + 10 },
+      (_, index) => `cmd-${index}`,
+    )
+    const receipt = buildReceipt(makeChildStateWithLedger(commands))
+    expect(receipt.sessionEvidence).toHaveLength(
+      SESSION_EVIDENCE_RECEIPT_MAX_ENTRIES,
+    )
+    // The bound keeps the NEWEST entries (the tail freshness-bound parent
+    // rules evaluate) and preserves oldest→newest order within the slice.
+    expect(receipt.sessionEvidence?.map((entry) => entry.commandText)).toEqual(
+      commands.slice(-SESSION_EVIDENCE_RECEIPT_MAX_ENTRIES),
+    )
+    expect(receipt.sessionEvidence?.[0]?.commandText).toBe('cmd-10')
+    expect(receipt.sessionEvidence?.at(-1)?.commandText).toBe('cmd-59')
+    expect(agentReceiptSchema.safeParse(receipt).success).toBe(true)
+  })
+
+  it('an absent or empty ledger omits sessionEvidence from the built receipt entirely', () => {
+    // Absent ledger: the fresh child state carries no ledger member at all.
+    expect('sessionEvidence' in buildReceipt(makeChildStateWithLedger([]))).toBe(
+      false,
+    )
+    // Empty ledger: nothing was recorded, so the field stays off — receipts
+    // stay lean and byte-identical to the pre-evidence shape.
+    const emptyLedgerChild = makeChildStateWithLedger([])
+    emptyLedgerChild.sessionEvidenceLog = createSessionEvidenceLog()
+    expect('sessionEvidence' in buildReceipt(emptyLedgerChild)).toBe(false)
+  })
+})
+
 describe('child-state rehydration validation (json-roundtrip repair)', () => {
   it('a valid serialized child state rehydrates into the rebuilt AgentState', () => {
     const state = buildChildAgentState({
@@ -251,6 +407,63 @@ describe('child-state rehydration validation (json-roundtrip repair)', () => {
       },
     })
     expect(state.taskMemory).toBeUndefined()
+  })
+
+  it('a playbook array of schema-valid entries rehydrates every entry into the rebuilt AgentState', () => {
+    const playbooks = [makePlaybook('pb-1'), makePlaybook('pb-2')]
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        playbookContext: playbooks,
+      },
+    })
+    // The child's own gate/band key on agentState.playbookContext, so the
+    // rehydrated rules must be the full validated set.
+    expect(state.playbookContext).toHaveLength(2)
+    expect(state.playbookContext).toEqual(playbooks)
+  })
+
+  it('a playbook array with one invalid entry keeps only the valid entry (partial drop)', () => {
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        playbookContext: [
+          makePlaybook('pb-1'),
+          // Not a schema-valid memory playbook.
+          { schemaVersion: 1, title: 'not a playbook' } as unknown,
+        ],
+      },
+    })
+    // Assign the valid entries (possibly fewer than sent); the band and the
+    // gate both revalidate anyway, so a partial drop is safe.
+    expect(state.playbookContext).toHaveLength(1)
+    expect(state.playbookContext?.[0]?.playbookId).toBe('pb-1')
+  })
+
+  it('a non-array playbookContext is DROPPED, not blind-cast', () => {
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        playbookContext: { playbookId: 'pb-1' } as unknown,
+      },
+    })
+    // The fresh initial-state default stands in — the malformed field never
+    // reaches loopAgentSteps under the live MemoryPlaybook[] type.
+    expect(state.playbookContext).toBeUndefined()
+  })
+
+  it('an empty playbook array leaves the fresh default (undefined) in place', () => {
+    const state = buildChildAgentState({
+      ...makeRequest(),
+      child: {
+        agentId: 'child-entry-agent-1',
+        playbookContext: [],
+      },
+    })
+    expect(state.playbookContext).toBeUndefined()
   })
 
   it('a workspaceState whose occurredAt was coerced to an ISO string is DROPPED, not blind-cast', () => {

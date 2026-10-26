@@ -125,6 +125,7 @@ import {
   compileMemoryV2Context,
   countConceptAdvisoryEntries,
 } from './util/memory-v2-context'
+import { compileActivePlaybooksContext } from './memory/playbook-context'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
@@ -2209,10 +2210,25 @@ export async function loopAgentSteps(
               })
             : false
         }
+        const buildCompiledPlaybooksMessage = (state: AgentState) => {
+          // Validation can empty the set (restored-session garbage), so gate
+          // on the COMPILED result, not the raw array — an empty band message
+          // must never ship.
+          const text = compileActivePlaybooksContext(state.playbookContext ?? [])
+          return text
+            ? userMessage({
+                content: withSystemTags(text),
+                tags: ['ACTIVE_PLAYBOOKS_CONTEXT'],
+                timeToLive: 'agentStep' as const,
+                keepDuringTruncation: true,
+              })
+            : false
+        }
         let messagesWithStepPrompt = buildArray(
           ...currentAgentState.messageHistory,
           buildCompiledTaskMemoryMessage(currentAgentState),
           buildCompiledMemoryV2Message(currentAgentState),
+          buildCompiledPlaybooksMessage(currentAgentState),
           stepPrompt &&
             userMessage({
               content: stepPrompt,
@@ -2321,6 +2337,7 @@ export async function loopAgentSteps(
               ...currentAgentState.messageHistory,
               buildCompiledTaskMemoryMessage(currentAgentState),
               buildCompiledMemoryV2Message(currentAgentState),
+              buildCompiledPlaybooksMessage(currentAgentState),
               stepPrompt &&
                 userMessage({
                   content: stepPrompt,
@@ -2631,6 +2648,7 @@ export async function loopAgentSteps(
           ...currentAgentState.messageHistory,
           buildCompiledTaskMemoryMessage(currentAgentState),
           buildCompiledMemoryV2Message(currentAgentState),
+          buildCompiledPlaybooksMessage(currentAgentState),
           stepPrompt &&
             userMessage({
               content: stepPrompt,
@@ -2775,6 +2793,7 @@ export async function loopAgentSteps(
             ...pruningResult.messages,
             buildCompiledTaskMemoryMessage(currentAgentState),
             buildCompiledMemoryV2Message(currentAgentState),
+            buildCompiledPlaybooksMessage(currentAgentState),
             stepPrompt &&
               userMessage({
                 content: stepPrompt,
@@ -2951,6 +2970,7 @@ export async function loopAgentSteps(
           memoryContextMessages: buildArray(
             buildCompiledTaskMemoryMessage(currentAgentState),
             buildCompiledMemoryV2Message(currentAgentState),
+            buildCompiledPlaybooksMessage(currentAgentState),
           ),
           // Projected progressive surface so executeToolCall (which gates via
           // getEffectiveAgentToolNames without agentState) accepts unlocked

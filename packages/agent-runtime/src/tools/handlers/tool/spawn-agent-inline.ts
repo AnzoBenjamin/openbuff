@@ -13,6 +13,7 @@ import {
   validateVersionedAgentHandoff,
   buildRuntimeAgentReceipt,
   reconcileAgentReceiptIntoParent,
+  mergeChildEvidenceIntoParent,
 } from './spawn-agent-utils'
 import { appendOrchestrationEvent } from '../../../util/orchestration-ledger'
 import { selectAgentAttempt } from '../../../orchestration/select-agent-attempt'
@@ -421,6 +422,14 @@ export const handleSpawnAgentInline = (async (
         output: result.output,
         agentState: result.agentState,
       })
+    // Fold the child's in-process playbook-gate evidence into the parent's
+    // ledger before reconciling, so delegated work (e.g. CI run inside
+    // basher) satisfies the parent's rules. No-op for a supervised settle:
+    // result.agentState is the parent-built state carrying no ledger.
+    mergeChildEvidenceIntoParent({
+      parentAgentState,
+      childAgentState: result.agentState,
+    })
     reconcileAgentReceiptIntoParent({
       parentAgentState,
       receipt,
@@ -449,6 +458,14 @@ export const handleSpawnAgentInline = (async (
       ],
     }
   } catch (error) {
+    // Same best-effort evidence fold as the spawn-agents rejected branches:
+    // an in-process child may have recorded gate evidence before it threw,
+    // and the handler-local childAgentState is the object it recorded onto.
+    // The helper never throws, so this cannot mask the re-throw below.
+    mergeChildEvidenceIntoParent({
+      parentAgentState,
+      childAgentState,
+    })
     // A settle throw (receipt build or receipt reconcile) must not leave the
     // `spawn_started` ledger event dangling: close the pair with an
     // `interrupted` event unless the terminal receipt was already reconciled.

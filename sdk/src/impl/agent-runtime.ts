@@ -168,6 +168,7 @@ export function getAgentRuntimeImpl(
     AgentRuntimeDeps,
     | 'journalWriter'
     | 'journalReader'
+    | 'onPlaybookGateOutcome'
     | 'processSupervision'
     | 'spawnSupervised'
   > &
@@ -190,6 +191,7 @@ export function getAgentRuntimeImpl(
     clientEnv = clientEnvDefault,
     journalWriter,
     journalReader,
+    onPlaybookGateOutcome,
     resumeDriver,
     processSupervision,
     spawnSupervised,
@@ -245,6 +247,9 @@ export function getAgentRuntimeImpl(
     // byte-identical to today.
     ...(journalWriter ? { journalWriter } : {}),
     ...(journalReader ? { journalReader } : {}),
+
+    // Fire-and-forget playbook counter persistence; absent = no reporting.
+    ...(onPlaybookGateOutcome ? { onPlaybookGateOutcome } : {}),
 
     // P2-audit-fix-8: production resume driver. Additive-optional exactly
     // like the journal deps above: the key exists ONLY when the caller wired
