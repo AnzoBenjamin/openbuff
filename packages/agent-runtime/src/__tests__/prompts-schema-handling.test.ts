@@ -861,6 +861,40 @@ describe('Schema handling error recovery', () => {
       })
     })
 
+    test('getToolSet keeps read_files selector field descriptions after compaction', async () => {
+      const toolSet = await getToolSet({
+        toolNames: ['read_files', 'glob'],
+        additionalToolDefinitions: async () => ({}),
+        agentTools: {},
+        skills: {},
+      })
+
+      const readFilesJsonSchema = (
+        toolSet.read_files.inputSchema as unknown as { jsonSchema: unknown }
+      ).jsonSchema
+      const globJsonSchema = (
+        toolSet.glob.inputSchema as unknown as { jsonSchema: unknown }
+      ).jsonSchema
+
+      // read_files is read-only, but its selector fields are the empirically
+      // highest shape-failure surface, so the provider toolset keeps their
+      // per-field guidance (the literal-anchor `match` and the 1-indexed
+      // `window`/`occurrence` descriptions).
+      expect(JSON.stringify(readFilesJsonSchema)).toContain(
+        'Exact literal string to anchor on',
+      )
+      expect(JSON.stringify(readFilesJsonSchema)).toContain(
+        '1-indexed occurrence',
+      )
+      expect(JSON.stringify(readFilesJsonSchema)).toContain(
+        '1-indexed window number',
+      )
+
+      // The asymmetry is deliberate: another non-mutation, non-read_files tool
+      // still has every description stripped by provider compaction.
+      expect(JSON.stringify(globJsonSchema)).not.toContain('description')
+    })
+
     test('compactToolInputSchemaForProvider preserves descriptions only when requested', () => {
       const schema = (toolParams.edit_transaction.providerInputSchema ??
         toolParams.edit_transaction.inputSchema) as z.ZodType

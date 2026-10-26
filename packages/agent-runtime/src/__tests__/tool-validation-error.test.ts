@@ -2,6 +2,7 @@ import z from 'zod/v4'
 
 import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
+import { __resetReadFilesSelectorRepairStatsForTest } from '@codebuff/common/tools/params/tool/read-files'
 import {
   buildReadFilesResultV1,
   fileMutationResultV1Schema,
@@ -38,12 +39,54 @@ import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
 import type {
   AssistantMessage,
   ToolMessage,
 } from '@codebuff/common/types/messages/codebuff-message'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+
+// Minimal recording logger for asserting logger.debug telemetry emissions
+// from parseRawToolCall (this file has no existing logger convention to
+// reuse). Typed against the Logger contract — no `any` casts. Only debug
+// payloads are recorded because that is the channel the repair diagnostics
+// ride.
+function createRecordingLogger(): {
+  logger: Logger
+  debugPayloads: unknown[]
+} {
+  const debugPayloads: unknown[] = []
+  const logger: Logger = {
+    debug: (data) => {
+      debugPayloads.push(data)
+    },
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  }
+  return { logger, debugPayloads }
+}
+
+// Shape guard for the read_files selector-repair telemetry payload: other
+// debug emissions on the same logger (e.g. recordUnserialize's
+// { toolName, kind }) never carry `repairedKinds`, so filtering by this
+// shape isolates the selector-repair diagnostic without counting unrelated
+// debug calls.
+function isSelectorRepairTelemetry(
+  data: unknown,
+): data is {
+  toolName: string
+  toolCallId: string
+  repairedKinds: Record<string, number>
+} {
+  return (
+    data !== null &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    'repairedKinds' in data
+  )
+}
 
 describe('tool validation error handling', () => {
   let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
@@ -1268,6 +1311,144 @@ describe('tool validation error handling', () => {
       expect(result.error).toContain('check every brace and bracket')
       expect(result.error).toContain('ambiguous brace nesting')
     }
+  })
+
+  it('gives targeted around-selector shape guidance for read_files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-around-empty-match-tool-call-id',
+        // An empty match fails min(1) and is NOT repaired (only plain-string
+        // entries are wrapped), so validation fails and the hint appears.
+        input: { around: [{ match: '' }] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      // The base hint is always present; the around-specific hint appends.
+      expect(result.error).toContain('combinable selectors `paths`')
+      expect(result.error).toContain('`around` is an array of objects')
+      expect(result.error).toContain('`match` is the literal anchor string')
+      expect(result.error).toContain(
+        'Example: { "paths": ["src/file.ts"], "around": [{ "match": "function handleSpawnAgents" }] }',
+      )
+    }
+  })
+
+  it('gives targeted symbols-selector shape guidance for read_files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-symbols-nonstring-path-tool-call-id',
+        input: { symbols: [{ path: 1 }] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`symbols` entries are objects { "path": string, "names": string[] }',
+      )
+      expect(result.error).toContain('never bare strings')
+      expect(result.error).toContain(
+        'Example: { "symbols": [{ "path": "src/file.ts", "names": ["parseToolCallContent"] }] }',
+      )
+    }
+  })
+
+  it('gives targeted windows-index guidance for read_files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-windows-negative-window-tool-call-id',
+        // Only the exact integer 0 is clamped to 1; -1 still fails validation.
+        input: { windows: [{ path: 'a.ts', window: -1 }] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`windows` entries are objects { "path": string, "windowSize"?: number, "window"?: number }',
+      )
+      expect(result.error).toContain('1-indexed')
+      expect(result.error).toContain('the first window is 1, not 0')
+    }
+  })
+
+  it('emits one selector-repair telemetry debug diagnostic per repaired read_files call', () => {
+    // The repair stats are module-global: reset so the per-call byKind delta
+    // below is attributable to THIS parse alone (earlier read_files parses in
+    // this file would otherwise pollute the delta).
+    __resetReadFilesSelectorRepairStatsForTest()
+    const { logger, debugPayloads } = createRecordingLogger()
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-selector-repair-telemetry-tool-call-id',
+        // A bare-string `around` anchor is wrapped inside the read_files
+        // preprocess during safeParse, so the parse SUCCEEDS while the stats
+        // total increased across that safeParse — the runtime layer must emit
+        // the counter-plus-diagnostic signal (a repair is never silent).
+        input: { paths: ['a.ts'], around: 'anchor' },
+      },
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    // Match by the telemetry payload shape (repairedKinds present) rather
+    // than total debug-call count, so unrelated debug emissions on the same
+    // logger cannot break the assertion. Exactly one such diagnostic per
+    // repaired call is the contract.
+    const telemetryCalls = debugPayloads.filter(isSelectorRepairTelemetry)
+    expect(telemetryCalls).toHaveLength(1)
+    expect(telemetryCalls[0].toolName).toBe('read_files')
+    expect(telemetryCalls[0].toolCallId).toBe(
+      'read-files-selector-repair-telemetry-tool-call-id',
+    )
+    expect(telemetryCalls[0].repairedKinds).toEqual({ around_string: 1 })
+  })
+
+  it('emits no selector-repair telemetry for an already-valid read_files call', () => {
+    __resetReadFilesSelectorRepairStatsForTest()
+    const { logger, debugPayloads } = createRecordingLogger()
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-valid-no-repair-telemetry-tool-call-id',
+        input: { paths: ['a.ts'] },
+      },
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    expect(debugPayloads.filter(isSelectorRepairTelemetry)).toHaveLength(0)
+  })
+
+  it('emits selector-repair telemetry even when the repaired read_files call still fails validation', () => {
+    // The emission rides the stats delta, not result.success: a repaired
+    // entry that still fails validation for another reason (no sole `paths`
+    // entry to infer the selector path) must still signal.
+    __resetReadFilesSelectorRepairStatsForTest()
+    const { logger, debugPayloads } = createRecordingLogger()
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-repaired-still-invalid-tool-call-id',
+        input: { around: 'anchor' },
+      },
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    const telemetryCalls = debugPayloads.filter(isSelectorRepairTelemetry)
+    expect(telemetryCalls).toHaveLength(1)
+    expect(telemetryCalls[0].toolName).toBe('read_files')
+    expect(telemetryCalls[0].toolCallId).toBe(
+      'read-files-repaired-still-invalid-tool-call-id',
+    )
+    expect(telemetryCalls[0].repairedKinds).toEqual({ around_string: 1 })
   })
 
   it('repairs a single-agent stray-sibling spawn payload by folding prompt into the entry', () => {
@@ -4736,11 +4917,11 @@ describe('executeToolCall queued → running transition', () => {
 })
 
 describe('getToolSet provider schema compaction', () => {
-  it('preserves schema descriptions for mutation tools and strips them for read-only tools', async () => {
+  it('preserves schema descriptions for mutation tools and read_files, strips them for other read-only tools', async () => {
     const { getToolSet } = await import('../tools/prompts')
 
     const toolSet = await getToolSet({
-      toolNames: ['edit_transaction', 'read_files'],
+      toolNames: ['edit_transaction', 'read_files', 'glob'],
       additionalToolDefinitions: async () => ({}),
       agentTools: {},
       skills: {},
@@ -4756,8 +4937,14 @@ describe('getToolSet provider schema compaction', () => {
     // model still sees guidance for the bare discriminated union; this asserts
     // the mutation-keyed `preserveDescriptions` wiring end-to-end via getToolSet.
     expect(schemaJson('edit_transaction')).toContain('description')
-    // Read-only tools stay fully compacted: no description annotations survive.
-    expect(schemaJson('read_files')).not.toContain('description')
+    // read_files is the deliberate read-only exception (its selector fields
+    // are the empirically highest shape-failure surface — see
+    // prompts-schema-handling.test.ts 'getToolSet keeps read_files selector
+    // field descriptions after compaction'); its per-field guidance survives.
+    expect(schemaJson('read_files')).toContain('description')
+    // Every other read-only tool stays fully compacted: no description
+    // annotations survive.
+    expect(schemaJson('glob')).not.toContain('description')
   })
 })
 

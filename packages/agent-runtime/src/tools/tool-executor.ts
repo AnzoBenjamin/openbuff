@@ -114,6 +114,7 @@ import type {
 } from '@codebuff/common/util/file'
 import type { ToolCallPart, ToolSet } from 'ai'
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import { getReadFilesSelectorRepairStats } from '@codebuff/common/tools/params/tool/read-files'
 
 export type CustomToolCall = {
   toolName: string
@@ -1686,6 +1687,45 @@ function getToolValidationHint(
       '`detach` must be a boolean (true/false) and `timeout_seconds` a number (e.g. 60, or -1 for no timeout) — do not quote them as strings. `process_type` must be the bare enum SYNC or BACKGROUND.',
     ].join('\n')
   }
+  if (toolName === 'read_files') {
+    const fieldNames = new Set(
+      (issues ?? []).flatMap(
+        (issue) => issue.path?.map((segment) => String(segment)) ?? [],
+      ),
+    )
+    const base = [
+      'Expected shape: combinable selectors `paths`, `ranges`, `windows`, `around`, `symbol`, `symbols` — e.g. { "paths": ["src/file.ts"], "windows": [{ "path": "src/file.ts", "window": 1 }], "around": [{ "match": "function handleSpawnAgents" }], "symbols": [{ "path": "src/file.ts", "names": ["parseToolCallContent"] }] }.',
+      'Selector entries are objects, and `window`/`occurrence` are 1-indexed. A sole `paths` entry infers the path for selector entries that omit `path`.',
+    ].join('\n')
+    const targetedHints: string[] = []
+    if (fieldNames.has('around')) {
+      targetedHints.push(
+        [
+          '`around` is an array of objects { "path": string, "match": string, "occurrence"?: number, "contextLines"?: number }; `match` is the literal anchor string, so a bare string is not accepted.',
+          'Example: { "paths": ["src/file.ts"], "around": [{ "match": "function handleSpawnAgents" }] } — the sole `paths` entry infers the selector path.',
+        ].join('\n'),
+      )
+    }
+    if (fieldNames.has('symbols') || fieldNames.has('symbol')) {
+      targetedHints.push(
+        [
+          '`symbols` entries are objects { "path": string, "names": string[] } and singular `symbol` entries are { "path": string, "name": string } — never bare strings.',
+          'Example: { "symbols": [{ "path": "src/file.ts", "names": ["parseToolCallContent"] }] }.',
+        ].join('\n'),
+      )
+    }
+    if (fieldNames.has('windows')) {
+      targetedHints.push(
+        [
+          '`windows` entries are objects { "path": string, "windowSize"?: number, "window"?: number }.',
+          '`window` is 1-indexed: the first window is 1, not 0. Omit it to get the window manifest plus the first window.',
+        ].join('\n'),
+      )
+    }
+    return targetedHints.length > 0
+      ? [base, ...targetedHints].join('\n\n')
+      : base
+  }
   if (toolName === 'spawn_agents') {
     const base = [
       'Expected shape: { "agents": [{ "agent_type": string, "prompt"?: string, "params"?: object, "handoff"?: object }] }.',
@@ -2296,7 +2336,41 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
       repairedInput = misbraced.repairedInput
     }
   }
+  // read_files selector-shape repair telemetry (counter-plus-diagnostic
+  // contract, matching recordUnserialize above): the repair runs inside the
+  // read_files input schema's z.preprocess chain DURING the safeParse below,
+  // so a before/after snapshot of the module-global stats in common is the
+  // per-call repair signal. Emitted regardless of result.success so a
+  // repaired-but-still-rejected call still signals. Metadata only — never
+  // paths, match strings, or symbol names. Stays synchronous: the diff is
+  // O(kinds) over the bounded repair kinds. The snapshot copies VALUES (plus
+  // a shallow byKind copy) because the getter returns the live stats object
+  // the preprocess mutates in place — aliasing that reference would make the
+  // before/after delta always zero.
+  let repairStatsBefore:
+    | { total: number; byKind: Record<string, number> }
+    | undefined
+  if (toolName === 'read_files') {
+    const before = getReadFilesSelectorRepairStats()
+    repairStatsBefore = { total: before.total, byKind: { ...before.byKind } }
+  }
   const result = paramsSchema.safeParse(repairedInput)
+  if (repairStatsBefore) {
+    const afterStats = getReadFilesSelectorRepairStats()
+    if (afterStats.total > repairStatsBefore.total) {
+      const repairedKinds: Record<string, number> = {}
+      for (const [kind, count] of Object.entries(afterStats.byKind)) {
+        const delta = count - (repairStatsBefore.byKind[kind] ?? 0)
+        if (delta > 0) {
+          repairedKinds[kind] = delta
+        }
+      }
+      logger?.debug(
+        { toolName, toolCallId: rawToolCall.toolCallId, repairedKinds },
+        'read_files: repaired selector entry shape(s) before schema validation',
+      )
+    }
+  }
 
   if (!result.success) {
     // Keep the public set_output schema strict so providers are guided toward

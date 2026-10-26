@@ -799,7 +799,7 @@ describe('read_files block selector input schema', () => {
     }
   })
 
-  it('rejects selector values beyond the window/context caps and below occurrence 1', () => {
+  it('rejects selector values beyond the window/context caps and negative 1-indexed values', () => {
     expect(
       parse({ windows: [{ path: 'a.ts', windowSize: MAX_WINDOW_SIZE + 1 }] })
         .success,
@@ -811,14 +811,16 @@ describe('read_files block selector input schema', () => {
         ],
       }).success,
     ).toBe(false)
-    expect(parse({ windows: [{ path: 'a.ts', window: 0 }] }).success).toBe(
+    // Zero window/occurrence values are repaired to 1 (see
+    // read-files-selector-repair.test.ts); negative values still fail.
+    expect(parse({ windows: [{ path: 'a.ts', window: -1 }] }).success).toBe(
       false,
     )
     expect(
-      parse({ around: [{ path: 'a.ts', match: 'x', occurrence: 0 }] }).success,
+      parse({ around: [{ path: 'a.ts', match: 'x', occurrence: -1 }] }).success,
     ).toBe(false)
     expect(
-      parse({ symbol: [{ path: 'a.ts', name: 'run', occurrence: 0 }] }).success,
+      parse({ symbol: [{ path: 'a.ts', name: 'run', occurrence: -1 }] }).success,
     ).toBe(false)
   })
 
