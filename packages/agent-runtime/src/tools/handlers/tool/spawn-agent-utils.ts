@@ -3344,14 +3344,33 @@ type SupervisedErrorOutput = AgentOutput & {
  * `supervisedOutcome` field on the envelope so the receipt derivation honors
  * the transport-level classification (retryable missing_output /
  * schema_invalid) instead of reporting a crashed, non-retryable settle.
+ * The schemaError param (surfaces SettledSubagentResult.schemaError) leads
+ * the detail when present, with the stderr tail appended after
+ * ' | stderr: ' — a schema_invalid settle names the real agentReceiptSchema
+ * failure instead of only benign stderr diagnostics.
  */
 function mapSettledOutcomeToAgentOutput(params: {
   agentType: string
   outcome: ReceiptOutcome
   stderrTail: string
+  /**
+   * The supervisor's structured settle detail (SettledSubagentResult.schemaError):
+   * the actual agentReceiptSchema issue dump, or the no-complete-line
+   * classification. Leads the message detail when present so the
+   * parent-visible error names the REAL failure; the bounded stderr tail
+   * follows as secondary diagnostics (stderr is never parsed into the
+   * receipt, so without this the only visible detail was benign child
+   * logging such as the template re-coercion notice).
+   */
+  schemaError?: string
   crashReason?: string
 }): SupervisedErrorOutput {
-  const detail = params.stderrTail.trim().slice(0, 2_000)
+  const schemaErrorDetail = params.schemaError?.trim() ?? ''
+  const stderrDetail = params.stderrTail.trim().slice(0, 2_000)
+  const detail =
+    schemaErrorDetail.length > 0
+      ? `${schemaErrorDetail.slice(0, 2_000)}${stderrDetail.length > 0 ? ` | stderr: ${stderrDetail}` : ''}`
+      : stderrDetail
   const detailSuffix = detail.length > 0 ? `: ${detail}` : ''
   // The message deliberately reuses the in-process crash envelope shape
   // (`Subagent <type> crashed: ...`) as the conservative fallback, while the
@@ -3559,6 +3578,7 @@ async function runSupervisedSubagent(params: {
         agentType: agentTemplate.id,
         outcome: settled.outcome,
         stderrTail: settled.stderrTail,
+        schemaError: settled.schemaError,
         crashReason: settled.crashReason,
       }),
     }
@@ -3576,6 +3596,7 @@ async function runSupervisedSubagent(params: {
         agentType: agentTemplate.id,
         outcome: 'crashed',
         stderrTail: settled.stderrTail,
+        schemaError: settled.schemaError,
       }),
     }
   }
@@ -3778,25 +3799,75 @@ export async function executeSubagent(
     )
   }
   if (spawnSupervised !== undefined) {
-    result = await runSupervisedSubagent({
-      spawnSupervised,
-      agentState: withDefaults.agentState,
-      logger: withDefaults.logger,
-      onResponseChunk,
-      agentTemplate,
-      parentAgentState,
-      ancestorRunIds,
-      prompt,
-      spawnParams,
-      userInputId: withDefaults.userInputId,
-      fingerprintId: withDefaults.fingerprintId,
-      clientSessionId: withDefaults.clientSessionId,
-      userId: withDefaults.userId,
-      parentSystemPrompt: withDefaults.parentSystemPrompt,
-      fileContext: withDefaults.fileContext,
-      localAgentTemplates: withDefaults.localAgentTemplates,
-      resolveModelContextWindow: withDefaults.resolveModelContextWindow,
-    })
+    try {
+      result = await runSupervisedSubagent({
+        spawnSupervised,
+        agentState: withDefaults.agentState,
+        logger: withDefaults.logger,
+        onResponseChunk,
+        agentTemplate,
+        parentAgentState,
+        ancestorRunIds,
+        prompt,
+        spawnParams,
+        userInputId: withDefaults.userInputId,
+        fingerprintId: withDefaults.fingerprintId,
+        clientSessionId: withDefaults.clientSessionId,
+        userId: withDefaults.userId,
+        parentSystemPrompt: withDefaults.parentSystemPrompt,
+        fileContext: withDefaults.fileContext,
+        localAgentTemplates: withDefaults.localAgentTemplates,
+        resolveModelContextWindow: withDefaults.resolveModelContextWindow,
+      })
+    } catch (error) {
+      // code-reviewer:supervised-branch-unguarded-throw — the supervised
+      // branch previously had NO catch: a throw from the unguarded prologue
+      // (params.resolveModelContextWindow, or
+      // serializeAgentTemplatesForTransport on a user-authored template
+      // schema) propagated out of executeSubagent AFTER the subagent_start
+      // event was already emitted — skipping the subagent_finish event (the
+      // UI shows a started-but-never-finished subagent) and failing the whole
+      // parent turn, the exact failure mode the in-process branch's catch
+      // below was hardened against. Mirror that contract: emit the finish
+      // event, rethrow ONLY on genuine parent cancellation (the parent signal
+      // actually being aborted), and otherwise degrade to the structured
+      // error output the settle chain classifies as outcome 'crashed'.
+      failed = true
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      onResponseChunk({
+        type: 'subagent_finish',
+        agentId: withDefaults.agentState.agentId,
+        agentType: agentTemplate.id,
+        displayName: agentTemplate.displayName,
+        onlyChild: isOnlyChild,
+        parentAgentId: parentAgentState.agentId,
+        prompt,
+        params: spawnParams,
+        spawnToolCallId,
+        spawnIndex,
+        error: errorMessage,
+      })
+      const parentSignalAborted =
+        (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
+      if (parentSignalAborted) {
+        // A prologue throw precedes the guarded seam call inside
+        // runSupervisedSubagent, so no child process can have started — no
+        // librarian clone exists to clean up. Register any child runId
+        // defensively (parity with the in-process abort path) and rethrow so
+        // genuine parent cancellation keeps unwinding the run.
+        if (withDefaults.agentState.runId) {
+          parentAgentState.childRunIds.push(withDefaults.agentState.runId)
+        }
+        throw error
+      }
+      result = {
+        agentState: withDefaults.agentState,
+        output: {
+          type: 'error' as const,
+          message: `Subagent ${agentTemplate.id} crashed: supervised spawn prologue threw: ${errorMessage}`,
+        },
+      }
+    }
   } else {
     try {
       result = await loopAgentSteps({

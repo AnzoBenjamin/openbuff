@@ -8,7 +8,10 @@
  *    `agentReceiptSchema` envelope. The envelope is compact by schema and
  *    bounded before writing so it stays under the supervisor's 8 MiB stdout
  *    capture cap (beyond-cap bytes are discarded by the supervisor and settle
- *    as 'truncated');
+ *    as 'truncated'). The write itself is AWAITED before main() returns — a
+ *    fire-and-forget write raced process.exit and truncated large envelopes
+ *    mid-flush, which the supervisor settles as 'schema_invalid' (see
+ *    defaultWrite below);
  *  - exit 0 when an envelope was written, 1 on any other failure (the
  *    supervisor classifies non-zero exits / no output as crashed or
  *    missing_output).
@@ -1000,12 +1003,22 @@ export async function runSupervisedChildEntry(
 /**
  * Stdout sink for the single-envelope contract. Injectable so tests can
  * capture the emitted bytes without owning the process' real stdout.
+ *
+ * The default sink RETURNS the Bun.write promise (never `void`s it):
+ * runChildEntryMain awaits the returned promise before its caller exits the
+ * process, so the single envelope fully flushes to the supervisor's pipe. A
+ * fire-and-forget write raced process.exit and truncated LARGE envelopes
+ * mid-flush (Bun.write had not completed when the process died) — the
+ * supervisor then saw stdout bytes with no newline-terminated JSON line and
+ * settled 'schema_invalid', crashing every large-receipt spawn (e.g. basher
+ * suite reports) while small envelopes survived. Empirical repro: a 500KB
+ * line written with `void Bun.write` + process.exit(0) arrives as 0 bytes;
+ * awaited, it arrives byte-identical.
  */
 export type ChildEntryWrite = (line: string) => void | Promise<void>
 
-const defaultWrite: ChildEntryWrite = (line) => {
-  void Bun.write(Bun.stdout, line)
-}
+const defaultWrite: ChildEntryWrite = (line) =>
+  Bun.write(Bun.stdout, line).then(() => undefined)
 
 /**
  * Process entry contract: read the request file, emit EXACTLY ONE

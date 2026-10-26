@@ -1018,6 +1018,50 @@ describe('child-entry process contract (P2-T8)', () => {
   )
 
   it.skipIf(!canSpawn)(
+    'real child process: a LARGE envelope fully flushes before exit (fire-and-forget stdout regression)',
+    async () => {
+      // Regression: the default stdout sink used to `void` the Bun.write
+      // promise, so process.exit fired while a large envelope (>64KB pipe
+      // buffer) was still pending — the supervisor settled 'schema_invalid'
+      // on the truncated stdout and every large-receipt spawn crashed. A
+      // huge child agentId rides the unsupported-deps receipt's agentId and
+      // taskId fields so the REAL process emits a >1MB envelope; the fixed
+      // sink awaits the write, so the envelope must arrive complete.
+      const largeAgentId = 'large-envelope-'.repeat(40_000) // ~560KB, doubled by taskId
+      const dir = mkdtempSync(join(tmpdir(), 'child-entry-large-'))
+      try {
+        const requestPath = join(dir, 'request.json')
+        writeFileSync(
+          requestPath,
+          JSON.stringify(makeRequest({ child: { agentId: largeAgentId } })),
+        )
+        const proc = Bun.spawn(
+          [
+            process.execPath,
+            'run',
+            join(import.meta.dir, '../child-entry.ts'),
+            requestPath,
+          ],
+          { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
+        )
+        const stdout = await new Response(proc.stdout).text()
+        const exitCode = await proc.exited
+        expect(exitCode).toBe(0)
+        expect(stdout.endsWith('\n')).toBe(true)
+        const lines = stdout.split('\n').filter((line) => line.trim().length > 0)
+        expect(lines).toHaveLength(1)
+        // The whole envelope survived the process boundary: no mid-flush cut.
+        expect(lines[0].length).toBeGreaterThan(1_000_000)
+        const parsed = agentReceiptSchema.safeParse(JSON.parse(lines[0]))
+        expect(parsed.success).toBe(true)
+        expect((parsed.data as AgentReceipt).agentId).toBe(largeAgentId)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.skipIf(!canSpawn)(
     'default seam end-to-end: the supervised child degrades honestly with an unsupported-deps receipt',
     async () => {
       const seam = buildDefaultSpawnSupervised({

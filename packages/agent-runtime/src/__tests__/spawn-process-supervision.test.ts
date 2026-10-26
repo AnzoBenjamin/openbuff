@@ -113,6 +113,25 @@ function settledCrash(
   }
 }
 
+/**
+ * A schema_invalid transport settle carrying BOTH the supervisor's
+ * structured schemaError and a stderr tail — the real-world shape a
+ * truncated/mid-flush stdout envelope settles as (see child-entry.ts's
+ * awaited defaultWrite flush fix).
+ */
+function settledSchemaInvalid(): SettledSubagentResult {
+  return {
+    outcome: 'schema_invalid',
+    schemaError: 'agentReceiptSchema: errors[0].role: Invalid enum value',
+    exitCode: 0,
+    durationMs: 5,
+    stdoutBytes: 64,
+    killed: false,
+    stderrTail:
+      'child-entry: re-coerced degraded schema members on 45 transported template(s)',
+  }
+}
+
 function makeTemplate(id: string, spawnableAgents: string[] = []): AgentTemplate {
   return {
     id,
@@ -489,6 +508,37 @@ describe('processSupervision flag routing (P2-T8)', () => {
     expect(output.message).toContain('boom from child')
   })
 
+  it('flag on: a schema_invalid settle leads its message with the structured schemaError, stderr tail appended second', async () => {
+    loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      },
+    )
+    const result = await executeSubagent(
+      buildExecuteParams({
+        processSupervision: true,
+        spawnSupervised: async () => settledSchemaInvalid(),
+      }),
+    )
+    expect(loopSpy).not.toHaveBeenCalled()
+    expect('supervisedReceipt' in result).toBe(false)
+    const output = result.output as {
+      type: string
+      message: string
+      supervisedOutcome?: string
+    }
+    expect(output.type).toBe('error')
+    // The parent-visible crash message LEADS with the supervisor's
+    // structured schemaError (the real agentReceiptSchema failure) and
+    // appends the bounded stderr tail second — previously only the stderr
+    // tail was visible, which on a large-receipt flush race is just benign
+    // child logging (the template re-coercion notice).
+    expect(output.message).toBe(
+      'Subagent thinker crashed: supervised receipt failed agentReceiptSchema (schema_invalid): agentReceiptSchema: errors[0].role: Invalid enum value | stderr: child-entry: re-coerced degraded schema members on 45 transported template(s)',
+    )
+    expect(output.supervisedOutcome).toBe('schema_invalid')
+  })
+
   it('flag on: a child-declared failed receipt (unsupported-deps) is carried verbatim', async () => {
     loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
       async () => {
@@ -550,6 +600,89 @@ describe('processSupervision flag routing (P2-T8)', () => {
     expect(output.type).toBe('error')
     expect(output.message).toContain('supervised spawn seam threw')
     expect(output.message).toContain('supervisor transport down')
+  })
+
+  // Finding code-reviewer:spawn-agent-utils.ts:supervised-branch-unguarded-throw —
+  // the supervised branch's runSupervisedSubagent call used to be unguarded: a
+  // prologue throw (resolveModelContextWindow, or
+  // serializeAgentTemplatesForTransport on a user-authored template schema)
+  // propagated out of executeSubagent AFTER the subagent_start event was
+  // emitted, skipping subagent_finish (started-but-never-finished subagent)
+  // and failing the whole parent turn. The branch now mirrors the
+  // in-process catch: finish event first, abort-only rethrow, structured
+  // degrade otherwise.
+  it('flag on: a throwing prologue (resolveModelContextWindow) still emits subagent_finish and degrades to the crash envelope', async () => {
+    loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      },
+    )
+    const chunks: Array<Record<string, unknown>> = []
+    const result = await executeSubagent(
+      buildExecuteParams({
+        processSupervision: true,
+        resolveModelContextWindow: () => {
+          throw new Error('route table unavailable')
+        },
+        // The prologue throw must never reach the seam: if it escaped the
+        // new guard, the settle below would produce a DIFFERENT crash
+        // message, failing the exact-message assertion.
+        spawnSupervised: async () =>
+          settledCrash('seam must not be reached when the prologue throws'),
+        onResponseChunk: (chunk: unknown) => {
+          chunks.push(chunk as Record<string, unknown>)
+        },
+      }),
+    )
+    expect(loopSpy).not.toHaveBeenCalled()
+    expect('supervisedReceipt' in result).toBe(false)
+    const output = result.output as { type: string; message: string }
+    expect(output.type).toBe('error')
+    expect(output.message).toBe(
+      'Subagent thinker crashed: supervised spawn prologue threw: route table unavailable',
+    )
+    // The start event fired before the prologue; the finish event MUST pair
+    // with it (started-but-never-finished was the reviewed failure mode) and
+    // carry the error text.
+    const startIdx = chunks.findIndex(
+      (chunk) => chunk.type === 'subagent_start',
+    )
+    const finishIdx = chunks.findIndex(
+      (chunk) => chunk.type === 'subagent_finish',
+    )
+    expect(startIdx).toBeGreaterThan(-1)
+    expect(finishIdx).toBeGreaterThan(startIdx)
+    expect(chunks[finishIdx]?.error).toBe('route table unavailable')
+  })
+
+  it('flag on: a prologue throw during genuine parent cancellation rethrows after the finish event', async () => {
+    loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
+        throw new Error('loopAgentSteps must not run when supervision is on')
+      },
+    )
+    const controller = new AbortController()
+    controller.abort()
+    const chunks: Array<Record<string, unknown>> = []
+    await expect(
+      executeSubagent(
+        buildExecuteParams({
+          processSupervision: true,
+          signal: controller.signal,
+          resolveModelContextWindow: () => {
+            throw new Error('aborted during route resolution')
+          },
+          spawnSupervised: async () => settledOk(OK_RECEIPT),
+          onResponseChunk: (chunk: unknown) => {
+            chunks.push(chunk as Record<string, unknown>)
+          },
+        }),
+      ),
+    ).rejects.toThrow('aborted during route resolution')
+    expect(loopSpy).not.toHaveBeenCalled()
+    // The rethrow path must not leave a started-but-never-finished
+    // subagent: the finish event fires BEFORE the cancellation rethrows.
+    expect(chunks.some((chunk) => chunk.type === 'subagent_finish')).toBe(true)
   })
 })
 
