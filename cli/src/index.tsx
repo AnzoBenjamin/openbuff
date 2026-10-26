@@ -42,6 +42,10 @@ import {
   resetCodebuffClient,
   setAttachTarget,
 } from './utils/codebuff-client'
+import {
+  startEarlyInputCapture,
+  stopEarlyInputCapture,
+} from './utils/early-input-capture'
 import { getCliEnv } from './utils/env'
 import { initializeAgentRegistry } from './utils/local-agent-registry'
 import { clearLogFile, logger } from './utils/logger'
@@ -51,6 +55,7 @@ import {
   installProcessCleanupHandlers,
   TERMINAL_RESET_SEQUENCES,
 } from './utils/renderer-cleanup'
+import { scheduleRunJournalMaintenance } from './utils/run-journal-path'
 import { initializeSkillRegistry } from './utils/skill-registry'
 import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { detectTerminalImageSupport } from './utils/terminal-images'
@@ -448,6 +453,22 @@ async function main(): Promise<void> {
     installNonRendererErrorHandlers()
   }
 
+  // Boot-window keystroke fix: keystrokes typed in the first moments after
+  // launch were silently dropped — until the Chat input mounts, the only
+  // stdin 'data' listener is the OSC probe below (which buffers early bytes
+  // into a throwaway response string), and the renderer starts consuming
+  // stdin before Chat exists. Capture stdin from the very start of the
+  // renderer path so those bytes survive; the capture is stopped immediately
+  // before the renderer is created and Chat replays the text into the input
+  // box on mount (consumeCapturedEarlyInput in chat.tsx). Gated like the OSC
+  // probe (renderer commands only; the TTY check lives inside the module),
+  // plus `publish`: isRendererCommand does not exclude it, but that path
+  // exits via process.exit(1) after initializeApp with no terminal reset, so
+  // it must never get the capture listener attached or raw mode toggled.
+  if (isRendererCommand(parsedArgs) && cliArgv[2] !== 'publish') {
+    startEarlyInputCapture()
+  }
+
   // Start OSC theme detection so it runs CONCURRENTLY with CLI init (P1-T9),
   // but ONLY on paths that end in the OpenTUI renderer. The serve/mcp/run/replay
   // commands return from main() before the renderer is created and use
@@ -784,6 +805,13 @@ async function main(): Promise<void> {
     }
   }
 
+  // Stop the boot-window capture BEFORE the renderer is created: OpenTUI
+  // claims stdin raw mode here and the capture listener must not compete
+  // with it. The return value is deliberately discarded — Chat's mount
+  // effect takes the captured text via consumeCapturedEarlyInput(), which is
+  // also what makes the replay one-shot across Chat remounts.
+  stopEarlyInputCapture()
+
   const renderer = await createCliRenderer({
     backgroundColor: 'transparent',
     exitOnCtrlC: false,
@@ -816,6 +844,23 @@ async function main(): Promise<void> {
       <AppWithAsyncAuth />
     </QueryClientProvider>,
   )
+
+  // Write-side run-journal maintenance, fire-and-forget: the shared journal
+  // file accumulates RUNS (per-run retention bounds rows, never the number of
+  // runs) and a WAL sqlite file never shrinks on DELETE alone — the user's
+  // live file had reached 3.3 GB. The common path is one O(1) stat: a file
+  // under RUN_JOURNAL_MAINTENANCE_TRIGGER_BYTES (512 MiB) never opens the
+  // db; over the trigger, one fail-open pass prunes old runs (keep newest 10)
+  // and VACUUMs the pruned pages back to the filesystem. Kicked here — the LAST
+  // step of boot (renderer path only; every non-renderer command has returned
+  // above) — AFTER the renderer is created and the first frame is handed to
+  // OpenTUI, so the boot-critical paint is never queued behind the pass, and
+  // maintainRunJournalIfNeeded itself yields to the scheduler before it opens
+  // the db, so the heavy over-trigger pass (per-run DELETEs plus a full-file
+  // VACUUM, all synchronous sqlite work) starts in a LATER macrotask instead
+  // of this boot tick. The helper swallows every failure and can never break
+  // boot.
+  scheduleRunJournalMaintenance()
 }
 
 void main()

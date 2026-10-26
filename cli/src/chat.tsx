@@ -58,6 +58,7 @@ import { usePublishStore } from './state/publish-store'
 import { trackEvent } from './utils/analytics'
 import { showClipboardMessage } from './utils/clipboard'
 import { readClipboardImage } from './utils/clipboard-image'
+import { consumeCapturedEarlyInput } from './utils/early-input-capture'
 import { getSystemMessage } from './utils/message-history'
 import { createErrorMessage } from './utils/send-message-helpers'
 import { getInputModeConfig } from './utils/input-modes'
@@ -224,6 +225,33 @@ export const Chat = ({
       setAgentMode(initialMode)
     }
   }, [initialMode, setAgentMode])
+
+  // Boot-window keystroke replay: main() captures stdin bytes typed before the
+  // renderer existed (see utils/early-input-capture.ts) and stops the capture
+  // just before creating the renderer, so this is the first component that can
+  // receive them. consumeCapturedEarlyInput() is a one-shot TAKE — the module
+  // clears its text when it hands it over — so a Chat remount (chatKey change)
+  // can never replay the same text twice, and when there is nothing to replay
+  // it returns undefined and this effect is a no-op.
+  //
+  // APPEND only, and deliberately NOT submitted: the user typed this text
+  // before the input was live, so it belongs in the input box exactly where
+  // they left it. This stays independent of the initialPrompt auto-submit flow
+  // in use-chat-input.ts — that flow submits the CLI-flag prompt on its own
+  // timer and does not read the input value, so the two never interact.
+  //
+  // lastEditDueToNav stays false: the append is a plain text edit, so the
+  // history-navigation guards in use-chat-input treat it as user typing.
+  useEffect(() => {
+    const captured = consumeCapturedEarlyInput()
+    if (captured) {
+      setInputValue((prev) => ({
+        text: prev.text + captured,
+        cursorPosition: prev.text.length + captured.length,
+        lastEditDueToNav: false,
+      }))
+    }
+  }, [setInputValue])
 
   // Additional selector for active agent types to derive phase-aware status labels
   const activeAgentTypes = useChatStore((state) => state.activeAgentTypes)

@@ -10,6 +10,7 @@ import {
   getGlobalOscTimeout,
   getQueryOscTimeout,
   computeQueryTimeoutMs,
+  shouldPauseAfterOscProbe,
 } from '../terminal-color-detection'
 
 // ============================================================================
@@ -427,6 +428,25 @@ describe('computeQueryTimeoutMs', () => {
     expect(computeQueryTimeoutMs(start + 600, start + 410)).toBeLessThanOrEqual(
       600 - 410 - 50,
     )
+  })
+})
+
+// ============================================================================
+// shouldPauseAfterOscProbe Tests
+// ============================================================================
+
+describe('shouldPauseAfterOscProbe', () => {
+  test('pauses only the stream the probe itself resumed', () => {
+    // Boot window: stdin starts non-flowing and the probe resumes it, so the
+    // probe's cleanup restores the non-flowing state it found.
+    expect(shouldPauseAfterOscProbe(false)).toBe(true)
+  })
+
+  test('never pauses a stream that was already flowing', () => {
+    // The early-input capture attaches its 'data' listener before the probe
+    // runs, so the stream is already flowing when the probe starts; the probe
+    // pausing it killed the capture's delivery mid-boot.
+    expect(shouldPauseAfterOscProbe(true)).toBe(false)
   })
 })
 

@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, it } from 'bun:test'
+import { statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -2235,6 +2236,382 @@ describe('P2-T2 slice 4: retention/rotation', () => {
       expect(journal.events('drop-b')).toHaveLength(0)
       await journal.flush()
       expect(journal.events('drop-b')).toHaveLength(0)
+    } finally {
+      journal.close()
+    }
+  })
+})
+
+describe('write-side file-level maintenance (maintain)', () => {
+  /**
+   * Journal over a createDatabase wrapper that fails every VACUUM with the
+   * injected message and reports a NON-EMPTY freelist (the suite's
+   * established wrapper seam): the busy-vacuum degradation is exercised
+   * hermetically — no second connection inside maintain and no real
+   * lock-timing flake. The freelist stub matters because maintain only
+   * attempts VACUUM when `PRAGMA freelist_count` is > 0 on its own
+   * connection, and these tiny :memory: journals free no whole pages, so
+   * without the stub the injected failure would never fire and the busy
+   * path would pass vacuously.
+   */
+  const makeFailingVacuumJournal = (vacuumErrorMessage: string) =>
+    createRunJournal({
+      path: ':memory:',
+      clock: fixedClock,
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            if (sql === 'VACUUM;') throw new Error(vacuumErrorMessage)
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            // maintain() only attempts VACUUM when its own connection
+            // reports free pages, and these tiny :memory: journals free
+            // no whole pages — stub a NON-EMPTY freelist so the injected
+            // VACUUM failure actually fires (the busy degrade is
+            // exercised, not passed vacuously).
+            if (sql === 'PRAGMA freelist_count') {
+              return { get: () => ({ freelist_count: 1 }) }
+            }
+            return (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+    })
+
+  /**
+   * Journal over a createDatabase wrapper that COUNTS connection-level
+   * VACUUM executions (the suite's established wrapper seam): proves the
+   * freelist gate skips VACUUM ENTIRELY — not merely reports vacuumed:
+   * false — on a journal whose own connection has no free pages to
+   * reclaim.
+   */
+  const makeVacuumCountingJournal = () => {
+    let vacuumAttempts = 0
+    const journal = createRunJournal({
+      path: ':memory:',
+      clock: fixedClock,
+      createDatabase: (p) => {
+        const db = new Database(p)
+        return {
+          run: (sql: string, ...params: unknown[]) => {
+            if (sql === 'VACUUM;') vacuumAttempts += 1
+            return (
+              db as unknown as {
+                run: (sql: string, ...params: unknown[]) => unknown
+              }
+            ).run(sql, ...params)
+          },
+          query: (sql: string) => {
+            return (
+              db as unknown as {
+                query: (sql: string) => {
+                  all: (...params: unknown[]) => unknown[]
+                  get: (...params: unknown[]) => unknown
+                }
+              }
+            ).query(sql)
+          },
+          close: () => {
+            ;(db as unknown as { close: () => void }).close()
+          },
+        }
+      },
+    })
+    return { journal, vacuumAttempts: () => vacuumAttempts }
+  }
+
+  it('keeps the newest K runs by FIRST-event order and deletes the older ones', () => {
+    let now = 1_000
+    const journal = makeJournalWith({ clock: { now: () => now } })
+    try {
+      for (let i = 0; i < 5; i++) {
+        journal.append(`run-${i}`, stepEvent(0))
+        now += 1_000
+      }
+      // A LATER append to the OLDEST run must not save it: maintain keys on
+      // each run's FIRST event — runIds()'s documented MIN(created_at) order —
+      // so the first keepRuns ids of that newest-first enumeration are
+      // exactly what pruneRuns receives.
+      now = 9_000
+      journal.append('run-0', stepEvent(1))
+      expect(journal.maintain({ keepRuns: 2, vacuum: false })).toEqual({
+        prunedRunCount: 3,
+        vacuumed: false,
+      })
+      expect(journal.runIds()).toEqual(['run-4', 'run-3'])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('defaults keepRuns to 10 (an :memory: prune-2 pass frees no whole page, so no VACUUM is attempted)', () => {
+    let now = 1_000
+    const journal = makeJournalWith({ clock: { now: () => now } })
+    try {
+      for (let i = 0; i < 12; i++) {
+        journal.append(`run-${i}`, stepEvent(0))
+        now += 1_000
+      }
+      // The 12 tiny runs share one page, so pruning 2 frees no whole
+      // page: the freelist gate sees an EMPTY freelist (an :memory: db
+      // reports freelist_count 0) and no VACUUM is attempted.
+      expect(journal.maintain()).toEqual({
+        prunedRunCount: 2,
+        vacuumed: false,
+      })
+      expect(journal.runIds()).toEqual([
+        'run-11',
+        'run-10',
+        'run-9',
+        'run-8',
+        'run-7',
+        'run-6',
+        'run-5',
+        'run-4',
+        'run-3',
+        'run-2',
+      ])
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('is idempotent when runs present are within keepRuns (and a no-op after close)', async () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-a', stepEvent(0))
+      journal.append('run-b', stepEvent(0))
+      expect(journal.maintain({ keepRuns: 5, vacuum: false })).toEqual({
+        prunedRunCount: 0,
+        vacuumed: false,
+      })
+      expect(journal.runIds()).toHaveLength(2)
+      // A second pass is equally inert: nothing was pruned and the
+      // freelist is empty, so the freelist gate skips VACUUM entirely
+      // instead of paying it on every pass.
+      expect(journal.maintain({ keepRuns: 5 })).toEqual({
+        prunedRunCount: 0,
+        vacuumed: false,
+      })
+      await journal.close()
+      // Post-close no-op, mirroring flush/forceFlush: the connection is
+      // gone and maintenance must never throw on it.
+      expect(journal.maintain({ keepRuns: 5 })).toEqual({
+        prunedRunCount: 0,
+        vacuumed: false,
+      })
+    } finally {
+      await journal.close()
+    }
+  })
+
+  it('keepRuns NaN behaves as the default: 12 runs prune exactly 2 (never an empty keep set)', () => {
+    let now = 1_000
+    const journal = makeJournalWith({ clock: { now: () => now } })
+    try {
+      for (let i = 0; i < 12; i++) {
+        journal.append(`run-${i}`, stepEvent(0))
+        now += 1_000
+      }
+      // NaN is type-valid but NaN-unsafe through the old clamp
+      // (Math.floor(NaN) and Math.max(1, NaN) stay NaN, slice(0, NaN) is
+      // [], and pruneRuns([]) would delete EVERY run): a non-finite
+      // keepRuns must behave as the default instead of wiping the journal.
+      expect(journal.maintain({ keepRuns: NaN, vacuum: false })).toEqual({
+        prunedRunCount: 2,
+        vacuumed: false,
+      })
+      expect(journal.runIds()).toHaveLength(10)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('keepRuns NaN with 3 runs prunes 0 (the keep set is never empty)', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-a', stepEvent(0))
+      journal.append('run-b', stepEvent(0))
+      journal.append('run-c', stepEvent(0))
+      expect(journal.maintain({ keepRuns: NaN, vacuum: false })).toEqual({
+        prunedRunCount: 0,
+        vacuumed: false,
+      })
+      expect(journal.runIds()).toHaveLength(3)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('keepRuns Infinity keeps every run (prunes 0)', () => {
+    let now = 1_000
+    const journal = makeJournalWith({ clock: { now: () => now } })
+    try {
+      for (let i = 0; i < 12; i++) {
+        journal.append(`run-${i}`, stepEvent(0))
+        now += 1_000
+      }
+      expect(
+        journal.maintain({
+          keepRuns: Number.POSITIVE_INFINITY,
+          vacuum: false,
+        }),
+      ).toEqual({ prunedRunCount: 0, vacuumed: false })
+      expect(journal.runIds()).toHaveLength(12)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('a prune-0 pass with vacuum:true on a never-pruned db reports vacuumed:false (no VACUUM attempted)', () => {
+    const { journal, vacuumAttempts } = makeVacuumCountingJournal()
+    try {
+      journal.append('run-a', stepEvent(0))
+      journal.append('run-b', stepEvent(0))
+      // A fresh db has an EMPTY freelist — nothing was ever pruned, so
+      // there are no free pages to reclaim — and a full-file VACUUM must
+      // not be attempted on every pass for a journal whose retained runs
+      // alone exceed the caller's size trigger.
+      expect(journal.maintain({ keepRuns: 5 })).toEqual({
+        prunedRunCount: 0,
+        vacuumed: false,
+      })
+      expect(vacuumAttempts()).toBe(0)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it("prunes the pruned runs' side-table rows via pruneRuns (no orphan rows)", async () => {
+    const dbPath = tmpDbPath()
+    let now = 1_000
+    // Both retention dimensions set so every append maintains BOTH side
+    // tables — the orphan-row assertion below is meaningful.
+    const journal = makeJournalWith(
+      {
+        clock: { now: () => now },
+        retention: { maxEvents: 20_000, maxBytes: 512 * 1024 * 1024 },
+      },
+      dbPath,
+    )
+    try {
+      for (let i = 0; i < 4; i++) {
+        journal.append(`run-${i}`, stepEvent(0))
+        now += 1_000
+      }
+      expect(journal.maintain({ keepRuns: 1, vacuum: false })).toEqual({
+        prunedRunCount: 3,
+        vacuumed: false,
+      })
+      expect(journal.runIds()).toEqual(['run-3'])
+    } finally {
+      await journal.close()
+    }
+    // Verify against the live file (the suite's raw-Database convention):
+    // the pruned runs left NO orphan rows in either side table.
+    const verify = new Database(dbPath)
+    try {
+      expect(
+        verify.query('SELECT DISTINCT run_id FROM run_events').all(),
+      ).toEqual([{ run_id: 'run-3' }])
+      expect(verify.query('SELECT run_id FROM run_byte_totals').all()).toEqual([
+        { run_id: 'run-3' },
+      ])
+      expect(
+        verify.query('SELECT run_id FROM run_event_counts').all(),
+      ).toEqual([{ run_id: 'run-3' }])
+    } finally {
+      verify.close()
+    }
+  })
+
+  it('vacuums a real file db so the pruned pages return to the filesystem', async () => {
+    const dbPath = tmpDbPath()
+    const bigPayload = { blob: 'x'.repeat(1013) }
+    const seeder = makeJournalWith({}, dbPath)
+    try {
+      for (let i = 0; i < 60; i++) {
+        seeder.append('keep-run', stepEvent(i, bigPayload))
+      }
+      for (let i = 0; i < 60; i++) {
+        seeder.append('drop-run', stepEvent(i, bigPayload))
+      }
+    } finally {
+      await seeder.close()
+    }
+    const sizeBefore = statSync(dbPath).size
+    const maintainer = makeJournalWith({}, dbPath)
+    try {
+      const result = maintainer.maintain({ keepRuns: 1 })
+      // One of the two runs was pruned and the VACUUM completed on the
+      // journal's own single connection (no concurrent writer holds the
+      // file here).
+      expect(result).toEqual({ prunedRunCount: 1, vacuumed: true })
+    } finally {
+      await maintainer.close()
+    }
+    // A WAL sqlite file never shrinks on DELETE alone: only VACUUM reclaims
+    // the pruned run's ~60KB of payload pages.
+    expect(statSync(dbPath).size).toBeLessThan(sizeBefore)
+    // The surviving run's rows are intact.
+    const verify = makeJournalWith({}, dbPath)
+    try {
+      const [survivor] = verify.runIds()
+      expect(verify.events(survivor!)).toHaveLength(60)
+    } finally {
+      await verify.close()
+    }
+  })
+
+  it('degrades a busy VACUUM to vacuumed false without throwing (and stays usable)', () => {
+    const journal = makeFailingVacuumJournal('database is locked')
+    try {
+      journal.append('run-a', stepEvent(0))
+      journal.append('run-b', stepEvent(0))
+      // SQLITE_BUSY — the class a concurrent writer/reader produces when
+      // it holds the exclusive access VACUUM needs — must degrade to
+      // vacuumed: false, never a throw, while the prune outcome is kept.
+      expect(journal.maintain({ keepRuns: 1 })).toEqual({
+        prunedRunCount: 1,
+        vacuumed: false,
+      })
+      expect(journal.runIds()).toHaveLength(1)
+      // The connection is not poisoned: the journal keeps appending.
+      journal.append('run-c', stepEvent(0))
+      expect(journal.runIds()).toHaveLength(2)
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('degrades a non-busy VACUUM failure fail-open (never throws)', () => {
+    const journal = makeFailingVacuumJournal('injected non-busy failure')
+    try {
+      journal.append('run-a', stepEvent(0))
+      journal.append('run-b', stepEvent(0))
+      // Any error inside maintain degrades to a returned result: the prune
+      // that already happened is reported and nothing throws onto the
+      // caller.
+      expect(journal.maintain({ keepRuns: 1 })).toEqual({
+        prunedRunCount: 1,
+        vacuumed: false,
+      })
     } finally {
       journal.close()
     }

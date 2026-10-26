@@ -115,6 +115,24 @@ export function computeQueryTimeoutMs(
 }
 
 /**
+ * Decide whether the OSC probe's cleanup may pause stdin.
+ *
+ * @internal Exported for testing
+ *
+ * WHY: cleanup used to pause stdin unconditionally, which killed data delivery
+ * for any other stdin listener attached during boot — the early-input capture
+ * (utils/early-input-capture.ts) keeps its own 'data' listener attached while
+ * the probe runs, and the probe pausing a stream it did not resume left that
+ * capture deaf for the rest of the boot window. The probe only ever pauses
+ * the stream it resumed itself: when the stream was already flowing before
+ * the probe ran, another consumer owns the flow and the probe must not touch
+ * it.
+ */
+export function shouldPauseAfterOscProbe(wasFlowing: boolean): boolean {
+  return !wasFlowing
+}
+
+/**
  * Check if the current terminal supports OSC color queries
  */
 export function terminalSupportsOSC(env: CliEnv = getCliEnv()): boolean {
@@ -192,6 +210,10 @@ async function sendOscQuery(
     let resolved = false
     let response = ''
     let wasRawMode = false
+    // Pre-probe flow state (readableFlowing === true), recorded BEFORE the
+    // probe attaches its listener/resumes the stream. Cleanup pauses stdin
+    // only when this is false — see shouldPauseAfterOscProbe.
+    let wasFlowing = false
     let dataHandler: ((data: Buffer) => void) | null = null
 
     const cleanup = () => {
@@ -218,11 +240,17 @@ async function sendOscQuery(
         }
       }
 
-      // Pause stdin so we leave it non-flowing before other listeners attach
-      try {
-        process.stdin.pause()
-      } catch {
-        // Ignore pause errors
+      // Leave stdin non-flowing ONLY when this probe is what resumed it: the
+      // boot-window early-input capture keeps its own 'data' listener attached
+      // while the probe runs, and an unconditional pause here killed delivery
+      // to it mid-boot. When the stream was already flowing before the probe,
+      // another consumer owns the flow and the probe must not touch it.
+      if (shouldPauseAfterOscProbe(wasFlowing)) {
+        try {
+          process.stdin.pause()
+        } catch {
+          // Ignore pause errors
+        }
       }
 
       // Close TTY write fd
@@ -293,6 +321,11 @@ async function sendOscQuery(
         }
       }
 
+      // Record the pre-probe flow state BEFORE attaching the listener: adding
+      // a 'data' listener itself switches the stream to flowing mode, so
+      // reading readableFlowing any later would observe the probe's own
+      // effect instead of the state it found.
+      wasFlowing = process.stdin.readableFlowing === true
       process.stdin.on('data', dataHandler)
       process.stdin.resume()
 

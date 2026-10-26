@@ -135,6 +135,21 @@ export interface RunJournal extends JournalWriter, JournalReader {
    */
   runSummaries?(): JournalRunSummary[]
   /**
+   * Optional write-side FILE-LEVEL maintenance: prune old RUNS from the
+   * journal — keeping the newest `keepRuns` runs by first-event order via
+   * the existing runIds()/pruneRuns() pair — and optionally VACUUM the
+   * shared file so a WAL sqlite db actually shrinks after deletes
+   * (per-run retention bounds each runId's ROWS but never the number of
+   * runs a shared file accumulates). WRITE-SIDE ONLY: readers (`openbuff
+   * dash`, `openbuff replay`) never call it and stay non-deleting. Never
+   * throws onto the caller; optional so an existing implementor of this
+   * interface is never broken by an added required member.
+   */
+  maintain?(params?: {
+    keepRuns?: number
+    vacuum?: boolean
+  }): { prunedRunCount: number; vacuumed: boolean }
+  /**
    * Optional (slice-4 hardening): force-drain any hot-path-batched events so
    * everything appended so far is durably committed BEFORE a side-effecting
    * tool executes — closing the kill-9 replay double-execution window that
@@ -185,6 +200,15 @@ export type CreatedRunJournal = RunJournal & {
   runIds(): string[]
   /** P2-T7 dash extension: always provided by the built-in journal. */
   runSummaries(): JournalRunSummary[]
+  /**
+   * Write-side file-level maintenance: always provided by the built-in
+   * journal. `prunedRunCount` counts RUNS deleted (runs present minus
+   * kept), not rows; `vacuumed` is true only when VACUUM completed.
+   */
+  maintain(params?: {
+    keepRuns?: number
+    vacuum?: boolean
+  }): { prunedRunCount: number; vacuumed: boolean }
   /** Slice-4 hardening: always provided by the built-in journal. */
   forceFlush(): Promise<void>
   /** Slice-4 hardening bounded read: always provided by the built-in journal. */
@@ -426,6 +450,12 @@ function rollbackTransaction(db: SqliteDb, attempts = 3): boolean {
 /** Default hot-path batching caps (P2-T2 slice 4). */
 const DEFAULT_MAX_BATCH_EVENTS = 32
 const DEFAULT_MAX_BATCH_DELAY_MS = 50
+
+/**
+ * Default run count kept by maintain(): a maintenance pass keeps the newest
+ * 10 runs by first-event order (see maintain).
+ */
+const DEFAULT_MAINTAIN_KEEP_RUNS = 10
 
 /**
  * Bounded tail window for classifyRunResume (slice-4 hardening): the resume
@@ -1498,6 +1528,122 @@ export function createRunJournal(params: {
           ? { firstCreatedAt: row.first_created_at }
           : {}),
       }))
+    },
+
+    /**
+     * Write-side FILE-LEVEL maintenance: prune old RUNS from the journal
+     * and (by default) VACUUM the shared file so the space the pruned rows
+     * occupied is actually returned to the filesystem — a WAL sqlite
+     * file never shrinks on DELETE alone. Per-run retention bounds each
+     * runId's ROWS (maxEvents/maxBytes) but never the number of runs a
+     * shared file accumulates, so this is the file-level counterpart the
+     * shared journal still needs. WRITE-SIDE ONLY: readers (`openbuff
+     * dash`, `openbuff replay`) never call it and stay non-deleting.
+     *
+     * Keeps the NEWEST `keepRuns` (default 10) runs by FIRST-event order:
+     * runIds() — newest first by MIN(created_at), its documented contract
+     * — enumerates the runs present, and the EXISTING pruneRuns() performs
+     * the delete with the first `keepRuns` ids (run_events rows plus the
+     * run_byte_totals / run_event_counts side rows and still-buffered
+     * events), so this method adds no pruning logic of its own.
+     * `prunedRunCount` counts RUNS deleted — runs present minus kept —
+     * never rows. Idempotent: when runs present <= keepRuns it is 0 and
+     * the freelist-gated VACUUM below only runs when the journal has
+     * free pages to reclaim.
+     *
+     * A NON-FINITE `keepRuns` never empties the journal: NaN and
+     * -Infinity fall back to the default (10), and +Infinity keeps every
+     * run present. Without that fallback a type-valid NaN bypasses the
+     * clamp (Math.floor(NaN) and Math.max(1, NaN) stay NaN,
+     * present.slice(0, NaN) is [], and pruneRuns([]) would delete EVERY
+     * run — an irreversible wipe returned as a successful result), so
+     * the keep set is never empty for any `keepRuns` a caller can pass.
+     *
+     * `vacuum` (default true) reclaims the pruned rows' pages by running
+     * VACUUM on this journal's OWN single connection (no second
+     * connection is opened), OUTSIDE any transaction — maintain opens
+     * none — but ONLY when the journal actually has free pages to
+     * reclaim: `PRAGMA freelist_count` is read on that same connection
+     * first, and an EMPTY freelist (nothing was ever pruned, or the
+     * deletes freed no whole pages) skips VACUUM entirely and reports
+     * `vacuumed: false` — a full-file VACUUM must not repeat on every
+     * pass for a journal whose retained runs alone exceed the caller's
+     * size trigger. When free pages DO exist, VACUUM needs exclusive
+     * access, so SQLITE_BUSY from a concurrent writer/reader is the
+     * EXPECTED degradation (e.g. the TUI's own writer is open): it
+     * resolves to `vacuumed: false` without throwing, and the prune
+     * outcome is kept either way.
+     *
+     * Fail-open: ANY error inside maintain degrades to a returned result
+     * — it never throws onto the caller, so a maintenance outage can
+     * never break the caller that kicked it.
+     */
+    maintain(params?: {
+      keepRuns?: number
+      vacuum?: boolean
+    }): { prunedRunCount: number; vacuumed: boolean } {
+      // Post-close no-op, mirroring flush/forceFlush: the connection is
+      // gone and maintenance must never throw on it.
+      if (closed) return { prunedRunCount: 0, vacuumed: false }
+      // Non-finite keepRuns must never produce an EMPTY keep set:
+      // Math.floor(NaN) and Math.max(1, NaN) stay NaN, present.slice(0,
+      // NaN) is [], and pruneRuns([]) would then delete EVERY run — an
+      // irreversible wipe returned as a successful result. NaN (and
+      // -Infinity) fall back to the default; +Infinity keeps every run
+      // present. Either way the keep set is never empty, and a finite
+      // value still clamps to a safe minimum so a misconfigured
+      // non-positive keepRuns keeps the newest run instead of emptying
+      // the journal.
+      const requestedKeepRuns = params?.keepRuns
+      const finiteKeepRuns =
+        typeof requestedKeepRuns === 'number' &&
+        Number.isFinite(requestedKeepRuns)
+          ? requestedKeepRuns
+          : DEFAULT_MAINTAIN_KEEP_RUNS
+      const keepRuns =
+        requestedKeepRuns === Number.POSITIVE_INFINITY
+          ? Number.POSITIVE_INFINITY
+          : Math.max(1, Math.floor(finiteKeepRuns))
+      const shouldVacuum = params?.vacuum ?? true
+      let prunedRunCount = 0
+      let vacuumed = false
+      try {
+        const present = this.runIds()
+        const keep = present.slice(0, keepRuns)
+        // pruneRuns deletes every run NOT in keep (side tables and
+        // still-buffered events included), so the pruned runs are exactly
+        // the newest-first enumeration's tail beyond the first keepRuns
+        // ids — no duplicated pruning logic here.
+        this.pruneRuns(keep)
+        prunedRunCount = Math.max(0, present.length - keep.length)
+        if (shouldVacuum) {
+          // Freelist gate: VACUUM rewrites the WHOLE file, so a pass whose
+          // deletes freed no whole pages (or deleted nothing at all) must
+          // not pay it on every call. Only a journal with free pages to
+          // reclaim — read on this SAME connection — attempts VACUUM; an
+          // empty freelist reports vacuumed: false without trying.
+          const freelistRow = db.query('PRAGMA freelist_count').get() as
+            | { freelist_count: number }
+            | undefined
+          const freePages = freelistRow?.freelist_count ?? 0
+          if (freePages > 0) {
+            try {
+              db.run('VACUUM;')
+              vacuumed = true
+            } catch (error) {
+              // The EXPECTED degradation: a concurrent writer/reader holds
+              // the exclusive access VACUUM needs. Anything else falls to
+              // the fail-open catch below.
+              if (!isSqliteBusyError(error)) throw error
+            }
+          }
+        }
+      } catch {
+        // Fail-open: maintenance is best-effort by design — degrade to
+        // the outcome accumulated so far instead of throwing onto the
+        // caller.
+      }
+      return { prunedRunCount, vacuumed }
     },
 
     /**

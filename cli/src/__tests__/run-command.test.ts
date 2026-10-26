@@ -170,6 +170,7 @@ describe('runHeadlessCommand', () => {
       flush: () => Promise.resolve(),
       close: () => Promise.resolve(),
       pruneRuns: () => undefined,
+      maintain: () => ({ prunedRunCount: 0, vacuumed: false }),
       runIds: () => [],
       runSummaries: () => [],
       forceFlush: async () => {},

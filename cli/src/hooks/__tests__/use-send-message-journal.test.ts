@@ -116,6 +116,7 @@ describe('useSendMessage journal lazy-open ordering', () => {
           runSummaries: () => [],
           flush: () => Promise.resolve(),
           pruneRuns: () => {},
+          maintain: () => ({ prunedRunCount: 0, vacuumed: false }),
           close: () => Promise.resolve(),
           // CreatedRunJournal hardening members (slice 4): no-op stubs so the
           // fake satisfies the full structural shape the opener returns.
