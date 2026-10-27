@@ -1475,6 +1475,119 @@ function test3() {
     })
   })
 
+  describe('near-match oracle agreement (preflight veto)', () => {
+    afterEach(() => {
+      mock.restore()
+    })
+
+    type TreeSitterDetection = Awaited<
+      ReturnType<typeof codeMap.detectSyntaxErrorViaTreeSitter>
+    >
+    const mockTreeSitterDetection = (result: {
+      available: boolean
+      hasError: boolean
+    }) => {
+      spyOn(codeMap, 'detectSyntaxErrorViaTreeSitter').mockImplementation(
+        async () => result as TreeSitterDetection,
+      )
+    }
+
+    it('refuses a near-match candidate the preflight oracle rejects even when tree-sitter accepts it', async () => {
+      // Tree-sitter is mocked clean, so the ONLY gate that can refuse this
+      // candidate is the preflight oracle veto: Bun.Transpiler genuinely
+      // rejects the injected `const broken = :` line while the mocked
+      // tree-sitter call cannot see it. Two oracles disagreeing about the
+      // same file must resolve toward rejection — the near-match falls
+      // through to the rich diagnostic error instead of auto-correcting
+      // bytes the edit tools' preflight would reject moments later.
+      mockTreeSitterDetection({ available: true, hasError: false })
+
+      const initialContent = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subTotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      // Same shape as the accepted single-winner fixture, but the return
+      // line additionally injects a genuine Bun parse error that rides past
+      // every similarity/uniqueness gate (which never look at newStr) and
+      // past the bracket-balanced structural checks.
+      const newStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        'const broken = :',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('The old string')
+      }
+    })
+
+    it('still auto-corrects when both oracles accept the candidate', async () => {
+      // Both oracles agree the candidate parses clean: the mocked
+      // tree-sitter gate accepts and the real Bun.Transpiler preflight
+      // accepts too, so the veto must not narrow legitimate
+      // auto-corrections.
+      mockTreeSitterDetection({ available: true, hasError: false })
+
+      const initialContent = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subTotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal * 1.0825',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('content' in result).toBe(true)
+      if ('content' in result) {
+        expect(result.content).toBe(newStr)
+        expect(
+          result.messages.some((msg) =>
+            msg.includes('auto-corrected a near-match edit'),
+          ),
+        ).toBe(true)
+      }
+    })
+  })
+
   it('should not auto-correct a short oldString below the autocorrect min length (Fix E)', async () => {
     // Regression test for Fix E: NEAR_MATCH_AUTOCORRECT_MIN_OLD_STR_LENGTH is
     // 30 in source. A short oldString (< 30 chars after trim) that misses an

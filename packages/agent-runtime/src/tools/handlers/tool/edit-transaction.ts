@@ -42,6 +42,7 @@ import {
   preflightValidateSyntax,
   formatPreflightErrorMessage,
 } from '../../../util/preflight-syntax-validation'
+import type { SyntaxValidationResult } from '../../../util/preflight-syntax-validation'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { FileProcessingState } from './write-file'
@@ -182,6 +183,92 @@ function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
       Array.isArray(edit.replacements) &&
       edit.replacements.some((replacement) => Boolean(replacement.basedOnRead)))
   )
+}
+
+type ContentLedger = Parameters<typeof attributeContentOffset>[0]
+
+type PreflightFailureAttribution = {
+  editIndex: number
+  attributionSuffix: string
+}
+
+/**
+ * Refines the naive first-edit-on-path attribution with the transaction
+ * ledger: it records which edit produced each byte range of the candidate
+ * content, so the edit that actually emitted the broken bytes is named
+ * instead of the first edit that happened to touch the same path.
+ */
+function resolvePreflightFailureAttribution(params: {
+  syntaxValidation: SyntaxValidationResult
+  file: { path: string; content: string; ledger?: ContentLedger }
+  edits: TransactionEdit[]
+  fallbackEditIndex: number
+  originalIndexByContentEditIndex: Map<number, number>
+  initialContentByPath: Map<string, string | null>
+}): PreflightFailureAttribution {
+  const {
+    syntaxValidation,
+    file,
+    edits,
+    fallbackEditIndex,
+    originalIndexByContentEditIndex,
+    initialContentByPath,
+  } = params
+  let editIndex = fallbackEditIndex
+  let attributionSuffix = ''
+  if (typeof syntaxValidation.line === 'number' && syntaxValidation.line >= 1) {
+    // getLineCoordinates normalizes line endings, matching the normalized
+    // space the ledger is built in (via normalizeLineEndings), so this
+    // offset is comparable to the ledger's after-range offsets. On CRLF
+    // files a column may drift by the dropped \r — positions here are
+    // best-effort diagnostics, not anchors.
+    const { lines, visibleLineCount } = getLineCoordinates(file.content)
+    const clampedLine = Math.min(syntaxValidation.line, visibleLineCount)
+    let offset = 0
+    for (let index = 0; index < clampedLine - 1; index++) {
+      offset += lines[index]!.length + 1
+    }
+    if (
+      typeof syntaxValidation.column === 'number' &&
+      syntaxValidation.column >= 1
+    ) {
+      offset += Math.min(
+        syntaxValidation.column - 1,
+        lines[clampedLine - 1]!.length,
+      )
+    }
+    const attribution = attributeContentOffset(file.ledger ?? [], offset)
+    const originalContent = initialContentByPath.get(file.path)
+    // The ledger's owningEditIndex is an index into contentEdits (the
+    // array processEditTransaction received), so translate it back to the
+    // model's original edits[] index before reporting it.
+    const originalEditIndex =
+      attribution.owningEditIndex === null
+        ? undefined
+        : originalIndexByContentEditIndex.get(attribution.owningEditIndex)
+    if (
+      originalEditIndex !== undefined &&
+      originalEditIndex >= 0 &&
+      originalEditIndex < edits.length
+    ) {
+      editIndex = originalEditIndex
+      attributionSuffix = ` The failing content was produced by edit ${editIndex + 1} of ${edits.length} (near line ${syntaxValidation.line} of the candidate content).`
+    } else if (
+      attribution.originalOffset !== null &&
+      typeof originalContent === 'string'
+    ) {
+      // Best-effort: the ledger maps original offsets in line-ending
+      // normalized space, so on CRLF files the reported current-file line
+      // may drift by the dropped carriage returns.
+      const originalLine = originalContent
+        .slice(0, attribution.originalOffset)
+        .split('\n').length
+      attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content (line ${originalLine} of the current file).`
+    } else {
+      attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content.`
+    }
+  }
+  return { editIndex, attributionSuffix }
 }
 
 /**
@@ -1193,67 +1280,15 @@ export const handleEditTransaction = (async (
       const fallbackEditIndex = edits.findIndex(
         (edit) => edit.path === file.path,
       )
-      let editIndex = fallbackEditIndex
-      // Refine the naive first-edit-on-path attribution with the transaction
-      // ledger: it records which edit produced each byte range of the candidate
-      // content, so the edit that actually emitted the broken bytes is named
-      // instead of the first edit that happened to touch the same path.
-      let attributionSuffix = ''
-      if (
-        typeof syntaxValidation.line === 'number' &&
-        syntaxValidation.line >= 1
-      ) {
-        // getLineCoordinates normalizes line endings, matching the normalized
-        // space the ledger is built in (via normalizeLineEndings), so this
-        // offset is comparable to the ledger's after-range offsets. On CRLF
-        // files a column may drift by the dropped \r — positions here are
-        // best-effort diagnostics, not anchors.
-        const { lines, visibleLineCount } = getLineCoordinates(file.content)
-        const clampedLine = Math.min(syntaxValidation.line, visibleLineCount)
-        let offset = 0
-        for (let index = 0; index < clampedLine - 1; index++) {
-          offset += lines[index]!.length + 1
-        }
-        if (
-          typeof syntaxValidation.column === 'number' &&
-          syntaxValidation.column >= 1
-        ) {
-          offset += Math.min(
-            syntaxValidation.column - 1,
-            lines[clampedLine - 1]!.length,
-          )
-        }
-        const attribution = attributeContentOffset(file.ledger ?? [], offset)
-        const originalContent = initialContentByPath.get(file.path)
-        // The ledger's owningEditIndex is an index into contentEdits (the
-        // array processEditTransaction received), so translate it back to the
-        // model's original edits[] index before reporting it.
-        const originalEditIndex =
-          attribution.owningEditIndex === null
-            ? undefined
-            : originalIndexByContentEditIndex.get(attribution.owningEditIndex)
-        if (
-          originalEditIndex !== undefined &&
-          originalEditIndex >= 0 &&
-          originalEditIndex < edits.length
-        ) {
-          editIndex = originalEditIndex
-          attributionSuffix = ` The failing content was produced by edit ${editIndex + 1} of ${edits.length} (near line ${syntaxValidation.line} of the candidate content).`
-        } else if (
-          attribution.originalOffset !== null &&
-          typeof originalContent === 'string'
-        ) {
-          // Best-effort: the ledger maps original offsets in line-ending
-          // normalized space, so on CRLF files the reported current-file line
-          // may drift by the dropped carriage returns.
-          const originalLine = originalContent
-            .slice(0, attribution.originalOffset)
-            .split('\n').length
-          attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content (line ${originalLine} of the current file).`
-        } else {
-          attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content.`
-        }
-      }
+      const { editIndex, attributionSuffix } =
+        resolvePreflightFailureAttribution({
+          syntaxValidation,
+          file,
+          edits,
+          fallbackEditIndex,
+          originalIndexByContentEditIndex,
+          initialContentByPath,
+        })
       // The truncation classifier inspects the payload of the REFINED edit
       // index. For single-edit and first-edit-on-path transactions the refined
       // index equals the naive findIndex one, so the classification is

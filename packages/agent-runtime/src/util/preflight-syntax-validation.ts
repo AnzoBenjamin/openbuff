@@ -118,6 +118,14 @@ export async function preflightValidateSyntax(
 }
 
 /**
+ * Leads with the candidate-content diagnosis (the incident: ~10 rejections for
+ * a content syntax error while the model re-split transactions and re-minted
+ * capabilities), then demotes the two structural causes to fallbacks.
+ */
+const EDIT_TRANSACTION_PREFLIGHT_GUIDANCE =
+  'NO files were changed. Do NOT resubmit the same edit_transaction; it will fail the same way.\nThe syntax error is in the candidate content the edits would produce, not in the current file (which is unchanged): fix the parser tokens cited above inside your newString/content before resubmitting. Re-splitting the transaction, re-minting read capabilities, or switching edit types does not fix a syntax error in the content itself.\nIf the cited tokens do not pinpoint it, two structural causes are common: (1) a rewritten import block — prefer structured insert_import/remove_import operations instead of rewriting an entire import block (e.g. an `import { ... }` left without a valid `from "..."`); (2) an oversized edit (newString/content roughly >30-50 KB) cut in transport, producing a mid-body syntax error like `Unexpected ,` — then re-read the exact target range with `read_files` and resubmit smaller capability-anchored edits (`replace_range` with `readCapability` or `str_replace` with `basedOnRead`), each anchored on a unique declaration, rather than one monolithic transaction.'
+
+/**
  * Formats a preflight failure error message for a given tool. Used by the
  * str_replace, write_file, edit_transaction, and apply_smart_patch handlers to
  * produce consistent recovery guidance when preflight rejects an edit.
@@ -133,7 +141,7 @@ export function formatPreflightErrorMessage(
 ): string {
   const toolSpecificGuidance =
     toolName === 'edit_transaction'
-      ? 'NO files were changed. Do NOT resubmit the same edit_transaction; it will fail the same way.\nThe syntax error is in the candidate content the edits would produce, not in the current file (which is unchanged): fix the parser tokens cited above inside your newString/content before resubmitting. Re-splitting the transaction, re-minting read capabilities, or switching edit types does not fix a syntax error in the content itself.\nIf the cited tokens do not pinpoint it, two structural causes are common: (1) a rewritten import block — prefer structured insert_import/remove_import operations instead of rewriting an entire import block (e.g. an `import { ... }` left without a valid `from "..."`); (2) an oversized edit (newString/content roughly >30-50 KB) cut in transport, producing a mid-body syntax error like `Unexpected ,` — then re-read the exact target range with `read_files` and resubmit smaller capability-anchored edits (`replace_range` with `readCapability` or `str_replace` with `basedOnRead`), each anchored on a unique declaration, rather than one monolithic transaction.'
+      ? EDIT_TRANSACTION_PREFLIGHT_GUIDANCE
       : toolName === 'apply_smart_patch'
         ? 'The smart patch was NOT written to disk. Do NOT resubmit the same patch; it will fail the same way.'
         : 'The edit was NOT written to disk. Do NOT resubmit the same edit; it will fail the same way.'

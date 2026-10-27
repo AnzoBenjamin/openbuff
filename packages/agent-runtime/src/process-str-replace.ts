@@ -9,7 +9,11 @@ import {
   findLiteralOccurrences,
   nthLiteralOccurrenceIndex,
 } from './structural-read'
-import { getBunTranspilerLoader } from './util/preflight-syntax-validation'
+import {
+  getBunTranspilerLoader,
+  isJavaScriptLikePath,
+  preflightValidateSyntax,
+} from './util/preflight-syntax-validation'
 
 import {
   getContentHash,
@@ -1877,6 +1881,10 @@ function getSymbolIdentityBoost(params: {
  *    (Node runtime, no grammar for the language, init error) this fails open
  *    to the cheap bracket-balance check (Fix B), which is now the fallback
  *    only — never the primary gate where grammars are available.
+ *  - the FULL candidate content also passes the preflight oracle
+ *    (`preflightValidateSyntax`, Bun.Transpiler) for JS/TS paths — the same
+ *    oracle the edit tools' preflight uses, so the two gates can never
+ *    disagree (Node: fails open)
  */
 async function tryNearMatchAutoCorrect(params: {
   initialContent: string
@@ -2045,6 +2053,16 @@ async function tryNearMatchAutoCorrect(params: {
     // as the fallback so environments without grammars (Node runtime)
     // behave exactly as before.
     return null
+  }
+
+  // Oracle agreement: the edit tools' own preflight (Bun.Transpiler for JS/TS)
+  // must also accept the candidate. Without this, the near-match gate could pass
+  // tree-sitter yet land bytes the preflight gate rejects moments later — two
+  // syntax oracles disagreeing about the same file. preflightValidateSyntax
+  // fails open in the Node runtime, so Node behavior is exactly as before.
+  if (isJavaScriptLikePath(path)) {
+    const preflight = await preflightValidateSyntax(path, candidateContent)
+    if (!preflight.valid) return null
   }
 
   return {
