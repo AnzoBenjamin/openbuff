@@ -34,7 +34,10 @@ import {
   coordinateEditApplication,
   invalidatePreparedEditPaths,
 } from './edit-application-coordinator'
-import { processEditTransaction } from '../../../process-edit-transaction'
+import {
+  attributeContentOffset,
+  processEditTransaction,
+} from '../../../process-edit-transaction'
 import {
   preflightValidateSyntax,
   formatPreflightErrorMessage,
@@ -968,15 +971,39 @@ export const handleEditTransaction = (async (
     runId,
     logger,
   )
-  const contentEdits = substitutedEdits.filter(
-    (edit) =>
+  // processEditTransaction receives ONLY the content edits (create/delete/move
+  // are applied by the client-change builder below), so every index it reports
+  // — including the transformation ledger's per-action editIndex — is an index
+  // into contentEdits. This map translates those back to the model's original
+  // edits[] indices so failure attribution keeps naming the submitted edit.
+  // processEditTransaction's own edit union covers exactly these six members,
+  // so the Extract keeps contentEdits assignable to its edits parameter.
+  const contentEdits: Extract<
+    TransactionEdit,
+    {
+      type:
+        | 'str_replace'
+        | 'structured'
+        | 'replace_range'
+        | 'rewrite_symbol'
+        | 'patch'
+        | 'write_file'
+    }
+  >[] = []
+  const originalIndexByContentEditIndex = new Map<number, number>()
+  substitutedEdits.forEach((edit, editIndex) => {
+    if (
       edit.type === 'str_replace' ||
       edit.type === 'structured' ||
       edit.type === 'replace_range' ||
       edit.type === 'rewrite_symbol' ||
       edit.type === 'patch' ||
-      edit.type === 'write_file',
-  )
+      edit.type === 'write_file'
+    ) {
+      originalIndexByContentEditIndex.set(contentEdits.length, editIndex)
+      contentEdits.push(edit)
+    }
+  })
   const transactionResult =
     contentEdits.length > 0
       ? await processEditTransaction({
@@ -1160,16 +1187,86 @@ export const handleEditTransaction = (async (
       // were structurally applied but the resulting content has a syntax
       // error. Don't force a re-read (markAllTransactionPathsAsRequiringRead)
       // — the agent only needs to fix the syntax, not re-read all files.
-      // Report the first edit index that targeted this path so the agent can
-      // identify which edit produced the broken content (multiple edits can
-      // target the same path; the first is the most actionable starting point).
-      const editIndex = edits.findIndex((edit) => edit.path === file.path)
+      // Report the edit that produced the broken content so the agent can fix
+      // it; the first-edit-on-path fallback below is only the starting point
+      // when the ledger cannot attribute the bytes.
+      const fallbackEditIndex = edits.findIndex(
+        (edit) => edit.path === file.path,
+      )
+      let editIndex = fallbackEditIndex
+      // Refine the naive first-edit-on-path attribution with the transaction
+      // ledger: it records which edit produced each byte range of the candidate
+      // content, so the edit that actually emitted the broken bytes is named
+      // instead of the first edit that happened to touch the same path.
+      let attributionSuffix = ''
+      if (
+        typeof syntaxValidation.line === 'number' &&
+        syntaxValidation.line >= 1
+      ) {
+        // getLineCoordinates normalizes line endings, matching the normalized
+        // space the ledger is built in (via normalizeLineEndings), so this
+        // offset is comparable to the ledger's after-range offsets. On CRLF
+        // files a column may drift by the dropped \r — positions here are
+        // best-effort diagnostics, not anchors.
+        const { lines, visibleLineCount } = getLineCoordinates(file.content)
+        const clampedLine = Math.min(syntaxValidation.line, visibleLineCount)
+        let offset = 0
+        for (let index = 0; index < clampedLine - 1; index++) {
+          offset += lines[index]!.length + 1
+        }
+        if (
+          typeof syntaxValidation.column === 'number' &&
+          syntaxValidation.column >= 1
+        ) {
+          offset += Math.min(
+            syntaxValidation.column - 1,
+            lines[clampedLine - 1]!.length,
+          )
+        }
+        const attribution = attributeContentOffset(file.ledger ?? [], offset)
+        const originalContent = initialContentByPath.get(file.path)
+        // The ledger's owningEditIndex is an index into contentEdits (the
+        // array processEditTransaction received), so translate it back to the
+        // model's original edits[] index before reporting it.
+        const originalEditIndex =
+          attribution.owningEditIndex === null
+            ? undefined
+            : originalIndexByContentEditIndex.get(attribution.owningEditIndex)
+        if (
+          originalEditIndex !== undefined &&
+          originalEditIndex >= 0 &&
+          originalEditIndex < edits.length
+        ) {
+          editIndex = originalEditIndex
+          attributionSuffix = ` The failing content was produced by edit ${editIndex + 1} of ${edits.length} (near line ${syntaxValidation.line} of the candidate content).`
+        } else if (
+          attribution.originalOffset !== null &&
+          typeof originalContent === 'string'
+        ) {
+          // Best-effort: the ledger maps original offsets in line-ending
+          // normalized space, so on CRLF files the reported current-file line
+          // may drift by the dropped carriage returns.
+          const originalLine = originalContent
+            .slice(0, attribution.originalOffset)
+            .split('\n').length
+          attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content (line ${originalLine} of the current file).`
+        } else {
+          attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content.`
+        }
+      }
+      // The truncation classifier inspects the payload of the REFINED edit
+      // index. For single-edit and first-edit-on-path transactions the refined
+      // index equals the naive findIndex one, so the classification is
+      // byte-identical to the pre-attribution behavior.
       const truncated = looksLikeTruncatedEditContent(
         edits[editIndex] ??
           ({ type: 'delete', path: file.path } as TransactionEdit),
         syntaxValidation.message,
         file.content,
       )
+      // The attribution suffix rides along only on the genuine-syntax-error
+      // branch; a transport-truncated payload keeps its existing note.
+      const composedSyntaxMessage = `${syntaxValidation.message}${attributionSuffix}`
       return {
         output: [
           {
@@ -1180,13 +1277,15 @@ export const handleEditTransaction = (async (
                 file.path,
                 truncated
                   ? `${syntaxValidation.message} — the edit payload appears cut in transport (unbalanced delimiters). Re-send the edit; keep each edit's newString/content well under the transport-safe band.`
-                  : syntaxValidation.message,
+                  : composedSyntaxMessage,
               ),
               failures: [
                 {
                   editIndex,
                   path: file.path,
-                  errorMessage: syntaxValidation.message,
+                  errorMessage: truncated
+                    ? syntaxValidation.message
+                    : composedSyntaxMessage,
                   failureKind: truncated
                     ? PAYLOAD_TRUNCATED_ERROR_CODE
                     : 'preflight_failed',

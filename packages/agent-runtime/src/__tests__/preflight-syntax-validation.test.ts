@@ -72,6 +72,50 @@ describe('preflightValidateSyntax — JS/TS (Bun.Transpiler)', () => {
   })
 })
 
+describe('preflightValidateSyntax — JS/TS parse-error detail', () => {
+  it('surfaces Bun sub-error tokens for a comma-less function-type parameter list (the incident shape)', async () => {
+    // The incident: a missing comma between function-type parameters. Bun
+    // reports this as MULTIPLE sub-errors on an AggregateError whose top-level
+    // message is the useless literal 'Parse error'. The composed message must
+    // carry the sub-error tokens verbatim (the edit-tool truncation classifier
+    // regexes them) plus a best-effort candidate-content position.
+    const content = [
+      'type T = {',
+      '  f: (',
+      '    a: A,',
+      '    b?: { x: number }',
+      '    c?: string,',
+      '  ) => string',
+      '}',
+      '',
+    ].join('\n')
+    const result = await preflightValidateSyntax('broken-type.ts', content)
+    expect(result.valid).toBe(false)
+    expect(result.message).not.toBe('Parse error')
+    expect(result.message).toContain('Parse error:')
+    expect(result.message).toContain('Expected')
+    expect(result.message).toContain('of the candidate content')
+    // Bun's multi-error position is best-effort: never pin the exact line.
+    expect(typeof result.line).toBe('number')
+    expect(result.line ?? 0).toBeGreaterThanOrEqual(1)
+  })
+
+  it('keeps the descriptive top-level message and 1-based position for a single parse error', async () => {
+    const result = await preflightValidateSyntax(
+      'broken.ts',
+      'const x = :\nconst y = 1\n',
+    )
+    expect(result.valid).toBe(false)
+    expect(result.message).toContain('Unexpected')
+    // A single Bun parse error is not an AggregateError, so its descriptive
+    // top-level message must survive without the 'Parse error:' label.
+    expect(result.message).not.toContain('Parse error:')
+    // Probe-verified 0-based line 0 / column 10, reported 1-based.
+    expect(result.line).toBe(1)
+    expect(result.column).toBe(11)
+  })
+})
+
 describe('preflightValidateSyntax — Python', () => {
   it('accepts valid Python', async () => {
     const content = [
@@ -413,6 +457,24 @@ describe('formatPreflightErrorMessage', () => {
     expect(msg).toContain('NO files were changed')
     expect(msg).toContain('insert_import')
     expect(msg).toContain('remove_import')
+  })
+
+  it('leads the edit_transaction guidance with the candidate-content diagnosis', () => {
+    const msg = formatPreflightErrorMessage(
+      'edit_transaction',
+      'baz.ts',
+      'Expected ")" but found ":"',
+    )
+    expect(msg).toContain('candidate content')
+    expect(msg).toContain('insert_import')
+    expect(msg).toContain('remove_import')
+    expect(msg).toContain('NO files were changed')
+    // The candidate-content diagnosis must come BEFORE the structural causes
+    // (import rewrite / transport truncation) so a genuine content syntax
+    // error is not misdirected into recovery rituals.
+    expect(msg.indexOf('candidate content')).toBeLessThan(
+      msg.indexOf('insert_import'),
+    )
   })
 
   it('includes write_file recovery guidance', () => {
