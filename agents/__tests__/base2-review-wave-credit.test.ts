@@ -316,7 +316,7 @@ describe('base2 wave credit accumulation across specialists', () => {
     // the actual spawned set, or a missing result can be mistaken for a
     // no-verdict review and credited with reduced assurance.
     expect(base2Source).toContain(
-      'const retrySpecialists = spawnableSpecialists.filter((agentType) => {',
+      'const retrySpecialists = spawnableSpecialists.filter(\n                (agentType) => {',
     )
     expect(base2Source).toContain(
       'if (!specialistTerminalFailure) {\n                for (const agentType of spawnableSpecialists) {',
@@ -451,24 +451,51 @@ describe('base2 wave credit accumulation across specialists', () => {
     const helpers = loadInlineReviewCreditHelpers()
     helpers.resetWaveCompletions()
     const plannedWaves = [['agents/a.ts', 'agents/b.ts']]
+    const firstFingerprint = 'v3:' + 'c'.repeat(64)
+    const secondFingerprint = 'v3:' + 'd'.repeat(64)
+    // The first snapshot's pass credits only part of the wave.
     helpers.recordWaveCompletionsForFiles(
       ['agents/a.ts'],
       plannedWaves,
-      'v3:' + 'c'.repeat(64),
+      firstFingerprint,
       'reviewer-a',
     )
-    // A different fingerprint must not inherit the prior partial credit: the
-    // wave stays incomplete until the new snapshot's files are credited.
+    // A different fingerprint must not inherit the prior partial credit, so
+    // crediting the wave's REMAINING file under the new fingerprint must
+    // still leave the new snapshot's wave incomplete: a.ts's credit was
+    // recorded under the FIRST fingerprint only. If cross-fingerprint
+    // inheritance were restored, the inherited a.ts credit plus this pass's
+    // b.ts credit would mark the new snapshot's wave complete.
+    helpers.recordWaveCompletionsForFiles(
+      ['agents/b.ts'],
+      plannedWaves,
+      secondFingerprint,
+      'reviewer-a',
+    )
+    const entryFor = (fingerprint: string) =>
+      Object.values(helpers.getWaveCompletions()).find(
+        (entry) => entry.fingerprint === fingerprint,
+      )
+    const firstEntry = entryFor(firstFingerprint)
+    expect(firstEntry).toBeDefined()
+    expect(firstEntry?.creditedFiles).toEqual(['agents/a.ts'])
+    // The first snapshot's partial entry is untouched and still incomplete.
+    expect(firstEntry?.completedAt).toBeUndefined()
+    const secondEntry = entryFor(secondFingerprint)
+    expect(secondEntry).toBeDefined()
+    // The new snapshot's wave carries ONLY this pass's credit, so it stays
+    // incomplete — the prior fingerprint's a.ts credit did not carry across.
+    expect(secondEntry?.creditedFiles).toEqual(['agents/b.ts'])
+    expect(secondEntry?.completedAt).toBeUndefined()
+    // Completing the new snapshot's wave requires crediting a.ts under the
+    // NEW fingerprint; the prior fingerprint's credit is no substitute.
     helpers.recordWaveCompletionsForFiles(
       ['agents/a.ts'],
       plannedWaves,
-      'v3:' + 'd'.repeat(64),
+      secondFingerprint,
       'reviewer-a',
     )
-    const completions = helpers.getWaveCompletions()
-    for (const entry of Object.values(completions)) {
-      expect(entry.completedAt).toBeUndefined()
-    }
+    expect(entryFor(secondFingerprint)?.completedAt).toBeDefined()
   })
 
   test('the bound retains prior-snapshot waves so a revert re-finds its partial credit', () => {
@@ -644,17 +671,34 @@ describe('base2 wave credit accumulation across specialists', () => {
     const key = Object.keys(helpers.getWaveCompletions())[0]
     const firstStamp = helpers.getWaveCompletions()[key].lastTouchedAt
     expect(typeof firstStamp).toBe('string')
-    // A later pass re-credits the SAME key in place; the stamp must be present
-    // on the re-write (it is what makes the bucket rank as most-recently
-    // touched even though its insertion position is unchanged).
+    // Backdate the entry's stamp to a fixed past instant: two
+    // `new Date().toISOString()` calls inside the same millisecond produce
+    // IDENTICAL strings, so comparing against the live first stamp could not
+    // distinguish a refresh from a preserve. The recorder never READS
+    // `lastTouchedAt` (only boundWaveCompletions ranks by it), so backdating
+    // cannot change which path the re-write takes — the same direct-seeding
+    // technique the sibling touch-ranking test uses.
+    const backdatedStamp = '2020-01-01T00:00:00.000Z'
+    helpers.getWaveCompletions()[key].lastTouchedAt = backdatedStamp
+    // A later pass re-credits the SAME key in place; the stamp must be
+    // REFRESHED on the re-write (it is what makes the bucket rank as
+    // most-recently touched even though its insertion position is unchanged).
     helpers.recordWaveCompletionsForFiles(
       ['agents/b.ts'],
       plannedWaves,
       fingerprint,
       'reviewer-a',
     )
-    expect(typeof helpers.getWaveCompletions()[key].lastTouchedAt).toBe('string')
-    expect(helpers.getWaveCompletions()[key].completedAt).toBeDefined()
+    const completions = helpers.getWaveCompletions()
+    const refreshedStamp = completions[key].lastTouchedAt as string
+    expect(typeof refreshedStamp).toBe('string')
+    // ISO-8601 stamps are fixed-width, so they compare lexicographically: the
+    // re-write's stamp is not older than the recorded one, and because that
+    // recorded one was backdated it must be strictly NEWER — a re-write that
+    // merely PRESERVED the entry's existing stamp would leave the strings
+    // equal and fail here.
+    expect(refreshedStamp > backdatedStamp).toBe(true)
+    expect(completions[key].completedAt).toBeDefined()
   })
 })
 
@@ -768,9 +812,12 @@ describe('base2 wave-completion bound preserves fingerprint-less (legacy) entrie
     > = {}
     // 8 stale fingerprints — exactly the retention limit — plus several
     // fingerprint-less entries and the current fingerprint.
+    const staleFingerprintKeys: string[] = []
     for (let i = 0; i < 8; i++) {
       const fingerprint = `v3:${(i + 1).toString(16).padStart(64, '0')}`
-      completions[waveKeyFor(fingerprint)] = {
+      const staleKey = waveKeyFor(fingerprint)
+      staleFingerprintKeys.push(staleKey)
+      completions[staleKey] = {
         fingerprint,
         waveIndex: 0,
         files: ['agents/a.ts'],
@@ -798,6 +845,15 @@ describe('base2 wave-completion bound preserves fingerprint-less (legacy) entrie
     // Every legacy entry survives and no stale fingerprint was evicted early.
     for (let i = 0; i < 3; i++) {
       expect(bounded[`legacy-${i}#w0#` + '0'.repeat(64)]).toBeDefined()
+    }
+    // Each seeded stale fingerprint survives as well: exactly 8 of them (the
+    // retention limit) are seeded, so a regression that let the
+    // fingerprint-less bucket consume the distinct-fingerprint budget would
+    // evict the earliest-ranked stale fingerprint (these buckets carry no
+    // lastTouchedAt, so ranking falls back to first-seen order) — silently,
+    // unless the seeded keys themselves are asserted.
+    for (const staleKey of staleFingerprintKeys) {
+      expect(bounded[staleKey]).toBeDefined()
     }
     expect(bounded[waveKeyFor(currentFingerprint)]).toBeDefined()
   })
