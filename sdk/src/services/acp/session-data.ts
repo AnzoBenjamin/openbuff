@@ -58,6 +58,18 @@ const MAX_RECEIPTS_PER_SESSION = 256
 /** Default and maximum `limit` served by `openbuff/getReceipts`. */
 const DEFAULT_RECEIPT_LIMIT = 50
 const MAX_RECEIPT_LIMIT = 256
+/**
+ * Producer bounds mirrored from base2's `formatGateStateBlock` for the
+ * additive reviewer attribution and machine skip reason. Both the lenient
+ * parse path and the journal-replay structural validation enforce them as
+ * sanitize-then-cap (see `sanitizeGateStateText`): the block text is
+ * arbitrary assistant output and the journal is an untrusted boundary, so
+ * this consumer never trusts the payload's own hygiene — it applies the
+ * producer's sanitize step itself before the bounds checks.
+ */
+const MAX_GATE_STATE_REVIEWERS = 4
+const MAX_GATE_STATE_REVIEWER_LENGTH = 64
+const MAX_GATE_STATE_SKIP_REASON_LENGTH = 120
 
 /**
  * Constructor options for `AcpSessionData`. Everything is optional so the
@@ -134,8 +146,9 @@ export type AcpGateStateResult = {
  * The latest parsed `<gate-state>` payload for a session. Producer:
  * `formatGateStateBlock` in agents/base2/base2.ts, which emits
  * `<gate-state>{...}</gate-state>` with `gate`/`status`/`details` always
- * present and `repairRound`/`maxRepairRounds`/`advisories`/`workflow`
- * optional and additive. `phase` is this store's projection of the payload.
+ * present and `repairRound`/`maxRepairRounds`/`advisories`/`workflow`/
+ * `reviewers`/`skipReason` optional and additive. `phase` is this store's
+ * projection of the payload.
  */
 export type AcpGateStateSnapshot = {
   gate: string
@@ -149,6 +162,29 @@ export type AcpGateStateSnapshot = {
     totalCount: number
     nextWorkflowAction: string
   }
+  /**
+   * Reviewer-family agent types that produced the gate result (e.g.
+   * `['reliability-reviewer']`). Additive: absent on blocks persisted before
+   * the key existed. Sanitized at parse time (whitespace collapsed, C0/DEL
+   * stripped) and bounded to at most 4 entries of at most 64 characters each;
+   * journal replay accepts only bytes that already satisfy that contract, so
+   * control bytes can never reach the ext-v1 wire.
+   */
+  reviewers?: string[]
+  /**
+   * Machine skip/error token attached to skipped AND terminally-failed gate
+   * blocks (e.g. `specialist-rate-limited`), distinct from the human-facing
+   * `details`. Not coupled to `status`: base2 attaches the token to `failed`
+   * blocks as well as `skipped` ones (the specialist rate-limit,
+   * specialist-terminal-failure, and edits-detected-without-pending-gate-files
+   * paths all emit it on a `failed` block), so a consumer that guards on
+   * `status === 'skipped'` before reading it misses the operationally most
+   * important tokens. Additive: absent on blocks persisted before the key
+   * existed. Sanitized at parse time (whitespace collapsed, C0/DEL stripped)
+   * and bounded to at most 120 characters; journal replay accepts only bytes
+   * that already satisfy that contract.
+   */
+  skipReason?: string
   phase: Exclude<AcpGatePhase, 'idle'>
 }
 
@@ -221,7 +257,11 @@ function isRedactionCleanWireEnvelope(
   }
   for (const action of mutation.actions) {
     if (!isPlainRecord(action)) return false
-    if ('afterContent' in action || 'patch' in action || 'editAnchor' in action) {
+    if (
+      'afterContent' in action ||
+      'patch' in action ||
+      'editAnchor' in action
+    ) {
       return false
     }
   }
@@ -292,7 +332,9 @@ function projectGatePhase(
   return gate === 'validation' ? 'validating' : 'reviewing'
 }
 
-function parseWorkflowProgress(value: unknown): AcpGateStateSnapshot['workflow'] {
+function parseWorkflowProgress(
+  value: unknown,
+): AcpGateStateSnapshot['workflow'] {
   if (!isPlainRecord(value)) return undefined
   const { completedCount, totalCount, nextWorkflowAction } = value
   if (
@@ -305,6 +347,77 @@ function parseWorkflowProgress(value: unknown): AcpGateStateSnapshot['workflow']
     return undefined
   }
   return { completedCount, totalCount, nextWorkflowAction }
+}
+
+/**
+ * The producer's sanitize step for the additive gate-state strings, mirroring
+ * the CLI consumer (`sanitizeGateStateText` in
+ * cli/src/utils/message-block-helpers.ts) so both sides of the published block
+ * contract agree on which bytes a stored reviewer or skipReason value may
+ * contain. Order matters: collapse whitespace FIRST so tabs/newlines become
+ * single spaces, then strip the remaining C0/DEL control bytes, then trim —
+ * so a hand- or model-authored payload cannot smuggle ANSI escapes onto the
+ * ext-v1 wire, and an entry made only of control characters collapses to the
+ * empty string (which the bounds checks then drop). Idempotent, which
+ * `isGateStateSnapshot` relies on to tell bytes the store itself wrote from
+ * tampered journal bytes.
+ */
+function sanitizeGateStateText(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .trim()
+}
+
+/**
+ * Additive reviewer-family attribution from the published block. Shared by
+ * the lenient parse path and the journal-replay structural validation so both
+ * enforce the SAME producer contract — sanitize-then-cap, exactly like the
+ * CLI parser: an all-strings array of at most MAX_GATE_STATE_REVIEWERS
+ * entries, each sanitized (whitespace collapsed, C0/DEL stripped, trimmed)
+ * and then at least 1 and at most MAX_GATE_STATE_REVIEWER_LENGTH characters.
+ * The SANITIZED entries are returned, so capture stores clean bytes; anything
+ * else yields undefined (the field is dropped whole), mirroring how
+ * `parseWorkflowProgress` doubles as the replay validator.
+ */
+function parseReviewerList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_GATE_STATE_REVIEWERS) {
+    return undefined
+  }
+  const reviewers: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') return undefined
+    const sanitized = sanitizeGateStateText(entry)
+    if (
+      sanitized.length === 0 ||
+      sanitized.length > MAX_GATE_STATE_REVIEWER_LENGTH
+    ) {
+      return undefined
+    }
+    reviewers.push(sanitized)
+  }
+  return reviewers
+}
+
+/**
+ * Additive machine skip reason from the published block. Shared by the
+ * lenient parse path and the journal-replay structural validation so both
+ * enforce the SAME producer contract — sanitize-then-cap, exactly like the
+ * CLI parser: a non-empty string sanitized (whitespace collapsed, C0/DEL
+ * stripped, trimmed) and then at most MAX_GATE_STATE_SKIP_REASON_LENGTH
+ * characters. The SANITIZED string is returned, so capture stores clean
+ * bytes; anything else yields undefined (the field is dropped whole).
+ */
+function parseSkipReason(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const sanitized = sanitizeGateStateText(value)
+  if (
+    sanitized.length === 0 ||
+    sanitized.length > MAX_GATE_STATE_SKIP_REASON_LENGTH
+  ) {
+    return undefined
+  }
+  return sanitized
 }
 
 /**
@@ -331,8 +444,12 @@ const STORED_GATE_PHASES: ReadonlySet<string> = new Set([
  * `parseGateStateBlock` accepts: known gate, non-empty status, string
  * details, a stored (non-idle) phase, and shape-valid optional fields.
  * Everything `parseGateStateBlock` produces passes; anything else — an
- * unknown gate name, an invented phase, a malformed `workflow` — is
- * rejected so the caller treats the snapshot as ABSENT.
+ * unknown gate name, an invented phase, a malformed `workflow`, `reviewers`
+ * list, or `skipReason` — is rejected so the caller treats the snapshot as
+ * ABSENT. Replay is intentionally STRICTER than the lenient parse on the
+ * additive string fields: `parseGateStateBlock` sanitizes at capture, so a
+ * snapshot whose reviewer/skipReason bytes are not already sanitized is a
+ * shape only a tampered journal could produce.
  */
 function isGateStateSnapshot(value: unknown): value is AcpGateStateSnapshot {
   if (!isPlainRecord(value)) return false
@@ -343,10 +460,7 @@ function isGateStateSnapshot(value: unknown): value is AcpGateStateSnapshot {
     return false
   }
   if (typeof value.details !== 'string') return false
-  if (
-    typeof value.phase !== 'string' ||
-    !STORED_GATE_PHASES.has(value.phase)
-  ) {
+  if (typeof value.phase !== 'string' || !STORED_GATE_PHASES.has(value.phase)) {
     return false
   }
   for (const key of ['repairRound', 'maxRepairRounds'] as const) {
@@ -366,6 +480,29 @@ function isGateStateSnapshot(value: unknown): value is AcpGateStateSnapshot {
     // Reuses the producer-side validator: an object that fails it is a
     // shape no real snapshot could have carried.
     if (parseWorkflowProgress(value.workflow) === undefined) return false
+  }
+  if (value.reviewers !== undefined) {
+    // Same reuse as `workflow`: a reviewers list outside the producer bounds
+    // is a shape no real snapshot could have carried, so the whole snapshot
+    // is rejected (mirroring the `advisories` all-strings gate).
+    const reviewers = parseReviewerList(value.reviewers)
+    if (reviewers === undefined) return false
+    // Replay strictness: `parseGateStateBlock` sanitizes at capture, so a
+    // snapshot this store wrote carries ALREADY-sanitized reviewer bytes and
+    // the sanitize round-trip above is the identity. A hand-edited journal
+    // line carrying ANSI/control or uncollapsed-whitespace bytes fails it, so
+    // the snapshot is treated as ABSENT — the raw bytes are never projected
+    // onto the ext-v1 wire.
+    const rawReviewers = value.reviewers as string[]
+    if (rawReviewers.some((entry, index) => entry !== reviewers[index])) {
+      return false
+    }
+  }
+  if (value.skipReason !== undefined) {
+    const skipReason = parseSkipReason(value.skipReason)
+    if (skipReason === undefined) return false
+    // Same replay strictness as `reviewers`.
+    if ((value.skipReason as string) !== skipReason) return false
   }
   return true
 }
@@ -423,10 +560,20 @@ export function parseGateStateBlock(
   if (workflow) {
     snapshot.workflow = workflow
   }
+  const reviewers = parseReviewerList(payload.reviewers)
+  if (reviewers !== undefined) {
+    snapshot.reviewers = reviewers
+  }
+  const skipReason = parseSkipReason(payload.skipReason)
+  if (skipReason !== undefined) {
+    snapshot.skipReason = skipReason
+  }
   return snapshot
 }
 
-function projectEnvelopeReceipt(envelope: AcpWireReceiptEnvelope): AcpWireReceipt {
+function projectEnvelopeReceipt(
+  envelope: AcpWireReceiptEnvelope,
+): AcpWireReceipt {
   const paths: string[] = []
   const actionIds: string[] = []
   for (const action of envelope.mutation.actions) {
@@ -451,6 +598,20 @@ function projectEnvelopeReceipt(envelope: AcpWireReceiptEnvelope): AcpWireReceip
     paths,
     actionIds,
   }
+}
+
+/**
+ * Serialized identity of one stored envelope, used only by
+ * `restoreFromJournal`'s merge dedupe. The journal persists the exact bytes
+ * of the envelope object the store recorded, so a live envelope and its
+ * journaled copy serialize identically — the key recognizes "the same
+ * receipt" across the memory/journal boundary without collapsing two
+ * genuinely different envelopes (a re-recorded operation with different
+ * content stays two entries, matching `pushEnvelope`, which never
+ * dedupes).
+ */
+function envelopeIdentity(envelope: AcpWireReceiptEnvelope): string {
+  return JSON.stringify(envelope)
 }
 
 /**
@@ -486,6 +647,31 @@ function projectGateStateV1(
     default:
       status = 'idle'
   }
+  // The additive machine `skipReason` is the contract's precise skip token,
+  // so it wins whenever the producer recorded one (parseSkipReason already
+  // sanitized and bounded it at capture). Otherwise the producer's `details`
+  // line IS the published skip explanation (the gate-state block emitter
+  // records the skip reason as `details`), so a skipped snapshot surfaces it
+  // as the contract's optional skipReason. That fallback is arbitrary
+  // assistant-authored text, so it gets the same sanitizeGateStateText
+  // treatment plus the published 120-char machine-token cap
+  // (MAX_GATE_STATE_SKIP_REASON_LENGTH, which gateStateV1Schema also enforces
+  // — an over-long token has no wire representation), and the key is omitted
+  // entirely when nothing survives sanitization. Nothing is invented when
+  // the producer recorded none.
+  const detailsSkipReason =
+    snapshot?.phase === 'skipped'
+      ? sanitizeGateStateText(snapshot.details).slice(
+          0,
+          MAX_GATE_STATE_SKIP_REASON_LENGTH,
+        )
+      : ''
+  const skipReason =
+    snapshot?.skipReason !== undefined
+      ? snapshot.skipReason
+      : detailsSkipReason.length > 0
+        ? detailsSkipReason
+        : undefined
   return {
     kind: 'openbuff.gate_state',
     version: 1,
@@ -493,12 +679,12 @@ function projectGateStateV1(
     status,
     pendingFiles: [],
     passedFiles: [],
-    // The producer's `details` line IS the published skip explanation (the
-    // gate-state block emitter records the skip reason as `details`), so a
-    // skipped snapshot surfaces it as the contract's optional skipReason;
-    // nothing is invented when the producer recorded none.
-    ...(snapshot?.phase === 'skipped' && snapshot.details.length > 0
-      ? { skipReason: snapshot.details }
+    ...(skipReason !== undefined ? { skipReason } : {}),
+    // Additive reviewer-family attribution, projected only when the snapshot
+    // actually recorded a non-empty list (never for the idle/no-snapshot
+    // shape).
+    ...(snapshot?.reviewers !== undefined && snapshot.reviewers.length > 0
+      ? { reviewers: snapshot.reviewers }
       : {}),
   }
 }
@@ -509,10 +695,16 @@ function projectGateStateV1(
  * with a `journalDir`, every receipt/gate-state mutation is mirrored to a
  * durable per-session JSONL journal (replayed via `restoreFromJournal`);
  * without one the store stays purely in-memory with zero filesystem access.
+ * Replay is safe to run while a session is actively being recorded: it
+ * merges into live per-session state instead of replacing it (see
+ * `restoreFromJournal`).
  */
 export class AcpSessionData {
   /** Newest-last; capped at MAX_RECEIPTS_PER_SESSION by recordReceipt. */
-  private readonly receiptsBySession = new Map<string, AcpWireReceiptEnvelope[]>()
+  private readonly receiptsBySession = new Map<
+    string,
+    AcpWireReceiptEnvelope[]
+  >()
   /** Latest gate-state snapshot per session (one per session, replace-on-update). */
   private readonly gateStateBySession = new Map<string, AcpGateStateSnapshot>()
   /** Latest ext-v1 capability map per session (one per session, replace-on-set). */
@@ -720,8 +912,8 @@ export class AcpSessionData {
    *
    * Note: the published block does NOT carry the current-task pointer —
    * `formatGateStateBlock` emits only gate/status/details/repairRound/
-   * maxRepairRounds/advisories/workflow — so the projection honestly
-   * reports `currentTask: null` rather than guessing.
+   * maxRepairRounds/advisories/workflow/reviewers/skipReason — so the
+   * projection honestly reports `currentTask: null` rather than guessing.
    */
   updateGateStateFromBlock(sessionId: string, blockText: string): void {
     const snapshot = parseGateStateBlock(blockText)
@@ -834,6 +1026,26 @@ export class AcpSessionData {
    * lines re-derive the honest baseline map instead of serving the
    * replayed bytes verbatim.
    *
+   * Replay MERGES into the live per-session state instead of replacing it.
+   * The invariant that makes the merge provably safe: the journal is a
+   * trailing mirror of memory. This store instance is the journal's only
+   * writer (one instance serves the whole process, per the class contract),
+   * and every recording path mutates memory first and queues its journal
+   * write after — so memory is never OLDER than the journal for the same
+   * session, while the journal may legitimately lag memory (the readFile
+   * below runs outside the write queue and can miss writes still queued).
+   * Replay therefore only FILLS state memory lacks and never rewinds state
+   * memory already has: replayed envelopes are unioned into the existing
+   * bucket — envelopes already live are recognized by serialized identity
+   * (`envelopeIdentity`) and never duplicated — and the merged bucket is
+   * re-capped at MAX_RECEIPTS_PER_SESSION with the live envelopes kept
+   * newest, while the single-slot gate snapshot and capability map are
+   * applied only when the session has no live value. A receipt, gate-state
+   * block, or capability map recorded for the same session while the
+   * journal is being read — or just before, with its journal write still
+   * queued — therefore always survives, so a later overflow
+   * `rewriteJournal` persists the complete merged state.
+   *
    * Returns whether a journal file existed for the session.
    */
   async restoreFromJournal(sessionId: string): Promise<boolean> {
@@ -895,7 +1107,12 @@ export class AcpSessionData {
         }
       } else if (parsed.kind === 'capabilities') {
         const replayed = capabilityMapV1Schema.safeParse(parsed.capabilities)
-        if (replayed.success) {
+        // Fill-only: a session that already has a live map is never rewound
+        // to the replayed (re-derived) one — by the invariant above the live
+        // map is at least as new as the journal, including a map set while
+        // this journal was being read or just before with its journal write
+        // still queued.
+        if (replayed.success && !this.capabilitiesBySession.has(sessionId)) {
           // Honest re-derivation: journal replay exists so a restored session
           // HAS a capability map (§6.1) — its journal flags come from THIS
           // store, and every other field is the honest P1 serve default. The
@@ -908,9 +1125,32 @@ export class AcpSessionData {
       }
     }
     if (receipts.length > 0) {
-      this.receiptsBySession.set(sessionId, receipts)
+      // Merge, never replace: the replayed envelopes restore durable
+      // history, while the live bucket may still hold envelopes recorded
+      // before or during the read whose journal appends have not flushed
+      // (journal IO is best-effort and fire-and-forget). Live envelopes the
+      // replay already contains are skipped, so re-loading a session this
+      // process is recording never duplicates receipts, and the merged
+      // bucket is re-capped so the per-session bound still holds.
+      const merged = [...receipts]
+      const replayedKeys = new Set(merged.map(envelopeIdentity))
+      for (const envelope of this.receiptsBySession.get(sessionId) ?? []) {
+        const identity = envelopeIdentity(envelope)
+        if (replayedKeys.has(identity)) continue
+        replayedKeys.add(identity)
+        merged.push(envelope)
+      }
+      if (merged.length > MAX_RECEIPTS_PER_SESSION) {
+        merged.splice(0, merged.length - MAX_RECEIPTS_PER_SESSION)
+      }
+      this.receiptsBySession.set(sessionId, merged)
     }
-    if (snapshot) {
+    if (snapshot && !this.gateStateBySession.has(sessionId)) {
+      // Fill-only: a session that already has a live snapshot is never
+      // rewound to the replayed one — by the invariant above the live
+      // snapshot is at least as new as the journal, including a block
+      // published while this journal was being read or just before with
+      // its journal write still queued.
       this.gateStateBySession.set(sessionId, snapshot)
     }
     return true

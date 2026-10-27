@@ -385,6 +385,23 @@ export type Base2ActiveWorkState = Base2GateState & {
   /** Number of automatic reviewer retries caused by protocol/attestation errors. */
   reviewerProtocolRetryCount?: number
   /**
+   * Dedicated durable latch for the reviewer-protocol retry policy
+   * (reliability: specialist-exit-overwrites-reviewer-protocol-guard-token).
+   * `lastReviewerGateSkipReason` is PUBLISHED telemetry — specialist
+   * no-progress / repair-cycle / no-verdict-budget / terminal / rate-limited
+   * exits assign it unconditionally so the published block always matches its
+   * own details — which makes it unsafe as a policy guard: a specialist exit
+   * on the pass after a protocol-blocked turn would overwrite the armed
+   * 'reviewer-protocol-attestation-failed' token and silently disarm the
+   * protocol guards. This latch is armed ONLY at the twice-attestation-failure
+   * site, cleared exactly wherever reviewerProtocolRetryCount resets, and
+   * read by reviewerProtocolBlocked / skipReviewerForReviewableScope / the
+   * reviewer-spawn gate. Backward-compatible: pre-split serialized state
+   * lacks the field; rehydration derives it one-time from the token (`??=`),
+   * so an in-flight protocol-blocked turn keeps its guard armed.
+   */
+  reviewerProtocolAttestationFailed?: boolean
+  /**
    * Number of reviewer-finding repair rounds for the current snapshot family.
    * Telemetry/counter only by default (unlimited / progress-gated). Optional
    * hard cap via maxReviewerRepairRounds / OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS

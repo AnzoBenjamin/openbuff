@@ -5,11 +5,8 @@ import path from 'node:path'
 
 import { LocalHarnessStore } from '../services/local-harness-store'
 import { resolveWorkspaceIdentity } from '../services/repository-identity'
-import {
-  runSemgrepBaseline,
-  SIGTERM_GRACE_MS,
-} from '../services/semgrep-baseline'
-import { gitStatus, runGit } from './git-status'
+import { runSemgrepBaseline } from '../services/semgrep-baseline'
+import { gitStatus, runGitBounded } from './git-status'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
@@ -37,6 +34,13 @@ const isSessionArtifactPath = (file: string): boolean => {
  * MAX_SNAPSHOT_ID_FILE_BYTES bytes, read asynchronously via fs.promises, and
  * every identity-path git spawn carries a SNAPSHOT_ID_GIT_TIMEOUT_MS
  * wall-clock deadline so a wedged git fails closed instead of hanging.
+ * (reliability: bundle-rev-parse-head-unbounded) the deadline covers the
+ * bundle's ENTIRE git surface — the prelude (status/diff observation,
+ * rev-parse HEAD, workspace identity) and the security-scan baseline
+ * resolution all route through runGitBounded or the deadline-threaded
+ * helpers — so the fail-closed guarantee holds end-to-end for the bundle
+ * the gate invokes every cycle, not only inside
+ * buildSnapshotIdentity/computeWorktreeSnapshotIdentity.
  */
 const MAX_SNAPSHOT_ID_DIFF_BYTES = 4 * 1024 * 1024
 const MAX_SNAPSHOT_ID_FILE_BYTES = 1024 * 1024
@@ -59,184 +63,12 @@ const SNAPSHOT_ID_READ_CONCURRENCY = 8
  */
 const SNAPSHOT_ID_GIT_TIMEOUT_MS = 10_000
 
-/**
- * Retains at most `cap` bytes across 'data' chunks while still counting every
- * byte received, so a caller can hash a bounded prefix while mixing the
- * UNtruncated size into its digest. Used by runGitBounded to bound the
- * snapshot-identity path's diff capture
- * (perf: snapshot-identity-diff-capture-unbounded).
- */
-class BoundedOutputCollector {
-  private chunks: Buffer[] = []
-  private retained = 0
-  total = 0
-
-  constructor(private readonly cap: number) {}
-
-  push(chunk: Buffer): void {
-    this.total += chunk.length
-    const remaining = this.cap - this.retained
-    if (remaining <= 0) return
-    const take = Math.min(remaining, chunk.length)
-    this.chunks.push(chunk.subarray(0, take))
-    this.retained += take
-  }
-
-  text(): string {
-    return Buffer.concat(this.chunks).toString('utf8')
-  }
-}
-
-/**
- * Bounded git spawn for the snapshot-identity path
- * (perf: snapshot-identity-diff-capture-unbounded,
- * identity-git-spawns-no-deadline). Unlike runGit, this never buffers more
- * than `maxOutputBytes` bytes per stream — git may emit arbitrarily more, but
- * only the first cap bytes are retained while every byte is still counted
- * (surfaced as stdoutTotalBytes so the hash can mix in the untruncated size) —
- * and a wall-clock deadline kills a wedged git instead of hanging the caller.
- * The AbortSignal path mirrors the semgrep and diagnostic runners' escalation
- * shape (perf: run-git-bounded-abort-no-sigkill-escalation): a bare SIGTERM
- * is followed by a SIGKILL after the shorter of the shared grace period and
- * the remaining deadline, so a git child that ignores SIGTERM is reaped with
- * its piped stdio instead of leaking past the caller's cancellation.
- */
-export async function runGitBounded(
-  args: string[],
-  cwd: string,
-  signal: AbortSignal | undefined,
-  options: {
-    timeoutMs: number
-    maxOutputBytes: number
-    /**
-     * Grace between the abort-path SIGTERM and the SIGKILL escalation
-     * (perf: run-git-bounded-abort-no-sigkill-escalation). Defaults to the
-     * shared SIGTERM_GRACE_MS the semgrep and diagnostic runners mirror.
-     */
-    sigtermGraceMs?: number
-  },
-): Promise<{
-  stdout: string
-  stderr: string
-  exitCode: number
-  /** Total stdout bytes emitted by git, retained or not. */
-  stdoutTotalBytes: number
-}> {
-  if (signal?.aborted) {
-    const reason = signal.reason
-    return {
-      stdout: '',
-      stderr: reason instanceof Error ? reason.message : 'Aborted',
-      exitCode: -1,
-      stdoutTotalBytes: 0,
-    }
-  }
-  return await new Promise((resolve) => {
-    let child: ReturnType<typeof spawn>
-    try {
-      child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    } catch (error) {
-      resolve({
-        stdout: '',
-        stderr: error instanceof Error ? error.message : String(error),
-        exitCode: -1,
-        stdoutTotalBytes: 0,
-      })
-      return
-    }
-    const stdoutCollector = new BoundedOutputCollector(options.maxOutputBytes)
-    const stderrCollector = new BoundedOutputCollector(options.maxOutputBytes)
-    let settled = false
-    let removeAbortListener = () => {}
-    let deadline: ReturnType<typeof setTimeout> | undefined
-    let escalate: ReturnType<typeof setTimeout> | undefined
-    const startedAt = Date.now()
-    const graceMs = options.sigtermGraceMs ?? SIGTERM_GRACE_MS
-
-    const settle = (result: { stderrNote?: string; exitCode: number }) => {
-      if (settled) return
-      settled = true
-      if (deadline !== undefined) clearTimeout(deadline)
-      if (escalate !== undefined) clearTimeout(escalate)
-      removeAbortListener()
-      const stderrNote = result.stderrNote ?? ''
-      resolve({
-        stdout: stdoutCollector.text(),
-        stderr: stderrCollector.text() + stderrNote,
-        exitCode: result.exitCode,
-        stdoutTotalBytes: stdoutCollector.total,
-      })
-    }
-
-    deadline = setTimeout(() => {
-      settle({
-        stderrNote: `git timed out after ${options.timeoutMs}ms`,
-        exitCode: -1,
-      })
-      try {
-        child.kill('SIGKILL')
-      } catch {}
-    }, options.timeoutMs)
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (settled) return
-      stdoutCollector.push(chunk)
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (settled) return
-      stderrCollector.push(chunk)
-    })
-    child.on('error', (error) => {
-      settle({ stderrNote: error.message, exitCode: -1 })
-    })
-    child.on('close', (code) => {
-      settle({ exitCode: code ?? -1 })
-    })
-
-    if (signal) {
-      const onAbort = () => {
-        if (settled) return
-        const reason = signal.reason
-        settle({
-          stderrNote: reason instanceof Error ? reason.message : 'Aborted',
-          exitCode: -1,
-        })
-        try {
-          child.kill('SIGTERM')
-        } catch {}
-        // SIGTERM → SIGKILL escalation (perf:
-        // run-git-bounded-abort-no-sigkill-escalation): a git child that
-        // ignores SIGTERM must not keep running with live piped stdio after
-        // the caller cancelled. The escalation fires after the shorter of the
-        // shared grace period and the remaining deadline, so the child is
-        // reaped no later than the original wall-clock deadline. Unref'd (a
-        // timer must never hold the process open on its own) and cleared in
-        // settle when the child exits on the SIGTERM alone.
-        const remainingMs = Math.max(
-          0,
-          options.timeoutMs - (Date.now() - startedAt),
-        )
-        const escalateDelayMs = Math.min(graceMs, remainingMs)
-        if (escalateDelayMs <= 0) {
-          try {
-            child.kill('SIGKILL')
-          } catch {}
-          return
-        }
-        escalate = setTimeout(() => {
-          try {
-            child.kill('SIGKILL')
-          } catch {}
-        }, escalateDelayMs)
-        escalate.unref()
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      removeAbortListener = () => {
-        signal.removeEventListener('abort', onAbort)
-      }
-    }
-  })
-}
+// runGitBounded and its BoundedOutputCollector moved to git-status.ts
+// (reliability: bundle-rev-parse-head-unbounded) so gitStatus can thread an
+// opt-in wall-clock deadline without an import cycle; re-export the runner
+// so the historical import path (run-git-bounded.test.ts and this file's
+// prior consumers) keeps working.
+export { runGitBounded }
 
 /**
  * A3 advisory (committed-diff identity under git's C-style quoting): when a
@@ -414,18 +246,28 @@ async function resolveSecurityScanBaseline(params: {
   headCommit: string
   signal?: AbortSignal
 }): Promise<string | null> {
-  const defaultRef = await runGit(
+  // (reliability: bundle-rev-parse-head-unbounded) the baseline resolution
+  // is best-effort fail-open, so every spawn runs under the identity
+  // deadline: a wedged git resolves exitCode -1 and the scan surfaces
+  // 'skipped' (no-baseline-commit) instead of hanging the bundle.
+  const bounded = {
+    timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
+    maxOutputBytes: 4096,
+  }
+  const defaultRef = await runGitBounded(
     ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
     params.cwd,
     params.signal,
+    bounded,
   )
   if (defaultRef.exitCode === 0) {
     const ref = defaultRef.stdout.trim()
     if (isSafeRefName(ref)) {
-      const mergeBase = await runGit(
+      const mergeBase = await runGitBounded(
         ['merge-base', 'HEAD', ref],
         params.cwd,
         params.signal,
+        bounded,
       )
       const candidate = mergeBase.stdout.trim()
       if (
@@ -437,10 +279,11 @@ async function resolveSecurityScanBaseline(params: {
       }
     }
   }
-  const parent = await runGit(
+  const parent = await runGitBounded(
     ['rev-parse', '--verify', 'HEAD~1'],
     params.cwd,
     params.signal,
+    bounded,
   )
   const fallback = parent.stdout.trim()
   if (
@@ -561,11 +404,27 @@ export async function hashIdentityFileBytes(
   }
   let nextToStart = 0
   const inFlight: Promise<{ header: string; bytes?: Buffer } | null>[] = []
+  // The fan-out is total: a no-op rejection observer is attached at
+  // CREATION time — the push-time .catch shape — rather than after the
+  // oldest awaited read rejects. Thread scheduling completes the opens in
+  // any order, so a sibling read can already have rejected by the time a
+  // catch around `await pending` would run, and an unhandledRejection event
+  // that already fired cannot be retracted by a later handler
+  // (allSettled-after-the-fact was too late for exactly that reason). The
+  // observer only marks sibling rejections observed; the original error
+  // still propagates through `await pending` below and the caller fails
+  // closed.
+  const observed = (
+    read: Promise<{ header: string; bytes?: Buffer } | null>,
+  ): Promise<{ header: string; bytes?: Buffer } | null> => {
+    void read.catch(() => null)
+    return read
+  }
   while (
     inFlight.length < SNAPSHOT_ID_READ_CONCURRENCY &&
     nextToStart < sorted.length
   ) {
-    inFlight.push(readContribution(sorted[nextToStart++]!))
+    inFlight.push(observed(readContribution(sorted[nextToStart++]!)))
   }
   let settled = 0
   while (settled < sorted.length) {
@@ -577,7 +436,7 @@ export async function hashIdentityFileBytes(
       inFlight.length < SNAPSHOT_ID_READ_CONCURRENCY &&
       nextToStart < sorted.length
     ) {
-      inFlight.push(readContribution(sorted[nextToStart++]!))
+      inFlight.push(observed(readContribution(sorted[nextToStart++]!)))
     }
     const contribution = await pending
     if (contribution === null) {
@@ -594,13 +453,29 @@ export async function hashIdentityFileBytes(
  * Core snapshot-identity computation shared by the full change-review bundle
  * and the identity-only targeted-validation path, so the two snapshotId
  * computations can never drift apart. `identityLines` is the uncollapsed
- * `git status --porcelain -uall` output. Throws on git failure; callers map
- * that to their own error shape.
+ * `git status --porcelain -uall` output. `workspaceState` no longer
+ * participates in the hash — the id is content-keyed (see the preimage
+ * comment below) — but stays on the signature so callers keep one shape;
+ * the bundle payload still echoes its journal coordinates. Throws on git
+ * failure; callers map that to their own error shape.
  */
 async function buildSnapshotIdentity(params: {
   cwd: string
   headCommit: string
   identityLines: string[]
+  /**
+   * UNtruncated byte total of the `git status --porcelain -uall` spawn that
+   * produced `identityLines` (runGitBounded's stdoutTotalBytes). The spawn
+   * excludes `.agents/sessions/**` at the pathspec — mirroring the diff
+   * spawn — so the total is artifact-clean: session plan artifacts never
+   * reach it and can never move the snapshotId through the status-length
+   * term. The bounded spawn retains only the first
+   * MAX_SNAPSHOT_ID_DIFF_BYTES bytes, so changed/untracked files past the
+   * cap are dropped from the identity lines; the total joins the hash
+   * preimage (the status-length term) so the cap boundary can never alias
+   * two distinct worktree states.
+   */
+  statusTotalBytes: number
   workspaceState?: WorkspaceStateV1
   signal?: AbortSignal
 }): Promise<{
@@ -676,10 +551,39 @@ async function buildSnapshotIdentity(params: {
         `git diff exited with code ${fullDiff.exitCode}.`,
     )
   }
+  // Content-keyed preimage: the bare-hex snapshotId is evidence-only worktree
+  // content identity (files/diff/HEAD), so it changes ONLY on real
+  // worktree/HEAD drift. The harness workspace journal
+  // (workspaceState.revision + workspaceState.snapshotId) used to be mixed in
+  // here, but that journal advances on EVERY confirmed edit AND
+  // conservatively on every run_terminal_command / run_file_change_hooks /
+  // run_targeted_validation / custom-tool call, so during one gate cycle
+  // (repair → validation → hooks → reviewers) parallel specialists each read
+  // a DIFFERENT bare-hex id with zero file changes — the id was useless as a
+  // drift signal and reviewers narrated spurious "live-bundle drift".
+  // Callers that need the journal binding still get workspaceRevision /
+  // workspaceSnapshotId echoed in the payload, and the harness-store scoping
+  // in getChangeReviewBundle (record.snapshotId === snapshotId) now keeps
+  // records in scope exactly while the content they were written against is
+  // unchanged.
   const hash = createHash('sha256')
-    .update(
-      `${params.headCommit}\0${identityStatus}\0${params.workspaceState?.revision ?? 'unknown'}\0${params.workspaceState?.snapshotId ?? 'unknown'}\0`,
-    )
+    .update(`${params.headCommit}\0${identityStatus}\0`)
+    // (correctness: porcelain-total-bytes-not-hashed) identityStatus and the
+    // identity file list are built from only the RETAINED porcelain prefix:
+    // runGitBounded keeps the first MAX_SNAPSHOT_ID_DIFF_BYTES bytes of the
+    // `git status --porcelain -uall` output that produced identityLines, so
+    // changed/untracked files past the cap are silently dropped from the
+    // identity lines and `files` — and untracked files never appear in the
+    // tracked diff either, so two worktree states differing only past the
+    // cap used to hash to an identical snapshotId and the
+    // runTargetedValidation before/after drift check failed open. The
+    // spawn's UNtruncated byte total joins the preimage here, mirroring the
+    // diff-length term below, so the cap boundary can never alias two
+    // distinct worktree states. The porcelain spawn excludes
+    // `.agents/sessions/**` at the pathspec (the diff spawn's identical
+    // exclusion), so the total counts only identity-relevant bytes and plan
+    // artifacts cannot move the id through the status-length term.
+    .update(`\0status-length:${params.statusTotalBytes}\0`)
     // stdout is already retained only up to MAX_SNAPSHOT_ID_DIFF_BYTES by the
     // bounded spawn, so this hashes exactly the capped prefix; the UNtruncated
     // byte total (stdoutTotalBytes counts every byte git emitted, retained or
@@ -701,7 +605,11 @@ async function buildSnapshotIdentity(params: {
  * drift detection): skips the presentation diff, harness-store lookups, and
  * the semgrep scan that the full bundle builds, while computing the exact
  * same snapshotId as {@link getChangeReviewBundle} for the same worktree
- * state.
+ * state. The id is content-keyed, so those before/after drift checks fail
+ * closed only on real worktree/HEAD drift — a harness workspace-journal
+ * advance (every confirmed edit, plus the conservative advances on
+ * validation/hooks/terminal/custom-tool calls) no longer registers as
+ * drift.
  */
 export async function computeWorktreeSnapshotIdentity(params: {
   cwd: string
@@ -727,7 +635,20 @@ export async function computeWorktreeSnapshotIdentity(params: {
     }
   }
   const porcelain = await runGitBounded(
-    ['status', '--porcelain', '-uall'],
+    // (correctness: porcelain-total-bytes-not-hashed) the artifact exclusion
+    // lives in the pathspec so the spawn's UNtruncated byte total — the
+    // status-length identity term — is artifact-clean: .agents/sessions
+    // plan artifacts never reach it and can never move the snapshotId,
+    // mirroring the diff spawn's identical `:(exclude)` pathspec. The
+    // line-level isSessionArtifactPath filter stays as defense in depth.
+    [
+      'status',
+      '--porcelain',
+      '-uall',
+      '--',
+      '.',
+      ':(exclude).agents/sessions/**',
+    ],
     params.cwd,
     params.signal,
     {
@@ -750,6 +671,7 @@ export async function computeWorktreeSnapshotIdentity(params: {
       cwd: params.cwd,
       headCommit: head.stdout.trim(),
       identityLines,
+      statusTotalBytes: porcelain.stdoutTotalBytes,
       workspaceState: params.workspaceState,
       signal: params.signal,
     })
@@ -775,15 +697,29 @@ export async function getChangeReviewBundle(params: {
    */
   skipSecurityScan?: boolean
 }): Promise<CodebuffToolOutput<'get_change_review_bundle'>> {
+  // (reliability: bundle-rev-parse-head-unbounded) the ENTIRE prelude runs
+  // under the identity deadline: gitStatus threads its timeoutMs, HEAD
+  // resolves through runGitBounded (a timeout resolves exitCode -1, which
+  // the head.exitCode !== 0 arm below already fails closed on), and the
+  // workspace identity resolves under the same bound — a wedged git can no
+  // longer hang the bundle the gate invokes every cycle.
   const [git, head, workspace] = await Promise.all([
     gitStatus({
       cwd: params.cwd,
       include_diff: true,
       max_chars: params.max_chars ?? 80_000,
       signal: params.signal,
+      timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
     }),
-    runGit(['rev-parse', 'HEAD'], params.cwd, params.signal),
-    resolveWorkspaceIdentity({ cwd: params.cwd, signal: params.signal }),
+    runGitBounded(['rev-parse', 'HEAD'], params.cwd, params.signal, {
+      timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
+      maxOutputBytes: 4096,
+    }),
+    resolveWorkspaceIdentity({
+      cwd: params.cwd,
+      signal: params.signal,
+      timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
+    }),
   ])
   const value = git[0]?.type === 'json' ? git[0].value : undefined
   // Direct gitStatus() never emits the per-turn suppressed { unchanged }
@@ -799,6 +735,12 @@ export async function getChangeReviewBundle(params: {
       {
         type: 'json',
         value: {
+          // (reliability: head-failure-empty-error-message) the head term
+          // coalesces with `||`, not `??`: a silent non-zero `rev-parse HEAD`
+          // exit resolves with EMPTY stderr (the normal-close settle path
+          // carries no stderrNote) and an empty string is not nullish, so a
+          // `??` chain surfaced `errorMessage: ''` with the documented
+          // fallback unreachable — the `||` shape every sibling uses.
           errorMessage:
             (value && 'errorMessage' in value
               ? value.errorMessage
@@ -806,8 +748,7 @@ export async function getChangeReviewBundle(params: {
                 ? value.note ||
                   'git_status returned a suppressed unchanged payload; expected a full status observation.'
                 : undefined) ??
-            head.stderr.trim() ??
-            'Unable to build change review bundle.',
+            (head.stderr.trim() || 'Unable to build change review bundle.'),
         },
       },
     ]
@@ -819,14 +760,30 @@ export async function getChangeReviewBundle(params: {
   // listing. `gitStatus` runs `git status --short --branch`, which collapses a
   // fully untracked directory into a single shallow entry (e.g. `?? .agents/`)
   // that would slip past `isSessionArtifactPath`. `-uall` lists every untracked
-  // file individually so session artifacts are matched and filtered reliably.
+  // file individually so session artifacts are matched and filtered reliably,
+  // and the `:(exclude).agents/sessions/**` pathspec keeps the spawn's
+  // untruncated byte total (the status-length identity term) artifact-clean —
+  // plan artifacts cannot move the snapshotId through it.
   // A4 advisory (identity-git-spawns-no-deadline parity): this porcelain spawn
   // ran with no wall-clock deadline while the identity-only path bounds the
   // same call. Use the identical bounds so a wedged git fails closed instead of
   // hanging the bundle build; a timeout resolves exitCode -1, which the
   // unchanged error mapping below already reports via the exitCode !== 0 branch.
   const porcelain = await runGitBounded(
-    ['status', '--porcelain', '-uall'],
+    // (correctness: porcelain-total-bytes-not-hashed) the artifact exclusion
+    // lives in the pathspec so the spawn's UNtruncated byte total — the
+    // status-length identity term — is artifact-clean: .agents/sessions
+    // plan artifacts never reach it and can never move the snapshotId,
+    // mirroring the diff spawn's identical `:(exclude)` pathspec. The
+    // line-level isSessionArtifactPath filter stays as defense in depth.
+    [
+      'status',
+      '--porcelain',
+      '-uall',
+      '--',
+      '.',
+      ':(exclude).agents/sessions/**',
+    ],
     params.cwd,
     params.signal,
     {
@@ -861,6 +818,7 @@ export async function getChangeReviewBundle(params: {
       cwd: params.cwd,
       headCommit,
       identityLines,
+      statusTotalBytes: porcelain.stdoutTotalBytes,
       workspaceState: params.workspaceState,
       signal: params.signal,
     })
@@ -961,7 +919,7 @@ export async function getChangeReviewBundle(params: {
         findings,
         securityScan,
         snapshotIdUsage:
-          'evidence-only: the bare-hex snapshotId is for drift checks and diff identity only. NEVER pass it (or any bare hex) as params.snapshot_id or params.snapshot_fingerprint — gate/specialist attestation uses the parent gate\'s opaque v3:<64-hex> token; manual spawns omit params.snapshot_id entirely (scoped files go in params.files).',
+          "evidence-only: the bare-hex snapshotId is content-keyed worktree identity (files/diff/HEAD) for drift checks only — stable while no file or HEAD changes; a changed id means real worktree content drift. NEVER pass it (or any bare hex) as params.snapshot_id or params.snapshot_fingerprint — gate/specialist attestation uses the parent gate's opaque v3:<64-hex> token; manual spawns omit params.snapshot_id entirely (scoped files go in params.files).",
       },
     },
   ]

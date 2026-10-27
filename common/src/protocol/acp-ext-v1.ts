@@ -177,9 +177,9 @@ export const wireFileMutationResultV1Schema = z
     version: z.literal(1),
     operationId: z.string().min(1),
     outcome: fileMutationOutcomeV1Schema,
-    actions: wireFileMutationActionV1Schema.array().max(
-      FILESYSTEM_RESULT_MAX_ACTIONS,
-    ),
+    actions: wireFileMutationActionV1Schema
+      .array()
+      .max(FILESYSTEM_RESULT_MAX_ACTIONS),
     authorityTier: authorityCapabilityTierSchema.nullable(),
     receiptId: z.string().min(1).optional(),
     workspaceRevision: z.number().int().nonnegative().optional(),
@@ -248,7 +248,16 @@ export const gateStateV1Schema = z
     validationSummary: z.string().min(1).optional(),
     fingerprint: z.string().min(1).optional(),
     progress: z.string().min(1).optional(),
-    skipReason: z.string().min(1).optional(),
+    // Mirrors the published `<gate-state>` block contract's 120-char
+    // machine-token cap (the store's parseSkipReason enforces it on every
+    // producer path), so an over-long token has no wire representation.
+    skipReason: z.string().min(1).max(120).optional(),
+    // Additive: reviewer-family agent types that produced the gate result,
+    // mirroring the published `<gate-state>` block's `reviewers` key and its
+    // bound: non-empty entries, at most 4 of at most 64 characters (the same
+    // cap the block's parsers enforce), so a hand-crafted payload outside
+    // that contract has no wire representation.
+    reviewers: z.array(z.string().min(1).max(64)).max(4).optional(),
   })
   .strict()
 

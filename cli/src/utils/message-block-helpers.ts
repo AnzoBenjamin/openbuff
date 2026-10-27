@@ -73,6 +73,21 @@ const MAX_GATE_STATE_ADVISORY_LENGTH = 240
  * the producer's cap itself instead of trusting the payload.
  */
 const MAX_GATE_STATE_WORKFLOW_ACTION_LENGTH = 240
+/**
+ * Producer bounds mirrored from base2's `formatGateStateBlock`, which caps
+ * the emitted reviewer list (reviewer-family agent types, e.g.
+ * 'reliability-reviewer') at 4 entries and each entry at 64 characters. Same
+ * reason as the advisory bounds: this parser also reads hand-authored/
+ * non-base2 assistant text, so it enforces the producer's caps itself.
+ */
+const MAX_GATE_STATE_REVIEWERS = 4
+const MAX_GATE_STATE_REVIEWER_LENGTH = 64
+/**
+ * Mirrors base2's machine `skipReason` cap of 120 characters. Same
+ * fail-closed reason as the other bounds: the parser also reads
+ * hand-authored assistant text and must not trust the payload's own hygiene.
+ */
+const MAX_GATE_STATE_SKIP_REASON_LENGTH = 120
 
 /**
  * Accept advisories only when they are an array of non-empty strings within the
@@ -146,6 +161,51 @@ const parseGateStateWorkflow = (
 }
 
 /**
+ * Accept reviewer-family agent types only when they are an array of
+ * non-empty strings within the producer's bounds (at most
+ * MAX_GATE_STATE_REVIEWERS entries of at most MAX_GATE_STATE_REVIEWER_LENGTH
+ * characters each). Anything else (not an array, empty entries, mixed types,
+ * too many entries, an over-long entry) is dropped WHOLE, fail-closed exactly
+ * like `parseGateStateAdvisories`, so a non-base2 payload can never render an
+ * unbounded or forged reviewer list.
+ *
+ * Each entry is sanitized BEFORE the non-empty and length checks, so an entry
+ * made only of control characters becomes empty and drops the whole list.
+ */
+const parseGateStateReviewers = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  if (value.length > MAX_GATE_STATE_REVIEWERS) return []
+  const reviewers = value.map((entry) =>
+    typeof entry === 'string' ? sanitizeGateStateText(entry) : '',
+  )
+  return reviewers.every(
+    (entry) =>
+      entry.length > 0 && entry.length <= MAX_GATE_STATE_REVIEWER_LENGTH,
+  )
+    ? reviewers
+    : []
+}
+
+/**
+ * Accept a machine skip reason only when it is a non-empty string within
+ * MAX_GATE_STATE_SKIP_REASON_LENGTH characters AFTER sanitization. Anything
+ * else drops the field WHOLE, fail-closed exactly like the workflow action
+ * bound: a partial, oversized, or controls-only reason would render (and be
+ * branched on) as nonsense.
+ */
+const parseGateStateSkipReason = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  const skipReason = sanitizeGateStateText(value)
+  if (
+    skipReason.length === 0 ||
+    skipReason.length > MAX_GATE_STATE_SKIP_REASON_LENGTH
+  ) {
+    return undefined
+  }
+  return skipReason
+}
+
+/**
  * Build a gate-state block from an already-parsed JSON payload whose `gate` is
  * a non-empty string. Returns null when the status is not one of the pinned
  * statuses, keeping the JSON form exactly as strict as the line form.
@@ -164,9 +224,14 @@ const buildGateStateFromJson = (
     typeof payload.details === 'string'
       ? sanitizeGateStateText(payload.details)
       : ''
-  const origin = typeof payload.origin === 'string' ? sanitizeGateStateText(payload.origin) : ''
+  const origin =
+    typeof payload.origin === 'string'
+      ? sanitizeGateStateText(payload.origin)
+      : ''
   const advisories = parseGateStateAdvisories(payload.advisories)
   const workflow = parseGateStateWorkflow(payload.workflow)
+  const reviewers = parseGateStateReviewers(payload.reviewers)
+  const skipReason = parseGateStateSkipReason(payload.skipReason)
 
   return {
     type: 'gate-state',
@@ -175,6 +240,8 @@ const buildGateStateFromJson = (
     ...(details ? { details } : {}),
     ...(advisories.length > 0 ? { advisories } : {}),
     ...(workflow ? { workflow } : {}),
+    ...(reviewers.length > 0 ? { reviewers } : {}),
+    ...(skipReason ? { skipReason } : {}),
     origin: origin || 'Base2',
   }
 }
@@ -192,6 +259,12 @@ const buildGateStateFromJson = (
  * - `advisories` (string[], optional; non-blocking reviewer observations)
  * - `workflow` (object, optional; declared write_todos progress on a PASSING
  *   gate, as `{ completedCount, totalCount, nextWorkflowAction }`)
+ * - `reviewers` (string[], optional; reviewer-family agent types that
+ *   produced the result, e.g. `['reliability-reviewer']`)
+ * - `skipReason` (string, optional; machine skip/error token for a skipped
+ *   OR terminally-failed gate, e.g. `specialist-rate-limited` — not coupled
+ *   to `status`; the producer also attaches it to `failed` blocks, so never
+ *   guard on `status === 'skipped'` before reading it)
  * Producers may also emit `repairRound`/`maxRepairRounds`, which this parser
  * ignores. Every optional key is additive: a block persisted before a key
  * existed replays unchanged.
@@ -201,7 +274,8 @@ const buildGateStateFromJson = (
  *   <gate-state>{"gate":"validation/reviewer","status":"passed",
  *   "details":"...","origin":"Base2","advisories":["..."],
  *   "workflow":{"completedCount":1,"totalCount":3,
- *   "nextWorkflowAction":"..."}}</gate-state>
+ *   "nextWorkflowAction":"..."},
+ *   "reviewers":["reliability-reviewer"]}</gate-state>
  *
  * The legacy line form remains supported (case-insensitive on keys/status,
  * narrow on purpose):
@@ -236,6 +310,13 @@ const buildGateStateFromJson = (
  *   240-char sanitized `nextWorkflowAction` plus finite non-negative integer
  *   counts with `totalCount > 0` and `completedCount < totalCount`. A violating
  *   payload drops the field whole rather than rendering partial progress math.
+ * - `reviewers` (reviewer-family agent types) and `skipReason` (machine
+ *   skip/error token, attached to skipped AND terminally-failed gate blocks)
+ *   are likewise JSON-payload-only, admitted only within the producer's
+ *   bounds: at most 4 sanitized reviewer entries of at most 64 chars each,
+ *   and a sanitized skip/error token of at most 120 chars. An out-of-bounds
+ *   or otherwise malformed value drops the field whole, mirroring
+ *   `advisories`/`workflow`.
  * - Advisories are admitted only within the producer's bounds
  *   (MAX_GATE_STATE_ADVISORIES entries, MAX_GATE_STATE_ADVISORY_LENGTH chars per
  *   entry); an out-of-bounds or otherwise malformed list is dropped whole and
@@ -281,8 +362,11 @@ export const parseGateStateBlock = (
     type: 'gate-state',
     gate,
     gateStatus: statusRaw,
-    ...(fields.details ? { details: sanitizeGateStateText(fields.details) } : {}),
-    origin: (fields.origin ? sanitizeGateStateText(fields.origin) : '') || 'Base2',
+    ...(fields.details
+      ? { details: sanitizeGateStateText(fields.details) }
+      : {}),
+    origin:
+      (fields.origin ? sanitizeGateStateText(fields.origin) : '') || 'Base2',
   }
 }
 
@@ -292,9 +376,7 @@ export const parseGateStateBlock = (
  * does not also render as prose.
  */
 export const scrubGateStateTags = (s: string): string =>
-  s
-    .replace(SCRUB_GATE_STATE_TAGS_RE, '')
-    .replace(/\n{3,}/g, '\n\n')
+  s.replace(SCRUB_GATE_STATE_TAGS_RE, '').replace(/\n{3,}/g, '\n\n')
 
 /**
  * Extracts plan content from a buffer containing <PLAN>...</PLAN> tags.
@@ -478,7 +560,10 @@ export const extractPlanMetadata = (
           if (!metadata.customArtifacts) {
             metadata.customArtifacts = []
           }
-          metadata.customArtifacts.push({ label: customLabel, path: normalizedValue })
+          metadata.customArtifacts.push({
+            label: customLabel,
+            path: normalizedValue,
+          })
         }
       }
       continue
@@ -543,7 +628,10 @@ const MAX_BLOCK_UPDATE_DEPTH = 200
  * agent block is left untouched so its live output stays visible. Nested
  * agent blocks follow the same terminal-status rule through the recursion.
  */
-export const autoCollapseBlocks = (blocks: ContentBlock[], _depth = 0): ContentBlock[] => {
+export const autoCollapseBlocks = (
+  blocks: ContentBlock[],
+  _depth = 0,
+): ContentBlock[] => {
   let result: ContentBlock[] | null = null
 
   for (let i = 0; i < blocks.length; i++) {
@@ -1128,9 +1216,7 @@ const formatLibrarianStructuredOutput = (
  * undefined when the value is not editor-shaped so the caller can fall
  * through to the next formatter.
  */
-const formatEditorNestedOutput = (
-  value: UnknownRecord,
-): string | undefined => {
+const formatEditorNestedOutput = (value: UnknownRecord): string | undefined => {
   const output = isRecordValue(value.output) ? value.output : undefined
   if (!output || !Array.isArray(output.messages)) return undefined
 
@@ -1442,11 +1528,13 @@ export const extractSpawnAgentResultContent = (
       if (basherSummary) {
         return { content: basherSummary, hasError: false }
       }
-      const generalReceiptSummary = formatGeneralAgentReceiptStructuredOutput(value)
+      const generalReceiptSummary =
+        formatGeneralAgentReceiptStructuredOutput(value)
       if (generalReceiptSummary) {
         return { content: generalReceiptSummary, hasError: false }
       }
-      const generalSummarySummary = formatGeneralAgentSummaryStructuredOutput(value)
+      const generalSummarySummary =
+        formatGeneralAgentSummaryStructuredOutput(value)
       if (generalSummarySummary) {
         return { content: generalSummarySummary, hasError: false }
       }
@@ -1495,7 +1583,7 @@ export const extractSpawnAgentResultContent = (
     // Fall through to format as JSON. Fenced so the markdown renderer shows
     // it verbatim instead of conceal-eating the JSON syntax.
     return {
-      content: "```json\n" + cappedJsonStringify(obj.value) + "\n```",
+      content: '```json\n' + cappedJsonStringify(obj.value) + '\n```',
       hasError: false,
     }
   }
@@ -1516,7 +1604,7 @@ export const extractSpawnAgentResultContent = (
   // Fallback to formatted output. Fenced so the markdown renderer shows it
   // verbatim instead of conceal-eating the JSON syntax.
   return {
-    content: "```json\n" + cappedJsonStringify(resultValue) + "\n```",
+    content: '```json\n' + cappedJsonStringify(resultValue) + '\n```',
     hasError: false,
   }
 }
@@ -1680,14 +1768,8 @@ export interface CreateAgentBlockOptions {
 export const createAgentBlock = (
   options: CreateAgentBlockOptions,
 ): AgentContentBlock => {
-  const {
-    agentId,
-    agentType,
-    prompt,
-    params,
-    spawnToolCallId,
-    spawnIndex,
-  } = options
+  const { agentId, agentType, prompt, params, spawnToolCallId, spawnIndex } =
+    options
   // Subagents start EXPANDED so their full live stream is visible by default.
   // Grid-row sizing still uses shouldCollapseByDefault (see block-processor's
   // splitByAgentSize); that layout grouping is intentionally decoupled from
@@ -1724,7 +1806,11 @@ export const updateBlocksRecursively = (
 
     if (block.type === 'agent' && block.agentId === targetAgentId) {
       newBlock = updateFn(block)
-    } else if (block.type === 'agent' && block.blocks && _depth < MAX_BLOCK_UPDATE_DEPTH) {
+    } else if (
+      block.type === 'agent' &&
+      block.blocks &&
+      _depth < MAX_BLOCK_UPDATE_DEPTH
+    ) {
       const updatedBlocks = updateBlocksRecursively(
         block.blocks,
         targetAgentId,
@@ -1799,7 +1885,11 @@ const findBlockInChildren = (
     if (block.type === 'agent' && block.agentId === targetId) {
       return true
     }
-    if (block.type === 'agent' && block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
+    if (
+      block.type === 'agent' &&
+      block.blocks &&
+      _depth < MAX_AUTO_COLLAPSE_DEPTH
+    ) {
       if (findBlockInChildren(block.blocks, targetId, _depth + 1)) {
         return true
       }
@@ -1807,7 +1897,6 @@ const findBlockInChildren = (
   }
   return false
 }
-
 
 /**
  * Extracts a block with given agentId from nested blocks structure.
@@ -1819,13 +1908,21 @@ export const extractBlockById = (
 ): { remainingBlocks: ContentBlock[]; extractedBlock: ContentBlock | null } => {
   let extractedBlock: ContentBlock | null = null
 
-  const extractRecursively = (blocks: ContentBlock[], _depth = 0): ContentBlock[] => {
+  const extractRecursively = (
+    blocks: ContentBlock[],
+    _depth = 0,
+  ): ContentBlock[] => {
     const result: ContentBlock[] = []
     for (const block of blocks) {
       if (block.type === 'agent' && block.agentId === targetAgentId) {
         extractedBlock = block
         // Don't add to result - we're extracting it
-      } else if (extractedBlock === null && block.type === 'agent' && block.blocks && _depth < MAX_BLOCK_UPDATE_DEPTH) {
+      } else if (
+        extractedBlock === null &&
+        block.type === 'agent' &&
+        block.blocks &&
+        _depth < MAX_BLOCK_UPDATE_DEPTH
+      ) {
         // Only recurse into agent children if the target hasn't been found yet
         result.push({
           ...block,
@@ -1944,8 +2041,16 @@ export const transformAskUserBlocks = (
         } as AskUserContentBlock
       }
       // If no result data, keep as tool block (fallback)
-    } else if (block.type === 'agent' && block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
-      const updatedBlocks = transformAskUserBlocks(block.blocks, options, _depth + 1)
+    } else if (
+      block.type === 'agent' &&
+      block.blocks &&
+      _depth < MAX_AUTO_COLLAPSE_DEPTH
+    ) {
+      const updatedBlocks = transformAskUserBlocks(
+        block.blocks,
+        options,
+        _depth + 1,
+      )
       if (updatedBlocks !== block.blocks) {
         updated = { ...block, blocks: updatedBlocks }
       }
@@ -2176,8 +2281,16 @@ export const updateToolBlockWithOutput = (
           ? { backgroundJobId }
           : {}),
       }
-    } else if (block.type === 'agent' && block.blocks && _depth < MAX_AUTO_COLLAPSE_DEPTH) {
-      const updatedBlocks = updateToolBlockWithOutput(block.blocks, options, _depth + 1)
+    } else if (
+      block.type === 'agent' &&
+      block.blocks &&
+      _depth < MAX_AUTO_COLLAPSE_DEPTH
+    ) {
+      const updatedBlocks = updateToolBlockWithOutput(
+        block.blocks,
+        options,
+        _depth + 1,
+      )
       if (updatedBlocks !== block.blocks) {
         updated = { ...block, blocks: updatedBlocks }
       }

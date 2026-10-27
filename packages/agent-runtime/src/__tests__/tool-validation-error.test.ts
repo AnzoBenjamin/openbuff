@@ -73,9 +73,7 @@ function createRecordingLogger(): {
 // { toolName, kind }) never carry `repairedKinds`, so filtering by this
 // shape isolates the selector-repair diagnostic without counting unrelated
 // debug calls.
-function isSelectorRepairTelemetry(
-  data: unknown,
-): data is {
+function isSelectorRepairTelemetry(data: unknown): data is {
   toolName: string
   toolCallId: string
   repairedKinds: Record<string, number>
@@ -139,7 +137,15 @@ describe('tool validation error handling', () => {
     // with {}), which would flatten recoveryHint before the serialized
     // assertions below. Assert via direct property reads instead.
     expect(output[0]?.type).toBe('json')
-    const report = (output[0] as unknown as { value: Array<{ agentType: string; agentName: string; value: { errorMessage: string; recoveryHint: unknown } }> }).value[0]
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: { errorMessage: string; recoveryHint: unknown }
+        }>
+      }
+    ).value[0]
     expect(report.agentType).toBe('basher')
     expect(report.agentName).toBe('basher')
     expect(report.value.errorMessage).toBe(
@@ -257,7 +263,9 @@ describe('tool validation error handling', () => {
     expect(reported).toHaveLength(20)
     for (const issue of reported) {
       expect(typeof issue.path).toBe('string')
-      expect(issue.message.length).toBeLessThanOrEqual(300 + '...[truncated]'.length)
+      expect(issue.message.length).toBeLessThanOrEqual(
+        300 + '...[truncated]'.length,
+      )
     }
   })
 
@@ -278,10 +286,482 @@ describe('tool validation error handling', () => {
     expect(serialized).not.toContain('Original params value')
   })
 
-  it('preserves basher extractedLines as control-plane output', async () => {
-    const { normalizeSpawnedAgentOutput } = await import(
-      '../tools/handlers/tool/spawn-agent-utils'
+  it('flags a transport-truncated serialized agents string and keeps the zod guidance alongside the honest truncation hint', () => {
+    // A serialized `agents` array cut in transport: the repair layer
+    // fail-closed passes the string through, so zod's residue
+    // ("expected object, received string") fires alongside the truncation
+    // signature. The failure output must carry BOTH — the actionable zod
+    // guidance the model can act on, plus the honest structural-incompleteness
+    // classification — never a hint that claims the payload cannot be a
+    // shape error.
+    const zodShapedError = Object.assign(
+      new Error('agents[0]: expected object, received string'),
+      {
+        issues: [
+          {
+            path: ['agents', 0],
+            message: 'Invalid input: expected object, received string',
+          },
+        ],
+      },
     )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      {
+        agents:
+          '[{"agent_type": "basher", "prompt": "Run tests", "params": {"command":',
+      },
+      zodShapedError,
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    expect(report.value.truncated).toBe(true)
+    const hint = report.value.recoveryHint ?? ''
+    // The error-derived zod guidance is PRESERVED, not replaced.
+    expect(hint).toContain('agents[0]: expected object, received string')
+    // The honest truncation classification is APPENDED after it.
+    expect(hint).toContain('structurally incomplete')
+    expect(hint).toContain('cut in transport')
+    expect(hint).toContain(
+      'resending the identical payload will fail identically',
+    )
+    expect(hint).toContain(
+      'If the JSON is malformed, fix the structure per the issues above.',
+    )
+    // The truncation hint always survives in full at the tail of the combined
+    // hint (the BASE hint is capped, never the combination).
+    expect(
+      hint.endsWith(
+        'If the JSON is malformed, fix the structure per the issues above.',
+      ),
+    ).toBe(true)
+    // The combined hint stays within SPAWN_RECOVERY_HINT_MAX_CHARS.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+    // validationIssues keep their existing contract alongside the new key.
+    expect(report.value.validationIssues).toEqual([
+      {
+        path: 'agents.0',
+        message: 'Invalid input: expected object, received string',
+      },
+    ])
+    // No payload content leaks into the hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('Run tests')
+  })
+
+  it('keeps the zod guidance alongside the truncation hint for a malformed unbalanced fragment array', () => {
+    // The truncation signature is shared by transport cuts AND genuinely
+    // malformed payloads (missing/mismatched closers). A zod-shaped error on
+    // the latter must still surface BOTH channels: the actionable zod guidance
+    // and the honest truncation classification — the retired hint claimed the
+    // payload was "NOT a shape error", steering the model away from the JSON
+    // fix it could make.
+    const fragments = JSON.stringify([
+      { agent_type: 'basher', prompt: 'Run tests' },
+    ])
+      .slice(0, -2)
+      .split(',')
+    const zodShapedError = Object.assign(
+      new Error('agents[0]: expected object, received string'),
+      {
+        issues: [
+          {
+            path: ['agents', 0],
+            message: 'Invalid input: expected object, received string',
+          },
+        ],
+      },
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      zodShapedError,
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            recoveryHint?: string
+            truncated?: boolean
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.truncated).toBe(true)
+    const hint = report.value.recoveryHint ?? ''
+    // BOTH channels ride together: the zod guidance first...
+    expect(hint).toContain('agents[0]: expected object, received string')
+    // ...the honest truncation classification appended after it.
+    expect(hint).toContain('structurally incomplete')
+    expect(hint).toContain(
+      'If the JSON is malformed, fix the structure per the issues above.',
+    )
+    expect(
+      hint.indexOf('agents[0]: expected object, received string'),
+    ).toBeLessThan(hint.indexOf('structurally incomplete'))
+    // The combined hint stays bounded.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+    expect(report.value.validationIssues).toEqual([
+      {
+        path: 'agents.0',
+        message: 'Invalid input: expected object, received string',
+      },
+    ])
+    // No payload content leaks into the hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('Run tests')
+  })
+
+  it('flags a comma-split fragment array as transport truncation even without an error-derived hint', () => {
+    // Transport tokenized a truncated stringified array on every comma; the
+    // rejoined fragments carry the truncation signature (mirrors
+    // repairCommaSplitFragments in common). The truncation hint fires even
+    // though the non-validation error produced no error-derived hint.
+    const fragments = JSON.stringify([
+      {
+        agent_type: 'file-picker',
+        prompt: 'Find files about authentication and sessions',
+      },
+    ])
+      .slice(0, -2)
+      .split(',')
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.truncated).toBe(true)
+    expect(report.value.recoveryHint ?? '').toContain('cut in transport')
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // Static hint only: no fragment content leaks into the output.
+    expect(JSON.stringify(output)).not.toContain('authentication')
+  })
+
+  it('emits exactly one report for a multi-fragment truncated array instead of one per fragment', () => {
+    // A comma-split fragment array classified 'transport-truncated' is ONE
+    // serialized payload tokenized on commas, so the failure output must
+    // carry EXACTLY ONE 'unknown'-typed report (not 12 identical copies each
+    // carrying the same hint). Normal agent arrays keep one report per entry.
+    const fragments = Array.from(
+      { length: 12 },
+      (_unused, index) => `{"agent_type": "agent-${index}"`,
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const reports = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+          }
+        }>
+      }
+    ).value
+
+    expect(reports).toHaveLength(1)
+    expect(reports[0].agentType).toBe('unknown')
+    expect(reports[0].agentName).toBe('unknown')
+    expect(reports[0].value.truncated).toBe(true)
+    expect(reports[0].value.recoveryHint ?? '').toContain(
+      'structurally incomplete',
+    )
+    expect(reports[0].value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // No fragment content leaks into the static hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('agent-0')
+  })
+
+  it('emits one combined report with both the zod guidance and the truncation hint for a malformed fragment array (F1+F2)', () => {
+    // Combined coverage for the two truncation repairs (never previously
+    // exercised together): a comma-split fragment array whose rejoined form
+    // is unbalanced JSON, paired with a zod-shaped error. BOTH behaviors
+    // must hold on the SAME failure output — the fragment array collapses to
+    // EXACTLY ONE report (F2), and that single report keeps the actionable
+    // zod guidance AND appends the honest structural-incompleteness
+    // classification (F1) instead of discarding the zod guidance.
+    const fragments = JSON.stringify([
+      { agent_type: 'basher', prompt: 'Run tests' },
+    ])
+      .slice(0, -2)
+      .split(',')
+    const zodShapedError = Object.assign(
+      new Error('agents[0]: expected object, received string'),
+      {
+        issues: [
+          {
+            path: ['agents', 0],
+            message: 'Invalid input: expected object, received string',
+          },
+        ],
+      },
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      zodShapedError,
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const reports = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value
+
+    // F2: ONE report for the whole tokenized payload, 'unknown'-typed.
+    expect(reports).toHaveLength(1)
+    expect(reports[0].agentType).toBe('unknown')
+    expect(reports[0].agentName).toBe('unknown')
+    expect(reports[0].value.truncated).toBe(true)
+    expect(reports[0].value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // F1: the zod guidance is PRESERVED and the truncation hint APPENDED
+    // after it, so both channels ride on the single combined report.
+    const hint = reports[0].value.recoveryHint ?? ''
+    expect(hint).toContain('expected object, received string')
+    expect(hint).toContain('structurally incomplete')
+    expect(hint.indexOf('expected object, received string')).toBeLessThan(
+      hint.indexOf('structurally incomplete'),
+    )
+    // The combined hint stays within SPAWN_RECOVERY_HINT_MAX_CHARS.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+    // validationIssues keep their existing contract on the combined shape.
+    expect(reports[0].value.validationIssues).toEqual([
+      {
+        path: 'agents.0',
+        message: 'Invalid input: expected object, received string',
+      },
+    ])
+    // No fragment content leaks into the hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('Run tests')
+  })
+
+  it('classifies an over-cap fragment array without setting the truncation flag (pre-join length cap)', () => {
+    // 64 entries of 2,000 chars each: the joined length (128,063) exceeds
+    // MAX_TRUNCATION_REJOINED_LENGTH (65,536), so the pre-join length
+    // accounting fails closed BEFORE join() ever allocates — no truncated
+    // flag and no truncation hint, exactly like any other unclassifiable
+    // payload.
+    const fragments = Array.from({ length: 64 }, () => 'x'.repeat(2_000))
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.truncated).toBeUndefined()
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // The non-validation error yields no error-derived hint, so the report
+    // carries no recoveryHint at all for the unclassifiable array.
+    expect(report.value.recoveryHint).toBeUndefined()
+  })
+
+  it('appends the auto-decode clarification to an existing hint for a decoded stringified array', () => {
+    // The stringified array parses cleanly, so the preprocess layer
+    // auto-decoded it before validation and the spawn failed for a real
+    // params reason. The error-derived hint survives with one bounded
+    // clarifying sentence appended, and no `truncated` key is added.
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: JSON.stringify([{ agent_type: 'basher', params: {} }]) },
+      new Error(
+        'Invalid params for agent basher: Missing required: command. Recovery: spawn Basher with a command param.',
+      ),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: { recoveryHint?: string; truncated?: boolean }
+        }>
+      }
+    ).value[0]
+
+    expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+    const hint = report.value.recoveryHint ?? ''
+    expect(hint).toContain('Missing required: command')
+    expect(hint).toContain('Recovery:')
+    expect(hint).toContain(
+      'auto-decoded before validation and is not itself a failure cause',
+    )
+    expect(hint).toContain('the issues above are the real cause')
+    // The combined hint stays bounded.
+    expect(hint.length).toBeLessThanOrEqual(2_000 + '...[truncated]'.length)
+  })
+
+  it('keeps the auto-decode clarification when the error-derived hint is already at the cap', () => {
+    // Regression (spawn-stringified-note-truncated-at-cap): the sanitized
+    // base hint can already sit at exactly SPAWN_RECOVERY_HINT_MAX_CHARS —
+    // the canonical long-zod-issue shape — and the branch used to cap the
+    // COMBINED string, slicing the appended clarifying sentence off in
+    // precisely the case it exists for. The base hint is capped instead, so
+    // the note always survives within the same 2_000-char bound.
+    const prefix = 'Validation failed '
+    const atCap = `${prefix}${'a'.repeat(2_000 - prefix.length)}`
+    expect(atCap.length).toBe(2_000)
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: JSON.stringify([{ agent_type: 'basher', params: {} }]) },
+      new Error(atCap),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ value: { recoveryHint?: string } }>
+      }
+    ).value[0]
+
+    const hint = report.value.recoveryHint ?? ''
+    // The clarifying note survives at the tail of the capped hint, in full.
+    expect(hint).toContain(
+      'auto-decoded before validation and is not itself a failure cause',
+    )
+    expect(hint).toContain('the issues above are the real cause')
+    expect(hint.endsWith('the issues above are the real cause.')).toBe(true)
+    // The error-derived prefix and its truncation marker survive too...
+    expect(hint).toContain('Validation failed')
+    expect(hint).toContain('...[truncated]')
+    // ...and the combined hint stays within the same bound as before.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+  })
+
+  it('does not fabricate a hint for a decoded stringified array when the error has none', () => {
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: JSON.stringify([{ agent_type: 'editor' }]) },
+      new Error('terminal bridge disconnected'),
+    )
+
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ value: Record<string, unknown> }>
+      }
+    ).value[0]
+
+    // No `truncated` flag (nothing was cut) and no fabricated hint: the keys
+    // stay absent, never present-with-undefined.
+    expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+    expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+  })
+
+  it('does not flag legitimate string arrays as transport truncation', () => {
+    // Legitimate string arrays (prompts-style prose, bracket-prefixed
+    // labels) rejoin to balanced payloads, which detectTransportTruncation
+    // rejects, so the classifier stays silent and the error-derived hint
+    // passes through unchanged.
+    for (const agents of [
+      ['find the auth files', 'run the tests'],
+      ['[draft]', '[final]'],
+    ]) {
+      const output = buildSpawnAgentsHandlerFailureOutput(
+        { agents },
+        new Error('agents[0]: expected object, received string'),
+      )
+      const report = (
+        output[0] as unknown as {
+          value: Array<{
+            value: { recoveryHint?: string; truncated?: boolean }
+          }>
+        }
+      ).value[0]
+
+      expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+      const hint = report.value.recoveryHint ?? ''
+      expect(hint).toContain('expected object, received string')
+      expect(hint).not.toContain('cut in transport')
+    }
+  })
+
+  it('no-ops the truncation classifier when the agents field is absent', () => {
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      {},
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ agentType: string; value: Record<string, unknown> }>
+      }
+    ).value[0]
+
+    // The empty-agents `[{}]` fallback report carries only the static marker.
+    expect(report.agentType).toBe('unknown')
+    expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+    expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+  })
+
+  it('preserves basher extractedLines as control-plane output', async () => {
+    const { normalizeSpawnedAgentOutput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
     const extractedLines = Array.from(
       { length: 80 },
       (_, index) => `failure line ${index + 1}: Expected x Received y`,
@@ -3392,7 +3872,9 @@ describe('tool validation error handling', () => {
     }
 
     expect(message).toContain('Missing required: snapshot_id')
-    expect(message).toContain('manual spawns omit `params.snapshot_id` entirely')
+    expect(message).toContain(
+      'manual spawns omit `params.snapshot_id` entirely',
+    )
     expect(message).toContain('params.files')
     expect(message).toContain('wait for the gate')
     expect(message).not.toContain('set params.snapshot_id')
@@ -3440,9 +3922,8 @@ describe('tool validation error handling', () => {
   })
 
   it('spawn_agents tool description stops listing reviewer snapshot_id as a required manual param', async () => {
-    const { spawnAgentsParams } = await import(
-      '@codebuff/common/tools/params/tool/spawn-agents'
-    )
+    const { spawnAgentsParams } =
+      await import('@codebuff/common/tools/params/tool/spawn-agents')
     const description = spawnAgentsParams.description
     // The live tool description must not tell callers to supply snapshot_id
     // for reviewer specialists: manual spawns omit the key entirely (the
@@ -3731,9 +4212,9 @@ describe('tool validation error handling', () => {
         }>
       }
     ).output[0]?.value[0]
-    expect(
-      (toolResultEvent as unknown as { toolName: string }).toolName,
-    ).toBe('spawn_agents')
+    expect((toolResultEvent as unknown as { toolName: string }).toolName).toBe(
+      'spawn_agents',
+    )
     expect(
       (toolResultEvent as unknown as { toolCallId: string }).toolCallId,
     ).toBe('basher-missing-command-tool-call-id')

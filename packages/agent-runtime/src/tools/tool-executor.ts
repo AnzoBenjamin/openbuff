@@ -291,6 +291,87 @@ function extractSpawnValidationIssues(
   return extracted.length > 0 ? extracted : undefined
 }
 
+// Static truncation hint for a serialized `agents` payload the classifier
+// flagged as structurally incomplete (unbalanced JSON). The truncation
+// signature is shared by two distinct causes — a genuine transport cut AND a
+// malformed payload with missing/mismatched closers — so the hint states both
+// recovery routes instead of asserting a shape error is impossible. Static
+// text only — no payload values are interpolated (the same safety rule as the
+// MIGRATION NOTE above) — and far below SPAWN_RECOVERY_HINT_MAX_CHARS.
+const SPAWN_TRANSPORT_TRUNCATION_HINT =
+  'The serialized agents payload is structurally incomplete (unbalanced JSON — cut in transport, or missing/mismatched closers). If it was cut, resending the identical payload will fail identically: re-emit with fewer agents per batch or a more compact handoff. If the JSON is malformed, fix the structure per the issues above.'
+
+// One bounded clarifying sentence appended to an EXISTING recoveryHint when
+// the stringified `agents` array was already auto-decoded by the preprocess
+// layer (the spawn then failed for a different reason). Never used to
+// fabricate a hint on its own.
+const SPAWN_STRINGIFIED_DECODED_NOTE =
+  'Note: a stringified agents array is auto-decoded before validation and is not itself a failure cause — the issues above are the real cause.'
+
+// Bounds mirroring repairCommaSplitFragments in common: beyond these ceilings
+// the fragment array is almost certainly a genuinely malformed payload, so
+// the classifier fails closed (no signal) instead of doing unbounded
+// join/scan work on a pathological array.
+const MAX_TRUNCATION_FRAGMENT_COUNT = 256
+const MAX_TRUNCATION_REJOINED_LENGTH = 65_536
+
+/**
+ * Bounded, fail-closed classification of the RAW `agents` field for the
+ * handler-failure output. Distinguishes the two serialized-payload cases the
+ * static failure string cannot speak to:
+ *  - 'transport-truncated': structurally incomplete serialized JSON — either
+ *    a string carrying the truncation signature, or a comma-split fragment
+ *    array whose rejoined form carries it (mirrors
+ *    repairCommaSplitFragments in common). The signature is shared by a
+ *    genuine transport cut AND a malformed payload with missing/mismatched
+ *    closers, and the classifier cannot tell the two apart, so the failure
+ *    output keeps any error-derived zod guidance and appends the honest
+ *    truncation classification instead of asserting a shape error is
+ *    impossible.
+ *  - 'stringified-decoded': a stringified array the preprocess layer already
+ *    auto-decoded, so the spawn failed for a DIFFERENT reason.
+ * Every other shape — non-string/non-array values, arrays with non-string
+ * entries, and the absent-agents fallback — returns undefined.
+ * detectTransportTruncation and parseJsonBounded are fail-safe and the shape
+ * guards return early, so this never throws.
+ */
+function classifySerializedSpawnAgentsPayload(
+  rawAgents: unknown,
+): 'transport-truncated' | 'stringified-decoded' | undefined {
+  if (typeof rawAgents === 'string') {
+    if (detectTransportTruncation(rawAgents)) return 'transport-truncated'
+    if (Array.isArray(parseJsonBounded(rawAgents))) {
+      return 'stringified-decoded'
+    }
+    return undefined
+  }
+  if (
+    Array.isArray(rawAgents) &&
+    rawAgents.length <= MAX_TRUNCATION_FRAGMENT_COUNT &&
+    rawAgents.every((entry) => typeof entry === 'string')
+  ) {
+    // Requiring EVERY entry to be a string plus a truncation signature on the
+    // rejoined form keeps legitimate string arrays (prompts-style prose,
+    // bracket-prefixed labels) unclassified: detectTransportTruncation
+    // rejects balanced payloads. The would-be joined length is computed
+    // arithmetically BEFORE joining — sum of entry lengths plus one
+    // separator byte per gap — so join() only ever allocates a string
+    // already known to be within MAX_TRUNCATION_REJOINED_LENGTH and a
+    // pathological all-string fragment array cannot force a megabyte-scale
+    // allocation before the cap rejects it (fail closed, no signal).
+    let joinedLength = rawAgents.length - 1
+    for (const entry of rawAgents) {
+      joinedLength += entry.length
+      if (joinedLength > MAX_TRUNCATION_REJOINED_LENGTH) return undefined
+    }
+    const rejoined = rawAgents.join(',')
+    if (detectTransportTruncation(rejoined)) {
+      return 'transport-truncated'
+    }
+  }
+  return undefined
+}
+
 export function buildSpawnAgentsHandlerFailureOutput(
   input: unknown,
   // Retained for call-site symmetry with the generic failure-output builder
@@ -304,43 +385,113 @@ export function buildSpawnAgentsHandlerFailureOutput(
       : undefined
   const agents =
     inputRecord && Array.isArray(inputRecord.agents) ? inputRecord.agents : []
+  // RAW agents value (pre-array-coercion): the serialized-payload classifier
+  // needs the original string / fragment-array shape, which the array coercion
+  // above discards. undefined when the input has no agents field, in which
+  // case the classifier no-ops.
+  const rawAgents = inputRecord ? inputRecord.agents : undefined
+  const payloadClassification = classifySerializedSpawnAgentsPayload(rawAgents)
   const recoveryHint = extractSanitizedSpawnRecoveryHint(error)
   const validationIssues = extractSpawnValidationIssues(error)
 
-  const reports = (agents.length > 0 ? agents : [{}]).map(
-    (agent): JSONObject => {
-      const agentType =
-        agent &&
-        typeof agent === 'object' &&
-        typeof (agent as Record<string, unknown>).agent_type === 'string'
-          ? String((agent as Record<string, unknown>).agent_type)
-          : 'unknown'
-      // The per-agent value is assembled additively so an ABSENT channel never
-      // puts an `undefined` into the JSON payload (jsonToolResult<T extends
-      // JSONValue> requires concrete values). `errorMessage` stays the stable
-      // machine-readable marker at exactly the same text; the two diagnostic
-      // channels below are present only when they actually have data.
-      const value: JSONObject = {
-        errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
-      }
+  // A comma-split fragment array classified as transport-truncated is ONE
+  // serialized payload tokenized on commas: mapping per fragment would emit
+  // N indistinguishable 'unknown'-typed reports each carrying the identical
+  // hint (O(fragments) bloat), so emit EXACTLY ONE report for the whole
+  // payload. Normal agent arrays and the decoded stringified case keep one
+  // report per entry.
+  const reportSources: unknown[] =
+    payloadClassification === 'transport-truncated' && Array.isArray(rawAgents)
+      ? [{}]
+      : agents.length > 0
+        ? agents
+        : [{}]
+  const reports = reportSources.map((agent): JSONObject => {
+    const agentType =
+      agent &&
+      typeof agent === 'object' &&
+      typeof (agent as Record<string, unknown>).agent_type === 'string'
+        ? String((agent as Record<string, unknown>).agent_type)
+        : 'unknown'
+    // The per-agent value is assembled additively so an ABSENT channel never
+    // puts an `undefined` into the JSON payload (jsonToolResult<T extends
+    // JSONValue> requires concrete values). `errorMessage` stays the stable
+    // machine-readable marker at exactly the same text; the two diagnostic
+    // channels below are present only when they actually have data.
+    const value: JSONObject = {
+      errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
+    }
+    if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
+      // String() is the identity on the already-sanitized primitive and keeps
+      // the property typed as string (not string|undefined).
+      value.recoveryHint = String(recoveryHint)
+    }
+    if (payloadClassification === 'transport-truncated') {
+      // Unbalanced JSON is the shared root cause: the payload was either cut
+      // in transport or is genuinely malformed with missing/mismatched
+      // closers, and the classifier cannot tell the two apart. `truncated`
+      // stays the structural-incompleteness marker in both sub-cases, and an
+      // error-derived hint is never discarded — its zod guidance is exactly
+      // what fixes a malformed payload. Like the stringified-decoded branch
+      // below, the BASE hint is capped (never the combined string) so the
+      // appended truncation hint always survives in full within
+      // SPAWN_RECOVERY_HINT_MAX_CHARS; only an error that produced no hint
+      // falls back to the truncation hint alone. errorMessage and
+      // validationIssues keep their existing contracts.
+      value.truncated = true
       if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
-        // String() is the identity on the already-sanitized primitive and keeps
-        // the property typed as string (not string|undefined).
-        value.recoveryHint = String(recoveryHint)
+        const truncationBudget =
+          SPAWN_RECOVERY_HINT_MAX_CHARS -
+          SPAWN_TRANSPORT_TRUNCATION_HINT.length -
+          1
+        const base =
+          recoveryHint.length > truncationBudget
+            ? `${recoveryHint
+                .slice(0, truncationBudget - '...[truncated]'.length)
+                .trimEnd()}...[truncated]`
+            : recoveryHint
+        value.recoveryHint = `${base} ${SPAWN_TRANSPORT_TRUNCATION_HINT}`
+      } else {
+        value.recoveryHint = SPAWN_TRANSPORT_TRUNCATION_HINT
       }
-      if (validationIssues) {
-        value.validationIssues = validationIssues.map((issue) => ({
-          path: issue.path,
-          message: issue.message,
-        }))
-      }
-      return {
-        agentType,
-        agentName: agentType,
-        value,
-      }
-    },
-  )
+    } else if (
+      payloadClassification === 'stringified-decoded' &&
+      typeof recoveryHint === 'string' &&
+      recoveryHint.length > 0
+    ) {
+      // The preprocess layer already auto-decoded the stringified array, so
+      // stringification is NOT the failure cause. Append one bounded
+      // clarifying sentence to the existing hint (never fabricate a hint
+      // when the error produced none). The BASE hint is capped, never the
+      // combined string: extractSanitizedSpawnRecoveryHint can already
+      // return a hint at exactly SPAWN_RECOVERY_HINT_MAX_CHARS, and capping
+      // the combination would slice the appended sentence off in precisely
+      // the long-zod-issue case it exists for. Reserving the note's own
+      // length plus its separator (and the truncation marker when the base
+      // is cut) keeps the combined hint within the same bound while the
+      // note always survives in full.
+      const noteBudget =
+        SPAWN_RECOVERY_HINT_MAX_CHARS -
+        SPAWN_STRINGIFIED_DECODED_NOTE.length -
+        1
+      const base =
+        recoveryHint.length > noteBudget
+          ? `${recoveryHint.slice(0, noteBudget - '...[truncated]'.length).trimEnd()}...[truncated]`
+          : recoveryHint
+      value.recoveryHint = `${base} ${SPAWN_STRINGIFIED_DECODED_NOTE}`
+    }
+    if (validationIssues) {
+      value.validationIssues = validationIssues.map((issue) => ({
+        path: issue.path,
+        message: issue.message,
+      }))
+    }
+    return {
+      agentType,
+      agentName: agentType,
+      value,
+    }
+  })
 
   return jsonToolResult(reports) as CodebuffToolOutput<'spawn_agents'>
 }

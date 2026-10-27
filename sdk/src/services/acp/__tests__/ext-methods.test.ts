@@ -47,10 +47,7 @@ import {
 } from '@codebuff/common/util/content-hash'
 
 import { createAcpAgent } from '../acp-agent'
-import {
-  compileExtV1JsonSchemas,
-  OPENBUFF_EXT_METHODS,
-} from '../ext-methods'
+import { compileExtV1JsonSchemas, OPENBUFF_EXT_METHODS } from '../ext-methods'
 import { AcpSessionData } from '../session-data'
 
 /** The honest P1 serve capability map (same shape the bridge stores). */
@@ -210,7 +207,10 @@ async function errorOf(
     await promise
   } catch (failure) {
     const err = failure as RequestError & { data?: unknown }
-    return { code: err.code, data: (failure as unknown as { data?: unknown }).data }
+    return {
+      code: err.code,
+      data: (failure as unknown as { data?: unknown }).data,
+    }
   }
   throw new Error('expected the ext-method call to reject')
 }
@@ -350,7 +350,9 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
       '_openbuff.dev/lanes/create',
       '_openbuff.dev/lanes/land',
     ] as const) {
-      const failure = await errorOf(agent.extMethod(method, { sessionId: 's1' }))
+      const failure = await errorOf(
+        agent.extMethod(method, { sessionId: 's1' }),
+      )
       expect(failure.code).toBe(-32601)
       const data = failure.data as Record<string, Record<string, unknown>>
       expect(data['openbuff.dev']).toEqual({
@@ -449,6 +451,31 @@ describe('ext-v1 dispatcher serves the live store (RF-10)', () => {
     const state = gateStateV1Schema.parse(result)
     expect(state.status).toBe('skipped')
     expect(state.skipReason).toBe('no reviewable diff in the pending set')
+  })
+
+  test('gate_state/get projects the additive reviewers and machine skipReason onto the wire result', async () => {
+    const sessionData = new AcpSessionData()
+    sessionData.updateGateStateFromBlock(
+      's1',
+      `<gate-state>${JSON.stringify({
+        gate: 'reviewer',
+        status: 'skipped',
+        details: 'no reviewable diff in the pending set',
+        reviewers: ['reliability-reviewer'],
+        skipReason: 'specialist-rate-limited',
+      })}</gate-state>`,
+    )
+    const agent = await ownedAgent(sessionData, 's1')
+    const result = await agent.extMethod('_openbuff.dev/gate_state/get', {
+      sessionId: 's1',
+    })
+    // The served result must re-parse against the strict published schema:
+    // the additive reviewers key exists there, and the machine skipReason
+    // (the precise token) wins over the details-derived fallback above.
+    const state = gateStateV1Schema.parse(result)
+    expect(state.status).toBe('skipped')
+    expect(state.skipReason).toBe('specialist-rate-limited')
+    expect(state.reviewers).toEqual(['reliability-reviewer'])
   })
 
   test('without the live store, every ext-v1 method fails closed with -32601', async () => {
@@ -553,8 +580,12 @@ describe('journal capabilities replay is schema-validated (RF-13)', () => {
       'utf8',
     )
     const sessionData = new AcpSessionData({ journalDir: dir })
-    await expect(sessionData.restoreFromJournal('s-journal')).resolves.toBe(true)
-    expect(sessionData.getCapabilities('s-journal')).toEqual(VALID_CAPABILITY_MAP)
+    await expect(sessionData.restoreFromJournal('s-journal')).resolves.toBe(
+      true,
+    )
+    expect(sessionData.getCapabilities('s-journal')).toEqual(
+      VALID_CAPABILITY_MAP,
+    )
   })
 
   test('a tampered capabilities line (unknown key) is skipped fail-closed', async () => {
@@ -566,7 +597,10 @@ describe('journal capabilities replay is schema-validated (RF-13)', () => {
     writeFileSync(
       join(dir, 's-journal.jsonl'),
       [
-        JSON.stringify({ kind: 'capabilities', capabilities: VALID_CAPABILITY_MAP }),
+        JSON.stringify({
+          kind: 'capabilities',
+          capabilities: VALID_CAPABILITY_MAP,
+        }),
         JSON.stringify({ kind: 'capabilities', capabilities: tampered }),
       ].join('\n') + '\n',
       'utf8',
@@ -575,7 +609,9 @@ describe('journal capabilities replay is schema-validated (RF-13)', () => {
     await sessionData.restoreFromJournal('s-journal')
     const stored = sessionData.getCapabilities('s-journal')
     expect(stored).toEqual(VALID_CAPABILITY_MAP)
-    expect((stored as unknown as Record<string, unknown>).injected).toBeUndefined()
+    expect(
+      (stored as unknown as Record<string, unknown>).injected,
+    ).toBeUndefined()
   })
 
   test('a journal with only tampered capability lines leaves no stored map', async () => {

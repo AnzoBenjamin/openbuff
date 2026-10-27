@@ -101,9 +101,7 @@ const expectGoldenPayload = <T>(
   payload: unknown,
 ): T => {
   const parsed = schema.parse(payload)
-  expect(JSON.stringify(parsed, null, 2)).toBe(
-    JSON.stringify(payload, null, 2),
-  )
+  expect(JSON.stringify(parsed, null, 2)).toBe(JSON.stringify(payload, null, 2))
   return parsed
 }
 
@@ -156,7 +154,10 @@ describe('GV-02/GV-11 capability map', () => {
     const ext = asRecord(
       asRecord(asRecord(gv02.result).agentCapabilities)._meta,
     )[OPENBUFF_ACP_NS] as Fixture
-    const capabilities = expectGoldenPayload(capabilityMapV1Schema, ext.capabilities)
+    const capabilities = expectGoldenPayload(
+      capabilityMapV1Schema,
+      ext.capabilities,
+    )
 
     // The P1 baseline claims exactly what the design pins: lexical sandbox,
     // lanes and journal off, gate on.
@@ -218,7 +219,10 @@ describe('GV-06 receipt envelope and redacted wire mutation', () => {
   })
 
   it('parses the receipt envelope and round-trips it byte-exactly', () => {
-    const envelope = expectGoldenPayload(receiptEnvelopeV1Schema, gv06Envelope())
+    const envelope = expectGoldenPayload(
+      receiptEnvelopeV1Schema,
+      gv06Envelope(),
+    )
     expect(envelope.laneId).toBe('main')
     expect(envelope.toolCallId).toBe('call_7')
     expect(envelope.sessionId).toBe(SESSION_ID)
@@ -329,7 +333,9 @@ describe('GV-09 gate state', () => {
 
   it('(c) projectGateState(GV-09-source) equals the emitted state object', () => {
     const projected = projectGateState({
-      state: gv09Source.state as Parameters<typeof projectGateState>[0]['state'],
+      state: gv09Source.state as Parameters<
+        typeof projectGateState
+      >[0]['state'],
       phase: gv09Source.phase as string,
       sessionId: gv09Source.sessionId as string,
     })
@@ -373,6 +379,91 @@ describe('GV-09 gate state', () => {
     })
     expect(projected.status).toBe('skipped')
     expect(projected.skipReason).toBe('reviewer not configured')
+  })
+
+  it('gateStateV1Schema accepts the additive reviewers key and legacy payloads without it', () => {
+    const base = {
+      kind: 'openbuff.gate_state',
+      version: 1,
+      sessionId: SESSION_ID,
+      status: 'passed',
+      pendingFiles: [],
+      passedFiles: ['src/a.ts'],
+    }
+    // A payload carrying the additive reviewers key parses and round-trips.
+    const withReviewers = { ...base, reviewers: ['reliability-reviewer'] }
+    expect(gateStateV1Schema.parse(withReviewers)).toEqual(withReviewers)
+    // A legacy payload without the key keeps parsing unchanged (additive
+    // only: the schema is `.strict()`, so this pins that no key became
+    // required and none was silently dropped).
+    expect(gateStateV1Schema.parse(base)).toEqual(base)
+    // A skipped payload carrying both additive keys parses.
+    const skipped = {
+      ...base,
+      status: 'skipped',
+      skipReason: 'specialist-rate-limited',
+      reviewers: ['reliability-reviewer'],
+    }
+    expect(gateStateV1Schema.parse(skipped)).toEqual(skipped)
+  })
+
+  it('gateStateV1Schema rejects reviewer lists outside the published block bounds', () => {
+    const base = {
+      kind: 'openbuff.gate_state',
+      version: 1,
+      sessionId: SESSION_ID,
+      status: 'passed',
+      pendingFiles: [],
+      passedFiles: ['src/a.ts'],
+    }
+    const rejects = (reviewers: unknown): void => {
+      const result = gateStateV1Schema.safeParse({ ...base, reviewers })
+      expect(result.success).toBe(false)
+    }
+    // The key mirrors the published `<gate-state>` block's `reviewers`
+    // contract — non-empty entries, at most 4 of at most 64 characters — so
+    // an empty entry, a fifth entry, or an over-long entry has no wire
+    // representation (no in-repo producer can emit one).
+    rejects([''])
+    rejects(['a', 'b', 'c', 'd', 'e'])
+    rejects(['x'.repeat(65)])
+    // The bound is inclusive: exactly four entries of exactly 64 characters
+    // still parse, mirroring the block parsers' at-most comparisons.
+    const edge = {
+      ...base,
+      reviewers: [
+        'a'.repeat(64),
+        'b'.repeat(64),
+        'c'.repeat(64),
+        'd'.repeat(64),
+      ],
+    }
+    expect(gateStateV1Schema.parse(edge)).toEqual(edge)
+  })
+
+  it('gateStateV1Schema rejects skipReason tokens outside the published 120-char cap', () => {
+    const base = {
+      kind: 'openbuff.gate_state',
+      version: 1,
+      sessionId: SESSION_ID,
+      status: 'skipped',
+      pendingFiles: [],
+      passedFiles: ['src/a.ts'],
+    }
+    const rejects = (skipReason: unknown): void => {
+      const result = gateStateV1Schema.safeParse({ ...base, skipReason })
+      expect(result.success).toBe(false)
+    }
+    // The key mirrors the published `<gate-state>` block's `skipReason`
+    // contract — a non-empty machine token of at most 120 characters, the
+    // same cap the store's parseSkipReason and the block emitter enforce —
+    // so an empty token or an over-long one has no wire representation.
+    rejects('')
+    rejects('x'.repeat(121))
+    // The bound is inclusive: exactly 120 characters still parses, mirroring
+    // the producer's at-most comparison.
+    const edge = { ...base, skipReason: 'x'.repeat(120) }
+    expect(gateStateV1Schema.parse(edge)).toEqual(edge)
   })
 })
 
@@ -448,17 +539,16 @@ describe('envelope-only vectors', () => {
     expect(asRecord(asRecord(gv08.cancelResponse).result).outcome).toEqual({
       outcome: 'cancelled',
     })
-    expect(
-      asRecord(asRecord(gv08.rejectOnceResponse).result).outcome,
-    ).toEqual({ outcome: 'selected', optionId: 'reject_once' })
+    expect(asRecord(asRecord(gv08.rejectOnceResponse).result).outcome).toEqual({
+      outcome: 'selected',
+      optionId: 'reject_once',
+    })
   })
 
   it('GV-12 cancel yields stopReason cancelled on the pending prompt', () => {
     const gv12 = loadFixture('GV-12')
     expectByteStable(gv12, 'GV-12')
-    expect(
-      asRecord(asRecord(gv12.cancel).params).sessionId,
-    ).toBe(SESSION_ID)
+    expect(asRecord(asRecord(gv12.cancel).params).sessionId).toBe(SESSION_ID)
     expect(asRecord(asRecord(gv12.promptResult).result)).toEqual({
       stopReason: 'cancelled',
     })
@@ -467,7 +557,8 @@ describe('envelope-only vectors', () => {
   it('GV-13 pins the plan update entries', () => {
     const gv13 = loadFixture('GV-13')
     expectByteStable(gv13, 'GV-13')
-    const update = asRecord(asRecord(gv13.notification).params).update as Fixture
+    const update = asRecord(asRecord(gv13.notification).params)
+      .update as Fixture
     expect(update.sessionUpdate).toBe('plan')
     const entries = update.entries as Array<Fixture>
     expect(entries.map((entry) => entry.status)).toEqual([
@@ -496,7 +587,9 @@ describe('§12.7/§12.8 security golden vectors (GV-15…GV-30)', () => {
     expect(serialized).not.toContain('cap.v3.')
     expect(serialized).not.toContain('sk-or-v1-abc')
     expect(serialized).not.toContain('rawOutput')
-    const update = asRecord(asRecord(asRecord(gv15.toolCallUpdate).params).update)
+    const update = asRecord(
+      asRecord(asRecord(gv15.toolCallUpdate).params).update,
+    )
     expect(update.sessionUpdate).toBe('tool_call_update')
     expect(update.status).toBe('completed')
   })
@@ -554,9 +647,7 @@ describe('§12.7/§12.8 security golden vectors (GV-15…GV-30)', () => {
 
   it('GV-21: an approval branch with control/bidi chars is sanitized to U+FFFD in the emitted title', () => {
     const gv21 = loadFixture('GV-21')
-    const update = asRecord(
-      asRecord(asRecord(gv21.request).params).toolCall,
-    )
+    const update = asRecord(asRecord(asRecord(gv21.request).params).toolCall)
     const title = update.title as string
     expect(title).toContain('\ufffd')
     // No C0 control (incl. ESC U+001B and BEL U+0007) survives sanitization.
@@ -661,7 +752,9 @@ describe('§12.7/§12.8 security golden vectors (GV-15…GV-30)', () => {
     const serialized = JSON.stringify(gv28.error)
     expect(serialized).not.toContain('cap.v3.')
     expect(serialized).not.toContain('sk-or-v1-abc')
-    expect(asRecord(gv28.error).error as Fixture).toMatchObject({ code: -32603 })
+    expect(asRecord(gv28.error).error as Fixture).toMatchObject({
+      code: -32603,
+    })
   })
 
   it('GV-29: serve --stdio without trust does not load project mcp.json and connects nothing', () => {

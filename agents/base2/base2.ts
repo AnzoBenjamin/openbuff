@@ -946,7 +946,9 @@ ${guideSections}
           /\b(?:performance|latency|throughput|benchmark|profil\w*|allocation|hot path|load test|complexity|memory leak|oom|regress\w*|slow\w*|bottleneck|cache miss|n\+1)\b/.test(
             requirements,
           ) ||
-          files.some((file) => /(?:bench|perf|load-test|profil|flamegraph)/.test(file))
+          files.some((file) =>
+            /(?:bench|perf|load-test|profil|flamegraph)/.test(file),
+          )
         )
           selected.add('performance-specialist')
         const hasUiFiles = files.some((file) =>
@@ -1222,6 +1224,7 @@ ${guideSections}
         securityReviewGateDone: false,
         reviewerCrashCount: 0,
         reviewerProtocolRetryCount: 0,
+        reviewerProtocolAttestationFailed: false,
         reviewerRepairRoundCount: 0,
         reviewerNoVerdictCount: 0,
         reviewerBypassChallenge: undefined,
@@ -1263,6 +1266,15 @@ ${guideSections}
         activeWorkState.preEditSecurityReviewDone
       activeWorkState.reviewerCrashCount ??= 0
       activeWorkState.reviewerProtocolRetryCount ??= 0
+      // One-time migration for pre-split serialized state: derive the
+      // protocol-policy latch from the durable token so an in-flight
+      // protocol-blocked turn keeps its guard armed. Post-split state carries
+      // the field, so `??=` never overwrites a live latch with a transient
+      // token value (reliability:
+      // specialist-exit-overwrites-reviewer-protocol-guard-token).
+      activeWorkState.reviewerProtocolAttestationFailed ??=
+        activeWorkState.lastReviewerGateSkipReason ===
+        'reviewer-protocol-attestation-failed'
       activeWorkState.reviewerRepairRoundCount ??= 0
       activeWorkState.reviewerNoVerdictCount ??= 0
       activeWorkState.reviewerGateBypassReason ??= ''
@@ -2986,8 +2998,9 @@ ${guideSections}
           const securityCrash = detectReviewerCrash(derivedSecurityToolResult)
           // Parent-owned process RF strings are not repair targets for security.
           // Pass toolResult so evidence-only parent ownership matches finalization.
-          const rawSecurityBlockers =
-            collectReviewerBlockers(derivedSecurityToolResult)
+          const rawSecurityBlockers = collectReviewerBlockers(
+            derivedSecurityToolResult,
+          )
           // One structured walk for the whole list: the per-blocker helper
           // re-collects the structured reviewer outputs on every call.
           const parentOwnedSecurityBlockers =
@@ -3011,8 +3024,9 @@ ${guideSections}
           // failure and parked the gate in a spawn/reject loop. The
           // security-specific credit accepts NON_BLOCKING while keeping the
           // same coverage/requirement/dimension gates.
-          const securityVerdict =
-            getSecurityReviewerFinalizationVerdict(derivedSecurityToolResult)
+          const securityVerdict = getSecurityReviewerFinalizationVerdict(
+            derivedSecurityToolResult,
+          )
           const securityProtocolFailure =
             securityCrash ||
             securityAttestationIssues.length > 0 ||
@@ -3082,6 +3096,15 @@ ${guideSections}
                   ...securityBlockers,
                   '',
                   'These findings remain open until targeted validation and a fresh matching security review clear them.',
+                  formatGateStateBlock(
+                    'reviewer',
+                    'failed',
+                    'security-reviewer returned blocking findings for the pending snapshot.',
+                    undefined,
+                    undefined,
+                    undefined,
+                    ['security-reviewer'],
+                  ),
                 ].join('\n'),
               },
               includeToolCall: false,
@@ -3121,7 +3144,17 @@ ${guideSections}
                       ],
                       unknowns: [],
                       findings: activeWorkState.openReviewerFindings.map(
-                        ({ id, text, files, snapshotFingerprint, reviewer, severity, dimension, evidence, correction }) => ({
+                        ({
+                          id,
+                          text,
+                          files,
+                          snapshotFingerprint,
+                          reviewer,
+                          severity,
+                          dimension,
+                          evidence,
+                          correction,
+                        }) => ({
                           id,
                           text,
                           files,
@@ -3133,7 +3166,8 @@ ${guideSections}
                           // spawned blind on `id: text` lines alone.
                           ...(severity && { severity }),
                           ...(dimension && { dimension }),
-                          ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                          ...(Array.isArray(evidence) &&
+                            evidence.length > 0 && { evidence }),
                           ...(correction && { correction }),
                         }),
                       ),
@@ -3183,8 +3217,8 @@ ${guideSections}
                       'Treat every finding ID as open until a fresh security reviewer clears it.',
                       'Read every target from the live filesystem before editing.',
                       '',
-                      ...activeWorkState.openReviewerFindings.map(
-                        (finding) => buildReviewerPromptLine(finding),
+                      ...activeWorkState.openReviewerFindings.map((finding) =>
+                        buildReviewerPromptLine(finding),
                       ),
                     ].join('\n'),
                   },
@@ -3471,7 +3505,10 @@ ${guideSections}
             (file) => isGateManifestOrCiFile(normalizeGateFilePath(file)),
           )
           const specialistRoutingFiles = Array.from(
-            new Set([...specialistAuxRelevantFiles, ...specialistManifestFiles]),
+            new Set([
+              ...specialistAuxRelevantFiles,
+              ...specialistManifestFiles,
+            ]),
           )
           const baseRoutedSpecialists = selectSpecialistReviewersInline({
             files: specialistRoutingFiles,
@@ -3586,8 +3623,7 @@ ${guideSections}
             // Record an explicit, non-empty, JSON-serializable skip reason and
             // emit telemetry, mirroring the committed-surface
             // 'committed-surface-no-specialists-routed' pattern above.
-            activeWorkState.lastReviewerGateSkipReason =
-              'no-specialists-routed'
+            activeWorkState.lastReviewerGateSkipReason = 'no-specialists-routed'
             markActiveWorkStateChanged()
             emitGateTelemetry({
               currentPhase: 'final_response_allowed',
@@ -3603,12 +3639,11 @@ ${guideSections}
             // crypto is unavailable rather than spawning with a bare bundle id.
             // Each scoped spawn fingerprint must attest independently.
             const scopedFingerprintsAreAttestable =
-              routedSpecialistsWithAttestableScope.every(
-                (agentType) =>
-                  isAttestableSnapshotFingerprint(
-                    specialistScopedFingerprints.get(agentType) ??
-                      specialistCreditFingerprint,
-                  ),
+              routedSpecialistsWithAttestableScope.every((agentType) =>
+                isAttestableSnapshotFingerprint(
+                  specialistScopedFingerprints.get(agentType) ??
+                    specialistCreditFingerprint,
+                ),
               )
             if (
               !isAttestableSnapshotFingerprint(specialistCreditFingerprint) ||
@@ -3747,6 +3782,27 @@ ${guideSections}
               auxGateFiredThisIteration = true
               let specialistBlocked = false
               let specialistTerminalFailure = false
+              // The terminal-failure handler below runs AFTER the routed-agent
+              // for loop, so the failing reviewer family is threaded here for
+              // the gate-state block's `reviewers` field.
+              let specialistTerminalFailureAgents: string[] = []
+              // Class of the CURRENT iteration's terminal failure, threaded to
+              // the handler below exactly like specialistTerminalFailureAgents.
+              // The handler must classify the failure that produced this exit,
+              // never the cross-turn durable lastReviewerGateSkipReason token:
+              // a stale 'specialist-rate-limited' token from an earlier round's
+              // rate-limit crash survives into this block, and reading it back
+              // misclassified the non-attestable and attestation-retry exits —
+              // failures that are NOT transient, so retrying can neither
+              // restore collision-resistant hashing nor re-arm the
+              // already-consumed single attestation auto-refresh — as
+              // transient rate limits on the wire, in durable state, and in
+              // telemetry. Default 'terminal' covers the per-agent
+              // attestation-retry exhaustion and non-transient crash exits.
+              let specialistTerminalFailureClass:
+                | 'rate-limited'
+                | 'terminal'
+                | 'non-attestable' = 'terminal'
               // Set only by the bounded specialist repair loop when it must
               // exit the OUTER while loop (repair budget exhausted, missing
               // repair receipt, repair crash, or no snapshot-visible progress).
@@ -3798,27 +3854,29 @@ ${guideSections}
                   extractSpawnedAgentResult(firstBatchToolResult, agentType),
                 )
               }
-              const retrySpecialists = spawnableSpecialists.filter((agentType) => {
-                const result = specialistResults.get(agentType)
-                // A fully-attesting review (every pending source file covered
-                // by a well-formed snapshot fingerprint) is accepted even when
-                // the exact snapshot id advanced; only genuine file-coverage
-                // gaps or a missing/non-attestable fingerprint require a
-                // re-spawn. `isStaleSnapshotReviewerResult` is therefore only
-                // consulted when attestation issues remain, so transient
-                // snapshot drift never triggers a pointless refresh+retry.
-                const attestationIssues = collectReviewerAttestationIssues(
-                  result,
-                  specialistScopedFingerprints.get(agentType) ??
-                    specialistCreditFingerprint,
-                  specialistScopedFileSets.get(agentType) ?? [],
-                  specialistScopedDeletedFiles.get(agentType) ?? [],
-                )
-                return (
-                  attestationIssues.length > 0 &&
-                  isStaleSnapshotReviewerResult(result)
-                )
-              })
+              const retrySpecialists = spawnableSpecialists.filter(
+                (agentType) => {
+                  const result = specialistResults.get(agentType)
+                  // A fully-attesting review (every pending source file covered
+                  // by a well-formed snapshot fingerprint) is accepted even when
+                  // the exact snapshot id advanced; only genuine file-coverage
+                  // gaps or a missing/non-attestable fingerprint require a
+                  // re-spawn. `isStaleSnapshotReviewerResult` is therefore only
+                  // consulted when attestation issues remain, so transient
+                  // snapshot drift never triggers a pointless refresh+retry.
+                  const attestationIssues = collectReviewerAttestationIssues(
+                    result,
+                    specialistScopedFingerprints.get(agentType) ??
+                      specialistCreditFingerprint,
+                    specialistScopedFileSets.get(agentType) ?? [],
+                    specialistScopedDeletedFiles.get(agentType) ?? [],
+                  )
+                  return (
+                    attestationIssues.length > 0 &&
+                    isStaleSnapshotReviewerResult(result)
+                  )
+                },
+              )
               if (retrySpecialists.length > 0) {
                 // Retry identity is the recomputed gate fingerprint of the
                 // current pending set — not a new bare bundle snapshotId.
@@ -3851,6 +3909,10 @@ ${guideSections}
                   markActiveWorkStateChanged()
                   specialistBlocked = true
                   specialistTerminalFailure = true
+                  specialistTerminalFailureAgents = retrySpecialists
+                  // Non-transient: retrying cannot restore collision-resistant
+                  // hashing, so this exit never classifies as a rate limit.
+                  specialistTerminalFailureClass = 'non-attestable'
                 } else {
                   // Optional evidence refresh; ignore missing snapshotId.
                   yield {
@@ -3955,6 +4017,12 @@ ${guideSections}
                     markActiveWorkStateChanged()
                     specialistBlocked = true
                     specialistTerminalFailure = true
+                    specialistTerminalFailureAgents = [agentType]
+                    // Non-transient: the single attestation auto-refresh was
+                    // already consumed, so this exit never classifies as a
+                    // rate limit even when the durable skip token still
+                    // holds one from an earlier round.
+                    specialistTerminalFailureClass = 'terminal'
                     break
                   }
                   // Attestation tolerates a coverage-complete specialist review
@@ -3982,8 +4050,9 @@ ${guideSections}
                     }
                   }
                   const crash = detectReviewerCrash(derivedSpecialistToolResult)
-                  const rawBlockers =
-                    collectReviewerBlockers(derivedSpecialistToolResult)
+                  const rawBlockers = collectReviewerBlockers(
+                    derivedSpecialistToolResult,
+                  )
                   // Defense in depth: parent-owned process RF strings must not
                   // alone force a specialist repair-editor spawn. Classify the
                   // whole list in ONE structured walk (the per-blocker helper
@@ -4001,8 +4070,9 @@ ${guideSections}
                   )
                   const parentOwnedOnlyBlockers =
                     rawBlockers.length > 0 && blockers.length === 0
-                  const verdict =
-                    getReviewerFinalizationVerdict(derivedSpecialistToolResult)
+                  const verdict = getReviewerFinalizationVerdict(
+                    derivedSpecialistToolResult,
+                  )
                   let specialistResultCreditPathQualified = false
                   if (parentOwnedOnlyBlockers && verdict === 'LOOKS_GOOD') {
                     // Pure parent-owned requirementCoverage gaps with LOOKS_GOOD:
@@ -4093,8 +4163,9 @@ ${guideSections}
                       specialistCreditFingerprint,
                       specialistScopedFileSets.get(agentType) ?? [],
                     )
-                    const records =
-                      collectReviewerFindingRecords(derivedSpecialistToolResult)
+                    const records = collectReviewerFindingRecords(
+                      derivedSpecialistToolResult,
+                    )
                     const specialistFindingRecords = blockers.map(
                       (text: string, index: number) => {
                         const record = correlateReviewerFindingRecord(
@@ -4180,6 +4251,15 @@ ${guideSections}
                             ...blockers,
                             '',
                             'Stop retrying automatically. Inspect the findings directly, fix them, or explicitly authorize a different path.',
+                            formatGateStateBlock(
+                              'reviewer',
+                              'failed',
+                              `${agentType} returned blocking findings for the pending snapshot.`,
+                              specialistRepairRound,
+                              undefined,
+                              undefined,
+                              [agentType],
+                            ),
                           ].join('\n'),
                         },
                         includeToolCall: false,
@@ -4211,6 +4291,15 @@ ${guideSections}
                           ...blockers,
                           '',
                           `These findings remain open until targeted validation and a fresh matching ${agentType} review clear them.`,
+                          formatGateStateBlock(
+                            'reviewer',
+                            'failed',
+                            `${agentType} returned blocking findings for the pending snapshot.`,
+                            specialistRepairRound,
+                            undefined,
+                            undefined,
+                            [agentType],
+                          ),
                         ].join('\n'),
                       },
                       includeToolCall: false,
@@ -4271,7 +4360,16 @@ ${guideSections}
                               ],
                               unknowns: [],
                               findings: specialistOpenFindings.map(
-                                ({ id, text, files, snapshotFingerprint, severity, dimension, evidence, correction }) => ({
+                                ({
+                                  id,
+                                  text,
+                                  files,
+                                  snapshotFingerprint,
+                                  severity,
+                                  dimension,
+                                  evidence,
+                                  correction,
+                                }) => ({
                                   id,
                                   text,
                                   files,
@@ -4280,7 +4378,8 @@ ${guideSections}
                                   // spawned blind on `id: text` lines alone.
                                   ...(severity && { severity }),
                                   ...(dimension && { dimension }),
-                                  ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                                  ...(Array.isArray(evidence) &&
+                                    evidence.length > 0 && { evidence }),
                                   ...(correction && { correction }),
                                 }),
                               ),
@@ -4331,8 +4430,8 @@ ${guideSections}
                               `Treat every finding ID as open until a fresh ${agentType} clears it.`,
                               'Read every target from the live filesystem before editing.',
                               '',
-                              ...specialistOpenFindings.map(
-                                (finding) => buildReviewerPromptLine(finding),
+                              ...specialistOpenFindings.map((finding) =>
+                                buildReviewerPromptLine(finding),
                               ),
                             ].join('\n'),
                           },
@@ -4373,8 +4472,7 @@ ${guideSections}
                       specialistOpenFindingIds.size === 0 ||
                       (!!specialistRepairReceipt &&
                         specialistRepairReceipt.findingsAddressed.some(
-                          (id: string) =>
-                            specialistOpenFindingIds.has(id),
+                          (id: string) => specialistOpenFindingIds.has(id),
                         ))
                     if (
                       !specialistRepairReceipt ||
@@ -4422,10 +4520,13 @@ ${guideSections}
                     // skip reason, retract finalization, and exit the gate loop
                     // instead of spawning another repair round.
                     if (postRepairFingerprint === preRepairFingerprint) {
-                      if (!activeWorkState.lastReviewerGateSkipReason) {
-                        activeWorkState.lastReviewerGateSkipReason =
-                          'specialist-repair-no-progress'
-                      }
+                      // The skip token must match this branch's own details,
+                      // so a stale token from an earlier unrelated failure
+                      // cannot survive this exit and contradict them: assign
+                      // UNCONDITIONALLY (the empty-only backfill let a stale
+                      // token survive), mirroring the terminal-failure site.
+                      activeWorkState.lastReviewerGateSkipReason =
+                        'specialist-repair-no-progress'
                       activeWorkState.currentPhase = 'blocked'
                       activeWorkState.nextRequiredAction = `Repair-editor made no snapshot-visible progress on the ${agentType} findings. Stop retrying and inspect the finding or handoff.`
                       activeWorkState.latestWorkSummary = `${agentType} repair produced no workspace fingerprint change.`
@@ -4457,10 +4558,14 @@ ${guideSections}
                         postRepairFingerprint,
                       )
                     ) {
-                      if (!activeWorkState.lastReviewerGateSkipReason) {
-                        activeWorkState.lastReviewerGateSkipReason =
-                          'specialist-repair-cycle'
-                      }
+                      // Same rationale as the no-progress exit above and the
+                      // terminal-failure site: the skip token must match this
+                      // branch's own details, so a stale token from an
+                      // earlier unrelated failure cannot survive this exit.
+                      // Assign UNCONDITIONALLY (the empty-only backfill let a
+                      // stale token survive).
+                      activeWorkState.lastReviewerGateSkipReason =
+                        'specialist-repair-cycle'
                       activeWorkState.currentPhase = 'blocked'
                       activeWorkState.nextRequiredAction = `The ${agentType} repair loop returned the workspace to a state it already visited this turn; retrying will not converge. Stop retrying and inspect the finding or handoff.`
                       activeWorkState.latestWorkSummary = `${agentType} repair loop revisited an earlier workspace fingerprint (repair cycle).`
@@ -4511,6 +4616,8 @@ ${guideSections}
                       markActiveWorkStateChanged()
                       specialistBlocked = true
                       specialistTerminalFailure = true
+                      specialistTerminalFailureAgents = [agentType]
+                      specialistTerminalFailureClass = 'rate-limited'
                       break
                     }
                     const crashClass = classifyReviewerCrash(crash)
@@ -4530,6 +4637,10 @@ ${guideSections}
                     markActiveWorkStateChanged()
                     specialistBlocked = true
                     specialistTerminalFailure = true
+                    specialistTerminalFailureAgents = [agentType]
+                    // Non-transient crash/protocol failure: classified from
+                    // this exit, never from the durable skip token.
+                    specialistTerminalFailureClass = 'terminal'
                     break
                   }
                   if (!verdict) {
@@ -4613,13 +4724,22 @@ ${guideSections}
                     }
                     activeWorkState.validationAssurance = 'reduced'
                     specialistResultCreditPathQualified = blockers.length === 0
-                    if (!activeWorkState.lastReviewerGateSkipReason) {
-                      activeWorkState.lastReviewerGateSkipReason =
-                        'specialist-no-verdict-budget-exhausted'
-                    }
-                    activeWorkState.latestWorkSummary = specialistNoVerdictConverged
-                      ? `${agentType} repeated the same no-verdict rejection (${specialistNoVerdictDiagnostic.code}); the gate converged and proceeded with reduced assurance.`
-                      : `${agentType} never returned a verdict after ${MAX_SPECIALIST_NO_VERDICT_RETRIES} retry/retries; the gate proceeded with reduced assurance.`
+                    // The skip token must match the reduced-assurance credit
+                    // this path produces, so a stale token from an earlier
+                    // unrelated failure cannot survive it and shadow the
+                    // accurate marker. Unlike the no-progress / repair-cycle
+                    // exits and the terminal-failure site, this path CREDITS
+                    // the specialist and CONTINUES the loop (no terminal
+                    // exit), so the stale token would otherwise ride every
+                    // later publication of the credited state: assign
+                    // UNCONDITIONALLY (the empty-only backfill let a stale
+                    // token survive), mirroring the three fixed sites.
+                    activeWorkState.lastReviewerGateSkipReason =
+                      'specialist-no-verdict-budget-exhausted'
+                    activeWorkState.latestWorkSummary =
+                      specialistNoVerdictConverged
+                        ? `${agentType} repeated the same no-verdict rejection (${specialistNoVerdictDiagnostic.code}); the gate converged and proceeded with reduced assurance.`
+                        : `${agentType} never returned a verdict after ${MAX_SPECIALIST_NO_VERDICT_RETRIES} retry/retries; the gate proceeded with reduced assurance.`
                     // Wave 3 (A8) IDEMPOTENT CREDIT: this converged/exhausted
                     // no-verdict path CREDITS the specialist below (done set +
                     // fingerprint + per-file markers), so it MUST record the
@@ -4901,10 +5021,17 @@ ${guideSections}
                 if (specialistTerminalFailure) {
                   // Preserve pending gate state so finalization cannot bypass.
                   // Rate-limit crashes keep a distinct skip reason and messaging;
-                  // do not collapse them into specialist-terminal-failure.
+                  // do not collapse them into specialist-terminal-failure. The
+                  // class comes from the per-iteration
+                  // specialistTerminalFailureClass set by the site that
+                  // produced THIS exit, never from the durable
+                  // lastReviewerGateSkipReason token: that token is cross-turn
+                  // state and can still hold an earlier round's
+                  // 'specialist-rate-limited' crash, which would misclassify
+                  // this exit's non-transient failure as a transient rate
+                  // limit on the wire, in durable state, and in telemetry.
                   const rateLimited =
-                    activeWorkState.lastReviewerGateSkipReason ===
-                    'specialist-rate-limited'
+                    specialistTerminalFailureClass === 'rate-limited'
                   // Deadlock escape: a specialist that keeps failing for a
                   // non-source reason (protocol/attestation crash or provider
                   // rate-limit) would otherwise block the turn forever. Mirror
@@ -5023,8 +5150,9 @@ ${guideSections}
                       reason: activeWorkState.reviewerGateBypassReason,
                       authorizedAt: new Date().toISOString(),
                       pendingFiles: Array.from(pendingGateFiles),
-                      fingerprint:
-                        reviewChallengeFingerprint(currentPendingGateFiles),
+                      fingerprint: reviewChallengeFingerprint(
+                        currentPendingGateFiles,
+                      ),
                       validationSummary:
                         activeWorkState.lastValidationSummary ?? '',
                     }
@@ -5044,10 +5172,15 @@ ${guideSections}
                     })
                     continue
                   }
-                  if (!activeWorkState.lastReviewerGateSkipReason) {
-                    activeWorkState.lastReviewerGateSkipReason =
-                      'specialist-terminal-failure'
-                  }
+                  // The skip token must match this block's details, so a
+                  // stale token from an earlier unrelated failure cannot
+                  // leak onto the wire and contradict them: assign
+                  // UNCONDITIONALLY (the empty-only backfill let a stale
+                  // token survive), with the rate-limited sub-case keeping
+                  // its distinct token.
+                  activeWorkState.lastReviewerGateSkipReason = rateLimited
+                    ? 'specialist-rate-limited'
+                    : 'specialist-terminal-failure'
                   const specialistBypassChallenge =
                     ensureReviewerBypassChallenge(
                       reviewChallengeFingerprint(currentPendingGateFiles),
@@ -5074,6 +5207,18 @@ ${guideSections}
                             '',
                             'This is a transient provider limit, not a source-code finding. The harness did not spawn repair-editor or recompute bare-hex fingerprints. End turn and retry later.',
                             `Or, to finalize on the recorded validation evidence for this snapshot only, explicitly reply "BYPASS REVIEWER ${specialistBypassChallenge.id}".`,
+                            formatGateStateBlock(
+                              'reviewer',
+                              'failed',
+                              rateLimited
+                                ? `${activeWorkState.lastReviewerGateSkipReason}: specialist review gate hit a rate-limit or concurrency limit.`
+                                : `${activeWorkState.lastReviewerGateSkipReason}: specialist review gate failed snapshot/file attestation after one automatic refresh.`,
+                              undefined,
+                              undefined,
+                              undefined,
+                              specialistTerminalFailureAgents,
+                              activeWorkState.lastReviewerGateSkipReason,
+                            ),
                           ].join('\n')
                         : [
                             'Specialist review gate failed snapshot/file attestation after one automatic refresh.',
@@ -5082,6 +5227,18 @@ ${guideSections}
                             '',
                             'This is a specialist reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching specialist review against a stable review bundle.',
                             `Or, to finalize on the recorded validation evidence for this snapshot only, explicitly reply "BYPASS REVIEWER ${specialistBypassChallenge.id}".`,
+                            formatGateStateBlock(
+                              'reviewer',
+                              'failed',
+                              rateLimited
+                                ? `${activeWorkState.lastReviewerGateSkipReason}: specialist review gate hit a rate-limit or concurrency limit.`
+                                : `${activeWorkState.lastReviewerGateSkipReason}: specialist review gate failed snapshot/file attestation after one automatic refresh.`,
+                              undefined,
+                              undefined,
+                              undefined,
+                              specialistTerminalFailureAgents,
+                              activeWorkState.lastReviewerGateSkipReason,
+                            ),
                           ].join('\n'),
                     },
                     includeToolCall: false,
@@ -5133,6 +5290,11 @@ ${guideSections}
                   'validation/reviewer',
                   'failed',
                   'edits-detected-without-pending-gate-files: edits were detected, but there are no pending gate files to validate or review.',
+                  undefined,
+                  undefined,
+                  undefined,
+                  undefined,
+                  'edits-detected-without-pending-gate-files',
                 ),
               ].join('\n'),
             },
@@ -5289,11 +5451,16 @@ ${guideSections}
           continue
         }
 
+        // Protocol-policy guard reads the dedicated latch, not the published
+        // skip token: specialist exits overwrite the token unconditionally
+        // (correct for the published block), so reading it here would let a
+        // specialist exit on this pass silently disarm the protocol retry
+        // policy (reliability:
+        // specialist-exit-overwrites-reviewer-protocol-guard-token).
         const reviewerProtocolBlocked =
           runReviewerGate &&
           editsHappened &&
-          activeWorkState.lastReviewerGateSkipReason ===
-            'reviewer-protocol-attestation-failed' &&
+          activeWorkState.reviewerProtocolAttestationFailed &&
           (activeWorkState.reviewerProtocolRetryCount ?? 0) >= 1
         const reviewerProtocolBypassAuthorized =
           reviewerProtocolBlocked &&
@@ -5650,8 +5817,8 @@ ${guideSections}
               const validationRepairAddressesFinding =
                 validationFindingIds.length === 0 ||
                 (!!validationRepairReceipt &&
-                  validationRepairReceipt.findingsAddressed.some(
-                    (id: string) => validationFindingIds.includes(id),
+                  validationRepairReceipt.findingsAddressed.some((id: string) =>
+                    validationFindingIds.includes(id),
                   ))
               if (
                 !validationRepairReceipt ||
@@ -5960,8 +6127,7 @@ ${guideSections}
           runReviewerGate &&
           editsHappened &&
           !reviewerProtocolBypassAuthorized &&
-          activeWorkState.lastReviewerGateSkipReason !==
-            'reviewer-protocol-attestation-failed' &&
+          !activeWorkState.reviewerProtocolAttestationFailed &&
           (reviewableGateScopeFiles.length === 0 ||
             reviewableSetAlreadyReviewed)
         if (skipReviewerForReviewableScope) {
@@ -5974,6 +6140,14 @@ ${guideSections}
               : docsOnlyEditsAfterLastReview
                 ? 'reviewer skip: docs-only edits after last review'
                 : 'reviewer skip: reviewable source set unchanged since last review'
+          // Machine skip token shared by the telemetry payload and the
+          // <gate-state> block below so the two cannot drift.
+          const reviewerSkipReasonToken =
+            reviewableGateScopeFiles.length === 0
+              ? 'reviewer-skip-no-reviewable-source-files'
+              : docsOnlyEditsAfterLastReview
+                ? 'reviewer-skip-docs-only-after-review'
+                : 'reviewer-skip-reviewable-set-unchanged'
           markActiveWorkStateChanged()
           emitGateTelemetry({
             currentPhase: 'awaiting_review',
@@ -5982,12 +6156,7 @@ ${guideSections}
             reviewerStatus: 'skipped',
             validationStatus: 'passed',
             reviewerVerdict: reviewerFinalizationVerdict,
-            skipReason:
-              reviewableGateScopeFiles.length === 0
-                ? 'reviewer-skip-no-reviewable-source-files'
-                : docsOnlyEditsAfterLastReview
-                  ? 'reviewer-skip-docs-only-after-review'
-                  : 'reviewer-skip-reviewable-set-unchanged',
+            skipReason: reviewerSkipReasonToken,
           })
           yield {
             toolName: 'add_message',
@@ -6003,6 +6172,11 @@ ${guideSections}
                     : docsOnlyEditsAfterLastReview
                       ? `reviewer-skip-docs-only-after-review: non-reviewable files: ${nonReviewableGateScopeFiles.join(', ') || '(none)'}`
                       : `reviewer-skip-reviewable-set-unchanged: reviewable files: ${reviewableGateScopeFiles.join(', ') || '(none)'}`,
+                  undefined,
+                  undefined,
+                  undefined,
+                  undefined,
+                  reviewerSkipReasonToken,
                 ),
               ].join('\n'),
             },
@@ -6014,8 +6188,7 @@ ${guideSections}
           editsHappened &&
           !reviewerProtocolBypassAuthorized &&
           !skipReviewerForReviewableScope &&
-          activeWorkState.lastReviewerGateSkipReason !==
-            'reviewer-protocol-attestation-failed'
+          !activeWorkState.reviewerProtocolAttestationFailed
         ) {
           activeWorkState.lastReviewerGateSkipReason = ''
           markActiveWorkStateChanged()
@@ -6126,8 +6299,14 @@ ${guideSections}
             activeWorkState.openReviewerFindings = []
             activeWorkState.latestWorkSummary =
               'Reviewer protocol failed after one automatic retry; finalization remains blocked.'
+            // Token for the published block + latch for the protocol-policy
+            // guards (reliability:
+            // specialist-exit-overwrites-reviewer-protocol-guard-token): the
+            // token is telemetry specialist exits may later overwrite; the
+            // latch is the guard state that survives those exits.
             activeWorkState.lastReviewerGateSkipReason =
               'reviewer-protocol-attestation-failed'
+            activeWorkState.reviewerProtocolAttestationFailed = true
             activeWorkState.currentPhase = 'blocked'
             activeWorkState.nextRequiredAction =
               'Obtain a fresh matching structured review before finalization can continue.'
@@ -6151,6 +6330,7 @@ ${guideSections}
             break
           }
           activeWorkState.reviewerProtocolRetryCount = 0
+          activeWorkState.reviewerProtocolAttestationFailed = false
           // Attestation tolerates a coverage-complete review whose well-formed
           // v3 fingerprint drifted from the expected snapshot; record that drift
           // instead of accepting it silently, so a review of possibly-stale file
@@ -6390,7 +6570,10 @@ ${guideSections}
                     | 'security-reviewer'
                     | SpecialistReviewerAgent,
                   ...buildReviewerRecordPayload(
-                    correlateReviewerFindingRecord(text, reviewerFindingRecords),
+                    correlateReviewerFindingRecord(
+                      text,
+                      reviewerFindingRecords,
+                    ),
                     text,
                   ),
                   createdAt: new Date().toISOString(),
@@ -6625,7 +6808,17 @@ ${guideSections}
                           ],
                           unknowns: [],
                           findings: activeWorkState.openReviewerFindings.map(
-                            ({ id, text, files, snapshotFingerprint, reviewer, severity, dimension, evidence, correction }) => ({
+                            ({
+                              id,
+                              text,
+                              files,
+                              snapshotFingerprint,
+                              reviewer,
+                              severity,
+                              dimension,
+                              evidence,
+                              correction,
+                            }) => ({
                               id,
                               text,
                               files,
@@ -6637,7 +6830,8 @@ ${guideSections}
                               // spawned blind on `id: text` lines alone.
                               ...(severity && { severity }),
                               ...(dimension && { dimension }),
-                              ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                              ...(Array.isArray(evidence) &&
+                                evidence.length > 0 && { evidence }),
                               ...(correction && { correction }),
                             }),
                           ),
@@ -6729,7 +6923,17 @@ ${guideSections}
                           ],
                           unknowns: [],
                           findings: activeWorkState.openReviewerFindings.map(
-                            ({ id, text, files, snapshotFingerprint, reviewer, severity, dimension, evidence, correction }) => ({
+                            ({
+                              id,
+                              text,
+                              files,
+                              snapshotFingerprint,
+                              reviewer,
+                              severity,
+                              dimension,
+                              evidence,
+                              correction,
+                            }) => ({
                               id,
                               text,
                               files,
@@ -6741,7 +6945,8 @@ ${guideSections}
                               // spawned blind on `id: text` lines alone.
                               ...(severity && { severity }),
                               ...(dimension && { dimension }),
-                              ...(Array.isArray(evidence) && evidence.length > 0 && { evidence }),
+                              ...(Array.isArray(evidence) &&
+                                evidence.length > 0 && { evidence }),
                               ...(correction && { correction }),
                             }),
                           ),
@@ -7051,6 +7256,19 @@ ${guideSections}
                 blockerCount: reFailures.length,
                 skipReason: 'reviewer-repair-validation-failed',
               })
+              // The repair loop is shared across mixed code/specialist
+              // findings (mergeReviewerFindings retains other families' open
+              // findings), so the reviewer attribution is DERIVED from the
+              // open ledger exactly like the success arm above — never a
+              // hardcoded code-reviewer-only list. boundGateStateReviewerFields
+              // bounds the list; an empty set omits the key entirely.
+              const revalidationOpenFamilies = [
+                ...new Set(
+                  (activeWorkState.openReviewerFindings ?? []).map((finding) =>
+                    reviewerFamilyFromFinding(finding),
+                  ),
+                ),
+              ]
               yield {
                 toolName: 'add_message',
                 input: {
@@ -7065,6 +7283,10 @@ ${guideSections}
                       'validation',
                       'failed',
                       `reviewer-repair-validation-failed: ${reFailures.length} failure(s) remain for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
+                      undefined,
+                      undefined,
+                      undefined,
+                      revalidationOpenFamilies,
                     ),
                   ].join('\n'),
                 },
@@ -7088,8 +7310,9 @@ ${guideSections}
           // Keep the verdict already set by the condoned pass above;
           // otherwise derive it from the reviewer output as before.
           if (!reviewerFinalizationVerdict) {
-            reviewerFinalizationVerdict =
-              getReviewerFinalizationVerdict(derivedReviewerToolResult)
+            reviewerFinalizationVerdict = getReviewerFinalizationVerdict(
+              derivedReviewerToolResult,
+            )
           }
           if (reviewerFinalizationVerdict) {
             setGateProgress(
@@ -7212,8 +7435,7 @@ ${guideSections}
                 noVerdictDiagnostic.code === 'no_structured_output' ||
                 noVerdictDiagnostic.code === 'prose_only' ||
                 noVerdictDiagnostic.code === 'unshaped_only' ||
-                noVerdictDiagnostic.code ===
-                  'unrecognized_verdict_literal' ||
+                noVerdictDiagnostic.code === 'unrecognized_verdict_literal' ||
                 noVerdictDiagnostic.code === 'verdict_key_not_found'
               const noVerdictConverged =
                 noVerdictCodeIsConvergent &&
@@ -7466,6 +7688,7 @@ ${guideSections}
             activeWorkState.securityReviewGateDone = false
             activeWorkState.reviewerCrashCount = 0
             activeWorkState.reviewerProtocolRetryCount = 0
+            activeWorkState.reviewerProtocolAttestationFailed = false
             activeWorkState.reviewerRepairRoundCount = 0
             activeWorkState.reviewerNoVerdictCount = 0
             // Clear the durable no-verdict convergence ledger too. It is keyed
@@ -7755,6 +7978,11 @@ ${guideSections}
                   'validation/reviewer',
                   'skipped',
                   `${disabledGateReason}: skipped automated gate checks for pending files: ${Array.from(pendingGateFiles).join(', ') || '(unknown files)'}`,
+                  undefined,
+                  undefined,
+                  undefined,
+                  undefined,
+                  disabledGateReason,
                 ),
               ].join('\n'),
             },
@@ -7952,8 +8180,14 @@ ${guideSections}
       // the parse contract documented on `parseGateStateBlock` /
       // `GateStateContentBlock` in the CLI): `gate` and `status` are always
       // present; `details` is always present (possibly empty); `repairRound`,
-      // `maxRepairRounds`, `advisories`, and `workflow` are optional and
-      // additive. `origin` is not emitted — the CLI defaults it to "Base2".
+      // `maxRepairRounds`, `advisories`, `workflow`, `reviewers`, and
+      // `skipReason` are optional and additive. `reviewers` names the
+      // reviewer-family agent type(s) that produced the result (at most 4
+      // entries, each sanitized and capped at 64 chars); `skipReason` is the
+      // machine skip/error token from
+      // activeWorkState.lastReviewerGateSkipReason (capped at 120 chars).
+      // Both are omitted entirely when empty — never `[]`/`""` in the payload.
+      // `origin` is not emitted — the CLI defaults it to "Base2".
       // Adding a key here REQUIRES updating both published CLI enumerations
       // (cli/src/types/chat.ts and cli/src/utils/message-block-helpers.ts).
       function formatGateStateBlock(
@@ -7967,6 +8201,8 @@ ${guideSections}
           totalCount: number
           nextWorkflowAction: string
         },
+        reviewers?: string[],
+        skipReason?: string,
       ): string {
         // Order matters: collapse whitespace FIRST so tabs/newlines/CRs become
         // spaces, then strip the remaining C0/DEL control bytes (ESC, NUL,
@@ -7988,6 +8224,8 @@ ${guideSections}
             totalCount: number
             nextWorkflowAction: string
           }
+          reviewers?: string[]
+          skipReason?: string
         } = { gate, status, details: normalizedDetails }
         if (
           typeof repairRound === 'number' &&
@@ -8017,6 +8255,22 @@ ${guideSections}
         const boundedWorkflow = boundWorkflowProgress(workflow)
         if (boundedWorkflow) {
           payload.workflow = boundedWorkflow
+        }
+        // Reviewer-family attribution (`reviewers`) and the machine skip/error
+        // token (`skipReason`): additive telemetry so post-compaction agents
+        // and structured consumers can tell WHICH reviewer family produced
+        // this gate result and why it skipped. Both keys are omitted entirely
+        // when nothing survives sanitization, bounded by the shared helper
+        // next to boundAdvisoryLines.
+        const boundedReviewerFields = boundGateStateReviewerFields(
+          reviewers,
+          skipReason,
+        )
+        if (boundedReviewerFields.reviewers) {
+          payload.reviewers = boundedReviewerFields.reviewers
+        }
+        if (boundedReviewerFields.skipReason) {
+          payload.skipReason = boundedReviewerFields.skipReason
         }
         // Delimiter safety: this payload carries reviewer-authored text
         // (`details`, `advisories`), so a literal `</gate-state>` inside it
@@ -8053,6 +8307,54 @@ ${guideSections}
               ? `${advisory.slice(0, 237).trimEnd()}...`
               : advisory,
           )
+      }
+
+      // Reviewer-family / skip-reason fields for the <gate-state> payload.
+      // Lives next to boundAdvisoryLines for the same reason: every payload
+      // field carries bytes the CLI renders in its <text> surface, so the
+      // control-byte strip and the cap must stay in lockstep across fields.
+      // Sanitization ORDER matches `details` / boundAdvisoryLines: collapse
+      // whitespace FIRST (so tabs/newlines become spaces instead of
+      // vanishing), then strip C0/DEL (an unstripped ESC in reviewer-authored
+      // text could spoof terminal output), then trim, then cap length so the
+      // bound describes the text actually shown. Both keys are OMITTED
+      // ENTIRELY — never []/"" — when nothing survives.
+      // Type-only alias, declared so BOTH the parameter and the return
+      // annotation stay SIMPLE (bracket-free) tokens — same constraint as
+      // BoundedWorkflowProgress below: `extractInlineFunctionSource` (which the
+      // delimiter-safety test uses to reconstruct this helper out of the
+      // serialized handleSteps body) cannot walk a return annotation that
+      // opens with a brace or a leading `|` union. Types are erased before
+      // handleSteps is reconstructed, so the alias costs nothing at runtime.
+      type BoundedGateStateReviewerFields = {
+        reviewers?: string[]
+        skipReason?: string
+      }
+      function boundGateStateReviewerFields(
+        reviewers?: string[],
+        skipReason?: string,
+      ): BoundedGateStateReviewerFields {
+        const sanitizeReviewerField = (value: unknown): string =>
+          String(value ?? '')
+            .replace(/\s+/g, ' ')
+            .replace(/[\x00-\x1f\x7f]/g, '')
+            .trim()
+        const boundedReviewers = (reviewers ?? [])
+          .map((reviewer) => sanitizeReviewerField(reviewer).slice(0, 64))
+          .filter((reviewer) => reviewer.length > 0)
+          .slice(0, 4)
+        const boundedSkipReason = sanitizeReviewerField(skipReason).slice(
+          0,
+          120,
+        )
+        return {
+          ...(boundedReviewers.length > 0
+            ? { reviewers: boundedReviewers }
+            : {}),
+          ...(boundedSkipReason.length > 0
+            ? { skipReason: boundedSkipReason }
+            : {}),
+        }
       }
 
       // Declared-workflow progress for the <gate-state> payload. It lives next
@@ -8637,7 +8939,9 @@ ${guideSections}
         // existed) has no stamp and falls back to its first-seen position, so
         // older state keeps its prior behavior; a stamped bucket always outranks
         // an unstamped one. Ties break on first-seen rank for determinism.
-        const touchedAtMs = (bucket: Array<[string, WaveCompletion]>): number => {
+        const touchedAtMs = (
+          bucket: Array<[string, WaveCompletion]>,
+        ): number => {
           let newest = Number.NEGATIVE_INFINITY
           for (const [, value] of bucket) {
             const stamp = value?.lastTouchedAt
@@ -11440,6 +11744,7 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
           activeWorkState.specialistReviewGatesDone = []
           activeWorkState.lastReviewerGateSkipReason = ''
           activeWorkState.reviewerProtocolRetryCount = 0
+          activeWorkState.reviewerProtocolAttestationFailed = false
           activeWorkState.reviewerNoVerdictCount = 0
           activeWorkState.currentPhase = 'awaiting_validation'
           if (!opts?.fromRepair && !activeWorkState.repairSessionId) {
@@ -12328,8 +12633,9 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
         // time. `readGateFileContentMarker` is read at the SAME instant as the
         // completion's own recorded marker, so a completion whose bytes drift
         // afterward re-opens (marker mismatch) exactly as before.
-        const waveCreditMarkers = ((activeWorkState.specialistWaveCreditMarkers ??=
-          {})[agentType] ??= {})
+        const waveCreditMarkers =
+          ((activeWorkState.specialistWaveCreditMarkers ??= {})[agentType] ??=
+            {})
         const waveCompletions = (activeWorkState.waveCompletions ??= {})
         for (let waveIndex = 0; waveIndex < plannedWaves.length; waveIndex++) {
           const rawWaveFiles = plannedWaves[waveIndex]
@@ -12370,7 +12676,7 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
           const existing = waveCompletions[key]
           const priorCredit =
             existing && existing.fingerprint === fingerprint
-              ? existing.creditedFileMarkers ?? {}
+              ? (existing.creditedFileMarkers ?? {})
               : {}
           const accumulated = new Set<string>(
             existing && existing.fingerprint === fingerprint
@@ -12414,9 +12720,7 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             }
             continue
           }
-          const fullyCredited = waveFiles.every((file) =>
-            accumulated.has(file),
-          )
+          const fullyCredited = waveFiles.every((file) => accumulated.has(file))
           if (!fullyCredited && accumulated.size === 0) continue
           // Mirror this wave's per-file credit into the WAVE-UNIVERSE marker
           // ledger. Every file the wave universe placed in a wave is therefore
@@ -12435,7 +12739,7 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
             creditedFiles: [...accumulated],
             creditedFileMarkers,
             completedAt: fullyCredited
-              ? existing?.completedAt ?? new Date().toISOString()
+              ? (existing?.completedAt ?? new Date().toISOString())
               : undefined,
             // TOUCH ORDER: stamped on EVERY write (including a re-write of an
             // existing key, which does NOT move it in object insertion order)
@@ -14174,9 +14478,7 @@ function committedSurfaceReceiptId(taskId: string, fingerprint: string): string 
         return marker
       }
 
-      function readGateMarkerBuiltinFs():
-        | typeof import('node:fs')
-        | undefined {
+      function readGateMarkerBuiltinFs(): typeof import('node:fs') | undefined {
         const getBuiltinModule =
           typeof process === 'object' &&
           process !== null &&
