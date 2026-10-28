@@ -931,6 +931,10 @@ const bareStringFieldRepairAllowlist: Partial<
   read_files: ['paths'],
   read_subtree: ['paths'],
   skill: ['name'],
+  // spawn_agents is deliberately absent: its only top-level field `agents` is
+  // an array the single-field regex can never match, and stringified-array
+  // recovery already lives in normalizeSpawnAgentList plus the D21 coercion.
+  spawn_agent_inline: ['agent_type', 'prompt'],
   web_search: ['query'],
 }
 

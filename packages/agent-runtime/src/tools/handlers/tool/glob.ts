@@ -89,7 +89,7 @@ export const handleGlob = (async (params: {
     if (agentState && typeof agentState === 'object') {
       const excerpts = getVerifiedMemoryExcerpts(agentState, {
         limit: 5,
-        maxCharsPerExcerpt: 500,
+        maxCharsPerExcerpt: 2_000,
       })
       const pathPrefixes: string[] = []
       if (typeof input.cwd === 'string' && input.cwd.length > 0) {

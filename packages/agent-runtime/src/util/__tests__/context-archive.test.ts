@@ -6,9 +6,11 @@ import {
   MAX_ARCHIVE_MESSAGE_CHARS,
   MAX_ARCHIVE_SNAPSHOTS,
   MAX_EVICTION_ARCHIVE_SNAPSHOTS,
+  RECALL_SNIPPET_CHARS,
   archiveEvictedToolResults,
   archivePreCompaction,
   recallFromArchive,
+  recallFromArchiveByToolCallId,
 } from '../context-archive'
 import { evictStaleToolResults } from '../tool-result-eviction'
 
@@ -477,5 +479,175 @@ describe('archiveEvictedToolResults (D26)', () => {
       expect(serialized.length).toBeLessThan(50_000)
       expect(serialized).toContain('truncated in archive')
     })
+  })
+})
+
+/**
+ * D26 exact-ID retrieval: the eviction tombstone names `toolCallId=<id>` and
+ * promises recall_context as the recovery path, but the text surfaces match
+ * only archived BODY text — an id appearing in no body (the usual case) was
+ * unrecoverable. The by-ID scanner matches the entry identity instead.
+ */
+describe('recallFromArchiveByToolCallId (D26 exact-ID retrieval)', () => {
+  // Hand-built eviction snapshots rather than `archiveEvictedToolResults`:
+  // the archive's own id-dedupe prevents the real entry point from recording
+  // the same call twice, so the scanner's newest-wins contract is exercised
+  // on the persisted-legacy shape where duplicate ids CAN coexist.
+  const evictionSnapshot = (
+    archivedAt: number,
+    entries: Array<{ toolCallId: string; stepIndex: number; body: string }>,
+  ): ContextArchiveSnapshot => ({
+    archivedAt,
+    action: 'tool_result_eviction',
+    keepRecentSteps: 0,
+    steps: entries.map((entry) => entry.stepIndex),
+    reason: 'deterministic tool-result eviction (stale recency)',
+    messages: entries.map((entry) =>
+      toolResult(entry.toolCallId, { output: entry.body }),
+    ),
+  })
+
+  it('newest copy wins: the FULL newer body is returned, not a snippet cap', () => {
+    // Bodies longer than RECALL_SNIPPET_CHARS make the full-body contract
+    // distinguishable from the text path's snippet cap — and neither body
+    // CONTAINS the id string, the exact case text search cannot resolve.
+    const olderBody = `older-copy-start ${'a'.repeat(1_000)} older-copy-end`
+    const newerBody = `newer-copy-start ${'b'.repeat(1_000)} newer-copy-end`
+    const archiveSnapshots = [
+      evictionSnapshot(10, [
+        { toolCallId: 'dup-call', stepIndex: 4, body: olderBody },
+      ]),
+      evictionSnapshot(20, [
+        { toolCallId: 'dup-call', stepIndex: 9, body: newerBody },
+      ]),
+    ]
+
+    const result = recallFromArchiveByToolCallId(archiveSnapshots, 'dup-call')
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].toolCallId).toBe('dup-call')
+    expect(result.matches[0].toolName).toBe('read_files')
+    // The NEWEST snapshot's copy wins — the older body is never returned.
+    expect(result.matches[0].snippet).toContain('newer-copy-start')
+    expect(result.matches[0].snippet).not.toContain('older-copy')
+    // FULL archived body, deliberately NOT capped at RECALL_SNIPPET_CHARS:
+    // body recovery is the whole point (the tombstone left no other copy),
+    // and the end marker survives well past the snippet bound.
+    expect(result.matches[0].snippet.length).toBeGreaterThan(
+      RECALL_SNIPPET_CHARS,
+    )
+    expect(result.matches[0].snippet).toContain('newer-copy-end')
+    // Hit in the NEWEST snapshot: only that snapshot was visited.
+    expect(result.snapshotsSearched).toBe(1)
+    expect(result.archivedAt).toEqual([20, 10])
+  })
+
+  it('miss returns empty matches with snapshotsSearched = archive length', () => {
+    const archiveSnapshots = [
+      evictionSnapshot(10, [
+        { toolCallId: 'call-a', stepIndex: 1, body: 'body-a' },
+      ]),
+      evictionSnapshot(20, [
+        { toolCallId: 'call-b', stepIndex: 2, body: 'body-b' },
+      ]),
+    ]
+    const result = recallFromArchiveByToolCallId(
+      archiveSnapshots,
+      'no-such-call',
+    )
+    expect(result.matches).toEqual([])
+    // A miss means the WHOLE archive was searched.
+    expect(result.snapshotsSearched).toBe(2)
+    expect(result.archivedAt).toEqual([20, 10])
+  })
+
+  it('returns the empty result for a missing or empty archive', () => {
+    expect(recallFromArchiveByToolCallId(undefined, 'any-call')).toEqual({
+      matches: [],
+      snapshotsSearched: 0,
+      archivedAt: [],
+    })
+    expect(recallFromArchiveByToolCallId([], 'any-call')).toEqual({
+      matches: [],
+      snapshotsSearched: 0,
+      archivedAt: [],
+    })
+  })
+
+  it('reports the ORIGINAL-transcript step from the D26 steps provenance array', () => {
+    const state: { compactionArchive?: ContextArchiveSnapshot[] } = {}
+    archiveEvictedToolResults(
+      state,
+      [
+        {
+          toolCallId: 'prov-call',
+          toolName: 'read_files',
+          content: [
+            { type: 'json', value: { output: 'provenance-body' } } as never,
+          ],
+          stepIndex: 7,
+        },
+      ],
+      42,
+    )
+    const result = recallFromArchiveByToolCallId(
+      state.compactionArchive,
+      'prov-call',
+    )
+    expect(result.matches).toHaveLength(1)
+    // NOT the slice-local index (0): the snapshot's steps[0] is 7 —
+    // original-transcript numbering, exactly like the text path reports.
+    expect(result.matches[0].step).toBe(7)
+  })
+
+  it('returns the stored body VERBATIM — never double-encoded (real-path regression)', () => {
+    // archiveMessageWithCap normalizes object json values to their serialized
+    // STRING at write time, so real-path archived bodies are strings; the FTS
+    // projection (getArchiveRecallEntry.text) stringifies them a SECOND
+    // time. The by-ID snippet must be the stored body byte-identical — the
+    // tombstone promises the full ORIGINAL output, not a quote-escaped copy.
+    const state: { compactionArchive?: ContextArchiveSnapshot[] } = {}
+    archiveEvictedToolResults(
+      state,
+      [
+        {
+          toolCallId: 'verbatim-call',
+          toolName: 'read_files',
+          // Real-path shape: the archived body is the serialized json value.
+          content: [
+            {
+              type: 'json',
+              value: JSON.stringify({ output: 'verbatim-fact' }),
+            } as never,
+          ],
+          stepIndex: 3,
+        },
+        {
+          toolCallId: 'object-call',
+          toolName: 'read_files',
+          // Legacy/hand-built shape: an object value predating the
+          // write-time normalization.
+          content: [{ type: 'json', value: { output: 'object-fact' } } as never],
+          stepIndex: 4,
+        },
+      ],
+      42,
+    )
+    const verbatim = recallFromArchiveByToolCallId(
+      state.compactionArchive,
+      'verbatim-call',
+    )
+    expect(verbatim.matches).toHaveLength(1)
+    expect(verbatim.matches[0].snippet).toBe(
+      JSON.stringify({ output: 'verbatim-fact' }),
+    )
+    const object = recallFromArchiveByToolCallId(
+      state.compactionArchive,
+      'object-call',
+    )
+    expect(object.matches).toHaveLength(1)
+    // Object values serialize exactly once — NOT the double-encoded FTS text.
+    expect(object.matches[0].snippet).toBe(
+      JSON.stringify({ output: 'object-fact' }),
+    )
   })
 })

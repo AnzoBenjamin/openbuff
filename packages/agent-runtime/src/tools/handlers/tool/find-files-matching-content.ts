@@ -90,9 +90,11 @@ export const handleFindFilesMatchingContent = (async (params: {
   // Memory-first check (best-effort, never breaks the call).
   try {
     if (agentState && typeof agentState === 'object') {
+      // 2_000 chars per excerpt: the coordinator clamps to 4_000, and the old
+      // 500 cap silently clipped identifiers/paths mid-token.
       const excerpts = getVerifiedMemoryExcerpts(agentState, {
         limit: 5,
-        maxCharsPerExcerpt: 500,
+        maxCharsPerExcerpt: 2_000,
       })
       const pathPrefixes: string[] = []
       if (typeof input.path === 'string' && input.path.length > 0) {

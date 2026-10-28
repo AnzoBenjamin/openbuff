@@ -362,13 +362,23 @@ describe('maybeRunBackgroundConsolidation', () => {
   })
 })
 
-const invokeRecall = async (agentState: AgentState, query: string) => {
+// `query`/`toolCallId` mirror recall_context's two retrieval modes (the
+// schema requires at least one); omitted params stay out of the input object
+// so a by-ID call matches the wire shape the schema documents.
+const invokeRecall = async (
+  agentState: AgentState,
+  query?: string,
+  toolCallId?: string,
+) => {
   const { output } = await handleRecallContext({
     previousToolCallFinished: Promise.resolve(),
     toolCall: {
       toolName: 'recall_context',
       toolCallId: 'recall-1',
-      input: { query },
+      input: {
+        ...(query === undefined ? {} : { query }),
+        ...(toolCallId === undefined ? {} : { toolCallId }),
+      },
     } as CodebuffToolCall<'recall_context'>,
     agentState,
   })
@@ -478,5 +488,77 @@ describe('handleRecallContext consolidation merge failure paths', () => {
     expect(value.consolidations).toBeUndefined()
     expect(value.message).toBeUndefined()
     expect(warn).toHaveBeenCalled()
+  })
+})
+
+/**
+ * D26 exact-ID retrieval: the eviction tombstone names `toolCallId=<id>` and
+ * promises recall_context as the recovery path, but buildRunnerState's
+ * archived bodies do not CONTAIN their own ids — the exact shape where a text
+ * search for the id matches nothing. The by-ID input must resolve the call
+ * the tombstone named, keep the consolidations search and the empty-result
+ * guidance message identical to the text path, and win when both params are
+ * present.
+ */
+describe('handleRecallContext exact-ID retrieval (by toolCallId)', () => {
+  test('exact ID resolves even when no archived body text contains the id string', async () => {
+    const agentState = buildRunnerState()
+    // The gap itself: as a TEXT query the id matches nothing (the id lives on
+    // the message identity, not inside any body), so the guidance message
+    // appears.
+    const asText = await invokeRecall(agentState, 'c-11')
+    expect(asText.matches).toEqual([])
+    expect(asText.message).toContain('No matching archived context')
+    // ...but the exact-ID path resolves the archived call and suppresses the
+    // guidance message, identically to any non-empty text result.
+    const byId = await invokeRecall(agentState, undefined, 'c-11')
+    expect(byId.matches).toHaveLength(1)
+    expect(byId.matches[0].toolCallId).toBe('c-11')
+    expect(byId.matches[0].snippet).toContain('keystone-11')
+    expect(byId.message).toBeUndefined()
+    // Provenance parity with the text path: newest-first timestamps, and the
+    // hit is in the OLDER snapshot so BOTH snapshots were visited.
+    expect(byId.archivedAt).toEqual([12, 11])
+    expect(byId.snapshotsSearched).toBe(2)
+  })
+
+  test('both params present: the exact ID wins and the consolidations search still runs on the query', async () => {
+    const agentState = buildRunnerState({
+      contextConsolidations: [
+        {
+          consolidatedAt: 99,
+          sourceArchivedAts: [11],
+          action: 'semantic_compaction',
+          summary: 'Discussed the keystone-12 eviction floor.',
+          coveredMessages: 2,
+        },
+      ],
+    })
+    // Control: as a TEXT query the term resolves the NEWER snapshot's c-12
+    // body — the match the ID must override.
+    const asText = await invokeRecall(agentState, 'keystone-12')
+    expect(asText.matches).toHaveLength(1)
+    expect(asText.matches[0].toolCallId).toBe('c-12')
+
+    // Both params present: the ID names c-11, so the exact-ID result wins
+    // over the query's own text match. The same query terms still hit the
+    // stored consolidation summary, proving the consolidations search keeps
+    // running on the query alongside the by-ID path.
+    const value = await invokeRecall(agentState, 'keystone-12', 'c-11')
+    expect(value.matches).toHaveLength(1)
+    expect(value.matches[0].toolCallId).toBe('c-11')
+    expect(value.matches[0].snippet).toContain('keystone-11')
+    expect(value.matches[0].snippet).not.toContain('keystone-12')
+    expect(value.consolidations).toHaveLength(1)
+    expect(value.consolidations![0].summary).toContain('keystone-12')
+    // Both result sets non-empty: no guidance message.
+    expect(value.message).toBeUndefined()
+  })
+
+  test('by-ID miss keeps the empty-result guidance message identical to the text path', async () => {
+    const agentState = buildRunnerState()
+    const value = await invokeRecall(agentState, undefined, 'no-such-call')
+    expect(value.matches).toEqual([])
+    expect(value.message).toContain('No matching archived context')
   })
 })

@@ -2763,6 +2763,57 @@ describe('tool validation error handling', () => {
       const after = getToolArgNormalizationStats()
       expect(after.total).toBe(before.total)
     })
+
+    it('repairs a double-encoded bare-string agent_type input for spawn_agent_inline', () => {
+      // Same eager-snapshot harness as the unserialize cases above: the
+      // bare-field repair is a separate mechanism from the schema-driven
+      // unserialize, so the stats total must not move.
+      const beforeTotal = getToolArgNormalizationStats().total
+      // The fully-quoted literal parses as valid JSON, so it pins the
+      // validate-only half; the bare (unquoted) values are unparseable JSON,
+      // so only the allowlisted single-field repair can recover them (the
+      // double-encoded variant reaches that repair on its second parse pass).
+      for (const input of [
+        '{"agent_type":"basher"}',
+        '{"agent_type": basher}',
+        JSON.stringify('{"agent_type": basher}'),
+      ]) {
+        const result = parseRawToolCall({
+          rawToolCall: {
+            toolName: 'spawn_agent_inline',
+            toolCallId: 'bare-agent-type-spawn-inline-tool-call-id',
+            input,
+          },
+        })
+
+        expect('error' in result).toBe(false)
+        if (!('error' in result)) {
+          expect(result.input).toEqual({ agent_type: 'basher' })
+        }
+      }
+      expect(getToolArgNormalizationStats().total).toBe(beforeTotal)
+    })
+
+    it('keeps a bracketed bare-string agents input for spawn_agents on the stringInputError path', () => {
+      // Pins the deliberate spawn_agents exclusion: the allowlist has no
+      // spawn_agents entry, and the bracketed array value is unmatchable by
+      // the single-field regex anyway, so the payload stays a stringInputError.
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'spawn_agents',
+          toolCallId: 'bare-agents-string-spawn-tool-call-id',
+          input: '{"agents": [{"agent_type": basher}]}',
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain(
+          'expected the tool arguments to be an object, but received a string',
+        )
+        expect(result.error).toContain('Parsing as JSON failed:')
+      }
+    })
   })
 
   it('should accept old_str/new_str aliases for str_replace replacements', () => {

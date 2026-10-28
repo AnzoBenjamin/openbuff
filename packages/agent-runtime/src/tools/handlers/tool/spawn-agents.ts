@@ -309,7 +309,7 @@ export const handleSpawnAgents = (async (
   try {
     verifiedExcerptsForSpawn = getVerifiedMemoryExcerpts(parentAgentState, {
       limit: 5,
-      maxCharsPerExcerpt: 500,
+      maxCharsPerExcerpt: 2_000,
     }).slice(0, 5)
   } catch {
     verifiedExcerptsForSpawn = []

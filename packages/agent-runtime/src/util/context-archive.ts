@@ -361,6 +361,34 @@ export const getArchiveRecallEntry = (
 }
 
 /**
+ * The VERBATIM stored body for by-ID recall — the recovery payload the
+ * eviction tombstone promises. `getArchiveRecallEntry.text` is the FTS/index
+ * PROJECTION: it `JSON.stringify`s every json part, but
+ * `archiveMessageWithCap` already normalizes non-string json values to their
+ * serialized string at ARCHIVE WRITE time, so real-path tool bodies (already
+ * strings) would come back from `entry.text` DOUBLE-encoded — quote-escaped,
+ * not the "full original output" the tombstone names recall_context for. The
+ * stored string is therefore returned as-is; object values that predate the
+ * write-time normalization (hand-built/legacy snapshots) are serialized
+ * exactly once. Conversation entries keep the projected entry text.
+ */
+const rawToolBodyOrEntryText = (
+  message: Message,
+  entry: ArchiveRecallEntry,
+): string =>
+  message.role === 'tool'
+    ? message.content
+        .map((part) =>
+          part.type === 'json'
+            ? typeof part.value === 'string'
+              ? part.value
+              : JSON.stringify(part.value)
+            : '[media]',
+        )
+        .join(' ')
+    : entry.text
+
+/**
  * Original-transcript step number for an archived tool message. D26
  * `tool_result_eviction` snapshots carry a parallel `steps` array holding the
  * ORIGINAL-transcript step of each archived tool message — reporting the
@@ -451,6 +479,78 @@ export function recallFromArchive(
   return {
     matches,
     snapshotsSearched,
+    archivedAt,
+  }
+}
+
+/**
+ * D26 exact-ID retrieval: recover ONE archived tool body by its `toolCallId`.
+ *
+ * WHY: the eviction tombstone names `toolCallId=<id>` and promises
+ * recall_context as the recovery path, but both existing recall surfaces are
+ * TEXT search — `recallFromArchive`'s scanner and the FTS index match only
+ * archived BODY text, so looking the named id up as a query term MISSES
+ * whenever the id string appears in no archived body (the usual case: the
+ * id lives on the message, not inside its content). The observable symptom
+ * was a tombstoned result whose id the model faithfully searched for and
+ * got zero matches back — the tombstone's promise was unkeepable. Matching
+ * the ENTRY IDENTITY instead of its text is what keeps the promise.
+ *
+ * Ordering mirrors `recallFromArchive` exactly — snapshots newest-first
+ * (`[...archive].reverse()`), messages last-to-first within a snapshot — so
+ * the NEWEST copy of a duplicated call id wins, and at most ONE match is
+ * returned.
+ *
+ * The snippet is the FULL archived body and deliberately BYPASSES
+ * `RECALL_SNIPPET_CHARS`: the whole point is body recovery (the tombstone
+ * left no other copy), and the archive write already caps bodies at
+ * `EVICTION_ARCHIVE_MESSAGE_CHARS` (64k for eviction snapshots), so the
+ * archive's own write-time bound is the per-result bound here.
+ *
+ * Provenance reuses `stepProvenance`/`getArchiveRecallEntry` unchanged (D26
+ * `steps` arrays for eviction snapshots, `stepBase` slice-local numbering
+ * otherwise). Pure; no I/O; a miss reports `matches: []` with the full
+ * archive as searched.
+ */
+export function recallFromArchiveByToolCallId(
+  archive: ContextArchiveSnapshot[] | undefined,
+  toolCallId: string,
+): RecallContextResult {
+  if (!archive || archive.length === 0) {
+    return { matches: [], snapshotsSearched: 0, archivedAt: [] }
+  }
+  // Newest-first provenance, the same ordering `recallFromArchive` reports.
+  const archivedAt = [...archive].reverse().map((s) => s.archivedAt)
+  let snapshotsSearched = 0
+  for (const snapshot of [...archive].reverse()) {
+    snapshotsSearched += 1
+    for (let i = snapshot.messages.length - 1; i >= 0; i--) {
+      const step = stepProvenance(snapshot, i)
+      const entry = getArchiveRecallEntry(snapshot.messages[i], step)
+      if (entry.toolCallId === toolCallId && entry.text) {
+        return {
+          matches: [
+            {
+              step,
+              toolName: entry.toolName,
+              toolCallId,
+              // FULL archived body, NOT a RECALL_SNIPPET_CHARS slice and NOT
+              // the double-encoded FTS projection: the tombstone left no other
+              // copy, so body recovery needs the whole VERBATIM stored body
+              // (bounded at write time by EVICTION_ARCHIVE_MESSAGE_CHARS).
+              snippet: rawToolBodyOrEntryText(snapshot.messages[i], entry),
+            },
+          ],
+          snapshotsSearched,
+          archivedAt,
+        }
+      }
+    }
+  }
+  // Miss: the whole archive was visited; keep the identical result shape.
+  return {
+    matches: [],
+    snapshotsSearched: archive.length,
     archivedAt,
   }
 }

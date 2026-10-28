@@ -648,8 +648,10 @@ export interface HoverTypeParams {
  * Search archived pre-compaction transcripts for verbatim conversation or tool facts a compaction pass removed from visible context.
  */
 export interface RecallContextParams {
-  /** Case-insensitive search terms for archived pre-compaction transcript content. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
-  query: string
+  /** Case-insensitive search terms for archived pre-compaction transcript content. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. Pass toolCallId instead to retrieve one archived tool result by its exact call id. */
+  query?: string
+  /** Exact retrieval: the toolCallId of an archived tool result (the id an eviction tombstone names). Returns the archived original pre-eviction body for that exact call. */
+  toolCallId?: string
 }
 
 /**
