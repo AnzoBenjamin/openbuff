@@ -452,3 +452,9 @@ Correction to the previous note: the P2-T2b checkbox flip was REJECTED by the up
 
 The other three reviewer advisories stay documented-only by design (lazy-import static cycle, hung-reservation hold, unheld-AbortController/pollability residual).
 
+
+<!-- update_plan_status:appended -->
+## P2-T2b wave committed (bb96dc424) + PR-T4 committed-surface request live — 2026-10-28 — 2026-10-28T05:43:46.146Z
+
+Final bookkeeping record for this turn: the P2-T2b wave is COMMITTED as bb96dc424 on feat/polyglot-reaudit-roadmap (7 files, +1775/−31: the six P2-T2b code/test files + STATUS.md; no push — not requested). The PLAN.md current-task annotation is set to PR-T4 (fixing the stale P0-T1 pointer that rejected the first committed-surface request), and PR-T4's committed-surface review request is LIVE — it is consumed by this turn's end gate pass over the fully clean tree, minting the plan-task receipt that flips PR-T4 next turn. The sequencing from the previous note stands: next turn flips PR-T4 + claims P2-T2b + requests its committed-surface review; the turn after flips P2-T2b and lands the two actionable reviewer advisories (creditsUsed fold, ledger spawn-pair).
+

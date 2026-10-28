@@ -16,7 +16,7 @@ Supersedes: `.agents/sessions/polyglot-native-waves/`. Its W0-1 scaffold (`packa
 
 Legend: `[ ]` pending · lang = implementation language · ships = the user-visible result · gate = the validation required before the task is done.
 
-<!-- current-task: P0-T1 -->
+<!-- current-task: PR-T4 -->
 
 ## Cross-cutting foundations (run alongside P0–P1; later phases depend on them)
 
