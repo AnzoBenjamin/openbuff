@@ -196,3 +196,27 @@ describe('oversized beyond the 1 MiB detection band', () => {
     expect(tryRecoverTruncatedToolArguments(truncated)).toBeUndefined()
   })
 })
+
+describe('bracket-flood payloads keep candidate recording memory-linear', () => {
+  // Reviewer finding truncation-candidate-stack-memory: a <=1 MiB
+  // bracket-flood payload (~500k '[' then ~260k ']') passes
+  // scanTruncationState as unbalanced (depth > 0), so it reaches recovery.
+  // The array form of the candidate pass copied the residual open stack for
+  // EVERY closer (O(closers x depth) memory — ~10^11 array slots here),
+  // OOM-killing the process; the persistent linked stack records each
+  // candidate in O(1) (one node per opener, structural sharing), so this
+  // payload classifies and recovers-or-degrades in bounded memory.
+  const FLOOD = '['.repeat(500_000) + ']'.repeat(260_000)
+
+  it('classifies the bracket flood as transport truncation (unbalanced depth)', () => {
+    expect(FLOOD.length).toBeLessThanOrEqual(MAX_TRUNCATION_RECOVERY_BYTES)
+    expect(detectTransportTruncation(FLOOD)).toBe(true)
+  })
+
+  it('returns undefined on the bracket flood without a memory blow-up (every candidate parses to an array, never a plain object)', () => {
+    // >256KB, so the candidate budget caps parse attempts at the latest 64
+    // closers; deep-nest JSON.parse failures (engine stack limits) are
+    // caught per-candidate exactly like any other parse miss.
+    expect(tryRecoverTruncatedToolArguments(FLOOD)).toBeUndefined()
+  })
+})

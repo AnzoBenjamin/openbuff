@@ -239,15 +239,37 @@ export function tryRecoverTruncatedToolArguments(
     // balanced payloads are never truncation-recovery candidates.
     return undefined
   }
-  // M3-T2: ONE forward pass over the raw input records every out-of-string
-  // `}`/`]` position together with the residual open-container stack at that
-  // point. The original implementation re-ran the string/escape/brace state
-  // machine over the whole prefix for EVERY candidate closer (O(n²) on the
-  // truncation-recovery hot path); recording the stack incrementally keeps
-  // the scan linear while producing byte-identical candidate strings.
-  type CandidateSnapshot = { pos: number; openStack: string[] }
+  // M3-T2 (memory fixed 2026-10-28c, reviewer finding
+  // truncation-candidate-stack-memory): ONE forward pass over the raw input
+  // records every out-of-string `}`/`]` position together with the residual
+  // open-container stack at that point, as a PERSISTENT linked stack — every
+  // push allocates one node that shares all older nodes (structural sharing),
+  // and each candidate records only { pos, node }. Recording is therefore
+  // O(1) memory per closer and O(input) overall, and the scan stays one
+  // linear pass in time. The earlier array form (openStack: [...openStack]
+  // per closer) was O(closers x depth) MEMORY: a <=1 MiB bracket-flood
+  // payload (~500k '[' then ~260k ']') passes scanTruncationState as
+  // unbalanced, reaches recovery, and allocated ~10^11 array slots —
+  // OOM-killing the process. Candidate strings stay byte-identical to that
+  // array form: the node→parent walk yields the same top-to-bottom closer
+  // sequence the array iteration produced.
+  type OpenStackNode = { ch: '{' | '['; parent: OpenStackNode | undefined }
+  type CandidateSnapshot = { pos: number; node: OpenStackNode | undefined }
+  // The stack ops route through function signatures on purpose: a direct
+  // `stackHead = stackHead?.parent` inside the loop hits TS's loop-carried
+  // narrowing quirk (the self-referential assignment degenerates the
+  // variable's narrowed type to `never`, TS2339 on `.parent`), while the
+  // parameter/return types keep the declared union in force.
+  const pushOpenNode = (
+    ch: '{' | '[',
+    parent: OpenStackNode | undefined,
+  ): OpenStackNode => ({ ch, parent })
+  const popOpenNode = (
+    node: OpenStackNode | undefined,
+  ): OpenStackNode | undefined =>
+    node === undefined ? undefined : node.parent
   const candidates: CandidateSnapshot[] = []
-  let openStack: string[] = []
+  let stackHead: OpenStackNode | undefined = undefined
   let inString = false
   let escapedData = false
   for (let i = 0; i < rawInput.length; i++) {
@@ -258,22 +280,25 @@ export function tryRecoverTruncatedToolArguments(
       else if (c === '"') inString = false
     } else if (c === '"') {
       inString = true
-    } else if (c === '{') {
-      openStack.push('{')
-    } else if (c === '[') {
-      openStack.push('[')
+    } else if (c === '{' || c === '[') {
+      stackHead = pushOpenNode(c, stackHead)
     } else if (c === '}' || c === ']') {
       // The candidate prefix ends AT this closer (inclusive), so the residual
-      // stack is the one AFTER this closer is consumed.
-      openStack.pop()
-      candidates.push({ pos: i, openStack: [...openStack] })
+      // stack is the one AFTER this closer is consumed. scanTruncationState
+      // already refused depth < 0, so every closer has a matching opener; the
+      // parent walk never mutates shared nodes.
+      stackHead = popOpenNode(stackHead)
+      candidates.push({ pos: i, node: stackHead })
     }
   }
   // Try candidates from LATEST to EARLIEST: append balanced closers for the
   // residual opens and let JSON.parse be the final gate. Same acceptance
   // semantics as before: the recovered object must be a plain non-empty
   // object. Oversized payloads cap the parse attempts at the latest N
-  // closers so per-candidate O(n) parses cannot accumulate into O(n²).
+  // closers so per-candidate O(n) parses cannot accumulate into O(n²); the
+  // per-candidate closer walk is O(depth) but only ever runs for TRIED
+  // candidates, and the suffix is assembled once via array+join (never
+  // re-roped per character).
   const candidateBudget =
     rawInput.length > LEGACY_MAX_REPAIRABLE_JSON_LENGTH
       ? MAX_TRUNCATION_RECOVERY_CANDIDATES
@@ -284,10 +309,14 @@ export function tryRecoverTruncatedToolArguments(
     k--
   ) {
     const snapshot = candidates[k]
-    let candidate = rawInput.slice(0, snapshot.pos + 1)
-    for (let i = snapshot.openStack.length - 1; i >= 0; i--) {
-      candidate += snapshot.openStack[i] === '{' ? '}' : ']'
+    const closers: string[] = []
+    for (let node = snapshot.node; node !== undefined; node = node.parent) {
+      closers.push(node.ch === '{' ? '}' : ']')
     }
+    const candidate =
+      closers.length > 0
+        ? rawInput.slice(0, snapshot.pos + 1) + closers.join('')
+        : rawInput.slice(0, snapshot.pos + 1)
     try {
       const recovered = JSON.parse(candidate)
       if (
