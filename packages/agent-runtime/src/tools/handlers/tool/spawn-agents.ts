@@ -611,6 +611,26 @@ export const handleSpawnAgents = (async (
         fingerprintId,
         spawnToolCallId: toolCall.toolCallId,
         spawnIndex,
+        // P2-T2b: thread the job -> parent-run linkage so the child itself can
+        // journal its backgroundLink spawn event at its runId-mint site inside
+        // loopAgentSteps — the launch-time intent above could only correlate on
+        // jobId because the childRunId did not exist yet, and this link is what
+        // a later resume (resumeBackgroundFromOwnJournal) reads back to find
+        // the child's own journal stream. Guarded: a background spawn of a
+        // non-journaled parent passes no link, and the append inside
+        // loopAgentSteps is separately guarded on journalWriter, so an
+        // unjournaled run appends nothing (byte-identical default path). The
+        // executeSubagent options type derives from loopAgentSteps' params, so
+        // the new optional field flows through without touching
+        // spawn-agent-utils.
+        ...(parentAgentState.runId
+          ? {
+              backgroundJobLink: {
+                jobId: job.jobId,
+                parentRunId: parentAgentState.runId,
+              },
+            }
+          : {}),
         // Background agents are detached; the parent never waits for them, so
         // the "only child" step-count semantics (tuned for blocking spawns the
         // parent blocks on) never apply. Force false regardless of how many

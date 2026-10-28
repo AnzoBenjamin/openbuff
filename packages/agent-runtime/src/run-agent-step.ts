@@ -46,6 +46,15 @@ import {
   planReplayActions,
 } from './util/run-journal'
 import type { RunResumeReport } from './util/run-journal'
+// P2-T2b: background-agent resume-from-own-journal engine (pure journal reads
+// plus an injectable launch seam) plus the same-process live re-drive
+// reservation the runtime seam below consults (dedupe against duplicate
+// launches while a re-drive is live).
+import {
+  releaseBackgroundReDrive,
+  reserveBackgroundReDrive,
+  resumeBackgroundFromOwnJournal,
+} from './util/background-resume'
 import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
@@ -1421,6 +1430,31 @@ export async function loopAgentSteps(
     // leaves this path byte-identical; the driver never throws, so a failing
     // handler is reported in its outcome rather than aborting the loop.
     resumeDriver?: (report: RunResumeReport) => Promise<unknown>
+    // P2-T2b linkage thread from the background spawn path: present only for
+    // BACKGROUND children of a journaled run. The background launch site
+    // (spawn-agents.ts) journals its durable intent under the PARENT runId with
+    // correlation = jobId because the childRunId is not known until THIS loop
+    // mints it via startAgentRun — so the child itself journals the
+    // job -> childRunId linkage at the mint site below, which is what
+    // resumeBackgroundFromOwnJournal reads back to reconstruct the pre-crash
+    // stream. Additive-optional: omitted (the default, i.e. every foreground
+    // child and every unjournaled parent) appends nothing.
+    backgroundJobLink?: { jobId: string; parentRunId: string }
+    // P2-T2b resume pin: when set, SKIP the startAgentRun call and use this
+    // runId verbatim, so a re-driven background child keeps journaling into
+    // its ORIGINAL pre-crash stream (journal lookups and respawn-marker
+    // settlement both key on it; a re-minted local-run-<uuid> would orphan the
+    // stream and leave the marker permanently unsettled).
+    //
+    // Self-resume trace (verified, intentionally benign): the re-driven child
+    // is handed a state whose runId is pre-stamped to this pin, so its OWN
+    // loop-entry resume block classifies its pre-terminal journal tail and
+    // builds a report. That report is inert here: the reconstructed state
+    // carries backgroundAgentJobs: [] (createAgentState), so
+    // planBackgroundAgentResume plans nothing, and the launch seam passes
+    // resumeDriver: undefined so the entry block stays classify-and-log. No
+    // self-respawn recursion is possible.
+    pinnedRunId?: string
   } & ParamsExcluding<typeof additionalToolDefinitions, 'agentTemplate'> &
     ParamsExcluding<
       typeof runProgrammaticStep,
@@ -1585,17 +1619,265 @@ export async function loopAgentSteps(
         'Run journal shows interrupted work from a previous run',
       )
       // P2-T2 final REPLAY SLICE: the report is now ACTED ON structurally —
-      // planned (bounded) and executed through caller-injected seams. These
-      // seams are LOGGING-ONLY: replayChild records the child's disposition
-      // and respawnBackground records the intended respawn without touching
-      // live state. They must NOT re-drive children or respawn background
-      // jobs here: reconcileInterruptedBackgroundAgentIntents above already
-      // reconciled the intents, so a real respawn in the seam would
-      // double-respawn, and P2-T8 upgrades these seams without touching the
-      // planner. Unwired/confirmed seams skip, so a clean report fires no
-      // actions and this wiring stays byte-identical for fresh runs.
+      // planned (bounded) and executed through caller-injected seams. The
+      // replayChild seam stays LOGGING-ONLY: it records the child's
+      // disposition without touching live state, because a foreground
+      // re-drive is a later slice and reconcileInterruptedBackgroundAgentIntents
+      // above already reconciled the intents. Unwired/confirmed seams skip, so
+      // a clean report fires no actions and this wiring stays byte-identical
+      // for fresh runs.
       const replayPlan = planReplayActions(resumeReport)
       if (replayPlan.actions.length > 0) {
+        // P2-T2b: the background respawn seam is REAL when both journal halves
+        // are wired. Captured into consts first so TypeScript's property
+        // narrowing survives the async closure below. Beyond the delegation to
+        // the engine, the seam owns three contracts the engine deliberately
+        // does not:
+        //  - same-process live re-drive dedupe (reviewer finding
+        //    respawn-seam-concurrent-dedupe): while ONE re-drive for a job is
+        //    live, every later parent turn in this process still re-plans the
+        //    intent 'respawn' (the respawn marker settles only on the re-driven
+        //    child's TERMINAL journal tail), so the seam reserves the jobId
+        //    BEFORE any journal read and short-circuits duplicate launches.
+        //  - the minimal settle (reviewer finding resume-result-not-delivered):
+        //    the detached re-drive bypasses the spawn settle chain, so the seam
+        //    folds the re-driven child's receipt into the parent and updates the
+        //    matching intent exactly like the spawn-agents settle chain does.
+        //    The re-drive is deliberately NOT a job-registry entry — the
+        //    original job's registry record died with the crashed process, and
+        //    re-creating one would double-count the per-root background budget;
+        //    the result is delivered through the intent settle instead, and
+        //    check_background_agent keeps reporting the pre-crash record
+        //    (documented residual, same honesty class as the
+        //    supervised-children gap in background-resume.ts).
+        //  - the detached launch itself: fire-and-forget with warn logging, so
+        //    a failed re-drive leaves the journaled marker unsettled and
+        //    re-planning honest instead of dropping the job.
+        const journalReader = params.journalReader
+        const journalWriter = params.journalWriter
+        const resumeParentRunId = initialAgentState.runId
+        const respawnBackground =
+          journalReader && journalWriter && resumeParentRunId
+            ? async (jobId: string, agentType: string) => {
+                // Same-process dedupe: check+reserve in one synchronous step
+                // BEFORE any await, so a concurrent pass cannot slip between
+                // the check and the reservation.
+                if (!reserveBackgroundReDrive(jobId)) {
+                  logger.debug(
+                    { runId: resumeParentRunId, jobId },
+                    'Journal replay: background re-drive already in flight for this job; skipping the duplicate launch',
+                  )
+                  return
+                }
+                let launched = false
+                try {
+                  const template = await getAgentTemplate({
+                    ...params,
+                    agentId: agentType,
+                  })
+                  if (!template) {
+                    logger.debug(
+                      { runId: resumeParentRunId, jobId, agentType },
+                      'Journal replay: background respawn skipped; agent template not found (honest degradation)',
+                    )
+                    return
+                  }
+                  // The engine reads the linkage + the child's own stream back
+                  // out of the journal, rebuilds the child state with its
+                  // ORIGINAL runId pinned, journals the settleable respawn
+                  // marker, then hands the state to the detached launch below.
+                  // no_linkage / unrecoverable degrade honestly: the intent
+                  // simply keeps re-planning on the next resume, exactly as it
+                  // did before this seam existed (and no marker is journaled
+                  // for a launch that never happens).
+                  const outcome = await resumeBackgroundFromOwnJournal({
+                    reader: journalReader,
+                    writer: journalWriter,
+                    parentRunId: resumeParentRunId,
+                    parentAgentState: initialAgentState,
+                    jobId,
+                    agentType,
+                    agentTemplate: template,
+                    logger,
+                    launch: async (childState) => {
+                      // Detached re-drive, NOT awaited inside the seam: the
+                      // seam must never throw into executeReplayActions, and
+                      // the parent turn must not block on the re-driven child.
+                      // (An async call always returns a promise, so the const
+                      // below cannot throw synchronously.)
+                      const drive = loopAgentSteps({
+                        ...params,
+                        agentType,
+                        agentTemplate: template,
+                        agentState: childState,
+                        // prompt:'' + no spawnParams + no content keeps
+                        // hasUserMessage false, so NO duplicate USER_PROMPT is
+                        // appended — the reconstructed history already carries
+                        // the original prompt (the hasUserMessage condition is
+                        // the verified guard for this).
+                        prompt: '',
+                        spawnParams: undefined,
+                        content: undefined,
+                        ancestorRunIds: [
+                          ...(initialAgentState.ancestorRunIds ?? []),
+                          initialAgentState.runId ?? initialAgentState.agentId,
+                        ],
+                        // Re-pass the link so the re-driven child journals its
+                        // linkage again: benign, because the linkage append is
+                        // keyed on jobId and findBackgroundChildLinkage
+                        // resolves the LAST match — and the childRunId is the
+                        // same pin.
+                        backgroundJobLink: {
+                          jobId,
+                          parentRunId: resumeParentRunId,
+                        },
+                        // The pin: loopAgentSteps skips startAgentRun and
+                        // reuses the ORIGINAL runId, so the re-drive keeps
+                        // journaling into the pre-crash stream the marker
+                        // settles against.
+                        pinnedRunId: childState.runId,
+                        // Neutralize every per-turn input the spread carried:
+                        // the re-drive is detached like the original background
+                        // spawn, so an aborted parent turn must not kill the
+                        // resume; the parent turn has moved past, so chunks are
+                        // dropped; and the MAIN agent's checkpoint callback
+                        // must never persist the child state over the main
+                        // agent.
+                        signal: new AbortController().signal,
+                        onResponseChunk: () => {},
+                        onCheckpoint: undefined,
+                        resumeDriver: undefined,
+                        clearUserPromptMessagesAfterResponse: false,
+                        resumeInterruptedTurn: false,
+                      })
+                      launched = true
+                      drive
+                        .then(async (result) => {
+                          // Minimal settle: mirror the spawn-agents settle
+                          // chain — fold the re-driven child's receipt + ledger
+                          // evidence into the parent and update the matching
+                          // intent, so the resume's result is DELIVERED instead
+                          // of dropped. Dynamic import: spawn-agent-utils
+                          // statically imports this module, so a static import
+                          // here would be a cycle; by settle time the module
+                          // graph is fully initialized. Never throws into the
+                          // drive chain: every step is guarded.
+                          try {
+                            const {
+                              buildRuntimeAgentReceipt,
+                              mergeChildEvidenceIntoParent,
+                              reconcileAgentReceiptIntoParent,
+                            } = await import(
+                              './tools/handlers/tool/spawn-agent-utils'
+                            )
+                            const receipt = buildRuntimeAgentReceipt({
+                              agentType,
+                              agentId: childState.agentId,
+                              output: result.output,
+                              agentState: result.agentState,
+                            })
+                            mergeChildEvidenceIntoParent({
+                              parentAgentState: initialAgentState,
+                              childAgentState: result.agentState,
+                            })
+                            reconcileAgentReceiptIntoParent({
+                              parentAgentState: initialAgentState,
+                              receipt,
+                              agentType,
+                            })
+                            const intent = initialAgentState.backgroundAgentJobs?.find(
+                              (entry) => entry.jobId === jobId,
+                            )
+                            if (intent) {
+                              intent.status = 'completed'
+                              intent.completedAt = clock.now()
+                              intent.childRunId = childState.runId
+                              intent.receipt = receipt
+                            }
+                          } catch (settleError) {
+                            logger.warn(
+                              {
+                                jobId,
+                                childRunId: childState.runId,
+                                error: settleError,
+                              },
+                              'Background resume settle failed (non-fatal; the intent keeps its prior status)',
+                            )
+                          }
+                        })
+                        .catch(async (error) => {
+                          logger.warn(
+                            {
+                              runId: childState.runId,
+                              jobId,
+                              agentType,
+                              error,
+                            },
+                            'Background resume re-drive rejected (non-fatal; marker stays unsettled until a terminal child tail)',
+                          )
+                          // Error settle mirroring the spawn chain's
+                          // rejected-promise branch: a failed re-drive must
+                          // not stay reported 'interrupted' forever.
+                          try {
+                            const intent =
+                              initialAgentState.backgroundAgentJobs?.find(
+                                (entry) => entry.jobId === jobId,
+                              )
+                            if (intent) {
+                              intent.status = 'error'
+                              intent.completedAt = clock.now()
+                              intent.childRunId = childState.runId
+                              intent.error =
+                                error instanceof Error
+                                  ? error.message
+                                  : String(error)
+                            }
+                          } catch {
+                            // Never throws into the drive chain.
+                          }
+                        })
+                        .finally(() => {
+                          // The reservation lives exactly as long as the drive:
+                          // releasing on settle keeps a finished re-drive from
+                          // blocking the next legitimate one and keeps the
+                          // reservation set from leaking.
+                          releaseBackgroundReDrive(jobId)
+                        })
+                    },
+                  })
+                  if (outcome.kind === 'resumed') {
+                    logger.debug(
+                      {
+                        runId: resumeParentRunId,
+                        jobId,
+                        childRunId: outcome.childRunId,
+                      },
+                      'Journal replay: background child resumed from its own journal stream',
+                    )
+                  } else if (outcome.kind === 'no_linkage') {
+                    logger.debug(
+                      { runId: resumeParentRunId, jobId, agentType },
+                      'Journal replay: background respawn found no child linkage; leaving the intent to re-plan',
+                    )
+                  } else {
+                    logger.warn(
+                      {
+                        runId: resumeParentRunId,
+                        jobId,
+                        agentType,
+                        reason: outcome.reason,
+                      },
+                      'Journal replay: background child could not be reconstructed from its journal; leaving the intent to re-plan',
+                    )
+                  }
+                } finally {
+                  // No launch happened (template missing, no linkage,
+                  // unrecoverable, or an engine throw): release the reservation
+                  // so later passes re-plan unobstructed.
+                  if (!launched) releaseBackgroundReDrive(jobId)
+                }
+              }
+            : undefined
         const replayResult = await executeReplayActions(replayPlan.actions, {
           logger,
           replayChild: async (childRunId, verdict) => {
@@ -1604,12 +1886,7 @@ export async function loopAgentSteps(
               'Journal replay: child disposition planned (logging-only seam)',
             )
           },
-          respawnBackground: async (jobId, agentType) => {
-            logger.debug(
-              { runId: initialAgentState.runId, jobId, agentType },
-              'Journal replay: background respawn intended (logging-only seam; intents already reconciled)',
-            )
-          },
+          respawnBackground,
         })
         logger.debug(
           {
@@ -1645,15 +1922,52 @@ export async function loopAgentSteps(
     }
   }
 
-  const runId = await startAgentRun({
-    ...params,
-    agentId: agentTemplate.id,
-    ancestorRunIds: initialAgentState.ancestorRunIds,
-  })
+  // P2-T2b: a resume-pinned relaunch (see pinnedRunId on the params type)
+  // skips startAgentRun entirely — reusing the ORIGINAL child runId — while
+  // every other caller keeps the byte-identical mint path.
+  const runId =
+    params.pinnedRunId ??
+    (await startAgentRun({
+      ...params,
+      agentId: agentTemplate.id,
+      ancestorRunIds: initialAgentState.ancestorRunIds,
+    }))
   if (!runId) {
     throw new Error('Failed to start agent run')
   }
   initialAgentState.runId = runId
+
+  // P2-T2b: a BACKGROUND child journals its own job -> childRunId linkage under
+  // the PARENT runId. The launch-time intent (spawn-agents.ts) could only
+  // correlate on jobId because THIS site is where the childRunId first exists;
+  // recording it here is what lets a later resume find the child's own journal
+  // stream (findBackgroundChildLinkage in util/background-resume.ts). The
+  // correlation stays jobId — NOT the childRunId — so a background child never
+  // enters planChildResume's foreground child-resume plan (a parent spawn with
+  // a childRunId correlation would be re-driven as a foreground child).
+  // Fail-open like every other journal write point: a journaling outage must
+  // never fail the run. Guarded on backgroundJobLink so foreground children,
+  // inline agents, and every unjournaled parent append nothing.
+  if (params.backgroundJobLink && params.journalWriter) {
+    try {
+      params.journalWriter.append(params.backgroundJobLink.parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: params.backgroundJobLink.jobId,
+        payload: {
+          backgroundLink: true,
+          jobId: params.backgroundJobLink.jobId,
+          childRunId: runId,
+          agentType: agentTemplate.id,
+        },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, runId, jobId: params.backgroundJobLink.jobId },
+        'Failed to append background job linkage to run journal (non-fatal)',
+      )
+    }
+  }
 
   // Agent/run correlation stamped on every compaction event this loop emits.
   // `loopAgentSteps` runs for the root turn, for foreground subagents, and for

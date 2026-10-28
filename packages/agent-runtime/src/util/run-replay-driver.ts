@@ -34,13 +34,22 @@
  * pass would double-respawn), mirroring executeReplayActions' contract.
  *
  * Known remaining gap (documented for a later slice, intentionally NOT
- * implemented here): resume-from-own-journal for background agents stays
- * deferred. Background coroutines DO now journal their own streams —
- * extractSubagentContextParams propagates journalWriter/journalReader into
- * the detached executeSubagent call (spawn-agent-utils), and the background
- * launch path in spawn-agents.ts appends the parent's durable `spawn` intent
- * at launch time — but the reDriveChild/respawnBackground seams still do not
- * replay a background child from its own journal.
+ * implemented here): FOREGROUND resume-from-own-journal — reDriveChild — stays
+ * log-only. Background coroutines journal their own streams
+ * (extractSubagentContextParams propagates journalWriter/journalReader into
+ * the detached executeSubagent call, and the background launch path in
+ * spawn-agents.ts appends the parent's durable `spawn` intent at launch
+ * time), and the background half is now IMPLEMENTED at the runtime seam:
+ * loopAgentSteps' loop-entry respawnBackground resolves the template, then
+ * calls resumeBackgroundFromOwnJournal (util/background-resume.ts), which
+ * reconstructs the interrupted child's message history from its own
+ * journaled llm_request payloads, relaunches it detached with its ORIGINAL
+ * child runId pinned, and journals the settleable respawn marker per the
+ * contract below. The foreground reDriveChild seam still does not replay a
+ * foreground child from its own journal; that is the remaining deferred
+ * slice. (This module's own respawnBackground handler stays a thin seam —
+ * the runtime seam owns the relaunch, so a caller injecting this driver's
+ * handlers directly keeps its documented marker-only contract.)
  *
  * Respawn marker parity (P2-T2 follow-up): the only production wiring point
  * for re-launching a background intent is the caller-injected
