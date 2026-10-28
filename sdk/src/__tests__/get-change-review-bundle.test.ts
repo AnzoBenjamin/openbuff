@@ -1242,4 +1242,80 @@ describe('getChangeReviewBundle', () => {
     expect(gitStatusSource).toContain('export async function runGitBounded(')
     expect(bundleSource).toContain('export { runGitBounded }')
   })
+
+  test('defaults the diff budget to the schema max (200k) so a realistic multi-file review is whole', async () => {
+    // The bundle used to default max_chars to 80_000, which clipped a
+    // realistic multi-file review mid-diff with no way for the caller to tell
+    // what was cut. The default is now the schema's own max; a ~150k diff —
+    // previously clipped at 80k — must arrive whole and untruncated.
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-budget-'))
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'big.txt'), 'seed\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    const changedLine = 'x'.repeat(150_000)
+    fs.writeFileSync(path.join(cwd, 'big.txt'), `${changedLine}\n`)
+
+    const result = await getChangeReviewBundle({ cwd })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).not.toHaveProperty('errorMessage')
+    const bundle = value as { diff: string; truncated: boolean }
+    expect(bundle.diff.length).toBeGreaterThan(80_000)
+    expect(bundle.diff).toContain(changedLine)
+    expect(bundle.truncated).toBe(false)
+  })
+
+  test('marks a clipped diff with a self-describing, resumable elision marker', async () => {
+    // When the diff IS still clipped, the marker must state the resume offset
+    // and total so the orchestrator can request the rest, and the truncation
+    // must surface on the OUTER bundle shape (never a plain success).
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-marker-'))
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'changed.txt'), 'seed\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'changed.txt'), `${'y'.repeat(4_000)}\n`)
+
+    const parts = await gitStatus({
+      cwd,
+      include_diff: true,
+      max_chars: 500,
+    })
+    const statusValue = parts[0]?.type === 'json' ? parts[0].value : undefined
+    expect(statusValue && 'diff' in statusValue ? statusValue.diff : '').toContain(
+      '[...truncated ',
+    )
+    expect(
+      statusValue && 'diff' in statusValue ? statusValue.diff : '',
+    ).toContain('chars at offset 500 of ')
+    expect(
+      statusValue && 'diff' in statusValue ? statusValue.diff : '',
+    ).toContain('read individual files with read_files')
+    expect(
+      statusValue && 'truncated' in statusValue
+        ? statusValue.truncated
+        : undefined,
+    ).toBe(true)
+
+    const bundleResult = await getChangeReviewBundle({ cwd, max_chars: 500 })
+    const bundleValue =
+      bundleResult[0]?.type === 'json' ? bundleResult[0].value : undefined
+    expect(bundleValue).not.toHaveProperty('errorMessage')
+    const bundle = bundleValue as { diff: string; truncated: boolean }
+    // Outer shape, not only the nested git payload: a clipped diff is never
+    // reported as an untruncated success.
+    expect(bundle.truncated).toBe(true)
+    expect(bundle.diff).toContain('[...truncated ')
+    expect(bundle.diff).toContain('read individual files with read_files')
+  })
 })

@@ -408,9 +408,18 @@ export async function gitStatus(params: {
     }
     diff = diffResult.stdout
     if (diff.length > maxChars) {
+      // Self-describing elision (truncation-recovery): the marker used to say
+      // only HOW MUCH was dropped, so an orchestrator had no way to ask for
+      // the remainder and reviewers silently reviewed a fragment. State the
+      // resume offset and the untruncated total, plus the two concrete
+      // recovery paths (a larger max_chars, or reading the individual files).
+      // The leading `[...truncated ` prefix is preserved so existing substring
+      // assertions and consumers keep matching it.
+      const omitted = diff.length - maxChars
+      const total = diff.length
       diff =
         diff.slice(0, maxChars) +
-        `\n[...truncated ${diff.length - maxChars} chars]`
+        `\n[...truncated ${omitted} chars at offset ${maxChars} of ${total}; re-call with a larger max_chars or read individual files with read_files]`
       truncated = true
     }
   }

@@ -110,7 +110,19 @@ export const COMPACTION_NO_PROGRESS_FRACTION = 0.05
 export const SEMANTIC_REARM_FRACTION = 0.5
 export const SEMANTIC_COOLDOWN_ITERATIONS = 3
 export const SEMANTIC_MAX_PASSES_PER_TURN = 3
-export const SEMANTIC_EVICTION_FRACTION = 0.55
+/**
+ * Share of the window at which the free deterministic tool-result evictor
+ * arms. INVARIANT: strictly BELOW `SEMANTIC_COMPACTION_TRIGGER_FRACTION`
+ * (0.78), with visible margin, so deterministic eviction always gets its
+ * zero-LLM-cost chance before the expensive pass is announced — but high
+ * enough that it only fires under REAL pressure. At 0.55 a 1M-token window
+ * started discarding live tool output at 550k tokens, i.e. ~450k tokens of
+ * headroom still free and ~230k tokens before the semantic pass would even
+ * trigger — the orchestrator lost complex tool output it never needed to
+ * lose. 0.70 keeps the ordering invariant while leaving a fifth of the window
+ * untouched before the LLM leg is announced.
+ */
+export const SEMANTIC_EVICTION_FRACTION = 0.7
 
 export type SemanticCompactionBudget = {
   resolvedContextWindowTokens?: number

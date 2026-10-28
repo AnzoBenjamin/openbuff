@@ -707,7 +707,11 @@ export async function getChangeReviewBundle(params: {
     gitStatus({
       cwd: params.cwd,
       include_diff: true,
-      max_chars: params.max_chars ?? 80_000,
+      // Default to the schema's own max (200_000): an 80k default clipped a
+      // realistic multi-file review mid-diff, and the orchestrator saw a
+      // fragment with no way to tell what was cut. An explicit
+      // params.max_chars override is still honored exactly.
+      max_chars: params.max_chars ?? 200_000,
       signal: params.signal,
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
     }),

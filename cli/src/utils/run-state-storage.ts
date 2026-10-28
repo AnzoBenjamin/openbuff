@@ -198,6 +198,9 @@ export function loadChatStateFromDirectory(
       )
       return loadChatStateFromCompatibilityFiles(chatDir)
     }
+    // Read-path sanitization is for redaction/unserializable safety ONLY — it
+    // must never size-cap, or a storage budget would truncate the transcript
+    // that becomes the next run's live model context.
     const persisted = sanitizeForChatPersistence(parsed as PersistedChatState)
     if (
       !persisted ||

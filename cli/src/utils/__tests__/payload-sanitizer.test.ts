@@ -85,22 +85,44 @@ describe('payload-sanitizer', () => {
     expect(sanitized.filename).toBe('current.png')
   })
 
-  test('truncates very large persisted strings', () => {
+  test('does NOT truncate very large persisted strings', () => {
+    // Persisted chat state is restored as the LIVE model transcript on the
+    // next run, so a storage budget must never rewrite real tool output such
+    // as read_files bodies, diffs, or command logs.
+    const output = 'x'.repeat(90_000)
     const payload = {
       blocks: [
         {
           type: 'tool',
           toolName: 'read_files',
-          output: 'x'.repeat(90_000),
+          output,
         },
       ],
     }
 
     const sanitized = sanitizeForChatPersistence(payload) as any
-    const output = sanitized.blocks[0].output
 
-    expect(output.length).toBeLessThan(10_000)
-    expect(output).toContain('Openbuff truncated')
+    expect(sanitized.blocks[0].output).toBe(output)
+    expect(JSON.stringify(sanitized)).not.toContain('Openbuff truncated')
+  })
+
+  test('keeps long text byte-identical while still redacting credentials in the same payload', () => {
+    const secret = 'sk-secret-access-token-xyz'
+    const longText = `${'y'.repeat(20_000)}-tail`
+    const payload = {
+      messageHistory: [
+        { role: 'tool', content: [{ type: 'text', text: longText }] },
+      ],
+      credentials: { accessToken: secret },
+    }
+
+    const sanitized = sanitizeForChatPersistence(payload) as any
+
+    expect(sanitized.messageHistory[0].content[0].text).toBe(longText)
+    expect(sanitized.messageHistory[0].content[0].text.length).toBe(20_005)
+    expect(sanitized.credentials.accessToken).toBe('[REDACTED]')
+    expect(JSON.stringify(sanitized)).not.toContain(secret)
+    expect(JSON.stringify(sanitized)).not.toContain('Openbuff truncated')
   })
 
   test('debug log sanitizer caps arrays, strings, and circular references', () => {

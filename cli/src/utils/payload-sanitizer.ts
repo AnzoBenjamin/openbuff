@@ -1,4 +1,3 @@
-const CHAT_STATE_MAX_STRING_LENGTH = 8_000
 const DEBUG_LOG_MAX_STRING_LENGTH = 8_000
 const DEBUG_LOG_MAX_ARRAY_LENGTH = 120
 const DEBUG_LOG_MAX_OBJECT_KEYS = 160
@@ -142,6 +141,11 @@ const isSensitiveKey = (key: string): boolean => {
 }
 
 type SanitizeOptions = {
+  /**
+   * Character cap applied to every string. `Number.MAX_SAFE_INTEGER` means
+   * "no string cap" and is used by the variants that must never rewrite the
+   * text they sanitize (persisted chat state, UI state).
+   */
   maxStringLength: number
   maxArrayLength?: number
   maxObjectKeys?: number
@@ -345,11 +349,34 @@ const sanitizeValue = (
   }
 }
 
+/**
+ * Sanitize a value on its way to (or back from) persisted chat state.
+ *
+ * Persistence must REDACT secrets and DROP non-serializable media, but it must
+ * NOT size-cap text. The restored transcript is loaded as `previousRunState`
+ * and becomes the LIVE `sessionState.mainAgentState.messageHistory` for the
+ * next run, so a storage budget spent here is laundered into model-visible
+ * truncation: the model is shown
+ * `[Openbuff truncated N chars while saving chat state. Re-run the tool if the
+ * full output is needed.]` in place of real tool output (read_files bodies,
+ * diffs, command logs) and can never recover the dropped text. Hence
+ * `maxStringLength: Number.MAX_SAFE_INTEGER` — "no string cap", the same idiom
+ * {@link sanitizeMediaForUiState} uses.
+ *
+ * Every other protection is kept: credential redaction by key name
+ * ({@link isSensitiveKey}/{@link redactSensitiveValue}), media/binary omission
+ * ({@link omittedMediaText}), circular-reference handling, and the
+ * MAX_SANITIZE_DEPTH recursion guard. If a storage-size concern ever needs a
+ * bound, it belongs in a separate size-limiting step at the disk-WRITE
+ * boundary — never in this sanitizer.
+ */
 export function sanitizeForChatPersistence<T>(value: T): T {
   return sanitizeValue(
     value,
     {
-      maxStringLength: CHAT_STATE_MAX_STRING_LENGTH,
+      // Deliberately unbounded: truncating here would permanently rewrite the
+      // transcript that becomes the model's live context.
+      maxStringLength: Number.MAX_SAFE_INTEGER,
       purpose: 'saving chat state',
     },
     new WeakSet(),

@@ -1784,7 +1784,28 @@ export async function loopAgentSteps(
                               parentAgentState: initialAgentState,
                               receipt,
                               agentType,
+                              // Ledger pairing: the resumed child never went
+                              // through the spawn handler, so no
+                              // `spawn_started` event exists for it. Passing
+                              // the child's OWN agentId as the spawn id keeps
+                              // the receipt reconciliation keyed on a stable
+                              // identity instead of silently defaulting to
+                              // receipt.agentId (which differs on the
+                              // supervised path and dangles the ledger row).
+                              spawnId: childState.agentId,
                             })
+                            // Fold the resumed child's cost into the parent,
+                            // exactly like the spawn-agents settle chain does
+                            // for a freshly launched background child
+                            // (spawn-agents.ts backgroundCredits). Without
+                            // this the re-drive ran for free: its
+                            // creditsUsed never reached the parent, so
+                            // resumed work was systematically underbilled.
+                            const resumedCredits =
+                              result.agentState.creditsUsed || 0
+                            if (resumedCredits > 0) {
+                              initialAgentState.creditsUsed += resumedCredits
+                            }
                             const intent = initialAgentState.backgroundAgentJobs?.find(
                               (entry) => entry.jobId === jobId,
                             )

@@ -151,6 +151,74 @@ describe('evictStaleToolResults', () => {
     expect(result.evictedCount).toBe(2)
   })
 
+  it('tombstone names the evicted call so the body is recoverable, not re-run', () => {
+    // The old tombstone said only "re-run the tool". The full body IS archived
+    // and searchable via recall_context, so the tombstone must NAME the call
+    // (tool / toolCallId / step) and point at that retrieval path instead of
+    // teaching the model to pay for an expensive re-run — the observable
+    // symptom being an orchestrator that could no longer SEE the output.
+    const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
+    const result = evictStaleToolResults(messages)
+    expect(result.evictedCount).toBe(2)
+
+    const toolResults = result.messages.filter(
+      (m): m is ToolMessage => m.role === 'tool',
+    )
+    for (const [index, toolResult] of toolResults.slice(0, 2).entries()) {
+      const part = toolResult.content[0]
+      expect(part.type).toBe('json')
+      if (part.type !== 'json' || typeof part.value !== 'string') {
+        throw new Error('expected a tombstone string')
+      }
+      const tombstone = part.value
+      // Identity is recoverable from the tombstone itself.
+      expect(tombstone).toContain('tool=read_files')
+      expect(tombstone).toContain(`toolCallId=call-${index}`)
+      expect(tombstone).toContain(`step=${index}`)
+      // It points at the archive/recall path, not at a re-run.
+      expect(tombstone).toContain('archived')
+      expect(tombstone).toContain('recall_context')
+      expect(tombstone).not.toContain('re-run the tool')
+      // A single short line: it is a pointer, never a body.
+      expect(tombstone).not.toContain('\n')
+      expect(tombstone.length).toBeLessThan(400)
+    }
+  })
+
+  it('still classifies legacy tombstones as evicted (no re-tombstoning of old transcripts)', () => {
+    // Persisted transcripts carry the OLD tombstone text. If the pattern
+    // dropped it, every load would re-tombstone those results — history churn
+    // and prompt-cache misses — so the legacy shape must stay recognized
+    // while the current shape is recognized too.
+    const legacyTombstone =
+      '[tool result evicted to free context (~10k tokens) — re-run the tool if you need this output again]'
+    const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
+    const legacyResult = messages[2] as ToolMessage
+    legacyResult.content = [{ type: 'json', value: legacyTombstone }]
+
+    const result = evictStaleToolResults(messages)
+    // Only the one genuinely stale full body was evicted: had the legacy text
+    // gone unrecognized, this would be 2.
+    expect(result.evictedCount).toBe(1)
+
+    const toolResults = result.messages.filter(
+      (m): m is ToolMessage => m.role === 'tool',
+    )
+    // The legacy tombstone is passed through byte-identical (same message).
+    expect(toolResults[0]).toBe(legacyResult)
+    expect(toolResults[0].content[0]).toEqual({
+      type: 'json',
+      value: legacyTombstone,
+    })
+    // The other stale body got the NEW identity-bearing tombstone.
+    const evictedPart = toolResults[1].content[0]
+    expect(evictedPart.type).toBe('json')
+    if (evictedPart.type === 'json' && typeof evictedPart.value === 'string') {
+      expect(evictedPart.value).toContain('toolCallId=call-1')
+      expect(evictedPart.value).toContain('recall_context')
+    }
+  })
+
   it('honors custom keepRecentSteps and minSavingsTokens overrides', () => {
     const messages = buildHistory(EVICTION_KEEP_RECENT_STEPS + 2)
     // keepRecentSteps large enough that nothing is stale.

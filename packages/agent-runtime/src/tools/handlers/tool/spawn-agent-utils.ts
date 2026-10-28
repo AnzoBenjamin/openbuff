@@ -1206,11 +1206,21 @@ function boundAgentOutputForParent(
 ): unknown {
   const truncation = { omittedItems: 0, omittedChars: 0 }
   const rawCompacted = compactAgentOutputValue(value, 0, undefined, truncation)
+  // Did compaction actually lose anything? This ledger is the ONLY honest
+  // signal that the parent-visible payload is a fragment: it is set by every
+  // clipped string leaf (32k high-fidelity / 4k default), every clipped array
+  // (48-item default), and every depth≥7 collapse. The size gate below is a
+  // DIFFERENT concern (whole-payload budget), so a 40k–250k child — or a
+  // single 40k `message`/`summary` leaf — used to slip through the size gate
+  // and reach the parent as a silent fragment with no artifactPath and no
+  // recovery path. Track `clipped` from the ledger and treat it as truncation
+  // everywhere below, independent of the payload's total size.
+  const clipped = truncation.omittedItems > 0 || truncation.omittedChars > 0
   const compacted =
     rawCompacted &&
     typeof rawCompacted === 'object' &&
     !Array.isArray(rawCompacted) &&
-    (truncation.omittedItems > 0 || truncation.omittedChars > 0)
+    clipped
       ? {
           ...(rawCompacted as Record<string, unknown>),
           truncation: {
@@ -1235,7 +1245,10 @@ function boundAgentOutputForParent(
       summary: 'Agent output was not serializable.',
     }
   }
-  if (serialized.length <= PARENT_AGENT_OUTPUT_MAX_CHARS) return compacted
+  const oversize = serialized.length > PARENT_AGENT_OUTPUT_MAX_CHARS
+  // Untouched output (no leaf clipped, within the whole-payload budget): the
+  // historical fast path — no artifact, no truncation marker.
+  if (!oversize && !clipped) return compacted
   // PR-T2 (D20) Part B: persist the FULL serialized payload so the truncated
   // parent-visible shape below stays recoverable via read_files. When
   // persistence fails, the receipt carries an explicit, bounded diagnostic
@@ -1267,6 +1280,26 @@ function boundAgentOutputForParent(
         artifactError:
           'Oversize agent output could NOT be persisted to the oversize artifact directory (tmp unwritable); the parent-visible payload below is truncated and not fully recoverable via read_files.',
       }
+  // Clipped but WITHIN the whole-payload budget: this is the common case the
+  // defect left unrecoverable (a child whose payload is 40k–250k chars, or
+  // whose single message/summary leaf exceeds 32k). Persisting a payload this
+  // size is cheap and is the whole point: keep the caller's own shape (so the
+  // structured `value` wrapper every consumer walks survives untouched), but
+  // stamp `truncated: true` on the envelope root — the D19 outcome classifier
+  // only inspects the normalized output ROOT, so leaf-level clipping would
+  // otherwise be reported as an honest-looking `outcome: 'ok'` — and attach
+  // the artifact pointer so `read_files` can recover the full output.
+  if (!oversize) {
+    const compactedRecord =
+      compacted && typeof compacted === 'object' && !Array.isArray(compacted)
+        ? (compacted as Record<string, unknown>)
+        : undefined
+    return {
+      ...(compactedRecord ?? { value: compacted }),
+      truncated: true,
+      ...artifactFields,
+    }
+  }
   if (compacted && typeof compacted === 'object' && !Array.isArray(compacted)) {
     const record = compacted as Record<string, unknown>
     const valueRecord =

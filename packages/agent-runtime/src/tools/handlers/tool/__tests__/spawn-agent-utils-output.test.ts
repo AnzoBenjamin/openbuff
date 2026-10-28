@@ -185,13 +185,25 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
       'security-reviewer',
     ) as any
     // The depth-7 collapse fires seven `nested` wrappers down; walk to the
-    // collapsed node instead of hard-coding its depth.
+    // collapsed node instead of hard-coding its depth. The walk keys on the
+    // collapsed node's own type, NOT on `truncated: true`: the envelope ROOT
+    // now carries that flag too (any clipping is reported honestly at the
+    // root), so a `truncated`-keyed walk would stop at the root.
     let collapsed: any = normalized
-    for (let i = 0; i < 12 && collapsed?.truncated !== true; i += 1) {
+    for (
+      let i = 0;
+      i < 12 && collapsed?.type !== 'truncatedNestedAgentOutput';
+      i += 1
+    ) {
       collapsed = collapsed?.nested
     }
     expect(collapsed?.truncated).toBe(true)
     expect(collapsed.type).toBe('truncatedNestedAgentOutput')
+    // The root itself reports the clipping (so the D19 classifier sees it
+    // instead of calling a clipped result `ok`) and points at the full
+    // payload for recovery.
+    expect(normalized.truncated).toBe(true)
+    expect(typeof normalized.artifactPath).toBe('string')
     expect(collapsed.verdict).toBe('LOOKS_GOOD')
     expect(collapsed.snapshotFingerprint).toBe('v3:' + 'a'.repeat(64))
     expect(collapsed.reviewedFiles).toEqual(['src/a.ts'])
@@ -592,6 +604,77 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     // collapse even when agentType does not match *reviewer*.
     expect(normalized.value.verdict).toBe('LOOKS_GOOD')
     expect(typeof normalized.artifactPath).toBe('string')
+  })
+})
+
+/**
+ * Clipped-but-not-oversize recovery: the COMMON truncation case is a child
+ * whose payload fits the 256k whole-payload budget yet still lost content to
+ * leaf compaction — a 40k–250k payload, or a single `message`/`summary` leaf
+ * past the 32k high-fidelity cap. That case used to return a clipped fragment
+ * with NO artifactPath and no root truncation flag, so the orchestrator could
+ * neither read the full output back nor tell the result had been cut (the D19
+ * classifier only inspects the ROOT, so it reported `outcome: 'ok'`).
+ */
+describe('normalizeSpawnedAgentOutput clipped non-oversize recovery', () => {
+  const clippedPayload = () => ({
+    type: 'structuredOutput',
+    value: { status: 'completed', message: 'm'.repeat(40_000) },
+  })
+
+  test('persists the full payload and flags truncation at the root when a leaf is clipped under the size bound', () => {
+    const payload = clippedPayload()
+    // Pin the regime: the serialized payload is far below the 256k bound (so
+    // the historical size-gated artifact path never fired) while the
+    // high-fidelity `message` leaf exceeds its 32k cap (so content IS lost).
+    expect(JSON.stringify(payload).length).toBeLessThan(256_000)
+
+    const normalized = normalizeSpawnedAgentOutput(payload, 'researcher-web') as any
+    expect(normalized.truncated).toBe(true)
+    expect(normalized.truncation.omittedChars).toBeGreaterThan(0)
+    expect(typeof normalized.artifactPath).toBe('string')
+    expect(normalized.artifact).toBe(
+      'Full untruncated output persisted; read with read_files.',
+    )
+    expect(normalized.artifactBytes).toBeGreaterThan(256_000 - 256_000)
+    // The caller's own envelope shape survives (the structured value wrapper
+    // every consumer walks is untouched apart from the clipped leaf).
+    expect(normalized.type).toBe('structuredOutput')
+    expect(normalized.value.status).toBe('completed')
+    expect(normalized.value.message.length).toBeLessThan(40_000)
+    // The recovery path is real: read_files on the artifact yields the FULL
+    // untruncated output.
+    const persisted = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
+    expect(persisted).toEqual(payload)
+  })
+
+  test('degrades to artifact diagnostic fields (never throws) when persistence fails', () => {
+    // TMPDIR pointed at a regular FILE makes mkdirSync fail with ENOTDIR on
+    // every POSIX runner (root included), exercising the never-throw path.
+    const scratchDir = mkdtempSync(join(osTmpdir(), 'openbuff-clipped-probe-'))
+    const blockerFile = join(scratchDir, 'blocker')
+    writeFileSync(blockerFile, 'regular file, not a directory')
+    const previousTmpdir = process.env.TMPDIR
+    process.env.TMPDIR = blockerFile
+    try {
+      const normalized = normalizeSpawnedAgentOutput(
+        clippedPayload(),
+        'researcher-web',
+      ) as any
+      // The clipping is still reported honestly; only the recovery pointer
+      // degrades to an explicit diagnostic.
+      expect(normalized.truncated).toBe(true)
+      expect(normalized.artifactPersisted).toBe(false)
+      expect(typeof normalized.artifactError).toBe('string')
+      expect(normalized.artifactPath).toBeUndefined()
+    } finally {
+      if (previousTmpdir === undefined) {
+        delete process.env.TMPDIR
+      } else {
+        process.env.TMPDIR = previousTmpdir
+      }
+      rmSync(scratchDir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -1079,6 +1162,28 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.outcome).toBe('ok')
     expect(receipt.status).toBe('completed')
     expect(receipt.errors).toEqual([])
+  })
+
+  test('records truncated (not ok) for a clipped payload under the size bound, without downgrading status', () => {
+    // The classifier inspects the normalized output ROOT. A sub-256k payload
+    // whose `message` leaf was clipped used to carry NO root truncation flag,
+    // so a clipped result settled as `outcome: 'ok'`. The root now reports
+    // `truncated: true`, which must yield `outcome: 'truncated'` while the
+    // completed status is preserved (truncated is not a failure).
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'researcher-web',
+      agentId: 'a-clipped-sub256k',
+      output: {
+        type: 'structuredOutput',
+        value: { status: 'completed', message: 'm'.repeat(40_000) },
+      },
+    })
+    expect(receipt.outcome).toBe('truncated')
+    expect(receipt.status).toBe('completed')
+    expect(receipt.errors).toEqual([])
+    const output = receipt.output as Record<string, unknown>
+    expect(output.truncated).toBe(true)
+    expect(typeof output.artifactPath).toBe('string')
   })
 
   test('mutation authority keeps a mutation agent completed despite missing_output', () => {

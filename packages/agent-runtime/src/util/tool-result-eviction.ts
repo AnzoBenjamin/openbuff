@@ -62,18 +62,52 @@ const stripEvidenceKindPrefix = (value: string): string =>
 
 const TOMBSTONE_MARKER = '[tool result evicted to free context'
 
-const buildTombstone = (tokensSaved: number): string =>
-  `${TOMBSTONE_MARKER} (~${Math.max(1, Math.round(tokensSaved / 1000))}k tokens) — re-run the tool if you need this output again]`
+/**
+ * Identity the tombstone must name so the model can RECOVER the evicted body.
+ *
+ * WHY: the previous tombstone said only "re-run the tool if you need this
+ * output again". The full pre-tombstone content is archived
+ * (`archiveEvictedToolResults`) and searchable via `recall_context`, but the
+ * tombstone never said so and never named the call — so the model either lost
+ * the output entirely or paid for an expensive re-run. The observable symptom
+ * was an orchestrator that could no longer SEE complex tool output (a large
+ * read/search result vanished mid-turn with no way back to it).
+ */
+const buildTombstone = ({
+  tokensSaved,
+  toolCallId,
+  toolName,
+  stepIndex,
+}: {
+  tokensSaved: number
+  toolCallId?: string
+  toolName?: string
+  stepIndex: number
+}): string => {
+  const resolvedToolName = toolName && toolName.length > 0 ? toolName : 'unknown'
+  const resolvedToolCallId =
+    toolCallId && toolCallId.length > 0 ? toolCallId : 'unknown'
+  // Single line, well under 400 chars: the tombstone is a POINTER, not a body.
+  return `${TOMBSTONE_MARKER} (~${Math.max(1, Math.round(tokensSaved / 1000))}k tokens) — tool=${resolvedToolName} toolCallId=${resolvedToolCallId} step=${stepIndex}. The full original output is archived; retrieve it with recall_context (search the archived text) instead of re-running the tool.]`
+}
 
 /**
  * Full tombstone SHAPE, not a prefix: a genuine tool result can legitimately
  * begin with the tombstone wording (e.g. a result that quotes an earlier
  * tombstone), and a prefix match would misclassify it as already-evicted and
- * silently skip eviction. Only the exact `buildTombstone` structure —
- * marker, k-token figure, trailing instruction, closing bracket — counts.
+ * silently skip eviction. Only the exact `buildTombstone` structures count.
+ *
+ * Two shapes must match, because persisted transcripts outlive the code:
+ *  - CURRENT: marker, k-token figure, then the `tool=/toolCallId=/step=`
+ *    identity and the `recall_context` retrieval instruction.
+ *  - LEGACY: marker + the old "re-run the tool" instruction. Already-evicted
+ *    messages in existing transcripts carry it; dropping it would re-tombstone
+ *    them on every load (history churn, cache misses).
+ * The shared prefix `[tool result evicted to free context` is kept intact so
+ * substring assertions in context-archive / loop-agent-steps tests still hold.
  */
 const TOMBSTONE_PATTERN =
-  /^\[tool result evicted to free context \(~\d+k tokens\) — re-run the tool if you need this output again\]$/
+  /^\[tool result evicted to free context \(~\d+k tokens\) — (?:(?:tool=\S+ toolCallId=\S+ step=\d+\. The full original output is archived; retrieve it with recall_context \(search the archived text\) instead of re-running the tool\.)|(?:re-run the tool if you need this output again))\]$/
 
 const isEvicted = (message: ToolMessage): boolean =>
   message.content.some(
@@ -350,7 +384,12 @@ export function evictStaleToolResults(
     }
     tombstonesByMessage.set(
       candidate,
-      buildTombstone(approximateTokens(candidate)),
+      buildTombstone({
+        tokensSaved: approximateTokens(candidate),
+        toolCallId: candidate.toolCallId,
+        toolName: candidate.toolName,
+        stepIndex: stepIndexOf.get(candidate) ?? 0,
+      }),
     )
   }
 
