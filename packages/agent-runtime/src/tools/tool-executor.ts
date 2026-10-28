@@ -8,6 +8,7 @@ import { decodeJsonObjectString } from '@codebuff/common/util/model-payload-reco
 import {
   detectTransportTruncation,
   describeTruncationRecovery,
+  MAX_TRUNCATION_RECOVERY_BYTES,
   parseJsonBounded,
   parseJsonStringWithRepair,
   PAYLOAD_TRUNCATED_ERROR_CODE,
@@ -983,10 +984,12 @@ function parseStringifiedToolInput(
   parseError?: string
   sawTransportTruncation?: boolean
   truncationRecovery?: TruncationRecoverySummary
+  oversizedTruncationBytes?: number
 } {
   let parsed = input
   let parseError: string | undefined
   let truncationRecovery: TruncationRecoverySummary | undefined
+  let oversizedTruncationBytes: number | undefined
 
   // Some providers/models double-encode tool arguments, for example an input
   // value like "\"{\\\"path\\\":\\\"file.ts\\\"}\"". Repeated JSON.parse
@@ -1011,6 +1014,17 @@ function parseStringifiedToolInput(
       ) {
         sawTransportTruncation = true
       }
+      // Oversized cut: truncation was detected but THIS failed parse's
+      // payload exceeds MAX_TRUNCATION_RECOVERY_BYTES, so recovery scanned
+      // nothing and no clean-boundary resume cursor can exist. Record the
+      // byte count so the error can honestly state WHY there is no cursor
+      // (split the arguments) instead of leaving the model to guess between
+      // a transport cut and malformed input.
+      oversizedTruncationBytes =
+        sawTransportTruncation &&
+        stringInput.length > MAX_TRUNCATION_RECOVERY_BYTES
+          ? stringInput.length
+          : undefined
       // A truncated payload is NEVER silently converted into a partial tool
       // call: the recovered object is not assigned to `parsed` (the retired
       // behavior that silently dropped trailing selectors). The unparseable
@@ -1037,6 +1051,7 @@ function parseStringifiedToolInput(
     parseError,
     sawTransportTruncation,
     truncationRecovery,
+    oversizedTruncationBytes,
   }
 }
 
@@ -1055,6 +1070,7 @@ function stringInputError(
   rawInput?: unknown,
   transportTruncated = false,
   truncationRecovery?: TruncationRecoverySummary,
+  oversizedTruncationBytes?: number,
 ): ToolCallError {
   const truncationNote = transportTruncated
     ? ` [${PAYLOAD_TRUNCATED_ERROR_CODE}] The argument payload was cut in transport — it ended mid-structure (unterminated string or unbalanced braces). This is a transport truncation, NOT a code syntax error: re-issue the same edit, ideally split so each edit's newString/content field stays well under the transport-safe band.`
@@ -1067,8 +1083,21 @@ function stringInputError(
   const cursorNote = truncationRecovery
     ? ` Resume cursor: ${truncationRecovery.recoveredBytes} bytes of leading argument structure survived the cut (capped preview, never applied: ${truncationRecovery.recoveredPreview}). Continue from where transmission cut off — re-issue the call with the arguments that follow that point, splitting them into a smaller follow-up call when needed.`
     : ''
+  // No-cursor note: truncation was detected yet no clean container-close
+  // prefix was recoverable, so the cursor above is absent. State WHY instead
+  // of leaving the missing cursor unexplained — either the cut payload
+  // exceeded the recovery scan bound (the only fix is to split the
+  // arguments), or the cut landed mid-value (the whole call must be
+  // re-issued). Appended after truncationNote/cursorNote so every
+  // non-truncated and cursor-bearing message stays byte-identical.
+  const noCursorNote =
+    transportTruncated && !truncationRecovery
+      ? oversizedTruncationBytes !== undefined
+        ? ` The cut payload was ${oversizedTruncationBytes} bytes, beyond the ${MAX_TRUNCATION_RECOVERY_BYTES}-byte recovery scan bound, so no resume cursor is available: split the arguments so each call's largest string field stays well under that bound.`
+        : ` The cut was not at a clean container boundary, so no resume cursor is available: re-issue the complete call.`
+      : ''
   const parseDetails = parseError
-    ? ` Parsing as JSON failed: ${parseError}. The arguments may be malformed or incomplete.${truncationNote}${cursorNote}`
+    ? ` Parsing as JSON failed: ${parseError}. The arguments may be malformed or incomplete.${truncationNote}${cursorNote}${noCursorNote}`
     : ' Parsing succeeded, but the parsed value was still a string.'
   const heredocHint =
     toolName === 'spawn_agents' || toolName === 'basher'
@@ -2463,6 +2492,7 @@ export function parseRawToolCall<T extends ToolName = ToolName>(params: {
       rawToolCall.input,
       processedParameters.sawTransportTruncation,
       processedParameters.truncationRecovery,
+      processedParameters.oversizedTruncationBytes,
     )
   }
 
@@ -3993,6 +4023,7 @@ export function parseRawCustomToolCall(params: {
       undefined,
       parsedInput.sawTransportTruncation,
       parsedInput.truncationRecovery,
+      parsedInput.oversizedTruncationBytes,
     )
   }
 

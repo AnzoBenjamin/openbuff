@@ -53,11 +53,14 @@ export function coerceToObject(val: unknown): unknown {
 }
 
 // Transport payloads are bounded by the model's per-response output budget, so
-// the classification/repair scan bound tracks the largest realistic tool-call
+// the recovery/repair scan bound tracks the largest realistic tool-call
 // payload (1 MiB) instead of the legacy 256KB cap that left oversized
-// truncated edits unclassified (they surfaced as generic syntax errors). All
-// scans under this bound are linear; recovery parse attempts are additionally
-// candidate-capped for oversized payloads to keep worst-case CPU bounded.
+// truncated edits unrecoverable. Truncation classification keeps its own
+// wider MAX_TRUNCATION_DETECT_LENGTH band (defined below) so an oversized
+// cut is still honestly classified even when it cannot be recovered. All
+// scans under these bounds are linear; recovery parse attempts are
+// additionally candidate-capped for oversized payloads to keep worst-case CPU
+// bounded.
 const MAX_REPAIRABLE_JSON_LENGTH = 1_048_576
 /**
  * Legacy classification bound. Payloads at or under this size keep the
@@ -126,8 +129,29 @@ export function repairMalformedJsonSeparators(
 /** Machine-readable code for arguments cut in transport; distinct from malformed. */
 export const PAYLOAD_TRUNCATED_ERROR_CODE = 'payload_truncated' as const
 
+/**
+ * Recovery/repair bound (1 MiB): the byte ceiling under which
+ * tryRecoverTruncatedToolArguments and repairMalformedJsonSeparators
+ * operate. Exported so the agent runtime's truncation errors can cite the
+ * exact bound instead of hardcoding a copy that drifts.
+ */
+export const MAX_TRUNCATION_RECOVERY_BYTES = MAX_REPAIRABLE_JSON_LENGTH
+
+/**
+ * Detection-only ceiling (8 MiB). detectTransportTruncation is a single
+ * linear scan that runs ONLY on the JSON-parse error path (never after a
+ * successful parse), so it can afford a wider band than recovery. Without
+ * it, a >1 MiB payload cut mid-structure came back unclassified and the
+ * executor reported a plain 'expected object, received string' with no
+ * payload_truncated code — the model could not tell a transport cut from
+ * malformed input. The O(n) scan runs on the error path only, which is
+ * the accepted cost; recovery stays at MAX_TRUNCATION_RECOVERY_BYTES
+ * because each candidate prefix re-parses.
+ */
+const MAX_TRUNCATION_DETECT_LENGTH = 8 * MAX_REPAIRABLE_JSON_LENGTH
+
 /** Structural scan state for classification + boundary recovery (bounds CPU). */
-const MAX_TRUNCATION_SCAN_LENGTH = MAX_REPAIRABLE_JSON_LENGTH
+const MAX_TRUNCATION_SCAN_LENGTH = MAX_TRUNCATION_RECOVERY_BYTES
 
 type TruncationScanState = {
   depth: number
@@ -135,12 +159,21 @@ type TruncationScanState = {
   escapedData: boolean
 }
 
-/** Single pass over the raw argument string tracking string/escape/brace depth. */
-function scanTruncationState(input: string): TruncationScanState | undefined {
+/**
+ * Single pass over the raw argument string tracking string/escape/brace
+ * depth. maxScanLength is required (no default) so every call site states
+ * its own bound — detection passes the wider MAX_TRUNCATION_DETECT_LENGTH
+ * ceiling, recovery passes MAX_TRUNCATION_RECOVERY_BYTES — and the two
+ * bounds cannot silently drift together.
+ */
+function scanTruncationState(
+  input: string,
+  maxScanLength: number,
+): TruncationScanState | undefined {
   if (
     typeof input !== 'string' ||
     input.length === 0 ||
-    input.length > MAX_TRUNCATION_SCAN_LENGTH
+    input.length > maxScanLength
   ) {
     return undefined
   }
@@ -169,7 +202,7 @@ export function detectTransportTruncation(
   parseError?: string,
 ): boolean {
   if (typeof input !== 'string') return false
-  const state = scanTruncationState(input)
+  const state = scanTruncationState(input, MAX_TRUNCATION_DETECT_LENGTH)
   if (!state) return false
   // A balanced, fully-closed, no-dangling-string payload is never truncated,
   // regardless of what a fallback parse error claimed (malformed stays malformed).
@@ -200,7 +233,7 @@ export function detectTransportTruncation(
 export function tryRecoverTruncatedToolArguments(
   rawInput: string,
 ): Record<string, unknown> | undefined {
-  const state = scanTruncationState(rawInput)
+  const state = scanTruncationState(rawInput, MAX_TRUNCATION_RECOVERY_BYTES)
   if (!state || (state.depth === 0 && !state.inString && !state.escapedData)) {
     // Non-strings, empty/oversized inputs, mismatched closers, and complete
     // balanced payloads are never truncation-recovery candidates.

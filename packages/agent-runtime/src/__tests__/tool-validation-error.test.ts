@@ -3,6 +3,7 @@ import z from 'zod/v4'
 import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { __resetReadFilesSelectorRepairStatsForTest } from '@codebuff/common/tools/params/tool/read-files'
+import { MAX_TRUNCATION_RECOVERY_BYTES } from '@codebuff/common/tools/params/utils'
 import {
   buildReadFilesResultV1,
   fileMutationResultV1Schema,
@@ -1191,6 +1192,71 @@ describe('tool validation error handling', () => {
     if ('error' in withFlag) {
       expect(withFlag.error).toContain('payload_truncated')
     }
+  })
+
+  describe('oversized truncation classification (>1 MiB)', () => {
+    // ~1.1 MiB: past the 1 MiB recovery bound, well under the 8 MiB
+    // detection ceiling. Before the detection band was split from the
+    // recovery bound, a structural cut this large was invisible to the
+    // classifier and the executor reported a plain parse error with no
+    // payload_truncated code — the model could not tell a transport cut from
+    // malformed input.
+    const OVERSIZED = MAX_TRUNCATION_RECOVERY_BYTES + 105_000
+
+    it('classifies an over-1-MiB cut mid-string and names the recovery bound (no cursor possible)', () => {
+      const truncated = `{"edits":[{"type":"str_replace","path":"a.ts","replacements":[{"oldString":"x","newString":"${'y'.repeat(OVERSIZED)}`
+      expect(truncated.length).toBeGreaterThan(MAX_TRUNCATION_RECOVERY_BYTES)
+
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'edit_transaction',
+          toolCallId: 'oversized-truncated-tool-call-id',
+          input: truncated,
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('payload_truncated')
+        // The honest oversized note names the exact byte count, the recovery
+        // bound it exceeded, and the only actionable fix (split the call).
+        expect(result.error).toContain(
+          `The cut payload was ${truncated.length} bytes`,
+        )
+        expect(result.error).toContain(
+          `beyond the ${MAX_TRUNCATION_RECOVERY_BYTES}-byte recovery scan bound`,
+        )
+        expect(result.error).toContain('split')
+        // No cursor is claimed for a payload recovery never scanned.
+        expect(result.error).not.toContain('Resume cursor:')
+      }
+    })
+
+    it('explains the missing cursor for a sub-1-MiB cut with no clean container boundary', () => {
+      const truncated =
+        '{"edits":[{"type":"str_replace","path":"a.ts","replacements":[{"oldString":"x","newString":"yyy'
+      expect(truncated.length).toBeLessThan(MAX_TRUNCATION_RECOVERY_BYTES)
+
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'edit_transaction',
+          toolCallId: 'mid-string-truncated-tool-call-id',
+          input: truncated,
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('payload_truncated')
+        expect(result.error).toContain(
+          'The cut was not at a clean container boundary',
+        )
+        // The sub-boundary mid-string cut takes the boundary note, never the
+        // oversized-bytes note or a cursor.
+        expect(result.error).not.toContain('recovery scan bound')
+        expect(result.error).not.toContain('Resume cursor:')
+      }
+    })
   })
 
   it('threads the streamed transportTruncated marker into the payload_truncated classification', async () => {

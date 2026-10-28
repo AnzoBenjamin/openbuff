@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   describeTruncationRecovery,
   detectTransportTruncation,
+  MAX_TRUNCATION_RECOVERY_BYTES,
   PAYLOAD_TRUNCATED_ERROR_CODE,
   tryRecoverTruncatedToolArguments,
 } from '../utils'
@@ -161,5 +162,37 @@ describe('oversized payload classification (post-256KB coverage)', () => {
     expect(recovered).toBeDefined()
     const recoveredEdits = (recovered as Record<string, unknown>).edits
     expect((recoveredEdits as unknown[]).length).toBe(100)
+  })
+})
+
+describe('oversized beyond the 1 MiB detection band', () => {
+  // ~1.1 MiB: past the 1 MiB recovery/repair bound, well under the 8 MiB
+  // detection ceiling. Before the detection band was split from the recovery
+  // bound, a cut this size was invisible to the classifier —
+  // detectTransportTruncation returned false — so the executor reported a
+  // plain parse error with no payload_truncated code and the model could not
+  // tell a transport cut from malformed input.
+  const OVERSIZED = MAX_TRUNCATION_RECOVERY_BYTES + 105_000
+
+  it('classifies an oversized payload cut mid-string as transport truncation', () => {
+    const truncated = `{"edits":[{"type":"str_replace","path":"a.ts","replacements":[{"oldString":"x","newString":"${'y'.repeat(OVERSIZED)}`
+    expect(truncated.length).toBeGreaterThan(MAX_TRUNCATION_RECOVERY_BYTES)
+    expect(detectTransportTruncation(truncated)).toBe(true)
+  })
+
+  it('does NOT classify an oversized but complete payload as truncated', () => {
+    const complete = `{"edits":[{"type":"write_file","path":"a.ts","content":"${'y'.repeat(OVERSIZED)}"}]}`
+    expect(complete.length).toBeGreaterThan(MAX_TRUNCATION_RECOVERY_BYTES)
+    expect(detectTransportTruncation(complete)).toBe(false)
+  })
+
+  it('keeps tryRecoverTruncatedToolArguments undefined past the 1 MiB recovery bound', () => {
+    // The same clean-boundary shape that recovers just above the legacy
+    // 256KB band (see above), but past 1 MiB: recovery stays deliberately
+    // bounded (each candidate prefix re-parses), so an oversized cut is
+    // classified but never recovered.
+    const truncated = `{"edits":[{"type":"write_file","path":"a.ts","content":"${'y'.repeat(OVERSIZED)}"}`
+    expect(truncated.length).toBeGreaterThan(MAX_TRUNCATION_RECOVERY_BYTES)
+    expect(tryRecoverTruncatedToolArguments(truncated)).toBeUndefined()
   })
 })

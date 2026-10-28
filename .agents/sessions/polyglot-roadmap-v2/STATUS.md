@@ -515,3 +515,45 @@ All three approved followups are now done. Wave 2 closed the three remaining act
 
 **Still open from the audit (unchanged, recorded):** payloads >1 MiB are unclassifiable by design (`MAX_REPAIRABLE_JSON_LENGTH`); the 256 KiB transport band is computed then only logged; `tool-stream-parser.ts` forwards an AI-SDK-unparseable tool-call string into the executor (stringInputError discards the recovered prefix); `spawn_agents`'s `agents` field stays outside the bare-string allowlist BY DESIGN (documented in-code).
 
+
+<!-- update_plan_status:appended -->
+## Wave 2 committed + PR-T4 flipped + P2-T2b committed-surface requested — 2026-10-28 — 2026-10-28T15:16:01.609Z
+
+Turn final state, executing the three approved followups:
+
+- **Wave 2 committed** as 839f5f195 (22 files) — recall_context exact-ID retrieval (verbatim body via rawToolBodyOrEntryText after the live probe caught the FTS double-encoding), spawn_agent_inline allowlist entry (spawn_agents excluded by design, documented in-code), six excerpt caps 500→2000, four regenerated tool-definition mirrors, all suites green (recall-context 5/5; archive+consolidation+validation 207/0; handler suites 0-fail; typechecks 0; determinism 0; drift 0). NO push — not in this turn's approved cards; the branch is now ahead 1 of origin (839f5f195), surfacing for explicit confirmation since PR #93 would pick it up.
+- **PR-T4 flipped done** citing plan-gate:PR-T4:v3:62c379ef87416 (the wave-2 gate's reviewed-diff receipt over the LOOKS_GOOD pass).
+- **P2-T2b claimed** (in_progress + currentTask) and its **committed-surface review requested** on the tree that is clean except this excluded .agents/sessions/ append — the request is consumed by this turn's end gate pass, routing specialists over P2-T2b's committed bytes (commit bb96dc424 + the advisory follow-up in 1f2f6bdf6) and minting the plan-task receipt.
+- **Next turn:** flip P2-T2b citing the minted receipt; surface the push decision; then the remaining recorded audit items (tool-stream-parser prefix discard, >1 MiB truncation classification) as the next wave.
+- **Live-verify evidence:** the real-path probe result (4/4 PASS, incl. the double-encoding catch + verbatim fix with its real-path regression test) is recorded in the wave-2 STATUS entry; the probe file itself was deleted per the .e2e-scratch convention.
+
+
+<!-- update_plan_status:appended -->
+## Stream-parser truncation wave: oversized-payload honest classification — 2026-10-28T15:49:48.278Z
+
+Closes the two remaining actionable items from the recorded truncation audit (editor receipts 0552e95f/49f8979a).
+
+**Root cause (verified from source before editing):** both named symptoms trace to ONE blindness — `scanTruncationState` (common/src/tools/params/utils.ts) returned `undefined` for inputs beyond its single shared scan bound (= MAX_REPAIRABLE_JSON_LENGTH = 1 MiB), so `detectTransportTruncation` fired false for an oversized truncated payload. The tool-stream-parser's forwarding of an AI-SDK-unparseable tool-call string into the executor is correct by design (classification belongs to the executor's string-argument parse path); the executor then owned the misclassification — `stringInputError` reported a plain 'expected object, received string' with no `payload_truncated` code and no cursor for a >1 MiB transport cut, and the recovered prefix was never surfaced.
+
+**Landed:**
+- `common/src/tools/params/utils.ts` — `scanTruncationState` now takes a REQUIRED `maxScanLength` (no default; every call site states its own bound so the two bands cannot silently drift together). DETECTION (`detectTransportTruncation`) scans the new `MAX_TRUNCATION_DETECT_LENGTH` band (8 MiB — detection-only: a single linear scan that runs ONLY on the JSON-parse error path, never after a successful parse). RECOVERY (`tryRecoverTruncatedToolArguments`, `repairMalformedJsonSeparators`) stays bounded at the now-EXPORTED `MAX_TRUNCATION_RECOVERY_BYTES` (1 MiB). Oversized payloads keep candidate-capped recovery (latest MAX_TRUNCATION_RECOVERY_CANDIDATES=64 container closers; the legacy ≤256 KB band keeps try-every-candidate behavior).
+- `packages/agent-runtime/src/tools/tool-executor.ts` — the string-arg parse path computes `oversizedTruncationBytes` when truncation is detected but the payload exceeds the recovery bound; `stringInputError` gains the honest no-cursor note. Truncation WITH a recoverable clean container-close prefix still gets the resume cursor (the recovered prefix is surfaced as bounded evidence, never applied as tool input); a >1 MiB cut gets the `payload_truncated` code plus 'The cut payload was N bytes, beyond the 1048576-byte recovery scan bound, so no resume cursor is available: split the arguments so each call's largest string field stays well under that bound.'; a mid-value cut under the bound gets the re-issue-the-complete-call wording. Every non-truncated and cursor-bearing message stays byte-identical.
+- Tests: common truncation-recovery gains the 'oversized beyond the 1 MiB detection band' describe (~1.1 MiB cut mid-string → detect TRUE; complete-balanced ~1.1 MiB → FALSE; recovery stays undefined past the bound); agent-runtime tool-validation-error gains the executor oversized cases.
+
+**Validation:** truncation-recovery 18/18, tool-validation-error 155/0, common + agent-runtime typecheck exit 0, determinism guard 0 findings. Knowledge refresh: common/knowledge.md 2026-10-28b entry (the utils change lives in common/src; no tool param schema changed, so no generated-mirror regeneration was needed).
+
+**Remaining recorded audit items (unchanged, by design):** the 256 KiB transport band is computed then only logged (the finishReason==='length' skip is intentional — a provider max-token cut is not a transport failure); `spawn_agents`'s `agents` field stays outside the bare-string repair allowlist (documented in-code; stringified-array recovery lives in normalizeSpawnAgentList + the D21 schema-driven coercion); no frame cap can clip a MODEL tool call (the 16 MiB caps verified are supervision-bridge only).
+
+**Next turn:** commit this wave and surface the push decision (branch is ahead 1 of origin at 839f5f195, plus this wave once committed); flip P2-T2b citing its minted committed-surface receipt; then the remaining recorded audit follow-ups.
+
+
+<!-- update_plan_status:appended -->
+## P2-T2b flipped + stream-parser wave committed — 2026-10-28 — 2026-10-28T16:10:48.916Z
+
+Closing record for the stream-parser truncation wave turn:
+
+- **P2-T2b flipped DONE** in PLAN.md citing its minted committed-surface receipt plan-gate:P2-T2b:v3:414a72469f468 (gate LOOKS_GOOD, reviewed-diff over the P2-T2b committed bytes: bb96dc424 + the advisory follow-up in 1f2f6bdf6); the stale current-task pointer is cleared. The roadmap's P2-T2b slice (background-agent resume-from-own-journal) is now fully closed with its checkbox, receipts, and validation history aligned.
+- **Stream-parser truncation wave** (this turn's implementation): oversized-payload honest classification landed — detection split from recovery (8 MiB detect band vs 1 MiB recovery bound, exported as MAX_TRUNCATION_RECOVERY_BYTES), stringInputError's honest no-cursor note naming the byte count and the recovery bound, and the executor oversized cases in both suites (truncation-recovery 18/18, tool-validation-error 155/0, typechecks 0, determinism 0). Gate LOOKS_GOOD over the wave (v3:414a72469f468), reviewer receipt g0MA_hacfkE. The tool-stream-parser's forwarding of an AI-SDK-unparseable tool-call string is correct by design — the executor's classification path was the actual defect and is now fixed, so the recovered prefix (resume cursor) is surfaced and >1 MiB cuts carry the payload_truncated code.
+- **Commit:** the wave's 7 task-owned paths are committed on feat/polyglot-reaudit-roadmap (utils + executor + two test suites + common/knowledge.md 2026-10-28b + PLAN.md flip + this STATUS record). NO push — the push decision remains surfaced for explicit user confirmation; the branch carries 839f5f195 (wave 2) plus this wave's commit ahead of origin/feat/polyglot-reaudit-roadmap, and PR #93 would absorb all of it.
+- **Next roadmap task:** the registry's next genuinely open task after P2-T2b — the remaining recorded audit follow-ups (the 256 KiB transport-band logging-only item is documented-by-design; candidates for the next wave are the sdk/src/serve/bridge.ts capChars producers and the run-programmatic-step messageHistory assembly cap, both recorded as unverified in the audit findings artifact).
+
