@@ -44,8 +44,8 @@ export type ToolName =
   | 'read_outline'
   | 'read_subtree'
   | 'replace_range'
-  | 'rename_symbol'
   | 'rewrite_symbol'
+  | 'rename_symbol'
   | 'render_ui'
   | 'run_file_change_hooks'
   | 'run_targeted_validation'
@@ -111,8 +111,8 @@ export interface ToolParamsMap {
   read_outline: ReadOutlineParams
   read_subtree: ReadSubtreeParams
   replace_range: ReplaceRangeParams
-  rename_symbol: RenameSymbolParams
   rewrite_symbol: RewriteSymbolParams
+  rename_symbol: RenameSymbolParams
   render_ui: RenderUiParams
   run_file_change_hooks: RunFileChangeHooksParams
   run_targeted_validation: RunTargetedValidationParams
@@ -205,16 +205,14 @@ export interface CheckJobParams {
 }
 
 /**
- * Apply a predefined LSP code action at the given position. Currently the only supported action is organizing imports, which sorts import statements and removes unused ones.
+ * Parameters for code_action tool
  */
 export interface CodeActionParams {
   /** Project-relative file path. */
   path: string
-  /** 1-based line number (as shown in editors and read_files). */
   line: number
-  /** 0-based character offset within the line (LSP convention). */
   character: number
-  /** The code action kind to apply. Only 'source.organizeImports' is currently supported. */
+  /** v1 supports organize imports only; further kinds land with the extract slice. */
   kind: 'source.organizeImports'
 }
 
@@ -827,20 +825,6 @@ export interface ReplaceRangeParams {
 }
 
 /**
- * Rename a symbol at the given position across the codebase using the language server.
- */
-export interface RenameSymbolParams {
-  /** Project-relative file path. */
-  path: string
-  /** 1-based line number (as shown in editors and read_files). */
-  line: number
-  /** 0-based character offset within the line (LSP convention). */
-  character: number
-  /** The new name for the symbol. */
-  new_name: string
-}
-
-/**
  * Replace a whole symbol's definition by name using the file's syntax tree, without copying its current text. Resolves the exact AST range and applies it through the safe str_replace path (atomic, anchored).
  */
 export interface RewriteSymbolParams {
@@ -854,6 +838,18 @@ export interface RewriteSymbolParams {
   occurrence?: number
   /** Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
   readCapability?: string
+}
+
+/**
+ * Parameters for rename_symbol tool
+ */
+export interface RenameSymbolParams {
+  /** Project-relative file path. */
+  path: string
+  line: number
+  character: number
+  /** New name for the symbol. */
+  new_name: string
 }
 
 /**

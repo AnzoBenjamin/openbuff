@@ -6,6 +6,7 @@ export type ToolName =
   | 'ask_user'
   | 'check_background_agent'
   | 'check_job'
+  | 'code_action'
   | 'code_search'
   | 'end_turn'
   | 'edit_transaction'
@@ -44,6 +45,7 @@ export type ToolName =
   | 'read_subtree'
   | 'replace_range'
   | 'rewrite_symbol'
+  | 'rename_symbol'
   | 'render_ui'
   | 'run_file_change_hooks'
   | 'run_targeted_validation'
@@ -71,6 +73,7 @@ export interface ToolParamsMap {
   ask_user: AskUserParams
   check_background_agent: CheckBackgroundAgentParams
   check_job: CheckJobParams
+  code_action: CodeActionParams
   code_search: CodeSearchParams
   end_turn: EndTurnParams
   edit_transaction: EditTransactionParams
@@ -109,6 +112,7 @@ export interface ToolParamsMap {
   read_subtree: ReadSubtreeParams
   replace_range: ReplaceRangeParams
   rewrite_symbol: RewriteSymbolParams
+  rename_symbol: RenameSymbolParams
   render_ui: RenderUiParams
   run_file_change_hooks: RunFileChangeHooksParams
   run_targeted_validation: RunTargetedValidationParams
@@ -198,6 +202,18 @@ export interface CheckJobParams {
   timeout_seconds?: number
   /** Follow mode only: SIGTERM the job on follow-timeout. Poll mode never kills. Default false. */
   kill_on_timeout?: boolean
+}
+
+/**
+ * Parameters for code_action tool
+ */
+export interface CodeActionParams {
+  /** Project-relative file path. */
+  path: string
+  line: number
+  character: number
+  /** v1 supports organize imports only; further kinds land with the extract slice. */
+  kind: 'source.organizeImports'
 }
 
 /**
@@ -822,6 +838,18 @@ export interface RewriteSymbolParams {
   occurrence?: number
   /** Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
   readCapability?: string
+}
+
+/**
+ * Parameters for rename_symbol tool
+ */
+export interface RenameSymbolParams {
+  /** Project-relative file path. */
+  path: string
+  line: number
+  character: number
+  /** New name for the symbol. */
+  new_name: string
 }
 
 /**
