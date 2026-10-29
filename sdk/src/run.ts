@@ -106,6 +106,7 @@ import { hoverType } from './tools/hover-type'
 import { workspaceSymbol } from './tools/workspace-symbol'
 import { renameSymbol } from './tools/rename-symbol'
 import { codeAction } from './tools/code-action'
+import { extractSymbol } from './tools/extract-symbol'
 import {
   createLanguageIntelligence,
   type LanguageIntelligenceService,
@@ -177,10 +178,10 @@ import { createRunResumeDriver } from './services/run-resume-driver'
 /**
  * Audit fix (D): tool calls whose receipt can contain file actions — the same
  * set that reaches handleToolCall's post-commit mutation block (the change-
- * file tools plus the compact-receipt tools). rename_symbol and code_action
- * ride the same compact-receipt channel as write_audit_findings, so they are
- * baseline-captured too. Mirrors the toolName list the override receipt guard
- * uses there.
+ * file tools plus the compact-receipt tools). rename_symbol, code_action,
+ * and extract_symbol ride the same compact-receipt channel as
+ * write_audit_findings, so they are baseline-captured too. Mirrors the
+ * toolName list the override receipt guard uses there.
  */
 const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'write_file',
@@ -191,6 +192,7 @@ const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'write_audit_findings',
   'rename_symbol',
   'code_action',
+  'extract_symbol',
 ])
 
 /**
@@ -207,11 +209,14 @@ function diagnosticBaselineFiles(toolName: string, input: unknown): string[] {
     case 'str_replace':
     case 'create_plan':
     case 'replace_range':
-    // rename_symbol and code_action are single-`path` mutating tools that
-    // reach the same post-commit mutation block via the compact-receipt
-    // channel, so they get the same `input.path` baseline branch.
+    // rename_symbol, code_action, and extract_symbol are single-`path`
+    // mutating tools that reach the same post-commit mutation block via the
+    // compact-receipt channel, so they get the same `input.path` baseline
+    // branch. (extract_symbol's destination is a NEW file, so it needs no
+    // pre-edit baseline.)
     case 'rename_symbol':
-    case 'code_action': {
+    case 'code_action':
+    case 'extract_symbol': {
       const file = typeof record.path === 'string' ? record.path : undefined
       return file ? [file] : []
     }
@@ -3021,6 +3026,30 @@ export async function handleToolCall({
           line: number
           character: number
           kind: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
+    } else if (toolName === 'extract_symbol') {
+      const applied = await extractSymbol(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          destination_path: string
+          symbol_name: string
         },
         {
           cwd: requireCwd(cwd, toolName),

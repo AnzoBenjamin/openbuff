@@ -11,6 +11,7 @@ export type ToolName =
   | 'end_turn'
   | 'edit_transaction'
   | 'edit_3d_asset'
+  | 'extract_symbol'
   | 'find_files'
   | 'find_files_matching_content'
   | 'find_references'
@@ -78,6 +79,7 @@ export interface ToolParamsMap {
   end_turn: EndTurnParams
   edit_transaction: EditTransactionParams
   edit_3d_asset: Edit3dAssetParams
+  extract_symbol: ExtractSymbolParams
   find_files: FindFilesParams
   find_files_matching_content: FindFilesMatchingContentParams
   find_references: FindReferencesParams
@@ -403,6 +405,20 @@ export interface Edit3dAssetParams {
         end: number
       }
   )[]
+}
+
+/**
+ * Parameters for extract_symbol tool
+ */
+export interface ExtractSymbolParams {
+  /** Project-relative file path. */
+  path: string
+  line: number
+  character: number
+  /** Project-relative NEW file path for the extracted code; must not exist yet. */
+  destination_path: string
+  /** Name for the extracted symbol in the destination file (advisory-only: currently ignored — the language server picks its own name). */
+  symbol_name: string
 }
 
 /**

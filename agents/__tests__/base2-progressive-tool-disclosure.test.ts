@@ -108,6 +108,7 @@ describe('base2 progressive tool disclosure (M1)', () => {
       'edit_transaction',
       'rename_symbol',
       'code_action',
+      'extract_symbol',
       'create_plan',
       'update_plan_status',
       'inspect_workspace',
@@ -278,13 +279,14 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).not.toContain('write_todos')
   })
 
-  test('token budget: always-on full tool surface is under 22.5k', async () => {
-    // The deliberate new default is the full 34-tool surface (measured ~21.4k
-    // tokens). This is a regression ceiling for that decision, not a
-    // core-only budget. Kept tight (~5% headroom) so an accidental surface
-    // expansion trips it instead of growing silently.
+  test('token budget: always-on full tool surface is under 23.9k', async () => {
+    // The deliberate new default is the full 35-tool surface (measured ~22.7k
+    // tokens after P4-T2 added extract_symbol; ~21.4k before it). This is a
+    // regression ceiling for that decision, not a core-only budget. Kept
+    // tight (~5% headroom) so an accidental surface expansion trips it
+    // instead of growing silently.
     const tools = createBase2('default').toolNames ?? []
-    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(22_500)
+    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(23_900)
   })
 
   test('programmaticToolNames unchanged vs today', () => {
@@ -460,6 +462,7 @@ describe('tier resolution helpers (M1-T3)', () => {
         'edit_transaction',
         'rename_symbol',
         'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -492,6 +495,7 @@ describe('tier resolution helpers (M1-T3)', () => {
         'edit_transaction',
         'rename_symbol',
         'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -515,6 +519,7 @@ describe('tier resolution helpers (M1-T3)', () => {
         'edit_transaction',
         'rename_symbol',
         'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -562,6 +567,7 @@ describe('tier resolution helpers (M1-T3)', () => {
         'edit_transaction',
         'rename_symbol',
         'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -607,6 +613,7 @@ describe('tier resolution helpers (M1-T3)', () => {
         'edit_transaction',
         'rename_symbol',
         'code_action',
+        'extract_symbol',
         'update_plan_status',
         'inspect_workspace',
         'inspect_environment',
@@ -643,6 +650,7 @@ describe('tier resolution helpers (M1-T3)', () => {
         'edit_transaction',
         'rename_symbol',
         'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',

@@ -87,6 +87,19 @@ export type LspTextEdit = {
  */
 export type LspWorkspaceEditChanges = Record<string, LspTextEdit[]>
 
+/**
+ * P4-T2 (extract_symbol): a fully normalized WorkspaceEdit including what
+ * the classic changes-by-uri map cannot express — `kind: 'create'` file
+ * creations, surfaced as bare uris. A created uri's CONTENT arrives as
+ * ordinary text edits against an empty document (the LSP create-file
+ * contract), so it also appears in changesByUri; the createdUris list is the
+ * only thing distinguishing a creation from an in-place edit.
+ */
+export type LspNormalizedEdit = {
+  changesByUri: LspWorkspaceEditChanges
+  createdUris: string[]
+}
+
 export type LspServerUnavailableReason =
   | 'unsupported-language'
   | 'no-server-spec'
@@ -97,6 +110,10 @@ export type LspServerUnavailableReason =
   | 'position is not renameable'
   | 'unsupported action kind (v1 organizes imports only)'
   | 'no organize-imports action available'
+  // P4-T2 (extract_symbol): the same verbatim-reason contract for the
+  // extract semantic gates.
+  | 'no extract action available'
+  | 'no new-file destination in the workspace edit'
 
 export type LspServerFailureReason =
   | 'spawn-failed'
@@ -649,6 +666,22 @@ export function defaultRootResolver(params: {
   return root
 }
 
+/**
+ * CONSTRUCTED-ONLY (factory creatable, not object-implementable):
+ * `LspMultiplexer` is produced exclusively by `createLspMultiplexer` below;
+ * the factory builds such an object with exactly this shape is an
+ * implementation detail, not an implementability contract.
+ *
+ * Consumer migration note (this release): the type GAINED a required
+ * `executeCommand` method (extract_symbol command resolution). This is
+ * BREAKING for any external consumer that structurally implements or
+ * mock-builds this type from a partial object literal — their literal no
+ * longer satisfies the type until it also supplies `executeCommand`.
+ * Consumers that only call the factory (or spread a factory-created object)
+ * are unaffected. Prefer building test doubles through the factory seam or
+ * extending a factory-created object rather than implementing this type
+ * directly.
+ */
 export type LspMultiplexer = {
   definition(params: {
     filePath: string
@@ -678,7 +711,32 @@ export type LspMultiplexer = {
     filePath: string
     position: LspPosition
     only?: string[]
-  }): Promise<Array<{ title: string; changesByUri: LspWorkspaceEditChanges }>>
+  }): Promise<
+    Array<{
+      title: string
+      changesByUri: LspWorkspaceEditChanges
+      /**
+       * P4-T2 (extract_symbol): a command-only action (no edit) is surfaced
+       * verbatim instead of dropped — several servers ship extract
+       * refactors this way, and executeCommand below resolves them at the
+       * CALLER's choice; this layer never runs a command unprompted.
+       */
+      command?: { command: string; arguments?: unknown[] }
+    }>
+  >
+  /**
+   * P4-T2 (extract_symbol): resolve a command-only code action through
+   * `workspace/executeCommand` and normalize the returned WorkspaceEdit.
+   * Same request seam and no capability gating as rename/codeAction: a null
+   * or non-record reply is an EMPTY edit (many servers acknowledge with
+   * null / `{ applied: true }` after applying through their own channel),
+   * while a server error response throws LspServerError honestly.
+   */
+  executeCommand(params: {
+    filePath: string
+    command: string
+    arguments?: unknown[]
+  }): Promise<LspNormalizedEdit>
   documentSymbol(params: {
     filePath: string
   }): Promise<LspDocumentSymbol[] | null>
@@ -982,11 +1040,13 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
   function normalizeWorkspaceEdit(raw: unknown): {
     changesByUri: LspWorkspaceEditChanges
     skipped: string[]
+    createdUris: string[]
   } {
     const changesByUri: LspWorkspaceEditChanges = {}
     const skipped: string[] = []
+    const createdUris: string[] = []
     if (!isRecord(raw)) {
-      return { changesByUri, skipped: ['workspace edit is not an object'] }
+      return { changesByUri, skipped: ['workspace edit is not an object'], createdUris }
     }
     const pushEdits = (uri: unknown, edits: unknown): boolean => {
       if (typeof uri !== 'string' || uri === '') return false
@@ -1048,8 +1108,51 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     const documentChanges = raw['documentChanges']
     if (Array.isArray(documentChanges)) {
       for (const entry of documentChanges) {
+        if (!isRecord(entry)) {
+          skipped.push('documentChanges entry skipped (not an object)')
+          continue
+        }
+        // LSP 3.17 CreateFile: the uri sits at the TOP level next to `kind`
+        // (a tolerant server may nest it under textDocument like the edit
+        // entries, so both shapes are accepted). The created file's CONTENT
+        // is the ordinary text-edit list the server returns for the new uri,
+        // so its edits flow through the same pushEdits path as everything
+        // else — the createdUris list is what marks a creation.
+        if (entry['kind'] === 'create') {
+          const createUri = entry['uri']
+          const nestedUri = isRecord(entry['textDocument'])
+            ? entry['textDocument']['uri']
+            : undefined
+          const uri =
+            typeof createUri === 'string' && createUri !== ''
+              ? createUri
+              : typeof nestedUri === 'string' && nestedUri !== ''
+                ? nestedUri
+                : undefined
+          if (!uri) {
+            skipped.push(
+              "documentChanges entry with kind 'create' skipped (no parseable uri)",
+            )
+            continue
+          }
+          createdUris.push(uri)
+          const edits = entry['edits']
+          if (edits !== undefined && !pushEdits(uri, edits)) {
+            skipped.push(
+              `${uri}: created-file edits skipped (not a plain text-edit list)`,
+            )
+          }
+          continue
+        }
+        if (entry['kind'] !== undefined && entry['kind'] !== 'edit') {
+          // RenameFile / DeleteFile / other non-textual kinds: honestly
+          // unimplemented, never silently dropped.
+          skipped.push(
+            `documentChanges entry with kind '${String(entry['kind'])}' skipped (unsupported document-change kind)`,
+          )
+          continue
+        }
         if (
-          !isRecord(entry) ||
           !isRecord(entry['textDocument']) ||
           !pushEdits(entry['textDocument']['uri'], entry['edits'])
         ) {
@@ -1059,7 +1162,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         }
       }
     }
-    return { changesByUri, skipped }
+    return { changesByUri, skipped, createdUris }
   }
 
   const WARM_ANCHOR_POLL_MS = 50
@@ -1198,24 +1301,67 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         context: { diagnostics: [] },
         ...(only !== undefined ? { only } : {}),
       })
-      // Only actions carrying an edit are returned; command-only actions are
-      // skipped and NOT resolved (no textDocument/codeAction round-trips).
+      // Edit-carrying AND command-carrying actions are returned; the command
+      // is surfaced verbatim so the caller (extractSymbol) can resolve it
+      // through executeCommand. Resolution stays the CALLER's choice — this
+      // layer never runs a command unprompted, and a command record without a
+      // string `command` field (the organize-imports fixtures pin this shape)
+      // is still skipped honestly.
       const actions = Array.isArray(result) ? result : []
       const normalized: Array<{
         title: string
         changesByUri: LspWorkspaceEditChanges
+        command?: { command: string; arguments?: unknown[] }
       }> = []
       for (const action of actions) {
         if (!isRecord(action)) continue
         const edit = action['edit']
-        if (!isRecord(edit)) continue
+        const rawCommand = action['command']
+        const command =
+          isRecord(rawCommand) && typeof rawCommand['command'] === 'string'
+            ? {
+                command: rawCommand['command'],
+                ...(Array.isArray(rawCommand['arguments'])
+                  ? { arguments: rawCommand['arguments'] as unknown[] }
+                  : {}),
+              }
+            : undefined
+        if (!isRecord(edit) && !command) continue
         normalized.push({
           title:
             typeof action['title'] === 'string' ? action['title'] : '(untitled action)',
-          changesByUri: normalizeWorkspaceEdit(edit).changesByUri,
+          changesByUri: isRecord(edit)
+            ? normalizeWorkspaceEdit(edit).changesByUri
+            : {},
+          ...(command ? { command } : {}),
         })
       }
       return normalized
+    },
+    executeCommand: async ({
+      filePath,
+      command,
+      arguments: commandArguments,
+    }) => {
+      const result = await withServer<unknown>(
+        filePath,
+        'workspace/executeCommand',
+        {
+          command,
+          ...(commandArguments !== undefined
+            ? { arguments: commandArguments }
+            : {}),
+        },
+      )
+      // The raw reply is normalized exactly once, here. null / primitives /
+      // non-record replies normalize to an EMPTY edit (many servers
+      // acknowledge with null or { applied: true } after applying through
+      // their own channel) — never an error for those.
+      const normalizedEdit = normalizeWorkspaceEdit(result)
+      return {
+        changesByUri: normalizedEdit.changesByUri,
+        createdUris: normalizedEdit.createdUris,
+      }
     },
     hover: ({ filePath, position }) =>
       withServer<LspHover>(filePath, 'textDocument/hover', positionParams(filePath, position)),

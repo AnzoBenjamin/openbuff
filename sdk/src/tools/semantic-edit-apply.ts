@@ -12,8 +12,8 @@ import type { FilesystemAuthorityPolicy } from './filesystem-authority'
 import type { TransactionIntentLog } from './transaction-intent-log'
 
 /**
- * P4-T2: ONE apply core for both semantic-edit SDK tools (rename_symbol and
- * code_action), shared so the two wrappers cannot drift.
+ * P4-T2: ONE apply core for the semantic-edit SDK tools (rename_symbol,
+ * code_action, and extract_symbol), shared so the wrappers cannot drift.
  *
  * The language-intelligence SERVICE never writes to disk: it splices the
  * language server's WorkspaceEdit into CURRENT disk bytes and returns per-file
@@ -46,7 +46,12 @@ export type SemanticEditApplyDeps = {
   logger?: Logger
 }
 
-/** The single json value the two tools publish (identical outputSchema). */
+/**
+ * The single json value the semantic-edit tools publish (identical
+ * outputSchema). extract_symbol's outputSchema is shape-identical to
+ * code_action's, so this shared value — and the `jsonOutput` cast below,
+ * typed as CodebuffToolOutput<'rename_symbol'> — covers it unchanged.
+ */
 type SemanticEditOutputValue =
   CodebuffToolOutput<'rename_symbol'>[number]['value']
 
@@ -162,8 +167,13 @@ export async function applySemanticEdit(
   return { output: jsonOutput(buildApplyOutput(mutation, serviceError)), mutation }
 }
 
+/**
+ * P4-T2 (extract slice): widened to cover extract_symbol. Its outputSchema is
+ * shape-identical to rename_symbol's / code_action's, so `output` carries the
+ * exact same union shape for all three tools.
+ */
 export type SemanticEditApplyResult<
-  T extends 'rename_symbol' | 'code_action',
+  T extends 'rename_symbol' | 'code_action' | 'extract_symbol',
 > = {
   /** Published result in the tool's own outputSchema shape. */
   output: CodebuffToolOutput<T>

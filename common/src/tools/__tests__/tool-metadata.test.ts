@@ -64,4 +64,14 @@ describe('tool metadata', () => {
       ).toBe(true)
     }
   })
+
+  test('accounts for extract_symbol created write target in path inputs', () => {
+    // extract_symbol writes both the source file (`path`) and the NEW file the
+    // extract creates (`destination_path`), mirroring how edit_transaction
+    // accounts a created file via `edits[].path`.
+    expect(toolMetadata.extract_symbol.pathInputs).toEqual([
+      'path',
+      'destination_path',
+    ])
+  })
 })

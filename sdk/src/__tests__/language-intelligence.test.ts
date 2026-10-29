@@ -16,6 +16,7 @@ import {
   LspServerUnavailableError,
 } from '../services/lsp-multiplexer'
 import { codeAction } from '../tools/code-action'
+import { extractSymbol } from '../tools/extract-symbol'
 import { renameSymbol } from '../tools/rename-symbol'
 
 import type {
@@ -60,6 +61,8 @@ function makeMultiplexer(
       'file:///repo/src/foo.ts': [],
     }),
     codeAction: async () => [],
+    // P4-T2 additive seam: an empty executeCommand outcome by default.
+    executeCommand: async () => ({ changesByUri: {}, createdUris: [] }),
     syncFile: async () => {},
     warmServerCount: () => 0,
     dispose: async () => {},
@@ -1049,7 +1052,183 @@ describe('language-intelligence syncMutatedFiles', () => {
   })
 })
 
-describe('semantic-edit apply wrappers (rename_symbol / code_action)', () => {
+describe('extract_symbol service (command resolution, destination gate, empty-base splice)', () => {
+  // The service-level extract contract: command-carrying actions resolve
+  // through executeCommand, the destination gate is fail-closed, and the
+  // created file publishes under the caller's destination_path verbatim.
+  // Hermetic: a fake multiplexer supplies the edits; the source splice
+  // reads a mock filesystem.
+  test('extractSymbol resolves a command-carrying action and publishes the created file under destination_path', async () => {
+    const mockFs = createMockFs({
+      files: {
+        '/repo/src/foo.ts': 'const helper = 1\nconst other = 2\n',
+      },
+    })
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      fs: mockFs,
+      multiplexer: makeMultiplexer({
+        codeAction: async () => [
+          {
+            title: 'Extract function',
+            changesByUri: {},
+            command: { command: 'ts.extract', arguments: ['x'] },
+          },
+        ],
+        executeCommand: async () => ({
+          changesByUri: {
+            'file:///repo/src/foo.ts': [
+              {
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 1, character: 0 },
+                },
+                newText: ''
+              },
+            ],
+            'file:///repo/src/helper.ts': [
+              {
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 0 },
+                },
+                newText: 'export const helper = 1\n',
+              },
+            ],
+          },
+          createdUris: ['file:///repo/src/helper.ts'],
+        }),
+      }),
+    })
+    const output = await service.extractSymbol({
+      path: 'src/foo.ts',
+      line: 1,
+      character: 7,
+      destination_path: 'src/helper.ts',
+      symbol_name: 'helper',
+    })
+    // Source splice + created file, in that order; destination_path is the
+    // CALLER's project-relative path, never the server's uri.
+    expect(firstValue(output).changedFiles).toEqual([
+      { path: '/repo/src/foo.ts', newContent: 'const other = 2\n' },
+      { path: 'src/helper.ts', newContent: 'export const helper = 1\n' },
+    ])
+  })
+
+  test('extractSymbol refuses an in-place-only refactor with an honest unavailable', async () => {
+    const mockFs = createMockFs({
+      files: { '/repo/src/foo.ts': 'const a = 1\n' },
+    })
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      fs: mockFs,
+      multiplexer: makeMultiplexer({
+        codeAction: async () => [
+          {
+            title: 'Extract to constant',
+            changesByUri: {
+              'file:///repo/src/foo.ts': [
+                {
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 0, character: 11 },
+                  },
+                  newText: 'x',
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    })
+    const output = await service.extractSymbol({
+      path: 'src/foo.ts',
+      line: 1,
+      character: 7,
+      destination_path: 'src/out.ts',
+      symbol_name: 'x',
+    })
+    // Fail-closed destination gate: an in-place refactor is NEVER applied
+    // under a to-new-file tool name, and nothing was spliced or written.
+    expect(firstValue(output)).toEqual({
+      unavailable: { reason: 'no new-file destination in the workspace edit' },
+    })
+    expect(fsReadPaths(mockFs)).toEqual([])
+  })
+
+  test('extractSymbol with no code actions degrades to the honest unavailable', async () => {
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      multiplexer: makeMultiplexer({ codeAction: async () => [] }),
+    })
+    const output = await service.extractSymbol({
+      path: 'src/foo.ts',
+      line: 1,
+      character: 0,
+      destination_path: 'src/out.ts',
+      symbol_name: 'x',
+    })
+    expect(firstValue(output)).toEqual({
+      unavailable: { reason: 'no extract action available' },
+    })
+  })
+
+  test('extractSymbol with two created files fails honestly instead of guessing', async () => {
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      multiplexer: makeMultiplexer({
+        codeAction: async () => [
+          {
+            title: 'Extract function',
+            changesByUri: {},
+            command: { command: 'ts.extract' },
+          },
+        ],
+        executeCommand: async () => ({
+          changesByUri: {},
+          createdUris: [
+            'file:///repo/src/a.ts',
+            'file:///repo/src/b.ts',
+          ],
+        }),
+      }),
+    })
+    const output = await service.extractSymbol({
+      path: 'src/foo.ts',
+      line: 1,
+      character: 0,
+      destination_path: 'src/out.ts',
+      symbol_name: 'x',
+    })
+    expect(firstValue(output).errorMessage).toContain('created 2 new files')
+  })
+
+  test('extractSymbol on an unavailable server degrades like rename', async () => {
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      multiplexer: makeMultiplexer({
+        codeAction: async () => {
+          throw new LspServerUnavailableError('no server', {
+            reason: 'no-server-spec',
+            languageId: 'typescript',
+          })
+        },
+      }),
+    })
+    const output = await service.extractSymbol({
+      path: 'src/foo.ts',
+      line: 1,
+      character: 0,
+      destination_path: 'src/out.ts',
+      symbol_name: 'x',
+    })
+    expect(firstValue(output)).toEqual({
+      unavailable: { reason: 'no-server-spec', languageId: 'typescript' },
+    })
+  })
+})
+
+describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_symbol)', () => {
   const capabilityIssuer = {
     projectId: '/repo',
     runId: 'semantic-edit-apply-tests',
@@ -1057,7 +1236,7 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action)', () => {
 
   function makeApplyService(
     overrides: Partial<
-      Pick<LanguageIntelligenceService, 'renameSymbol' | 'codeAction'>
+      Pick<LanguageIntelligenceService, 'renameSymbol' | 'codeAction' | 'extractSymbol'>
     >,
   ): LanguageIntelligenceService {
     // Structural fake: the apply wrappers dispatch ONLY through
@@ -1142,5 +1321,73 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action)', () => {
     expect(await mockFs.readFile('/repo/src/foo.ts', 'utf-8')).toBe(
       'const foo = 1\n',
     )
+  })
+
+  test('extract_symbol applies the broker-assigned created file', async () => {
+    const mockFs = createMockFs({
+      files: { '/repo/src/foo.ts': 'const foo = 1\n' },
+    })
+    const captured: Array<{
+      path: string
+      line: number
+      character: number
+      destination_path: string
+      symbol_name: string
+    }> = []
+    const service = makeApplyService({
+      extractSymbol: async (params) => {
+        captured.push(params)
+        return [
+          {
+            type: 'json' as const,
+            value: {
+              changedFiles: [
+                // The broker-created destination file, verbatim from the
+                // service: the wrapper must NOT pre-write it.
+                { path: '/repo/src/foo-extracted.ts', newContent: 'const extractedHelper = 1\n' },
+                // The extract source file loses the extracted range.
+                { path: '/repo/src/foo.ts', newContent: '' },
+              ],
+            },
+          },
+        ]
+      },
+    })
+    const applied = await extractSymbol(
+      service,
+      {
+        path: 'src/foo.ts',
+        line: 1,
+        character: 12,
+        destination_path: 'src/foo-extracted.ts',
+        symbol_name: 'extractedHelper',
+      },
+      { cwd: '/repo', fs: mockFs, capabilityIssuer },
+    )
+    // Params pass through VERBATIM: destination_path is never rewritten,
+    // normalized, or existence-checked at the wrapper layer.
+    expect(captured).toEqual([
+      {
+        path: 'src/foo.ts',
+        line: 1,
+        character: 12,
+        destination_path: 'src/foo-extracted.ts',
+        symbol_name: 'extractedHelper',
+      },
+    ])
+    expect(applied.output[0]?.value).toMatchObject({
+      applied: true,
+      results: [
+        { path: 'src/foo-extracted.ts', applied: true },
+        { path: 'src/foo.ts', applied: true },
+      ],
+    })
+    expect(applied.mutation?.outcome).toBe('applied')
+    // Both changedFiles drove commit paths: the create landed with its exact
+    // service-provided bytes and the source file was reduced.
+    expect(await mockFs.readFile('/repo/src/foo-extracted.ts', 'utf-8')).toBe(
+      'const extractedHelper = 1\n',
+    )
+    expect(await mockFs.readFile('/repo/src/foo.ts', 'utf-8')).toBe('')
   })
 })

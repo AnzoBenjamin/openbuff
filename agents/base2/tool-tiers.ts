@@ -44,6 +44,7 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'check_background_agent',
   'check_job',
   'code_action',
+  'extract_symbol',
   'code_search',
   'create_plan',
   'end_turn',

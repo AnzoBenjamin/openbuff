@@ -44,6 +44,23 @@ import type { JSONValue } from '@codebuff/common/types/json'
  * supplied and no language-server process is ever spawned).
  */
 
+/**
+ * CONSTRUCTED-ONLY (factory creatable, not object-implementable):
+ * `LanguageIntelligenceService` is produced exclusively by
+ * `createLanguageIntelligence` below; the fact that it builds an object with
+ * exactly this shape is an implementation detail, not an implementability
+ * contract. See the constructed-only / consumer-migration note on the
+ * exported `LspMultiplexer` type in lsp-multiplexer.ts — this interface is
+ * documented the same way.
+ *
+ * Consumer migration note (this release): the interface GAINED a required
+ * `extractSymbol` method (the extract_symbol tool's service seam). This is
+ * BREAKING for any external consumer that structurally implements or
+ * mock-builds this interface from a partial object literal — their literal
+ * no longer satisfies the type until it also supplies `extractSymbol`.
+ * Consumers that only call the factory (or spread a factory-created object)
+ * are unaffected.
+ */
 export type LanguageIntelligenceService = {
   goToDefinition(params: {
     path: string
@@ -89,6 +106,28 @@ export type LanguageIntelligenceService = {
     line: number
     character: number
     kind: string
+  }): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
+  /**
+   * P4-T2 (extract_symbol): extract the symbol at a file position into a NEW
+   * file. The destination gate is fail-closed: a server that offers only an
+   * in-place refactor (no created file in its workspace edit) is an honest
+   * unavailable, never a silent in-place edit under a to-new-file tool name.
+   * `destination_path` is published verbatim — the server's created uri only
+   * supplies bytes, never the destination path. Same splice-on-disk contract
+   * as renameSymbol/codeAction.
+   *
+   * `symbol_name` is ADVISORY-ONLY in v1: it is accepted for forward
+   * compatibility and NOT forwarded to the server — no LSP seam exposes a
+   * name parameter on this path, so the server always picks its own name for
+   * the extracted symbol (the published extract_symbol tool schema
+   * documents the field the same way).
+   */
+  extractSymbol(params: {
+    path: string
+    line: number
+    character: number
+    destination_path: string
+    symbol_name: string
   }): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
   /**
    * P3 audit fix (C): push committed file contents into any already-running
@@ -395,6 +434,55 @@ async function applyChangesByUriFromDisk(
     changedFiles,
     ...(failures.length > 0 ? { errorMessage: failures.join('; ') } : {}),
   }
+}
+
+/**
+ * P4-T2 (extract_symbol): splice a CREATED file's edits against an empty
+ * base. The LSP create-file contract makes the created document's content
+ * arrive as ordinary text edits against an empty document, so offsets resolve
+ * against '' with a single line start — an edit claiming any other line is a
+ * server/client disagreement and fails that file honestly. The destination
+ * path is the CALLER's project-relative path, never derived from the created
+ * uri. Same dedupe + reverse-order + overlap contract as the disk splice.
+ */
+function applyCreatedFileEdits(
+  destinationPath: string,
+  edits: LspTextEdit[],
+): { path: string; newContent: string } | { path: string; errorMessage: string } {
+  const lineStarts = [0]
+  const positioned: Array<{
+    startOffset: number
+    endOffset: number
+    newText: string
+  }> = []
+  for (const edit of dedupePerFileEdits(edits)) {
+    const startOffset = toOffsetInRangeText('', lineStarts, edit.range.start)
+    const endOffset = toOffsetInRangeText('', lineStarts, edit.range.end)
+    if (startOffset === undefined || endOffset === undefined) {
+      return {
+        path: destinationPath,
+        errorMessage:
+          'created-file edit range is out of bounds of the empty document',
+      }
+    }
+    positioned.push({ startOffset, endOffset, newText: edit.newText })
+  }
+  positioned.sort((a, b) => b.startOffset - a.startOffset)
+  for (let index = 0; index < positioned.length - 1; index++) {
+    const current = positioned[index]
+    const previous = positioned[index + 1]
+    if (previous.endOffset > current.startOffset) {
+      return {
+        path: destinationPath,
+        errorMessage: `created-file edits overlap: the edit ending at offset ${previous.endOffset} reaches into the edit starting at offset ${current.startOffset}`,
+      }
+    }
+  }
+  let spliced = ''
+  for (const { startOffset, endOffset, newText } of positioned) {
+    spliced = spliced.slice(0, startOffset) + newText + spliced.slice(endOffset)
+  }
+  return { path: destinationPath, newContent: spliced }
 }
 
 /** Bounded work: cap files synced per syncMutatedFiles call. */
@@ -711,6 +799,125 @@ export function createLanguageIntelligence(
           ),
         },
       ]
+    },
+
+    async extractSymbol(params) {
+      const result = await runQuery(async (mux) => {
+        const filePath = path.resolve(options.cwd, params.path)
+        const position = toLspPosition(params.line, params.character)
+        // NO `only` filter: extract refactors are `refactor.extract.*` kinds
+        // and the kind vocabulary is server-specific, so filtering here would
+        // match nothing. Selection is heuristic and documented: prefer an
+        // extract-titled action carrying edits or a command, then any
+        // edit-carrying action, then any command-carrying action.
+        const actions = await mux.codeAction({ filePath, position })
+        const winner =
+          actions.find(
+            (action) =>
+              /extract/i.test(action.title) &&
+              (Object.keys(action.changesByUri).length > 0 || action.command),
+          ) ??
+          actions.find((action) => Object.keys(action.changesByUri).length > 0) ??
+          actions.find((action) => action.command)
+        if (!winner) {
+          throw new LspServerUnavailableError(
+            'the language server offered no extract refactor at this position.',
+            { reason: 'no extract action available' },
+          )
+        }
+        let changesByUri = winner.changesByUri
+        let createdUris: string[] = []
+        // Command-carrying actions are resolved through
+        // workspace/executeCommand; its WorkspaceEdit reply is merged with any
+        // edits the action itself carried (same uri concatenates the
+        // action's edits first). A throwing executeCommand propagates as an
+        // honest LspServerError like every other request seam.
+        if (winner.command) {
+          const commandEdit = await mux.executeCommand({
+            filePath,
+            command: winner.command.command,
+            arguments: winner.command.arguments,
+          })
+          const merged: LspWorkspaceEditChanges = { ...changesByUri }
+          for (const [uri, edits] of Object.entries(commandEdit.changesByUri)) {
+            merged[uri] = [...(merged[uri] ?? []), ...edits]
+          }
+          changesByUri = merged
+          createdUris = commandEdit.createdUris
+        }
+        // DESTINATION GATE (fail-closed): the server must CREATE the
+        // destination file (documentChanges kind:'create'), exactly one,
+        // other than the source. An in-place-only refactor must never land
+        // under a to-new-file tool name, and v1 supports exactly one new
+        // file — no guessing which created uri the caller meant.
+        const created = createdUris.filter(
+          (uri) => uriToPath(uri) !== filePath,
+        )
+        if (created.length === 0) {
+          throw new LspServerUnavailableError(
+            'the language server offered only an in-place refactor; extracting to a new file requires a server that creates the destination file.',
+            { reason: 'no new-file destination in the workspace edit' },
+          )
+        }
+        if (created.length !== 1) {
+          throw new LspServerError(
+            `the extract refactor created ${created.length} new files; v1 supports exactly one.`,
+            { reason: 'protocol' },
+          )
+        }
+        const createdUri = created[0]
+        const createdEdits = changesByUri[createdUri] ?? []
+        const sourceChanges: LspWorkspaceEditChanges = {}
+        for (const [uri, edits] of Object.entries(changesByUri)) {
+          if (uri === createdUri) continue
+          sourceChanges[uri] = edits
+        }
+        const sourceResult = await applyChangesByUriFromDisk(
+          sourceChanges,
+          'extract symbols from',
+          readContext,
+        )
+        // The created file splices against an empty base and is published
+        // under the caller's destination_path VERBATIM — the server's uri
+        // only supplies bytes, never the destination path. A failed
+        // created-file splice fails the extract honestly (the model must
+        // never see a partial extract as a success).
+        const createdSplice = applyCreatedFileEdits(
+          params.destination_path,
+          createdEdits,
+        )
+        if ('errorMessage' in createdSplice) {
+          if ('changedFiles' in sourceResult) {
+            return {
+              changedFiles: sourceResult.changedFiles,
+              errorMessage: `${createdSplice.path}: ${createdSplice.errorMessage}`,
+            }
+          }
+          return {
+            errorMessage: `could not extract symbols: ${createdSplice.path}: ${createdSplice.errorMessage}`,
+          }
+        }
+        if ('changedFiles' in sourceResult) {
+          return {
+            changedFiles: [...sourceResult.changedFiles, createdSplice],
+            ...(sourceResult.errorMessage
+              ? { errorMessage: sourceResult.errorMessage }
+              : {}),
+          }
+        }
+        // No source-file edits at all: the created file alone is the result —
+        // but a source-splice failure message still surfaces. Never drop an
+        // honest failure just because the created file spliced. (The narrowed
+        // no-changedFiles type still admits UnavailableResult, so the
+        // errorMessage access is guarded by its own `in` check.)
+        return {
+          changedFiles: [createdSplice],
+          ...('errorMessage' in sourceResult
+            ? { errorMessage: sourceResult.errorMessage }
+            : {}),
+        }
+      })
+      return [{ type: 'json', value: result }]
     },
 
     async syncMutatedFiles(paths, opts) {

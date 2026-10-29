@@ -5,6 +5,7 @@ import { handleBrowserLogs } from './tool/browser-logs'
 import { handleCheckBackgroundAgent } from './tool/check-background-agent'
 import { handleCheckJob } from './tool/check-job'
 import { handleCodeAction } from './tool/code-action'
+import { handleExtractSymbol } from './tool/extract-symbol'
 import { handleCodeSearch } from './tool/code-search'
 import { handleCreatePlan } from './tool/create-plan'
 import { handleEditTransaction } from './tool/edit-transaction'
@@ -113,6 +114,7 @@ export const codebuffToolHandlers = {
   hover_type: handleHoverType,
   rename_symbol: handleRenameSymbol,
   code_action: handleCodeAction,
+  extract_symbol: handleExtractSymbol,
   workspace_symbol: handleWorkspaceSymbol,
   recall_context: handleRecallContext,
   record_decision: handleRecordDecision,

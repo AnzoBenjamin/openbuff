@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { handleCodeAction } from '../code-action'
+import { handleExtractSymbol } from '../extract-symbol'
 import { handleFindReferences } from '../find-references'
 import { handleGoToDefinition } from '../go-to-definition'
 import { handleHoverType } from '../hover-type'
@@ -147,6 +148,45 @@ describe('semantic-edit proxy handlers', () => {
           line: 5,
           character: 3,
           kind: 'quickfix',
+        },
+      },
+    ])
+  })
+
+  test('extract_symbol forwards exactly its narrow mutation inputs', async () => {
+    const seen: unknown[] = []
+    const requestClientToolCall = async (call: unknown) => {
+      seen.push(call)
+      return [{ type: 'json', value: { edits: [] } }] as never
+    }
+
+    await handleExtractSymbol({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'extract_symbol',
+        toolCallId: 'extract',
+        input: {
+          path: 'src/foo.ts',
+          line: 5,
+          character: 3,
+          destination_path: 'src/foo-extracted.ts',
+          symbol_name: 'extractedHelper',
+          extra: 'should-not-forward',
+        },
+      },
+      requestClientToolCall,
+    } as never)
+
+    expect(seen).toEqual([
+      {
+        toolName: 'extract_symbol',
+        toolCallId: 'extract',
+        input: {
+          path: 'src/foo.ts',
+          line: 5,
+          character: 3,
+          destination_path: 'src/foo-extracted.ts',
+          symbol_name: 'extractedHelper',
         },
       },
     ])

@@ -66,6 +66,7 @@ const MUTATION_TOOLS = new Set<ToolName>([
   'create_plan',
   'edit_transaction',
   'edit_3d_asset',
+  'extract_symbol',
   'replace_range',
   'rename_symbol',
   'rewrite_symbol',
@@ -104,6 +105,7 @@ const CUSTOM_RENDERERS = new Set<ToolName>([
 const NAMED_PATH_TOOLS = new Set<ToolName>([
   'code_action',
   'create_plan',
+  'extract_symbol',
   'replace_range',
   'rename_symbol',
   'rewrite_symbol',
@@ -117,6 +119,7 @@ const NAMED_PATH_TOOLS = new Set<ToolName>([
 const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
   code_action: ['path'],
   create_plan: ['path'],
+  extract_symbol: ['path', 'destination_path'],
   edit_transaction: ['edits[].path'],
   edit_3d_asset: ['path'],
   inspect_3d_asset: ['path'],

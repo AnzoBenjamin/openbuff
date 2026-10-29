@@ -1088,3 +1088,202 @@ describe('createLspMultiplexer', () => {
     await mux.dispose()
   })
 })
+
+describe('P4-T2 extract seams (create-file documentChanges / executeCommand / command passthrough)', () => {
+  test('executeCommand normalizes create-file documentChanges and surfaces createdUris', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'workspace/executeCommand') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            documentChanges: [
+              {
+                textDocument: { uri: 'file:///proj/a.ts' },
+                edits: [
+                  {
+                    range: {
+                      start: { line: 0, character: 0 },
+                      end: { line: 0, character: 1 },
+                    },
+                    newText: 'b',
+                  },
+                ],
+              },
+              {
+                kind: 'create',
+                uri: 'file:///proj/new.ts',
+                edits: [
+                  {
+                    range: {
+                      start: { line: 0, character: 0 },
+                      end: { line: 0, character: 0 },
+                    },
+                    newText: 'export {}\n',
+                  },
+                ],
+              },
+              {
+                kind: 'rename',
+                oldUri: 'file:///proj/old.ts',
+                newUri: 'file:///proj/renamed.ts',
+              },
+            ],
+          },
+        }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    const edit = await mux.executeCommand({
+      filePath: '/proj/a.ts',
+      command: 'ts.extract',
+    })
+    // The create uri is recorded; its edits flow into changesByUri like any
+    // other text-edit list; the rename kind is skipped, not applied.
+    expect(edit.createdUris).toEqual(['file:///proj/new.ts'])
+    expect(Object.keys(edit.changesByUri).sort()).toEqual([
+      'file:///proj/a.ts',
+      'file:///proj/new.ts',
+    ])
+    // The command was forwarded verbatim; `arguments` is omitted entirely
+    // when the caller passed none (the LSP default is no arguments).
+    const request = peer.received
+      .map(
+        (body) => JSON.parse(body) as { method?: string; params?: Record<string, unknown> },
+      )
+      .find((m) => m.method === 'workspace/executeCommand')
+    expect(request?.params).toEqual({ command: 'ts.extract' })
+    await mux.dispose()
+  })
+
+  test('executeCommand treats a null or non-workspace-edit reply as an empty edit, not an error', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'workspace/executeCommand') {
+        return { jsonrpc: '2.0', id, result: null }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    const edit = await mux.executeCommand({
+      filePath: '/proj/a.ts',
+      command: 'x',
+      arguments: [1],
+    })
+    expect(edit).toEqual({ changesByUri: {}, createdUris: [] })
+    await mux.dispose()
+  })
+
+  test('executeCommand surfaces a server error honestly', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'workspace/executeCommand') {
+        return { jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found' } }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    await expect(
+      mux.executeCommand({ filePath: '/proj/a.ts', command: 'x' }),
+    ).rejects.toBeInstanceOf(LspServerError)
+    await mux.dispose()
+  })
+
+  test('a create documentChanges entry without a parseable uri is skipped honestly', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'workspace/executeCommand') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            documentChanges: [
+              // No top-level uri and no textDocument.uri: nothing to record.
+              { kind: 'create', options: { overwrite: false } },
+            ],
+          },
+        }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    const edit = await mux.executeCommand({
+      filePath: '/proj/a.ts',
+      command: 'ts.extract',
+    })
+    expect(edit).toEqual({ changesByUri: {}, createdUris: [] })
+    await mux.dispose()
+  })
+
+  test('codeAction surfaces a command-only action verbatim for caller-side resolution', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'textDocument/codeAction') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: [
+            {
+              title: 'Extract function',
+              command: {
+                command: '_tsls.extractFunction',
+                arguments: ['arg1'],
+              },
+            },
+            {
+              title: 'Edit-carrying',
+              edit: {
+                changes: {
+                  'file:///proj/a.ts': [
+                    {
+                      range: {
+                        start: { line: 0, character: 0 },
+                        end: { line: 0, character: 1 },
+                      },
+                      newText: 'x',
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    const actions = await mux.codeAction({
+      filePath: '/proj/a.ts',
+      position: { line: 1, character: 0 },
+    })
+    // The command-only action is surfaced (empty changesByUri + the verbatim
+    // command), NOT resolved here; the edit-carrying action is unchanged.
+    expect(actions).toHaveLength(2)
+    expect(actions[0]).toEqual({
+      title: 'Extract function',
+      changesByUri: {},
+      command: { command: '_tsls.extractFunction', arguments: ['arg1'] },
+    })
+    expect(Object.keys(actions[1]?.changesByUri ?? {})).toEqual([
+      'file:///proj/a.ts',
+    ])
+    await mux.dispose()
+  })
+})

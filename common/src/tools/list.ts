@@ -9,6 +9,7 @@ import { checkBackgroundAgentParams } from './params/tool/check-background-agent
 import { checkJobParams } from './params/tool/check-job'
 import { codeSearchParams } from './params/tool/code-search'
 import { codeActionParams } from './params/tool/code-action'
+import { extractSymbolParams } from './params/tool/extract-symbol'
 import { gitBranchParams } from './params/tool/git-branch'
 import { gitStatusParams } from './params/tool/git-status'
 import { killJobParams } from './params/tool/kill-job'
@@ -87,6 +88,7 @@ const canonicalToolParams = {
   check_job: checkJobParams,
   code_search: codeSearchParams,
   code_action: codeActionParams,
+  extract_symbol: extractSymbolParams,
   git_status: gitStatusParams,
   git_branch: gitBranchParams,
   get_task: getTaskParams,
@@ -328,6 +330,10 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   z.object({
     toolName: z.literal('code_action'),
     input: toolParams.code_action.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('extract_symbol'),
+    input: toolParams.extract_symbol.inputSchema,
   }),
   z.object({
     toolName: z.literal('rename_symbol'),
