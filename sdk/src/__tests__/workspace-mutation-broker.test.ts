@@ -72,6 +72,9 @@ describe('WorkspaceMutationBroker', () => {
     ).toEqual(['committed', 'rejected'])
   })
 
+  // 1002 sequential fs-heavy commits: ~2.2s locally, but CI-disk contention
+  // pushed this past bun's 5s per-test default (observed 5.06s on PR #93 CI).
+  // Explicit 30s budget judges the retention semantics, not runner disk speed.
   test('prunes oldest finalized receipts beyond the retention cap (hr-09 P4.3)', async () => {
     const { workspace, stateDir } = await makeWorkspace('broker-retention')
     const file = path.join(workspace, 'counter.txt')
@@ -118,7 +121,7 @@ describe('WorkspaceMutationBroker', () => {
       brokerRevision: 1002,
       state: 'committed',
     })
-  })
+  }, 30_000)
 
   test('serializes compare-and-swap across Openbuff processes', async () => {
     const { workspace, stateDir } = await makeWorkspace('broker-process-race')

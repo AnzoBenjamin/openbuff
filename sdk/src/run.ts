@@ -693,6 +693,18 @@ type RunReturnType = RunState
  */
 const transactionRecoveryPerformed = new Set<string>()
 
+/**
+ * P3-T10: guards the once-per-process registration of the bundled exact
+ * token providers (registerBundledExactTokenProviders in
+ * @codebuff/agent-runtime/util/exact-token-providers). Flipped only once a
+ * run actually finds the OPENBUFF_EXACT_TOKENS gate ON, so flag-off runs
+ * leave it false — a later run that turns the gate on still registers —
+ * while consecutive gated runs never repeat the dynamic import. The
+ * provider module is itself idempotent; this guard only avoids redundant
+ * import attempts.
+ */
+let exactTokenProvidersRegistrationAttempted = false
+
 export async function run(options: RunExecutionOptions): Promise<RunState> {
   const { signal } = options
 
@@ -761,6 +773,39 @@ async function runOnce({
   onCheckpoint,
   resumeInterruptedTurn,
 }: RunExecutionOptions): Promise<RunState> {
+  // P3-T10: register the bundled OpenAI-family exact tokenizers when the
+  // OPENBUFF_EXACT_TOKENS gate is on. This is the FIRST thing the run does
+  // so no token count in the run can precede registration, and the dynamic
+  // import below is the ONLY import of the provider module — and therefore
+  // of tiktoken's WASM — so a flag-off run never loads it and token counting
+  // stays byte-identical (the gpt-tokenizer estimator). The gate uses the
+  // same truthy-set rule as the counter's per-call gate in
+  // @codebuff/agent-runtime/util/token-counter and is read from the raw
+  // process env through the same accessor the other OPENBUFF_* trust flags
+  // use, so the seam and the counter agree on when the providers are live.
+  // Once-per-process via the module-level guard; a registration failure is
+  // logged and degrades to the estimator (the seam's own fallback) instead
+  // of failing the run.
+  if (!exactTokenProvidersRegistrationAttempted) {
+    const exactTokensEnv = getSystemProcessEnv().OPENBUFF_EXACT_TOKENS
+    if (
+      exactTokensEnv !== undefined &&
+      /^(1|true|yes|on)$/i.test(exactTokensEnv.trim())
+    ) {
+      exactTokenProvidersRegistrationAttempted = true
+      try {
+        const { registerBundledExactTokenProviders } = await import(
+          '@codebuff/agent-runtime/util/exact-token-providers'
+        )
+        registerBundledExactTokenProviders()
+      } catch (error) {
+        logger?.warn(
+          { error },
+          'Exact token provider registration failed; keeping the estimator',
+        )
+      }
+    }
+  }
   const resolvedHarnessStateDir = harnessStateDir ?? getHarnessStateDir(env)
   // Read-only external root allowlist. Configured HERE, strictly before any
   // tool can dispatch, so the first read of an allowlisted path in a process

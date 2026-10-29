@@ -338,6 +338,12 @@
       "tarball": "https://registry.npmjs.org/gpt-tokenizer/-/gpt-tokenizer-2.9.0.tgz",
       "deprecated": false
     },
+    "tiktoken@1.0.22": {
+      "integrity": "sha512-PKvy1rVF1RibfF3JlXBSP0Jrcw2uq3yXdgcEXtKTYn3QJ/cBRBHDnrJ5jHky+MENZ6DIPwNUGWpkVx+7joCpNA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/tiktoken/-/tiktoken-1.0.22.tgz",
+      "deprecated": false
+    },
     "gray-matter@4.0.3": {
       "integrity": "sha512-5v6yZd4JK3eMI3FqqCouswVqwugaA9r4dNZB1wwcmrD02QkV5H0y7XBQW8QwQqEaZY1pM9aqORSORhJRdNK44Q==",
       "license": "MIT",

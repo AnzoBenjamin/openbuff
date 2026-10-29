@@ -1116,13 +1116,14 @@ describe('loopAgentSteps', () => {
 
   it('revokes implicit read authorizations when eviction rewrites read bodies out of history', async () => {
     setup()
-    // A 200k window puts the eviction floor at 110k tokens, the semantic
-    // trigger at 156k, and the provider-safe mechanical ceiling at 176k, so a
-    // ~130k transcript of stale read results exercises ONLY the eviction
-    // branch: no semantic pass, no mechanical trim.
+    // A 200k window puts the eviction floor at 140k tokens
+    // (SEMANTIC_EVICTION_FRACTION 0.70, raised from 0.55 by the truncation
+    // wave-1 fix), the semantic trigger at 156k (0.78), and the mechanical
+    // ceiling at 176k, so a ~146k transcript of stale read results exercises
+    // ONLY the eviction branch: no semantic pass, no mechanical trim.
     const chunk = 'old evidence '.repeat(500)
     const chunkTokens = countTokens(chunk)
-    const repeatsPerResult = Math.ceil(16_000 / chunkTokens)
+    const repeatsPerResult = Math.ceil(18_000 / chunkTokens)
     const history: Message[] = [userMessage('Initial message')]
     for (let i = 0; i < 8; i++) {
       history.push({
