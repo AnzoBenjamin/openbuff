@@ -6,6 +6,7 @@ export type ToolName =
   | 'ask_user'
   | 'check_background_agent'
   | 'check_job'
+  | 'code_action'
   | 'code_search'
   | 'end_turn'
   | 'edit_transaction'
@@ -43,6 +44,7 @@ export type ToolName =
   | 'read_outline'
   | 'read_subtree'
   | 'replace_range'
+  | 'rename_symbol'
   | 'rewrite_symbol'
   | 'render_ui'
   | 'run_file_change_hooks'
@@ -71,6 +73,7 @@ export interface ToolParamsMap {
   ask_user: AskUserParams
   check_background_agent: CheckBackgroundAgentParams
   check_job: CheckJobParams
+  code_action: CodeActionParams
   code_search: CodeSearchParams
   end_turn: EndTurnParams
   edit_transaction: EditTransactionParams
@@ -108,6 +111,7 @@ export interface ToolParamsMap {
   read_outline: ReadOutlineParams
   read_subtree: ReadSubtreeParams
   replace_range: ReplaceRangeParams
+  rename_symbol: RenameSymbolParams
   rewrite_symbol: RewriteSymbolParams
   render_ui: RenderUiParams
   run_file_change_hooks: RunFileChangeHooksParams
@@ -198,6 +202,20 @@ export interface CheckJobParams {
   timeout_seconds?: number
   /** Follow mode only: SIGTERM the job on follow-timeout. Poll mode never kills. Default false. */
   kill_on_timeout?: boolean
+}
+
+/**
+ * Apply a predefined LSP code action at the given position. Currently the only supported action is organizing imports, which sorts import statements and removes unused ones.
+ */
+export interface CodeActionParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
+  /** The code action kind to apply. Only 'source.organizeImports' is currently supported. */
+  kind: 'source.organizeImports'
 }
 
 /**
@@ -806,6 +824,20 @@ export interface ReplaceRangeParams {
   }
   /** Complete replacement content for the selected line range. */
   newContent: string
+}
+
+/**
+ * Rename a symbol at the given position across the codebase using the language server.
+ */
+export interface RenameSymbolParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
+  /** The new name for the symbol. */
+  new_name: string
 }
 
 /**

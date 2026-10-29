@@ -68,6 +68,8 @@ export const BASE2_TIER_TOOL_NAMES: Record<
 > = {
   implement: [
     'edit_transaction',
+    'rename_symbol',
+    'code_action',
     'create_plan',
     'update_plan_status',
     'inspect_workspace',

@@ -8,6 +8,7 @@ import { browserLogsParams } from './params/tool/browser-logs'
 import { checkBackgroundAgentParams } from './params/tool/check-background-agent'
 import { checkJobParams } from './params/tool/check-job'
 import { codeSearchParams } from './params/tool/code-search'
+import { codeActionParams } from './params/tool/code-action'
 import { gitBranchParams } from './params/tool/git-branch'
 import { gitStatusParams } from './params/tool/git-status'
 import { killJobParams } from './params/tool/kill-job'
@@ -35,6 +36,7 @@ import { readOutlineParams } from './params/tool/read-outline'
 import { readSubtreeParams } from './params/tool/read-subtree'
 import { replaceRangeParams } from './params/tool/replace-range'
 import { rewriteSymbolParams } from './params/tool/rewrite-symbol'
+import { renameSymbolParams } from './params/tool/rename-symbol'
 import { renderUIParams } from './params/tool/render-ui'
 import { runFileChangeHooksParams } from './params/tool/run-file-change-hooks'
 import { runTerminalCommandParams } from './params/tool/run-terminal-command'
@@ -84,6 +86,7 @@ const canonicalToolParams = {
   check_background_agent: checkBackgroundAgentParams,
   check_job: checkJobParams,
   code_search: codeSearchParams,
+  code_action: codeActionParams,
   git_status: gitStatusParams,
   git_branch: gitBranchParams,
   get_task: getTaskParams,
@@ -123,6 +126,7 @@ const canonicalToolParams = {
   read_subtree: readSubtreeParams,
   replace_range: replaceRangeParams,
   rewrite_symbol: rewriteSymbolParams,
+  rename_symbol: renameSymbolParams,
   render_ui: renderUIParams,
   run_file_change_hooks: runFileChangeHooksParams,
   run_targeted_validation: runTargetedValidationParams,
@@ -320,6 +324,14 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   z.object({
     toolName: z.literal('go_to_definition'),
     input: toolParams.go_to_definition.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('code_action'),
+    input: toolParams.code_action.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('rename_symbol'),
+    input: toolParams.rename_symbol.inputSchema,
   }),
   z.object({
     toolName: z.literal('hover_type'),

@@ -62,10 +62,12 @@ const READ_TOOLS = new Set<ToolName>([
   'workspace_symbol',
 ])
 const MUTATION_TOOLS = new Set<ToolName>([
+  'code_action',
   'create_plan',
   'edit_transaction',
   'edit_3d_asset',
   'replace_range',
+  'rename_symbol',
   'rewrite_symbol',
   'str_replace',
   'update_plan_status',
@@ -100,8 +102,10 @@ const CUSTOM_RENDERERS = new Set<ToolName>([
   'write_todos',
 ])
 const NAMED_PATH_TOOLS = new Set<ToolName>([
+  'code_action',
   'create_plan',
   'replace_range',
+  'rename_symbol',
   'rewrite_symbol',
   'str_replace',
   'update_plan_status',
@@ -111,6 +115,7 @@ const NAMED_PATH_TOOLS = new Set<ToolName>([
   'render_3d_preview',
 ])
 const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
+  code_action: ['path'],
   create_plan: ['path'],
   edit_transaction: ['edits[].path'],
   edit_3d_asset: ['path'],
@@ -130,6 +135,7 @@ const PATH_INPUTS: Partial<Record<ToolName, readonly string[]>> = {
   read_outline: ['path'],
   read_subtree: ['paths[]'],
   replace_range: ['path'],
+  rename_symbol: ['path'],
   rewrite_symbol: ['path'],
   str_replace: ['path'],
   update_plan_status: ['path'],

@@ -66,10 +66,37 @@ export type LspWorkspaceSymbol = {
   containerName?: string
 }
 
+/**
+ * P4-T2 (rename_symbol / code_action v1): a splicable text edit — 0-based LSP
+ * range plus its full replacement text. Ranges are consumed verbatim: the
+ * service layer owns the 1-based→0-based shift, so this layer never re-bases
+ * (shifting twice would corrupt every splice).
+ */
+export type LspTextEdit = {
+  range: LspRange
+  newText: string
+}
+
+/**
+ * A WorkspaceEdit normalized ONCE into per-URI edit lists. Supports both the
+ * `changes` and the `documentChanges` ({textDocument:{uri}, edits}) shapes;
+ * per-textDocument optional versions are accepted but ignored (on-disk bytes
+ * are authoritative), and entries that carry no implementable edit (e.g. a
+ * textual-diff document change) are skipped with a recorded reason rather
+ * than throwing for the whole workspace edit.
+ */
+export type LspWorkspaceEditChanges = Record<string, LspTextEdit[]>
+
 export type LspServerUnavailableReason =
   | 'unsupported-language'
   | 'no-server-spec'
   | 'tcp-transport'
+  // P4-T2 (rename_symbol/code_action v1): the semantic gate phrases below
+  // surface verbatim in `unavailable.reason` so the model can see WHY without
+  // parsing the message.
+  | 'position is not renameable'
+  | 'unsupported action kind (v1 organizes imports only)'
+  | 'no organize-imports action available'
 
 export type LspServerFailureReason =
   | 'spawn-failed'
@@ -632,6 +659,26 @@ export type LspMultiplexer = {
     position: LspPosition
   }): Promise<LspLocation[] | null>
   hover(params: { filePath: string; position: LspPosition }): Promise<LspHover | null>
+  /**
+   * P4-T2 (rename_symbol / code_action v1): rename and codeAction issue the
+   * request WITHOUT gating on server capability advertisements — an incapable
+   * server's error response becomes the caller's honest LspServerError, the
+   * same contract unclean capability matches get on references().
+   */
+  prepareRenameParams(params: {
+    filePath: string
+    position: LspPosition
+  }): Promise<{ range: LspRange } | null>
+  rename(params: {
+    filePath: string
+    position: LspPosition
+    newName: string
+  }): Promise<LspWorkspaceEditChanges>
+  codeAction(params: {
+    filePath: string
+    position: LspPosition
+    only?: string[]
+  }): Promise<Array<{ title: string; changesByUri: LspWorkspaceEditChanges }>>
   documentSymbol(params: {
     filePath: string
   }): Promise<LspDocumentSymbol[] | null>
@@ -922,6 +969,99 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     }
   }
 
+  /**
+   * P4-T2: normalize a raw textDocument/rename (or an action's edit) into
+   * per-URI edit lists — exactly once, here. The `changes` shape is the
+   * classic {uri: edits} map; `documentChanges` pairs each entry with an
+   * optional document version that is ignored for v1 (on-disk bytes are
+   * authoritative). An entry that carries no implementable edit (or a
+   * non-array edits list) is skipped with a recorded reason instead of
+   * throwing for the whole workspace edit, so one malformed entry can never
+   * drop every other file's edits.
+   */
+  function normalizeWorkspaceEdit(raw: unknown): {
+    changesByUri: LspWorkspaceEditChanges
+    skipped: string[]
+  } {
+    const changesByUri: LspWorkspaceEditChanges = {}
+    const skipped: string[] = []
+    if (!isRecord(raw)) {
+      return { changesByUri, skipped: ['workspace edit is not an object'] }
+    }
+    const pushEdits = (uri: unknown, edits: unknown): boolean => {
+      if (typeof uri !== 'string' || uri === '') return false
+      if (!Array.isArray(edits)) return false
+      const normalized: LspTextEdit[] = []
+      let malformed = 0
+      for (const edit of edits) {
+        // Only a plain text edit is splicable. An AnnotatedTextEdit keeps the
+        // extra fields but still carries range/newText, so it is accepted;
+        // any other shape (textual-diff/snippet/optional-version-edit) is
+        // honestly skipped.
+        if (!isRecord(edit)) {
+          malformed++
+          continue
+        }
+        const range = edit['range']
+        const newText = edit['newText']
+        if (
+          !isRecord(range) ||
+          !isRecord(range['start']) ||
+          !isRecord(range['end']) ||
+          typeof range['start']['line'] !== 'number' ||
+          typeof range['start']['character'] !== 'number' ||
+          typeof range['end']['line'] !== 'number' ||
+          typeof range['end']['character'] !== 'number' ||
+          typeof newText !== 'string'
+        ) {
+          malformed++
+          continue
+        }
+        normalized.push({
+          range: {
+            start: { line: range['start']['line'], character: range['start']['character'] },
+            end: { line: range['end']['line'], character: range['end']['character'] },
+          },
+          newText,
+        })
+      }
+      if (malformed > 0) {
+        skipped.push(
+          `${uri}: ${malformed} edit${malformed === 1 ? '' : 's'} skipped (not a plain text edit)`,
+        )
+      }
+      if (normalized.length > 0) {
+        // Last writer wins when both shapes name the same uri; the service
+        // dedupes per file before splicing.
+        changesByUri[uri] = normalized
+      }
+      return true
+    }
+    const changes = raw['changes']
+    if (isRecord(changes)) {
+      for (const [uri, edits] of Object.entries(changes)) {
+        if (!pushEdits(uri, edits)) {
+          skipped.push(`${uri}: skipped (not a plain text-edit list)`)
+        }
+      }
+    }
+    const documentChanges = raw['documentChanges']
+    if (Array.isArray(documentChanges)) {
+      for (const entry of documentChanges) {
+        if (
+          !isRecord(entry) ||
+          !isRecord(entry['textDocument']) ||
+          !pushEdits(entry['textDocument']['uri'], entry['edits'])
+        ) {
+          skipped.push(
+            'documentChanges entry skipped (missing textDocument.uri or not a plain text-edit list)',
+          )
+        }
+      }
+    }
+    return { changesByUri, skipped }
+  }
+
   const WARM_ANCHOR_POLL_MS = 50
   const WARM_ANCHOR_TIMEOUT_MS = 2_000
 
@@ -1002,6 +1142,81 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         ...positionParams(filePath, position),
         context: { includeDeclaration: true },
       }),
+    // P4-T2 rename/codeAction: the same request seam as definition/references
+    // (prepare-file via acquire + withServer, 0-based LSP positions verbatim —
+    // the service layer is the ONLY owner of the 1-based→0-based shift).
+    // Deliberately NOT capability-advertisement-gated: an over-cautious
+    // client-claimed capability would paper over a server that actually
+    // answers; an incapable server's error response surfaces honestly instead.
+    prepareRenameParams: async ({ filePath, position }) => {
+      const result = await withServer<unknown>(
+        filePath,
+        'textDocument/prepareRename',
+        positionParams(filePath, position),
+      )
+      // Normalize the two server response shapes — the legacy bare Range and
+      // the current { range, placeholder } — into one `{ range }` result;
+      // anything else means the position is not renameable (null).
+      if (!isRecord(result)) return null
+      const candidate = isRecord(result['range']) ? result['range'] : result
+      if (
+        !isRecord(candidate['start']) ||
+        !isRecord(candidate['end']) ||
+        typeof candidate['start']['line'] !== 'number' ||
+        typeof candidate['start']['character'] !== 'number' ||
+        typeof candidate['end']['line'] !== 'number' ||
+        typeof candidate['end']['character'] !== 'number'
+      ) {
+        return null
+      }
+      return {
+        range: {
+          start: {
+            line: candidate['start']['line'],
+            character: candidate['start']['character'],
+          },
+          end: {
+            line: candidate['end']['line'],
+            character: candidate['end']['character'],
+          },
+        },
+      }
+    },
+    rename: async ({ filePath, position, newName }) => {
+      const result = await withServer<unknown>(filePath, 'textDocument/rename', {
+        ...positionParams(filePath, position),
+        newName,
+      })
+      // The raw WorkspaceEdit is normalized exactly once, here.
+      return normalizeWorkspaceEdit(result).changesByUri
+    },
+    codeAction: async ({ filePath, position, only }) => {
+      const { textDocument } = positionParams(filePath, position)
+      const result = await withServer<unknown>(filePath, 'textDocument/codeAction', {
+        textDocument,
+        range: { start: position, end: position },
+        context: { diagnostics: [] },
+        ...(only !== undefined ? { only } : {}),
+      })
+      // Only actions carrying an edit are returned; command-only actions are
+      // skipped and NOT resolved (no textDocument/codeAction round-trips).
+      const actions = Array.isArray(result) ? result : []
+      const normalized: Array<{
+        title: string
+        changesByUri: LspWorkspaceEditChanges
+      }> = []
+      for (const action of actions) {
+        if (!isRecord(action)) continue
+        const edit = action['edit']
+        if (!isRecord(edit)) continue
+        normalized.push({
+          title:
+            typeof action['title'] === 'string' ? action['title'] : '(untitled action)',
+          changesByUri: normalizeWorkspaceEdit(edit).changesByUri,
+        })
+      }
+      return normalized
+    },
     hover: ({ filePath, position }) =>
       withServer<LspHover>(filePath, 'textDocument/hover', positionParams(filePath, position)),
     documentSymbol: ({ filePath }) =>

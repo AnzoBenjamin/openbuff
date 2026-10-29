@@ -612,3 +612,17 @@ The gate's dependency-reviewer pass over the P3-T10 tiktoken wave returned two b
 
 **Next turn:** end-turn yield for the fresh matching dependency-reviewer pass; on PASS, commit + push the full wave (tiktoken tier + provenance record + eager-validation repair + CI fixture repairs) onto PR #93.
 
+
+<!-- update_plan_status:appended -->
+## P4-T2 semantic-edit slice landed (rename_symbol + code_action via LSP WorkspaceEdits) — 2026-10-28 — 2026-10-28T23:59:00.000Z
+
+Executing the user-approved followups after the P3-T10 wave pushed (49e79403e, PR #93 CI green on all previously red checks). P3-T10 moved to BLOCKED honestly in the registry with its minted gate receipt checkpointed (the OPENBUFF_EXACT_TOKENS flip needs a live key); P4-T2 claimed as the sole in-progress task.
+
+**Landed (four coordinated editor waves, all with receipts):** (A1) NEW common param modules `rename-symbol.ts` + `code-action.ts` (code_action v1 = organize imports only; extract-to-new-file DEFERRED and recorded) registered in constants/list/metadata (toolNames + publishedTools, toolParams record + clientToolCallSchema union, MUTATION_TOOLS + PATH_INPUTS) — receipts d722035a/7054fccd. (A2a) mux gained prepareRenameParams/rename/codeAction with MUX-OWNED WorkspaceEdit normalization (both `changes` and `documentChanges` shapes; incapable servers fail honestly); service gained renameSymbol/codeAction (runQuery degradation, single 1→0 line shift, disk splice reverse-document-order with per-file honest errors) + SDK tests — receipts 3f045cb5/0587898e. (W2) runtime proxy handlers mirror go_to_definition byte-style, handlers/list.ts registration, BASE2_TIER_TOOL_NAMES.implement gained both names — receipts f09b039e/185e013b. (A2b) NEW sdk/src/tools/semantic-edit-apply.ts + rename-symbol.ts + code-action.ts reusing the EXISTING changeFiles machinery (broker CAS per file, P2-T5 intent log, FileMutationResultV1 receipt channel — no new broker code) + the two run.ts dispatch branches + wrapper tests — receipts 87b06fc4/e6cb20fe/8df7d71f/a0862df7.
+
+**Debugger-verified repairs (4 root causes, all fixed with receipts):** two SDK test-side contract mismatches (the mux owns normalization — mock updated to the normalized shape, receipt 8a96a5f7); the agents curated ToolName union + ToolParamsMap lacked the new names (receipt 8b53a6cd), which also required the template mirror (common/src/templates/initial-agents-dir/types/tools.ts) to widen in byte-lockstep (receipt d828beee) plus MODE_NEUTRAL_TOOL_NAMES and the 7 progressive-disclosure roster literals (receipt e0dbead2). LESSON now in knowledge: widening an agents tool union requires the union + ToolParamsMap + template mirror + MODE_NEUTRAL + progressive-disclosure roster in the SAME wave.
+
+**Validation:** agents typecheck 0 (mode-policy 5/0, base2 262/0, progressive-disclosure 31/0 after the roster update), common typecheck 0 (params 242/0, X-1 golden vectors green — NO mirror regeneration needed), sdk typecheck 0 (language-intelligence + mux suites 71/0), agent-runtime typecheck 0 (proxy suite 3/0), determinism guard 0 findings, provenance guard 108 releases. Knowledge refreshes: common 2026-10-28d + sdk (receipts c0409421/2bc3de74); PLAN.md P4-T2 slice note (receipt 846a73ba); packages/agent-runtime has no knowledge.md (skipped).
+
+**Remaining for P4-T2 proper:** real-server rename/codeAction fixtures (suites are mock-LSP, mirroring P3-T2's recorded gap) and the extract-to-new-file slice. MCP surface + CLI renderers deliberately out of this slice (recorded in the Plan note).
+

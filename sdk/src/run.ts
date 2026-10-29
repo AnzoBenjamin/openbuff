@@ -104,6 +104,8 @@ import { findReferences } from './tools/find-references'
 import { goToDefinition } from './tools/go-to-definition'
 import { hoverType } from './tools/hover-type'
 import { workspaceSymbol } from './tools/workspace-symbol'
+import { renameSymbol } from './tools/rename-symbol'
+import { codeAction } from './tools/code-action'
 import {
   createLanguageIntelligence,
   type LanguageIntelligenceService,
@@ -174,9 +176,11 @@ import { createRunResumeDriver } from './services/run-resume-driver'
 
 /**
  * Audit fix (D): tool calls whose receipt can contain file actions — the same
- * set that reaches handleToolCall's post-commit mutation block (the
- * change-file tools plus the compact-receipt write tool). Mirrors the
- * toolName list the override receipt guard uses there.
+ * set that reaches handleToolCall's post-commit mutation block (the change-
+ * file tools plus the compact-receipt tools). rename_symbol and code_action
+ * ride the same compact-receipt channel as write_audit_findings, so they are
+ * baseline-captured too. Mirrors the toolName list the override receipt guard
+ * uses there.
  */
 const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'write_file',
@@ -185,6 +189,8 @@ const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'edit_transaction',
   'replace_range',
   'write_audit_findings',
+  'rename_symbol',
+  'code_action',
 ])
 
 /**
@@ -200,7 +206,12 @@ function diagnosticBaselineFiles(toolName: string, input: unknown): string[] {
     case 'write_file':
     case 'str_replace':
     case 'create_plan':
-    case 'replace_range': {
+    case 'replace_range':
+    // rename_symbol and code_action are single-`path` mutating tools that
+    // reach the same post-commit mutation block via the compact-receipt
+    // channel, so they get the same `input.path` baseline branch.
+    case 'rename_symbol':
+    case 'code_action': {
       const file = typeof record.path === 'string' ? record.path : undefined
       return file ? [file] : []
     }
@@ -1104,6 +1115,11 @@ async function runOnce({
     languageIntelligenceService ??= createLanguageIntelligence({
       cwd: requireCwd(cwd, 'language intelligence'),
       spawn,
+      // Audit fix (fs splice): the semantic-edit splice and post-commit LSP
+      // sync read through THIS run's filesystem, so a virtual-fs host
+      // (fsSource / hydration) is spliced from the same bytes the mutation
+      // broker commits — never raw host node disk.
+      fs,
     })
     return languageIntelligenceService
   }
@@ -2247,6 +2263,9 @@ export async function handleToolCall({
     if (getLanguageIntelligence) return getLanguageIntelligence()
     fallbackLanguageIntelligence ??= createLanguageIntelligence({
       cwd: requireCwd(cwd, 'language intelligence'),
+      // Direct handleToolCall callers (tests) run against THIS call's fs, so
+      // the splice seam is still filesystem-owned rather than raw node disk.
+      fs,
     })
     return fallbackLanguageIntelligence
   }
@@ -2350,9 +2369,10 @@ export async function handleToolCall({
   let result: ToolResultOutput[]
   let canonicalReceipt: CommitReceiptV1 | undefined
   // Returned by tools whose declared output is a compact receipt rather than
-  // the file_mutation_result payload (write_audit_findings), so the
-  // post-dispatch mutation block below still observes their filesystem
-  // actions. It is returned for applied AND not_applied writes, so the
+  // the file_mutation_result payload (write_audit_findings, rename_symbol,
+  // code_action), so the post-dispatch mutation block below still observes
+  // their filesystem actions. It is returned for applied AND not_applied
+  // writes, so the
   // `getConfirmedAppliedActionsV1` gate below — not its presence — decides
   // whether anything landed. That receipt intentionally stays compact: the
   // emitted FilesystemMutationEvent, which carries
@@ -2962,6 +2982,60 @@ export async function handleToolCall({
         resolveLanguageIntelligence(),
         input as { query: string },
       )
+    } else if (toolName === 'rename_symbol') {
+      // P4-T2: the semantic-edit apply tools route their changed files through
+      // the SAME multi-file commit path as edit_transaction (per-file broker
+      // CAS, CommitReceiptV1s, P2-T5 intent log, rollback). The deps passed
+      // below mirror the edit_transaction branch exactly. Their published
+      // output is a compact named result rather than a file_mutation_result
+      // payload, so the underlying mutation rides the compact-receipt channel
+      // (the writeAuditFindings precedent) into the post-dispatch block and
+      // the journaling/LSP-sync wiring stays automatic with no new machinery.
+      const applied = await renameSymbol(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          new_name: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
+    } else if (toolName === 'code_action') {
+      const applied = await codeAction(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          kind: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
     } else if (toolName === 'get_build_targets') {
       result = await getBuildTargets(
         requireCwd(cwd, 'get_build_targets'),

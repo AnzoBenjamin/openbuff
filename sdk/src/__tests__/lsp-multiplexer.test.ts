@@ -903,4 +903,188 @@ describe('createLspMultiplexer', () => {
     expect(mux.warmServerCount()).toBe(2)
     await mux.dispose()
   })
+
+  // P4-T2 (rename/codeAction): the semantic-edit paths follow the same
+  // hermetic framed-peer pattern as definition above. NO capability-
+  // advertisement gate is asserted: the request is issued verbatim and an
+  // incapable server's error response surfaces as the caller's typed error.
+  test('prepareRenameParams and rename follow the definition/references request pattern', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      switch (message.method) {
+        case 'initialize':
+          return { jsonrpc: '2.0', id, result: okInitialize }
+        case 'textDocument/prepareRename':
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: { range: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } } },
+          }
+        case 'textDocument/rename':
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              changes: {
+                'file:///proj/a.ts': [
+                  { range: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } }, newText: 'renamed' },
+                ],
+              },
+            },
+          }
+        default:
+          return { jsonrpc: '2.0', id, result: null }
+      }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    // 0-based positions are consumed verbatim: the mux never re-bases (the
+    // service layer owns the single 1-based-to-0-based shift).
+    const range = await mux.prepareRenameParams({
+      filePath: '/proj/a.ts',
+      position: { line: 7, character: 2 },
+    })
+    expect(range).toEqual({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } },
+    })
+    const changes = await mux.rename({
+      filePath: '/proj/a.ts',
+      position: { line: 7, character: 2 },
+      newName: 'renamed',
+    })
+    expect(changes).toEqual({
+      'file:///proj/a.ts': [
+        { range: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } }, newText: 'renamed' },
+      ],
+    })
+    const requests = peer.received.map(
+      (body) => JSON.parse(body) as { method?: string; params?: Record<string, unknown> },
+    )
+    const prepare = requests.find((m) => m.method === 'textDocument/prepareRename')
+    expect(prepare?.params?.position).toEqual({ line: 7, character: 2 })
+    const rename = requests.find((m) => m.method === 'textDocument/rename')
+    expect(rename?.params?.position).toEqual({ line: 7, character: 2 })
+    expect(rename?.params?.newName).toBe('renamed')
+    await mux.dispose()
+  })
+
+  test('rename normalizes documentChanges and skips a non-text-edit entry honestly', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'textDocument/rename') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            documentChanges: [
+              {
+                // The per-textDocument version is accepted but ignored: the
+                // on-disk bytes are authoritative downstream.
+                textDocument: { uri: 'file:///proj/a.ts', version: 3 },
+                edits: [
+                  { range: { start: { line: 1, character: 0 }, end: { line: 1, character: 4 } }, newText: 'sum' },
+                ],
+              },
+              {
+                // A non-plain-text edit (no range/newText — a textual-diff
+                // shape): skipped with a recorded reason instead of failing
+                // the whole workspace edit.
+                textDocument: { uri: 'file:///proj/diff.ts' },
+                edits: [{ textDocument: { uri: 'file:///proj/diff.ts' }, text: 'diff' }],
+              },
+            ],
+          },
+        }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    const changes = await mux.rename({
+      filePath: '/proj/a.ts',
+      position: { line: 0, character: 0 },
+      newName: 'x',
+    })
+    expect(changes).toEqual({
+      'file:///proj/a.ts': [
+        { range: { start: { line: 1, character: 0 }, end: { line: 1, character: 4 } }, newText: 'sum' },
+      ],
+    })
+    await mux.dispose()
+  })
+
+  test('codeAction returns only edit-carrying actions with normalized changes', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'textDocument/codeAction') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: [
+            // A command-only action: skipped, never resolved.
+            { title: 'organize imports (command only)', command: { title: 'x' } },
+            {
+              title: 'Remove unused import',
+              edit: {
+                changes: {
+                  'file:///proj/a.ts': [
+                    { range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } }, newText: '' },
+                  ],
+                },
+              },
+            },
+          ],
+        }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    const actions = await mux.codeAction({
+      filePath: '/proj/a.ts',
+      position: { line: 3, character: 1 },
+      only: ['source.organizeImports'],
+    })
+    expect(actions).toHaveLength(1)
+    expect(actions[0]?.title).toBe('Remove unused import')
+    expect(actions[0]?.changesByUri).toEqual({
+      'file:///proj/a.ts': [
+        { range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } }, newText: '' },
+      ],
+    })
+    const request = peer.received
+      .map((body) => JSON.parse(body) as { method?: string; params?: Record<string, unknown> })
+      .find((m) => m.method === 'textDocument/codeAction')
+    // The request carries the zero-diagnostic context and the ONLY filter;
+    // CodeActionParams has no top-level `position` key — the caller's
+    // 0-based position is echoed as range: { start, end = position }.
+    expect(request?.params).toEqual({
+      textDocument: { uri: 'file:///proj/a.ts' },
+      range: { start: { line: 3, character: 1 }, end: { line: 3, character: 1 } },
+      context: { diagnostics: [] },
+      only: ['source.organizeImports'],
+    })
+    await mux.dispose()
+  })
+
+  test('an incapable rename server errors honestly instead of a capability-gated no-op', async () => {
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'textDocument/rename') {
+        return { jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found' } }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({ spawner: () => peer.child })
+    await expect(
+      mux.rename({ filePath: '/proj/a.ts', position: { line: 0, character: 0 }, newName: 'x' }),
+    ).rejects.toBeInstanceOf(LspServerError)
+    await mux.dispose()
+  })
 })
