@@ -59,6 +59,7 @@ import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { JSONObject, JSONValue } from '@codebuff/common/types/json'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import type { SharedSpawnCloneCache } from './spawn-agent-utils'
 import type { ToolSet } from 'ai'
 
 export type SendSubagentChunk = (data: {
@@ -208,6 +209,14 @@ export const handleSpawnAgents = (async (
     (params.clock ?? realClock).now(),
   )
 
+  // One clone cache per handler invocation: every child in THIS batch shares
+  // the same memoized clones of the parent's taskMemory/playbookContext/
+  // workspaceState (1 deep clone per field instead of N children). The object
+  // is re-created on the next spawn_agents call, so nothing is ever reused
+  // across batches. Safe to share because every runtime writer of these fields
+  // is copy-on-write (fresh revisions are assigned, never mutated in place).
+  const spawnBatchCloneCache: SharedSpawnCloneCache = {}
+
   // Validate the complete batch before launching any detached work. Without
   // this preflight, an invalid later entry could throw after earlier
   // background agents had started but before their job ids were returned.
@@ -289,6 +298,7 @@ export const handleSpawnAgents = (async (
           selection.candidate.template,
           parentAgentState,
           {},
+          spawnBatchCloneCache,
         ),
       }
     }),

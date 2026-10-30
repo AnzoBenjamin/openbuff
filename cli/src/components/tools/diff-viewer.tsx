@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { TextAttributes } from '@opentui/core'
+
+import { LRUCache } from '@codebuff/common/util/lru-cache'
 
 import { Button } from '../button'
 import { useTheme } from '../../hooks/use-theme'
@@ -109,6 +111,16 @@ function parseHunkHeader(
   return { oldStart: 1, newStart: 1, oldLen: 0, newLen: 0 }
 }
 
+const PARSE_DIFF_CACHE_MAX_SIZE = 32
+
+// Bounded, module-scope cache keyed on the diff string itself. Re-renders of
+// an unchanged payload and per-file size-suffix computations
+// (computeDiffStats) reuse the parsed result instead of re-walking the same
+// text on every render.
+const parsedDiffCache = new LRUCache<string, ParsedDiff>(
+  PARSE_DIFF_CACHE_MAX_SIZE,
+)
+
 /**
  * Split a unified diff into leading file-header lines and a list of hunks.
  * Each hunk body line carries its (possibly null) old/new line number, with
@@ -117,8 +129,18 @@ function parseHunkHeader(
  * - del: increments old only
  * - add: increments new only
  * `\\ No newline at end of file` markers are skipped (not rendered as rows).
+ * Cached per distinct diff string (see parsedDiffCache); the returned object
+ * is shared, so callers must not mutate it.
  */
 export function parseDiffIntoHunks(diffText: string): ParsedDiff {
+  const cached = parsedDiffCache.get(diffText)
+  if (cached) return cached
+  const parsed = computeParsedDiffUncached(diffText)
+  parsedDiffCache.set(diffText, parsed)
+  return parsed
+}
+
+function computeParsedDiffUncached(diffText: string): ParsedDiff {
   const rawLines = diffText.length
     ? diffText.replace(/\n+$/, '').split('\n')
     : []
@@ -293,7 +315,12 @@ export const DiffViewer = ({
   initiallyCollapsedHunks = [],
 }: DiffViewerProps) => {
   const theme = useTheme()
-  const parsedDiff = parseDiffIntoHunks(diffText)
+  // Parsed once per distinct diff text: re-renders of the same payload hit
+  // the cache layer inside parseDiffIntoHunks, while the memo itself also
+  // skips the cache lookup on unchanged renders.
+  const parsedDiff = useMemo(() => parseDiffIntoHunks(diffText), [diffText])
+  // Size-suffix totals reuse the same cached parse, never a second full walk.
+  const stats = useMemo(() => computeDiffStats(diffText), [diffText])
   const [collapsedHunks, setCollapsedHunks] = useState<Set<number>>(
     () =>
       new Set([
@@ -335,7 +362,6 @@ export const DiffViewer = ({
   }
 
   const { fileHeaders, hunks } = parsedDiff
-  const stats = computeDiffStats(diffText)
 
   // File headers stay plain muted text (bold for the ---/+++ file pair);
   // they are not part of any hunk, so they never reach the native <diff>.

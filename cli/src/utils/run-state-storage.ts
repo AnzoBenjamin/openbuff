@@ -1,4 +1,5 @@
 import * as fs from 'fs'
+import { readdir, unlink } from 'fs/promises'
 import path from 'path'
 
 import {
@@ -6,6 +7,11 @@ import {
   getMostRecentChatDir,
   getProjectDataDir,
 } from '../project-files'
+import {
+  atomicWriteJsonFile,
+  cancelAndDrainPendingWriteFor,
+  schedulePersistenceWrite,
+} from './persistence-queue'
 import { logger } from './logger'
 import { sanitizeForChatPersistence } from './payload-sanitizer'
 
@@ -235,20 +241,28 @@ export function loadChatStateFromDirectory(
   return loadChatStateFromCompatibilityFiles(chatDir)
 }
 
-function writeJsonAtomic(filePath: string, value: unknown): void {
-  const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`
-  fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), { mode: 0o600 })
-  try {
-    fs.renameSync(tempPath, filePath)
-  } catch (error) {
-    if (
-      !['EEXIST', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')
-    ) {
-      throw error
-    }
-    fs.unlinkSync(filePath)
-    fs.renameSync(tempPath, filePath)
-  }
+/**
+ * Queue one atomic chat-state output file: temp file + rename, coalesced per
+ * file path on the persistence queue so a rapid save burst writes each file
+ * at most once. Serialization has already happened by the time the caller
+ * invokes this; only the disk IO is asynchronous. Write failures are logged
+ * (fail-soft, matching saveChatState's error contract) and never thrown.
+ */
+function scheduleChatStateWrite(filePath: string, serialized: string): void {
+  schedulePersistenceWrite({
+    targetKey: filePath,
+    label: filePath,
+    run: () => atomicWriteJsonFile(filePath, serialized, { mode: 0o600 }),
+    onError: (error) => {
+      logger.error(
+        {
+          filePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Failed to save chat state',
+      )
+    },
+  })
 }
 
 export function isValidChatId(chatId: string): boolean {
@@ -343,6 +357,13 @@ export function saveChatState(
       messages: persistedMessages,
     }
 
+    // Serialize (sanitize + compact JSON) happens synchronously so the
+    // persisted bytes always match THIS call's arguments and the caller still
+    // sees an up-to-date in-memory snapshot; only the disk IO (queued via
+    // scheduleChatStateWrite) is asynchronous. Compact JSON keeps the three
+    // envelopes lean; file names, layout, and the version contract below are
+    // unchanged.
+    //
     // The envelope is the authoritative resume state, so a crash cannot pair
     // one turn's run state with another turn's messages. Legacy files remain
     // as atomic compatibility/read-model outputs for history views.
@@ -352,7 +373,9 @@ export function saveChatState(
     // version), it must not be overwritten — a downgraded CLI continuing a
     // session would otherwise destroy the newer release's only authoritative
     // resume state. The legacy sidecars still advance so compatibility
-    // recovery and history views keep working for this process.
+    // recovery and history views keep working for this process. The version
+    // check reads the CURRENT on-disk envelope synchronously, before any of
+    // this call's writes are queued.
     const chatStatePath = getChatStatePath()
     const diskVersion = readEnvelopeVersion(chatStatePath)
     if (
@@ -368,10 +391,13 @@ export function saveChatState(
         'Chat state envelope has an unrecognized version; leaving it in place and updating only the legacy compatibility files',
       )
     } else {
-      writeJsonAtomic(chatStatePath, envelope)
+      scheduleChatStateWrite(chatStatePath, JSON.stringify(envelope))
     }
-    writeJsonAtomic(getRunStatePath(), persistedRunState)
-    writeJsonAtomic(getChatMessagesPath(), persistedMessages)
+    scheduleChatStateWrite(getRunStatePath(), JSON.stringify(persistedRunState))
+    scheduleChatStateWrite(
+      getChatMessagesPath(),
+      JSON.stringify(persistedMessages),
+    )
 
     // Cross-session context-archive persistence: fire-and-forget flush of the
     // run's compaction archive into the memory-v2 store (the recall_context
@@ -379,10 +405,12 @@ export function saveChatState(
     // run state is flushed, not the raw one: the durable store must never
     // persist tool bodies less redacted than the run-state.json produced by
     // the same sanitizeForChatPersistence pass. Deliberately NOT
-    // awaited — saveChatState must stay synchronous — and safe to fire here
-    // without an import cycle: context-archive-sync → provider → utils/env +
-    // project-files, none of which import back into run-state-storage. The
-    // helper is no-throw; the .catch is a double-guard so an unexpected
+    // awaited — saveChatState keeps sanitize + serialize synchronous and only
+    // the queued disk writes above and this archive flush are asynchronous —
+    // and safe to fire here without an import cycle: context-archive-sync →
+    // provider → utils/env + project-files, none of which import back into
+    // run-state-storage. The helper is no-throw; the .catch is a
+    // double-guard so an unexpected
     // rejection can only ever log.
     void flushContextArchiveSnapshots(persistedRunState).catch((error) => {
       logger.warn(
@@ -475,9 +503,12 @@ export type TurnCheckpoint = {
 /**
  * P2-3: Save a mid-turn checkpoint atomically (temp file + rename). Called by
  * the SDK's onCheckpoint callback (throttled to 30s inside loopAgentSteps).
- * Failures are swallowed and logged — checkpoint persistence must never kill
- * the run (loopAgentSteps also catches, but we double-guard here since this
- * runs on the CLI's filesystem).
+ * Serialize (sanitize + compact JSON) happens synchronously so the serialized
+ * bytes always match THIS call's snapshot; only the disk IO is queued on the
+ * persistence queue (coalesced per checkpoint path). Failures are swallowed
+ * and logged — checkpoint persistence must never kill the run (loopAgentSteps
+ * also catches, but we double-guard here since this runs on the CLI's
+ * filesystem).
  */
 export function saveCheckpoint(
   checkpointTurnId: string,
@@ -490,30 +521,46 @@ export function saveCheckpoint(
       checkpointTime: Date.now(),
       mainAgentState: sanitizeForChatPersistence(mainAgentState),
     }
-    const serialized = JSON.stringify(checkpoint, null, 2)
+    const serialized = JSON.stringify(checkpoint)
     // Atomic write: temp file in the same directory, then rename. Same-dir
     // rename is atomic on POSIX and prevents a partial-write checkpoint from
-    // corrupting the resume path on a crash mid-write.
+    // corrupting the resume path on a crash mid-write. The run() below
+    // executes on the serial persistence queue, so the sweep can never race
+    // this target's own in-flight rename.
     const dir = path.dirname(checkpointPath)
     const tempPath = `${checkpointPath}.tmp.${process.pid}`
-    // Sweep stale temp files from prior crashed writes (a previous pid that
-    // died between writeFileSync and renameSync). Bounded to the checkpoint's
-    // own directory and the `.tmp.` prefix so we never touch unrelated files.
-    try {
-      for (const entry of fs.readdirSync(dir)) {
-        if (
-          entry.startsWith(`${CHECKPOINT_FILENAME}.tmp.`) &&
-          entry !== path.basename(tempPath)
-        ) {
-          fs.unlinkSync(path.join(dir, entry))
+    schedulePersistenceWrite({
+      targetKey: checkpointPath,
+      label: checkpointPath,
+      run: async () => {
+        // Sweep stale temp files from prior crashed writes (a previous pid
+        // that died between write and rename). Bounded to the checkpoint's
+        // own directory and the `.tmp.` prefix so we never touch unrelated
+        // files.
+        try {
+          for (const entry of await readdir(dir)) {
+            if (
+              entry.startsWith(`${CHECKPOINT_FILENAME}.tmp.`) &&
+              entry !== path.basename(tempPath)
+            ) {
+              await unlink(path.join(dir, entry))
+            }
+          }
+        } catch {
+          // Best-effort cleanup; a missing dir or race here must not block the
+          // checkpoint write below.
         }
-      }
-    } catch {
-      // Best-effort cleanup; a missing dir or race here must not block the
-      // checkpoint write below.
-    }
-    fs.writeFileSync(tempPath, serialized)
-    fs.renameSync(tempPath, checkpointPath)
+        await atomicWriteJsonFile(checkpointPath, serialized, {
+          tmpPath: tempPath,
+        })
+      },
+      onError: (error) => {
+        logger.warn(
+          { error: error instanceof Error ? error.message : String(error) },
+          'Failed to save mid-turn checkpoint (non-fatal)',
+        )
+      },
+    })
   } catch (error) {
     logger.warn(
       { error: error instanceof Error ? error.message : String(error) },
@@ -565,10 +612,22 @@ export function loadCheckpoint(): TurnCheckpoint | null {
  * P2-3: Clear the mid-turn checkpoint. Called after a turn completes
  * successfully (so a stale checkpoint can't interfere with the next turn) and
  * when a checkpoint is rejected as stale on resume.
+ *
+ * Async serialization is required here, not a plain cancel: the persistence
+ * pump deletes a write's map entry BEFORE awaiting run(), so an in-flight
+ * rename is invisible to cancelPendingPersistenceWrite and could land after
+ * the unlink below, resurrecting a checkpoint from a completed turn. On the
+ * next restore, loadCheckpoint would accept that file (its turnId still
+ * matches a restored message) and a resumed send could fork from a stale
+ * mid-turn snapshot instead of the final saved state.
  */
-export function clearCheckpoint(): void {
+export async function clearCheckpoint(): Promise<void> {
   try {
     const checkpointPath = getCheckpointPath()
+    // Cancel the queued write, then drain so any write already handed to the
+    // pump settles before the unlink below. The pump serializes writes, so
+    // after this await no dequeued-but-unwritten rename can follow it.
+    await cancelAndDrainPendingWriteFor(checkpointPath)
     if (fs.existsSync(checkpointPath)) {
       fs.unlinkSync(checkpointPath)
       logger.debug({ checkpointPath }, 'Cleared mid-turn checkpoint')
@@ -582,13 +641,21 @@ export function clearCheckpoint(): void {
 }
 
 /**
- * Clear the saved state files
+ * Clear the saved state files. Clear-then-unlink on each target is awaited
+ * (see clearCheckpoint) so an in-flight write cannot land after a target's
+ * unlink and resurrect the cleared state.
  */
-export function clearChatState(): void {
+export async function clearChatState(): Promise<void> {
   try {
     const runStatePath = getRunStatePath()
     const messagesPath = getChatMessagesPath()
     const chatStatePath = getChatStatePath()
+
+    // Cancel queued writes and drain the pump first so a pending save cannot
+    // resurrect any of these files after the unlinks below.
+    await cancelAndDrainPendingWriteFor(runStatePath)
+    await cancelAndDrainPendingWriteFor(messagesPath)
+    await cancelAndDrainPendingWriteFor(chatStatePath)
 
     if (fs.existsSync(runStatePath)) {
       fs.unlinkSync(runStatePath)

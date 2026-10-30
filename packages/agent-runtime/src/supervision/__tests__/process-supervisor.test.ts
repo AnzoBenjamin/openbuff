@@ -775,6 +775,175 @@ describe('spawnSettledSubagent', () => {
   )
 })
 
+// cancel-softlock fix: parent-cancellation kill. The PARENT's AbortSignal
+// is threaded into spawnSettledSubagent; when it aborts, the child's WHOLE
+// process group is killed via the SAME SIGTERM → SIGKILL grace escalation
+// the deadline path uses (no new wall-clock watchdog), the settle keeps the
+// honest signal-death reason (never a fabricated 'timeout'), and the abort
+// listener is removed on every settle path so no listener leaks across
+// spawns.
+describe('spawnSettledSubagent parent-abort kill (cancel-softlock fix)', () => {
+  /**
+   * A stub child that settles the moment it is group-killed (a child that
+   * honors SIGTERM): killGroup closes the streams and resolves the exit by
+   * signal, so the fast abort tests run in milliseconds instead of waiting
+   * out the supervisor's SIGTERM→SIGKILL grace window. killGroup is ALWAYS
+   * exposed (the default seam spawns detached, so the group kill is the
+   * production path); direct `kill` is a no-op — the abort path with a
+   * killGroup seam must never reach it.
+   */
+  function abortTestChildSeam(sinks: {
+    groupKills: Array<'SIGTERM' | 'SIGKILL'>
+  }): SettleSpawnSeam {
+    return () => {
+      let closeStdout: (() => void) | undefined
+      let closeStderr: (() => void) | undefined
+      let resolveExit: (code: number | null) => void = () => {}
+      const die = (signal: 'SIGTERM' | 'SIGKILL'): void => {
+        sinks.groupKills.push(signal)
+        closeStdout?.()
+        closeStderr?.()
+        resolveExit(null)
+      }
+      return {
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            closeStdout = () => controller.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            closeStderr = () => controller.close()
+          },
+        }),
+        exited: new Promise<number | null>((resolve) => {
+          resolveExit = resolve
+        }),
+        kill: () => {},
+        killGroup: (signal) => die(signal ?? 'SIGTERM'),
+      }
+    }
+  }
+
+  it('parent abort: kills the WHOLE group and settles crashed (never a fabricated timeout)', async () => {
+    const groupKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const controller = new AbortController()
+    const settlePromise = spawnSettledSubagent({
+      childModulePath: fixturePath,
+      spawn: abortTestChildSeam({ groupKills }),
+      signal: controller.signal,
+    })
+    // Abort while the settle is pending — the stub child never exits on its
+    // own, so only the abort kill can settle it.
+    await Bun.sleep(20)
+    controller.abort()
+    const result = await settlePromise
+    // The killed child settles as the honest signal-death crash, NOT
+    // 'timeout': the abort path must not masquerade as a deadline expiry.
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('nonzero_exit')
+    expect(result.killed).toBe(true)
+    expect(result.exitCode).toBeNull()
+    expect(groupKills).toEqual(['SIGTERM'])
+  })
+
+  it('parent abort: escalates to SIGKILL when the child ignores SIGTERM (a stubborn child can never hang the settle)', async () => {
+    const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const groupKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const controller = new AbortController()
+    const settlePromise = spawnSettledSubagent({
+      childModulePath: fixturePath,
+      spawn: recordingChildSeam({ direct: directKills, group: groupKills }),
+      signal: controller.signal,
+    })
+    await Bun.sleep(20)
+    controller.abort()
+    const result = await settlePromise
+    // The SIGTERM-ignoring child forced the escalation, and the settle still
+    // completed within the grace window instead of hanging forever (the
+    // softlock this fix removes).
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('nonzero_exit')
+    expect(result.killed).toBe(true)
+    expect(groupKills).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(directKills).toEqual([])
+    expect(result.durationMs).toBeLessThan(SETTLE_KILL_GRACE_MS + 1_000)
+  })
+
+  it('parent abort: the listener is removed on a normal settle — a late abort kills nothing', async () => {
+    const groupKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const controller = new AbortController()
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      // A child that settles ok on its own and is never killed.
+      spawn: () => ({
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `${JSON.stringify(VALID_SETTLE_RECEIPT)}\n`,
+              ),
+            )
+            controller.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        exited: Promise.resolve(0),
+        kill: () => {},
+        killGroup: (signal) => groupKills.push(signal ?? 'SIGTERM'),
+      }),
+      signal: controller.signal,
+    })
+    expect(result.outcome).toBe('ok')
+    // Aborting the parent signal AFTER the normal settle must not kill
+    // anything: the abort listener was removed on the settle path (no
+    // listener leak across spawns).
+    controller.abort()
+    expect(groupKills).toEqual([])
+  })
+
+  it('parent abort: an already-aborted signal kills the just-spawned child immediately', async () => {
+    const groupKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const controller = new AbortController()
+    controller.abort()
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      spawn: abortTestChildSeam({ groupKills }),
+      signal: controller.signal,
+    })
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('nonzero_exit')
+    expect(result.killed).toBe(true)
+    expect(groupKills).toEqual(['SIGTERM'])
+  })
+
+  it.skipIf(!canSpawn || process.platform === 'win32')(
+    'parent abort: a REAL child dies on the group kill and settles well before its own sleep ends',
+    async () => {
+      const controller = new AbortController()
+      const settlePromise = spawnSettledSubagent({
+        childModulePath: fixturePath,
+        args: ['slow', '30000'],
+        signal: controller.signal,
+      })
+      // Abort shortly after the child is up: the SIGTERM group kill ends the
+      // Bun child, so the settle completes in ~300ms — the pre-fix behavior
+      // awaited the child's full 30s sleep (the cancel softlock).
+      await Bun.sleep(300)
+      controller.abort()
+      const result = await settlePromise
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toBe('nonzero_exit')
+      expect(result.killed).toBe(true)
+      expect(result.durationMs).toBeLessThan(SETTLE_KILL_GRACE_MS + 1_500)
+    },
+  )
+})
+
 // P2-T8 adoption slice: buildSupervisedChildEnv — the child env allowlist
 // builder. Asserts the EXACT key set: seeded credential keys present under
 // their canonical env names, every unseeded key absent, and NO ambient keys

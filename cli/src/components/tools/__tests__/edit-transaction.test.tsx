@@ -9,6 +9,62 @@ import type { ToolBlock } from '../types'
 
 initializeThemeStore()
 
+test('cached render data is frozen and consumers receive an isolated copy (transaction-cache-mutable-shared)', async () => {
+  const { getTransactionRenderData } = await import('../edit-transaction')
+  const payload = {
+    kind: 'file_mutation_result',
+    version: 1,
+    operationId: 'op-cache',
+    outcome: 'applied',
+    authorityTier: 'portable_path',
+    receiptId: 'r-cache',
+    actions: [
+      {
+        actionId: 'a',
+        index: 0,
+        action: 'update',
+        path: 'src/cache.ts',
+        outcome: 'applied',
+        beforeHash: 'before',
+        afterHash: 'after',
+      },
+    ],
+    errors: [],
+    freshCapabilities: [],
+  }
+  const block = {
+    type: 'tool',
+    toolName: 'edit_transaction',
+    toolCallId: 'tx-cache-repeat',
+    input: { edits: [] },
+    outputRaw: [{ type: 'json', value: payload }],
+  } as ToolBlock
+
+  const first = getTransactionRenderData(block)
+  expect(first.files.length).toBe(1)
+
+  // Hostile consumer mutates the returned object (an extend/push the old
+  // contract warned against): it must corrupt neither the memoized entry nor
+  // a subsequent re-render of the same block.
+  expect(() => {
+    try {
+      first.files.push({ path: 'leaked.ts', diff: null })
+      first.rows.push('leaked row')
+    } catch {
+      // Frozen cached data throwing is also an acceptable guard.
+    }
+  }).not.toThrow()
+
+  const second = getTransactionRenderData(block)
+  expect(second.files).toHaveLength(1)
+  expect(second.rows).not.toContain('leaked row')
+  // The consumer's copy is a fresh envelope: mutating it cannot touch the
+  // cache, and the next render re-reads pristine data.
+  second.files.push({ path: 'pushed-by-consumer.ts', diff: null })
+  const third = getTransactionRenderData(block)
+  expect(third.files.map((file) => file.path)).toEqual(['src/cache.ts'])
+})
+
 test('[ERR-M06] transaction renders per-action rollback and failure detail', () => {
   const block = {
     type: 'tool',

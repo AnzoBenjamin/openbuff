@@ -453,10 +453,18 @@ describe('Spawn Agents Message History', () => {
     expect(capturedSubAgentState.playbookContext).toEqual(playbooks)
     expect(capturedSubAgentState.playbookContext).not.toBe(playbooks)
     expect(capturedSubAgentState.playbookContext[0]).not.toBe(playbooks[0])
-    // Mutating the child's copy (a row + the array) must not affect the
-    // parent's playbook context.
-    capturedSubAgentState.playbookContext[0].title = 'mutated by child'
-    capturedSubAgentState.playbookContext.push(makePlaybook('pb-3'))
+    // The shared spawn-batch clone is deep-frozen (dev/test guard,
+    // createAgentState's memoizedStructuredClone → deepFreezeSharedClone): a
+    // violating in-place write on the child's copy throws and can never reach
+    // the parent — sibling isolation holds strictly.
+    let frozenWriteThrew = false
+    try {
+      capturedSubAgentState.playbookContext[0].title = 'mutated by child'
+      capturedSubAgentState.playbookContext.push(makePlaybook('pb-3'))
+    } catch {
+      frozenWriteThrew = true
+    }
+    expect(frozenWriteThrew).toBe(true)
     expect(sessionState.mainAgentState.playbookContext).toHaveLength(2)
     expect(sessionState.mainAgentState.playbookContext[0].title).toBe(
       'Run local CI before spawning the git committer',

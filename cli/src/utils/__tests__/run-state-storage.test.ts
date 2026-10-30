@@ -4,12 +4,16 @@ import * as path from 'path'
 import * as os from 'os'
 
 import { setProjectRoot, setCurrentChatId } from '../../project-files'
+import { drainPersistenceQueue } from '../persistence-queue'
 import {
   getAllToggleIdsFromMessages,
   getRunStatePath,
   getChatMessagesPath,
   getChatStatePath,
   saveChatState,
+  saveCheckpoint,
+  getCheckpointPath,
+  clearCheckpoint,
   loadMostRecentChatState,
   isValidChatId,
   loadChatStateFromDirectory,
@@ -17,6 +21,7 @@ import {
 } from '../run-state-storage'
 import type { ChatMessage, ContentBlock } from '../../types/chat'
 import type { RunState } from '@openbuff/sdk'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 // Mock the project-files module
 const mockProjectDataDir = path.join(os.tmpdir(), 'codebuff-test-project')
@@ -422,7 +427,7 @@ describe('run-state-storage', () => {
       }
     })
 
-    test('saveChatState leaves a newer envelope in place instead of clobbering it', () => {
+    test('saveChatState leaves a newer envelope in place instead of clobbering it', async () => {
       // A downgraded CLI continuing a session must not destroy the newer
       // release's chat-state.json: the read path relies on that file being
       // found again after re-upgrade.
@@ -459,6 +464,8 @@ describe('run-state-storage', () => {
         ],
       )
 
+      // Persisted writes are queued, not synchronous: drain before asserting.
+      await drainPersistenceQueue()
       expect(JSON.parse(fs.readFileSync(chatStatePath, 'utf8'))).toEqual(
         newerEnvelope,
       )
@@ -468,7 +475,7 @@ describe('run-state-storage', () => {
       expect(fs.existsSync(getChatMessagesPath())).toBe(true)
     })
 
-    test('saveChatState still refreshes an envelope of its own version', () => {
+    test('saveChatState still refreshes an envelope of its own version', async () => {
       // The guard must only skip unrecognized versions, never strand a stale
       // session behind a same-version envelope.
       fs.writeFileSync(
@@ -488,6 +495,8 @@ describe('run-state-storage', () => {
         ],
       )
 
+      // Persisted writes are queued, not synchronous: drain before asserting.
+      await drainPersistenceQueue()
       const parsed = JSON.parse(fs.readFileSync(getChatStatePath(), 'utf8'))
       expect(parsed.version).toBe(1)
       expect(parsed.messages).toHaveLength(1)
@@ -856,7 +865,7 @@ describe('run-state-storage', () => {
       }
     })
 
-    test('compactionArchive incl. D26 eviction snapshot survives saveChatState → loadMostRecentChatState deep-equal', () => {
+    test('compactionArchive incl. D26 eviction snapshot survives saveChatState → loadMostRecentChatState deep-equal', async () => {
       // docs/agents-and-tools.md claims compactionArchive is plain-JSON
       // session state ("sessions persisted before the field existed parse
       // without it"); this pins that the whole archive subtree round-trips
@@ -883,6 +892,8 @@ describe('run-state-storage', () => {
       } as unknown as RunState
 
       saveChatState(runState, [])
+      // Persisted writes are queued, not synchronous: drain before asserting.
+      await drainPersistenceQueue()
       const loaded = loadMostRecentChatState(chatId)
 
       expect(loaded).not.toBeNull()
@@ -913,6 +924,108 @@ describe('run-state-storage', () => {
       expect(evictionSnapshot?.['reason']).toBe(
         'deterministic tool-result eviction (stale recency)',
       )
+    })
+  })
+
+  describe('async write queue behavior (persistence rewire)', () => {
+    // Same isolated temp-dir pattern as the envelope-tolerance suite above.
+    const tmpConfigDir = path.join(
+      os.tmpdir(),
+      `codebuff-async-queue-test-${process.pid}`,
+    )
+    const originalConfigDir = process.env.OPENBUFF_CONFIG_DIR
+
+    beforeEach(() => {
+      mock.restore()
+      if (fs.existsSync(tmpConfigDir)) {
+        fs.rmSync(tmpConfigDir, { recursive: true, force: true })
+      }
+      fs.mkdirSync(tmpConfigDir, { recursive: true })
+      process.env.OPENBUFF_CONFIG_DIR = tmpConfigDir
+      setProjectRoot(tmpConfigDir)
+      setCurrentChatId('test-chat-async-queue')
+    })
+
+    afterEach(() => {
+      if (originalConfigDir === undefined) {
+        delete process.env.OPENBUFF_CONFIG_DIR
+      } else {
+        process.env.OPENBUFF_CONFIG_DIR = originalConfigDir
+      }
+      if (fs.existsSync(tmpConfigDir)) {
+        fs.rmSync(tmpConfigDir, { recursive: true, force: true })
+      }
+    })
+
+    const makeBareAgentState = () =>
+      ({
+        agentId: 'async-queue-agent',
+        messageHistory: [],
+        stepsRemaining: 1,
+      }) as unknown as AgentState
+
+    test('saveChatState returns off the synchronous stack and flushes on drain', async () => {
+      const runState = {
+        output: { type: 'error', message: 'queued output' },
+      } as unknown as RunState
+      const messages: ChatMessage[] = [
+        {
+          id: 'queued-msg-1',
+          variant: 'user',
+          content: 'Queued prompt',
+          timestamp: new Date().toISOString(),
+          blocks: [],
+        },
+      ]
+
+      saveChatState(runState, messages)
+
+      // The queue pumps its first tick off the synchronous stack, so a save
+      // returns before any output file may exist — this is what keeps the
+      // render thread free of disk IO.
+      expect(fs.existsSync(getChatStatePath())).toBe(false)
+      expect(fs.existsSync(getRunStatePath())).toBe(false)
+      expect(fs.existsSync(getChatMessagesPath())).toBe(false)
+
+      await drainPersistenceQueue()
+
+      expect(fs.existsSync(getRunStatePath())).toBe(true)
+      expect(fs.existsSync(getChatMessagesPath())).toBe(true)
+      const envelope = JSON.parse(fs.readFileSync(getChatStatePath(), 'utf8'))
+      expect(envelope.version).toBe(1)
+      expect(envelope.runState).toEqual({
+        output: { type: 'error', message: 'queued output' },
+      })
+      expect(envelope.messages).toEqual(messages)
+      // Compact JSON: the persisted envelope carries no pretty-print
+      // indentation; file names and layout are unchanged.
+      const raw = fs.readFileSync(getChatStatePath(), 'utf8')
+      expect(raw.startsWith('{"version":1,')).toBe(true)
+      expect(raw).not.toContain('\n  ')
+    })
+
+    test('saveCheckpoint writes through the queue without blocking on disk IO', async () => {
+      saveCheckpoint('turn-async-queue', makeBareAgentState())
+      expect(fs.existsSync(getCheckpointPath())).toBe(false)
+
+      await drainPersistenceQueue()
+
+      expect(fs.existsSync(getCheckpointPath())).toBe(true)
+      const dir = fs.readdirSync(path.dirname(getCheckpointPath()))
+      expect(dir.some((entry) => entry.endsWith('.tmp'))).toBe(false)
+      const checkpoint = JSON.parse(
+        fs.readFileSync(getCheckpointPath(), 'utf8'),
+      )
+      expect(checkpoint.checkpointTurnId).toBe('turn-async-queue')
+    })
+
+    test('clearCheckpoint cancels a still-pending checkpoint save', async () => {
+      saveCheckpoint('turn-would-be-canceled', makeBareAgentState())
+      clearCheckpoint()
+
+      await drainPersistenceQueue()
+
+      expect(fs.existsSync(getCheckpointPath())).toBe(false)
     })
   })
 })

@@ -26,6 +26,13 @@
  *    timeout path SIGTERMs then SIGKILLs the WHOLE group (negative-pid
  *    kill) so shell grandchildren die too; injected seams without a
  *    `killGroup` fall back to the direct-pid kill.
+ *  - Parent cancellation (cancel-softlock fix): an optional `signal` param
+ *    carries the PARENT's AbortSignal. When it aborts, the child's WHOLE
+ *    process group is killed via the SAME SIGTERM → SIGKILL grace
+ *    escalation (no new wall-clock watchdog), the killed child settles with
+ *    the honest signal-death reason (never a fabricated 'timeout'), and the
+ *    abort listener is removed on every settle path. Omitted ⇒
+ *    byte-identical behavior.
  *  - Caps: stdout capture 8 MiB (bytes beyond the cap are counted and
  *    discarded → outcome 'truncated'); stderr capture 64 KiB, bounded-log
  *    diagnostics ONLY — stderr is NEVER parsed into the receipt.
@@ -170,6 +177,16 @@ export type SpawnSettledSubagentParams = {
   cwd?: string
   /** Injectable monotonic clock for durationMs (see NOTE below). */
   now?: () => number
+  /**
+   * cancel-softlock fix: the PARENT's AbortSignal. When it aborts — or is
+   * already aborted at spawn time — the child's WHOLE process group is
+   * killed via the same SIGTERM → SIGKILL grace escalation the deadline
+   * path uses (shared killCommitted latch — never a double kill), with NO
+   * new wall-clock watchdog, and the settle keeps the honest signal-death
+   * reason (never a fabricated 'timeout'). The listener is removed on every
+   * settle path. Omitted ⇒ byte-identical behavior (no listener, no kill).
+   */
+  signal?: AbortSignal
   /** When set, the deadline is an INACTIVITY window reset on each activity
    *  event (see onActivity); omitted → the single wall-clock timeoutMs timer. */
   idleTimeoutMs?: number
@@ -197,7 +214,7 @@ export type SettledSubagentResult = {
   durationMs: number
   /** Total bytes the child wrote to stdout, before the capture cap discard. */
   stdoutBytes: number
-  /** True when the supervisor killed the child (timeout settle). */
+  /** True when the supervisor killed the child (timeout or parent-abort settle). */
   killed: boolean
   /** Bounded-log stderr tail (<= 64 KiB); never parsed into the receipt. */
   stderrTail: string
@@ -358,15 +375,18 @@ export async function spawnSettledSubagent(
     }
   }
 
-  // Idempotent deadline-kill latch: once committed, late activity events are
+  // Idempotent kill latch: once committed, late activity events are
   // neutralized (markActivity's killCommitted guard) and the maxLifetime cap
-  // never gets rearmed. commitKill keeps the legacy timedOut=true semantics
-  // so the settle path still picks crashReason='timeout'.
+  // never gets rearmed. The deadline callers keep the legacy timedOut=true
+  // semantics so the settle path still picks crashReason='timeout'; the
+  // parent-abort caller passes markTimedOut=false so the settle keeps the
+  // honest signal-death reason instead of a fabricated 'timeout'
+  // (cancel-softlock fix).
   let killCommitted = false
-  const commitKill = () => {
+  const commitKill = (markTimedOut = true) => {
     if (killCommitted) return
     killCommitted = true
-    timedOut = true
+    if (markTimedOut) timedOut = true
     killed = true
     try {
       killChild('SIGTERM')
@@ -409,12 +429,36 @@ export async function spawnSettledSubagent(
   }
   const unsubscribeActivity = params.onActivity?.(markActivity)
 
+  // Parent-cancellation kill (cancel-softlock fix): the PARENT's signal does
+  // the killing (the child never observes it — the request is
+  // JSON-serialized). On abort the SAME SIGTERM → SIGKILL grace escalation
+  // runs through the shared killCommitted latch, so a concurrent deadline
+  // commit wins and the abort becomes a no-op — never a double kill — and
+  // NO new wall-clock watchdog is armed: the grace settle stays the only
+  // timer. An already-aborted signal kills the just-spawned child
+  // immediately instead of letting it run. The kill is wrapped in
+  // commitKill's try/catch (the child may already be dead — ESRCH), so the
+  // listener can never throw out of the abort event and crash the parent.
+  const onParentAbort = (): void => {
+    commitKill(false)
+  }
+  if (params.signal !== undefined) {
+    if (params.signal.aborted) {
+      onParentAbort()
+    } else {
+      params.signal.addEventListener('abort', onParentAbort, { once: true })
+    }
+  }
+
   const clearTimers = () => {
     if (termTimer !== undefined) clearTimeout(termTimer)
     if (idleTimer !== undefined) clearTimeout(idleTimer)
     if (killTimer !== undefined) clearTimeout(killTimer)
     if (maxTimer !== undefined) clearTimeout(maxTimer)
     unsubscribeActivity?.()
+    // cancel-softlock fix: drop the parent-abort listener on EVERY settle
+    // path (ok / crashed / internal error) — no listener leak across spawns.
+    params.signal?.removeEventListener('abort', onParentAbort)
   }
 
   try {

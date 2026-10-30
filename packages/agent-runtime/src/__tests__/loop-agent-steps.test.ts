@@ -2607,4 +2607,211 @@ describe('loopAgentSteps', () => {
     expect(history).toContain('does not populate structured output')
     expect(history).not.toContain('Your set_output call was rejected')
   })
+
+  // End-of-stream empty-output retry (ai@5 NoOutputGeneratedError). A provider
+  // that opens a stream, emits zero chunks, and closes cleanly makes
+  // runAgentStep throw with the message-prefixed error ('No output generated
+  // ...'), which historically killed the child with
+  // '{type:'error', message:'Agent run error: ...'} and NO retry even when the
+  // child's committed state was untouched. The loop now retries the same LLM
+  // step at most once, guarded on visible committed state. The mock must throw
+  // from the promptAiSdkStream generator to reproduce the same propagation a
+  // real empty stream has through processStream → runAgentStep → here.
+  const emptyCloseError = () =>
+    new Error('No output generated. Check the stream for errors.')
+  const assertNoErrorOutput = (output: { type?: unknown }) => {
+    expect(output).toBeDefined()
+    expect(output.type).not.toBe('error')
+  }
+
+  it('retries once and succeeds when the stream ends empty with no executed tool call', async () => {
+    setup()
+    let llmCalls = 0
+    const events: any[] = []
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCalls++
+      if (llmCalls === 1) {
+        throw emptyCloseError()
+      }
+      yield { type: 'text' as const, text: 'LLM response\n\n' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-retry-success')
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Exactly one extra attempt for the same step input: max 2 generations.
+    expect(llmCalls).toBe(2)
+    // A CLI-visible retry chunk with the same provider_status field shape the
+    // sdk layer emits for its own retries.
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'provider_status',
+        status: 'retrying',
+        attempt: 2,
+        maxAttempts: 2,
+        delayMs: 1_000,
+      }),
+    )
+    // The step completed with no error output at all.
+    assertNoErrorOutput(result.output)
+  })
+
+  it('surfaces the exact failure output when attempt 2 also ends empty', async () => {
+    setup()
+    let llmCalls = 0
+    const events: any[] = []
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCalls++
+      throw emptyCloseError()
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Bounded: one extra attempt, then failure — no retry loop.
+    expect(llmCalls).toBe(2)
+    // Upstream failover and parent receipt semantics are unchanged: the exact
+    // today's error envelope is surfaced for the second empty attempt too.
+    expect(result.output).toEqual({
+      type: 'error',
+      message:
+        'Agent run error: No output generated. Check the stream for errors.',
+    })
+    // The failure path is silent beyond what today shows: only the one
+    // retrying chunk from attempt 1 exists, nothing is emitted after the
+    // second empty failure.
+    expect(
+      events.filter((event) => event.type === 'provider_status'),
+    ).toHaveLength(1)
+  })
+
+  it('does not retry when a tool call executed before the empty end', async () => {
+    setup()
+    let llmCalls = 0
+    const events: any[] = []
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCalls++
+      yield { type: 'text' as const, text: 'Reading the file first.\n' }
+      yield createToolCallChunk('read_files', { paths: ['file1.txt'] })
+      throw emptyCloseError()
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // A tool call DID execute before the failure, so the guard surfaces the
+    // error immediately with NO retry: a retried generation could
+    // double-execute the tool and duplicate its committed state.
+    expect(llmCalls).toBe(1)
+    expect(result.output).toEqual({
+      type: 'error',
+      message:
+        'Agent run error: No output generated. Check the stream for errors.',
+    })
+    expect(events.filter((event) => event.type === 'provider_status'))
+      .toHaveLength(0)
+    // The executed tool call committed visible state exactly the way the
+    // guard detects it: a tool message for read_files landed in history and
+    // grew it beyond the pre-step length.
+    expect(
+      result.agentState.messageHistory.filter(
+        (message) =>
+          message.role === 'tool' && message.toolName === 'read_files',
+      ).length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('compacts once before the retry when context exceeds 0.7 of the window', async () => {
+    setup()
+    const events: any[] = []
+    // A 200k window puts the 0.7 retry-compaction threshold at 140_000 tokens
+    // while the loop's own semantic trigger stays at 156_000 and the
+    // mechanical ceiling at 176_000, so a ~144k transcript is over the retry
+    // threshold but under every pre-existing compaction path — the ONLY
+    // compacting pass observed here is the one the retry guard triggers.
+    agentTemplate.handleSteps = undefined
+    agentTemplate.spawnableAgents = ['context-pruner']
+    const chunk = 'old evidence '.repeat(500)
+    const chunkTokens = countTokens(chunk)
+    agentState.messageHistory = [
+      userMessage(chunk.repeat(Math.ceil(142_000 / chunkTokens))),
+    ]
+    // The pruner CHILD shares this mock (the compaction spreads the same
+    // params), so the counter must branch by agentId: only the parent's calls
+    // count as step attempts, and the child never throws.
+    let llmCalls = 0
+    runtimeParams.promptAiSdkStream = mock(async function* ({ agentId }) {
+      if (agentId !== 'test-agent') {
+        yield { type: 'text' as const, text: 'Pruner child response.' }
+        return promptSuccess('mock-pruner-child-message')
+      }
+      llmCalls++
+      if (llmCalls === 1) {
+        throw emptyCloseError()
+      }
+      yield { type: 'text' as const, text: 'LLM response\n\n' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-after-compact')
+    })
+    let prunerRuns = 0
+    const contextPruner = buildPrunerStub(function* () {
+      prunerRuns++
+      yield {
+        toolName: 'set_messages',
+        input: { messages: retainedMemoryTranscript() },
+        includeToolCall: false,
+      }
+    } as () => StepGenerator)
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      resolveModelContextWindow: mock(() => 200_000),
+      localAgentTemplates: {
+        'test-agent': agentTemplate,
+        'context-pruner': contextPruner,
+      },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Retry exactness: one extra generation after the failed empty attempt.
+    expect(llmCalls).toBe(2)
+    // Above 0.7 of the window the retry first runs ONE compaction pass via
+    // the existing runtime semantic compaction entry point (pruner ran
+    // exactly once), announced and settled with the run correlation.
+    expect(prunerRuns).toBe(1)
+    const startedEvents = events.filter(
+      (event) =>
+        event.type === 'context_compaction_status' &&
+        event.state === 'started',
+    )
+    expect(startedEvents).toHaveLength(1)
+    expect(startedEvents[0]).toMatchObject({
+      runId: expect.any(String),
+      agentId: 'test-agent-id',
+      resolvedContextWindowTokens: 200_000,
+    })
+    // The retried generation then succeeded (no error output), and the
+    // compaction result actually shrank the transcript the second attempt
+    // was sent with.
+    assertNoErrorOutput(result.output)
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain(
+      '<knowledge_memory>',
+    )
+  })
 })

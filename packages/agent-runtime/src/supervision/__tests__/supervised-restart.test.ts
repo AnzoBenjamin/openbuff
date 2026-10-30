@@ -14,6 +14,12 @@
  * replaced by the `_scheduleRestart` recording hook (no real sleeps), and
  * every seam call is bounded by a wall-clock race so a restart-loop bug
  * shows as a timeout failure, never a hung run. No unbounded loops.
+ *
+ * cancel-softlock fix: the final describe also pins the DEFAULT seam's
+ * per-call parent-abort signal wiring — the signal threads VERBATIM into
+ * spawnSettledSubagent (the supervisor's abort listener is the kill
+ * channel), and the restart loop never respawns a child the parent just
+ * cancelled (an abort kill settles as a restartable transport crash).
  */
 import { describe, expect, it } from 'bun:test'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
@@ -23,7 +29,10 @@ import type {
 } from '@codebuff/common/types/contracts/agent-runtime'
 
 import type { SpawnSettledSubagentParams } from '../process-supervisor'
-import { buildDefaultSpawnSupervised } from '../supervised-spawn'
+import {
+  buildDefaultSpawnSupervised,
+  type SpawnSupervisedFn,
+} from '../supervised-spawn'
 
 // ---- outcome-sequence injection (the only test-side seam available) ------
 
@@ -113,11 +122,12 @@ const SETTLE_TIMEOUT_MS = 5_000
 
 /** Fails the test (instead of hanging) when the seam does not settle in time. */
 async function settleBounded(
-  seam: (request: SupervisedSpawnRequest) => Promise<SettledSubagentResult>,
+  seam: SpawnSupervisedFn,
   request: SupervisedSpawnRequest,
+  options?: { signal?: AbortSignal },
 ): Promise<SettledSubagentResult> {
   return Promise.race([
-    seam(request),
+    seam(request, options),
     Bun.sleep(SETTLE_TIMEOUT_MS).then(() => {
       throw new Error(
         `supervised restart test did not settle within ${SETTLE_TIMEOUT_MS}ms — an unbounded restart loop would hang here`,
@@ -146,7 +156,7 @@ function buildRestartingSeam(policy: {
   backoffMultiplier?: number
   onRestart?: (info: { attempt: number; crashReason: string }) => void
 }): {
-  seam: (request: SupervisedSpawnRequest) => Promise<SettledSubagentResult>
+  seam: SpawnSupervisedFn
   record: RecordedRestart
 } {
   const record: RecordedRestart = { delays: [], observes: [] }
@@ -559,3 +569,78 @@ describe('supervised-spawn settle deadline wiring (absolute lifetime cap)', () =
     },
   )
 })
+
+// cancel-softlock fix: the per-call parent-abort signal wiring through the
+// DEFAULT seam. The tool-handler tests assert the FAKE seam receives the
+// signal and the supervisor tests pass the signal directly; these cases pin
+// the wrapper in between — the signal is threaded VERBATIM into
+// spawnSettledSubagent, and the restart loop never respawns a child the
+// parent just cancelled (an abort kill settles as a restartable transport
+// crash, so only the guard stops the respawn).
+describe(
+  'supervised-spawn parent-abort signal wiring (cancel-softlock fix)',
+  () => {
+    it('threads the per-call signal into spawnSettledSubagent verbatim', async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(okResult)
+      const seam = buildDefaultSpawnSupervised({}, undefined, {
+        _spawnSettledSubagent: spawnSettledSubagentStub,
+      })
+      const controller = new AbortController()
+      const result = await settleBounded(seam, REQUEST, {
+        signal: controller.signal,
+      })
+      expect(result).toBe(okResult)
+      const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+      // The signal rides into the supervisor — its abort listener is the
+      // kill channel that group-kills the child.
+      expect(settleParams.signal).toBe(controller.signal)
+    })
+
+    it(
+      'omits the signal key entirely when no per-call options are passed (byte-identical older callers)',
+      async () => {
+        resetSpawnQueue()
+        const okResult = settledOk()
+        queueSpawns(okResult)
+        const seam = buildDefaultSpawnSupervised({}, undefined, {
+          _spawnSettledSubagent: spawnSettledSubagentStub,
+        })
+        const result = await settleBounded(seam, REQUEST)
+        expect(result).toBe(okResult)
+        const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+        // Additive contract: a signal-less call carries no signal key at all,
+        // exactly the pre-fix supervisor params shape.
+        expect('signal' in settleParams).toBe(false)
+      },
+    )
+
+    it(
+      'never respawns a child the parent just cancelled (restartable crash + aborted signal)',
+      async () => {
+        resetSpawnQueue()
+        const abortKillCrash = settledCrash('nonzero_exit', {
+          exitCode: null,
+          killed: true,
+        })
+        // ONLY one entry is queued: a respawn (the pre-fix behavior — the
+        // abort kill settles as a RESTARTABLE transport crash) would consume
+        // a second spawn and throw 'queue exhausted', failing this test.
+        queueSpawns(abortKillCrash)
+        const { seam, record } = buildRestartingSeam({ maxAttempts: 3 })
+        const controller = new AbortController()
+        controller.abort()
+        const result = await settleBounded(seam, REQUEST, {
+          signal: controller.signal,
+        })
+        expect(spawnCallParams).toHaveLength(1)
+        expect(result).toBe(abortKillCrash)
+        // No backoff was scheduled and no restart observed: the loop ended
+        // on the cancelled-signal guard, not after burning the budget.
+        expect(record.delays).toEqual([])
+        expect(record.observes).toEqual([])
+      },
+    )
+  },
+)

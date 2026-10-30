@@ -159,18 +159,22 @@ export function isReceiptDowngradeBlocked(params: {
 }
 
 /**
- * Recover complete top-level fields from a truncated JSON object string.
- * Only includes keys whose values fully close; never invents incomplete values.
- * When the recovered fields form a reviewer receipt (attestation-core fields
- * plus a recognized verdict/coverage pair) but dimensions/requirementCoverage
- * were cut off mid-essay, fills minimal placeholders so schema validation can
- * still accept a receipt the model already decided. Non-reviewer outputs are
- * returned as recovered, without the reviewer-only keys injected.
+ * Ungated salvage scan for a truncated JSON object string: recovers the
+ * COMPLETE top-level fields of an object whose closing brace never arrived,
+ * never inventing incomplete values. Returns undefined when the input does
+ * not start with '{' or no field closes (non-JSON payloads included).
  *
- * Moved verbatim to this module in C2 of the json-overhaul; reviewer-receipt
- * gating uses the constants defined above in this same module.
+ * Unlike the reviewer-gated recoverTruncatedJsonObject below, this scan does
+ * NOT require reviewer-receipt keys: the agent-runtime stream-xml-parser
+ * salvages an overflowing unterminated tool-call payload once any single
+ * field (e.g. cb_tool_name) has closed, so a truncated edit_transaction body
+ * is salvage evidence while a truncated non-receipt set_output payload still
+ * fails closed through the gated entry point.
+ *
+ * Moved to this module in C2 of the json-overhaul; reviewer-receipt gating
+ * for the gated entry point uses the constants defined above.
  */
-export const recoverTruncatedJsonObject = (
+export const recoverTruncatedJsonObjectFields = (
   input: string,
 ): Record<string, unknown> | undefined => {
   const s = input.trim()
@@ -212,7 +216,21 @@ export const recoverTruncatedJsonObject = (
     break
   }
 
-  if (Object.keys(result).length === 0) return undefined
+  return Object.keys(result).length === 0 ? undefined : result
+}
+
+/**
+ * Reviewer-receipt-shaped recovery (gate on top of
+ * recoverTruncatedJsonObjectFields): only payloads carrying a gate-critical
+ * key (verdict / snapshotFingerprint / reviewedFiles) recover, because an
+ * unwrapped truncated set_output payload is promoted IS-Receipt or not at
+ * all. The scan itself lives in recoverTruncatedJsonObjectFields above.
+ */
+export const recoverTruncatedJsonObject = (
+  input: string,
+): Record<string, unknown> | undefined => {
+  const result = recoverTruncatedJsonObjectFields(input)
+  if (!result) return undefined
 
   const hasGateCritical = GATE_CRITICAL_KEYS.some((key) => key in result)
   if (!hasGateCritical) return undefined

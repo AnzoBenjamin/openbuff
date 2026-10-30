@@ -56,6 +56,7 @@ import {
   openRunJournalForRun,
   resolveRunJournalPath,
 } from '../utils/run-journal-path'
+import { describeRunConfigForLog } from '../utils/run-config-digest'
 
 interface UseSendMessageOptions {
   inputRef: React.MutableRefObject<any>
@@ -191,8 +192,22 @@ export const useSendMessage = ({
       // double-guard so an unexpected rejection can only ever log.
       const restoredRunState = loadedState.runState
       const restoredSessionState = restoredRunState.sessionState
-      if (restoredSessionState) {
-        const restoredMainAgentState = restoredSessionState.mainAgentState
+      // restore-hydration-unchecked-mainagentstate: loadChatStateFromDirectory
+      // validates runState presence and the messages array but never that
+      // sessionState.mainAgentState exists, so a persisted envelope shaped
+      // that way would throw an uncaught TypeError on the render thread —
+      // both HERE (unconditional deref) and in the .then merge below (which
+      // re-reads mainAgentState). Guard with a falsy check, warn, and skip
+      // the merge when the field is absent.
+      const restoredMainAgentState = restoredSessionState?.mainAgentState
+      if (!restoredMainAgentState) {
+        if (restoredSessionState) {
+          logger.warn(
+            { chatId: loadedState.chatId },
+            '[send-message] Restored session state has no mainAgentState; skipping context archive hydration merge',
+          )
+        }
+      } else {
         void hydrateContextArchiveSnapshots(
           restoredMainAgentState.compactionArchive,
         )
@@ -200,10 +215,18 @@ export const useSendMessage = ({
             const { runState: latestRunState, setRunState: setLatestRunState } =
               useChatStore.getState()
             const latestSessionState = latestRunState?.sessionState
+            // Re-verify before deref: the store could have been replaced
+            // between scheduling and settle (identity guards below), and a
+            // runState legitimately without mainAgentState must not throw
+            // here either.
+            const latestMainAgentState = latestSessionState?.mainAgentState
             if (
+              !latestRunState ||
+              !latestSessionState ||
+              !latestMainAgentState ||
               latestRunState !== restoredRunState ||
               latestSessionState !== restoredSessionState ||
-              latestSessionState.mainAgentState !== restoredMainAgentState
+              latestMainAgentState !== restoredMainAgentState
             ) {
               return
             }
@@ -249,7 +272,9 @@ export const useSendMessage = ({
             { checkpointTurnId: checkpoint.checkpointTurnId },
             '[send-message] Mid-turn checkpoint is stale (no matching message), discarding',
           )
-          clearCheckpoint()
+          // Fire-and-forget clear (cancel + drain + unlink is serialized
+          // inside clearCheckpoint itself; nothing here needs to wait on it).
+          void clearCheckpoint()
         }
       }
     }, 0)
@@ -636,7 +661,9 @@ export const useSendMessage = ({
             // Prompt doesn't match — user typed a new message. Discard the
             // stale checkpoint so it can't interfere with future turns.
             resumableCheckpointRef.current = null
-            clearCheckpoint()
+            // Serialize the clear with any in-flight queued checkpoint write
+            // BEFORE the next save can enqueue (see clearCheckpoint).
+            await clearCheckpoint()
           }
         }
 
@@ -679,8 +706,12 @@ export const useSendMessage = ({
           resumeInterruptedTurn,
         })
 
+        // Size digest only: most fields of the run config carry per-run
+        // transcript state, so the config is never stringified into the log
+        // — top-level fields are measured, not logged, and the
+        // [send-message] prefix is kept for grep-ability.
         logger.info(
-          { runConfig },
+          describeRunConfigForLog(runConfig),
           '[send-message] Sending message with sdk run config',
         )
         const runState = await client.run({
@@ -718,7 +749,9 @@ export const useSendMessage = ({
           return currentMessages
         })
         // The SDK state is authoritative for both success and cooperative abort.
-        clearCheckpoint()
+        // Awaited so the checkpoint clear (cancel + drain + unlink) is fully
+        // serialized before anything else enqueues for this target.
+        await clearCheckpoint()
         resumableCheckpointRef.current = null
         handleRunCompletion({
           runState,

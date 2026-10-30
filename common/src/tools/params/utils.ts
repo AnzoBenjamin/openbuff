@@ -61,7 +61,12 @@ export function coerceToObject(val: unknown): unknown {
 // scans under these bounds are linear; recovery parse attempts are
 // additionally candidate-capped for oversized payloads to keep worst-case CPU
 // bounded.
-const MAX_REPAIRABLE_JSON_LENGTH = 1_048_576
+/**
+ * Recovery/repair bound (1 MiB) for JSON-shaped tool-call payloads. Exported so
+ * the agent runtime's stream parser caps truncated-tool-call salvage at the
+ * same bound instead of hardcoding a copy of the number that drifts.
+ */
+export const MAX_REPAIRABLE_JSON_LENGTH = 1_048_576
 /**
  * Legacy classification bound. Payloads at or under this size keep the
  * original try-every-candidate recovery behavior; larger payloads cap the

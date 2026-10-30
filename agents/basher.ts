@@ -123,8 +123,14 @@ Do not use any tools! Only report the output of the command.`,
     const detach = params?.detach as boolean | undefined
     const shouldSaveFullLog =
       save_full_log === true && process_type !== 'BACKGROUND'
+    // Track whether the caller supplied failure_pattern: when it is absent
+    // (and save_full_log is not used), the basher reports inline with a
+    // bounded head+tail slice of the raw output instead of forcing a
+    // file-write round-trip.
+    const callerFailurePattern =
+      params?.failure_pattern as string | undefined
     const failure_pattern =
-      (params?.failure_pattern as string | undefined) ??
+      callerFailurePattern ??
       '\\(fail\\)|error:|Expected|Received|panic|Unhandled|not ok'
     const max_failure_lines = params?.max_failure_lines as number | undefined
     // M3-T1 (finite timeouts / bounded output): clamp max_failure_lines — NaN,
@@ -142,6 +148,34 @@ Do not use any tools! Only report the output of the command.`,
       numericMaxFailureLines === undefined
         ? DEFAULT_MAX_FAILURE_LINES
         : Math.min(MAX_FAILURE_LINES, Math.max(1, numericMaxFailureLines))
+    // Dual-window line extraction: 60% head / 40% tail of failureLineLimit so
+    // both early failure banners and late run summaries survive. Proportions
+    // are fixed so the shape stays deterministic for a given input.
+    // Bounded retention for the always-on full logs
+    // (basher-log-retention-unbounded): retention stays on (the operator
+    // goal: silent deletion forced another run just to see the log again),
+    // but it is now BOUNDED — on every full-log run a sweep line deletes the
+    // OLDEST full logs beyond FULL_LOG_RETENTION_COUNT before this run's own
+    // log file is created, so its own file is never swept and a long session
+    // cannot accumulate unbounded temp-file growth on the host. Deletion is
+    // scoped to the fixed /tmp/openbuff-basher-*.log prefix and best-effort
+    // (`|| true`), the same bounded-sweep pattern as the CLI's checkpoint
+    // temp sweep in run-state-storage.
+    const FULL_LOG_RETENTION_COUNT = 20
+    const failureHeadLines = Math.floor(failureLineLimit * 0.6)
+    const failureTailLines = failureLineLimit - failureHeadLines
+    // Inline raw-output window: when no failure_pattern is supplied, the
+    // report includes a bounded head+tail slice of the raw output so early
+    // banners and late summaries survive without forcing save_full_log.
+    // Reuses MAX_FAILURE_LINES semantics and keeps the window strictly
+    // bounded (~80 lines total, fixed 60% head / 40% tail proportions).
+    const inlineLineLimit = Math.min(
+      80,
+      DEFAULT_MAX_FAILURE_LINES,
+      MAX_FAILURE_LINES,
+    )
+    const inlineHeadLines = Math.floor(inlineLineLimit * 0.6)
+    const inlineTailLines = inlineLineLimit - inlineHeadLines
     // No default timeout cap: agent tasks can take arbitrarily long, and a
     // hard wall-clock limit kills legitimate long-running work (test suites,
     // builds, editor think-time). Callers that want a cap pass timeout_seconds
@@ -162,14 +196,39 @@ Do not use any tools! Only report the output of the command.`,
     const commandToRun = shouldSaveFullLog
       ? [
           'set -o pipefail',
+          // Bounded retention sweep, run BEFORE this run's own log file
+          // exists (tee creates it below), so its own file is never swept.
+          // Best-effort: any ls/rm failure is swallowed so the sweep can
+          // never fail the command; only files matching the fixed
+          // /tmp/openbuff-basher-*.log prefix are ever deleted.
+          `older_full_logs=$(ls -1t /tmp/openbuff-basher-*.log 2>/dev/null | tail -n +${FULL_LOG_RETENTION_COUNT + 1}); if [ -n "$older_full_logs" ]; then for f in $older_full_logs; do rm -f -- "$f"; done; fi || true`,
           `(${command}) 2>&1 | tee ${shellQuote(fullLogPath!)} >/dev/null`,
           'status=${PIPESTATUS[0]}',
-          ...(retain_full_log ? [`echo "full_log_path=${fullLogPath}"`] : []),
+          // Always keep the full log on disk even when the caller didn't ask
+          // to retain it: silent deletion forces another run just to see the
+          // log again. Emit a one-line notice with the path and approximate
+          // size so the caller knows where the extract came from. Retention
+          // is bounded by the sweep line above (newest
+          // FULL_LOG_RETENTION_COUNT logs survive; older ones are
+          // best-effort deleted) so growth stays bounded
+          // (basher-log-retention-unbounded).
+          ...(!retain_full_log
+            ? [
+                `echo "full_log_path: ${fullLogPath} (retained, ~$(wc -c < ${shellQuote(
+                  fullLogPath!,
+                )}) bytes)"`,
+              ]
+            : [`echo "full_log_path=${fullLogPath}"`]),
           'echo "exit_status=$status"',
-          `grep -n -E ${shellQuote(failure_pattern)} ${shellQuote(
-            fullLogPath!,
-          )} | head -${failureLineLimit} || true`,
-          ...(!retain_full_log ? [`rm -f ${shellQuote(fullLogPath!)}`] : []),
+          // Dual-window failure extract: head lines (early failure banners)
+          // plus tail lines (late run summaries), total still capped at
+          // failureLineLimit. awk preserves grep's numbered-line format.
+          `awk 'NR<=${failureHeadLines}' <(grep -n -E ${shellQuote(
+            failure_pattern,
+          )} ${shellQuote(fullLogPath!)})`,
+          `awk 'NR>${failureHeadLines}' <(grep -n -E ${shellQuote(
+            failure_pattern,
+          )} ${shellQuote(fullLogPath!)}) | tail -${failureTailLines}`,
           'exit "$status"',
         ].join('\n')
       : command
@@ -279,6 +338,28 @@ Do not use any tools! Only report the output of the command.`,
       0,
       sourceLines.length - extractedLines.length,
     )
+    // Inline head+tail raw-output slice (only when the caller did NOT supply
+    // a failure_pattern): the window is capped at inlineLineLimit total lines
+    // so the model context cannot explode, with a truncation marker counting
+    // the dropped middle lines.
+    const truncateInlineLine = (line: string) =>
+      line.length > 1_000 ? `${line.slice(0, 1_000)}…` : line
+    const rawOutputInline =
+      callerFailurePattern === undefined
+        ? sourceLines.length > inlineHeadLines + inlineTailLines
+          ? [
+              ...sourceLines
+                .slice(0, inlineHeadLines)
+                .map(truncateInlineLine),
+              `[... ${
+                sourceLines.length - inlineHeadLines - inlineTailLines
+              } line(s) truncated ...]`,
+              ...sourceLines
+                .slice(-inlineTailLines)
+                .map(truncateInlineLine),
+            ]
+          : sourceLines
+        : []
     const exitCode =
       typeof commandOutput.exitCode === 'number'
         ? commandOutput.exitCode
@@ -293,7 +374,7 @@ Do not use any tools! Only report the output of the command.`,
       fullLogPath && retain_full_log
         ? `Full log retained: ${fullLogPath}`
         : fullLogPath
-          ? 'Full log deleted after extracting relevant lines.'
+          ? `Full log kept on disk: ${fullLogPath}`
           : undefined,
       commandOutput.startingCwd
         ? `Starting CWD: ${String(commandOutput.startingCwd)}`
@@ -310,6 +391,9 @@ Do not use any tools! Only report the output of the command.`,
         ? `Extracted ${extractedLines.length} relevant line(s) for: ${what_to_summarize}`
         : `No output lines matched: ${what_to_summarize}`,
       ...extractedLines,
+      ...(rawOutputInline.length > 0
+        ? ['Inline raw output (head + tail):', ...rawOutputInline]
+        : []),
       omittedLineCount > 0
         ? `[omitted ${omittedLineCount} non-matching or excess line(s)]`
         : undefined,
@@ -342,10 +426,11 @@ Do not use any tools! Only report the output of the command.`,
             : {}),
           ...(fullLogPath
             ? {
-                fullLogRetained: retain_full_log === true,
-                ...(retain_full_log === true ? { fullLogPath } : {}),
+                fullLogRetained: true,
+                fullLogPath,
               }
             : {}),
+          ...(rawOutputInline.length > 0 ? { rawOutputInline } : {}),
         },
       },
       includeToolCall: false,

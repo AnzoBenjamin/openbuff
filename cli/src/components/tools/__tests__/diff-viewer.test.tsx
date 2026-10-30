@@ -234,4 +234,43 @@ describe('DiffViewer', () => {
     expect(markup).toContain('(no changes)')
     expect(markup).not.toContain('<diff')
   })
+
+  // The parse cache (parsedDiffCache inside parseDiffIntoHunks) is keyed on
+  // the diff string itself; the returned object is shared, so callers must
+  // not mutate it.
+  describe('parseDiffIntoHunks memoization', () => {
+    test('the same diff string parses once: identical reference on repeat calls', () => {
+      const diffText = '@@ -1,1 +1,1 @@\n-old\n+new\n'
+      const first = parseDiffIntoHunks(diffText)
+      const second = parseDiffIntoHunks(diffText)
+      expect(second).toBe(first)
+      // Cached value is complete, not a stub.
+      expect(second.hunks).toHaveLength(1)
+    })
+
+    test('a different diff string recomputes: cache keyed on the payload body', () => {
+      const first = parseDiffIntoHunks('@@ -1,1 +1,1 @@\n-a\n+b\n')
+      const second = parseDiffIntoHunks('@@ -1,1 +1,1 @@\n-c\n+d\n')
+      expect(second).not.toBe(first)
+      expect(second.hunks[0]?.bodyLines.map((line) => line.text)).toEqual([
+        'c',
+        'd',
+      ])
+    })
+
+    test('the cache stays bounded: evicted entries reparse instead of leaking stale rows', () => {
+      const make = (i: number): string =>
+        `@@ -${i},1 +${i},1 @@\n-old${i}\n+new${i}\n`
+      const earlyRef = parseDiffIntoHunks(make(0))
+      for (let i = 0; i < 40; i += 1) {
+        parseDiffIntoHunks(make(i))
+      }
+      // Past the 32-entry LRU bound the oldest entry was evicted, so it
+      // reparses into a fresh object (never a stale one from elsewhere).
+      expect(parseDiffIntoHunks(make(0))).not.toBe(earlyRef)
+      // The most recently used diff is still resident and shared.
+      const recentRef = parseDiffIntoHunks(make(39))
+      expect(parseDiffIntoHunks(make(39))).toBe(recentRef)
+    })
+  })
 })

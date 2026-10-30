@@ -48,6 +48,9 @@ import {
 } from '../../../util/messages'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
+import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
+import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 import type {
   AgentHandoff,
   AgentReceipt,
@@ -59,6 +62,9 @@ import type {
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { SessionEvidenceLog } from '../../../memory/session-evidence-log'
 import type { ReceiptOutcome } from '../../../supervision/process-supervisor'
+// TYPE-ONLY import (erased at compile time — the supervision module is still
+// loaded lazily by the seam on the flag-on path, never statically here).
+import type { SpawnSupervisedFn } from '../../../supervision/supervised-spawn'
 import type {
   SettledSubagentResult,
   SupervisedSpawnRequest,
@@ -121,11 +127,12 @@ export type SubagentContextParams = AgentRuntimeDeps &
      * delegates to this seam (backed by supervision/process-supervisor.ts)
      * instead of calling `loopAgentSteps` in-process. The seam is seeded at
      * the SDK impl entry seam; tests inject a stub here. Default undefined
-     * ⇒ off ⇒ the in-process path is byte-identical.
+     * ⇒ off ⇒ the in-process path is byte-identical. cancel-softlock fix:
+     * the seam accepts an optional per-call `{ signal }` second argument
+     * ({@link SpawnSupervisedCallOptions}) so the supervisor group-kills the
+     * child when the parent aborts.
      */
-    spawnSupervised?: (
-      request: SupervisedSpawnRequest,
-    ) => Promise<SettledSubagentResult>
+    spawnSupervised?: SpawnSupervisedFn
   }
 
 /**
@@ -3170,14 +3177,101 @@ export function validateAgentInput(
 }
 
 /**
- * Creates a new agent state for spawned agents
+ * Per-spawn-batch memo slots for the structuredClone calls inside
+ * {@link createAgentState}. Each optional slot holds the source object it was
+ * cloned FROM alongside the clone, so a caller that REPLACES the parent's
+ * taskMemory/playbookContext/workspaceState object mid-batch gets a fresh
+ * clone instead of a stale memo (slots are keyed by source identity).
+ */
+export type SharedSpawnCloneCache = {
+  taskMemory?: { source?: TaskMemoryV1; clone?: TaskMemoryV1 }
+  playbookContext?: { source?: MemoryPlaybook[]; clone?: MemoryPlaybook[] }
+  workspaceState?: { source?: WorkspaceStateV1; clone?: WorkspaceStateV1 }
+}
+
+type CloneSlot<T extends object> = { source?: T; clone?: T }
+
+/**
+ * Defense-in-depth runtime guard at the spawn-batch isolation boundary
+ * (spawn-batch-shared-clone-isolation): ONE memoized structuredClone is
+ * handed to EVERY sibling child of a batch, so structural isolation between
+ * siblings rests entirely on the copy-on-write convention — a child's first
+ * memory commit REPLACES the property on its own AgentState instead of
+ * mutating the shared clone in place. A writer that violates that convention
+ * (user agent template code, or future runtime code assigning into a nested
+ * row/array before its first COW assignment) would otherwise leak mutations
+ * across siblings of the batch and back into the parent-shared snapshot, and
+ * a second child observes exactly what the first child wrote.
+ *
+ * Deep-freezing the memoized clone makes any in-place nested write from such
+ * a writer fail loudly (frozen-object TypeError in strict mode) or no-op
+ * silently, instead of silently cross-contaminating siblings. Legitimate
+ * copy-on-write writers are unaffected: they assign the owning property on
+ * the child's AgentState, never inside the shared node.
+ *
+ * DEV AND TEST ONLY: under NODE_ENV=production the traversal is skipped so
+ * the hot spawn path pays no per-batch O(clone-graph) freeze cost; the
+ * mutation-attempt test below exercises the dev/test behavior.
+ */
+function deepFreezeSharedClone<T extends object>(value: T): T {
+  if (process.env.NODE_ENV === 'production') {
+    return value
+  }
+  const seen = new Set<object>()
+  const freezeDeep = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return
+    const obj = node as object
+    if (seen.has(obj)) return
+    seen.add(obj)
+    Object.freeze(obj)
+    for (const key of Object.keys(obj)) {
+      freezeDeep((obj as Record<string, unknown>)[key])
+    }
+  }
+  freezeDeep(value)
+  return value
+}
+
+/**
+ * structuredClone memoized for one spawn batch: reuses the slot's clone while
+ * the source object is unchanged, and re-clones when the slot is cold or the
+ * parent node was replaced between two children of the same batch. The cache
+ * object must be created fresh per spawn-handler invocation — it is never
+ * reused across batches, and no module-level mutable state exists here.
+ */
+function memoizedStructuredClone<T extends object>(
+  slot: CloneSlot<T>,
+  source: T,
+): T {
+  if (slot.source === source && slot.clone !== undefined) {
+    return slot.clone
+  }
+  // The clone is shared across every sibling of the batch, so it crosses the
+  // isolation boundary deep-frozen (dev/test only — see
+  // deepFreezeSharedClone).
+  const clone = deepFreezeSharedClone(structuredClone(source))
+  slot.source = source
+  slot.clone = clone
+  return clone
+}
+
+/**
+ * Creates a new agent state for spawned agents.
+ *
+ * `sharedSpawnCloneCache` (optional) memoizes the parent's
+ * taskMemory/playbookContext/workspaceState structuredClones for ONE spawn
+ * handler invocation, so a multi-child batch performs 1 deep clone per field
+ * instead of N. A fresh cache object must be created per invocation; without
+ * a cache, each call keeps exactly one clone per field as before.
  */
 export function createAgentState(
   agentType: string,
   agentTemplate: AgentTemplate,
   parentAgentState: AgentState,
   agentContext: Record<string, Subgoal>,
+  sharedSpawnCloneCache?: SharedSpawnCloneCache,
 ): AgentState {
+  const cloneCache: SharedSpawnCloneCache = sharedSpawnCloneCache ?? {}
   const agentId = generateCompactId()
 
   // When including message history, filter out any tool calls that don't have
@@ -3258,12 +3352,23 @@ export function createAgentState(
     contextWindowTokens: undefined,
     // Operational memory is structured state, not transcript inheritance.
     // Transfer it only when the selected parent-history mode permits bounded
-    // context, and clone so children cannot mutate the parent's source of truth.
+    // context, and clone so children cannot mutate the parent's source of
+    // truth. Every runtime writer of taskMemory is copy-on-write
+    // (commitTaskMemory / recordToolEvidenceInTaskMemory /
+    // mergeAgentReceiptIntoTaskMemory return fresh revisions that are
+    // ASSIGNED, never mutated in place), so within ONE spawn batch the
+    // memoized clone is safe to share across sibling children: a child's
+    // first memory commit replaces this property on its own state instead of
+    // writing into the shared clone. A threaded cache turns N deep clones
+    // into 1; callers without a cache keep exactly one clone per child.
     taskMemory:
       messageHistoryMode === 'none'
         ? undefined
         : parentAgentState.taskMemory
-          ? structuredClone(parentAgentState.taskMemory)
+          ? memoizedStructuredClone(
+              (cloneCache.taskMemory ??= {}),
+              parentAgentState.taskMemory,
+            )
           : undefined,
     // Active procedural playbooks (the playbook gate and the compiled band
     // both key on agentState.playbookContext) transfer to EVERY child —
@@ -3275,10 +3380,16 @@ export function createAgentState(
     // cannot mutate the parent's rule rows; playbook rows originate as
     // parsed store JSON, so they are structuredClone-safe.
     playbookContext: parentAgentState.playbookContext
-      ? structuredClone(parentAgentState.playbookContext)
+      ? memoizedStructuredClone(
+          (cloneCache.playbookContext ??= {}),
+          parentAgentState.playbookContext,
+        )
       : undefined,
     workspaceState: parentAgentState.workspaceState
-      ? structuredClone(parentAgentState.workspaceState)
+      ? memoizedStructuredClone(
+          (cloneCache.workspaceState ??= {}),
+          parentAgentState.workspaceState,
+        )
       : undefined,
     backgroundAgentJobs: [],
   }
@@ -3460,12 +3571,38 @@ function mapSettledOutcomeToAgentOutput(params: {
 }
 
 /**
+ * cancel-softlock fix (reliability-reviewer:
+ * supervised-cancel-softlock-parent-abort-kill): the cancellation error a
+ * supervised spawn settles with when the PARENT signal aborted mid-child.
+ * The parent's abort listener group-kills the supervised child, so the
+ * settle surfaces the killed child's exit-code error rather than a clean
+ * abort; name/message mirror the in-process cancellation path exactly so
+ * executeSubagent's supervised catch rethrows genuine cancellation the same
+ * way (finish event + parent-signal-gated rethrow) and the killed-child
+ * settle can never be misclassified as a crash outcome downstream.
+ */
+function createSupervisedCancellationError(agentType: string): Error {
+  const error = new Error(`Subagent ${agentType} was cancelled`)
+  error.name = 'AbortError'
+  return error
+}
+
+/**
  * Runs one subagent through the injectable supervised-spawn seam and maps
  * the settled result into the SAME `{ agentState, output }` shape (plus the
  * additive `supervisedReceipt` carry) the in-process `loopAgentSteps` path
  * returns, so the existing settle chains (buildRuntimeAgentReceipt →
  * reconcileAgentReceiptIntoParent, lease release, ledger pairing) run
  * unchanged.
+ *
+ * cancel-softlock fix: `parentSignal` (the parent's own AbortSignal, read
+ * off `withDefaults` in executeSubagent) gates the seam call — an
+ * already-aborted signal throws BEFORE any child is spawned, otherwise the
+ * signal is threaded into the seam as `{ signal }` and a local race gate
+ * rejects on abort, so the await can no longer hang forever after the user
+ * terminates the run. Every failure observed while the parent signal is
+ * aborted is classified as cancellation (see
+ * createSupervisedCancellationError).
  *
  * Receipt mapping contract (P2-T8):
  *  - settle outcome 'ok' (or 'truncated', which still carries the validated
@@ -3481,9 +3618,17 @@ function mapSettledOutcomeToAgentOutput(params: {
  *    parent-visible output becomes the failure message.
  */
 async function runSupervisedSubagent(params: {
-  spawnSupervised: (
-    request: SupervisedSpawnRequest,
-  ) => Promise<SettledSubagentResult>
+  spawnSupervised: SpawnSupervisedFn
+  /**
+   * cancel-softlock fix: the PARENT's AbortSignal. When supplied, the seam
+   * is called with `{ signal }` (the supervisor group-kills the child on
+   * abort) AND a local race gate rejects on abort, so this await always
+   * settles: a killed child or a bridge torn down by the kill resolves the
+   * race, and every settle that lands after the parent aborted is
+   * classified as cancellation — never as a crash outcome. Omitted ⇒
+   * byte-identical behavior for older callers.
+   */
+  parentSignal?: AbortSignal
   agentState: AgentState
   logger: Logger
   onResponseChunk: (chunk: string | PrintModeEvent) => void
@@ -3510,6 +3655,7 @@ async function runSupervisedSubagent(params: {
 }> {
   const {
     spawnSupervised,
+    parentSignal,
     agentState,
     logger,
     agentTemplate,
@@ -3527,6 +3673,16 @@ async function runSupervisedSubagent(params: {
     agentId: agentTemplate.id,
     model: agentTemplate.model,
   })
+
+  // Live abort probe (cancel-softlock fix): every cancellation check in this
+  // body re-reads the signal at CALL time through this closure. The signal
+  // can abort at ANY point — before the spawn, during the awaited race
+  // below, or between the race settling and the gate-listener removal — so
+  // the checks must observe the live flag, not the straight-line
+  // control-flow snapshot the pre-spawn guard below would otherwise narrow
+  // `parentSignal` to (the narrowing would type the post-race re-checks as
+  // `false | undefined` and flag `=== true` as an impossible comparison).
+  const isParentAborted = (): boolean => parentSignal?.aborted === true
 
   const request: SupervisedSpawnRequest = {
     agentType: agentTemplate.id,
@@ -3580,10 +3736,76 @@ async function runSupervisedSubagent(params: {
     parentSystemPrompt: params.parentSystemPrompt,
   }
 
+  // cancel-softlock fix: an already-aborted PARENT signal must never spawn
+  // a child. This sits AFTER the pure prologue above so a prologue throw
+  // during genuine cancellation keeps its pinned contract (executeSubagent
+  // rethrows the ORIGINAL error, not this one).
+  if (isParentAborted()) {
+    throw createSupervisedCancellationError(agentTemplate.id)
+  }
+
+  // Local race gate (cancel-softlock fix): a belt-and-braces cancellation
+  // promise so THIS await settles even if a custom seam ignores the threaded
+  // signal. The real kill is the supervisor's abort listener (the seam is
+  // called with `{ signal }` below); this gate only classifies the await.
+  // The listener is removed when the race settles so a parent signal shared
+  // across spawns never accumulates gate listeners (no leak across spawns).
+  let removeCancellationGate: (() => void) | undefined
+  let cancellationGate: Promise<never> | undefined
+  if (parentSignal !== undefined) {
+    // Bind the narrowed signal to a local: the executor below runs after
+    // this scope ends, so it must not rely on control-flow narrowing of the
+    // union-typed param.
+    const signal = parentSignal
+    cancellationGate = new Promise<never>((_, reject) => {
+      const onParentAbort = (): void =>
+        reject(createSupervisedCancellationError(agentTemplate.id))
+      signal.addEventListener('abort', onParentAbort, { once: true })
+      removeCancellationGate = () =>
+        signal.removeEventListener('abort', onParentAbort)
+    })
+  }
+
+  const racers: Array<Promise<SettledSubagentResult>> = [
+    // The seam runs UNAWAITED inside the race: a late seam rejection after
+    // the gate won (e.g. sandbox cleanup racing the kill) must never surface
+    // as an unhandled rejection in the parent.
+    spawnSupervised(
+      request,
+      // Thread the signal as the seam's second argument: the SUPERVISOR's
+      // abort listener does the killing (SIGTERM → SIGKILL group escalation
+      // so shell grandchildren die too) — the child still never observes the
+      // parent signal internally. The options object is present ONLY when a
+      // signal exists; omitted keeps the seam call byte-identical to today.
+      parentSignal !== undefined ? { signal: parentSignal } : undefined,
+    ),
+  ]
+  racers[0].catch(() => {}) // avoid unhandled rejection when the gate wins
+  if (cancellationGate !== undefined) {
+    racers.push(cancellationGate)
+    // Same defensive branch the supervisor keeps on its killed-race promise:
+    // an abort landing in the window between the race settling and the
+    // listener removal below must never surface as an unhandled rejection.
+    cancellationGate.catch(() => {})
+  }
+
   let settled: SettledSubagentResult
   try {
-    settled = await spawnSupervised(request)
+    settled = await Promise.race(racers)
   } catch (error) {
+    // Drop the gate listener on EVERY settle path — including the
+    // cancellation throw below — so an aborted parent signal shared across
+    // spawns never accumulates gate listeners.
+    removeCancellationGate?.()
+    // cancel-softlock fix: when the parent signal is aborted, EVERY failure
+    // here is cancellation — the killed child surfaces as an exit-code error
+    // rather than a clean abort, and a racing seam throw during teardown is
+    // transport noise from the kill. Classification MUST win over the
+    // seam-threw degrade below, or the settle chain would record outcome
+    // 'crashed' for a cancelled run.
+    if (isParentAborted()) {
+      throw createSupervisedCancellationError(agentTemplate.id)
+    }
     // A seam that throws is a supervisor-transport failure, not a child
     // crash: degrade to the same structured error output the in-process
     // catch path produces instead of failing the whole parent turn.
@@ -3602,6 +3824,16 @@ async function runSupervisedSubagent(params: {
         message: `Subagent ${agentTemplate.id} crashed: supervised spawn seam threw: ${errorMessage}`,
       },
     }
+  }
+  removeCancellationGate?.()
+
+  // cancel-softlock fix: a settle that lands AFTER the parent aborted is
+  // cancellation regardless of its transport outcome — a killed child
+  // settles as an exit-code error and a bridge torn down by the kill as
+  // missing_output, and neither may ever reach the settle chain as outcome
+  // 'crashed'.
+  if (isParentAborted()) {
+    throw createSupervisedCancellationError(agentTemplate.id)
   }
 
   if (settled.outcome !== 'ok' && settled.outcome !== 'truncated') {
@@ -3695,9 +3927,10 @@ export async function executeSubagent(
       spawnIndex?: number
       // P2-T8 flag-gated process supervision (see SubagentContextParams).
       processSupervision?: boolean
-      spawnSupervised?: (
-        request: SupervisedSpawnRequest,
-      ) => Promise<SettledSubagentResult>
+      // cancel-softlock fix: SpawnSupervisedFn carries the optional per-call
+      // `{ signal }` options so the supervisor can group-kill the child when
+      // the parent aborts.
+      spawnSupervised?: SpawnSupervisedFn
     } & ParamsExcluding<typeof loopAgentSteps, 'agentType' | 'ancestorRunIds'>,
     'isOnlyChild' | 'clearUserPromptMessagesAfterResponse'
   >,
@@ -3773,10 +4006,13 @@ export async function executeSubagent(
   // process.env is read in this module.
   //
   // Slice limitations (documented, non-goals for this slice):
-  //  - the supervised child does NOT observe the parent AbortSignal (the
-  //    request is JSON-serialized; signal bridging rides the RPC-bridge
-  //    slice) — it is bounded by the supervisor's wall-clock deadline
-  //    (default SETTLE_DEFAULT_TIMEOUT_MS) instead;
+  //  - the supervised child still does NOT observe the parent AbortSignal
+  //    internally (the request is JSON-serialized) — but the PARENT kills it
+  //    (cancel-softlock fix): the parent signal is threaded into the seam
+  //    and the supervisor group-kills the child's process group on abort
+  //    (SIGTERM → SIGKILL grace), so a cancelled run no longer hangs
+  //    awaiting the child; explicitly-bounded children keep the supervisor's
+  //    wall-clock deadline as their hard bound;
   //  - process-group teardown IS shipped: the default seam spawns the child
   //    as a detached group leader and the supervisor kills the WHOLE group on
   //    deadline (supervision/supervised-spawn.ts; process-supervisor.ts
@@ -3835,6 +4071,10 @@ export async function executeSubagent(
     try {
       result = await runSupervisedSubagent({
         spawnSupervised,
+        // cancel-softlock fix: the parent's own signal gates the supervised
+        // spawn (abort group-kills the child and the await settles as
+        // cancellation) — the same signal the in-process branch reads below.
+        parentSignal: (withDefaults as { signal?: AbortSignal }).signal,
         agentState: withDefaults.agentState,
         logger: withDefaults.logger,
         onResponseChunk,

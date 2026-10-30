@@ -18,6 +18,7 @@ import {
 import { getErrorObject } from '@codebuff/common/util/error'
 import z from 'zod/v4'
 
+import { getSdkEnv } from './env'
 import { loadLocalAgents } from './agents/load-agents'
 import {
   codebuffFsToNodePromises,
@@ -70,6 +71,39 @@ export function selectHighestPriorityKnowledgeFile(
 export type RunState = {
   sessionState?: SessionState
   output: AgentOutput
+}
+
+/**
+ * Defense-in-depth runtime guard for the targeted-copy contract
+ * (targeted-copy-shared-nodes-contract): withMessageHistory and
+ * applyOverridesToSessionState deliberately SHARE deeper nested nodes
+ * (taskMemory, workspaceState, playbookContext, message-history entry
+ * objects, fileContext subtrees) instead of deep-cloning them, so isolation
+ * between RunState generations rests on the copy-on-write convention — every
+ * runtime writer assigns a freshly built revision rather than mutating in
+ * place. A single mutating consumer would otherwise silently corrupt the
+ * caller's original state across runs.
+ *
+ * Freezing the shared nested nodes makes any in-place nested write from such
+ * a consumer fail loudly (frozen-object TypeError in strict mode) or no-op,
+ * instead of silently aliasing state across runs. DEV AND TEST ONLY: under
+ * NODE_ENV=production the traversal is skipped so the hot run-startup path
+ * pays no per-state O(state-graph) freeze cost.
+ */
+function deepFreezeSharedStateNodes(value: unknown): void {
+  if (getSdkEnv().NODE_ENV === 'production') return
+  const seen = new Set<object>()
+  const freezeDeep = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return
+    const obj = node as object
+    if (seen.has(obj)) return
+    seen.add(obj)
+    Object.freeze(obj)
+    for (const key of Object.keys(obj)) {
+      freezeDeep((obj as Record<string, unknown>)[key])
+    }
+  }
+  freezeDeep(value)
 }
 
 export type InitialSessionStateOptions = {
@@ -796,11 +830,46 @@ export function withMessageHistory({
   runState: RunState
   messages: Message[]
 }): RunState {
-  // Deep copy
-  const newRunState = JSON.parse(JSON.stringify(runState)) as typeof runState
+  // Targeted copy, mirroring the spread-based copies used elsewhere in this
+  // file: only the replaced fields get new identities (root, sessionState,
+  // mainAgentState, messageHistory) while every other nested object is shared.
+  // Consumers rely on root AND sessionState object identity change for
+  // run-progress detection; they do not require any other nested object to be
+  // fresh, and downstream writers of the shared nested state (taskMemory,
+  // workspaceState, playbookContext) are all copy-on-write — they assign
+  // freshly built revisions instead of mutating in place — so structural
+  // isolation for the replaced fields is preserved without a deep clone. The
+  // caller's `messages` array is installed verbatim, exactly as the old deep
+  // clone did before it was overwritten by this same assignment.
+  const newRunState = runState.sessionState
+    ? {
+        ...runState,
+        sessionState: {
+          ...runState.sessionState,
+          mainAgentState: {
+            ...runState.sessionState.mainAgentState,
+            messageHistory: messages,
+          },
+        },
+      }
+    : { ...runState }
 
-  if (newRunState.sessionState) {
-    newRunState.sessionState.mainAgentState.messageHistory = messages
+  if (newRunState.sessionState && runState.sessionState) {
+    // Runtime guard for the sharing contract (dev/test only): freeze the
+    // nested nodes SHARED with the caller's original state, so a future
+    // in-place writer fails at this boundary instead of silently aliasing
+    // the caller's state across runs. Note the pre-change JSON round-trip
+    // clone incidentally dropped undefined/function fields; the targeted
+    // copy preserves them — pinned by the targeted-copy tests.
+    deepFreezeSharedStateNodes(
+      newRunState.sessionState.mainAgentState.taskMemory,
+    )
+    deepFreezeSharedStateNodes(
+      newRunState.sessionState.mainAgentState.workspaceState,
+    )
+    deepFreezeSharedStateNodes(
+      newRunState.sessionState.mainAgentState.playbookContext,
+    )
   }
 
   return newRunState
@@ -825,14 +894,43 @@ export async function applyOverridesToSessionState(
     logger?: Logger
   },
 ): Promise<SessionState> {
-  // Deep clone to avoid mutating the original session state
-  const sessionState = JSON.parse(
-    JSON.stringify(baseSessionState),
-  ) as SessionState
+  // Targeted copy instead of a JSON round-trip: fresh identities for the
+  // nodes this function and the continuing run write to — root, fileContext
+  // (its properties are reassigned below: fileTree, fileTokenScores,
+  // tokenCallers, knowledgeFiles, agentTemplates, customToolDefinitions) and
+  // mainAgentState — while deeper, copy-on-write nodes (taskMemory,
+  // workspaceState, message history entries) are shared verbatim. SessionState
+  // on disk is exactly { fileContext, mainAgentState }, so spreading both
+  // children covers every field. Notes restating the old JSON-clone contract:
+  // - Every writer of the shared nested state (commitTaskMemory,
+  //   recordToolEvidenceInTaskMemory, mergeAgentReceiptIntoTaskMemory,
+  //   advanceWorkspaceState) assigns a freshly built revision instead of
+  //   mutating in place, so sharing them cannot leak mutations back into the
+  //   base state.
+  // - The caller's hostile-input surface is unchanged: sanitizeAgentStateSecurityMaps
+  //   still fully replaces mainAgentState below, so the persisted security
+  //   maps always pass through shape validation before use.
+  // - Concurrent in-place use of baseSessionState while this awaited function
+  //   runs is unchanged: the base fileContext/mainAgentState nodes are never
+  //   written, only read.
+  const sessionState: SessionState = {
+    ...baseSessionState,
+    fileContext: { ...baseSessionState.fileContext },
+    mainAgentState: { ...baseSessionState.mainAgentState },
+  }
 
-  // M2-T3: the clone above re-derives mainAgentState from untrusted persisted
-  // JSON (JSON.parse-and-cast), so shape-validate and strip the security maps
-  // at this restore boundary before any consumer trusts them.
+  // Runtime guard for the targeted-copy contract (dev/test only): freeze the
+  // deeper nodes SHARED verbatim with baseSessionState, so a future in-place
+  // writer fails at this boundary instead of silently corrupting the caller's
+  // original state (see deepFreezeSharedStateNodes).
+  deepFreezeSharedStateNodes(sessionState.mainAgentState.taskMemory)
+  deepFreezeSharedStateNodes(sessionState.mainAgentState.workspaceState)
+  deepFreezeSharedStateNodes(sessionState.mainAgentState.playbookContext)
+
+  // M2-T3: session state restores from untrusted persisted JSON
+  // (JSON.parse-and-cast upstream of this call), so shape-validate and strip
+  // the security maps at this restore boundary before any consumer trusts
+  // them.
   sessionState.mainAgentState = sanitizeAgentStateSecurityMaps(
     sessionState.mainAgentState,
   )

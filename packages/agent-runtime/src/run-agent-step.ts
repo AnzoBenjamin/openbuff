@@ -3292,34 +3292,205 @@ export async function loopAgentSteps(
 
         const creditsBefore = currentAgentState.directCreditsUsed
         const childrenBefore = currentAgentState.childRunIds.length
+        // END-OF-STREAM EMPTY-OUTPUT RETRY (ai@5 `NoOutputGeneratedError`).
+        // A provider that opens a stream, emits zero chunks, and closes cleanly
+        // makes `runAgentStep` throw with the ai SDK's message-prefixed error
+        // ('No output generated ...') — this loop has no sdk-layer retry/failover
+        // below it, so without a runtime wrap the child dies on its FIRST empty
+        // stream even though its committed state is untouched. The retry is
+        // strictly bounded and guarded on visible mutations:
+        //  - exactly ONE extra attempt for the SAME step input (a per-iteration
+        //    local counter — no new global mutable state and no retry loop);
+        //  - retried ONLY when the failed attempt committed nothing: no tool
+        //    result was recorded and no tool call was fully executed (a fully
+        //    executed call is mirrored by a tool message + result in history),
+        //    so the second call can never double-charge a tool or duplicate an
+        //    edit receipt;
+        //  - attempt 2 also ending empty rethrows into today's catch below, so
+        //    the surfaced `{type:'error', message:'Agent run error: ...'}` and
+        //    any downstream failover/parent-receipt semantics stay identical.
+        //
+        // Matching is message-text-prefixed ('No output generated') rather than
+        // `instanceof NoOutputGeneratedError` because agent-runtime must not
+        // import from the `ai` package at this layer; the SDK (which DOES import
+        // the class) already retries the same condition via the equivalent
+        // message check before this point ever sees a clean close.
+        const runLlmStep = () =>
+          runAgentStep({
+            ...params,
+
+            agentState: currentAgentState,
+            memoryContextMessages: buildArray(
+              buildCompiledTaskMemoryMessage(currentAgentState),
+              buildCompiledMemoryV2Message(currentAgentState),
+              buildCompiledPlaybooksMessage(currentAgentState),
+            ),
+            // Projected progressive surface so executeToolCall (which gates via
+            // getEffectiveAgentToolNames without agentState) accepts unlocked
+            // model tools and rejects still-locked ones for this step.
+            agentTemplate: effectiveAgentTemplate,
+            n,
+            prompt: currentPrompt,
+            runId,
+            stepNumber: totalSteps,
+            spawnParams: currentParams,
+            system,
+            tools,
+            additionalToolDefinitions: additionalToolDefinitionsWithCache,
+          })
+
+        const stepHistoryBefore = currentAgentState.messageHistory
+        let emptyStreamRetryCount = 0
+        // Definite-assignment assertion: the only exits from the retry loop
+        // below are the try-block's break (after llmStep is assigned) and the
+        // guarded throw, so the post-loop destructure always sees an assigned
+        // value; TS's CFA cannot see through the try/catch merge, so the
+        // assertion encodes the loop invariant instead of a cast.
+        let llmStep!: Awaited<ReturnType<typeof runAgentStep>>
+        while (true) {
+          let stepAttemptError: unknown
+          try {
+            llmStep = await runLlmStep()
+            break
+          } catch (error) {
+            stepAttemptError = error
+          }
+
+          // The retry guard is narrow by design: it matches ONLY the
+          // provider empty-close marker and requires the failed attempt to
+          // have committed NOTHING visible. The committed-state test compares
+          // PERSISTENT messages (no `timeToLive: 'agentStep'`) before and
+          // after the attempt: the step prompt and the compiled memory-context
+          // messages are APPENDED on every attempt and are all step-TTL, so
+          // they are invisible bookkeeping rather than committed state, while
+          // a fully executed tool call (its tool-call assistant part, its tool
+          // result), a recorded tool-call error, or streamed assistant text
+          // all land as persistent messages and VETO the retry, guaranteeing
+          // the second generation can never double-execute the tool.
+          const errorMessage =
+            stepAttemptError instanceof Error
+              ? stepAttemptError.message
+              : String(stepAttemptError)
+          const countPersistentMessages = (messages: Message[]) =>
+            messages.filter(
+              (message) => message.timeToLive === undefined,
+            ).length
+          const attemptCommittedNothingVisible =
+            countPersistentMessages(currentAgentState.messageHistory) ===
+            countPersistentMessages(stepHistoryBefore)
+          const isCleanEmptyStreamFailure =
+            errorMessage.startsWith('No output generated') &&
+            attemptCommittedNothingVisible
+          if (
+            !isCleanEmptyStreamFailure ||
+            emptyStreamRetryCount >= EMPTY_STREAM_RETRY_ATTEMPTS ||
+            signal.aborted
+          ) {
+            throw stepAttemptError
+          }
+
+          emptyStreamRetryCount += 1
+
+          // Bounded retry backoff: a fixed 1000ms between attempt 1 and 2,
+          // matching the sdk layer's `RETRY_BACKOFF_BASE_DELAY_MS = 1000`
+          // convention in sdk/src/retry-config.ts. NOT imported from the sdk
+          // (cross-layer dependency is forbidden); agent-runtime owns its own
+          // trial-bound constant instead.
+          await new Promise<void>((resolve) => {
+            // Listener-leak symmetry (retry-backoff-listener-leak): the
+            // 'abort' listener sits on the LONG-LIVED run signal shared by
+            // every step of the run, so a long multi-step run hitting
+            // repeated empty-stream retries would otherwise accumulate one
+            // listener per retry (memory growth plus eventual
+            // MaxListenersExceeded warnings) and keep the signal
+            // referentially reachable after cleanup. Both completion paths
+            // (timer fires, abort fires) now remove the listener and clear
+            // the other's timer, and the listener is registered { once: true
+            // } so even an unchanged code path cannot double-fire it.
+            let onAbort: (() => void) | undefined
+            const signal_ = signal
+            const backoffTimer = setTimeout(() => {
+              if (onAbort) signal_.removeEventListener('abort', onAbort)
+              resolve()
+            }, EMPTY_STREAM_RETRY_BACKOFF_MS)
+            onAbort = () => {
+              clearTimeout(backoffTimer)
+              resolve()
+            }
+            signal_.addEventListener('abort', onAbort, { once: true })
+          })
+          if (signal.aborted) {
+            throw new AbortError()
+          }
+
+          // Reclaim context FIRST when this step already sits past 0.7 of the
+          // model window: an empty-closed stream is the classic silently-failing
+          // shape of an over-context provider request, so ONE bounded semantic
+          // compaction pass (today's existing entry point — not a new mechanism)
+          // runs before the retried generation when context allows it. Under 0.7
+          // the step retries unchanged with NO compaction pass and no cost.
+          if (
+            currentAgentState.contextWindowTokens !== undefined &&
+            currentAgentState.contextTokenCount >
+              0.7 * currentAgentState.contextWindowTokens
+          ) {
+            const semanticBudget = getSemanticCompactionBudget(
+              currentAgentState.contextWindowTokens,
+            )
+            onResponseChunk({
+              type: 'context_compaction_status',
+              state: 'started',
+              ...compactionCorrelation,
+              contextTokens: currentAgentState.contextTokenCount,
+              resolvedContextWindowTokens:
+                semanticBudget.resolvedContextWindowTokens,
+              triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
+              targetBudgetTokens: semanticBudget.targetBudgetTokens,
+            })
+            // Same best-effort contract as the loop's own semantic branch:
+            // failures are absorbed by the helper and never abort the step.
+            await runRuntimeSemanticCompaction({
+              ...params,
+              agentState: currentAgentState,
+              agentTemplate,
+              localAgentTemplates,
+              logger,
+              system,
+              tools,
+              userInputId,
+              onCompactionProgress: emitCompactionProgress,
+            })
+            onResponseChunk({
+              type: 'context_compaction_status',
+              state: 'settled',
+              ...compactionCorrelation,
+            })
+          }
+
+          // Same field shape as the sdk/src/impl/llm.ts provider-status
+          // emission (same provider_status channel, same fields), so the CLI's
+          // existing status chunk handler renders this retry natively — no new
+          // chunk contract is introduced. `model` names the agent's routed
+          // model; `attempt` is the 1-based number of the NEXT attempt (2), the
+          // same convention the sdk layer uses for its 'retrying' publishes.
+          // Nothing is emitted on the failure path beyond what today shows.
+          onResponseChunk({
+            type: 'provider_status',
+            status: 'retrying',
+            model: effectiveAgentTemplate.model,
+            attempt: emptyStreamRetryCount + 1,
+            maxAttempts: EMPTY_STREAM_RETRY_ATTEMPTS + 1,
+            delayMs: EMPTY_STREAM_RETRY_BACKOFF_MS,
+          })
+        }
+
         const {
           agentState: newAgentState,
           shouldEndTurn: llmShouldEndTurn,
           hitStepCap: llmHitStepCap,
           messageId,
           nResponses: generatedResponses,
-        } = await runAgentStep({
-          ...params,
-
-          agentState: currentAgentState,
-          memoryContextMessages: buildArray(
-            buildCompiledTaskMemoryMessage(currentAgentState),
-            buildCompiledMemoryV2Message(currentAgentState),
-            buildCompiledPlaybooksMessage(currentAgentState),
-          ),
-          // Projected progressive surface so executeToolCall (which gates via
-          // getEffectiveAgentToolNames without agentState) accepts unlocked
-          // model tools and rejects still-locked ones for this step.
-          agentTemplate: effectiveAgentTemplate,
-          n,
-          prompt: currentPrompt,
-          runId,
-          stepNumber: totalSteps,
-          spawnParams: currentParams,
-          system,
-          tools,
-          additionalToolDefinitions: additionalToolDefinitionsWithCache,
-        })
+        } = llmStep
 
         if (newAgentState.runId) {
           await addAgentStep({
@@ -3620,6 +3791,24 @@ const buildCompactionNoProgressClause = (
  * fixed caps that begin above 30 steps.
  */
 const NEAR_STEP_CAP_WARNING_THRESHOLD = 30
+
+/**
+ * How many EXTRA attempts the loop makes for an end-of-stream empty-output
+ * failure ('No output generated', the ai@5 provider closed-with-zero-chunks
+ * case). Exactly 1: max 2 generations total for the same step input, so the
+ * bound is reached with no loop and no unbounded growth on a provider that
+ * fails the same way every turn.
+ */
+const EMPTY_STREAM_RETRY_ATTEMPTS = 1
+
+/**
+ * Retry backoff between attempt 1 and 2 for an end-of-stream empty-output
+ * failure: a fixed 1000ms. Matches the sdk layer's
+ * `RETRY_BACKOFF_BASE_DELAY_MS = 1000` convention (sdk/src/retry-config.ts)
+ * WITHOUT importing it — cross-layer (agent-runtime → sdk) imports are
+ * forbidden, so the trial-bound constant is re-owned here rather than shared.
+ */
+const EMPTY_STREAM_RETRY_BACKOFF_MS = 1_000
 
 const NEAR_STEP_CAP_WARNING_MESSAGE = [
   'Heads up: this turn is approaching its maximum number of agent steps.',

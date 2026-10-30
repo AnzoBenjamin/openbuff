@@ -218,5 +218,7 @@ describe('bracket-flood payloads keep candidate recording memory-linear', () => 
     // closers; deep-nest JSON.parse failures (engine stack limits) are
     // caught per-candidate exactly like any other parse miss.
     expect(tryRecoverTruncatedToolArguments(FLOOD)).toBeUndefined()
-  })
+    // Explicit budget: the bounded flood walk runs ~5.5s under parallel
+    // load vs bun's 5s default per-test budget, which flakes in full runs.
+  }, 30_000)
 })

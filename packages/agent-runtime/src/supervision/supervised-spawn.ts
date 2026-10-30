@@ -132,9 +132,31 @@ export type {
   SupervisedRestartPolicy,
 } from '@codebuff/common/types/contracts/agent-runtime'
 
+/**
+ * Per-call options for one supervised-spawn seam invocation
+ * ({@link SpawnSupervisedFn}). Additive-optional: existing one-argument seam
+ * implementations stay assignable, and callers that omit the options object
+ * keep byte-identical behavior.
+ */
+export type SpawnSupervisedCallOptions = {
+  /**
+   * cancel-softlock fix: the PARENT's AbortSignal, threaded PER CALL (the
+   * seam is built once per runtime impl, before any run signal exists).
+   * When supplied, the supervisor registers an abort listener that
+   * group-kills the supervised child (SIGTERM → SIGKILL grace escalation) —
+   * a cancelled run can no longer hang forever awaiting the child — and the
+   * settle surfaces the honest signal-death crash, which
+   * runSupervisedSubagent classifies as cancellation. The restart loop never
+   * respawns a child the parent just cancelled. Omitted ⇒ byte-identical
+   * behavior (no listener, no kill, no restart guard).
+   */
+  signal?: AbortSignal
+}
+
 /** The seam `SubagentContextParams.spawnSupervised` expects. */
 export type SpawnSupervisedFn = (
   request: SupervisedSpawnRequest,
+  options?: SpawnSupervisedCallOptions,
 ) => Promise<SettledSubagentResult>
 
 /**
@@ -473,6 +495,15 @@ export function isSupervisedSpawnSelfExecMode(): boolean {
  * ({@link SupervisedSpawnOptions._scheduleRestart}); see the module
  * docblock's P2-T8c section. Omitting `options` (or `options.restart`)
  * preserves today's exact single-spawn behavior.
+ *
+ * cancel-softlock fix: the returned seam accepts an optional second
+ * `{ signal }` argument ({@link SpawnSupervisedCallOptions}) carrying the
+ * PARENT's AbortSignal for THIS run. The signal is threaded per call (the
+ * seam is built once per runtime impl, before any run signal exists) into
+ * `spawnSettledSubagent`, whose abort listener group-kills the child via the
+ * SAME SIGTERM → SIGKILL grace escalation — a cancelled run can no longer
+ * hang forever awaiting a supervised child. The restart loop also never
+ * respawns a child the parent just cancelled.
  */
 export function buildDefaultSpawnSupervised(
   seed: SupervisedChildEnvSeed = {},
@@ -487,6 +518,11 @@ export function buildDefaultSpawnSupervised(
   // earlier attempt's. This closure alone IS the flags-off seam.
   const runSettledAttempt = async (
     request: SupervisedSpawnRequest,
+    // Named callOptions so the PER-CALL argument never shadows the
+    // build-time `options` (SupervisedSpawnOptions) read inside this body:
+    // the TEST-ONLY `_spawnSettledSubagent` injection comes from the
+    // build-time options, the per-call `signal` from this argument.
+    callOptions?: SpawnSupervisedCallOptions,
   ): Promise<SettledSubagentResult> => {
     // Lazy on purpose: the supervisor module (Bun.spawn, the receipt schema
     // imports it pulls, and the env allowlist builder included) is evaluated
@@ -635,7 +671,14 @@ export function buildDefaultSpawnSupervised(
               maxLifetimeMs: settleDeadlineMs,
             }
           : {}),
-        onActivity: (l) => {
+        // cancel-softlock fix: thread the PARENT's per-call AbortSignal into
+        // the supervisor, whose abort listener group-kills the child (the
+        // key is present ONLY when a signal was supplied — omitted stays
+        // byte-identical). Read off callOptions — the per-call argument.
+        ...(callOptions?.signal !== undefined
+          ? { signal: callOptions.signal }
+          : {}),
+        onActivity: (l: () => void) => {
           activityListeners.add(l)
           return () => activityListeners.delete(l)
         },
@@ -685,17 +728,24 @@ export function buildDefaultSpawnSupervised(
   // the LAST settled result UNCHANGED — it already carries the crash
   // reason. An attempt that THROWS (e.g. a failed bridge bind) is not a
   // crash: the rejection propagates exactly as in the flags-off seam.
-  return async (request) => {
-    let result = await runSettledAttempt(request)
+  return async (request, options) => {
+    let result = await runSettledAttempt(request, options)
     let attemptNumber = 0
-    while (attemptNumber < policy.maxAttempts && isRestartableCrash(result)) {
+    while (
+      attemptNumber < policy.maxAttempts &&
+      isRestartableCrash(result) &&
+      // cancel-softlock fix: a parent-abort kill settles as a RESTARTABLE
+      // transport crash (signal death ⇒ nonzero_exit with no receipt), so
+      // the loop must never respawn the child the parent just cancelled.
+      options?.signal?.aborted !== true
+    ) {
       attemptNumber += 1
       await scheduleRestart(computeRestartDelayMs(policy, attemptNumber))
       policy.onRestart?.({
         attempt: attemptNumber,
         crashReason: result.crashReason,
       })
-      result = await runSettledAttempt(request)
+      result = await runSettledAttempt(request, options)
     }
     return result
   }

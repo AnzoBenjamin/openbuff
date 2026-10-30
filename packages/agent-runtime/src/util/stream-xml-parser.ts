@@ -6,7 +6,14 @@
  */
 
 import { toolXmlName } from '@codebuff/common/tools/constants'
-import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
+import {
+  MAX_REPAIRABLE_JSON_LENGTH,
+  PAYLOAD_TRUNCATED_ERROR_CODE,
+  parseJsonStringWithRepair,
+} from '@codebuff/common/tools/params/utils'
+import {
+  recoverTruncatedJsonObjectFields,
+} from '@codebuff/common/util/model-payload-recovery'
 
 import {
   MISSING_TOOL_NAME_REASON,
@@ -18,6 +25,39 @@ import {
 const startToolTag = `<${toolXmlName}>`
 const endToolTag = `</${toolXmlName}>`
 const DEFAULT_MAX_TOOL_CALL_BUFFER_LENGTH = 64 * 1024
+
+/**
+ * Salvage ceiling for overflowing unterminated tool-call payloads: instead of
+ * destroying a JSON-shaped payload at the configured 64 KiB buffer limit, the
+ * parser keeps buffering up to this bounded 1 MiB ceiling (imported from
+ * common/src/tools/params/utils.ts so ONE constant governs both the recovery
+ * helpers' repair bound and the stream parser's salvage ceiling) and attempts
+ * one bounded salvage of the modeled bytes at the overflow event.
+ */
+export const MAX_TOOL_CALL_SALVAGE_LENGTH = MAX_REPAIRABLE_JSON_LENGTH
+
+/**
+ * Marker appended when a recoveredPayload exceeds the salvage budget, built
+ * from PAYLOAD_TRUNCATED_ERROR_CODE so the same payload_truncated code that
+ * common/src/tools/params/utils.ts uses for transport-truncated tool
+ * arguments also labels the capped salvaged payload here.
+ */
+export const RECOVERED_PAYLOAD_TRUNCATION_MARKER = ` [${PAYLOAD_TRUNCATED_ERROR_CODE}]`
+
+/**
+ * Caps a JSON-stringified recovered payload to the same salvage budget the
+ * recovery scan respects. Content at or under MAX_TOOL_CALL_SALVAGE_LENGTH
+ * characters is returned verbatim; longer content keeps the first 1 MiB and
+ * appends the payload_truncated-style marker plus a count of the dropped
+ * characters, so the error message cannot balloon past the budget.
+ */
+export function toBoundedRecoveredPayload(payload: string): string {
+  if (payload.length <= MAX_TOOL_CALL_SALVAGE_LENGTH) {
+    return payload
+  }
+  const truncated = payload.length - MAX_TOOL_CALL_SALVAGE_LENGTH
+  return `${payload.slice(0, MAX_TOOL_CALL_SALVAGE_LENGTH)}${RECOVERED_PAYLOAD_TRUNCATION_MARKER} [${truncated} chars truncated]`
+}
 
 export type ParsedToolCall = {
   toolName: string
@@ -40,6 +80,16 @@ export type StreamParserError = {
    * (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
    */
   rawExcerpt?: string
+  /**
+   * Salvaged survivor of a tool_call_buffer_exceeded overflow: the
+   * JSON-stringified complete top-level fields recovered from the
+   * unterminated payload (recoverTruncatedJsonObjectFields, no
+   * reviewer-receipt gate), or absent when nothing usable could be salvaged.
+   * Capped to the salvage budget with the ` [payload_truncated]`-style marker
+   * derived from PAYLOAD_TRUNCATED_ERROR_CODE so downstream edit-transaction
+   * recovery helpers can rebuild without unbounded error growth.
+   */
+  recoveredPayload?: string
 }
 
 export type StreamParserState = {
@@ -112,6 +162,16 @@ const MAX_TAG_TAIL_CARRYOVER =
   Math.max(startToolTag.length, endToolTag.length) - 1
 
 /**
+ * One bounded salvage-error emit per stream: recoverTruncatedJsonObjectFields
+ * is O(buffer) per attempt and the first SUCCESSFUL recovery is the one that
+ * carries the survivor bytes downstream, so this commit records that a
+ * salvaged error was already emitted (and suppresses per-chunk rescans and
+ * duplicate salvage errors) while the ceiling gate keeps attempts bounded.
+ * Weak keys: the set itself never accumulates state across streams.
+ */
+const salvageAttemptedStates = new WeakSet<StreamParserState>()
+
+/**
  * Creates initial parser state
  */
 export function createStreamParserState(options?: {
@@ -124,6 +184,24 @@ export function createStreamParserState(options?: {
     maxToolCallBufferLength:
       options?.maxToolCallBufferLength ?? DEFAULT_MAX_TOOL_CALL_BUFFER_LENGTH,
   }
+}
+
+/**
+ * Whether the buffered tool-call payload starts like a JSON object, allowing
+ * leading whitespace, so the overflow branch can raise the effective cap for
+ * JSON-shaped payloads. Bounded prefix scan instead of a full trimStart
+ * copy: only shapes establishable within the first characters matter, and a
+ * payload with more leading whitespace than the scan window keeps today's
+ * exact discard behavior (never becomes salvage-eligible).
+ */
+function isJsonShapedBuffer(content: string): boolean {
+  const prefixLimit = Math.min(content.length, 64)
+  for (let index = 0; index < prefixLimit; index++) {
+    const char = content[index]
+    if (char === '{') return true
+    if (char !== undefined && !/\s/.test(char)) return false
+  }
+  return false
 }
 
 /**
@@ -225,31 +303,111 @@ export function parseStreamChunk(
         // branch above) parses and is emitted regardless of size — the limit
         // never fires for a complete call, only for one still waiting for
         // its closing tag.
-        // Overflow recovery: the unterminated payload exceeded the budget.
-        // Stay insideToolCall purely for scoping but enter discard mode so the
-        // eventual end tag is consumed SILENTLY — the buffered garbage is never
-        // parsed (that would emit a bogus invalid_tool_call_json error) and
-        // never leaks into the visible text stream. A trailing partial end tag
-        // survives as the discard-mode carry so an end tag split exactly across
-        // this boundary is still fully consumed.
-        // Capture the bounded excerpt from the buffered payload BEFORE the
-        // discard reset below destroys it: once `state.buffer` is reduced to
-        // the partial-tag carry the payload is unrecoverable, and the excerpt
-        // is the only surviving evidence of what the model emitted
-        // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
-        const rawExcerpt = toBoundedRawExcerpt(state.buffer + pending)
-        errors.push({
-          code: 'tool_call_buffer_exceeded',
-          message: `Discarded unterminated ${toolXmlName} content after ${bufferedLength} buffered characters (limit ${state.maxToolCallBufferLength}). Discarding content until the end tag.`,
-          bufferedLength,
-          maxBufferLength: state.maxToolCallBufferLength,
-          rawExcerpt,
-        })
-        state.discardingUntilEndTag = true
-        const partialEnd = findPartialTagMatch(scan, endToolTag)
-        state.buffer = partialEnd > 0 ? scan.slice(-partialEnd) : ''
-        pending = ''
-        continue
+        // Salvage-first overflow handling: a JSON-shaped unterminated payload
+        // gets a raised, BOUNDED effective cap — the 1 MiB
+        // MAX_REPAIRABLE_JSON_LENGTH salvage ceiling imported from
+        // common/src/tools/params/utils.ts — so a large tool call whose
+        // closing tag is merely slow to arrive keeps buffering (and parses
+        // normally when the end tag arrives below the ceiling) instead of
+        // being destroyed at the configured buffer limit. Non-JSON-shaped
+        // content and content above the salvage ceiling keep today's exact
+        // discard behavior, so growth stays strictly bounded.
+        const salvageCommitted = salvageAttemptedStates.has(state)
+        const underSalvageCeiling =
+          bufferedLength <= MAX_TOOL_CALL_SALVAGE_LENGTH
+        let discard = true
+
+        const discardOverflow = (): void => {
+          // Full O(payload) concat only when the content is actually needed
+          // (excerpt capture BEFORE the discard reset destroys it); the
+          // keep-buffering paths never pay for it.
+          const bufferedContent = state.buffer + pending
+          // Overflow recovery: stay insideToolCall purely for scoping but
+          // enter discard mode so the eventual end tag is consumed SILENTLY —
+          // the buffered garbage is never parsed (that would emit a bogus
+          // invalid_tool_call_json error) and never leaks into the visible
+          // text stream. A trailing partial end tag survives as the
+          // discard-mode carry so an end tag split exactly across this
+          // boundary is still fully consumed.
+          // Capture the bounded excerpt from the buffered payload BEFORE the
+          // discard reset below destroys it: once `state.buffer` is reduced
+          // to the partial-tag carry the payload is unrecoverable, and the
+          // excerpt is the only surviving evidence of what the model emitted
+          // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+          errors.push({
+            code: 'tool_call_buffer_exceeded',
+            message: `Discarded unterminated ${toolXmlName} content after ${bufferedLength} buffered characters (limit ${state.maxToolCallBufferLength}). Discarding content until the end tag.`,
+            bufferedLength,
+            maxBufferLength: state.maxToolCallBufferLength,
+            rawExcerpt: toBoundedRawExcerpt(bufferedContent),
+          })
+          state.discardingUntilEndTag = true
+          const partialEnd = findPartialTagMatch(scan, endToolTag)
+          state.buffer = partialEnd > 0 ? scan.slice(-partialEnd) : ''
+          pending = ''
+        }
+
+        if (underSalvageCeiling) {
+          // JSON-shape check reads only the bounded payload head —
+          // state.buffer holds every in-call byte seen so far, so its head
+          // IS the payload head — never an O(payload) concat just to test
+          // the first character.
+          const payloadHead = state.buffer.length > 0 ? state.buffer : pending
+          if (salvageCommitted) {
+            // A salvaged error was already emitted for this stream: keep
+            // buffering with no per-chunk payload rescan; growth stays
+            // bounded by the ceiling (a later scan past it discards below).
+            discard = false
+          } else if (isJsonShapedBuffer(payloadHead)) {
+            // ONE bounded O(payload) salvage scan per overflow event, only
+            // while under the ceiling. The ungated
+            // recoverTruncatedJsonObjectFields (no reviewer-receipt
+            // requirement) is what makes a truncated edit_transaction
+            // payload recoverable; the salvageAttemptedStates commit on the
+            // successful path below suppresses DUPLICATE salvage errors,
+            // not the keep-buffering on the unsuccessful one.
+            const bufferedContent = state.buffer + pending
+            const recovered = recoverTruncatedJsonObjectFields(bufferedContent)
+            if (recovered !== undefined) {
+              // At least one complete top-level field survived the
+              // truncated payload: emit the existing
+              // tool_call_buffer_exceeded error code plus the
+              // JSON-stringified recovered content (capped to the same
+              // salvage budget with the payload_truncated-style marker) so
+              // downstream edit-transaction recovery helpers can rebuild.
+              salvageAttemptedStates.add(state)
+              errors.push({
+                code: 'tool_call_buffer_exceeded',
+                message: `Salvaged unterminated ${toolXmlName} content after ${bufferedLength} buffered characters (limit ${state.maxToolCallBufferLength}) into recoveredPayload; continuing to buffer until the end tag or the ${MAX_TOOL_CALL_SALVAGE_LENGTH}-character salvage ceiling.`,
+                bufferedLength,
+                maxBufferLength: state.maxToolCallBufferLength,
+                rawExcerpt: toBoundedRawExcerpt(bufferedContent),
+                recoveredPayload: toBoundedRecoveredPayload(
+                  JSON.stringify(recovered),
+                ),
+              })
+              discard = false
+            }
+            // recovered === undefined: KEEP BUFFERING, never a permanent
+            // discard (salvage-first-overflow-discard). A JSON-shaped payload
+            // whose buffered prefix has not yet closed any complete top-level
+            // field — e.g. a large edit payload whose big string field opens
+            // before cb_tool_name closes — used to be destroyed at the FIRST
+            // overflow event purely because of field ordering and the chunk
+            // boundary, while the identical payload with cb_tool_name first
+            // was recoverable. Instead, later overflow events re-attempt
+            // salvage and the end tag (or EOF handling) decides with the
+            // full payload. Costs stay bounded: each attempt is
+            // O(buffer) and only runs on overflow events under the 1 MiB
+            // ceiling, never per unterminated chunk otherwise.
+            discard = false
+          }
+        }
+
+        if (discard) {
+          discardOverflow()
+          continue
+        }
       }
 
       // No end tag yet: retain the payload — it is the eventual tool-call

@@ -1,6 +1,8 @@
 import { TextAttributes } from '@opentui/core'
 
-import { DiffViewer, computeDiffStats } from './diff-viewer'
+import { LRUCache } from '@codebuff/common/util/lru-cache'
+
+import { DiffViewer } from './diff-viewer'
 import { defineToolComponent } from './types'
 import { useTheme } from '../../hooks/use-theme'
 import {
@@ -8,12 +10,208 @@ import {
   getStructuredErrorMessages,
 } from '../../utils/tool-result-normalizer'
 
+import type { ToolResultRecord } from '../../utils/tool-result-normalizer'
 import type { ToolRenderConfig, ToolBlock } from './types'
 
 type TransactionFile = {
   path: string
   destinationPath?: string
   diff: string | null
+}
+
+/**
+ * Fully derived render inputs for one transaction payload body. Memoized per
+ * `toolCallId` (the render "instance") in `transactionCache` and keyed on the
+ * serialized payload string: when the same instance re-renders with an
+ * unchanged payload the cached object is reused without re-walking the
+ * payload, and any change to the payload (a replaced `outputRaw` or an
+ * in-place mutation) serializes to a different key, discarding that
+ * instance's cache entry. Consumers receive a stable per-instance view of
+ * this data (see `createConsumerView`) so cache hits keep object identity
+ * while staying isolated from render-path mutations. Exported for the test
+ * suite.
+ */
+export type TransactionRenderData = {
+  payloadKey: string
+  files: TransactionFile[]
+  error: string | null
+  rows: string[]
+  mutation: ToolResultRecord | null
+  diffStats: { added: number; removed: number }
+}
+
+const TRANSACTION_CACHE_MAX_SIZE = 64
+const transactionCache = new LRUCache<string, TransactionRenderData>(
+  TRANSACTION_CACHE_MAX_SIZE,
+)
+
+function getPayloadKey(outputRaw: unknown): string | null {
+  if (typeof outputRaw === 'string') return `string:${outputRaw}`
+  try {
+    return `json:${JSON.stringify(outputRaw) ?? 'undefined'}`
+  } catch {
+    // Unserializable payloads (e.g. cyclic references) cannot yield a stable
+    // key; returning null forces a recompute instead of stale reuse.
+    return null
+  }
+}
+
+/**
+ * Added/removed totals for the collapsed size suffix, summed across the
+ * transaction's per-file diffs. Counting is hunk-header agnostic: streaming
+ * appends frequently emit a bare hunk body with no `@@` range line, which
+ * the hunk-scoped shared parser (`computeDiffStats`) files under its
+ * file-header bucket and reports as 0/0 — exactly the payloads this suffix
+ * exists to summarize. Git file-header forms (`--- a/…`, `+++ b/…`) are
+ * excluded with the same predicates the shared parser applies, so a fully
+ * headered diff's totals match the hunk-scoped counting DiffViewer renders.
+ */
+function computeTransactionDiffStats(
+  files: TransactionFile[],
+): { added: number; removed: number } {
+  let added = 0
+  let removed = 0
+  for (const file of files) {
+    if (typeof file.diff !== 'string') continue
+    for (const line of file.diff.split('\n')) {
+      if (/^---\s+a\//.test(line) || /^\+\+\+\s+b\//.test(line)) continue
+      if (line.startsWith('+')) added += 1
+      else if (line.startsWith('-')) removed += 1
+    }
+  }
+  return { added, removed }
+}
+
+function computeTransactionRenderData(
+  toolBlock: ToolBlock,
+  payloadKey: string,
+): TransactionRenderData {
+  const files = getTransactionFiles(toolBlock)
+  // Quick-scan size signal on the collapsed line: +N -M totals across the
+  // transaction's per-file diffs, so the cost of an edit is visible without
+  // expanding the card. Walked here (inside the memo layer), not per render.
+  const diffStats = computeTransactionDiffStats(files)
+  return {
+    payloadKey,
+    files,
+    error: getTransactionError(toolBlock),
+    rows: getTransactionRows(toolBlock),
+    mutation: getCanonicalMutationResult(toolBlock.outputRaw),
+    diffStats,
+  }
+}
+
+/**
+ * Cache-integrity guard (transaction-cache-mutable-shared): the memoized
+ * envelope and every object it OWNS (files entries, rows, diffStats — all
+ * derived fresh in computeTransactionRenderData) are frozen, so a stray
+ * render-path write cannot corrupt the cache for later renders.
+ *
+ * The `mutation` record is deliberately NOT frozen: it aliases the caller's
+ * live tool-block payload (getCanonicalMutationResult returns a view into
+ * outputRaw), and the payload contract supports an in-place payload
+ * mutation — freezing it would break that live-update path. Cache safety for
+ * it comes from the payload-key invalidation instead (an in-place mutation
+ * serializes to a different key, so the stale entry is discarded, exactly
+ * like the replaced-outputRaw path).
+ */
+function freezeCachedRenderData(data: TransactionRenderData): void {
+  Object.freeze(data.files)
+  for (const file of data.files) Object.freeze(file)
+  Object.freeze(data.rows)
+  Object.freeze(data.diffStats)
+  Object.freeze(data)
+}
+
+function isPristineCopy<T>(
+  view: readonly T[],
+  pristine: readonly T[],
+): boolean {
+  return (
+    view.length === pristine.length &&
+    view.every((item, index) => item === pristine[index])
+  )
+}
+
+/**
+ * Stable consumer view for one cache entry (render-data memoization identity
+ * contract): every hit on an unchanged payload returns the SAME view object,
+ * so an unchanged payload is never re-walked and re-renders observe stable
+ * identity. The view wraps the frozen cache data (see freezeCachedRenderData)
+ * and serves `files`/`rows` from per-entry scratch copies: when a render-path
+ * consumer mutates the previously exposed copy — the
+ * transaction-cache-mutable-shared audit finding — the next access re-exposes
+ * a fresh shallow copy of the frozen data, so hostile mutations stay isolated
+ * from the cache and from later renders without cloning on every hit.
+ */
+function createConsumerView(
+  data: TransactionRenderData,
+): TransactionRenderData {
+  let filesView: TransactionFile[] = []
+  let rowsView: string[] = []
+  const view: TransactionRenderData = {
+    get payloadKey() {
+      return data.payloadKey
+    },
+    get files() {
+      if (!isPristineCopy(filesView, data.files)) {
+        filesView = [...data.files]
+      }
+      return filesView
+    },
+    get error() {
+      return data.error
+    },
+    get rows() {
+      if (!isPristineCopy(rowsView, data.rows)) {
+        rowsView = [...data.rows]
+      }
+      return rowsView
+    },
+    get mutation() {
+      return data.mutation
+    },
+    get diffStats() {
+      return data.diffStats
+    },
+  }
+  return Object.freeze(view)
+}
+
+/**
+ * Per-instance memoization layer for the transaction render body: keyed by
+ * `toolCallId` and reset whenever the incoming payload no longer serializes
+ * to the cached key, so a different payload can never reuse another block's
+ * cached results. The tool components here are render callbacks (no hooks),
+ * so the cache must live at module scope; the payload-key mismatch clause is
+ * the invalidation boundary instead of component state. Hits return the same
+ * consumer view object every time (see createConsumerView), so an unchanged
+ * payload is never re-walked, and the view's self-healing collection copies
+ * keep render-path mutations away from the frozen cache data (see
+ * freezeCachedRenderData).
+ */
+export function getTransactionRenderData(
+  toolBlock: ToolBlock,
+): TransactionRenderData {
+  const payloadKey = getPayloadKey(toolBlock.outputRaw)
+  const cached =
+    payloadKey === null
+      ? undefined
+      : transactionCache.get(toolBlock.toolCallId)
+  if (cached && cached.payloadKey === payloadKey) {
+    // The cached view serves the payloadKey of the frozen derivation it
+    // wraps, so this check validates the entry against the payload it was
+    // built from before reusing it.
+    return cached
+  }
+  const data = computeTransactionRenderData(toolBlock, payloadKey ?? '')
+  if (payloadKey !== null) {
+    freezeCachedRenderData(data)
+    const view = createConsumerView(data)
+    transactionCache.set(toolBlock.toolCallId, view)
+    return view
+  }
+  return data
 }
 
 // Mirrors the `queued` distinction in str-replace.tsx: a write tool call that
@@ -260,22 +458,15 @@ export const EditTransactionComponent = defineToolComponent({
   toolName: 'edit_transaction',
 
   render(toolBlock, _theme, options): ToolRenderConfig {
-    const files = getTransactionFiles(toolBlock)
-    const error = getTransactionError(toolBlock)
-    const rows = getTransactionRows(toolBlock)
+    // The transaction payload body is parsed once per distinct payload (see
+    // getTransactionRenderData), not re-derived on every render.
+    const { files, error, rows, mutation, diffStats } =
+      getTransactionRenderData(toolBlock)
     const queued = isQueued(toolBlock)
-    const mutation = getCanonicalMutationResult(toolBlock.outputRaw)
     const title = 'Edit transaction'
     // Quick-scan size signal on the collapsed line: +N -M totals across the
     // transaction's per-file diffs, so the cost of an edit is visible without
-    // expanding the card.
-    const diffStats = files.reduce(
-      (acc, file) => {
-        const stats = computeDiffStats(typeof file.diff === 'string' ? file.diff : '')
-        return { added: acc.added + stats.added, removed: acc.removed + stats.removed }
-      },
-      { added: 0, removed: 0 },
-    )
+    // expanding the card. Computed inside the memo layer above.
     const sizeSuffix =
       diffStats.added + diffStats.removed > 0
         ? ` (+${diffStats.added} -${diffStats.removed})`

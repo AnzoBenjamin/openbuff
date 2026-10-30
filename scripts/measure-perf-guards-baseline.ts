@@ -599,17 +599,20 @@ function runCase3(): void {
       `${inBudgetChunks.length} chunks → 1 tool call, ${IN_BUDGET_CALL_PAYLOAD.length}B of 64KB budget`,
   )
 
-  // 64KB budget cap engagement: an oversized call must trip the budget exactly
-  // once and discard the rest silently (0 calls, 0 leaked bytes). The before
-  // row is the pre-budget shape — retain every byte and rescan the whole
-  // buffer per chunk (quadratic) — so outputs differ BY DESIGN here: that
-  // discard contract IS the cap.
+  // 64KB budget cap engagement: an oversized JSON-shaped call must trip the
+  // budget exactly once (1 tool_call_buffer_exceeded with a salvage
+  // recoveredPayload), then keep buffering to the 1 MiB
+  // MAX_REPAIRABLE_JSON_LENGTH salvage ceiling and parse-and-emit normally
+  // when the end tag arrives under that ceiling (1 call, 0 leaked bytes).
+  // The before row is the pre-salvage/broken-stream shape — retain every byte
+  // and rescan the whole buffer per chunk (quadratic, no recovery) — so the
+  // rows differ BY DESIGN: salvage-first recovery IS the new contract.
   const oversizedChunks = sliceIntoChunks(
     `${startToolTag}\n${OVERSIZED_CALL_PAYLOAD}\n${endToolTag}`,
     512,
   )
   assertParity('CASE 3c budget cap contract', streamCallStats(oversizedChunks), {
-    toolCalls: 0,
+    toolCalls: 1,
     bufferErrors: 1,
     leaked: 0,
   })
@@ -630,7 +633,7 @@ function runCase3(): void {
     before: legacyMs,
     after: capMs,
     ratioBasis: 'contract',
-    note: `${OVERSIZED_CALL_PAYLOAD.length}B payload in ${oversizedChunks.length} chunks: before retains+rescans all bytes, after discards past 64KB (outputs differ by design)`,
+    note: `${OVERSIZED_CALL_PAYLOAD.length}B payload in ${oversizedChunks.length} chunks: before retains+rescans all bytes without recovery, after salvages the JSON-shaped payload and keeps buffering to the 1 MiB MAX_REPAIRABLE_JSON_LENGTH ceiling (outputs differ by design)`,
   })
 
   // In-call payload replay (in-call-payload-replayed-per-chunk / RF-11):
