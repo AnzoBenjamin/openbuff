@@ -120,7 +120,13 @@ import type {
   ParentBridgeServer,
   SupervisedBridgeHandlerTable,
 } from './parent-bridge-server'
+import { createBridgeStderrLogger } from './bridge-protocol'
 import { SUPERVISED_SELF_EXEC_FLAG } from './self-exec-flag'
+
+// Bounded stderr diagnostic logger shared by the bridge sides (the same
+// convention child-bridge-client.ts and parent-bridge-server.ts use). Only
+// used on the close-failure advisory-repair path below.
+const cleanupLogger = createBridgeStderrLogger('supervised-spawn')
 
 /**
  * P2-T8c: the restart policy CONTRACT is declared in common's
@@ -293,18 +299,22 @@ function clampBackoffScalar(value: unknown, fallback: number): number {
 /**
  * P2-T8c: wall-clock delay before the `attempt`-th restart (1-based):
  * `backoffMs * backoffMultiplier ** (attempt - 1)` — the FIRST restart
- * waits exactly `backoffMs`. Capped at Number.MAX_SAFE_INTEGER because
- * `setTimeout(Infinity)` fires IMMEDIATELY (a huge multiplier blowing past
- * the safe range would silently drop the backoff; the attempt bound, not
- * the delay, is what bounds total wall-clock cost).
+ * waits exactly `backoffMs`. Capped at the 31-bit setTimeout ceiling
+ * (2^31 - 1, exported for tests) because timers clamp above it: Node
+ * setTimeout fires >2^31-1 IMMEDIATELY (Bun matches the clamp), so the
+ * old Number.MAX_SAFE_INTEGER cap silently dropped the backoff —
+ * `setTimeout(Infinity)` and `setTimeout(MAX_SAFE_INTEGER)` both fire
+ * immediately. The attempt bound, not the delay, bounds total wall-clock
+ * cost.
  */
+export const MAX_SETTLEABLE_RESTART_DELAY_MS = 2_147_483_647
 function computeRestartDelayMs(
   policy: NormalizedRestartPolicy,
   attempt: number,
 ): number {
   const rawDelay = policy.backoffMs * policy.backoffMultiplier ** (attempt - 1)
-  if (!Number.isFinite(rawDelay) || rawDelay > Number.MAX_SAFE_INTEGER) {
-    return Number.MAX_SAFE_INTEGER
+  if (!Number.isFinite(rawDelay) || rawDelay > MAX_SETTLEABLE_RESTART_DELAY_MS) {
+    return MAX_SETTLEABLE_RESTART_DELAY_MS
   }
   return Math.max(0, rawDelay)
 }
@@ -692,8 +702,27 @@ export function buildDefaultSpawnSupervised(
       // SupervisedBridgeHandlerTable.cancelInFlightStreams) so a killed
       // stream stops consuming the provider stream with no consumer; the
       // socket file is unlinked.
+      //
+      // code-reviewer advisory (fix-wave 2026-10-30, supervised-spawn
+      // cleanup ordering): bridge.close() must never starve the sandbox
+      // removal below — a close rejection previously skipped rmSync and
+      // leaked the 0700 mkdtemp sandbox + request file. The close rejection
+      // is logged-and-swallowed so the rmSync ALWAYS runs, and the
+      // spawnSettled result itself never changes shape on this path (the
+      // promise being returned may already be settled; a close failure
+      // surfaces only as the debug log).
       if (bridge) {
-        await bridge.close()
+        try {
+          await bridge.close()
+        } catch (closeError) {
+          // Advisory repair: a close failure must not starve the sandbox
+          // rmSync below; log-and-continue instead of rethrowing out of the
+          // finally block.
+          cleanupLogger.debug(
+            { error: closeError },
+            'Supervised-spawn bridge close failed; continuing sandbox cleanup',
+          )
+        }
       }
       // The request file lives inside the sandbox, so the recursive sandbox
       // removal cleans up both.

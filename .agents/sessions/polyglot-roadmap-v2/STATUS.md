@@ -647,3 +647,16 @@ Non-blocking advisories from the fix-wave reviewer pass (gate LOOKS_GOOD, finger
 
 **Full-suite verification (followup wave):** `bun run test` surfaced 5 failing reports across 3 workspaces; isolated reruns resolved them as 2 real stale test pins + load artifacts: indexer 410/0 in isolation and token-counter/indexer combined run exit 0 (parallel-load timeouts, not regressions). The two real failures were stale pins fixed in place (debugger-ruled, no production changes): (a) spawn-agents-message-history.test.ts:456-467 now guards the frozen shared clone write (deep-frozen by design; throws as expected, parent-snapshot assertions unchanged); (b) scripts/measure-perf-guards-baseline.ts CASE 3c parity pin updated to the salvage-first shipped contract {toolCalls:1, bufferErrors:1, leaked:0} — the parser now salvages unterminated JSON-shaped oversized tool-call payloads under the 1 MiB MAX_REPAIRABLE_JSON_LENGTH ceiling instead of silently discarding. Both suites green in isolation after the fix (message-history 15 pass; perf-baseline smoke 1 pass).
 
+
+<!-- update_plan_status:appended -->
+## Supervised-spawn advisory repairs + regression sweep — 2026-10-30T20:56:45.437Z
+
+Both post-review non-blocking advisories from the supervised-spawn reviewer pass (v3:5ec0691c2d525, file already attested LOOKS_GOOD) are resolved with receipts:
+
+1. **computeRestartDelayMs setTimeout clamp (advisory 1):** the cap moved from Number.MAX_SAFE_INTEGER to the new exported MAX_SETTLEABLE_RESTART_DELAY_MS = 2_147_483_647 (2^31 - 1). Node's setTimeout clamps timers above 2^31-1 to fire immediately (Bun matches), so the old MAX_SAFE_INTEGER cap silently dropped the backoff for huge multipliers — the exact failure the cap existed to prevent. The docblock now states the 31-bit ceiling rationale; the attempt bound still bounds total wall-clock cost. Pinned by MAX_SETTLEABLE_RESTART_DELAY_MS being exported for tests.
+2. **finally-block cleanup ordering (advisory 2):** bridge.close() is now wrapped in try/catch so a close rejection can never starve the trailing rmSync sandbox removal (the 0700 mkdtemp sandbox + request file could previously leak on a close failure). The close error is logged via the shared bounded-stderr `cleanupLogger` (createBridgeStderrLogger from bridge-protocol — the same convention child-bridge-client.ts/parent-bridge-server.ts use; the lightweight bridge-protocol import does not violate the file's lazy-loading contract, which only defers process-supervisor/parent-bridge-server). The spawnSettled result shape is unchanged on this path.
+
+Validation: agent-runtime typecheck 0; supervision/cancel suites 71/0 (process-supervisor, supervised-restart, spawn-agent-utils-cancel, spawn-agent-utils-clone-cache); cli supervision-adjacent regression sweep 75/0 (persistence-queue, run-state-storage, turn-checkpoint, logger).
+
+**P4-T3 status:** started with the callOptions rename + these two advisory repairs (supervised-spawn hygiene complete). The remaining large P4-T3 candidate is the deferred spawn-agent-utils.ts module split (~4.3k lines, three concerns: receipt / librarian cleanup / output compaction) — recorded in the backlog; it warrants its own dedicated wave with the existing receipt-pinning suites as the safety net, not a tail-end slice.
+
