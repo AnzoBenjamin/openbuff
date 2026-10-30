@@ -614,6 +614,21 @@ export function createLanguageIntelligence(
           const [command, ...args] = spec.argv
           return toLspChildHandle(spawn(command, args, { cwd: spec.cwd }))
         },
+        // P4-T2 (real-server seam): strict servers refuse document queries
+        // for a file they never received via didOpen, so the service supplies
+        // the containment-checked filesystem here. A refused path fails the
+        // query with the same honest containment contract the splice path
+        // already produces, instead of leaking real host-disk bytes.
+        openFile: async ({ filePath }) => {
+          const containedPath = await resolveSplicePath(filePath, readContext)
+          if (!containedPath) {
+            throw new LspServerError(
+              'LSP document open refused: path is outside the project and the configured read roots.',
+              { reason: 'unavailable' },
+            )
+          }
+          return readContext.fs.readFile(containedPath, 'utf8')
+        },
       })
       built = true
     }

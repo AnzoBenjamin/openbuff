@@ -1087,6 +1087,65 @@ describe('createLspMultiplexer', () => {
     ).rejects.toBeInstanceOf(LspServerError)
     await mux.dispose()
   })
+
+  test('an injected openFile auto-opens an unopened document before the document-scoped request', async () => {
+    // Real-server contract (observed clangd): a document query for a file the
+    // server has not received must arrive as didOpen first — strict servers
+    // answer with -32602 'trying to get AST for non-added document' otherwise.
+    const peer = makePeer((message) => {
+      const id = message.id as number
+      if (message.method === 'initialize') {
+        return { jsonrpc: '2.0', id, result: okInitialize }
+      }
+      if (message.method === 'textDocument/rename') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            changes: {
+              'file:///proj/a.ts': [
+                {
+                  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+                  newText: 'x',
+                },
+              ],
+            },
+          },
+        }
+      }
+      return { jsonrpc: '2.0', id, result: null }
+    })
+    const mux = createLspMultiplexer({
+      spawner: () => peer.child,
+      openFile: async () => 'const a = 1\n',
+    })
+    const changes = await mux.rename({
+      filePath: '/proj/a.ts',
+      position: { line: 0, character: 0 },
+      newName: 'x',
+    })
+    expect(changes).toEqual({
+      'file:///proj/a.ts': [
+        { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: 'x' },
+      ],
+    })
+    const messages = peer.received.map(
+      (body) => JSON.parse(body) as { method?: string; params?: Record<string, unknown> },
+    )
+    const methods = messages.map((message) => message.method)
+    const openIndex = methods.indexOf('textDocument/didOpen')
+    const renameIndex = methods.indexOf('textDocument/rename')
+    expect(openIndex).toBeGreaterThanOrEqual(0)
+    expect(renameIndex).toBeGreaterThan(openIndex)
+    const openMessage = messages.find((message) => message.method === 'textDocument/didOpen')
+    const textDocument = openMessage?.params?.['textDocument'] as
+      | { uri?: string; text?: string; languageId?: string }
+      | undefined
+    expect(textDocument?.uri).toBe('file:///proj/a.ts')
+    expect(textDocument?.text).toBe('const a = 1\n')
+    expect(textDocument?.languageId).toBe('typescript')
+    await mux.dispose()
+  })
 })
 
 describe('P4-T2 extract seams (create-file documentChanges / executeCommand / command passthrough)', () => {

@@ -194,6 +194,19 @@ export type LspMultiplexerOptions = {
   maxPendingRequests?: number
   maxFrameBytes?: number
   onEvent?: (event: LspMultiplexerEvent) => void
+  /**
+   * P4-T2 (real-server fixtures): strict servers (observed clangd 23.1.4)
+   * refuse document-scoped requests with -32602 'trying to get AST for
+   * non-added document' until the document arrives via didOpen. The
+   * post-mutation sync path opens documents, but a QUERY against a file the
+   * server never received must open it on demand. When this hook is set,
+   * before any document-scoped request on a connection where the uri is not
+   * yet open, the multiplexer calls it once and issues didOpen with the
+   * returned bytes. The CALLER owns content authority (the service wires
+   * the containment-checked filesystem); without the hook the request is
+   * issued as before and a strict server's protocol error surfaces honestly.
+   */
+  openFile?: (params: { filePath: string }) => Promise<string>
 }
 
 export type LspMultiplexerEvent =
@@ -1016,6 +1029,17 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
   ): Promise<T | null> {
     const entry = await acquire(filePath)
     if (entry.restarting) await entry.restarting
+    // P4-T2 (real-server seam): auto-open an unopened document before a
+    // document-scoped request when the caller supplied bytes for it. Version
+    // 1 is correct here: versionOf is connection-local and the connection
+    // just acquired (or freshly restarted) has the uri unopened.
+    if (options.openFile) {
+      const uri = filePathToUri(filePath)
+      if (entry.connection.versionOf(uri) === undefined) {
+        const text = await options.openFile({ filePath })
+        entry.connection.didOpen(uri, entry.languageId, 1, text)
+      }
+    }
     const result = (await entry.connection.request(method, params)) as T | null
     return result ?? null
   }
