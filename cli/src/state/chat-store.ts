@@ -188,15 +188,39 @@ type ChatStore = ChatStoreState & ChatStoreActions
 const generateSessionId = () => crypto.randomUUID()
 
 /**
+ * Retention bound for past message snapshots. Mirrors the drop-oldest
+ * mechanism of turn-snapshots.ts MAX_RETAINED_SNAPSHOTS (50), scaled down for
+ * message snapshots because each entry holds a deep-cloned message list in
+ * memory rather than a git ref.
+ */
+export const MAX_PAST_MESSAGE_SNAPSHOTS = 20
+
+/**
  * Deep-clone the current message list so subsequent immer mutations on the live
  * `messages` array cannot mutate a stored snapshot. Uses structuredClone
  * (available on Node 17+/Bun) with a JSON fallback for older runtimes.
+ *
+ * metadata.runState is REPLACED with undefined rather than cloned: a completed
+ * message's RunState body is the transcript-sized tree this clone exists to
+ * avoid copying, and undo/redo restore message lists for rendering only —
+ * anything that needs the run state reads the live session state
+ * (store.runState / previousRunState), never a snapshot.
  */
 const cloneMessageSnapshot = (messages: ChatMessage[]): ChatMessage[] => {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(messages) as ChatMessage[]
-  }
-  return JSON.parse(JSON.stringify(messages)) as ChatMessage[]
+  const cloned =
+    typeof structuredClone === 'function'
+      ? (structuredClone(messages) as ChatMessage[])
+      : (JSON.parse(JSON.stringify(messages)) as ChatMessage[])
+  return cloned.map((message) => {
+    if (message.metadata?.runState === undefined) {
+      return message
+    }
+    const { runState: _strippedRunState, ...restMetadata } = message.metadata
+    return {
+      ...message,
+      metadata: restMetadata,
+    }
+  })
 }
 
 const initialState: ChatStoreState = {
@@ -244,10 +268,12 @@ export const useChatStore = create<ChatStore>()(
       const { messages, pastMessageSnapshots } = useChatStore.getState()
       const snapshot = cloneMessageSnapshot(messages)
       set((state) => {
-        state.pastMessageSnapshots = castDraft([
-          ...pastMessageSnapshots,
-          snapshot,
-        ])
+        const next = [...pastMessageSnapshots, snapshot]
+        // Drop-oldest bound: only the newest MAX_PAST_MESSAGE_SNAPSHOTS
+        // entries stay undoable;
+        state.pastMessageSnapshots = castDraft(
+          next.slice(-MAX_PAST_MESSAGE_SNAPSHOTS),
+        )
         state.futureMessageSnapshots = []
       })
     },

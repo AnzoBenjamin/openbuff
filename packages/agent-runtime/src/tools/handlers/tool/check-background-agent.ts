@@ -10,6 +10,7 @@ import {
   waitForBackgroundAgentJob,
 } from '../../../util/background-agent-jobs'
 import { resolveRuntimeJobOwner } from '../../../util/runtime-job-owner'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -17,6 +18,7 @@ import type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 import type {
   JobEvent,
   JobSnapshot,
@@ -159,12 +161,14 @@ export const handleCheckBackgroundAgent = (async ({
   agentState,
   clientSessionId,
   signal,
+  clock,
 }: {
   previousToolCallFinished: Promise<void>
   toolCall: CodebuffToolCall<ToolName>
   agentState: AgentState
   clientSessionId: string
   signal: AbortSignal
+  clock?: Clock
 }): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
   await previousToolCallFinished
 
@@ -213,7 +217,9 @@ export const handleCheckBackgroundAgent = (async ({
   // ownership gate above already reported that case as not_found.
   let cancelledNow = false
   if (cancel) {
-    const cancelResult = cancelBackgroundAgentJob(jobId)
+    // P2-T1b: one injected-clock reading stamps both the core view and intent.
+    const cancelledAt = (clock ?? realClock).now()
+    const cancelResult = cancelBackgroundAgentJob(jobId, cancelledAt)
     if ('errorMessage' in cancelResult) {
       return {
         output: [
@@ -231,7 +237,7 @@ export const handleCheckBackgroundAgent = (async ({
       )
       if (intent) {
         intent.status = 'cancelled'
-        intent.completedAt = Date.now()
+        intent.completedAt = cancelledAt
         intent.error = BACKGROUND_AGENT_CANCEL_REASON
       }
     }

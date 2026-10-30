@@ -483,8 +483,13 @@ export async function getToolSet(params: {
       // Mutation tools keep schema field descriptions so the model still sees
       // per-field guidance for a bare discriminated union (e.g.
       // edit_transaction); read-only/other tools stay fully compacted.
+      // read_files is the one read-only exception: its selector fields are the
+      // empirically highest shape-failure surface, and Anthropic-published
+      // guidance attributes error-rate reductions to per-field descriptions —
+      // non-mutation compaction was stripping all selector guidance.
       const preserveDescriptions =
-        getToolMetadata(toolName as ToolName).kind === 'mutation'
+        getToolMetadata(toolName as ToolName).kind === 'mutation' ||
+        toolName === 'read_files'
 
       // For the skill tool, replace the placeholder with the actual available
       // skills (or an explicit "no skills" notice when none are loaded) before

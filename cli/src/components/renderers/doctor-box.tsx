@@ -4,6 +4,10 @@ import { HarnessBox } from './harness-box'
 import { useTheme } from '../../hooks/use-theme'
 
 import type { DoctorContentBlock } from '../../types/chat'
+import type {
+  DoctorCapabilityRow,
+  DoctorCapabilityRowTone,
+} from '../../utils/capability-tiers'
 
 interface DoctorBoxProps {
   block: DoctorContentBlock
@@ -21,6 +25,16 @@ export const DoctorBox = memo(({ block }: DoctorBoxProps) => {
   const skillsBadge = block.skillsTrusted
     ? 'trusted and enabled'
     : 'disabled with project-agent trust policy'
+  const capabilityRows = block.capabilities
+  const capabilityToneFg: Record<
+    DoctorCapabilityRowTone,
+    typeof theme.foreground
+  > = {
+    default: theme.foreground,
+    success: theme.success,
+    warning: theme.warning,
+    muted: theme.muted,
+  }
 
   return (
     <HarnessBox tone="secondary" title="Doctor" gap={1} paddingBottom={1}>
@@ -48,6 +62,36 @@ export const DoctorBox = memo(({ block }: DoctorBoxProps) => {
         <span style={{ fg: theme.secondary }}>Loaded MCP servers:</span>
         <span style={{ fg: theme.foreground }}>{` ${block.mcpCount}`}</span>
       </text>
+      {capabilityRows && capabilityRows.length > 0 ? (
+        <box style={{ flexDirection: 'column', gap: 0 }}>
+          <text style={{ wrapMode: 'word', fg: theme.secondary }}>
+            Capability tiers:
+          </text>
+          {capabilityRows.map((row: DoctorCapabilityRow, rowIndex: number) => (
+            <box
+              key={`capability-${rowIndex}`}
+              style={{ flexDirection: 'column', gap: 0 }}
+            >
+              <text style={{ wrapMode: 'word', fg: theme.foreground }}>
+                <span
+                  style={{ fg: theme.secondary }}
+                >{`  ${row.label}:`}</span>
+                <span
+                  style={{ fg: capabilityToneFg[row.tone] }}
+                >{` ${row.value}`}</span>
+              </text>
+              {row.rows?.map((detail, detailIndex) => (
+                <text
+                  key={`capability-${rowIndex}-detail-${detailIndex}`}
+                  style={{ wrapMode: 'word', fg: theme.muted }}
+                >
+                  {`    - ${detail}`}
+                </text>
+              ))}
+            </box>
+          ))}
+        </box>
+      ) : null}
       <text style={{ wrapMode: 'word', fg: theme.foreground }}>
         <span style={{ fg: theme.secondary }}>Agent diagnostics:</span>
         <span

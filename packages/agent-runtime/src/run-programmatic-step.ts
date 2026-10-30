@@ -16,6 +16,7 @@ import {
 import { remintConfirmedPostEditAnchors } from './util/read-authorization'
 import { isContextPrunerAgentId } from './util/context-pruner-identity'
 import { createWarnLatch } from './util/warn-latch'
+import { withSystemTags } from './util/messages'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
 import type { ExecuteToolCallParams } from './tools/tool-executor'
@@ -43,6 +44,7 @@ import type {
 } from '@codebuff/common/types/messages/content-part'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { AgentState } from '@codebuff/common/types/session-state'
+import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * Cap on how many DISTINCT base2 template ids the blank-projectRoot warning
@@ -67,6 +69,13 @@ class AgentRunContextRegistry {
   // distinct agent runs (which would otherwise silently resume each other's
   // generator).
   private readonly runIdToOwnerAgentId = new Map<string, string>()
+  // P2-T2-DESIGN §5 (replay requires reproducible ids): per-run ordered
+  // consumption counts for the replay short-circuit. Keyed by
+  // `${toolName}\u0000${occurrenceScopeInput}`-style strings built in
+  // executeSingleToolCall; the value is the number of journaled tool_call
+  // matches already consumed for that key, so the same tool called twice with
+  // an identical input in one run resolves deterministically in seq order.
+  private readonly runIdToReplayConsumed = new Map<string, Map<string, number>>()
   // Latch for the "base2 run has no projectRoot" warning (a missing root makes
   // the gate-telemetry sink a silent no-op), keyed by template id so a second,
   // differently-misconfigured base2 variant stays diagnosable. Registry-owned
@@ -113,11 +122,28 @@ class AgentRunContextRegistry {
     return this.missingBase2ProjectRootWarnLatch.shouldWarn(templateId)
   }
 
+  /**
+   * Ordered replay consumption for one (runId, toolName+input) key: returns
+   * the occurrence index this dispatch should consume, then increments it.
+   * Registry-owned so clearRun/clearAll cannot leak replay state across runs.
+   */
+  nextReplayOccurrence(runId: string, key: string): number {
+    let counters = this.runIdToReplayConsumed.get(runId)
+    if (!counters) {
+      counters = new Map()
+      this.runIdToReplayConsumed.set(runId, counters)
+    }
+    const occurrence = counters.get(key) ?? 0
+    counters.set(key, occurrence + 1)
+    return occurrence
+  }
+
   /** Per-run teardown: drop the generator, STEP_ALL latch, and owner mapping. */
   clearRun(runId: string): void {
     delete this.runIdToGenerator[runId]
     this.runIdToStepAll.delete(runId)
     this.runIdToOwnerAgentId.delete(runId)
+    this.runIdToReplayConsumed.delete(runId)
   }
 
   /** Process-wide teardown: drop every run's state. */
@@ -127,6 +153,7 @@ class AgentRunContextRegistry {
     }
     this.runIdToStepAll.clear()
     this.runIdToOwnerAgentId.clear()
+    this.runIdToReplayConsumed.clear()
     this.missingBase2ProjectRootWarnLatch.clear()
   }
 }
@@ -264,6 +291,10 @@ export async function runProgrammaticStep(
     logger,
   } = params
   let { stepNumber } = params
+
+  // Resolve the injectable id generator once at the runtime entry so replay
+  // (P2-T2) can reproduce identity ids deterministically.
+  const idGen = params.idGen ?? realIdGen
 
   if (!template.handleSteps) {
     throw new Error('No step handler found for agent template ' + template.id)
@@ -486,7 +517,7 @@ export async function runProgrammaticStep(
     }
   }
 
-  const agentStepId = crypto.randomUUID()
+  const agentStepId = idGen.uuid()
 
   // Initialize state for tool execution
   const toolCalls: CodebuffToolCall[] = []
@@ -623,6 +654,15 @@ export async function runProgrammaticStep(
             addProgrammaticToolResultContext,
             onResponseChunk,
           })
+        } else {
+          // Zero segments (e.g. a whitespace-only STEP_TEXT) executed
+          // nothing: reset toolResult so generator.next() receives the
+          // results of exactly the previous yield, per the StepGenerator
+          // contract. Leaving the prior iteration's results in place
+          // replayed stale output for a yield that ran no tools (reviewer
+          // advisory: stale toolResult fed to generator.next() on a
+          // zero-segment STEP_TEXT).
+          toolResult = []
         }
         continue
       }
@@ -667,6 +707,26 @@ export async function runProgrammaticStep(
         })
       } else {
         logger.error('No runId found for agent state after finishing agent run')
+      }
+
+      // P2-T2 slice 1: journal the step boundary + one spawn event per newly
+      // spawned child run (P2-T2-DESIGN §2). Additive and guarded on runId.
+      if (agentState.runId && params.journalWriter) {
+        const newChildRunIds = agentState.childRunIds.slice(childrenBefore)
+        params.journalWriter.append(agentState.runId, {
+          eventType: 'step_boundary',
+          stepNumber,
+          correlation: agentStepId,
+          payload: { status: 'completed', childRunIds: newChildRunIds },
+        })
+        for (const childRunId of newChildRunIds) {
+          params.journalWriter.append(agentState.runId, {
+            eventType: 'spawn',
+            stepNumber,
+            correlation: childRunId,
+            payload: { childRunId },
+          })
+        }
       }
       stepNumber++
 
@@ -854,6 +914,9 @@ type ExecuteToolCallsArrayParams = Omit<
   agentState: AgentState
   addProgrammaticToolResultContext?: (message: Message) => void
   onResponseChunk: (chunk: string | PrintModeEvent) => void
+  // P2-T2: real step index from runProgrammaticStep's params (both internal
+  // call sites spread {...params}, so the parent value flows through).
+  stepNumber: number
 }
 
 /**
@@ -889,7 +952,54 @@ async function executeSingleToolCall(
     )
   }
 
-  const toolCallId = crypto.randomUUID()
+  const idGen = params.idGen ?? realIdGen
+  const toolCallId = idGen.uuid()
+
+  // P2-T2 slice 1: replay idempotency short-circuit (P2-T2-DESIGN §4c).
+  // A journaled tool_result is never re-executed on replay: if this exact
+  // tool call already completed before a crash, reuse the recorded result
+  // verbatim in the same shape the normal path produces (latestToolResult =
+  // toolResults[last]?.content) instead of re-running a side-effecting tool.
+  //
+  // P2-T2-DESIGN §5 (replay requires reproducible ids): the short-circuit must
+  // NOT key on `toolCallId` — it is minted fresh by idGen.uuid() (realIdGen
+  // produces a NEW random id on a resumed run), so a uuid-keyed lookup NEVER
+  // matches the journaled tool_result after a restart and a completed
+  // side-effecting tool would re-execute. Instead key on the journaled
+  // tool_call PAYLOAD (toolName + structurally-equal input), which the
+  // programmatic loop re-derives identically on resume, and consume matches in
+  // order via `nextReplayOccurrence` so the same tool called twice with an
+  // identical input in one run resolves deterministically to distinct results.
+  if (agentState.runId && params.journalReader) {
+    const replayKey = `${toolCallToExecute.toolName}\u0000${JSON.stringify(toolCallToExecute.input) ?? ''}`
+    const occurrence = agentRunContextRegistry.nextReplayOccurrence(
+      agentState.runId,
+      replayKey,
+    )
+    const replayed = params.journalReader.toolResultForInput(
+      agentState.runId,
+      toolCallToExecute.toolName,
+      toolCallToExecute.input,
+      occurrence,
+    )
+    if (replayed !== undefined) {
+      const recordedResult = (
+        replayed as { result?: ToolResultOutput[] | null }
+      ).result
+      const replayedToolMessage: ToolMessage = {
+        role: 'tool',
+        toolCallId,
+        toolName: toolCallToExecute.toolName,
+        content: (recordedResult ?? []) as ToolResultOutput[],
+      }
+      // NOTE(James): agentState.messageHistory is readonly for some reason (?!).
+      agentState.messageHistory = [...agentState.messageHistory]
+      agentState.messageHistory.push(replayedToolMessage)
+      toolResults.push(replayedToolMessage)
+      return toolResults[toolResults.length - 1]?.content
+    }
+  }
+
   const includeStructuredToolCall = toolCallToExecute.includeToolCall === true
   const excludeToolFromMessageHistory = !includeStructuredToolCall
 
@@ -921,6 +1031,22 @@ async function executeSingleToolCall(
   }
 
   const toolResultsToAddToMessageHistory: ToolMessage[] = []
+
+  // P2-T2 slice 1: tool_call is the completion-marker boundary (P2-T2-DESIGN
+  // §4) and MUST be journaled before the tool executes, so a crash mid-tool is
+  // classifiable as an in-flight tool call on resume.
+  if (agentState.runId && params.journalWriter) {
+    params.journalWriter.append(agentState.runId, {
+      eventType: 'tool_call',
+      stepNumber: params.stepNumber,
+      correlation: toolCallId,
+      payload: {
+        toolName: toolCallToExecute.toolName,
+        input: toolCallToExecute.input,
+      },
+    })
+  }
+
   // Execute the tool call
   await executeToolCall({
     ...params,
@@ -1004,6 +1130,20 @@ async function executeSingleToolCall(
   // Get the latest tool result
   const latestToolResult = toolResults[toolResults.length - 1]?.content
 
+  // P2-T2 slice 1: tool_result closes the tool_call boundary; a journaled
+  // result is what the replay short-circuit above later reuses.
+  if (agentState.runId && params.journalWriter) {
+    params.journalWriter.append(agentState.runId, {
+      eventType: 'tool_result',
+      stepNumber: params.stepNumber,
+      correlation: toolCallId,
+      payload: {
+        toolName: toolCallToExecute.toolName,
+        result: latestToolResult ?? null,
+      },
+    })
+  }
+
   if (
     toolCallToExecute.includeToolCall === undefined &&
     latestToolResult &&
@@ -1047,7 +1187,25 @@ async function executeSegmentsArray(
       // Stream assistant text
       onResponseChunk(segment.text)
     } else if (segment.type === 'parse_error') {
-      onResponseChunk({ type: 'error', message: segment.message })
+      // Compose the same excerpt-annotated message the streaming emission
+      // boundary (tool-stream-parser emitParserErrors) builds, and persist it
+      // into the transcript too: streaming it alone leaves a silent hole in
+      // the model's own history where the tool call was, so it cannot
+      // self-correct the malformed JSON on the next turn. Follows this file's
+      // readonly messageHistory convention (recreate the array, then push).
+      // .agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md
+      const message =
+        segment.rawExcerpt !== undefined
+          ? `${segment.message}\n\nOriginal tool call input (excerpt): ${segment.rawExcerpt}`
+          : segment.message
+      onResponseChunk({ type: 'error', message })
+      agentState.messageHistory = [...agentState.messageHistory]
+      agentState.messageHistory.push(
+        userMessage({
+          content: withSystemTags(message),
+          tags: ['TOOL_CALL_ERROR'],
+        }),
+      )
     } else {
       // Handle tool call segment
       const toolResult = await executeSingleToolCall(segment, params)

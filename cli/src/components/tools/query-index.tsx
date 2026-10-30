@@ -1,7 +1,9 @@
 import React from 'react'
+import { TextAttributes } from '@opentui/core'
 
 import { SimpleToolCallItem } from './tool-call-item'
 import { defineToolComponent } from './types'
+import { splitPatternSegments } from './discovery-results'
 import { useTheme } from '../../hooks/use-theme'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
@@ -227,15 +229,12 @@ export const QueryIndexComponent = defineToolComponent({
               }}
             >
               {results.map((result, index) => {
+                // Human-facing detail: WHY this ranked (what it matched on).
+                // Raw score floats and content hashes are agent-facing
+                // telemetry — the rank order already communicates score.
                 const details = [
-                  typeof result.score === 'number'
-                    ? `score ${roundScore(result.score)}`
-                    : '',
                   formatMatchedOn(result)
                     ? `matched: ${formatMatchedOn(result)}`
-                    : '',
-                  typeof result.indexedHash === 'string'
-                    ? `hash ${result.indexedHash.slice(0, 12)}`
                     : '',
                 ].filter(Boolean)
                 const snippet = formatSnippets(result)
@@ -252,9 +251,18 @@ export const QueryIndexComponent = defineToolComponent({
                         detailColWidth,
                       )
                     : ''
-                const snippetDisplay = snippet
-                  ? wrapTextPreservingNewlines(snippet, detailColWidth)
-                  : ''
+                const queryTerms = String(query)
+                  .split(/\s+/)
+                  .filter((word) => word.length > 1)
+                  .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                const emphasisPattern =
+                  queryTerms.length > 0 ? queryTerms.join('|') : ''
+                const snippetSegments = emphasisPattern
+                  ? splitPatternSegments(
+                      wrapTextPreservingNewlines(snippet ?? '', detailColWidth),
+                      emphasisPattern,
+                    )
+                  : []
                 const relatedDisplay = related
                   ? wrapTextPreservingNewlines(related, detailColWidth)
                   : ''
@@ -276,18 +284,37 @@ export const QueryIndexComponent = defineToolComponent({
                       <span fg={theme.muted}>{`${index + 1}. `}</span>
                       <span fg={theme.directory}>{pathDisplay}</span>
                     </text>
+                    {snippet ? (
+                      <text
+                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
+                      >
+                        {snippetSegments.length > 0
+                          ? snippetSegments.map((segment, segIndex) =>
+                              segment.match ? (
+                                <span
+                                  key={segIndex}
+                                  fg={theme.primary}
+                                  attributes={TextAttributes.BOLD}
+                                >
+                                  {segment.text}
+                                </span>
+                              ) : (
+                                <span key={segIndex} fg={theme.foreground}>
+                                  {segment.text}
+                                </span>
+                              ),
+                            )
+                          : null}
+                        {snippetSegments.length === 0
+                          ? wrapTextPreservingNewlines(snippet, detailColWidth)
+                          : null}
+                      </text>
+                    ) : null}
                     {detailsDisplay ? (
                       <text
                         style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
                       >
                         <span fg={theme.muted}>{detailsDisplay}</span>
-                      </text>
-                    ) : null}
-                    {snippetDisplay ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{snippetDisplay}</span>
                       </text>
                     ) : null}
                     {relatedDisplay ? (
@@ -543,9 +570,6 @@ function formatRelated(result: QueryIndexResult): string {
   return truncate(`related to ${first.path}${reason}`, 120)
 }
 
-function roundScore(score: number): string {
-  return (Math.round(score * 100) / 100).toString()
-}
 
 function truncate(text: string, maxLength: number): string {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`

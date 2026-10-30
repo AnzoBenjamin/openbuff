@@ -7,6 +7,9 @@ import {
   selectUnconsolidatedSnapshots,
 } from './context-consolidation'
 
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
+
+import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 import type { ContextConsolidation } from '@codebuff/common/types/context-consolidation'
 import type { executeSubagent } from '../tools/handlers/tool/spawn-agent-utils'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
@@ -70,9 +73,12 @@ export function maybeRunBackgroundConsolidation(
     agentState: AgentState
     agentTemplate: Pick<AgentTemplate, 'id' | 'programmaticConfig'>
     userInputId: string
+    /** Injectable wall-clock (P2-T1); resolves to realClock when omitted. */
+    clock?: Clock
   } & ConsolidationSpawnContext,
 ): void {
   const { agentState, agentTemplate, logger, userInputId } = params
+  const clock = params.clock ?? realClock
   try {
     if (agentTemplate.programmaticConfig?.backgroundSnapshotConsolidation !== true) return
     if (activeConsolidations.has(agentState)) return
@@ -116,7 +122,7 @@ export function maybeRunBackgroundConsolidation(
         const summary = extractLastText(result.agentState.messageHistory)
         if (summary.length > 0) {
           const consolidation: ContextConsolidation = {
-            consolidatedAt: Date.now(),
+            consolidatedAt: clock.now(),
             sourceArchivedAts: snapshots.map((s) => s.archivedAt),
             action: snapshots[0].action,
             summary,

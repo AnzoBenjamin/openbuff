@@ -1,6 +1,7 @@
 import { IndexManager } from '@codebuff/indexer'
 import { AskUserBridge } from '@codebuff/common/utils/ask-user-bridge'
 import {
+  AcpRemoteBackend,
   OpenbuffClient,
   loadProviderConfigSync,
   createConfiguredEmbedder,
@@ -28,6 +29,24 @@ import type {
   RunState,
 } from '@openbuff/sdk'
 import type { MemoryV2ProviderResult } from '../services/memory-v2/provider'
+
+/**
+ * P1-T3 attach-mode target. Set by cli/src/index.tsx from the parsed
+ * `--attach` flags; when present, getCodebuffClient() builds an
+ * ACP-remote-backed client against a running `openbuff serve` instead of the
+ * in-process client. `undefined` keeps the default in-process behavior.
+ */
+let attachTarget: { socketPath: string; token?: string } | undefined
+
+export function setAttachTarget(
+  target: { socketPath: string; token?: string } | undefined,
+): void {
+  attachTarget = target
+}
+
+export function getAttachTarget(): { socketPath: string; token?: string } | undefined {
+  return attachTarget
+}
 
 export function memoryV2ClientConfigFromProvider(
   result: MemoryV2ProviderResult,
@@ -149,6 +168,28 @@ export async function getCodebuffClient(): Promise<OpenbuffClient> {
   const generation = clientGeneration
   const root = getProjectRoot()
   const create = async (): Promise<OpenbuffClient> => {
+    // P1-T3 attach mode: run prompts against a live `openbuff serve` over ACP
+    // instead of in-process. Off by default; set only via --attach.
+    if (attachTarget) {
+      const backend = new AcpRemoteBackend({
+        kind: 'socket',
+        socketPath: attachTarget.socketPath,
+        token: attachTarget.token ?? '',
+      })
+      const client = new ManagedOpenbuffClient(
+        { cwd: root, logger, backend },
+        async () => {
+          await backend.close()
+        },
+      )
+      if (generation === clientGeneration) {
+        clientInstance = client
+        return client
+      }
+      await client.retire()
+      return getCodebuffClient()
+    }
+
     // Set up ripgrep path for SDK to use
     const env = getCliEnv()
     if (env.CODEBUFF_IS_BINARY) {

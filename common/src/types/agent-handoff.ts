@@ -61,6 +61,13 @@ export const agentFindingSchema = z
     // reconciliation scope `findingsAddressed` to the OWNING family instead
     // of accepting any family's id.
     reviewer: z.string().min(1).optional(),
+    // Repair-payload carrier: the reviewer's structured finding fields ride
+    // into repair handoffs so repair editors are not spawned blind on an
+    // `id: text` line alone. Optional for legacy envelopes.
+    severity: z.string().min(1).optional(),
+    dimension: z.string().min(1).optional(),
+    evidence: z.array(z.string().min(1)).optional(),
+    correction: z.string().min(1).optional(),
   })
   .strict()
 
@@ -128,6 +135,13 @@ export const agentReceiptSchema = z
     role: agentRoleSchema,
     agentId: z.string().min(1),
     status: z.enum(['completed', 'partial', 'blocked', 'failed', 'cancelled']),
+    /**
+     * D19/PR-T1 typed handoff outcome; additive — legacy receipts without it
+     * stay valid.
+     */
+    outcome: z
+      .enum(['ok', 'missing_output', 'schema_invalid', 'truncated', 'crashed'])
+      .optional(),
     workspaceRevision: z.number().int().nonnegative().optional(),
     workspaceSnapshotId: z.string().min(1).optional(),
     changedFiles: z.array(agentChangedFileReceiptSchema),
@@ -206,6 +220,29 @@ export const agentReceiptSchema = z
         coverage: z.enum(['covered', 'missing', 'n/a']).optional(),
       })
       .strict()
+      .optional(),
+    /**
+     * Supervised-child gate-evidence transport: a supervised child's
+     * subprocess-local evidence ledger dies with the child process, so the
+     * child serializes a bounded snapshot of its own sessionEvidenceLog into
+     * the receipt and the parent folds it into its ledger when the
+     * supervised receipt is accepted — the parent's settle merge then sees
+     * work performed in the subprocess. Bounded to the LAST ≤50 entries,
+     * oldest→newest order preserved, serialized child-side from the child's
+     * own sessionEvidenceLog. Optional, so every existing receipt stays valid
+     * and no consumer migration is required.
+     */
+    sessionEvidence: z
+      .array(
+        z
+          .object({
+            toolName: z.string().min(1),
+            commandText: z.string().optional(),
+            atMs: z.number().int().nonnegative(),
+          })
+          .strict(),
+      )
+      .max(50)
       .optional(),
   })
   .strict()

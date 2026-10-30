@@ -20,6 +20,7 @@ import {
   acquireCiLocalLock,
   ciLocalLockPath,
   ciLocalStepTimeoutMs,
+  type CiLocalStepRunner,
   runCiLocalChecks,
   runInherited,
   formatGenerateFailedMessage,
@@ -128,6 +129,11 @@ describe('check-ci-local helpers', () => {
     expect(formatSuccessMessage()).toContain('CI-local early gates passed')
     expect(formatSuccessMessage()).toContain('memory-drift')
     expect(formatSuccessMessage()).toContain('sync-agent-config')
+    expect(formatSuccessMessage()).toContain('determinism')
+    expect(formatSuccessMessage()).toContain('mock-module')
+    expect(formatSuccessMessage()).toContain('project-root')
+    expect(formatSuccessMessage()).toContain('byok-wording')
+    expect(formatSuccessMessage()).toContain('dependency-provenance')
     expect(formatSuccessMessage()).toContain('full agents + common suites')
   })
 
@@ -331,11 +337,41 @@ describe('runCiLocalChecks orchestration', () => {
       args: ['--cwd=scripts', 'run', 'guard:sync-agent-config'],
       cwdDir: '',
     },
+    {
+      command: 'bun',
+      args: ['--cwd=scripts', 'run', 'guard:determinism'],
+      cwdDir: '',
+    },
+    {
+      command: 'bun',
+      args: ['--cwd=scripts', 'run', 'guard:mock-module'],
+      cwdDir: '',
+    },
+    {
+      command: 'bun',
+      args: ['--cwd=scripts', 'run', 'guard:project-root'],
+      cwdDir: '',
+    },
+    {
+      command: 'bun',
+      args: ['--cwd=scripts', 'run', 'guard:byok-wording'],
+      cwdDir: '',
+    },
+    {
+      command: 'bun',
+      args: ['--cwd=scripts', 'run', 'guard:dependency-provenance'],
+      cwdDir: '',
+    },
+    {
+      command: 'bun',
+      args: ['--cwd=scripts', 'run', 'guard:types-declaration'],
+      cwdDir: '',
+    },
     { command: 'bun', args: ['test'], cwdDir: 'agents' },
     { command: 'bun', args: ['test'], cwdDir: 'common' },
   ]
 
-  test('runs steps A-E in order and exits 0 when all pass', () => {
+  test('runs steps A-K in order and exits 0 when all pass', () => {
     withQuietConsole(() => {
       const { calls, run } = recordingStepRunner(0)
       expect(runCiLocalChecks(tmpRoot, run)).toBe(0)
@@ -344,12 +380,63 @@ describe('runCiLocalChecks orchestration', () => {
         const expected = expectedSteps[i]
         expect(call.command).toBe(expected.command)
         expect(call.args.slice(0, expected.args.length)).toEqual(expected.args)
-        // Steps A-D run at the repo root; Step E cds into each package dir.
+        // Steps A-J run at the repo root; Step K cds into each package dir.
         const expectedCwd = expected.cwdDir
           ? join(tmpRoot, expected.cwdDir)
           : tmpRoot
         expect(call.cwd).toBe(expectedCwd)
       })
+      // Step E runs the determinism gate at the repo root before the
+      // full suites (Step K) — a hard gate step, not suite-internal.
+      expect(calls[4].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:determinism',
+      ])
+      expect(calls[4].cwd).toBe(tmpRoot)
+      // Step F runs the mock-module guard at the repo root, still before
+      // the full suites (Step K) — a hard gate step, not suite-internal.
+      expect(calls[5].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:mock-module',
+      ])
+      expect(calls[5].cwd).toBe(tmpRoot)
+      // Step G runs the project-root guard at the repo root, still before the
+      // full suites (Step K) — a hard gate step, not suite-internal, so an
+      // unguarded fileContext.projectRoot deref cannot silently land.
+      expect(calls[6].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:project-root',
+      ])
+      expect(calls[6].cwd).toBe(tmpRoot)
+      // Step H runs the byok-wording guard at the repo root, still before the
+      // full suites (Step K) — a hard gate step, not suite-internal.
+      expect(calls[7].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:byok-wording',
+      ])
+      expect(calls[7].cwd).toBe(tmpRoot)
+      // Step I reconciles every exact-pinned dependency against the checked-in
+      // upstream provenance record, offline, before the suites run — so an
+      // unreconcilable pin fails the gate rather than the suite.
+      expect(calls[8].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:dependency-provenance',
+      ])
+      expect(calls[8].cwd).toBe(tmpRoot)
+      // Step J enforces the runtime-dependency / typings co-declaration
+      // invariant from manifests alone, still before the suites (Step K), so a
+      // dropped @types sibling fails the gate rather than a suite.
+      expect(calls[9].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:types-declaration',
+      ])
+      expect(calls[9].cwd).toBe(tmpRoot)
       // Step B diffs tracked files against git HEAD (staged drift included).
       expect(calls[1].args[2]).toBe('HEAD')
       // Lock is released after success.
@@ -365,6 +452,97 @@ describe('runCiLocalChecks orchestration', () => {
       expect(calls).toHaveLength(1)
       expect(calls[0].command).toBe('bun')
       // Lock released despite the early failure.
+      expect(existsSync(ciLocalLockPath(tmpRoot))).toBe(false)
+    })
+  })
+
+  test('fails when guard:determinism fails and skips the full suites', () => {
+    withQuietConsole(() => {
+      const { calls, run } = recordingStepRunner(0)
+      // Step E (guard:determinism) is the 5th invoked step; fail only there.
+      const failingRun: CiLocalStepRunner = (command, args, cwd) => {
+        const result = run(command, args, cwd)
+        return calls.length === 5 ? { status: 1 } : result
+      }
+      expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
+      // Steps A-E ran; the mock-module/project-root guards (Steps F-G) and
+      // the full suites (Step K) were skipped.
+      expect(calls).toHaveLength(5)
+      expect(calls[4].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:determinism',
+      ])
+      expect(calls[4].cwd).toBe(tmpRoot)
+      // Lock released despite the failure.
+      expect(existsSync(ciLocalLockPath(tmpRoot))).toBe(false)
+    })
+  })
+
+  test('fails when guard:mock-module fails and skips the full suites', () => {
+    withQuietConsole(() => {
+      const { calls, run } = recordingStepRunner(0)
+      // Step F (guard:mock-module) is the 6th invoked step; fail only there.
+      const failingRun: CiLocalStepRunner = (command, args, cwd) => {
+        const result = run(command, args, cwd)
+        return calls.length === 6 ? { status: 1 } : result
+      }
+      expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
+      // Steps A-F ran; the project-root guard (Step G) and the full suites
+      // (Step K) were skipped.
+      expect(calls).toHaveLength(6)
+      expect(calls[5].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:mock-module',
+      ])
+      expect(calls[5].cwd).toBe(tmpRoot)
+      // Lock released despite the failure.
+      expect(existsSync(ciLocalLockPath(tmpRoot))).toBe(false)
+    })
+  })
+
+  test('fails when guard:project-root fails and skips the full suites', () => {
+    withQuietConsole(() => {
+      const { calls, run } = recordingStepRunner(0)
+      // Step G (guard:project-root) is the 7th invoked step; fail only there.
+      const failingRun: CiLocalStepRunner = (command, args, cwd) => {
+        const result = run(command, args, cwd)
+        return calls.length === 7 ? { status: 1 } : result
+      }
+      expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
+      // Steps A-H ran; the full suites (Step K) were skipped.
+      expect(calls).toHaveLength(7)
+      expect(calls[6].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:project-root',
+      ])
+      expect(calls[6].cwd).toBe(tmpRoot)
+      // Lock released despite the failure.
+      expect(existsSync(ciLocalLockPath(tmpRoot))).toBe(false)
+    })
+  })
+
+  test('fails when guard:byok-wording fails and skips the full suites', () => {
+    withQuietConsole(() => {
+      const { calls, run } = recordingStepRunner(0)
+      // Step H (guard:byok-wording) is the 8th invoked step; fail only there.
+      const failingRun: CiLocalStepRunner = (command, args, cwd) => {
+        const result = run(command, args, cwd)
+        return calls.length === 8 ? { status: 1 } : result
+      }
+      expect(runCiLocalChecks(tmpRoot, failingRun)).toBe(1)
+      // Steps A-J ran; the types-declaration guard (Step J) passed and the
+      // full suites (Step K) were skipped.
+      expect(calls).toHaveLength(8)
+      expect(calls[7].args).toEqual([
+        '--cwd=scripts',
+        'run',
+        'guard:byok-wording',
+      ])
+      expect(calls[7].cwd).toBe(tmpRoot)
+      // Lock released despite the failure.
       expect(existsSync(ciLocalLockPath(tmpRoot))).toBe(false)
     })
   })

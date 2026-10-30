@@ -10,6 +10,7 @@ import { join } from 'node:path'
 
 import { afterAll, describe, expect, test } from 'bun:test'
 
+import { transitionBase2GateSafe } from '@codebuff/agent-runtime/orchestration/workflow-engine'
 import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
 
 import { createBaseDeep } from '../base2/base-deep'
@@ -169,6 +170,8 @@ function parseGateStateBlock(text: string):
         totalCount: number
         nextWorkflowAction: string
       }
+      reviewers?: string[]
+      skipReason?: string
     }
   | undefined {
   const match = text.match(/<gate-state>([\s\S]*?)<\/gate-state>/)
@@ -202,6 +205,16 @@ function parseGateStateBlock(text: string):
               nextWorkflowAction: string
             },
           }
+        : {}),
+      // Reviewer-family attribution and the machine skip token are additive
+      // optional fields, surfaced so driven lifecycles can assert them.
+      ...(Array.isArray(parsed.reviewers)
+        ? {
+            reviewers: parsed.reviewers.map((reviewer) => String(reviewer)),
+          }
+        : {}),
+      ...(typeof parsed.skipReason === 'string'
+        ? { skipReason: parsed.skipReason }
         : {}),
     }
   } catch {
@@ -4086,6 +4099,10 @@ describe('base2 verification and reviewer gates', () => {
     expect(skipGate!.details).toContain(
       'validation-and-reviewer-gates-disabled',
     )
+    // Additive field: the disabled-gate reason token is published as the
+    // block's skipReason; no reviewer family ran, so `reviewers` is absent.
+    expect(skipGate!.skipReason).toBe('validation-and-reviewer-gates-disabled')
+    expect(skipGate!.reviewers).toBeUndefined()
 
     const done = gen.next()
     expect(done.done).toBe(true)
@@ -4209,6 +4226,11 @@ describe('base2 verification and reviewer gates', () => {
       status: 'failed',
     })
     expect(unsafeGate!.details).toContain(
+      'edits-detected-without-pending-gate-files',
+    )
+    // Additive field: the machine skip token assigned to
+    // lastReviewerGateSkipReason is published on the block.
+    expect(unsafeGate!.skipReason).toBe(
       'edits-detected-without-pending-gate-files',
     )
     expect((agentState as any).base2ActiveWork).toMatchObject({
@@ -5136,8 +5158,12 @@ describe('base2 verification and reviewer gates', () => {
     try {
       const tmpFile = join(tmpDir, 'a.ts')
       const gateFile = normalizeGateFilePath(tmpFile)
+      // Different LENGTHS on purpose so the consecutive snapshots can never
+      // collide on size+mtime (even with a fully broken marker cache) while
+      // keeping the oscillation semantics: the finding sequence is unchanged,
+      // only the byte lengths differ.
       const contentA = 'export const value = 1\n'
-      const contentB = 'export const value = 2\n'
+      const contentB = 'export const value = 22\n'
       writeFileSync(tmpFile, contentA)
       const base2 = createBase2('default')
       const agentState = { agentId: 'base2' }
@@ -5732,6 +5758,17 @@ describe('base2 verification and reviewer gates', () => {
       securityReviewGateDone: false,
       preEditSecurityReviewDone: false,
       requiredReviewerRevalidation: 'security-reviewer',
+    })
+    // Additive field: the security blocking add_message now ends with a
+    // <gate-state> block naming the security-reviewer family.
+    expect(
+      parseGateStateBlock(
+        (blockerMessage.value as any).input.content as string,
+      ),
+    ).toMatchObject({
+      gate: 'reviewer',
+      status: 'failed',
+      reviewers: ['security-reviewer'],
     })
     expect((agentState as any).base2ActiveWork.openReviewerFindings).toEqual(
       expect.arrayContaining([
@@ -6405,6 +6442,10 @@ describe('base2 verification and reviewer gates', () => {
     expect((agentState as any).base2ActiveWork).toMatchObject({
       currentPhase: 'final_response_allowed',
       reviewerProtocolRetryCount: 0,
+      // The gate-pass clean slate clears the protocol latch beside its retry
+      // counter (reliability:
+      // specialist-exit-overwrites-reviewer-protocol-guard-token).
+      reviewerProtocolAttestationFailed: false,
     })
   })
 
@@ -6482,6 +6523,7 @@ describe('base2 verification and reviewer gates', () => {
       currentPhase: 'blocked',
       pendingGateFiles: ['src/a.ts'],
       reviewerProtocolRetryCount: 1,
+      reviewerProtocolAttestationFailed: true,
       lastReviewerGateSkipReason: 'reviewer-protocol-attestation-failed',
       openReviewerFindings: [],
       nextRequiredAction:
@@ -7423,11 +7465,17 @@ describe('base2 verification and reviewer gates', () => {
       const condonedKeys = active.condonedFindingKeys as string[]
       // (a) the reviewer-supplied id produced an id-keyed condone entry
       // (Q4-2: reviewer-namespaced).
-      expect(condonedKeys).toContain(`code-reviewer::NON_BLOCKING::id:${findingId}`)
-      expect(condonedKeys).toContain(`code-reviewer::NON_BLOCKING::text:${blockerText}`)
+      expect(condonedKeys).toContain(
+        `code-reviewer::NON_BLOCKING::id:${findingId}`,
+      )
+      expect(condonedKeys).toContain(
+        `code-reviewer::NON_BLOCKING::text:${blockerText}`,
+      )
       // (c) the record-less finding got a minted RF-... id, which is positional
       // and therefore never keyed on.
-      expect(condonedKeys).toContain(`code-reviewer::NON_BLOCKING::text:${plainFindingText}`)
+      expect(condonedKeys).toContain(
+        `code-reviewer::NON_BLOCKING::text:${plainFindingText}`,
+      )
       expect(condonedKeys.filter((key) => key.includes('::id:'))).toEqual([
         `code-reviewer::NON_BLOCKING::id:${findingId}`,
       ])
@@ -7791,10 +7839,17 @@ describe('base2 verification and reviewer gates', () => {
       expect((afterReview.value as any).input.content).toContain(
         'NON_BLOCKING: reviewer returned non-blocking nits without findings',
       )
-      expect(gen.next().value).toMatchObject({
+      const repairSpawn = gen.next().value as any
+      expect(repairSpawn).toMatchObject({
         toolName: 'spawn_agents',
         input: { agents: [{ agent_type: 'repair-editor' }] },
       })
+      // The placeholder finding must carry a real correction payload so the
+      // repair editor is not spawned blind on an `id: text` line alone.
+      const repairFinding = repairSpawn?.input?.agents?.[0]?.handoff
+        ?.findings?.[0] as { correction?: string } | undefined
+      expect(typeof repairFinding?.correction).toBe('string')
+      expect(repairFinding?.correction).toContain('gate placeholder')
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -8039,6 +8094,84 @@ describe('base2 verification and reviewer gates', () => {
       requirementCoverageCount: 100,
       receiptTruncated: true,
     })
+  })
+
+  // PR-T5 (D23) Slice 1: the receipt binds per-file content hashes captured
+  // through the gate's own readGateFileContentMarker, so a downstream consumer
+  // can verify the exact reviewed bytes.
+  test('recordSuccessfulReviewReceipt binds reviewedFileHashes to the reviewed file markers', () => {
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      expect(
+        gen.next(attestedReviewerResult(reviewCall) as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const receipt = (agentState as any).base2ActiveWork.reviewReceipts[0]
+      // The hash equals the content marker of the live bytes: raw sha256 +
+      // byte length, exactly what readGateFileContentMarker computes.
+      expect(receipt.reviewedFileHashes).toEqual([
+        { path: gateFile, hash: buildContentMarker(tmpFile) },
+      ])
+      expect(receipt.reviewedFileHashes[0].hash).toMatch(
+        /^sha256:[a-f0-9]{64}:\d+$/,
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // PR-T5 (D23) Slice 1: hash entries are exact content markers, so
+  // fitReceiptToStorageBound bounds only their COUNT (slice to 4) and keeps
+  // the values verbatim through receipt truncation.
+  test('fitReceiptToStorageBound keeps reviewedFileHashes through truncation', () => {
+    const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+      driveToFirstReview()
+    try {
+      const longText = 'receipt detail '.repeat(300)
+      const bigReview = attestedReviewerResult(reviewCall) as any
+      bigReview.toolResult[0].value[0].findings = Array.from(
+        { length: 20 },
+        (_unused, index) => ({
+          id: `code-reviewer:correctness:finding-${index}`,
+          summary: longText,
+          severity: 'low',
+          dimension: 'correctness',
+          evidence: Array.from({ length: 8 }, () => longText),
+          correction: longText,
+        }),
+      )
+      bigReview.toolResult[0].value[0].requirementCoverage = Array.from(
+        { length: 100 },
+        (_unused, index) => ({
+          requirement: `Requirement ${index}: ${longText}`,
+          status: 'satisfied',
+          evidence: Array.from({ length: 8 }, () => longText),
+        }),
+      )
+      expect(gen.next(bigReview).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const gatePassed = gen.next({
+        toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+      } as any)
+      expect(gatePassed.value).toMatchObject({ toolName: 'add_message' })
+      const receipt = (agentState as any).base2ActiveWork.reviewReceipts[0]
+      expect(receipt.receiptTruncated).toBe(true)
+      expect(JSON.stringify(receipt).length).toBeLessThanOrEqual(4_000)
+      // The single hash entry survives the compaction byte-for-byte.
+      expect(receipt.reviewedFileHashes).toEqual([
+        { path: gateFile, hash: buildContentMarker(tmpFile) },
+      ])
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   test('execute-plan prompts use injected artifacts without repeated unchanged reads', () => {
@@ -10682,9 +10815,15 @@ describe('base2 emitGateTelemetry durable sink recorder', () => {
    * the `base2-fast` agentId allowlist, so supplying the config would turn the
    * validation/reviewer gate back ON and never reach the skip diagnostic.
    */
-  function driveDisabledGateTurn(params: Record<string, unknown>) {
+  function driveDisabledGateTurn(
+    params: Record<string, unknown>,
+    // Optional pre-seeded agent state so a test can force an illegal gate
+    // transition; the default keeps every existing call site unchanged.
+    agentState: Record<string, unknown> & {
+      workflowStates?: Record<string, unknown>
+    } = { agentId: 'base2-fast' },
+  ) {
     const base2 = createBase2('fast')
-    const agentState = { agentId: 'base2-fast' }
     const gen = base2.handleSteps!({
       agentState,
       prompt: 'Make the requested change now please',
@@ -10801,6 +10940,115 @@ describe('base2 emitGateTelemetry durable sink recorder', () => {
         event: 'base2.gate',
         skipReason: 'validation-and-reviewer-gates-disabled',
       })
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
+  test('a legal transition persists the same base2-gate-v1 state as the engine', () => {
+    const originalInfo = console.info
+    console.info = () => {}
+    try {
+      const agentState: Record<string, unknown> & {
+        workflowStates?: Record<string, unknown>
+      } = { agentId: 'base2-fast' }
+      const skipDiagnostic = driveDisabledGateTurn(
+        {
+          orchestrationControlPlane: {
+            transitionBase2GateSafe,
+          },
+        },
+        agentState,
+      )
+
+      // The gate kept working: the skip diagnostic still emitted.
+      expect(skipDiagnostic.value).toMatchObject({ toolName: 'add_message' })
+      // The gate's disabled-skip event ('awaiting_validation') advanced the
+      // workflow from its 'idle' initial state, matching a direct engine call
+      // for the same event (schema, id, state, revision, and lastEvent; only
+      // the wall-clock `updatedAt` stamp may differ).
+      const expected = transitionBase2GateSafe({
+        phase: 'awaiting_validation',
+      })
+      expect(expected.ok).toBe(true)
+      if (expected.ok) {
+        expect(agentState.workflowStates!['base2-gate-v1']).toMatchObject({
+          schemaVersion: expected.state.schemaVersion,
+          workflowId: expected.state.workflowId,
+          state: expected.state.state,
+          revision: expected.state.revision,
+          lastEvent: expected.state.lastEvent,
+        })
+      }
+      // No structured error was recorded on the legal path.
+      expect(
+        agentState.workflowStates!['base2-gate-v1-last-error'],
+      ).toBeUndefined()
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
+  test('an illegal transition records the structured error and does not throw', () => {
+    const recorded: Array<Record<string, unknown>> = []
+    const logged: string[] = []
+    const originalInfo = console.info
+    console.info = (...args: unknown[]) => {
+      const [first] = args
+      if (typeof first === 'string' && first.includes('"base2.gate"')) {
+        logged.push(first)
+      }
+    }
+    try {
+      // Seed the persisted workflow state so this turn's skip telemetry event
+      // ('awaiting_validation') is an ILLEGAL transition: the engine defines
+      // no awaiting_validation → awaiting_validation edge.
+      const seeded = transitionBase2GateSafe({
+        phase: 'awaiting_validation',
+      })
+      if (!seeded.ok) {
+        throw new Error('test seed transition unexpectedly rejected')
+      }
+      const agentState: Record<string, unknown> & {
+        workflowStates?: Record<string, unknown>
+      } = {
+        agentId: 'base2-fast',
+        workflowStates: { 'base2-gate-v1': seeded.state },
+      }
+      const skipDiagnostic = driveDisabledGateTurn(
+        {
+          orchestrationControlPlane: {
+            transitionBase2GateSafe,
+            recordGateTelemetry: (payload: Record<string, unknown>) => {
+              recorded.push(payload)
+            },
+          },
+        },
+        agentState,
+      )
+
+      // The gate continued to its skip diagnostic instead of surfacing the
+      // rejection, and both telemetry channels still fired exactly once.
+      expect(skipDiagnostic.value).toMatchObject({ toolName: 'add_message' })
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0]).toMatchObject({
+        event: 'base2.gate',
+        skipReason: 'validation-and-reviewer-gates-disabled',
+      })
+      expect(logged).toHaveLength(1)
+      // The rejection is RECORDED, not silently swallowed: the prior state
+      // stays in place and the structured error names the illegal from+event.
+      expect(agentState.workflowStates!['base2-gate-v1']).toEqual(seeded.state)
+      const lastError = agentState.workflowStates![
+        'base2-gate-v1-last-error'
+      ] as Record<string, unknown> | undefined
+      expect(lastError).toBeDefined()
+      expect(lastError).toMatchObject({
+        from: 'awaiting_validation',
+        event: 'awaiting_validation',
+      })
+      expect(typeof lastError?.error).toBe('string')
+      expect(String(lastError?.error)).toContain('awaiting_validation')
     } finally {
       console.info = originalInfo
     }
@@ -10978,6 +11226,8 @@ type InlineGateStateBlockHelpers = {
       totalCount: number
       nextWorkflowAction: string
     },
+    reviewers?: string[],
+    skipReason?: string,
   ) => string
   extractGateStateBlocksFromMessage: (message: unknown) => Array<{
     gate: string
@@ -11005,6 +11255,10 @@ function loadInlineGateStateBlockHelpers(): InlineGateStateBlockHelpers {
       // which the reviewer/security/specialist add_message surfaces also call.
       // Reconstructing the producer without it throws at call time.
       extractInlineFunctionSource(base2Source, 'boundAdvisoryLines'),
+      // Same contract for the reviewer-family/skip-reason bounds helper: the
+      // producer calls it unconditionally, so omitting it here throws
+      // `boundGateStateReviewerFields is not defined` on every call.
+      extractInlineFunctionSource(base2Source, 'boundGateStateReviewerFields'),
       // Same contract for the declared-workflow bounds helper: the producer
       // calls it unconditionally (it is what decides whether to emit the
       // optional `workflow` key at all), so omitting it here throws
@@ -11064,6 +11318,1125 @@ describe('base2 inline formatGateStateBlock delimiter safety', () => {
     // The same bytes round-trip through the CLI-facing parse shape too.
     const parsed = parseGateStateBlock(block)
     expect(parsed?.advisories).toEqual([hostileAdvisory])
+  })
+})
+
+describe('base2 gate-state reviewer-family and skip-reason fields', () => {
+  /** Gate state parked mid-gate on one pending reviewable file, with the aux
+   * gates credited so only the routed specialist block runs. */
+  function seededSpecialistGateState(gateFile: string) {
+    return {
+      changedFiles: [gateFile],
+      touchedFiles: [gateFile],
+      pendingGateFiles: [gateFile],
+      currentPhase: 'awaiting_validation',
+      openReviewerBlockers: [],
+      openReviewerFindings: [],
+      lastValidationSummary: '',
+      nextRequiredAction: '',
+      lastPinnedStateMessage: '',
+      gatePassedFiles: [],
+      gatePassedPendingFiles: [],
+      gatePassedReviewerVerdict: '',
+      gatePassedValidationSummary: '',
+      gatePassedFingerprint: '',
+      lastReviewerGateSkipReason: '',
+      reviewReceipts: [],
+      testWriterGateDone: true,
+      docWriterGateDone: true,
+      securityReviewGateDone: true,
+      preEditSecurityReviewDone: true,
+      specialistReviewGatesDone: [],
+      auxGatesLastPendingFiles: [gateFile],
+    }
+  }
+
+  /** Real on-disk state/session.ts fixture: the `state/` path segment routes
+   * reliability-reviewer through the specialist gate. */
+  function seedReliabilityFixture(prefix: string) {
+    const tmpDir = makeProjectTempDir(prefix)
+    const stateDir = join(tmpDir, 'state')
+    mkdirSync(stateDir, { recursive: true })
+    const absoluteFile = join(stateDir, 'session.ts')
+    writeFileSync(absoluteFile, 'export const session = "v1"\n')
+    return { tmpDir, gateFile: normalizeGateFilePath(absoluteFile) }
+  }
+
+  /** Drive a seeded specialist turn to the routed reliability-reviewer spawn. */
+  function driveToSpecialistSpawn(
+    gateFile: string,
+    agentState: Record<string, unknown>,
+  ) {
+    const base2 = createBase2('default')
+    const gen = base2.handleSteps!({
+      agentState,
+      prompt: 'Please finish the pending reliability finding.',
+      params: {},
+    } as any)
+
+    expect(gen.next().value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    expect(
+      gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+    ).toMatchObject({
+      toolName: 'spawn_agent_inline',
+      input: { agent_type: 'context-pruner' },
+    })
+    expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+    expect(gen.next().value).toBe('STEP')
+    expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+      toolName: 'git_status',
+      input: {},
+    })
+    const bundle = gen.next(feedJson({ status: ` M ${gateFile}` }))
+    expect(bundle.value).toMatchObject({
+      toolName: 'get_change_review_bundle',
+      input: {},
+    })
+    const spawn = gen.next(
+      feedJson({
+        snapshotId: 'unit-spec-snap-attribution',
+        files: [gateFile],
+      }),
+    )
+    expect(spawn.value).toMatchObject({
+      toolName: 'spawn_agents',
+      input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+    })
+    const fingerprint = String(
+      (spawn.value as any).input.agents[0].params?.snapshot_id ?? '',
+    )
+    expect(fingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
+    return { gen, fingerprint }
+  }
+
+  test('specialist blocking findings name the routed reviewer family in the block', () => {
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-gate-state-specialist-blocking-',
+    )
+    try {
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: seededSpecialistGateState(gateFile),
+      }
+      const { gen, fingerprint } = driveToSpecialistSpawn(gateFile, agentState)
+
+      const blockerMessage = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: {
+            schemaVersion: 1,
+            family: 'reviewer',
+            verdict: 'BLOCKING',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: [gateFile],
+            findings: ['Fix the race in the session retry path.'],
+            coverage: 'covered',
+            dimensions: {},
+            requirementCoverage: [],
+          },
+        }),
+      )
+      expect(blockerMessage.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (blockerMessage.value as any).input.content as string
+      expect(content).toContain(
+        'reliability-reviewer returned blocking findings. The harness will send these exact findings to repair-editor:',
+      )
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({
+        gate: 'reviewer',
+        status: 'failed',
+        repairRound: 1,
+        reviewers: ['reliability-reviewer'],
+      })
+      expect(gateState!.details).toBe(
+        'reliability-reviewer returned blocking findings for the pending snapshot.',
+      )
+      // No skip token was assigned on the blocking path, so the key is absent.
+      expect(gateState!.skipReason).toBeUndefined()
+      expect(content).not.toContain('"skipReason"')
+      // The blocking path still hands off to repair-editor exactly as before.
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('specialist rate-limit crash carries reviewers and the specialist-rate-limited skip token', () => {
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-gate-state-specialist-ratelimit-',
+    )
+    try {
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: seededSpecialistGateState(gateFile),
+      }
+      const { gen } = driveToSpecialistSpawn(gateFile, agentState)
+
+      const crashMessage = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: {
+            errorMessage: 'Provider rate limit exceeded, please retry later.',
+          },
+        }),
+      )
+      expect(crashMessage.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (crashMessage.value as any).input.content as string
+      expect(content).toContain(
+        'Specialist review gate hit a rate-limit or concurrency limit.',
+      )
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({
+        gate: 'reviewer',
+        status: 'failed',
+        reviewers: ['reliability-reviewer'],
+        skipReason: 'specialist-rate-limited',
+      })
+      expect(gateState!.details).toContain('specialist-rate-limited')
+      expect(
+        (agentState as any).base2ActiveWork.lastReviewerGateSkipReason,
+      ).toBe('specialist-rate-limited')
+      // The terminal-failure handler breaks out of the gate loop.
+      expect(gen.next().done).toBe(true)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a stale skip token is overwritten on the specialist terminal-failure path', () => {
+    // Regression (stale-skip-reason-token): the terminal-failure block used
+    // to backfill lastReviewerGateSkipReason only when it was EMPTY, so a
+    // stale token from an earlier unrelated failure survived into the
+    // published <gate-state> block and contradicted its own details. The
+    // token must be assigned unconditionally so it always matches the
+    // block it rides on.
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-specialist-stale-token-',
+    )
+    try {
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          // A stale token left behind by an earlier, unrelated failure.
+          lastReviewerGateSkipReason: 'validation-hook-failures',
+        },
+      }
+      const { gen, fingerprint } = driveToSpecialistSpawn(gateFile, agentState)
+
+      // A specialist result that both fails file attestation (the pending
+      // file is not attested) and reports a stale snapshot finding: the gate
+      // performs its single automatic refresh + retry, then fails
+      // terminally.
+      const staleAttestation = feedJson({
+        agentType: 'reliability-reviewer',
+        value: {
+          schemaVersion: 1,
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: fingerprint,
+          reviewedFiles: [],
+          findings: [
+            {
+              id: 'reliability-reviewer:correctness:stale-snapshot',
+              summary: 'The supplied snapshot is stale and does not match.',
+            },
+          ],
+          coverage: 'covered',
+          dimensions: {},
+          requirementCoverage: [],
+        },
+      })
+      const refresh = gen.next(staleAttestation)
+      expect(refresh.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const retrySpawn = gen.next(
+        feedJson({
+          snapshotId: 'unit-spec-snap-stale-retry',
+          files: [gateFile],
+        }),
+      )
+      expect(retrySpawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const blockedMessage = gen.next(staleAttestation)
+      expect(blockedMessage.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+
+      const content = (blockedMessage.value as any).input.content as string
+      expect(content).toContain(
+        'Specialist review gate failed snapshot/file attestation after one automatic refresh.',
+      )
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({
+        gate: 'reviewer',
+        status: 'failed',
+        reviewers: ['reliability-reviewer'],
+      })
+      // The stale token is OVERWRITTEN: the published machine token matches
+      // the block's own details instead of leaking the unrelated earlier
+      // failure's token onto the wire.
+      expect(gateState!.skipReason).toBe('specialist-terminal-failure')
+      expect(gateState!.details).toBe(
+        'specialist-terminal-failure: specialist review gate failed snapshot/file attestation after one automatic refresh.',
+      )
+      expect(
+        (agentState as any).base2ActiveWork.lastReviewerGateSkipReason,
+      ).toBe('specialist-terminal-failure')
+      // The terminal-failure handler breaks out of the gate loop.
+      expect(gen.next().done).toBe(true)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a stale specialist-rate-limited token does not misclassify a non-crash terminal failure', () => {
+    // Regression (stale-rate-limited-token): the terminal-failure handler
+    // classified the CURRENT failure by reading the cross-turn durable
+    // lastReviewerGateSkipReason token, so a stale
+    // 'specialist-rate-limited' token left by an earlier round's rate-limit
+    // crash made the handler publish the rate-limit token and 'transient
+    // provider limit... End turn and retry later' guidance for the
+    // attestation-retry exhaustion exit — a failure that is NOT transient,
+    // because retrying cannot re-arm the already-consumed single attestation
+    // auto-refresh. The failure class must come from the per-iteration
+    // failure that produced the exit, not from the durable token.
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-specialist-stale-ratelimit-token-',
+    )
+    try {
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          // A stale token left behind by an earlier round's rate-limit crash.
+          lastReviewerGateSkipReason: 'specialist-rate-limited',
+        },
+      }
+      const { gen, fingerprint } = driveToSpecialistSpawn(gateFile, agentState)
+      // The stale token is cross-turn durable state and is still in place
+      // when the specialist result is evaluated — the exact precondition
+      // the handler must not trust for classification.
+      expect(
+        (agentState as any).base2ActiveWork.lastReviewerGateSkipReason,
+      ).toBe('specialist-rate-limited')
+
+      // A specialist result that both fails file attestation (the pending
+      // file is not attested) and reports a stale snapshot finding: the gate
+      // performs its single automatic refresh + retry, then fails
+      // terminally — a NON-crash terminal failure.
+      const staleAttestation = feedJson({
+        agentType: 'reliability-reviewer',
+        value: {
+          schemaVersion: 1,
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: fingerprint,
+          reviewedFiles: [],
+          findings: [
+            {
+              id: 'reliability-reviewer:correctness:stale-snapshot',
+              summary: 'The supplied snapshot is stale and does not match.',
+            },
+          ],
+          coverage: 'covered',
+          dimensions: {},
+          requirementCoverage: [],
+        },
+      })
+      const refresh = gen.next(staleAttestation)
+      expect(refresh.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const retrySpawn = gen.next(
+        feedJson({
+          snapshotId: 'unit-spec-snap-stale-retry',
+          files: [gateFile],
+        }),
+      )
+      expect(retrySpawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const blockedMessage = gen.next(staleAttestation)
+      expect(blockedMessage.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+
+      const content = (blockedMessage.value as any).input.content as string
+      // The terminal-failure branch published, not the rate-limit branch:
+      // this failure is not transient, so no rate-limit guidance appears.
+      expect(content).toContain(
+        'Specialist review gate failed snapshot/file attestation after one automatic refresh.',
+      )
+      expect(content).not.toContain(
+        'Specialist review gate hit a rate-limit or concurrency limit.',
+      )
+      expect(content).not.toContain('transient provider limit')
+      expect(content).not.toContain('End turn and retry later.')
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({
+        gate: 'reviewer',
+        status: 'failed',
+        reviewers: ['reliability-reviewer'],
+      })
+      expect(gateState!.skipReason).toBe('specialist-terminal-failure')
+      expect(gateState!.details).toBe(
+        'specialist-terminal-failure: specialist review gate failed snapshot/file attestation after one automatic refresh.',
+      )
+      // The durable state carries the terminal class this failure produced,
+      // not the stale rate-limit class.
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.lastReviewerGateSkipReason).toBe(
+        'specialist-terminal-failure',
+      )
+      expect(activeWork.nextRequiredAction).toContain(
+        'Obtain a fresh matching specialist review',
+      )
+      expect(activeWork.nextRequiredAction).not.toContain(
+        'End turn / retry later',
+      )
+      expect(activeWork.latestWorkSummary).toBe(
+        'Specialist review protocol failed after one automatic refresh; finalization remains blocked.',
+      )
+      // The terminal-failure handler breaks out of the gate loop.
+      expect(gen.next().done).toBe(true)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a stale skip token is overwritten on the specialist no-progress repair exit', () => {
+    // Regression (stale-skip-reason-token): the no-progress repair-exit
+    // branch used to backfill lastReviewerGateSkipReason only when it was
+    // EMPTY, so a stale token from an earlier unrelated failure survived the
+    // exit and leaked onto the pinned state and the wire while the telemetry
+    // and nextRequiredAction described the actual no-progress failure. A
+    // repair touching no pending file leaves recordChangedFiles uncalled,
+    // so nothing else clears the token; it must be assigned unconditionally
+    // so it always matches the branch's own details, exactly like the
+    // terminal-failure site above.
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-specialist-stale-token-no-progress-',
+    )
+    try {
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          // A stale token left behind by an earlier, unrelated failure.
+          lastReviewerGateSkipReason: 'specialist-review-waves-incomplete',
+        },
+      }
+      const { gen, fingerprint } = driveToSpecialistSpawn(gateFile, agentState)
+
+      // A blocking specialist verdict arms the bounded specialist repair loop.
+      const blockerMessage = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: {
+            schemaVersion: 1,
+            family: 'reviewer',
+            verdict: 'BLOCKING',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: [gateFile],
+            findings: ['Fix the race in the session retry path.'],
+            coverage: 'covered',
+            dimensions: {},
+            requirementCoverage: [],
+          },
+        }),
+      )
+      expect(blockerMessage.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      expect(gen.next().value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const findingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+
+      // A completed, finding-addressing receipt whose reported change never
+      // landed on disk: the post-repair git status is CLEAN, so
+      // recordChangedFiles never runs and the pending bytes stay identical —
+      // the no-progress exit fires while the stale token is still in place.
+      expect(
+        gen.next(completedRepairReceipt(findingIds, [gateFile]) as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(feedJson({ status: '' })).done).toBe(true)
+
+      // The no-progress exit fired and OVERWROTE the stale token with its own
+      // token instead of letting it leak onto the pinned state / wire.
+      expect((agentState as any).base2ActiveWork.currentPhase).toBe('blocked')
+      expect((agentState as any).base2ActiveWork.nextRequiredAction).toContain(
+        'no snapshot-visible progress',
+      )
+      expect(
+        (agentState as any).base2ActiveWork.lastReviewerGateSkipReason,
+      ).toBe('specialist-repair-no-progress')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a stale skip token is overwritten on the specialist no-verdict budget-exhaustion path', () => {
+    // Regression (stale-skip-reason-token): the no-verdict
+    // budget-exhaustion branch used to backfill lastReviewerGateSkipReason
+    // only when it was EMPTY, so a stale token from an earlier unrelated
+    // failure survived the reduced-assurance CREDIT and shadowed the
+    // accurate 'specialist-no-verdict-budget-exhausted' marker on the
+    // durable state. Unlike the terminal-failure and repair-exit
+    // siblings, this path CONTINUES the loop, so the stale token would
+    // ride the pinned state the loop re-emits for the credited snapshot.
+    // The token must be assigned unconditionally so it always matches the
+    // credit that produced it, exactly like the three sites above.
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-specialist-stale-token-no-verdict-',
+    )
+    try {
+      // Finite retry budget with the per-specialist count already spent by
+      // a prior pass on this snapshot: the FIRST no-verdict rejection of
+      // this pass exhausts the budget, so the reduced-assurance credit
+      // path runs without a second specialist spawn.
+      const base2 = createBase2('default', { maxSpecialistNoVerdictRetries: 1 })
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          // A stale token left behind by an earlier, unrelated failure.
+          lastReviewerGateSkipReason: 'validation-hook-failures',
+          // The per-specialist no-verdict retry budget is already spent.
+          specialistNoVerdictCounts: { 'reliability-reviewer': 1 },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Please finish the pending reliability finding.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const spawn = gen.next(
+        feedJson({
+          snapshotId: 'unit-spec-snap-no-verdict',
+          files: [gateFile],
+        }),
+      )
+      expect(spawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+
+      // The specialist ran but returned only prose: no structured verdict,
+      // no crash, no blockers. The spent budget routes the gate straight
+      // to the reduced-assurance credit instead of a re-spawn.
+      const afterNoVerdict = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: 'The session retry path looks acceptable to me.',
+        }),
+      )
+      // The credit path CONTINUES the loop: the specialist is credited
+      // with reduced assurance and the loop re-enters at the pruner.
+      expect(afterNoVerdict.value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.specialistReviewGatesDone).toContain(
+        'reliability-reviewer',
+      )
+      expect(activeWork.validationAssurance).toBe('reduced')
+      expect(activeWork.latestWorkSummary).toContain('never returned a verdict')
+      // The stale token is OVERWRITTEN: the durable marker names the
+      // reduced-assurance credit that produced it instead of leaking the
+      // unrelated earlier failure's token.
+      expect(activeWork.lastReviewerGateSkipReason).toBe(
+        'specialist-no-verdict-budget-exhausted',
+      )
+
+      // Loop re-entry republishes the durable state: the pinned block the
+      // next surface reads carries the accurate marker, not the stale one.
+      const pinned = gen.next()
+      expect(pinned.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const pinnedText = (pinned.value as any).input.content as string
+      expect(pinnedText).toContain(
+        'Last reviewer gate skip/error reason: specialist-no-verdict-budget-exhausted',
+      )
+      expect(pinnedText).not.toContain('validation-hook-failures')
+      expect(gen.next().value).toBe('STEP')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a specialist exit overwrites the protocol token but not the protocol latch', () => {
+    // Regression (specialist-exit-overwrites-reviewer-protocol-guard-token):
+    // lastReviewerGateSkipReason is PUBLISHED telemetry, so specialist exits
+    // assign it unconditionally — but the reviewer-protocol retry guards used
+    // to read that same token as policy state. A turn that ended blocked on
+    // reviewer-protocol attestation failure enters this pass with the token
+    // armed; the specialist no-verdict budget-exhaustion credit then
+    // overwrites the token (correct for the published block) and must NOT
+    // disarm the protocol policy: the guards read the dedicated
+    // reviewerProtocolAttestationFailed latch, which survives the exit, so
+    // the harness cannot silently auto-retry or skip the reviewer on a prior
+    // receipt where the blocked message promised no automatic retry.
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-specialist-protocol-latch-',
+    )
+    try {
+      const base2 = createBase2('default', {
+        maxSpecialistNoVerdictRetries: 1,
+      })
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          // A prior turn ended blocked on reviewer-protocol attestation
+          // failure: the token is armed and the bounded retry is spent.
+          // Pre-split serialized state: the latch field is absent, so
+          // rehydration derives it from the armed token.
+          lastReviewerGateSkipReason: 'reviewer-protocol-attestation-failed',
+          reviewerProtocolRetryCount: 1,
+          specialistNoVerdictCounts: { 'reliability-reviewer': 1 },
+        },
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Please finish the pending reliability finding.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      expect(gen.next().value).toMatchObject({ toolName: 'add_message' })
+      expect(gen.next().value).toBe('STEP')
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
+      })
+      const spawn = gen.next(
+        feedJson({
+          snapshotId: 'unit-spec-snap-protocol-latch',
+          files: [gateFile],
+        }),
+      )
+      expect(spawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      // Rehydration derived the protocol latch from the armed token before
+      // the specialist ran.
+      expect(
+        (agentState as any).base2ActiveWork.reviewerProtocolAttestationFailed,
+      ).toBe(true)
+
+      // Prose-only specialist response with the budget spent: the
+      // reduced-assurance credit path overwrites the published token…
+      const afterNoVerdict = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: 'The session retry path looks acceptable to me.',
+        }),
+      )
+      expect(afterNoVerdict.value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.lastReviewerGateSkipReason).toBe(
+        'specialist-no-verdict-budget-exhausted',
+      )
+      // …while the protocol-policy latch SURVIVES the exit with its retry
+      // budget intact: the next pass's guards still see the
+      // protocol-blocked state instead of silently disarming.
+      expect(activeWork.reviewerProtocolAttestationFailed).toBe(true)
+      expect(activeWork.reviewerProtocolRetryCount).toBe(1)
+      // Loop re-entry republishes the accurate (overwritten) token while the
+      // latch stays armed: published telemetry and policy state have split.
+      const pinned = gen.next()
+      expect(pinned.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const pinnedText = (pinned.value as any).input.content as string
+      expect(pinnedText).toContain(
+        'Last reviewer gate skip/error reason: specialist-no-verdict-budget-exhausted',
+      )
+      expect(gen.next().value).toBe('STEP')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('rehydration derives the protocol latch from pre-split serialized state', () => {
+    // Migration (specialist-exit-overwrites-reviewer-protocol-guard-token):
+    // state serialized before the token/latch split carries only the token.
+    // Rehydration must derive the latch one-time via `??=` so an in-flight
+    // protocol-blocked turn keeps its guard armed — and must never overwrite
+    // a live latch afterwards (post-split state carries the field).
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-protocol-latch-migration-',
+    )
+    try {
+      const armed = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          lastReviewerGateSkipReason: 'reviewer-protocol-attestation-failed',
+          reviewerProtocolRetryCount: 1,
+        },
+      }
+      const armedGen = createBase2('default').handleSteps!({
+        agentState: armed,
+        prompt: 'Continue.',
+        params: {},
+      } as any)
+      expect(armedGen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        (armed as any).base2ActiveWork.reviewerProtocolAttestationFailed,
+      ).toBe(true)
+
+      const unarmed = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          lastReviewerGateSkipReason: 'specialist-rate-limited',
+          reviewerProtocolRetryCount: 0,
+        },
+      }
+      const unarmedGen = createBase2('default').handleSteps!({
+        agentState: unarmed,
+        prompt: 'Continue.',
+        params: {},
+      } as any)
+      expect(unarmedGen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        (unarmed as any).base2ActiveWork.reviewerProtocolAttestationFailed,
+      ).toBe(false)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a docs-only pending set reports the reviewer-skip token in the block', () => {
+    const tmpDir = makeProjectTempDir('base2-gate-state-docs-skip-')
+    try {
+      const docsFile = join(tmpDir, 'notes.md')
+      writeFileSync(docsFile, '# notes\n')
+      const gateFile = normalizeGateFilePath(docsFile)
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2-custom' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Continue the plan.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt(gateFile))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const decision = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      expect(decision.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (decision.value as any).input.content as string
+      expect(content).toContain(
+        'Reviewer gate skipped (reviewer skip: no reviewable source files)',
+      )
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({
+        gate: 'reviewer',
+        status: 'skipped',
+        skipReason: 'reviewer-skip-no-reviewable-source-files',
+      })
+      // No reviewer family ran, so `reviewers` is omitted entirely.
+      expect(gateState!.reviewers).toBeUndefined()
+      expect(content).not.toContain('"reviewers"')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('reviewer-repair re-validation failure names the code-reviewer family', () => {
+    const tmpDir = makeProjectTempDir('base2-gate-state-repair-validation-')
+    try {
+      const tmpFile = join(tmpDir, 'a.ts')
+      const gateFile = normalizeGateFilePath(tmpFile)
+      writeFileSync(tmpFile, 'export const value = 1\n')
+      const base2 = createBase2('default')
+      const agentState = { agentId: 'base2-custom' }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Make the requested change now please',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(gen.next(feedJson({ status: '' })).value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+      })
+      expect(gen.next().value).toBe('STEP')
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt(gateFile))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const reviewCall = gen.next(feedJson({ status: ` M ${gateFile}` }))
+        .value as any
+      expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+      const afterReview = gen.next(
+        attestedReviewerResult(reviewCall, 'BLOCKING', [
+          'Fix the edge case.',
+        ]) as any,
+      )
+      expect(afterReview.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const repairSpawn = gen.next().value as any
+      expect(repairSpawn).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const findingIds = (
+        agentState as any
+      ).base2ActiveWork.openReviewerFindings.map((finding: any) => finding.id)
+      // Real byte change so the reviewer-repair no-progress guard stays quiet.
+      writeFileSync(tmpFile, 'export const value = 2 // repaired\n')
+      expect(
+        gen.next(completedRepairReceipt(findingIds, [gateFile]) as any).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      // Re-verify hooks FAIL after the reviewer repair.
+      const blocked = gen.next(
+        feedJson([
+          {
+            hookName: 'typecheck',
+            exitCode: 1,
+            stderr: 'src/a.ts(1,1): error TS1234: type error',
+          },
+        ]),
+      )
+      expect((blocked.value as any).toolName).toBe('add_message')
+      const content = (blocked.value as any).input.content as string
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({
+        gate: 'validation',
+        status: 'failed',
+        reviewers: ['code-reviewer'],
+      })
+      expect(gateState!.details).toContain('reviewer-repair-validation-failed')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('reviewer-repair re-validation failure names every open reviewer family, not just code-reviewer', () => {
+    // Regression (hardcoded-code-reviewer-attribution): the
+    // revalidation-failed block hardcoded reviewers ['code-reviewer'] even
+    // though the repair loop is shared across mixed code/specialist findings
+    // and mergeReviewerFindings RETAINS other families' open findings. The
+    // block must derive the open families from openReviewerFindings exactly
+    // like the success arm, so a specialist-owned open finding rides the
+    // revalidation-failure path with its family named on the block.
+    const { tmpDir, gateFile } = seedReliabilityFixture(
+      'base2-gate-state-repair-validation-mixed-',
+    )
+    try {
+      const specialistFinding = {
+        id: 'reliability-reviewer:correctness:session-retry-race',
+        gateId: 'reliability-reviewer:prior-snapshot',
+        text: 'BLOCKING: [reliability-reviewer:correctness:session-retry-race] Fix the retry race in the session path.',
+        status: 'open' as const,
+        files: [gateFile],
+        snapshotFingerprint: 'prior-snapshot',
+        reviewer: 'reliability-reviewer' as const,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      }
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: {
+          ...seededSpecialistGateState(gateFile),
+          // A specialist-owned open finding: turn-start rehydration arms its
+          // owed revalidation, so the routed specialist block re-fires before
+          // the final code-reviewer gate.
+          openReviewerFindings: [specialistFinding],
+        },
+      }
+      const { gen, fingerprint } = driveToSpecialistSpawn(gateFile, agentState)
+
+      // The owed specialist re-attests cleanly: it is credited and its owed
+      // entry clears, while its earlier finding stays OPEN in the ledger.
+      const afterSpecialist = gen.next(
+        feedJson({
+          agentType: 'reliability-reviewer',
+          value: {
+            schemaVersion: 1,
+            family: 'reviewer',
+            verdict: 'LOOKS_GOOD',
+            snapshotFingerprint: fingerprint,
+            reviewedFiles: [gateFile],
+            findings: [],
+            coverage: 'covered',
+            dimensions: {},
+            requirementCoverage: [],
+          },
+        }),
+      )
+      expect(afterSpecialist.value).toMatchObject({
+        toolName: 'spawn_agent_inline',
+        input: { agent_type: 'context-pruner' },
+      })
+      let step = gen.next(feedJson({})).value as any
+      if (step !== 'STEP') {
+        expect(step).toMatchObject({ toolName: 'add_message' })
+        step = gen.next().value
+      }
+      expect(step).toBe('STEP')
+      // No new edits this step: the loop advances to validation + review.
+      expect(gen.next(finishStepWithToolResult({})).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const reviewCall = gen.next(feedJson({ status: ` M ${gateFile}` }))
+        .value as any
+      expect(reviewCall).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+
+      // A blocking code-reviewer round: mergeReviewerFindings RETAINS the
+      // specialist-owned finding alongside the new code finding, so BOTH
+      // families are open when the repair round starts.
+      const afterReview = gen.next(
+        attestedReviewerResult(reviewCall, 'BLOCKING', [
+          'Fix the edge case.',
+        ]) as any,
+      )
+      expect(afterReview.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const openReviewers = (
+        (agentState as any).base2ActiveWork.openReviewerFindings as Array<{
+          reviewer?: string
+        }>
+      )
+        .map((finding) => finding.reviewer)
+        .filter(Boolean)
+      expect(openReviewers).toContain('reliability-reviewer')
+      expect(openReviewers).toContain('code-reviewer')
+
+      const repairSpawn = gen.next().value as any
+      expect(repairSpawn).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'repair-editor' }] },
+      })
+      const codeFindingIds = (
+        (agentState as any).base2ActiveWork.openReviewerFindings as Array<{
+          id: string
+          reviewer?: string
+        }>
+      )
+        .filter((finding) => finding.reviewer === 'code-reviewer')
+        .map((finding) => finding.id)
+      // Real byte change so the reviewer-repair no-progress guard stays quiet.
+      writeFileSync(
+        join(tmpDir, 'state', 'session.ts'),
+        'export const session = "v2"\n',
+      )
+      expect(
+        gen.next(completedRepairReceipt(codeFindingIds, [gateFile]) as any)
+          .value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+
+      // Re-verify hooks FAIL after the reviewer repair: the block must name
+      // EVERY open reviewer family (the specialist-owned one included),
+      // never the hardcoded code-reviewer-only list.
+      const blocked = gen.next(
+        feedJson([
+          {
+            hookName: 'typecheck',
+            exitCode: 1,
+            stderr: 'src/a.ts(1,1): error TS1234: type error',
+          },
+        ]),
+      )
+      expect((blocked.value as any).toolName).toBe('add_message')
+      const content = (blocked.value as any).input.content as string
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({
+        gate: 'validation',
+        status: 'failed',
+      })
+      expect(gateState!.reviewers).toHaveLength(2)
+      expect(gateState!.reviewers).toEqual(
+        expect.arrayContaining(['reliability-reviewer', 'code-reviewer']),
+      )
+      expect(gateState!.reviewers).not.toEqual(['code-reviewer'])
+      expect(gateState!.details).toContain('reviewer-repair-validation-failed')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // Emitter-level bounds via the inline harness: the two new fields share the
+  // sanitize-then-cap contract with `details`/`advisories` and are OMITTED
+  // entirely (never []/"") when nothing survives sanitization.
+  test('reviewers/skipReason are bounded, sanitized, and omitted when empty', () => {
+    const { formatGateStateBlock } = loadInlineGateStateBlockHelpers()
+    const minimal = formatGateStateBlock(
+      'validation',
+      'failed',
+      'no reviewer family attributable',
+    )
+    expect(minimal).not.toContain('"reviewers"')
+    expect(minimal).not.toContain('"skipReason"')
+    expect(parseGateStateBlock(minimal)).toMatchObject({
+      gate: 'validation',
+      status: 'failed',
+      details: 'no reviewer family attributable',
+    })
+
+    const block = formatGateStateBlock(
+      'reviewer',
+      'failed',
+      'specialist blocked the pending snapshot',
+      undefined,
+      undefined,
+      undefined,
+      [
+        '',
+        ' \t ',
+        '  reliability-reviewer\twith\nwhitespace ',
+        'x'.repeat(80),
+        'specialist\u001b[31mcontrol\u0000bytes\u007f',
+        'third-reviewer',
+        'fourth-reviewer-dropped',
+      ],
+      '  specialist-rate-limited\twith\ncontrol\u0000bytes ' + 'y'.repeat(200),
+    )
+    const parsed = parseGateStateBlock(block)!
+    // Empty entries are dropped BEFORE the 4-entry cap, so the cap counts only
+    // surviving sanitized entries; each survivor is capped at 64 chars.
+    expect(parsed.reviewers).toEqual([
+      'reliability-reviewer with whitespace',
+      'x'.repeat(64),
+      'specialist[31mcontrolbytes',
+      'third-reviewer',
+    ])
+    // Whitespace-collapsed, control-stripped, capped at 120 chars.
+    expect(parsed.skipReason).toBe(
+      ('specialist-rate-limited with controlbytes ' + 'y'.repeat(200)).slice(
+        0,
+        120,
+      ),
+    )
+    expect(parsed.skipReason).toHaveLength(120)
+    for (const reviewer of parsed.reviewers ?? []) {
+      expect(reviewer.length).toBeLessThanOrEqual(64)
+      expect(/[\u0000-\u001f\u007f]/.test(reviewer)).toBe(false)
+    }
+    expect(/[\u0000-\u001f\u007f]/.test(parsed.skipReason ?? '')).toBe(false)
+  })
+
+  // Explicit backward-compat case: a serialized block from an older base2
+  // (no reviewers/skipReason keys) still parses with both fields absent.
+  test('legacy blocks without the new fields still parse', () => {
+    const legacy = parseGateStateBlock(
+      '<gate-state>{"gate":"validation","status":"failed","details":"legacy block without reviewer attribution"}</gate-state>',
+    )
+    expect(legacy).toMatchObject({
+      gate: 'validation',
+      status: 'failed',
+      details: 'legacy block without reviewer attribution',
+    })
+    expect(legacy!.reviewers).toBeUndefined()
+    expect(legacy!.skipReason).toBeUndefined()
   })
 })
 
@@ -11411,7 +12784,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       gatePassedReviewerVerdict: '',
       gatePassedValidationSummary: '',
       gatePassedFingerprint: '',
-      reviewedReviewableFingerprint: '',
       lastReviewerGateSkipReason: '',
       reviewReceipts: [],
       testWriterGateDone: true,
@@ -11477,10 +12849,12 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
     }
   }
 
-  test('a matching receipt skips the reviewer even when the scalar holds a later-wave fingerprint', () => {
-    // Wave 1 reviewed {A}, wave 2 reviewed {C}, so the single scalar holds only
-    // fingerprint({C}). A later cycle that re-arms on the unchanged {A} set
-    // must reuse the durable receipt instead of re-spawning the reviewer.
+  test('legacy serialized state carrying the removed reviewedReviewableFingerprint key is ignored', () => {
+    // reviewedReviewableFingerprint was removed from Base2GateState (it was
+    // write-only dead state; the reviewer skip reads the reviewReceipts
+    // ledger). Sessions serialized by older base2 still carry the key; it
+    // must load as an ignored unknown key and a matching receipt must still
+    // skip the reviewer.
     const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
       'base2-reviewer-skip-receipt-',
     )
@@ -11550,7 +12924,177 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
     }
   })
 
-  test('a matching receipt plus a matching scalar still skips the reviewer (no regression)', () => {
+  // PR-T5 (D23) Slice 2: a dirty NON-reviewable file in the gate scope after
+  // a matching review skip is docs-only bookkeeping and gets its own skip
+  // reason instead of the generic unchanged-set one.
+  test('dirty docs-only files after a matching review skip with the docs-only reason', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-docs-dirty-',
+    )
+    try {
+      const { decision } = driveToReviewerDecision(
+        gateFile,
+        reviewerSkipSeedState(gateFile, {
+          touchedFiles: [gateFile, 'notes.md'],
+          changedFiles: [gateFile, 'notes.md'],
+          pendingGateFiles: [gateFile, 'notes.md'],
+          reviewReceipts: [
+            reviewReceiptFor({
+              reviewer: 'code-reviewer',
+              snapshotFingerprint: reviewableFingerprint,
+              reviewedFiles: [gateFile],
+            }),
+          ],
+        }),
+      )
+
+      expect(decision.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (decision.value as any).input.content as string
+      expect(content).toContain(
+        'reviewer skip: docs-only edits after last review',
+      )
+      const gateState = parseGateStateBlock(content)
+      expect(gateState).toMatchObject({ gate: 'reviewer', status: 'skipped' })
+      expect(gateState!.details).toContain(
+        'reviewer-skip-docs-only-after-review',
+      )
+      expect(gateState!.details).toContain('notes.md')
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // PR-T5 (D23) Slice 2: a docs-only edit DURING the turn (after a prior
+  // reviewer pass whose receipt still matches) must not re-run the reviewer;
+  // it skips with the dedicated docs-only reason. The docs file enters the
+  // pending set through the edit receipt but is not reviewable, so the
+  // reviewable set is unchanged since the last review.
+  test('a docs-only edit after a matching review skips instead of re-running the reviewer', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-docs-edit-',
+    )
+    try {
+      const activeWork = reviewerSkipSeedState(gateFile, {
+        reviewReceipts: [
+          reviewReceiptFor({
+            reviewer: 'code-reviewer',
+            snapshotFingerprint: reviewableFingerprint,
+            reviewedFiles: [gateFile],
+          }),
+        ],
+      })
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: activeWork,
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Update the docs notes only.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      // Docs-only edit this turn: touches no reviewable file.
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt('docs/notes.md'))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const decision = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      expect(decision.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const content = (decision.value as any).input.content as string
+      expect(content).toContain(
+        'reviewer skip: docs-only edits after last review',
+      )
+      expect(parseGateStateBlock(content)!.details).toContain(
+        'reviewer-skip-docs-only-after-review',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  // PR-T5 (D23) Slice 2 guard: the docs-only skip must NOT weaken the gate —
+  // a reviewable file whose bytes change after the review still re-arms the
+  // reviewer (existing behavior unchanged).
+  test('a reviewable-file edit after a matching review still re-arms the reviewer', () => {
+    const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
+      'base2-reviewer-skip-reviewable-edit-',
+    )
+    try {
+      const activeWork = reviewerSkipSeedState(gateFile, {
+        reviewReceipts: [
+          reviewReceiptFor({
+            reviewer: 'code-reviewer',
+            snapshotFingerprint: reviewableFingerprint,
+            reviewedFiles: [gateFile],
+          }),
+        ],
+      })
+      const base2 = createBase2('default')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: activeWork,
+      }
+      const gen = base2.handleSteps!({
+        agentState,
+        prompt: 'Change the source file.',
+        params: {},
+        config: base2.programmaticConfig,
+      } as any)
+
+      expect(gen.next().value).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'spawn_agent_inline' })
+      const maybePinned = gen.next().value
+      if (maybePinned !== 'STEP') {
+        expect(maybePinned).toMatchObject({ toolName: 'add_message' })
+        expect(gen.next().value).toBe('STEP')
+      }
+      // The reviewable file's bytes change this turn: the receipt no longer
+      // attests the current snapshot, so the reviewer must run.
+      writeFileSync(join(tmpDir, 'a.ts'), 'export const value = 2\n')
+      expect(
+        gen.next(finishStepWithToolResult(editReceipt(gateFile))).value,
+      ).toMatchObject({ toolName: 'git_status' })
+      expect(
+        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
+      ).toMatchObject({ toolName: 'run_file_change_hooks' })
+      expect(gen.next(feedJson([])).value).toMatchObject({
+        toolName: 'git_status',
+      })
+      const decision = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      expect(decision.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('a matching receipt skips the reviewer (no regression)', () => {
     const { tmpDir, gateFile, reviewableFingerprint } = seedReviewableFile(
       'base2-reviewer-skip-scalar-',
     )
@@ -11558,7 +13102,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const { decision } = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: reviewableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'code-reviewer',
@@ -11604,7 +13147,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const { decision } = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: nonAttestableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'code-reviewer',
@@ -11677,7 +13219,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const mismatchedFiles = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: reviewableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'code-reviewer',
@@ -11696,7 +13237,6 @@ describe('base2 reviewer skip via the durable receipt ledger', () => {
       const mismatchedFamily = driveToReviewerDecision(
         gateFile,
         reviewerSkipSeedState(gateFile, {
-          reviewedReviewableFingerprint: reviewableFingerprint,
           reviewReceipts: [
             reviewReceiptFor({
               reviewer: 'security-reviewer',
@@ -11929,7 +13469,6 @@ describe('base2 EXECUTE_PLAN gate-issued plan-task receipts', () => {
       gatePassedReviewerVerdict: '',
       gatePassedValidationSummary: '',
       gatePassedFingerprint: '',
-      reviewedReviewableFingerprint: '',
       lastReviewerGateSkipReason: '',
       reviewReceipts: [],
       testWriterGateDone: true,
@@ -13440,7 +14979,6 @@ describe('base2 committed-surface review mode', () => {
       gatePassedReviewerVerdict: '',
       gatePassedValidationSummary: '',
       gatePassedFingerprint: '',
-      reviewedReviewableFingerprint: '',
       lastReviewerGateSkipReason: '',
       reviewReceipts: [],
       testWriterGateDone: true,

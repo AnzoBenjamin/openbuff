@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { runGit } from '../tools/git-status'
+import { runGit, runGitBounded } from '../tools/git-status'
 
 function canonicalPath(value: string): string {
   const resolved = path.resolve(value)
@@ -28,10 +28,37 @@ export type WorkspaceIdentity = {
 export async function resolveWorkspaceIdentity(params: {
   cwd: string
   signal?: AbortSignal
+  /**
+   * Optional wall-clock deadline for both rev-parse spawns (reliability:
+   * bundle-rev-parse-head-unbounded): the bundle's identity path resolves
+   * repository identity under the same deadline as every other identity
+   * spawn. Unset callers (workspace-journal, mutation-broker) keep the
+   * historical unbounded behavior; a timeout resolves exitCode -1 and the
+   * throw below fires — bounded latency, unchanged contract.
+   */
+  timeoutMs?: number
 }): Promise<WorkspaceIdentity> {
+  const bounded =
+    params.timeoutMs !== undefined
+      ? { timeoutMs: params.timeoutMs, maxOutputBytes: 8 * 1024 * 1024 }
+      : undefined
   const [root, commonDir] = await Promise.all([
-    runGit(['rev-parse', '--show-toplevel'], params.cwd, params.signal),
-    runGit(['rev-parse', '--git-common-dir'], params.cwd, params.signal),
+    bounded !== undefined
+      ? runGitBounded(
+          ['rev-parse', '--show-toplevel'],
+          params.cwd,
+          params.signal,
+          bounded,
+        )
+      : runGit(['rev-parse', '--show-toplevel'], params.cwd, params.signal),
+    bounded !== undefined
+      ? runGitBounded(
+          ['rev-parse', '--git-common-dir'],
+          params.cwd,
+          params.signal,
+          bounded,
+        )
+      : runGit(['rev-parse', '--git-common-dir'], params.cwd, params.signal),
   ])
   if (root.exitCode !== 0 || commonDir.exitCode !== 0) {
     throw new Error(

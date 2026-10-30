@@ -5,9 +5,16 @@ import * as path from 'node:path'
 import {
   extractCodeChunks,
   getFileTokenScores,
+  AST_IMPORT_SPECIFIER_LIMIT,
   SUPPORTED_CODE_EXTENSIONS,
 } from '@codebuff/code-map'
 
+import {
+  extractImportSpecifiers,
+  resolveImportToFile,
+  stripJsonComments,
+} from './import-resolution'
+import { createTsModuleResolver } from './ts-module-resolver'
 import {
   BINARY_EXTENSIONS,
   statProjectFiles,
@@ -33,11 +40,204 @@ import type {
 } from './types'
 import type { ParseCoverage, ParsedFileTokens } from '@codebuff/code-map'
 import type { WalkedFile, WalkProjectResult } from './file-walker'
+import type { TsModuleResolver } from './ts-module-resolver'
+import { getLanguageFamily } from '@codebuff/common/util/language-profiles'
 
 const CODE_EXTENSIONS = new Set(SUPPORTED_CODE_EXTENSIONS)
 
 const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst'])
 const CONFIG_EXTENSIONS = new Set(['.json', '.jsonc', '.yaml', '.yml', '.toml'])
+
+/**
+ * Default time slice (ms) of synchronous work between event-loop yields. The
+ * gate is awaited at every scheduling seam — once per file-loop iteration AND
+ * at the intra-file seams around each dominant synchronous block (stat/hash
+ * pass, content extraction vs. tree-sitter chunk extraction) — so the slice
+ * bounds synchronous work between consecutive yields across the whole run,
+ * not merely per file. The residual exception is a single atomic native call
+ * (a whole-content SHA-256 or a whole-file tree-sitter parse): it cannot be
+ * split, so it alone can overshoot the slice, and the gate then suspends at
+ * the immediately following seam. Recorded baseline: see the 'tunables cost
+ * baselines' block in cli/src/utils/__tests__/opentui-syntax-style.test.ts.
+ */
+const DEFAULT_YIELD_INTERVAL_MS = 8
+/**
+ * Production yield interval, overridable via CODEBUFF_YIELD_INTERVAL_MS so the
+ * 8ms default can be tuned and later regression-tracked against quantitative
+ * before/after evidence (event-loop lag via perf_hooks.monitorEventLoopDelay,
+ * cold-index throughput) without a code change per experiment; the measured
+ * gate-on/gate-off evidence harness lives in the 'yield-gate throughput and
+ * event-loop-lag evidence' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts, which measures BOTH
+ * packages' loops against fixed recorded baselines: the code-map cold parse
+ * (RECORDED_YIELD_GATE_BASELINE) and this package's cold buildMetadataIndex
+ * over the same shared fixture (RECORDED_INDEXER_YIELD_GATE_BASELINE — its
+ * mechanism assertions read the indexer module's OWN suspension counter, so
+ * they cover the indexer's yield-gated loops independently of the embedded
+ * code-map parse counter). The default
+ * stays put until such evidence justifies moving it. Recorded baseline for
+ * the cost this knob introduces (one macrotask suspension per elapsed slice
+ * during cold index; at interval 0, one per yield-gate call — pinned in the
+ * 'tunables cost baselines' block in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts and by the indexer
+ * cold-build suspension pin in
+ * packages/indexer/src/metadata-indexer.test.ts).
+ */
+let yieldIntervalMs = getPositiveIntegerEnv(
+  'CODEBUFF_YIELD_INTERVAL_MS',
+  DEFAULT_YIELD_INTERVAL_MS,
+)
+/**
+ * Completed macrotask suspensions across every yield gate, incremented only
+ * AFTER the awaited `setImmediate` resolves so a count > 0 proves the await
+ * actually suspended through the macrotask queue. Read (and reset) via the
+ * TEST-ONLY hooks below.
+ */
+let macrotaskYieldCount = 0
+
+/**
+ * Create an independent macrotask-yield gate for ONE indexing invocation.
+ * Every buildMetadataIndex / updateMetadataIndex call gets its own gate
+ * state, so concurrent index builds (e.g. index-manager refreshing two
+ * roots) each receive a full time slice instead of sharing one module-level
+ * "last yield" timestamp.
+ *
+ * The gate measures elapsed time with performance.now(), NOT Date.now(): the
+ * slice measures elapsed work time and must be immune to wall-clock steps
+ * (NTP corrections, manual clock adjustment), which could otherwise suppress
+ * or spuriously force yields during a long index run.
+ *
+ * A plain `await` inside a loop resumes via the MICROTASK queue, which the
+ * event loop drains fully before it can process I/O or UI input — so
+ * per-file awaits never unblock the TUI during a cold index build on a large
+ * repo. Awaiting a `setImmediate` schedules a MACROTASK, which lets the
+ * event loop interleave pending I/O and keystrokes between file batches.
+ * (Local helper instead of importing from code-map keeps the packages
+ * decoupled; duplicating the helper and its TEST-ONLY hooks across the two
+ * packages is acceptable.) Called at every scheduling seam — the top of each
+ * file-loop iteration AND the intra-file seams around each dominant
+ * synchronous block (stat/hash, content vs. chunk extraction) — so the slice
+ * bounds synchronous work between consecutive yields across the whole run,
+ * not merely per file; a cheap no-op until the time slice has elapsed. The
+ * invocation's first slice starts when its gate is created, so an invocation
+ * whose total work stays below one slice never suspends.
+ *
+ * Regression-pinned: the macrotask-yield regression tests assert that (a)
+ * awaiting a gate lets a pending macrotask I/O callback run BEFORE the await
+ * resumes, (b) the macrotaskYields counter increments only across an actual
+ * suspension, (c) concurrent gates slice independently, and (d) the gate
+ * factory remains an exported, awaitable seam via createYieldGateForTests /
+ * forceEventLoopYieldForTests. Replacing the awaited `setImmediate` with a
+ * plain await/microtask, dropping the awaited suspension, or inlining the
+ * loop body so the gate disappears fails those tests.
+ */
+function createEventLoopYieldGate(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  // The invocation's first slice starts at gate CREATION, not at epoch 0: a
+  // lastYield of 0 sits infinitely outside every slice, so the old default
+  // forced the first gate call of EVERY invocation through a setImmediate
+  // macrotask even when the whole invocation's work is far below one slice
+  // (small incremental updateMetadataIndex/getFileTokenScores calls paid
+  // ~1ms+ latency each). An explicit initialLastYieldMs (TEST-ONLY) still
+  // pins the stale-gate semantics.
+  const firstSliceStart = initialLastYieldMs ?? performance.now()
+  let lastYield = firstSliceStart
+  return async () => {
+    const now = performance.now()
+    if (now - lastYield < yieldIntervalMs) return
+    lastYield = now
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    macrotaskYieldCount += 1
+  }
+}
+
+/** Positive-int env override with fallback (mirrors code-map's parse.ts). */
+function getPositiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (!raw) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
+ * TEST-ONLY yield-seam hooks (repo `*ForTests` convention) backing the
+ * macrotask-yield regression pins described on
+ * {@link createEventLoopYieldGate}. Never call from app code: they override
+ * the production time slice.
+ */
+
+/** TEST-ONLY: override the yield interval (0 forces a yield on every call). */
+export function setYieldIntervalForTests(intervalMs: number): void {
+  if (Number.isFinite(intervalMs) && intervalMs >= 0) {
+    yieldIntervalMs = intervalMs
+  }
+}
+
+/** TEST-ONLY: restore the production yield interval and zero the counters. */
+export function resetYieldStateForTests(): void {
+  yieldIntervalMs = getPositiveIntegerEnv(
+    'CODEBUFF_YIELD_INTERVAL_MS',
+    DEFAULT_YIELD_INTERVAL_MS,
+  )
+  macrotaskYieldCount = 0
+}
+
+/** TEST-ONLY: yield-seam counters for regression assertions. */
+export function getYieldStatsForTests(): { macrotaskYields: number } {
+  return { macrotaskYields: macrotaskYieldCount }
+}
+
+/**
+ * TEST-ONLY: the effective production yield interval (ms), so the 8ms
+ * DEFAULT_YIELD_INTERVAL_MS default itself is pinnable in tests — a default
+ * change must fail the interval pin and re-record the quantitative
+ * before/after baseline it deltas against (see the 'tunables cost baselines'
+ * and 'yield-gate throughput and event-loop-lag evidence' blocks in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts).
+ */
+export function getYieldIntervalForTests(): number {
+  return yieldIntervalMs
+}
+
+/**
+ * TEST-ONLY: create an independent yield gate exactly like the per-invocation
+ * gates the indexing loops await, so the per-invocation slice semantics and
+ * the macrotask mechanism are pinnable without running a full index build.
+ * Omit the argument for the production semantics (first slice starts at
+ * creation); pass 0 explicitly for a stale gate whose first call always
+ * suspends.
+ */
+export function createYieldGateForTests(
+  initialLastYieldMs?: number,
+): () => Promise<void> {
+  return createEventLoopYieldGate(initialLastYieldMs)
+}
+
+/**
+ * TEST-ONLY: await a gate from the same factory the indexing loops await, so
+ * a refactor that removes, renames, or inlines the gate fails the regression
+ * tests instead of silently dropping the macrotask yield. Pinned to the
+ * stale-gate semantics (lastYield = 0) so the FIRST call always suspends,
+ * independent of the production interval.
+ */
+export async function forceEventLoopYieldForTests(): Promise<void> {
+  await createEventLoopYieldGate(0)()
+}
+
+/**
+ * TEST-ONLY re-export namespace: code-map's parse-loop yield hooks, exposed
+ * through this module so dependents that declare only @codebuff/indexer
+ * (e.g. @codebuff/cli, whose yield-gate regression pins in
+ * cli/src/utils/__tests__/opentui-syntax-style.test.ts cover BOTH packages'
+ * loops) can reach them without importing '@codebuff/code-map/parse'
+ * directly. @codebuff/cli does not declare @codebuff/code-map, so a direct
+ * import there would be a phantom dependency resolved only via hoisting and
+ * would break if this package dropped its code-map dependency. The namespace
+ * carries the same module instance the '@codebuff/code-map/parse' specifier
+ * resolves to, so the module-level yield state is shared, not duplicated.
+ */
+export * as codeMapParseYieldHooks from '@codebuff/code-map/parse'
 
 /** Historical hardcoded graph edge weights — the ranking baseline. */
 export const DEFAULT_GRAPH_WEIGHTS: Required<GraphWeights> = {
@@ -100,11 +300,7 @@ export function compareRevisions(
   return strA < strB ? -1 : strA > strB ? 1 : 0
 }
 
-// Captures the module specifier from: `import … from 'x'`, `export … from 'x'`
-// (re-exports), `require('x')` / `import('x')` (dynamic), and `import 'x'`
-// (side-effect). The {0,500} bound avoids catastrophic backtracking.
-const IMPORT_REGEX =
-  /(?:\b(?:import|export)\b[\s\S]{0,500}?\bfrom\s+['"]([^'"]+)['"])|(?:\b(?:require|import)\s*\(\s*['"]([^'"]+)['"])|(?:\bimport\s+['"]([^'"]+)['"])/g
+
 const MARKDOWN_LINK_REGEX = /\[[^\]]+\]\(([^)]+)\)/g
 
 /**
@@ -123,10 +319,26 @@ const tsAliasCacheByRoot = new Map<string, TsAliasMap>()
  * Upper bound on the number of distinct project roots whose parse/alias
  * caches we retain in-process. Eviction is FIFO (Map insertion order). A
  * long-lived process that indexes many distinct roots can't grow these
- * without bound; the oldest root's cache is dropped on overflow.
+ * without bound; the oldest root's cache is dropped on overflow. Each of
+ * the two per-root maps is bounded INDEPENDENTLY: a doc-only root (no code
+ * files) gets a tsAliasCacheByRoot entry without any parsedCacheByRoot
+ * insert, so bounding only the parse-cache size would let the alias cache
+ * grow without bound. Exported so tests can assert the bound is enforced
+ * on every write path.
  */
-const MAX_INDEXED_PROJECT_ROOTS = 8
+export const MAX_INDEXED_PROJECT_ROOTS = 8
 
+/**
+ * FIFO eviction guard shared by every insert path into either per-root
+ * cache. Both maps must be bounded independently: a doc-only root (no code
+ * files) gets a tsAliasCacheByRoot entry via loadTsAliases WITHOUT any
+ * parsedCacheByRoot insert, so gating eviction on the parse-cache size
+ * alone lets the alias cache grow without bound in a long-lived process
+ * indexing many distinct doc-only roots. Each map evicts its own oldest
+ * root on overflow; evicting a parse-cache root also drops that root's
+ * alias entry, and evicting an alias-only root leaves any parse cache it
+ * may still hold intact (aliases are recomputable on the next load).
+ */
 function evictOldestRootCacheIfNeeded(): void {
   if (parsedCacheByRoot.size >= MAX_INDEXED_PROJECT_ROOTS) {
     const oldestRoot = parsedCacheByRoot.keys().next().value
@@ -135,6 +347,67 @@ function evictOldestRootCacheIfNeeded(): void {
       tsAliasCacheByRoot.delete(oldestRoot)
     }
   }
+  if (tsAliasCacheByRoot.size >= MAX_INDEXED_PROJECT_ROOTS) {
+    const oldestRoot = tsAliasCacheByRoot.keys().next().value
+    if (oldestRoot !== undefined) {
+      tsAliasCacheByRoot.delete(oldestRoot)
+    }
+  }
+}
+
+/**
+ * Single write path into parsedCacheByRoot: every insert routes through the
+ * FIFO eviction guard so MAX_INDEXED_PROJECT_ROOTS bounds the number of
+ * retained per-root caches even when a build/update holds a complete parse
+ * result to store (previously those paths called .set directly and bypassed
+ * eviction, letting the map grow past the bound).
+ */
+function setParsedCache(
+  projectRoot: string,
+  cache: Record<string, ParsedFileTokens>,
+): void {
+  if (!parsedCacheByRoot.has(projectRoot)) {
+    evictOldestRootCacheIfNeeded()
+  }
+  parsedCacheByRoot.set(projectRoot, cache)
+}
+
+/** Test hook: number of roots currently holding parse caches. */
+export function getParsedCacheRootCount(): number {
+  return parsedCacheByRoot.size
+}
+
+/** Test hook: number of roots currently holding tsconfig alias caches. */
+export function getTsAliasCacheRootCount(): number {
+  return tsAliasCacheByRoot.size
+}
+
+/**
+ * Warn-latch for transient hash-read failures: the same unreadable path
+ * previously failed silently on every refresh. Each distinct path warns at
+ * most once per process; the latch is FIFO-bounded so a long-lived process
+ * indexing many distinct failing paths cannot grow it without bound. Keyed
+ * by absolute path so identical relative paths in different projects are
+ * warned (and latched) independently.
+ */
+const HASH_READ_FAILURE_WARN_LATCH_LIMIT = 256
+const hashReadFailureWarnedPaths = new Set<string>()
+
+function recordHashReadFailure(
+  absolutePath: string,
+  relativePath: string,
+  error: unknown,
+): void {
+  if (hashReadFailureWarnedPaths.has(absolutePath)) return
+  if (hashReadFailureWarnedPaths.size >= HASH_READ_FAILURE_WARN_LATCH_LIMIT) {
+    const oldest = hashReadFailureWarnedPaths.keys().next()
+    if (!oldest.done) hashReadFailureWarnedPaths.delete(oldest.value)
+  }
+  hashReadFailureWarnedPaths.add(absolutePath)
+  const message = error instanceof Error ? error.message : String(error)
+  console.warn(
+    `[metadata-indexer] hash read failed for ${relativePath} (will retry on a later refresh): ${message}`,
+  )
 }
 
 function getParsedCache(projectRoot: string): Record<string, ParsedFileTokens> {
@@ -176,7 +449,7 @@ export async function buildMetadataIndex(
       parseDiagnostics = data.diagnostics
       parseCoverage = data.coverage
       parseData = data.parsed
-      parsedCacheByRoot.set(projectRoot, parseData)
+      setParsedCache(projectRoot, parseData)
     } catch (error) {
       parseDiagnostics = [createParseDiagnostic(projectRoot, error)]
     }
@@ -184,7 +457,16 @@ export async function buildMetadataIndex(
 
   const indexedFiles: Record<string, IndexedFile> = {}
 
+  // One yield gate per invocation: concurrent buildMetadataIndex calls each
+  // get their own time slice instead of sharing one (see
+  // createEventLoopYieldGate).
+  const yieldToEventLoop = createEventLoopYieldGate()
+
   for (const file of files) {
+    // Macrotask yield so a cold build does not starve the TUI (see
+    // createEventLoopYieldGate). Precedes all per-file work; loop-carried state
+    // (indexedFiles) is mutated only below the yield.
+    await yieldToEventLoop()
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
       projectRoot,
@@ -194,6 +476,8 @@ export async function buildMetadataIndex(
       ext: file.ext,
       asset: file.asset,
       tokenScores: tokenScores[file.relativePath] ?? {},
+      astImports: parseData[file.relativePath]?.imports,
+      yieldToEventLoop,
     })
     if (indexed) indexedFiles[file.relativePath] = indexed
   }
@@ -238,6 +522,11 @@ export async function updateMetadataIndex(
         config.maxFiles,
       )
   const files = walked.files
+  // One yield gate per invocation: concurrent updateMetadataIndex calls each
+  // get their own time slice instead of sharing one (see
+  // createEventLoopYieldGate). Both loops in this invocation share the gate —
+  // the gate bounds time-between-yields, not per-loop yield counts.
+  const yieldToEventLoop = createEventLoopYieldGate()
   const currentByPath = new Map(files.map((f) => [f.relativePath, f]))
   const changedDeltaPaths = new Set(
     (mutationDelta?.changedPaths ?? []).map(normalizeMutationPath),
@@ -262,25 +551,76 @@ export async function updateMetadataIndex(
 
   const hashByPath = new Map<string, string>()
   const hashReadFailedPaths = new Set<string>()
+  // Content reads that failed inside indexWalkedFile even though hashing
+  // succeeded (e.g. the file became unreadable between the hash read and the
+  // content read). Mirrors hashReadFailedPaths: a still-walked file must
+  // keep its previous indexed entry instead of being dropped from the index.
+  const contentReadFailedPaths = new Set<string>()
   const changedFiles: typeof files = []
   const updatedFiles: Record<string, IndexedFile> = { ...existing.files }
   let metadataOnlyChange = false
 
   for (const file of files) {
+    // Macrotask yield so the stat/hash pass does not starve the TUI (see
+    // createEventLoopYieldGate). Precedes all per-file work/continue paths so every
+    // iteration is covered uniformly.
+    await yieldToEventLoop()
     const indexed = existing.files[file.relativePath]
     if (preciseDelta && !changedDeltaPaths.has(file.relativePath)) {
       continue
     }
+    // Stat-gated hashing (X-2a): unchanged files skip the content read +
+    // SHA-256 entirely. A file is treated as unchanged only when BOTH the
+    // walked mtime/size AND a fresh stat() match the indexed record — the
+    // walked mtime can be stale for precise-delta overlays rebuilt from the
+    // indexed record, and the fresh stat catches changes that land between
+    // the walk and this loop. Known tradeoff (the standard indexer one,
+    // prescribed by the DEPTH audit): a touch-less write that keeps mtime
+    // AND size identical is invisible to this gate. Stat failures fall back
+    // to hashing, preserving the previous behavior.
+    // Residual race (documented, tolerated): the fresh stat() above and the
+    // hash read below are not atomic. A write landing between them is hashed
+    // as NEW content but recorded under the PRE-write mtime/size from the
+    // walk, so that record's stat identity is temporarily wrong. The next
+    // refresh's fresh stat() then mismatches the indexed record and forces a
+    // re-hash — the index self-heals one refresh late; content is never
+    // lost, only transiently attributed to a stale stat.
     let hash: string | undefined
-    try {
-      hash = file.asset
-        ? await hashBinaryFile(file.absolutePath)
-        : await hashFile(file.absolutePath)
-    } catch {
-      hashReadFailedPaths.add(file.relativePath)
-      changedFiles.push(file)
-      continue
+    if (indexed) {
+      try {
+        const stat = await fs.promises.stat(file.absolutePath)
+        if (
+          indexed.mtime === stat.mtimeMs &&
+          indexed.size === stat.size &&
+          indexed.mtime === file.mtime &&
+          indexed.size === file.size
+        ) {
+          hash = indexed.hash
+        }
+      } catch {
+        // Stat failure: fall back to hashing below (current behavior).
+      }
     }
+    if (hash === undefined) {
+      try {
+        hash = file.asset
+          ? await hashBinaryFile(file.absolutePath)
+          : await hashFile(file.absolutePath)
+      } catch (error) {
+        hashReadFailedPaths.add(file.relativePath)
+        // Bounded diagnostics: warn once per path instead of silently
+        // retrying (and silently failing) on every refresh.
+        recordHashReadFailure(file.absolutePath, file.relativePath, error)
+        changedFiles.push(file)
+        continue
+      }
+    }
+    // Intra-file yield seam: the stat/hash pass above and the derived-metadata
+    // stat + change-classification block below each stay within one time
+    // slice (a single whole-content SHA-256 is one atomic native call — the
+    // documented residual exception that cannot be split; see
+    // createEventLoopYieldGate).
+    await yieldToEventLoop()
     hashByPath.set(file.relativePath, hash)
     const derivedMetadataPath = file.asset
       ? `.openbuff/artifacts/3d/metadata/${hash}.json`
@@ -318,25 +658,107 @@ export async function updateMetadataIndex(
     deletedPaths.size === 0 &&
     !needsParseHydration
   ) {
+    // Self-heal stale parse failures on the no-change path. Failed-parse files
+    // are never written to parseData (getFileTokenScores `continue`s on a
+    // diagnostic), so an idle session with no code changes would otherwise
+    // carry stale parseDiagnostics + stale coverage.parser.truncated forever
+    // (the symptom: a persistent 'idx degraded' chip after a transient parser
+    // regression that has since been fixed). Re-attempt ONLY the
+    // previously-diagnosed files that are still present and uncached — a small
+    // set — and recompute diagnostics/coverage from the result. On success
+    // they enter the parse cache and drop out of the diagnostic set, so the
+    // NEXT no-change tick re-attempts nothing (steady-state cost = 0). A
+    // genuinely-still-failing file stays diagnosed and uncached, so it is
+    // re-tested each tick (bounded by the small failing-set size) and never
+    // hidden.
+    const walkedPaths = new Set(files.map((f) => f.relativePath))
+    const priorDiagnostics = existing.parseDiagnostics ?? []
+    // Drop diagnostics for files that are no longer walked (deleted/renamed)
+    // so stale coverage never references vanished files.
+    let parseDiagnostics = priorDiagnostics.filter((d) =>
+      walkedPaths.has(d.filePath),
+    )
+    let parseData = existing.parseData
+    let parserCoverage = existing.coverage?.parser
+
+    const retryPaths = parseDiagnostics
+      .map((d) => d.filePath)
+      .filter(
+        (p) =>
+          CODE_EXTENSIONS.has(path.extname(p)) &&
+          existing.parseData?.[p] === undefined,
+      )
+
+    if (retryPaths.length > 0) {
+      const reheal = await getFileTokenScores(
+        projectRoot,
+        retryPaths,
+        undefined,
+        {},
+      )
+      parseData = { ...(existing.parseData ?? {}), ...reheal.parsed }
+      setParsedCache(projectRoot, parseData)
+      const retrySet = new Set(retryPaths)
+      // The only files that can still be failing on this path are the ones we
+      // just re-tested (everything else is cached-success), so the post-reheal
+      // diagnostics fully characterize failure-driven coverage.
+      parseDiagnostics = [
+        ...parseDiagnostics.filter((d) => !retrySet.has(d.filePath)),
+        ...reheal.diagnostics,
+      ]
+      const budgetTruncated = Boolean(
+        existing.coverage?.parser?.fileBudgetExceeded ||
+          existing.coverage?.parser?.byteBudgetExceeded,
+      )
+      const failureSkipPaths = parseDiagnostics.map((d) => d.filePath)
+      parserCoverage = existing.coverage?.parser
+        ? {
+            ...existing.coverage.parser,
+            skippedFiles: failureSkipPaths.length,
+            truncated: budgetTruncated || failureSkipPaths.length > 0,
+            skippedPrefixes: Array.from(
+              new Set(
+                failureSkipPaths.map((p) => {
+                  const normalized = p.replace(/\\/g, '/')
+                  const slash = normalized.indexOf('/')
+                  return slash === -1 ? '.' : normalized.slice(0, slash)
+                }),
+              ),
+            ).sort(),
+            skippedLanguages: Array.from(
+              new Set(
+                failureSkipPaths.map((p) => path.extname(p) || 'unknown'),
+              ),
+            ).sort(),
+          }
+        : undefined
+    }
+
+    const graphFiles = metadataOnlyChange ? updatedFiles : existing.files
+    const aliases = loadTsAliases(projectRoot)
+    // One fail-open ts resolution tier per pass (null when the typescript
+    // module is unavailable).
     const graph = buildGraph(
-      metadataOnlyChange ? updatedFiles : existing.files,
+      graphFiles,
       {},
-      loadTsAliases(projectRoot),
+      aliases,
       resolveGraphWeights(config.weights?.graph),
-      existing.parseData,
+      parseData,
+      createTsModuleResolver({ projectRoot, files: graphFiles, aliases }),
     )
     return {
       ...existing,
       builtAt: Date.now(),
       // A refresh that applied changes clears any prior degraded flag (P8.1).
       parserDegraded: undefined,
-      files: metadataOnlyChange ? updatedFiles : existing.files,
+      files: graphFiles,
       graph,
-      queryData: buildIndexQueryData(
-        metadataOnlyChange ? updatedFiles : existing.files,
-        graph,
-      ),
-      coverage: createIndexCoverage(walked, existing.coverage?.parser),
+      queryData: buildIndexQueryData(graphFiles, graph),
+      // Carry the RECOMPUTED parse evidence, not the (possibly stale) spread
+      // from `existing`, so a self-healed failure clears here.
+      parseData,
+      parseDiagnostics,
+      coverage: createIndexCoverage(walked, parserCoverage),
     }
   }
 
@@ -382,7 +804,7 @@ export async function updateMetadataIndex(
       parseDiagnostics = data.diagnostics
       parseCoverage = data.coverage
       parseData = data.parsed
-      parsedCacheByRoot.set(projectRoot, parseData)
+      setParsedCache(projectRoot, parseData)
     } catch (error) {
       parseDiagnostics = [createParseDiagnostic(projectRoot, error)]
       parserDegraded = true
@@ -410,6 +832,10 @@ export async function updateMetadataIndex(
   }
 
   for (const file of changedFiles) {
+    // Macrotask yield so re-indexing many changed files does not starve the
+    // TUI (see createEventLoopYieldGate). Precedes per-file work; updatedFiles is
+    // mutated only below the yield.
+    await yieldToEventLoop()
     const previous = existing.files[file.relativePath]
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
@@ -421,13 +847,17 @@ export async function updateMetadataIndex(
       asset: file.asset,
       hash: hashByPath.get(file.relativePath),
       tokenScores: tokenScores[file.relativePath] ?? {},
+      astImports: parseData[file.relativePath]?.imports,
       previousChunks: previous?.chunks,
       previousHash: previous?.hash,
+      readFailedPaths: contentReadFailedPaths,
+      yieldToEventLoop,
     })
     if (indexed) {
       updatedFiles[file.relativePath] = indexed
     } else if (
-      hashReadFailedPaths.has(file.relativePath) &&
+      (hashReadFailedPaths.has(file.relativePath) ||
+        contentReadFailedPaths.has(file.relativePath)) &&
       existing.files[file.relativePath]
     ) {
       // Transient (non-deletion) read failure: the walk still sees the file,
@@ -470,8 +900,22 @@ async function indexWalkedFile(params: {
   asset?: { kind: '3d'; format: string }
   hash?: string
   tokenScores: Record<string, number>
+  /**
+   * P3-T5 AST import-capture tier: import specifiers captured by the
+   * code-map tags query for this file's language (five tier languages).
+   * Empty/undefined keeps the line-based fallback byte-identical.
+   */
+  astImports?: string[]
   previousChunks?: IndexedFile['chunks']
   previousHash?: string
+  /**
+   * Caller-collected set of relative paths whose content read failed
+   * transiently inside this function, so the caller can keep the previous
+   * indexed entry instead of dropping a still-existing file.
+   */
+  readFailedPaths?: Set<string>
+  /** Macrotask yield gate owned by the calling index build/update run. */
+  yieldToEventLoop: () => Promise<void>
 }): Promise<IndexedFile | null> {
   // Skip binary files entirely — they cannot be parsed as UTF-8 text and
   // reading them would corrupt the index with garbage imports/symbols.
@@ -534,11 +978,14 @@ async function indexWalkedFile(params: {
   try {
     content = await fs.promises.readFile(params.absolutePath, 'utf8')
   } catch {
+    // Transient read failure: report it so the caller can keep the previous
+    // indexed entry for this still-walked file instead of dropping it.
+    params.readFailedPaths?.add(params.relativePath)
     return null
   }
 
   const symbols = getTopSymbols(params.tokenScores, 30)
-  const imports = extractImports(content, params.ext)
+  const imports = extractImports(content, params.ext, params.astImports)
   const headings = DOC_EXTENSIONS.has(params.ext)
     ? extractHeadings(content)
     : []
@@ -564,12 +1011,25 @@ async function indexWalkedFile(params: {
   // Godot .tscn/.tres, Unreal .uproject, Bevy configs). Returns [] for non-asset files.
   const assetRefs = extractAssetRefs(content, params.ext, params.relativePath)
 
+  // Intra-file yield seam: the content read / imports / headings / concepts /
+  // content-sample extraction block above and the tree-sitter chunk
+  // extraction block below each stay within one time slice (a single
+  // whole-file tree-sitter chunk parse is one atomic native call — the
+  // documented residual exception; see createEventLoopYieldGate).
+  await params.yieldToEventLoop()
+
   // Phase A2 (additive): chunk summaries for code files only. Reuses the
   // already-read `content`; never re-reads disk. Errors or empty results
   // leave `chunks` undefined to keep the cache compact.
   let chunks: IndexedFile['chunks']
+  // Content hash, computed AT MOST once per file: on the cold-build path
+  // buildMetadataIndex passes no `hash`, and this full synchronous SHA-256
+  // over the entire content used to run twice per code file (once for
+  // chunk freshness here and once for the indexed record below) inside the
+  // yield-seam-bounded block. Non-code files hash lazily at the return.
+  let contentHash: string | undefined
   if (CODE_EXTENSIONS.has(params.ext)) {
-    const contentHash = params.hash ?? hashContent(content)
+    contentHash = params.hash ?? hashContent(content)
     if (params.previousChunks && params.previousHash && contentHash === params.previousHash) {
       chunks = params.previousChunks.slice(0, 100)
       if (chunks.length === 0) chunks = undefined
@@ -597,7 +1057,7 @@ async function indexWalkedFile(params: {
     path: params.relativePath,
     mtime: params.mtime,
     size: params.size,
-    hash: params.hash ?? hashContent(content),
+    hash: params.hash ?? contentHash ?? hashContent(content),
     ext: params.ext,
     symbols,
     imports,
@@ -624,6 +1084,7 @@ function createMetadataIndex(
     aliases,
     resolveGraphWeights(graphWeights),
     parseData,
+    createTsModuleResolver({ projectRoot, files, aliases }),
   )
   return {
     version: '2',
@@ -724,18 +1185,6 @@ function normalizeMutationPath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\.\//, '')
 }
 
-function getLanguageFamily(extension: string | undefined): string {
-  const normalized = extension?.toLowerCase() ?? ''
-  if (['.ts', '.tsx', '.mts', '.cts'].includes(normalized)) return 'typescript'
-  if (['.js', '.jsx', '.mjs', '.cjs'].includes(normalized)) return 'javascript'
-  if (['.c', '.h'].includes(normalized)) return 'c'
-  if (['.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx'].includes(normalized)) {
-    return 'cpp'
-  }
-  if (['.kt', '.kts'].includes(normalized)) return 'kotlin'
-  return normalized
-}
-
 function createParseDiagnostic(
   projectRoot: string,
   error: unknown,
@@ -753,6 +1202,7 @@ function buildGraph(
   aliases: TsAliasMap | undefined,
   weights: Required<GraphWeights>,
   parseData: Record<string, ParsedFileTokens> = {},
+  tsResolver: TsModuleResolver | null = null,
 ): IndexGraph {
   const nodes: Record<string, IndexNode> = {}
   const edges: IndexEdge[] = []
@@ -803,6 +1253,7 @@ function buildGraph(
         importPath,
         files,
         aliases,
+        tsResolver,
       )
       if (resolved) {
         edges.push({
@@ -900,7 +1351,13 @@ function buildGraph(
   }
 
   edges.push(
-    ...buildModuleAwareCallEdges(files, parseData, aliases, weights.calls),
+    ...buildModuleAwareCallEdges(
+      files,
+      parseData,
+      aliases,
+      weights.calls,
+      tsResolver,
+    ),
   )
 
   return { nodes, edges: dedupeEdges(edges) }
@@ -911,6 +1368,7 @@ function buildModuleAwareCallEdges(
   parseData: Record<string, ParsedFileTokens>,
   aliases: TsAliasMap | undefined,
   weight: number,
+  tsResolver: TsModuleResolver | null = null,
 ): IndexEdge[] {
   const definitions = new Map<string, string[]>()
   for (const [filePath, parsed] of Object.entries(parseData)) {
@@ -920,6 +1378,19 @@ function buildModuleAwareCallEdges(
       if (!paths.includes(filePath)) paths.push(filePath)
       definitions.set(symbol, paths)
     }
+  }
+
+  // Language family depends only on a file's extension, so resolve it once per
+  // file (with its lone path.extname/toLowerCase allocation) instead of once
+  // per candidate edge inside the caller-resolution loops below.
+  const familyByPath = new Map<string, string>()
+  const familyForPath = (filePath: string): string => {
+    let family = familyByPath.get(filePath)
+    if (family === undefined) {
+      family = getLanguageFamily(files[filePath]?.ext)
+      familyByPath.set(filePath, family)
+    }
+    return family
   }
 
   const edges: IndexEdge[] = []
@@ -935,19 +1406,22 @@ function buildModuleAwareCallEdges(
             importPath,
             files,
             aliases,
+            tsResolver,
           ),
         )
         .filter((filePath): filePath is string => Boolean(filePath)),
     )
 
+    // callerLanguage is invariant across this caller's calls and candidates,
+    // so hoist it out of the inner loops rather than recomputing it (and its
+    // path.extname/toLowerCase allocation) per call and per candidate edge.
+    const callerLanguage = familyForPath(callerPath)
     for (const call of parsed.calls) {
       const candidates = (definitions.get(call) ?? []).filter(
         (filePath) => filePath !== callerPath,
       )
       const sameLanguage = candidates.filter(
-        (filePath) =>
-          getLanguageFamily(files[filePath]?.ext) ===
-          getLanguageFamily(caller.ext),
+        (filePath) => familyForPath(filePath) === callerLanguage,
       )
       const languageCandidates = sameLanguage
       const importedCandidates = languageCandidates.filter((filePath) =>
@@ -992,86 +1466,32 @@ function getTopSymbols(
     .map(([sym]) => sym)
 }
 
-function extractImports(content: string, extension: string): string[] {
-  const imports = new Set<string>()
-  const addMatches = (
-    regex: RegExp,
-    select: (match: RegExpExecArray) => string | undefined,
-  ) => {
-    let match: RegExpExecArray | null
-    while ((match = regex.exec(content)) !== null && imports.size < 50) {
-      const importPath = select(match)?.trim()
-      if (importPath) imports.add(importPath)
-    }
+/**
+ * P3-T5 AST import-capture tier: prefer import specifiers captured by the
+ * code-map tree-sitter tags query (the SAME .scm query the parse pipeline
+ * runs; see `parseFile`'s @import.* capture grouping and
+ * `importSpecifiersFromAstCaptures`) when the parse pipeline produced a
+ * non-empty list for a tier language (TypeScript, JavaScript, Python, Go,
+ * Rust). AST captures are normalized in code-map to the exact specifier
+ * shapes the line-based extractor emits, so downstream resolution
+ * (resolveImportToFile / edge building) is untouched.
+ *
+ * When the parse pipeline exposes no captures — the file's language has no
+ * AST tier, the grammar failed to load, or the file produced no @import
+ * captures — this falls back byte-identically to the canonical line-based
+ * extraction (`extractImportSpecifiers`), which remains the safety net and
+ * is NOT removed. Both tiers are capped by the same bound. Exported so the
+ * seam contract is directly pinnable in tests.
+ */
+export function extractImports(
+  content: string,
+  extension: string,
+  astImports?: string[],
+): string[] {
+  if (astImports && astImports.length > 0) {
+    return astImports.slice(0, AST_IMPORT_SPECIFIER_LIMIT)
   }
-
-  if (
-    ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'].includes(
-      extension,
-    )
-  ) {
-    addMatches(
-      new RegExp(IMPORT_REGEX.source, 'g'),
-      (match) => match[1] ?? match[2] ?? match[3],
-    )
-  } else if (['.py', '.pyi'].includes(extension)) {
-    addMatches(/^\s*from\s+([.\w]+)\s+import\b/gm, (match) => match[1])
-    addMatches(/^\s*import\s+([\w.]+)/gm, (match) => match[1])
-  } else if (extension === '.rs') {
-    addMatches(/^\s*(?:pub\s+)?(?:use|mod)\s+([\w:]+)/gm, (match) => match[1])
-  } else if (extension === '.go') {
-    addMatches(
-      /^\s*import\s+(?:[\w.]+\s+)?["`]([^"`]+)["`]/gm,
-      (match) => match[1],
-    )
-    addMatches(/\bimport\s*\(([\s\S]*?)\)/gm, (blockMatch) => {
-      for (const line of (blockMatch[1] ?? '').split(/\r?\n/)) {
-        const item = line.match(
-          /^\s*(?:[\w.]+\s+)?["`]([^"`]+)["`]\s*(?:\/\/.*)?$/,
-        )
-        if (item?.[1]) imports.add(item[1])
-      }
-      return undefined
-    })
-  } else if (['.java', '.kt', '.kts'].includes(extension)) {
-    addMatches(
-      /^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;?\s*$/gm,
-      (match) => match[1],
-    )
-  } else if (
-    ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(
-      extension,
-    )
-  ) {
-    addMatches(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gm, (match) => match[1])
-  } else if (extension === '.cs') {
-    addMatches(
-      /^\s*(?:global\s+)?using\s+(?:[\w]+\s*=\s*)?([\w.]+)\s*;/gm,
-      (match) => match[1],
-    )
-  } else if (extension === '.rb') {
-    addMatches(
-      /^\s*require(?:_relative)?\s*[('" ]+([^'"\s)]+)/gm,
-      (match) => match[1],
-    )
-  } else if (extension === '.php') {
-    addMatches(/^\s*use\s+([\w\\]+)/gm, (match) =>
-      match[1]?.replace(/\\/g, '/'),
-    )
-    addMatches(
-      /\b(?:require|require_once|include|include_once)\s*\(?\s*['"]([^'"]+)/g,
-      (match) => match[1],
-    )
-  } else if (extension === '.swift') {
-    addMatches(/^\s*import\s+(?:\w+\s+)?([\w.]+)/gm, (match) => match[1])
-  } else if (extension === '.gd') {
-    addMatches(
-      /\b(?:preload|load)\s*\(\s*["'](?:res:\/\/)?([^"']+)/g,
-      (match) => match[1],
-    )
-  }
-
-  return Array.from(imports)
+  return extractImportSpecifiers(content, extension)
 }
 
 function extractHeadings(content: string): string[] {
@@ -1182,6 +1602,17 @@ function mergeConcepts(primary: string[], secondary: string[]): string[] {
   return Array.from(new Set([...primary, ...secondary])).slice(0, 160)
 }
 
+/**
+ * Raw command text (package.json script bodies, CI `run:`/`name:` lines) is
+ * embedded verbatim as a query-facing concept; cap each such concept so a
+ * pathological multi-kilobyte command cannot dominate the concept index.
+ */
+const MAX_RAW_CONCEPT_LENGTH = 200
+const clampRawConcept = (concept: string): string =>
+  concept.length > MAX_RAW_CONCEPT_LENGTH
+    ? concept.slice(0, MAX_RAW_CONCEPT_LENGTH)
+    : concept
+
 function extractPackageJsonConcepts(content: string): string[] {
   const concepts = new Set<string>([
     'package manifest',
@@ -1205,7 +1636,7 @@ function extractPackageJsonConcepts(content: string): string[] {
     if (typeof command !== 'string') continue
     concepts.add(name)
     concepts.add(`script ${name}`)
-    concepts.add(`script:${name}=${command}`)
+    concepts.add(clampRawConcept(`script:${name}=${command}`))
     for (const token of conceptTokens(`${name} ${command}`)) concepts.add(token)
   }
   return Array.from(concepts).slice(0, 160)
@@ -1223,11 +1654,13 @@ function extractCiWorkflowConcepts(content: string): string[] {
     if (/^(?:-\s*)?(run|uses|name):\s+/i.test(trimmed)) {
       const isRunCommand = /^(?:-\s*)?run:/i.test(trimmed)
       concepts.add(
-        isRunCommand
-          ? trimmed.startsWith('run:')
-            ? trimmed
-            : `run:${trimmed}`
-          : trimmed,
+        clampRawConcept(
+          isRunCommand
+            ? trimmed.startsWith('run:')
+              ? trimmed
+              : `run:${trimmed}`
+            : trimmed,
+        ),
       )
       for (const token of conceptTokens(trimmed)) concepts.add(token)
     }
@@ -1337,297 +1770,144 @@ function conceptNodeId(concept: string): string {
   return `concept:${concept}`
 }
 
-export type TsAliasMap = Record<string, string[]>
-
-function stripJsonComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
-    .replace(/,(\s*[}\]])/g, '$1')
-}
+export type { TsAliasMap } from './import-resolution'
+import type { TsAliasMap } from './import-resolution'
 
 /**
- * Load tsconfig `compilerOptions.paths` aliases (following `extends`), so the
- * import graph can resolve workspace-internal aliases like "@codebuff/common/*".
- * Tolerant: comments/trailing commas are stripped, and any failure yields no
- * aliases (relative-import resolution still works). Cached per root.
+ * Upper bound on tsconfig project references followed per loadTsAliases walk;
+ * a hostile or accidental reference fan-out cannot grow the walk without
+ * bound (cycles are separately bounded by the shared visited set).
+ */
+const MAX_TSCONFIG_REFERENCES = 32
+
+/**
+ * Load tsconfig `compilerOptions.paths` aliases (following `extends` AND
+ * top-level `references`), so the import graph can resolve workspace-internal
+ * aliases like "@codebuff/common/*" and paths declared by project-referenced
+ * tsconfigs.
+ *
+ * Walk order: the root tsconfig.json contributes first, then its `extends`
+ * chain (each extends resolved relative to the referencing file's directory);
+ * a config's top-level `references` entries (`{ path: string }[]`, resolved
+ * relative to the referencing file's directory, with a directory reference
+ * getting `/tsconfig.json` appended, as TypeScript does) are queued behind
+ * the extends chain, and each referenced config is walked with its own
+ * extends chain too. A single visited set bounds the whole walk against
+ * cycles, and at most MAX_TSCONFIG_REFERENCES references are followed.
+ *
+ * Closest-wins precedence, matching the existing rule: a key already in the
+ * map is never overwritten, so the root config wins over its extends bases,
+ * and nearer references win over farther ones in walk order. Paths
+ * discovered through references are rebased to be project-root-relative (a
+ * referenced config's `paths` are relative to that config's own directory,
+ * but the resolver applies every alias against the project root).
+ *
+ * Tolerant/fail-open: comments/trailing commas are stripped, and malformed
+ * JSON, missing files, reference cycles, or the reference cap simply
+ * contribute nothing for that config (relative-import resolution still
+ * works). Cached per root.
  */
 function loadTsAliases(projectRoot: string): TsAliasMap {
   const cached = tsAliasCacheByRoot.get(projectRoot)
   if (cached) return cached
 
   const aliases: TsAliasMap = {}
-  try {
-    let configPath: string = path.join(projectRoot, 'tsconfig.json')
-    const visited = new Set<string>()
-    while (
-      configPath &&
-      !visited.has(configPath) &&
-      fs.existsSync(configPath)
-    ) {
-      visited.add(configPath)
+  const queue: { filePath: string; viaReference: boolean }[] = [
+    { filePath: path.join(projectRoot, 'tsconfig.json'), viaReference: false },
+  ]
+  const visited = new Set<string>()
+  let referencesFollowed = 0
+  while (queue.length > 0) {
+    const entry = queue.shift()!
+    if (visited.has(entry.filePath) || !fs.existsSync(entry.filePath)) {
+      continue
+    }
+    visited.add(entry.filePath)
+    let extendsPath: string | undefined
+    const referencePaths: { filePath: string; viaReference: boolean }[] = []
+    try {
       const raw = JSON.parse(
-        stripJsonComments(fs.readFileSync(configPath, 'utf8')),
-      )
+        stripJsonComments(fs.readFileSync(entry.filePath, 'utf8')),
+      ) as {
+        compilerOptions?: { paths?: unknown }
+        extends?: unknown
+        references?: unknown
+      }
       const paths = raw?.compilerOptions?.paths
       if (paths && typeof paths === 'object') {
+        // Paths in a config reached via `references` are relative to that
+        // config's own directory; rebase them so they resolve against the
+        // project root like every other alias.
+        const rebasePrefix = entry.viaReference
+          ? path
+              .relative(projectRoot, path.dirname(entry.filePath))
+              .split(path.sep)
+              .join('/')
+          : ''
         for (const [key, value] of Object.entries(paths)) {
           // Closest config wins; do not let a base config override.
           if (!(key in aliases) && Array.isArray(value)) {
-            aliases[key] = (value as string[]).map((t) =>
-              t.replace(/^\.\//, '').replace(/\\/g, '/'),
-            )
+            aliases[key] = (value as unknown[])
+              .filter((t): t is string => typeof t === 'string')
+              .map((t) => {
+                const normalized = t.replace(/^\.\//, '').replace(/\\/g, '/')
+                return rebasePrefix
+                  ? `${rebasePrefix}/${normalized}`
+                  : normalized
+              })
           }
         }
       }
       const ext = raw?.extends
-      configPath =
-        typeof ext === 'string'
-          ? path.resolve(path.dirname(configPath), ext)
-          : ''
+      if (typeof ext === 'string' && ext !== '') {
+        extendsPath = path.resolve(path.dirname(entry.filePath), ext)
+      }
+      if (Array.isArray(raw?.references)) {
+        for (const reference of raw.references) {
+          const referencePath =
+            reference !== null && typeof reference === 'object'
+              ? (reference as { path?: unknown }).path
+              : undefined
+          if (typeof referencePath !== 'string') continue
+          if (referencesFollowed >= MAX_TSCONFIG_REFERENCES) break
+          referencesFollowed++
+          const resolved = path.resolve(
+            path.dirname(entry.filePath),
+            referencePath,
+          )
+          // A directory reference names the referenced project root; its
+          // tsconfig.json is the config file (mirrors TypeScript's behavior).
+          referencePaths.push({
+            filePath: /\.json$/i.test(resolved)
+              ? resolved
+              : path.join(resolved, 'tsconfig.json'),
+            viaReference: true,
+          })
+        }
+      }
+    } catch {
+      // Malformed/missing config contributes nothing; the walk continues.
     }
-  } catch {
-    // No aliases on parse/read failure.
+    // Extends chains drain before any queued reference so the root config
+    // and its bases stay closer than referenced configs.
+    if (extendsPath) {
+      queue.unshift({
+        filePath: extendsPath,
+        viaReference: entry.viaReference,
+      })
+    }
+    if (referencePaths.length > 0) queue.push(...referencePaths)
   }
 
+  // Every alias-cache insert routes through the evicting helper so
+  // MAX_INDEXED_PROJECT_ROOTS bounds this map too — including doc-only
+  // roots whose project has no code files, for which no parsedCacheByRoot
+  // insert ever happens (see evictOldestRootCacheIfNeeded).
   if (!tsAliasCacheByRoot.has(projectRoot)) {
     evictOldestRootCacheIfNeeded()
   }
   tsAliasCacheByRoot.set(projectRoot, aliases)
   return aliases
-}
-
-function resolveModuleCandidates(
-  base: string,
-  files: Record<string, IndexedFile>,
-): string | null {
-  const normalized = base.replace(/^\.\//, '')
-  const sourceExtensions = [
-    '.ts',
-    '.tsx',
-    '.js',
-    '.jsx',
-    '.mts',
-    '.cts',
-    '.mjs',
-    '.cjs',
-    '.py',
-    '.pyi',
-    '.rs',
-    '.go',
-    '.java',
-    '.kt',
-    '.kts',
-    '.cs',
-    '.c',
-    '.cc',
-    '.cpp',
-    '.cxx',
-    '.h',
-    '.hh',
-    '.hpp',
-    '.hxx',
-    '.rb',
-    '.php',
-    '.swift',
-    '.gd',
-  ]
-  const candidates = [
-    normalized,
-    ...sourceExtensions.map((extension) => `${normalized}${extension}`),
-    ...sourceExtensions.map((extension) => `${normalized}/index${extension}`),
-    `${normalized}/__init__.py`,
-    `${normalized}/mod.rs`,
-  ]
-  return candidates.find((candidate) => files[candidate]) ?? null
-}
-
-/**
- * Resolve a non-relative import via tsconfig `paths` aliases (e.g.
- * "@codebuff/common/util/x" -> "common/src/util/x"). Supports both wildcard
- * (`@scope/*`) and exact (`@scope/sdk`) patterns. Targets are interpreted
- * relative to the project root (baseUrl="." in this repo).
- */
-function resolveAliasImport(
-  importPath: string,
-  aliases: TsAliasMap,
-  files: Record<string, IndexedFile>,
-): string | null {
-  for (const [pattern, targets] of Object.entries(aliases)) {
-    const starIndex = pattern.indexOf('*')
-    if (starIndex >= 0) {
-      const prefix = pattern.slice(0, starIndex)
-      const suffix = pattern.slice(starIndex + 1)
-      if (
-        importPath.startsWith(prefix) &&
-        importPath.endsWith(suffix) &&
-        importPath.length >= prefix.length + suffix.length
-      ) {
-        const middle = importPath.slice(
-          prefix.length,
-          importPath.length - suffix.length,
-        )
-        for (const target of targets) {
-          const base = target.replace('*', middle)
-          const resolved = resolveModuleCandidates(base, files)
-          if (resolved) return resolved
-        }
-      }
-    } else if (importPath === pattern) {
-      for (const target of targets) {
-        const resolved = resolveModuleCandidates(target, files)
-        if (resolved) return resolved
-      }
-    }
-  }
-  return null
-}
-
-function resolveImportToFile(
-  fromFilePath: string,
-  fromExtension: string,
-  importPath: string,
-  files: Record<string, IndexedFile>,
-  aliases?: TsAliasMap,
-): string | null {
-  const normalizedImport = importPath.replace(/\\/g, '/')
-  let suffixSpecifier = normalizedImport
-  if (fromExtension === '.gd') {
-    return resolveModuleCandidates(
-      normalizedImport.replace(/^res:\/\//, ''),
-      files,
-    )
-  }
-  if (
-    ['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx', '.rb'].includes(
-      fromExtension,
-    )
-  ) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const local = resolveModuleCandidates(
-      path.posix.normalize(path.posix.join(fromDir, normalizedImport)),
-      files,
-    )
-    if (local) return local
-  }
-  if (['.java', '.kt', '.kts', '.cs', '.php'].includes(fromExtension)) {
-    const dottedPath = normalizedImport.replace(/\./g, '/')
-    suffixSpecifier = dottedPath
-    if (['.java', '.kt', '.kts', '.php'].includes(fromExtension)) {
-      const declared = resolveDeclaredPackageImport(
-        dottedPath,
-        fromExtension,
-        files,
-      )
-      if (declared) return declared
-    } else {
-      const exact = resolveModuleCandidates(dottedPath, files)
-      if (exact) return exact
-    }
-  }
-  if (fromExtension === '.rs') {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const rustPath = normalizedImport
-      .replace(/^crate::/, '')
-      .replace(/^self::/, '')
-      .replace(/^super::/, '../')
-      .replace(/::/g, '/')
-    const local = resolveModuleCandidates(
-      path.posix.normalize(path.posix.join(fromDir, rustPath)),
-      files,
-    )
-    if (local) return local
-    const crateRelative = resolveModuleCandidates(`src/${rustPath}`, files)
-    if (crateRelative) return crateRelative
-  }
-  if (['.py', '.pyi'].includes(fromExtension)) {
-    const leadingDots = normalizedImport.match(/^\.+/)?.[0].length ?? 0
-    const modulePath = normalizedImport.slice(leadingDots).replace(/\./g, '/')
-    if (leadingDots > 0) {
-      let baseDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-      for (let index = 1; index < leadingDots; index++)
-        baseDir = path.posix.dirname(baseDir)
-      const relative = resolveModuleCandidates(
-        path.posix.join(baseDir, modulePath),
-        files,
-      )
-      if (relative) return relative
-    }
-    const absolute = resolveModuleCandidates(modulePath, files)
-    if (absolute) return absolute
-  }
-  if (normalizedImport.startsWith('.')) {
-    const fromDir = path.posix.dirname(fromFilePath.replace(/\\/g, '/'))
-    const normalizedBase = path.posix.normalize(
-      path.posix.join(fromDir, normalizedImport),
-    )
-    return resolveModuleCandidates(normalizedBase, files)
-  }
-  // Non-relative: try tsconfig path aliases (workspace-internal imports).
-  if (aliases) {
-    const aliasResolved = resolveAliasImport(normalizedImport, aliases, files)
-    if (aliasResolved) return aliasResolved
-  }
-  // Go module imports and Ruby load paths often include a repository/module
-  // prefix. Resolve only an unambiguous suffix to avoid inventing graph edges.
-  if (fromExtension !== '.go') {
-    return null
-  }
-  const goModule = files['go.mod']?.contentSample?.match(
-    /^\s*module\s+([^\s]+)\s*$/m,
-  )?.[1]
-  if (!goModule || !normalizedImport.startsWith(`${goModule}/`)) return null
-  suffixSpecifier = normalizedImport.slice(goModule.length + 1)
-  const suffixMatches = Object.keys(files).filter((candidate) => {
-    const withoutExtension = candidate.replace(/\.[^.\/]+$/, '')
-    const packageDirectory = path.posix.dirname(withoutExtension)
-    return (
-      suffixSpecifier.endsWith(withoutExtension) ||
-      withoutExtension.endsWith(suffixSpecifier) ||
-      (fromExtension === '.go' &&
-        packageDirectory !== '.' &&
-        suffixSpecifier.endsWith(packageDirectory))
-    )
-  })
-  if (suffixMatches.length === 1) return suffixMatches[0]
-  return null
-}
-
-function resolveDeclaredPackageImport(
-  importPath: string,
-  fromExtension: string,
-  files: Record<string, IndexedFile>,
-): string | null {
-  const segments = importPath.split('/').filter(Boolean)
-  if (segments.length < 2) return null
-  const symbolName = segments.at(-1)!
-  const packageName = segments
-    .slice(0, -1)
-    .join(fromExtension === '.php' ? '\\' : '.')
-  const allowedExtensions =
-    fromExtension === '.php' ? new Set(['.php']) : new Set(['.java', '.kt'])
-  const matches = Object.values(files).filter((candidate) => {
-    if (!allowedExtensions.has(candidate.ext)) return false
-    if (path.posix.basename(candidate.path, candidate.ext) !== symbolName) {
-      return false
-    }
-    const sample = candidate.contentSample ?? ''
-    if (fromExtension === '.php') {
-      return new RegExp(
-        `^\\s*namespace\\s+${escapeRegex(packageName)}\\s*;`,
-        'm',
-      ).test(sample)
-    }
-    return new RegExp(
-      `^\\s*package\\s+${escapeRegex(packageName)}\\s*;?`,
-      'm',
-    ).test(sample)
-  })
-  return matches.length === 1 ? matches[0].path : null
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function dedupeEdges(edges: IndexEdge[]): IndexEdge[] {

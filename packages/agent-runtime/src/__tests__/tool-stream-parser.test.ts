@@ -7,7 +7,10 @@ import {
   cachedRegExp,
   processStructuredEdit,
 } from '../process-structured-edit'
-import { processStreamWithTools } from '../tool-stream-parser'
+import {
+  processStreamWithTools,
+  streamParserErrorGuidance,
+} from '../tool-stream-parser'
 import {
   parseToolCallsFromText,
   TOOL_EXTRACTION_PATTERN,
@@ -21,6 +24,7 @@ import { createToolCallChunk } from './test-utils'
 import type { AgentRuntimeDeps } from '@codebuff/common/types/contracts/agent-runtime'
 import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { PromptResult } from '@codebuff/common/util/error'
 
 describe('processStreamWithTags', () => {
   async function* createMockStream(chunks: StreamChunk[]) {
@@ -552,10 +556,23 @@ describe('processStreamWithTags', () => {
     }
 
     expect(responseChunks).toHaveLength(1)
+    // Capture the message BEFORE toMatchObject: bun's toMatchObject replaces
+    // the matched property with the asymmetric-matcher object, so reading
+    // .message afterwards yields the matcher (which stringifies to '{}') and
+    // toContain type-errors instead of comparing strings.
+    const message = responseChunks[0].message
     expect(responseChunks[0]).toMatchObject({
       type: 'error',
       message: expect.stringContaining('JSON parsing failed'),
     })
+    // The base message stays byte-identical; the bounded raw excerpt is
+    // composed onto it at this emission boundary (mirroring the executor's
+    // pinned 'Original tool call input:' self-correcting pattern) so the
+    // model can diff its broken JSON instead of guessing which call failed
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    expect(message).toContain(
+      'Original tool call input (excerpt): \n{"cb_tool_name": "test_tool",\n',
+    )
   })
 
   it('should surface non-JSON tool-call input through the structured error channel and forward the raw string', async () => {
@@ -812,6 +829,554 @@ describe('processStreamWithTags', () => {
     expect(capped.executed).toEqual([])
     expect(capped.errors).toHaveLength(1)
     expect(capped.errors[0]).toContain('JSON parsing failed')
+  })
+
+  it('fails safe on model-degeneration output (aborted tool-call tag fragments never execute)', async () => {
+    // Real production degeneration specimen: coherent prose, ~200 carriage
+    // returns, aborted tool-call tag fragments (<to, <tool_call, <tool_c)
+    // and a foreign-protocol fragment (<parameter name="path"> ...
+    // window=1, 475). None of these bytes form the canonical start tag, so
+    // no processor may fire, no tool may execute, no parser error may
+    // surface, and every byte must still reach the text channel exactly
+    // once.
+    const specimen =
+      'The symbol read failed due to parameter shape. Let me read the run-journal implementation to confirm the close() shape cited in the finding.' +
+      '\r'.repeat(200) +
+      '<to' +
+      '<tool_call' +
+      '<tool_c' +
+      '<parameter name="path">scripts/diag-count-side-table.ts' +
+      'window=1, 475'
+
+    // Feed the specimen in artificially small chunks: 8 chars per chunk for
+    // production-like streaming, plus 1 char per chunk so every '<' lands on
+    // its own chunk boundary and the partial-tag carry (a lone '<' held
+    // until the next byte mismatches the start tag) is actually exercised.
+    const runAtChunkSize = async (chunkSize: number) => {
+      const streamChunks: StreamChunk[] = []
+      for (let i = 0; i < specimen.length; i += chunkSize) {
+        streamChunks.push(textChunk(specimen.slice(i, i + chunkSize)))
+      }
+
+      const events: any[] = []
+      const processors = {
+        test_tool: {
+          params: ['param1'] as string[],
+          onTagStart: (tagName: string, attributes: Record<string, string>) => {
+            events.push({ tagName, type: 'start', attributes })
+          },
+          onTagEnd: (tagName: string, params: Record<string, any>) => {
+            events.push({ tagName, type: 'end', params })
+          },
+        },
+      }
+
+      const executedToolCalls: string[] = []
+      const responseErrors: string[] = []
+      const responseText: string[] = []
+      let yieldedText = ''
+
+      for await (const chunk of processStreamWithTools({
+        ...agentRuntimeImpl,
+        stream: createMockStream(streamChunks),
+        processors,
+        defaultProcessor: (toolName: string) => {
+          events.push({ name: toolName, type: 'default-processor' })
+          return {
+            onTagStart: () => {},
+            onTagEnd: () => {},
+          }
+        },
+        onResponseChunk: (chunk: any) => {
+          if (chunk.type === 'error') responseErrors.push(chunk.message)
+          if (chunk.type === 'text') responseText.push(chunk.text)
+        },
+        executeXmlToolCall: async ({ toolName }) => {
+          executedToolCalls.push(toolName)
+        },
+      })) {
+        if (chunk.type === 'text') {
+          yieldedText += chunk.text
+        }
+      }
+
+      return {
+        events,
+        executedToolCalls,
+        responseErrors,
+        responseText,
+        yieldedText,
+      }
+    }
+
+    for (const chunkSize of [1, 8]) {
+      const outcome = await runAtChunkSize(chunkSize)
+
+      // No processor hook, no default-processor lookup and no executor may
+      // ever fire: the aborted fragments are not the canonical start tag.
+      expect(outcome.events).toEqual([])
+      expect(outcome.executedToolCalls).toEqual([])
+      // No start tag matched, so the parser has nothing to report.
+      expect(outcome.responseErrors).toEqual([])
+      // The degeneration output is still visible text, byte for byte: a
+      // carried '<' is flushed once the next byte mismatches, so the
+      // re-joined emitted text equals the specimen exactly.
+      expect(outcome.responseText.length).toBeGreaterThan(0)
+      expect(outcome.responseText.join('')).toBe(specimen)
+      expect(outcome.yieldedText).toBe(specimen)
+    }
+  })
+
+  it('reports an unterminated tool call at end of stream without executing or leaking it', async () => {
+    // End-of-stream gap closure
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md):
+    // a call whose closing tag never arrives used to be dropped with ZERO
+    // feedback unless it overflowed the 64 KiB buffer. The finalize step now
+    // reports it through the same error channel — never executed, never
+    // leaked as text — with the bounded excerpt and actionable retry
+    // guidance composed at the emission boundary.
+    const streamChunks: StreamChunk[] = [
+      textChunk(`<codebuff_tool_call>
+{"cb_tool_name": "test_tool",
+`),
+    ]
+    const stream = createMockStream(streamChunks)
+
+    const events: any[] = []
+    const responseChunks: any[] = []
+
+    const processors = {
+      test_tool: {
+        onTagStart: (tagName: string) => {
+          events.push({ tagName, type: 'start' })
+        },
+        onTagEnd: (tagName: string) => {
+          events.push({ tagName, type: 'end' })
+        },
+      },
+    }
+
+    for await (const chunk of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors,
+      defaultProcessor: (toolName: string) => {
+        events.push({ name: toolName, type: 'default-processor' })
+        return {
+          onTagStart: () => {},
+          onTagEnd: () => {},
+        }
+      },
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async () => {
+        events.push({ type: 'executed' })
+      },
+    })) {
+      if (chunk.type === 'text') {
+        events.push({ type: 'yielded-text' })
+      }
+    }
+
+    // Exactly one error chunk: the dropped-payload report composed with the
+    // bounded excerpt and the retry guidance.
+    expect(responseChunks).toHaveLength(1)
+    expect(responseChunks[0].type).toBe('error')
+    const message = responseChunks[0].message
+    expect(message).toContain('ended before the closing tag')
+    expect(message).toContain('Original tool call input (excerpt):')
+    expect(message).toContain('Re-emit the complete tool call')
+    // Fail-safe unchanged: no processor fires, the executor never runs, and
+    // the dropped payload never leaks as text (neither via onResponseChunk
+    // nor via the yielded stream).
+    expect(events).toEqual([])
+  })
+
+  it('appends split-the-payload guidance to the buffer-exceeded error at the emission boundary', async () => {
+    // The overflow error used to carry no actionable guidance; guidance is
+    // appended after the rawExcerpt composition so the base message stays
+    // byte-identical
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    const oversized = 'x'.repeat(64 * 1024 + 1)
+    const stream = createMockStream([
+      textChunk(`<codebuff_tool_call>${oversized}`),
+    ])
+    const responseChunks: any[] = []
+
+    for await (const _chunk of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors: {},
+      defaultProcessor: () => ({
+        onTagStart: () => {},
+        onTagEnd: () => {},
+      }),
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async () => {},
+    })) {
+      // consume stream
+    }
+
+    // The overflow error is reported once — the discard-mode EOF finalize
+    // does not duplicate it.
+    expect(responseChunks).toHaveLength(1)
+    expect(responseChunks[0].type).toBe('error')
+    const message = responseChunks[0].message
+    expect(message).toContain('Discarding content until the end tag.')
+    expect(message).toContain('Original tool call input (excerpt):')
+    expect(message).toContain(
+      'Split large payloads across multiple smaller tool calls',
+    )
+  })
+
+  it('annotates the end-of-stream tool-call error with the provider max-token cut (finish reason "length")', async () => {
+    // The stream-only finish marker (the `{ type: 'finish' }` StreamChunk
+    // variant) carries the provider's authoritative finish reason into the
+    // runtime stream parser. finishReason === 'length' is the max-token cut,
+    // so the EOF report must tell the model the response ended at the token
+    // limit — the fact that separates a truncated call from a
+    // payload-too-big one
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    const streamChunks: StreamChunk[] = [
+      textChunk('<codebuff_tool_call>\n{"cb_tool_name": "test_tool",\n'),
+      { type: 'finish', finishReason: 'length' },
+    ]
+    const stream = createMockStream(streamChunks)
+
+    const events: any[] = []
+    const responseChunks: any[] = []
+    const yieldedChunks: StreamChunk[] = []
+
+    const processors = {
+      test_tool: {
+        onTagStart: (tagName: string) => {
+          events.push({ tagName, type: 'start' })
+        },
+        onTagEnd: (tagName: string) => {
+          events.push({ tagName, type: 'end' })
+        },
+      },
+    }
+
+    for await (const chunk of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors,
+      defaultProcessor: (toolName: string) => {
+        events.push({ name: toolName, type: 'default-processor' })
+        return {
+          onTagStart: () => {},
+          onTagEnd: () => {},
+        }
+      },
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async () => {
+        events.push({ type: 'executed' })
+      },
+    })) {
+      yieldedChunks.push(chunk)
+    }
+
+    // Exactly one error chunk: the EOF report composed with the bounded
+    // excerpt, the retry guidance, AND the additive max-token annotation.
+    expect(responseChunks).toHaveLength(1)
+    expect(responseChunks[0].type).toBe('error')
+    const message = responseChunks[0].message
+    expect(message).toContain('ended before the closing tag')
+    expect(message).toContain('Original tool call input (excerpt):')
+    expect(message).toContain('Re-emit the complete tool call')
+    expect(message).toContain('finish reason "length"')
+    // Fail-safe unchanged: no processor fires, the executor never runs, and
+    // the dropped payload never leaks as text.
+    expect(events).toEqual([])
+    expect(yieldedChunks).toEqual([])
+    // Interception pin: the stream-only finish marker never reaches the
+    // yielded stream (the parser consumes it before the wrapper).
+    expect(
+      yieldedChunks.filter((chunk) => chunk.type === 'finish'),
+    ).toEqual([])
+  })
+
+  it('leaves the end-of-stream tool-call error un-annotated when the provider finished normally (finish reason "stop")', async () => {
+    // Control for the annotation above: a clean stop is NOT a cut, so the
+    // EOF report keeps its original composition — the annotation is
+    // strictly additive on finishReason === 'length' only.
+    const streamChunks: StreamChunk[] = [
+      textChunk('<codebuff_tool_call>\n{"cb_tool_name": "test_tool",\n'),
+      { type: 'finish', finishReason: 'stop' },
+    ]
+    const stream = createMockStream(streamChunks)
+    const responseChunks: any[] = []
+
+    for await (const _chunk of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors: {},
+      defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async () => {},
+    })) {
+      // consume stream
+    }
+
+    expect(responseChunks).toHaveLength(1)
+    expect(responseChunks[0].type).toBe('error')
+    const message = responseChunks[0].message
+    expect(message).toContain('ended before the closing tag')
+    expect(message).toContain('Re-emit the complete tool call')
+    expect(message).not.toContain('finish reason')
+  })
+
+  it('annotates the buffer-overflow error with the provider max-token cut (finish reason "length")', async () => {
+    // The overflow error also reads differently under a max-token cut: the
+    // guidance says to split the payload, but only the provider-reported cut
+    // explains why the call never finished, so both ride the same message.
+    const oversized = 'x'.repeat(64 * 1024 + 1)
+    const stream = createMockStream([
+      textChunk(`<codebuff_tool_call>${oversized}`),
+      { type: 'finish', finishReason: 'length' },
+    ])
+    const responseChunks: any[] = []
+
+    for await (const _chunk of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors: {},
+      defaultProcessor: () => ({
+        onTagStart: () => {},
+        onTagEnd: () => {},
+      }),
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async () => {},
+    })) {
+      // consume stream
+    }
+
+    // One overflow error (the discard-mode EOF finalize adds no duplicate),
+    // now carrying the truncation annotation.
+    expect(responseChunks).toHaveLength(1)
+    expect(responseChunks[0].type).toBe('error')
+    const message = responseChunks[0].message
+    expect(message).toContain('Discarding content until the end tag.')
+    expect(message).toContain('finish reason "length"')
+  })
+
+  it('flushes a trailing partial-tag carry as text at end of stream', async () => {
+    // The outside-call carry is real prose: a lone '<' held back in case it
+    // becomes a start tag must not vanish when the stream ends
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    const stream = createMockStream([textChunk('partial text <')])
+    const responseText: string[] = []
+    let yieldedText = ''
+
+    for await (const chunk of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors: {},
+      defaultProcessor: () => ({
+        onTagStart: () => {},
+        onTagEnd: () => {},
+      }),
+      onResponseChunk: (chunk: any) => {
+        if (chunk.type === 'text') responseText.push(chunk.text)
+      },
+      executeXmlToolCall: async () => {},
+    })) {
+      if (chunk.type === 'text') {
+        yieldedText += chunk.text
+      }
+    }
+
+    expect(responseText.join('')).toBe('partial text <')
+    expect(yieldedText).toBe('partial text <')
+  })
+
+  it('emits deferred parser errors when the stream throws mid-stream', async () => {
+    // deferred-parser-errors-lost-on-early-exit: mid-stream parser errors are
+    // held for the finalize emission (the only point where the finish reason
+    // is known), so a stream that dies before EOF must still deliver them —
+    // the pre-deferral code emitted them as they were parsed, and dropping
+    // them on a fatal provider error lost the TOOL_CALL_ERROR report the
+    // wrapper persists from exactly that failure path. The consumption loop's
+    // finally runs the same finalize emission when `stream.next()` throws.
+    async function* throwingStream(): AsyncGenerator<
+      StreamChunk,
+      PromptResult<string | null>
+    > {
+      yield textChunk(`<codebuff_tool_call>
+{"cb_tool_name": "test_tool",
+</codebuff_tool_call>`)
+      throw new Error('fatal provider error')
+    }
+
+    const responseChunks: any[] = []
+    let thrownError: unknown
+    try {
+      for await (const _chunk of processStreamWithTools({
+        ...agentRuntimeImpl,
+        stream: throwingStream(),
+        processors: {},
+        defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
+        onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+        executeXmlToolCall: async () => {},
+      })) {
+        // consume stream
+      }
+    } catch (error) {
+      thrownError = error
+    }
+
+    expect(thrownError).toBeInstanceOf(Error)
+    expect((thrownError as Error).message).toBe('fatal provider error')
+    // The buffered parser error survived the throw: exactly one report,
+    // composed at the same finalize boundary as the normal-completion path.
+    expect(responseChunks).toHaveLength(1)
+    expect(responseChunks[0].type).toBe('error')
+    expect(responseChunks[0].message).toContain('JSON parsing failed')
+    expect(responseChunks[0].message).toContain(
+      'Original tool call input (excerpt):',
+    )
+  })
+
+  it('emits deferred parser errors on consumer early exit, keeping the max-token annotation', async () => {
+    // The wrapper's cooperative `signal.aborted` break stops pulling chunks
+    // and then closes this generator with `.return()` — the pre-deferral
+    // code had already delivered mid-stream parser errors by then, so the
+    // finally that `.return()` runs must flush the deferred buffer. The
+    // finish chunk arrives before the exit, so `streamFinishReason` is
+    // already set and the truncation annotation is composed exactly as on
+    // the normal-completion path.
+    const streamChunks: StreamChunk[] = [
+      textChunk(`<codebuff_tool_call>
+{"cb_tool_name": "test_tool",
+</codebuff_tool_call>`),
+      { type: 'finish', finishReason: 'length' },
+      textChunk('visible text'),
+    ]
+    const responseChunks: any[] = []
+    const generator = processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream: createMockStream(streamChunks),
+      processors: {},
+      defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async () => {},
+    })
+
+    // Consume the one chunk the consumer takes, then close the generator
+    // exactly as the wrapper's finally does.
+    const first = await generator.next()
+    expect(first.done).toBe(false)
+    if (!first.done) {
+      expect(first.value.type).toBe('text')
+    }
+    await generator.return({ aborted: true })
+
+    // The consumed text chunk plus exactly one flushed parser error — no
+    // duplicate emission from the finalize pass.
+    expect(responseChunks).toHaveLength(2)
+    expect(responseChunks[0]).toEqual({ type: 'text', text: 'visible text' })
+    expect(responseChunks[1].type).toBe('error')
+    expect(responseChunks[1].message).toContain('JSON parsing failed')
+    expect(responseChunks[1].message).toContain('finish reason "length"')
+    // Exactly once: the finalized generator emits nothing further.
+    expect((await generator.next()).done).toBe(true)
+  })
+
+  it('reports an unterminated tool call when the stream throws mid-stream', async () => {
+    // The EOF finalize report rides the same finally: a call still
+    // unterminated when the provider stream dies must be reported (never
+    // executed, never leaked as text) instead of vanishing with the
+    // exception.
+    async function* throwingStream(): AsyncGenerator<
+      StreamChunk,
+      PromptResult<string | null>
+    > {
+      yield textChunk('text before ')
+      yield textChunk(`<codebuff_tool_call>
+{"cb_tool_name": "test_tool",
+`)
+      throw new Error('fatal provider error')
+    }
+
+    const responseChunks: any[] = []
+    let thrownError: unknown
+    try {
+      for await (const _chunk of processStreamWithTools({
+        ...agentRuntimeImpl,
+        stream: throwingStream(),
+        processors: {},
+        defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
+        onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+        executeXmlToolCall: async () => {},
+      })) {
+        // consume stream
+      }
+    } catch (error) {
+      thrownError = error
+    }
+
+    expect(thrownError).toBeInstanceOf(Error)
+    expect((thrownError as Error).message).toBe('fatal provider error')
+    // The text before the call was delivered, then the unterminated call's
+    // EOF report — the buffered payload neither executes nor leaks as text.
+    expect(responseChunks).toHaveLength(2)
+    expect(responseChunks[0]).toEqual({ type: 'text', text: 'text before ' })
+    expect(responseChunks[1].type).toBe('error')
+    expect(responseChunks[1].message).toContain('ended before the closing tag')
+    expect(responseChunks[1].message).toContain('Re-emit the complete tool call')
+  })
+
+  it('flushes a trailing partial-tag carry as text when the consumer exits early', async () => {
+    // The outside-call partial-tag carry is real prose: when the consumer
+    // early-exits (the wrapper's cooperative abort breaks and then closes
+    // this generator via `.return()`), the finally that runs must flush it
+    // through the same dual channel as the normal-completion path instead of
+    // letting the held-back bytes vanish with the suspended generator.
+    const stream = createMockStream([textChunk('partial text <')])
+    const responseChunks: any[] = []
+    const generator = processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors: {},
+      defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async () => {},
+    })
+
+    const first = await generator.next()
+    expect(first.done).toBe(false)
+    if (!first.done) {
+      expect(first.value).toEqual({ type: 'text', text: 'partial text ' })
+    }
+    // Consumer early exit — the same close the wrapper's finally performs.
+    await generator.return({ aborted: true })
+    // Resuming once more lets the injected return complete the generator.
+    expect((await generator.next()).done).toBe(true)
+    // The held-back '<' was flushed during the close — exactly once, through
+    // the response channel the wrapper persists from.
+    expect(responseChunks).toEqual([
+      { type: 'text', text: 'partial text ' },
+      { type: 'text', text: '<' },
+    ])
+  })
+})
+
+describe('streamParserErrorGuidance', () => {
+  it('returns actionable guidance for the overflow and EOF codes', () => {
+    // Guidance is composed onto the base message only at the emission
+    // boundary, so its exact text is pinned here
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    expect(streamParserErrorGuidance('tool_call_buffer_exceeded')).toBe(
+      'This tool call exceeded the streaming buffer limit. Split large payloads across multiple smaller tool calls (for example, write files in smaller chunks) instead of inlining the entire payload.',
+    )
+    expect(streamParserErrorGuidance('tool_call_unterminated_eof')).toBe(
+      'The response ended before this tool call was complete. Re-emit the complete tool call, keeping the payload small enough to finish within the response.',
+    )
+  })
+
+  it('returns undefined for codes without next-step guidance', () => {
+    expect(streamParserErrorGuidance('invalid_tool_call_json')).toBeUndefined()
+    expect(streamParserErrorGuidance('missing_tool_name')).toBeUndefined()
   })
 })
 

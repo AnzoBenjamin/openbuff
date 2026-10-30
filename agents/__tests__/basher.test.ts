@@ -161,13 +161,14 @@ describe('commander agent', () => {
 
       const result = generator.next()
 
-      // M3-T1: an explicitly omitted timeout falls back to the documented
-      // finite default cap.
+      // No default timeout: agent tasks can take arbitrarily long. An
+      // omitted timeout_seconds passes -1 (no timeout) to the underlying
+      // run_terminal_command tool.
       expect(result.value).toEqual({
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
-          timeout_seconds: 300,
+          timeout_seconds: -1,
         },
       })
     })
@@ -198,7 +199,7 @@ describe('commander agent', () => {
       })
     })
 
-    test('defaults to a finite timeout and keeps explicit callers winning', () => {
+    test('defaults to no timeout and keeps explicit callers winning', () => {
       const mockAgentState = createMockAgentState()
       const mockLogger = {
         debug: () => {},
@@ -214,7 +215,7 @@ describe('commander agent', () => {
       })
       expect(defaulted.next().value).toEqual({
         toolName: 'run_terminal_command',
-        input: { command: 'sleep 10', timeout_seconds: 300 },
+        input: { command: 'sleep 10', timeout_seconds: -1 },
       })
 
       // An explicitly passed timeout — including -1 (no timeout) — always
@@ -258,11 +259,19 @@ describe('commander agent', () => {
       }
 
       // M3-T1: NaN/non-finite and negative values are rejected in favor of
-      // the documented default, and a runaway value is capped.
-      expect(firstCommandFor(Number.NaN)).toContain('head -120')
-      expect(firstCommandFor(-5)).toContain('head -1')
-      expect(firstCommandFor(5)).toContain('head -5')
-      expect(firstCommandFor(1_000_000)).toContain('head -1000')
+      // the documented default, and a runaway value is capped. The
+      // failure extract is a dual-window awk head+tail whose total line
+      // count is still exactly failureLineLimit (72 head + 48 tail for 120;
+      // a 1-line cap degenerates to a tail-only window; fixed floor(60%)
+      // head split keeps the shape deterministic).
+      expect(firstCommandFor(Number.NaN)).toContain("awk 'NR<=72'")
+      expect(firstCommandFor(Number.NaN)).toContain('| tail -48')
+      expect(firstCommandFor(-5)).toContain("awk 'NR<=0'")
+      expect(firstCommandFor(-5)).toContain('| tail -1')
+      expect(firstCommandFor(5)).toContain("awk 'NR<=3'")
+      expect(firstCommandFor(5)).toContain('| tail -2')
+      expect(firstCommandFor(1_000_000)).toContain("awk 'NR<=600'")
+      expect(firstCommandFor(1_000_000)).toContain('| tail -400')
     })
 
     test('yields set_output with raw result when what_to_summarize is not provided', () => {
@@ -327,7 +336,7 @@ describe('commander agent', () => {
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
-          timeout_seconds: 300,
+          timeout_seconds: -1,
         },
         includeToolCall: false,
       })
@@ -396,8 +405,29 @@ describe('commander agent', () => {
         "(bun test 'quoted file.test.ts') 2>&1 | tee '/tmp/openbuff-basher-",
       )
       expect(firstYield.input.command).toContain("grep -n -E 'FAIL|Expected'")
-      expect(firstYield.input.command).toContain('head -7')
+      // Dual-window extract: 7-line cap split into a 4-line head window plus
+      // a 3-line tail window.
+      expect(firstYield.input.command).toContain("awk 'NR<=4'")
+      expect(firstYield.input.command).toContain('| tail -3')
       expect(firstYield.input.command).toContain('exit "$status"')
+      // Log is always kept on disk even without retain_full_log, with a
+      // one-line size notice printed before the extract.
+      expect(firstYield.input.command).toContain('(retained, ~$(')
+      // Bounded-retention sweep (basher-log-retention-unbounded): the wrap
+      // sweeps OLDEST full logs beyond the retention cap BEFORE its own tee
+      // creates this run's log file, scoped to the fixed basher log prefix
+      // and best-effort (rm failures can never fail the command). No
+      // unconditional full-log deletion remains.
+      expect(firstYield.input.command).toContain(
+        "tail -n +21",
+      )
+      const sweepLine = firstYield.input.command
+        .split('\n')
+        .find((line) => line.includes('older_full_logs'))
+      expect(sweepLine).toBeDefined()
+      expect(sweepLine).toContain("ls -1t /tmp/openbuff-basher-*.log 2>/dev/null")
+      expect(sweepLine).toContain('rm -f -- "$f"')
+      expect(sweepLine).toContain('|| true')
 
       const result = generator.next({
         agentState: createMockAgentState(),
@@ -421,9 +451,79 @@ describe('commander agent', () => {
       expect(toolCall.toolName).toBe('set_output')
       expect(toolCall.input.data.message).toContain('Command: bun test')
       expect(toolCall.input.data.message).toContain(
-        'Full log deleted after extracting relevant lines.',
+        'Full log kept on disk: /tmp/openbuff-basher-',
       )
       expect(toolCall.input.data.message).toContain('10:Expected 1 received 2')
+      // A caller-supplied failure_pattern suppresses the inline raw slice.
+      expect(
+        (toolCall.input.data as { rawOutputInline?: string[] }).rawOutputInline,
+      ).toBeUndefined()
+    })
+
+    test('includes inline head+tail raw output when no failure_pattern is given', () => {
+      const mockAgentState = createMockAgentState()
+      const mockLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }
+
+      const generator = commander.handleSteps!({
+        agentState: mockAgentState,
+        logger: mockLogger as any,
+        params: {
+          command: 'bun test',
+          what_to_summarize: 'test failures',
+          save_full_log: true,
+        },
+      })
+
+      const firstYield = generator.next().value as {
+        toolName: string
+        input: { command: string }
+      }
+      // Failure extract still runs against the default failure pattern.
+      expect(firstYield.input.command).toContain('grep -n -E')
+
+      const lines = Array.from({ length: 200 }, (_, i) => `line-${i}`)
+      const result = generator.next({
+        agentState: createMockAgentState(),
+        toolResult: [
+          {
+            type: 'json' as const,
+            value: { stdout: lines.join('\n'), exitCode: 0 },
+          },
+        ],
+        stepsComplete: true,
+      })
+
+      const toolCall = result.value as {
+        toolName: string
+        input: {
+          data: {
+            message: string
+            rawOutputInline: string[]
+            fullLogPath?: string
+            fullLogRetained?: boolean
+          }
+        }
+      }
+      expect(toolCall.toolName).toBe('set_output')
+      // Inline window: first 48 lines + one truncation marker + last 32
+      // lines (80-line total cap with fixed 60/40 proportions).
+      expect(toolCall.input.data.rawOutputInline).toEqual(
+        expect.arrayContaining(['line-0', 'line-47', 'line-168', 'line-199']),
+      )
+      expect(toolCall.input.data.rawOutputInline).toHaveLength(81)
+      expect(toolCall.input.data.rawOutputInline).toContain(
+        '[... 120 line(s) truncated ...]',
+      )
+      expect(toolCall.input.data.message).toContain('Inline raw output')
+      expect(toolCall.input.data.message).toContain('line-199')
+      // The full log is always kept on disk, even without retain_full_log.
+      expect(toolCall.input.data.fullLogRetained).toBe(true)
+      expect(toolCall.input.data.fullLogPath).toMatch(/^\/tmp\/openbuff-basher-/)
     })
 
     test('includes background job fields in deterministic report', () => {
@@ -450,7 +550,7 @@ describe('commander agent', () => {
         input: {
           command: 'bun dev',
           process_type: 'BACKGROUND',
-          timeout_seconds: 300,
+          timeout_seconds: -1,
         },
         includeToolCall: false,
       })

@@ -25,11 +25,17 @@ function buildRepresentativeSkills(count: number): SkillsMap {
 }
 
 describe('base2 provider-facing context budget', () => {
+  // P4-T2 re-baseline: extract_symbol joined the surface (35 tools), which budged
+  // the execute-plan surface from just under the old 25k ceiling to ~25.1k.
+  // The ceiling is a REGRESSION guard against runaway growth, not a hard
+  // product contract — measured value + ~6% headroom, mirroring the
+  // 22.5k→23.9k re-baseline in base2-progressive-tool-disclosure.test.ts for
+  // the default surface.
   test.each([
     ['default', {}],
     ['execute-plan', { executePlan: true }],
   ] as const)(
-    'keeps the %s root tool surface below 25k estimated tokens',
+    'keeps the %s root tool surface below 26.5k estimated tokens',
     async (_name, options) => {
       const base2 = createBase2('default', options)
       const tools = await getToolSet({
@@ -49,7 +55,7 @@ describe('base2 provider-facing context budget', () => {
 
       expect(base2.spawnableAgentToolMode).toBe('generic')
       expect(Object.keys(tools)).toHaveLength(base2.toolNames?.length ?? 0)
-      expect(countTokensJson(tokenShape)).toBeLessThan(25_000)
+      expect(countTokensJson(tokenShape)).toBeLessThan(26_500)
     },
   )
 })

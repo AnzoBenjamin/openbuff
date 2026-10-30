@@ -3,6 +3,7 @@ import {
   taskMemoryV1Schema,
 } from '@codebuff/common/types/task-memory'
 import { stableHash } from '@codebuff/common/util/stable-hash'
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 
 import type {
   TaskMemoryDraftV1,
@@ -401,6 +402,7 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
   current?: TaskMemoryV1
   receipt: AgentReceipt
   objective?: string
+  now?: number
 }): TaskMemoryV1 {
   const { current, receipt } = params
   const evidence: TaskMemoryEvidenceV1[] = receipt.evidence
@@ -417,7 +419,8 @@ export function mergeAgentReceiptIntoTaskMemory(params: {
         ? boundText(item.freshnessHash, 256)
         : undefined,
       workspaceRevision: item.workspaceRevision ?? receipt.workspaceRevision,
-      verifiedAt: Date.now(),
+      // P2-T1b: verifiedAt uses the injected clock when threaded.
+      verifiedAt: params.now ?? realClock.now(),
     }))
   const blockers =
     receipt.status === 'blocked' || receipt.status === 'failed'
@@ -624,9 +627,11 @@ function deriveToolEvidence(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): DerivedToolEvidence {
   const { toolName, callId, output, workspaceState } = params
-  const verifiedAt = Date.now()
+  // P2-T1b: verifiedAt uses the injected clock (the tool executor threads it).
+  const verifiedAt = params.now ?? realClock.now()
   const source = boundText(`${toolName}:${callId}`, 1_000)
   const evidence: TaskMemoryEvidenceV1[] = []
   const filesInspected: string[] = []
@@ -679,6 +684,12 @@ function deriveToolEvidence(params: {
       path,
       freshnessHash: toStoredFreshnessHash(anchor.contentHash),
       verifiedAt,
+      // Tier 1D: derived read evidence is session-ephemeral. It stays
+      // available to compileTaskMemoryContext within the run but is dropped
+      // by the store at merge time, so per-read boilerplate ("Read X lines
+      // 1-N") no longer occupies durable evidence slots across sessions.
+      // Mutation evidence below remains durable.
+      sessionScoped: true,
       workspaceRevision: workspaceState?.revision,
     })
     filesInspected.push(path)
@@ -810,11 +821,18 @@ export function recordToolEvidenceInTaskMemory(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): TaskMemoryV1 | undefined {
   const { current, toolName, callId, output, workspaceState } = params
   return commitDerivedToolEvidence({
     current,
-    derived: deriveToolEvidence({ toolName, callId, output, workspaceState }),
+    derived: deriveToolEvidence({
+      toolName,
+      callId,
+      output,
+      workspaceState,
+      now: params.now,
+    }),
     workspaceState,
   })
 }
@@ -839,6 +857,7 @@ export function bufferToolEvidenceForStep(params: {
   callId: string
   output: unknown
   workspaceState?: WorkspaceStateV1
+  now?: number
 }): void {
   const { owner, toolName, callId, output, workspaceState } = params
   const derived = deriveToolEvidence({
@@ -846,6 +865,7 @@ export function bufferToolEvidenceForStep(params: {
     callId,
     output,
     workspaceState,
+    now: params.now,
   })
   if (derived.evidence.length === 0) return
   const buffered = BUFFERED_STEP_EVIDENCE.get(owner)

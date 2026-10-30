@@ -110,7 +110,19 @@ export const COMPACTION_NO_PROGRESS_FRACTION = 0.05
 export const SEMANTIC_REARM_FRACTION = 0.5
 export const SEMANTIC_COOLDOWN_ITERATIONS = 3
 export const SEMANTIC_MAX_PASSES_PER_TURN = 3
-export const SEMANTIC_EVICTION_FRACTION = 0.55
+/**
+ * Share of the window at which the free deterministic tool-result evictor
+ * arms. INVARIANT: strictly BELOW `SEMANTIC_COMPACTION_TRIGGER_FRACTION`
+ * (0.78), with visible margin, so deterministic eviction always gets its
+ * zero-LLM-cost chance before the expensive pass is announced — but high
+ * enough that it only fires under REAL pressure. At 0.55 a 1M-token window
+ * started discarding live tool output at 550k tokens, i.e. ~450k tokens of
+ * headroom still free and ~230k tokens before the semantic pass would even
+ * trigger — the orchestrator lost complex tool output it never needed to
+ * lose. 0.70 keeps the ordering invariant while leaving a fifth of the window
+ * untouched before the LLM leg is announced.
+ */
+export const SEMANTIC_EVICTION_FRACTION = 0.7
 
 export type SemanticCompactionBudget = {
   resolvedContextWindowTokens?: number
@@ -320,6 +332,14 @@ export function getModelContextMessageLimit(
 export function maybePruneContext(params: {
   messages: Message[]
   systemTokens: number
+  /**
+   * Request messages which are compiled from state for this step but are not
+   * part of `messages` (for example task memory, Memory V2, and the step
+   * prompt). They consume the same provider budget, so history trimming must
+   * reserve their tokens rather than judging the history against the whole
+   * message allowance.
+   */
+  nonHistoryMessageTokens?: number
   contextTokenCount: number
   maxTotalTokens?: number
   logger: Logger
@@ -327,6 +347,7 @@ export function maybePruneContext(params: {
   const {
     messages,
     systemTokens,
+    nonHistoryMessageTokens = 0,
     contextTokenCount,
     maxTotalTokens = DEFAULT_MAX_CONTEXT_TOKENS,
     logger,
@@ -338,7 +359,11 @@ export function maybePruneContext(params: {
 
   const report = trimMessagesToFitTokenLimitWithReport({
     messages,
-    systemTokens,
+    // `trimMessagesToFitTokenLimitWithReport` owns only messageHistory. Fold
+    // the per-step compiled messages into its fixed baseline so it cannot
+    // report a zero-change "trim" when task memory or a step prompt pushed the
+    // actual provider request over budget.
+    systemTokens: systemTokens + Math.max(0, nonHistoryMessageTokens),
     maxTotalTokens,
     logger,
   })
@@ -364,8 +389,6 @@ export type SemanticCompactionGovernor = {
   iterationsSincePass: number
   /** Announced passes this turn; bounded by SEMANTIC_MAX_PASSES_PER_TURN. */
   passesThisTurn: number
-  /** Consecutive passes that settled without reclaiming meaningful space. */
-  consecutiveNoProgressPasses: number
 }
 
 export type GovernorDecision = {
@@ -381,7 +404,6 @@ export function createSemanticCompactionGovernor(): SemanticCompactionGovernor {
     state: 'armed',
     iterationsSincePass: 0,
     passesThisTurn: 0,
-    consecutiveNoProgressPasses: 0,
   }
 }
 
@@ -478,29 +500,6 @@ export function advanceGovernorIteration(
 ): void {
   if (governor.state === 'cooldown') {
     governor.iterationsSincePass += 1
-  }
-}
-
-/**
- * Record a settled pass. A productive pass resets the no-progress streak; an
- * unproductive one increments it, and TWO consecutive no-progress passes cap
- * the turn at its already-spent pass budget. Unlike the old permanent
- * `suppressSemanticCompaction` advisory this stays bounded (no further paid
- * passes this turn, but eviction + the mechanical trim still respond) and the
- * state resets naturally next turn because the governor is loop-local.
- */
-export function recordPassSettled(
-  governor: SemanticCompactionGovernor,
-  params: { productive: boolean },
-): void {
-  const { productive } = params
-  if (productive) {
-    governor.consecutiveNoProgressPasses = 0
-    return
-  }
-  governor.consecutiveNoProgressPasses += 1
-  if (governor.consecutiveNoProgressPasses >= 2) {
-    governor.passesThisTurn = SEMANTIC_MAX_PASSES_PER_TURN
   }
 }
 

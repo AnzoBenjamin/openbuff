@@ -21,8 +21,8 @@ import {
   type ProviderPickerSelection,
 } from './components/provider-picker-screen'
 import { LoadPreviousButton } from './components/load-previous-button'
+import { MessageListWindow } from './components/message-list-window'
 import { ReviewScreen } from './components/review-screen'
-import { MessageWithAgents } from './components/message-with-agents'
 import { PendingBashMessage } from './components/pending-bash-message'
 import { StatusBar } from './components/status-bar'
 import { TopBanner } from './components/top-banner'
@@ -58,16 +58,20 @@ import { usePublishStore } from './state/publish-store'
 import { trackEvent } from './utils/analytics'
 import { showClipboardMessage } from './utils/clipboard'
 import { readClipboardImage } from './utils/clipboard-image'
+import { consumeCapturedEarlyInput } from './utils/early-input-capture'
 import { getSystemMessage } from './utils/message-history'
 import { createErrorMessage } from './utils/send-message-helpers'
 import { getInputModeConfig } from './utils/input-modes'
 import {
   addCustomOpenbuffProvider,
   handleOpenbuffProviderCommand,
+  loadProviderConfigSync,
+  displayModelId,
   resolveModelNameForAgent,
   setupOpenbuffProviderFromArgs,
+  testProviderConnection,
 } from './utils/openbuff-provider'
-import { getDiffStats, type DiffStats } from './utils/git'
+import { getDiffStatsAsync, type DiffStats } from './utils/git'
 import {
   peekIndexStatus,
   shouldForceStatusLineForIndex,
@@ -94,7 +98,11 @@ import {
 } from './utils/status-indicator-state'
 import { createPasteHandler, LONG_TEXT_THRESHOLD } from './utils/strings'
 import { setTerminalTitle } from './utils/terminal-title'
-import { computeInputLayoutMetrics } from './utils/text-layout'
+import {
+  computeInputLayoutMetrics,
+  inputWrapColumns,
+  multilineInputMeasurementKey,
+} from './utils/text-layout'
 
 import type { CommandResult } from './commands/command-registry'
 import type { MultilineInputHandle } from './components/multiline-input'
@@ -111,6 +119,32 @@ import {
   setQueuedPromptDrain,
 } from './hooks/use-exit-handler'
 import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
+import { whenRegistriesReady } from './services/deferred-registries'
+
+import {
+  type MentionReplacement,
+  resolveMentionReplacement,
+  buildMentionReplacement,
+} from './utils/mention-helpers'
+
+/**
+ * Policy for when the status-bar git diff-stats refresh may fork a git
+ * subprocess across an isStreaming transition (wasStreaming → isStreaming).
+ *
+ * Pins the streaming hot-path invariant documented on the diff-stats effects
+ * below: a stream never spawns git from this component. The steady-stream
+ * half is enforced by the 10s interval poller gating on
+ * `!isStreamingRef.current`; the falling edge applies this predicate
+ * directly and refreshes exactly once. A regression that re-introduces
+ * spawns during streaming must change this predicate's truth table or
+ * bypass it, both reviewable in isolation.
+ */
+export function shouldSpawnDiffStatsForStreamingTransition(
+  wasStreaming: boolean,
+  isStreaming: boolean,
+): boolean {
+  return wasStreaming && !isStreaming
+}
 
 export const Chat = ({
   headerContent,
@@ -192,6 +226,33 @@ export const Chat = ({
     }
   }, [initialMode, setAgentMode])
 
+  // Boot-window keystroke replay: main() captures stdin bytes typed before the
+  // renderer existed (see utils/early-input-capture.ts) and stops the capture
+  // just before creating the renderer, so this is the first component that can
+  // receive them. consumeCapturedEarlyInput() is a one-shot TAKE — the module
+  // clears its text when it hands it over — so a Chat remount (chatKey change)
+  // can never replay the same text twice, and when there is nothing to replay
+  // it returns undefined and this effect is a no-op.
+  //
+  // APPEND only, and deliberately NOT submitted: the user typed this text
+  // before the input was live, so it belongs in the input box exactly where
+  // they left it. This stays independent of the initialPrompt auto-submit flow
+  // in use-chat-input.ts — that flow submits the CLI-flag prompt on its own
+  // timer and does not read the input value, so the two never interact.
+  //
+  // lastEditDueToNav stays false: the append is a plain text edit, so the
+  // history-navigation guards in use-chat-input treat it as user typing.
+  useEffect(() => {
+    const captured = consumeCapturedEarlyInput()
+    if (captured) {
+      setInputValue((prev) => ({
+        text: prev.text + captured,
+        cursorPosition: prev.text.length + captured.length,
+        lastEditDueToNav: false,
+      }))
+    }
+  }, [setInputValue])
+
   // Additional selector for active agent types to derive phase-aware status labels
   const activeAgentTypes = useChatStore((state) => state.activeAgentTypes)
 
@@ -212,6 +273,8 @@ export const Chat = ({
     scrollToLatest,
     scrollUp,
     scrollDown,
+    adjustScrollTop,
+    isAtBottomNow,
     appliedScrollboxProps,
     isAtBottom,
     hasOverflow,
@@ -225,13 +288,33 @@ export const Chat = ({
     markdownPalette,
   } = useChatUI({ messages, isUserCollapsing })
 
-  const localAgents = useMemo(() => loadLocalAgents(agentMode), [agentMode])
+  // P1-T9: the agent/skill registries load asynchronously after startup
+  // (services/deferred-registries). The reads below happen once at mount, so
+  // re-run them when the deferred loads settle — without this gate the
+  // slash-command skill suggestions and the local agent list would observe
+  // the (still-empty) registries and stay empty for the whole session.
+  const [registriesLoaded, setRegistriesLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void whenRegistriesReady().then(() => {
+      if (!cancelled) setRegistriesLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const localAgents = useMemo(
+    () => loadLocalAgents(agentMode),
+    [agentMode, registriesLoaded],
+  )
   const inputMode = useChatStore((state) => state.inputMode)
   const setInputMode = useChatStore((state) => state.setInputMode)
   const askUserState = useChatStore((state) => state.askUserState)
 
-  // Get loaded skills for slash commands
-  const loadedSkills = useMemo(() => getLoadedSkills(), [])
+  // Get loaded skills for slash commands (re-read once the deferred
+  // registry loads settle — see the registriesLoaded gate above).
+  const loadedSkills = useMemo(() => getLoadedSkills(), [registriesLoaded])
 
   // Merge skill commands and game-dev preset commands into the slash command list
   const filteredSlashCommands = useMemo(() => {
@@ -414,7 +497,7 @@ export const Chat = ({
       setExitStreamSignal(undefined)
       setQueuedPromptDrain(undefined)
     }
-  }, [clearQueue, saveToHistory, addToQueue, abortControllerRef])
+  }, [clearQueue, saveToHistory, abortControllerRef])
 
   // M4.3: Context-window usage for the status bar (updated via context_window
   // PrintModeEvent from the agent runtime).
@@ -439,34 +522,85 @@ export const Chat = ({
   // Resolve the model name for the active agent mode from the provider config.
   const modelName = useMemo(() => {
     const agentId = AGENT_MODE_TO_ID[agentMode]
-    return agentId ? resolveModelNameForAgent(agentId) : null
+    if (!agentId) return null
+    return displayModelId(resolveModelNameForAgent(agentId)) ?? null
   }, [agentMode])
 
-  // Poll git diff stats: on mount, after streaming ends, and periodically
-  // while idle (cheap `git status --short` call).
+  // Current isStreaming value, readable from the effects below so they do
+  // not have to re-subscribe when it changes.
+  const isStreamingRef = useRef(false)
+
+  // Poll git diff stats: on mount and periodically while idle. The git call
+  // runs off the render thread (getDiffStatsAsync). A per-effect AbortController
+  // + cancelled flag ensures a late-resolving result after unmount does not
+  // call setState, and only the latest in-flight refresh wins. The interval
+  // callback is a no-op while isStreaming is true, so no git subprocess is
+  // forked on the streaming hot path; the falling-edge effect below refreshes
+  // exactly once when the stream completes.
+  //
+  // Streaming-path spawn count, before → after (the streaming half is
+  // pinned by shouldSpawnDiffStatsForStreamingTransition below; counting
+  // getDiffStatsAsync invocations while a stream is active verifies the
+  // rest): a stream that holds isStreaming true for T seconds previously
+  // forked floor(T / 10) extra git subprocesses from this interval, on top
+  // of the one per falling edge — e.g. a 60s stream forked ≥6 spawns during
+  // streaming plus 1 after, vs exactly 1 spawn (after) now. The index-status
+  // poller below applies the same pause.
   useEffect(() => {
     const cwd = getProjectRoot() ?? process.cwd()
-    const refresh = () => setDiffStats(getDiffStats({ cwd }))
+    let cancelled = false
+    const controller = new AbortController()
+    const refresh = () => {
+      if (isStreamingRef.current) return
+      getDiffStatsAsync({ cwd, signal: controller.signal })
+        .then((stats) => {
+          if (!cancelled) setDiffStats(stats)
+        })
+        .catch(() => {})
+    }
     refresh()
     const interval = setInterval(refresh, 10_000)
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(interval)
+    }
   }, [])
-  // Refresh diff stats when streaming completes (files may have changed).
+  // Refresh diff stats only on the falling edge of isStreaming (stream just
+  // completed) via the pinned shouldSpawnDiffStatsForStreamingTransition
+  // predicate. The shared ref doubles as the previous-value tracker, so the
+  // rising edge still does not spawn — and then immediately abort — a
+  // subprocess.
   useEffect(() => {
-    if (!isStreaming) {
-      const cwd = getProjectRoot() ?? process.cwd()
-      setDiffStats(getDiffStats({ cwd }))
+    const wasStreaming = isStreamingRef.current
+    isStreamingRef.current = isStreaming
+    if (!shouldSpawnDiffStatsForStreamingTransition(wasStreaming, isStreaming)) {
+      return
+    }
+    const cwd = getProjectRoot() ?? process.cwd()
+    let cancelled = false
+    const controller = new AbortController()
+    getDiffStatsAsync({ cwd, signal: controller.signal })
+      .then((stats) => {
+        if (!cancelled) setDiffStats(stats)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+      controller.abort()
     }
   }, [isStreaming])
 
   // Peek index status from the existing singleton (~2s). getStatus() may
   // schedule an age-stale refresh; do not call ensureBuilt() from the UI.
+  // Pause polling while streaming to avoid unnecessary work on the hot path.
   useEffect(() => {
+    if (isStreaming) return
     const refresh = () => setIndexStatus(peekIndexStatus())
     refresh()
     const interval = setInterval(refresh, 2_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [isStreaming])
 
   // When streaming completes, flush any pending bash commands into history (ghost mode only)
   // Non-ghost mode commands are already in history and will be cleared when user sends next message
@@ -647,45 +781,54 @@ export const Chat = ({
   // Handle followup suggestion clicks
   useEffect(() => {
     const handleFollowupClick = (event: Event) => {
-      const customEvent = event as CustomEvent<{
-        prompt: string
-        index: number
-        toolCallId: string
-      }>
-      const { prompt, index, toolCallId } = customEvent.detail
+      try {
+        const customEvent = event as CustomEvent<{
+          prompt: string
+          index: number
+          toolCallId: string
+        }>
+        if (!customEvent.detail || typeof customEvent.detail !== 'object') {
+          logger.warn({ event }, '[followup-click] Received malformed event without detail')
+          return
+        }
+        const { prompt, index, toolCallId } = customEvent.detail
 
-      logger.info(
-        { promptLength: prompt.length, index, toolCallId, agentMode },
-        '[followup-click] Followup clicked',
-      )
+        logger.info(
+          { promptLength: prompt.length, index, toolCallId, agentMode },
+          '[followup-click] Followup clicked',
+        )
 
-      // Track analytics event
-      trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
-        promptLength: prompt.length,
-        index,
-        agentMode,
-      })
-
-      // Mark this followup as clicked (persisted per toolCallId)
-      useChatStore.getState().markFollowupClicked(toolCallId, index)
-
-      // Send the followup prompt directly, preserving the user's current input
-      onSubmitPrompt(prompt, agentMode, {
-        preserveInputValue: true,
-      })
-        .then((result) => {
-          logger.info(
-            { hasResult: !!result },
-            '[followup-click] onSubmitPrompt completed',
-          )
+        // Track analytics event
+        trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
+          promptLength: prompt.length,
+          index,
+          agentMode,
         })
-        .catch((error) => {
-          logger.error(
-            { error },
-            '[followup-click] onSubmitPrompt failed with error',
-          )
-          showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+
+        // Mark this followup as clicked (persisted per toolCallId)
+        useChatStore.getState().markFollowupClicked(toolCallId, index)
+
+        // Send the followup prompt directly, preserving the user's current input
+        onSubmitPrompt(prompt, agentMode, {
+          preserveInputValue: true,
         })
+          .then((result) => {
+            logger.info(
+              { hasResult: !!result },
+              '[followup-click] onSubmitPrompt completed',
+            )
+          })
+          .catch((error) => {
+            logger.error(
+              { error },
+              '[followup-click] onSubmitPrompt failed with error',
+            )
+            showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+          })
+      } catch (error) {
+        logger.error({ error }, '[followup-click] Synchronous error in followup handler')
+        showClipboardMessage('Failed to send followup', { durationMs: 3000 })
+      }
     }
 
     globalThis.addEventListener('codebuff:send-followup', handleFollowupClick)
@@ -703,31 +846,27 @@ export const Chat = ({
     (index: number) => {
       if (mentionContext.startIndex < 0) return
 
-      let replacement: string
-      if (index < agentMatches.length) {
-        const selected = agentMatches[index]
-        if (!selected) return
-        replacement = `@${selected.id} `
-      } else {
-        const fileIndex = index - agentMatches.length
-        const selectedFile = fileMatches[fileIndex]
-        if (!selectedFile) return
+      const resolved = resolveMentionReplacement(
+        index,
+        agentMatches,
+        fileMatches,
+        false,
+      )
+      if (!resolved) return
+      if (resolved.selectedFile) {
         addPendingFileMention(
-          selectedFile.filePath,
-          selectedFile.isDirectory,
+          resolved.selectedFile.filePath,
+          resolved.selectedFile.isDirectory,
           getProjectRoot(),
         )
-        replacement = `@${selectedFile.filePath} `
       }
-      const before = inputValue.slice(0, mentionContext.startIndex)
-      const after = inputValue.slice(
-        mentionContext.startIndex + 1 + mentionContext.query.length,
+      const { text, cursorPosition } = buildMentionReplacement(
+        inputValue,
+        mentionContext.startIndex,
+        mentionContext.query,
+        resolved.replacement,
       )
-      setInputValue({
-        text: before + replacement + after,
-        cursorPosition: before.length + replacement.length,
-        lastEditDueToNav: false,
-      })
+      setInputValue({ text, cursorPosition, lastEditDueToNav: false })
       setAgentSelectedIndex(0)
     },
     [
@@ -749,6 +888,7 @@ export const Chat = ({
     onSubmitPrompt,
     isCompactHeight,
     isNarrowWidth,
+    modeWidthAdjustment: getInputModeConfig(inputMode).widthAdjustment,
   })
 
   const {
@@ -898,13 +1038,10 @@ export const Chat = ({
 
   const inputValueRef = useRef(inputValue)
   const cursorPositionRef = useRef(cursorPosition)
-  useEffect(() => {
-    inputValueRef.current = inputValue
-  }, [inputValue])
-
-  useEffect(() => {
-    cursorPositionRef.current = cursorPosition
-  }, [cursorPosition])
+  // Sync refs synchronously during render — no useEffect needed, avoids
+  // scheduling overhead on the hot keystroke path.
+  inputValueRef.current = inputValue
+  cursorPositionRef.current = cursorPosition
 
   const handleOpenFeedbackForMessage = useCallback(
     (
@@ -1218,31 +1355,27 @@ export const Chat = ({
         if (mentionContext.startIndex < 0) return
 
         const trySelectAtIndex = (index: number): boolean => {
-          let replacement: string
-          if (index < agentMatches.length) {
-            const selected = agentMatches[index]
-            if (!selected) return false
-            replacement = `@${selected.id} `
-          } else {
-            const fileIndex = index - agentMatches.length
-            const selectedFile = fileMatches[fileIndex]
-            if (!selectedFile) return false
+          const resolved = resolveMentionReplacement(
+            index,
+            agentMatches,
+            fileMatches,
+            false,
+          )
+          if (!resolved) return false
+          if (resolved.selectedFile) {
             addPendingFileMention(
-              selectedFile.filePath,
-              selectedFile.isDirectory,
+              resolved.selectedFile.filePath,
+              resolved.selectedFile.isDirectory,
               getProjectRoot(),
             )
-            replacement = `@${selectedFile.filePath} `
           }
-          const before = inputValue.slice(0, mentionContext.startIndex)
-          const after = inputValue.slice(
-            mentionContext.startIndex + 1 + mentionContext.query.length,
+          const { text, cursorPosition } = buildMentionReplacement(
+            inputValue,
+            mentionContext.startIndex,
+            mentionContext.query,
+            resolved.replacement,
           )
-          setInputValue({
-            text: before + replacement + after,
-            cursorPosition: before.length + replacement.length,
-            lastEditDueToNav: false,
-          })
+          setInputValue({ text, cursorPosition, lastEditDueToNav: false })
           setAgentSelectedIndex(0)
           return true
         }
@@ -1254,38 +1387,27 @@ export const Chat = ({
         // Complete the word without executing - same as select for mentions
         if (mentionContext.startIndex < 0) return
 
-        let replacement: string
-        const index = agentSelectedIndex
-        if (index < agentMatches.length) {
-          const selected =
-            agentMatches.length > 0
-              ? agentMatches[index] || agentMatches[0]
-              : undefined
-          if (!selected) return
-          replacement = `@${selected.id} `
-        } else {
-          const fileIndex = index - agentMatches.length
-          const selectedFile =
-            fileMatches.length > 0
-              ? fileMatches[fileIndex] || fileMatches[0]
-              : undefined
-          if (!selectedFile) return
+        const resolved = resolveMentionReplacement(
+          agentSelectedIndex,
+          agentMatches,
+          fileMatches,
+          true,
+        )
+        if (!resolved) return
+        if (resolved.selectedFile) {
           addPendingFileMention(
-            selectedFile.filePath,
-            selectedFile.isDirectory,
+            resolved.selectedFile.filePath,
+            resolved.selectedFile.isDirectory,
             getProjectRoot(),
           )
-          replacement = `@${selectedFile.filePath} `
         }
-        const before = inputValue.slice(0, mentionContext.startIndex)
-        const after = inputValue.slice(
-          mentionContext.startIndex + 1 + mentionContext.query.length,
+        const { text, cursorPosition } = buildMentionReplacement(
+          inputValue,
+          mentionContext.startIndex,
+          mentionContext.query,
+          resolved.replacement,
         )
-        setInputValue({
-          text: before + replacement + after,
-          cursorPosition: before.length + replacement.length,
-          lastEditDueToNav: false,
-        })
+        setInputValue({ text, cursorPosition, lastEditDueToNav: false })
         setAgentSelectedIndex(0)
       },
       onOpenFileMenuWithTab: () => {
@@ -1492,27 +1614,69 @@ export const Chat = ({
     fileMatchCount: fileSuggestionItems.length,
   })
 
-  const inputLayoutMetrics = useMemo(() => {
-    // In bash mode, layout is based on the actual input (no ! prefix needed)
-    const text = inputValue ?? ''
-    const layoutContent = text.length > 0 ? text : ' '
-    const safeCursor = Math.max(
-      0,
-      Math.min(cursorPosition, layoutContent.length),
-    )
-    const cursorProbe =
-      safeCursor >= layoutContent.length
-        ? layoutContent
-        : layoutContent.slice(0, safeCursor)
-    const cols = Math.max(1, inputWidth)
-    return computeInputLayoutMetrics({
-      layoutContent,
-      cursorProbe,
-      cols,
-      maxHeight: Math.floor(terminalHeight / 2),
-    })
-  }, [inputValue, cursorPosition, inputWidth, terminalHeight])
-  const isMultilineInput = inputLayoutMetrics.heightLines > 1
+  const { metrics: inputLayoutMetrics, measurementKey: inputMeasurementKey } =
+    useMemo(() => {
+      // In bash mode, layout is based on the actual input (no ! prefix needed)
+      const text = inputValue ?? ''
+      // An empty input still occupies one row, so the row count is measured from a
+      // single space. The measurement KEY is derived from the raw `text` (no
+      // substitution): the box compares it against the key IT derives from the
+      // value prop it was handed, which is also the raw value, so the two
+      // identities agree on the idle empty frame — the space never enters the
+      // identity, only the row count.
+      const layoutContent = text.length > 0 ? text : ' '
+      const safeCursor = Math.max(
+        0,
+        Math.min(cursorPosition, layoutContent.length),
+      )
+      // Measure at the columns the text actually wraps at. MultilineInput draws
+      // inside its own 1-column horizontal wrapper padding, so measuring at the
+      // outer inputWidth here would count fewer rows than the box renders — and
+      // that disagreement is what let a wrapped value still be treated as
+      // single-line (centered) while the box needed several rows.
+      //
+      // `inputWrapColumns` is the ONE definition of that subtraction: the box
+      // derives the columns it checks the forwarded key against from the same
+      // helper, so the two cannot drift by a column and the row count computed
+      // here is exactly the one the box would compute — that equality is what
+      // lets the box reuse this measurement instead of re-wrapping the same
+      // value on every keystroke.
+      const cols = inputWrapColumns(inputWidth)
+      return {
+        metrics: computeInputLayoutMetrics({
+          layoutContent,
+          // The metrics only ever need the offset: slicing the prefix string here
+          // allocated an O(cursor) copy on every keystroke and cursor move just to
+          // hand over its length.
+          cursorOffset: safeCursor,
+          cols,
+          // UNCAPPLED row measurement. The forwarded `totalLines` is a PRE-CLAMP row
+          // fact: chat-input-bar forwards it to two MultilineInput mounts that are
+          // given different `maxHeight`s, and each box derives its own height AND
+          // its own `isScrollable` by comparing that row count against the cap it
+          // actually draws with. Measuring to a cap here would saturate the count at
+          // this caller's cap, and a box with a taller cap would then be told the
+          // content fits on a frame where it must scroll. This caller's own
+          // centering decision is clamped separately below.
+          maxHeight: Number.MAX_SAFE_INTEGER,
+        }),
+        // Supplied to the box as the identity of the measurement: a producer-side
+        // key over the same raw value and columns the box derives its own key
+        // from. The box trusts the forwarded count only while the two keys
+        // match, which is what turns a stale or wrong-width count into one extra
+        // local wrap pass instead of a mis-sized box.
+        measurementKey: multilineInputMeasurementKey(text, cols),
+      }
+    }, [inputValue, cursorPosition, inputWidth])
+  // The screen still owns a ceiling for its own layout decision ("is the input
+  // taller than the box I give it"), applied to the uncapped row fact rather
+  // than baked into the measurement the box consumes.
+  const inputHeightCap = Math.floor(terminalHeight / 2)
+  const inputHeightLines = Math.min(
+    inputLayoutMetrics.heightLines,
+    Math.max(1, inputHeightCap),
+  )
+  const isMultilineInput = inputLayoutMetrics.totalLines > 1
   const shouldCenterInputVertically = !hasSuggestionMenu && !isMultilineInput
   const statusIndicatorState = getStatusIndicatorState({
     statusMessage,
@@ -1561,6 +1725,33 @@ export const Chat = ({
       setInputFocused(true)
 
       if (selection.type === 'cancel') return
+
+      if (selection.type === 'test-connections') {
+        const loadedConfig = loadProviderConfigSync()
+        const providerIds = Object.keys(loadedConfig.config.providers)
+        if (providerIds.length === 0) {
+          setMessages((prev) => [
+            ...prev,
+            getSystemMessage('No providers configured yet — add one first.'),
+          ])
+          return
+        }
+        setMessages((prev) => [
+          ...prev,
+          getSystemMessage(
+            `Testing ${providerIds.length} provider${providerIds.length === 1 ? '' : 's'}…`,
+          ),
+        ])
+        const results: string[] = []
+        for (const providerId of providerIds) {
+          results.push((await testProviderConnection(providerId)).message)
+        }
+        setMessages((prev) => [
+          ...prev,
+          getSystemMessage(results.join('\n')),
+        ])
+        return
+      }
 
       let message: string
       try {
@@ -1714,14 +1905,35 @@ export const Chat = ({
         flexGrow: 1,
       }}
     >
+      {/* D47 Stage 1: OpenTUI 0.5's native stickyScroll/stickyStart is
+          deliberately NOT enabled here. With stickyScroll live, OpenTUI's
+          native code re-pins scrollTop to the bottom on every content
+          growth, so it would be a SECOND independent writer of scrollTop on
+          this scrollbox alongside use-scroll-management's auto-scroll
+          effect — two writers with no evidence they cooperate (e.g. a user
+          scrolling up during streaming: native stickyScroll re-pins on the
+          next content growth while the JS effect may also force
+          scrollTop = maxScroll, fighting the user's scroll intent or
+          resurrecting auto-follow after they deliberately scrolled away).
+          use-scroll-management remains the single validated scrollTop
+          writer: its auto-scroll effect follows new content only while the
+          user is at/near the bottom (autoScrollEnabledRef), and
+          scrollUp/scrollDown/scrollToLatest stay available for keyboard
+          paging and the jump-to-latest control. */}
       <scrollbox
         ref={scrollRef as React.Ref<ScrollBoxRenderable>}
-        stickyScroll
-        stickyStart="bottom"
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
-          visible: !isStreaming && !isWaitingForResponse && hasOverflow,
+          // Visibility depends only on hasOverflow: the scrollbar track is a
+          // layout SIBLING of the message content column, so toggling
+          // visibility with streaming state would shift the message wrap
+          // width on every agent-response start AND end while availableWidth
+          // (terminal-derived) stays fixed — silently staling every
+          // width-tagged measured height exactly when a response completes.
+          // Keeping the track in layout whenever content overflows keeps the
+          // content width stable for those measurements.
+          visible: hasOverflow,
           trackOptions: { width: 1 },
         }}
         {...appliedScrollboxProps}
@@ -1762,18 +1974,23 @@ export const Chat = ({
             onLoadMore={handleLoadPreviousMessages}
           />
         )}
-        {visibleTopLevelMessages.map((message, idx) => {
-          const isLast = idx === visibleTopLevelMessages.length - 1
-          return (
-            <MessageWithAgents
-              key={message.id}
-              message={message}
-              depth={0}
-              isLastMessage={isLast}
-              availableWidth={messageAvailableWidth}
-            />
-          )
-        })}
+        {/* P1-T10: viewport-windowed message list. Only the messages
+            intersecting the current scroll viewport (plus a small overscan)
+            mount real MessageWithAgents components; off-screen messages
+            collapse into fixed spacer boxes that preserve total scroll height
+            and scroll position. Keys stay on the message ids so per-message
+            state survives the window moving as the user scrolls. The scroll
+            subscription is confined to MessageListWindow so scrolling does not
+            re-render the rest of the chat screen. */}
+        <MessageListWindow
+          messages={visibleTopLevelMessages}
+          scrollRef={scrollRef}
+          availableWidth={messageAvailableWidth}
+          hasLoadPrevious={hiddenMessageCount > 0}
+          adjustScrollTop={adjustScrollTop}
+          isAtBottomNow={isAtBottomNow}
+          scrollToLatest={scrollToLatest}
+        />
         {/* Pending bash messages as ghost messages (only show those not already in history) */}
         {pendingBashMessages
           .filter((msg) => !msg.addedToHistory)
@@ -1844,6 +2061,12 @@ export const Chat = ({
             inputBoxTitle={inputBoxTitle}
             isCompactHeight={isCompactHeight}
             isNarrowWidth={isNarrowWidth}
+            inputWidth={inputWidth}
+            inputMinHeight={1}
+            inputTotalLines={inputLayoutMetrics.totalLines}
+            inputMeasurementKey={inputMeasurementKey}
+            inputInputCap={inputHeightLines}
+            inputGutterEnabled={inputLayoutMetrics.gutterEnabled}
             feedbackMode={feedbackMode}
             handleExitFeedback={handleExitFeedback}
             publishMode={publishMode}

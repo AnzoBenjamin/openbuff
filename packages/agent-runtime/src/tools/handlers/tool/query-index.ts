@@ -87,7 +87,7 @@ export const handleQueryIndex = (async (params: {
   try {
     const excerpts = getVerifiedMemoryExcerpts(agentState, {
       limit: 5,
-      maxCharsPerExcerpt: 500,
+      maxCharsPerExcerpt: 2_000,
     })
     const queryText = [input.query ?? '', input.from ?? '', input.to ?? '']
       .filter((part) => typeof part === 'string' && part.length > 0)

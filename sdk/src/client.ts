@@ -1,5 +1,7 @@
 import { run } from './run'
+import { resolveClientBackend } from './client/backend'
 
+import type { ClientBackend } from './client/backend'
 import type { RunOptions, OpenbuffClientOptions } from './run'
 import type { RunState } from './run-state'
 
@@ -25,6 +27,16 @@ export class OpenbuffClient {
   }
 
   /**
+   * The pluggable backend this client dispatches to. Defaults to the
+   * in-process backend (today's `run()`); a host can substitute an
+   * ACP-remote backend via `OpenbuffClientOptions.backend` (P1-T3). Exposed
+   * so hosts can reach the detach/attach/close surface when one exists.
+   */
+  public get backend(): ClientBackend {
+    return resolveClientBackend(this.options)
+  }
+
+  /**
    * Run an Openbuff agent with the specified options.
    *
    * @param agent - The agent to run. Use 'base' for the default agent, or specify a custom agent ID if you made your own agent config.
@@ -45,7 +57,12 @@ export class OpenbuffClient {
   public async run(
     options: RunOptions & OpenbuffClientOptions,
   ): Promise<RunState> {
-    return run({ ...this.options, ...options })
+    const merged = { ...this.options, ...options }
+    // P1-T3 backend seam: an injected backend takes over execution entirely;
+    // otherwise resolveClientBackend returns the in-process default and this
+    // is byte-identical to `run(merged)`.
+    const backend = resolveClientBackend(merged)
+    return backend.run(merged)
   }
 }
 

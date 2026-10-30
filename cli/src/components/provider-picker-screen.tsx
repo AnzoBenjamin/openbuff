@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { MultilineInput } from './multiline-input'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
-import { getSystemProcessEnv } from '../utils/env'
+import { getSystemProcessEnv, isEnvVarSet } from '../utils/env'
 import { createTextPasteHandler } from '../utils/strings'
 import { BORDER_CHARS } from '../utils/ui-constants'
 
@@ -23,6 +23,7 @@ export type ProviderPickerPresetId =
   | 'freemodel'
 
 export type ProviderPickerSelection =
+  | { type: 'test-connections' }
   | { type: 'preset'; preset: ProviderPickerPresetId }
   | { type: 'connect-codex' }
   | {
@@ -143,6 +144,15 @@ type CustomProviderDraft = {
 
 type PickerItem =
   | (ProviderPickerPreset & { kind: 'preset' })
+  | {
+      kind: 'test'
+      id: 'test-connections'
+      label: string
+      description: string
+      category: 'Diagnostics'
+      env?: undefined
+      aliases: string[]
+    }
   | {
       kind: 'custom'
       id: 'custom'
@@ -282,6 +292,15 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
         kind: 'preset' as const,
       })),
       {
+        kind: 'test' as const,
+        id: 'test-connections',
+        label: 'Test connections',
+        description:
+          'Live-check every configured provider endpoint and API key via model discovery.',
+        category: 'Diagnostics' as const,
+        aliases: ['test', 'check', 'validate', 'ping'],
+      },
+      {
         kind: 'custom' as const,
         id: 'custom',
         label: 'Custom OpenAI/Anthropic-compatible provider',
@@ -335,6 +354,10 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
     if (!selectedRow || selectedRow.type !== 'item') return
 
     const item = selectedRow.item
+    if (item.kind === 'test') {
+      onSelect({ type: 'test-connections' })
+      return
+    }
     if (item.kind === 'custom') {
       setMode('custom')
       setCustomField('id')
@@ -647,7 +670,14 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
                   {item.label}
                   <span style={{ fg: theme.muted }}>{envSuffix}</span>
                 </text>
-                <text style={{ fg: theme.muted }}> {item.description}</text>
+                <text style={{ fg: theme.muted }}>
+                {' '}
+                {item.kind === 'preset' && item.env
+                  ? isEnvVarSet(item.env)
+                    ? `${item.description} · key set (${item.env})`
+                    : `${item.description} · set ${item.env}`
+                  : item.description}
+              </text>
               </box>
             )
           })

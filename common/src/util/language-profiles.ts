@@ -6,6 +6,7 @@ import {
 } from './language-capabilities'
 
 import type { FileTreeNode } from './file'
+import * as path from 'path'
 
 export {
   LANGUAGE_CAPABILITY_REGISTRY,
@@ -99,6 +100,67 @@ function getFileExtension(name: string): string {
   const index = baseName.lastIndexOf('.')
   if (index <= 0) return ''
   return baseName.slice(index).toLowerCase()
+}
+
+/**
+ * Pinned language-family extension sets, allocated once at module load instead
+ * of rebuilding five array literals per getLanguageFamily invocation. That
+ * function runs inside the call-graph caller-edge nested loops (per call and
+ * per candidate), so hoisting keeps allocations from scaling with total
+ * candidate edges in large/polyglot repos.
+ */
+const TYPESCRIPT_FAMILY_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts'])
+const JAVASCRIPT_FAMILY_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs'])
+const C_FAMILY_EXTENSIONS = new Set(['.c', '.h'])
+const CPP_FAMILY_EXTENSIONS = new Set([
+  '.cc',
+  '.cpp',
+  '.cxx',
+  '.hpp',
+  '.hh',
+  '.hxx',
+])
+const KOTLIN_FAMILY_EXTENSIONS = new Set(['.kt', '.kts'])
+
+/**
+ * Canonical extension -> language-family map shared by code-map and the
+ * indexer. Accepts either a leading-dot extension or a file path (extension is
+ * derived via path.extname). Returns 'typescript'/'javascript'/'c'/'cpp'/
+ * 'kotlin' for the pinned families, otherwise the normalized extension (with
+ * dot; '' when there is none). undefined input yields '' so callers passing an
+ * optional extension typecheck without casts.
+ *
+ * Deliberately NOT derived from LANGUAGE_CAPABILITY_REGISTRY: that registry
+ * conflates js into typescript and c into cpp, which would collapse the
+ * ts-vs-js and c-vs-cpp separation pinned by the code-map buildTokenCallers
+ * tests and the indexer call-navigation suite.
+ */
+export function getLanguageFamily(
+  filePathOrExtension: string | undefined,
+): string {
+  if (filePathOrExtension === undefined) return ''
+  // path.extname resolves the extension for real paths, including files that
+  // live inside a dot-directory (e.g. '.storybook/main.ts', '.config/foo.ts').
+  // It returns '' for a bare leading-dot token like '.ts', so treat a
+  // separator-free leading-dot input as a candidate extension only for the
+  // pinned-family checks below. That keeps '.ts'->typescript / '.jsx'->
+  // javascript bare-token resolution working without echoing a dotfile name
+  // like '.env' verbatim: a dotfile has no extension per path.extname, so it
+  // falls through to the documented '' result.
+  const extnameResult = path.extname(filePathOrExtension).toLowerCase()
+  const bareDotToken =
+    !extnameResult &&
+    filePathOrExtension.startsWith('.') &&
+    !/[\\/]/.test(filePathOrExtension)
+      ? filePathOrExtension.toLowerCase()
+      : ''
+  const candidate = extnameResult || bareDotToken
+  if (TYPESCRIPT_FAMILY_EXTENSIONS.has(candidate)) return 'typescript'
+  if (JAVASCRIPT_FAMILY_EXTENSIONS.has(candidate)) return 'javascript'
+  if (C_FAMILY_EXTENSIONS.has(candidate)) return 'c'
+  if (CPP_FAMILY_EXTENSIONS.has(candidate)) return 'cpp'
+  if (KOTLIN_FAMILY_EXTENSIONS.has(candidate)) return 'kotlin'
+  return extnameResult
 }
 
 export function detectLanguageIdForPath(

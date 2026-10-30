@@ -1,8 +1,8 @@
 [test]
-preload = ["../../test/setup-scm-loader.ts", "../../sdk/test/setup-env.ts"]
-# test/setup-scm-loader.ts registers the .scm text loader required by
-# @codebuff/code-map tree-sitter queries. Running `bun test` from this package
-# directory uses THIS bunfig (not the repo-root one), so without the scm-loader
-# preload, structural-read falls back to its regex symbol path and
-# occurrence-based symbol selectors (e.g. the M2 five-selector read_files test)
-# fail when run package-locally. Root and package preloads are now aligned.
+# setup-scm-loader preload removed: tree-sitter queries load via fs at
+# query-load time (packages/code-map/src/languages.ts resolveQueryPath), so the
+# .scm text-loader plugin is no longer required (previously, without it,
+# structural-read fell back to its regex symbol path and occurrence-based
+# symbol selectors failed package-locally). Reintroduce it ONLY if a .scm
+# module import ever returns. setup-env stays preloaded package-locally.
+preload = ["../../sdk/test/setup-env.ts"]

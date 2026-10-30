@@ -57,23 +57,31 @@
   "bugs": {
     "url": "https://github.com/AnzoBenjamin/openbuff/issues"
   },
+  "//dependencies": "Public runtime contract of this package. Every EXTERNAL package imported by shipped code (src/, bundled into dist/) must appear here; `scripts/build.ts` reads this list to mark the bundle's externals, so an undeclared external import would ship a broken install graph. Workspace-internal @codebuff/* imports are intentionally NOT declared: the build marks only non-@codebuff dependencies external, so those modules are BUNDLED into dist rather than resolved from the consumer's node_modules. Candidate pre-release dependencies (e.g. @agentclientprotocol/sdk) still ride in `dependencies` until dist stops importing them.",
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.5.0",
     "@ai-sdk/anthropic": "2.0.50",
+    "@modelcontextprotocol/sdk": "^1.18.2",
     "@jitl/quickjs-wasmfile-release-sync": "0.31.0",
     "@vscode/tree-sitter-wasm": "0.1.4",
     "ai": "^5.0.52",
     "diff": "8.0.3",
     "gray-matter": "^4.0.3",
     "ignore": "7.0.5",
+    "lodash": "4.17.23",
     "micromatch": "^4.0.8",
     "pixelmatch": "^7.2.0",
     "pngjs": "^7.0.0",
+    "tiktoken": "1.0.22",
     "web-tree-sitter": "0.25.10",
     "ws": "^8.18.0",
     "zod": "^4.2.1"
   },
+  "//devDependencies": "Declared here, not hoisted, so a pruned or isolated install still typechecks this member: src/ imports lodash at runtime (declared in dependencies above) and the declaration build inlines what it needs from these typings, so they must resolve from THIS manifest rather than from the workspace-root devDependency. @types/lodash stays a devDependency (not a runtime one) so type packages are not forced into every consumer install graph.",
   "devDependencies": {
     "@types/diff": "8.0.0",
+    "@types/ws": "8.18.1",
+    "@types/lodash": "^4.17.21",
     "@types/micromatch": "^4.0.9",
     "@types/pngjs": "^6.0.5",
     "adm-zip": "^0.5.12",

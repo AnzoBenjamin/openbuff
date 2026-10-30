@@ -1,6 +1,9 @@
 import z from 'zod/v4'
 
+import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
+import { __resetReadFilesSelectorRepairStatsForTest } from '@codebuff/common/tools/params/tool/read-files'
+import { MAX_TRUNCATION_RECOVERY_BYTES } from '@codebuff/common/tools/params/utils'
 import {
   buildReadFilesResultV1,
   fileMutationResultV1Schema,
@@ -22,9 +25,11 @@ import {
 } from '../tools/handlers/tool/edit-read-state'
 import type { FileProcessingState } from '../tools/handlers/tool/write-file'
 import {
+  __resetToolArgNormalizationStatsForTest,
   buildSpawnAgentsHandlerFailureOutput,
   buildUnavailableToolMessage,
   executeToolCall,
+  getToolArgNormalizationStats,
   normalizeNativeToolOutput,
   parseRawCustomToolCall,
   parseRawToolCall,
@@ -35,12 +40,52 @@ import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
 import type {
   AssistantMessage,
   ToolMessage,
 } from '@codebuff/common/types/messages/codebuff-message'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+
+// Minimal recording logger for asserting logger.debug telemetry emissions
+// from parseRawToolCall (this file has no existing logger convention to
+// reuse). Typed against the Logger contract — no `any` casts. Only debug
+// payloads are recorded because that is the channel the repair diagnostics
+// ride.
+function createRecordingLogger(): {
+  logger: Logger
+  debugPayloads: unknown[]
+} {
+  const debugPayloads: unknown[] = []
+  const logger: Logger = {
+    debug: (data) => {
+      debugPayloads.push(data)
+    },
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  }
+  return { logger, debugPayloads }
+}
+
+// Shape guard for the read_files selector-repair telemetry payload: other
+// debug emissions on the same logger (e.g. recordUnserialize's
+// { toolName, kind }) never carry `repairedKinds`, so filtering by this
+// shape isolates the selector-repair diagnostic without counting unrelated
+// debug calls.
+function isSelectorRepairTelemetry(data: unknown): data is {
+  toolName: string
+  toolCallId: string
+  repairedKinds: Record<string, number>
+} {
+  return (
+    data !== null &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    'repairedKinds' in data
+  )
+}
 
 describe('tool validation error handling', () => {
   let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
@@ -93,7 +138,15 @@ describe('tool validation error handling', () => {
     // with {}), which would flatten recoveryHint before the serialized
     // assertions below. Assert via direct property reads instead.
     expect(output[0]?.type).toBe('json')
-    const report = (output[0] as unknown as { value: Array<{ agentType: string; agentName: string; value: { errorMessage: string; recoveryHint: unknown } }> }).value[0]
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: { errorMessage: string; recoveryHint: unknown }
+        }>
+      }
+    ).value[0]
     expect(report.agentType).toBe('basher')
     expect(report.agentName).toBe('basher')
     expect(report.value.errorMessage).toBe(
@@ -111,10 +164,605 @@ describe('tool validation error handling', () => {
     expect(serialized).not.toContain('Original params value')
   })
 
-  it('preserves basher extractedLines as control-plane output', async () => {
-    const { normalizeSpawnedAgentOutput } = await import(
-      '../tools/handlers/tool/spawn-agent-utils'
+  it('surfaces a bounded, sanitized validationIssues list from a Zod-shaped error', () => {
+    // Spawn params actually fail as a Zod issue LIST, which the message-text
+    // recoveryHint allowlist cannot see. The structural channel must carry the
+    // failing field paths + messages so the parent learns WHICH field was
+    // wrong instead of only the static failure string.
+    const zodShaped = Object.assign(new Error('Validation failed'), {
+      issues: [
+        {
+          path: ['agents', 0, 'params', 'command'],
+          message: 'Invalid input: expected string, received undefined',
+        },
+        {
+          path: [],
+          message: 'Too small:\n  expected string to have >=1 characters',
+        },
+        // Non-string message and non-array path are dropped / defaulted, never
+        // stringified into the payload.
+        { path: ['agents', 0, 'params', 'secret'], message: 42 },
+      ],
+    })
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'basher', params: {} }] },
+      zodShaped,
     )
+
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: {
+            errorMessage: string
+            recoveryHint?: unknown
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value[0]
+
+    // The stable machine-readable marker is unchanged.
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    expect(report.value.validationIssues).toEqual([
+      {
+        path: 'agents.0.params.command',
+        message: 'Invalid input: expected string, received undefined',
+      },
+      {
+        path: '',
+        message: 'Too small: expected string to have >=1 characters',
+      },
+    ])
+    // Both diagnostic channels can ride together without clobbering the marker.
+    expect(typeof report.value.recoveryHint).toBe('string')
+    expect(report.value.recoveryHint as string).toContain('Validation failed')
+  })
+
+  it('omits validationIssues entirely when the error is not issue-shaped', () => {
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'editor' }] },
+      new Error('terminal bridge disconnected'),
+    )
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ value: Record<string, unknown> }>
+      }
+    ).value[0]
+
+    // No `undefined` ever enters the JSON payload: the key is absent, not
+    // present-with-undefined.
+    expect(Object.hasOwn(report.value, 'validationIssues')).toBe(false)
+    expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+  })
+
+  it('bounds the validationIssues entry count and per-string length', () => {
+    const issues = Array.from({ length: 30 }, (_, index) => ({
+      path: ['agents', 0, 'params', `field${index}`],
+      message: `expected ${'x'.repeat(4_000)}`,
+    }))
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'basher', params: {} }] },
+      Object.assign(new Error('Validation failed'), { issues }),
+    )
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: { validationIssues?: Array<{ path: string; message: string }> }
+        }>
+      }
+    ).value[0]
+    const reported = report.value.validationIssues ?? []
+
+    // Small fixed count and a short per-string ceiling keep the payload bounded.
+    expect(reported).toHaveLength(20)
+    for (const issue of reported) {
+      expect(typeof issue.path).toBe('string')
+      expect(issue.message.length).toBeLessThanOrEqual(
+        300 + '...[truncated]'.length,
+      )
+    }
+  })
+
+  it('extends the recovery-hint allowlist to Zod-style text without weakening redaction', () => {
+    const validationError = new Error(
+      'Unrecognized key: "expectedHash"\n\nOriginal params value:\n{"secret":"should-never-appear"}',
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: [{ agent_type: 'edit-transaction' }] },
+      validationError,
+    )
+    const serialized = JSON.stringify(output)
+
+    // The widened allowlist now qualifies plain Zod wording...
+    expect(serialized).toContain('Unrecognized key')
+    // ...while the security boundary still strips the raw params section.
+    expect(serialized).not.toContain('should-never-appear')
+    expect(serialized).not.toContain('Original params value')
+  })
+
+  it('flags a transport-truncated serialized agents string and keeps the zod guidance alongside the honest truncation hint', () => {
+    // A serialized `agents` array cut in transport: the repair layer
+    // fail-closed passes the string through, so zod's residue
+    // ("expected object, received string") fires alongside the truncation
+    // signature. The failure output must carry BOTH — the actionable zod
+    // guidance the model can act on, plus the honest structural-incompleteness
+    // classification — never a hint that claims the payload cannot be a
+    // shape error.
+    const zodShapedError = Object.assign(
+      new Error('agents[0]: expected object, received string'),
+      {
+        issues: [
+          {
+            path: ['agents', 0],
+            message: 'Invalid input: expected object, received string',
+          },
+        ],
+      },
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      {
+        agents:
+          '[{"agent_type": "basher", "prompt": "Run tests", "params": {"command":',
+      },
+      zodShapedError,
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    expect(report.value.truncated).toBe(true)
+    const hint = report.value.recoveryHint ?? ''
+    // The error-derived zod guidance is PRESERVED, not replaced.
+    expect(hint).toContain('agents[0]: expected object, received string')
+    // The honest truncation classification is APPENDED after it.
+    expect(hint).toContain('structurally incomplete')
+    expect(hint).toContain('cut in transport')
+    expect(hint).toContain(
+      'resending the identical payload will fail identically',
+    )
+    expect(hint).toContain(
+      'If the JSON is malformed, fix the structure per the issues above.',
+    )
+    // The truncation hint always survives in full at the tail of the combined
+    // hint (the BASE hint is capped, never the combination).
+    expect(
+      hint.endsWith(
+        'If the JSON is malformed, fix the structure per the issues above.',
+      ),
+    ).toBe(true)
+    // The combined hint stays within SPAWN_RECOVERY_HINT_MAX_CHARS.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+    // validationIssues keep their existing contract alongside the new key.
+    expect(report.value.validationIssues).toEqual([
+      {
+        path: 'agents.0',
+        message: 'Invalid input: expected object, received string',
+      },
+    ])
+    // No payload content leaks into the hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('Run tests')
+  })
+
+  it('keeps the zod guidance alongside the truncation hint for a malformed unbalanced fragment array', () => {
+    // The truncation signature is shared by transport cuts AND genuinely
+    // malformed payloads (missing/mismatched closers). A zod-shaped error on
+    // the latter must still surface BOTH channels: the actionable zod guidance
+    // and the honest truncation classification — the retired hint claimed the
+    // payload was "NOT a shape error", steering the model away from the JSON
+    // fix it could make.
+    const fragments = JSON.stringify([
+      { agent_type: 'basher', prompt: 'Run tests' },
+    ])
+      .slice(0, -2)
+      .split(',')
+    const zodShapedError = Object.assign(
+      new Error('agents[0]: expected object, received string'),
+      {
+        issues: [
+          {
+            path: ['agents', 0],
+            message: 'Invalid input: expected object, received string',
+          },
+        ],
+      },
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      zodShapedError,
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            recoveryHint?: string
+            truncated?: boolean
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.truncated).toBe(true)
+    const hint = report.value.recoveryHint ?? ''
+    // BOTH channels ride together: the zod guidance first...
+    expect(hint).toContain('agents[0]: expected object, received string')
+    // ...the honest truncation classification appended after it.
+    expect(hint).toContain('structurally incomplete')
+    expect(hint).toContain(
+      'If the JSON is malformed, fix the structure per the issues above.',
+    )
+    expect(
+      hint.indexOf('agents[0]: expected object, received string'),
+    ).toBeLessThan(hint.indexOf('structurally incomplete'))
+    // The combined hint stays bounded.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+    expect(report.value.validationIssues).toEqual([
+      {
+        path: 'agents.0',
+        message: 'Invalid input: expected object, received string',
+      },
+    ])
+    // No payload content leaks into the hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('Run tests')
+  })
+
+  it('flags a comma-split fragment array as transport truncation even without an error-derived hint', () => {
+    // Transport tokenized a truncated stringified array on every comma; the
+    // rejoined fragments carry the truncation signature (mirrors
+    // repairCommaSplitFragments in common). The truncation hint fires even
+    // though the non-validation error produced no error-derived hint.
+    const fragments = JSON.stringify([
+      {
+        agent_type: 'file-picker',
+        prompt: 'Find files about authentication and sessions',
+      },
+    ])
+      .slice(0, -2)
+      .split(',')
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.truncated).toBe(true)
+    expect(report.value.recoveryHint ?? '').toContain('cut in transport')
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // Static hint only: no fragment content leaks into the output.
+    expect(JSON.stringify(output)).not.toContain('authentication')
+  })
+
+  it('emits exactly one report for a multi-fragment truncated array instead of one per fragment', () => {
+    // A comma-split fragment array classified 'transport-truncated' is ONE
+    // serialized payload tokenized on commas, so the failure output must
+    // carry EXACTLY ONE 'unknown'-typed report (not 12 identical copies each
+    // carrying the same hint). Normal agent arrays keep one report per entry.
+    const fragments = Array.from(
+      { length: 12 },
+      (_unused, index) => `{"agent_type": "agent-${index}"`,
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const reports = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+          }
+        }>
+      }
+    ).value
+
+    expect(reports).toHaveLength(1)
+    expect(reports[0].agentType).toBe('unknown')
+    expect(reports[0].agentName).toBe('unknown')
+    expect(reports[0].value.truncated).toBe(true)
+    expect(reports[0].value.recoveryHint ?? '').toContain(
+      'structurally incomplete',
+    )
+    expect(reports[0].value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // No fragment content leaks into the static hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('agent-0')
+  })
+
+  it('emits one combined report with both the zod guidance and the truncation hint for a malformed fragment array (F1+F2)', () => {
+    // Combined coverage for the two truncation repairs (never previously
+    // exercised together): a comma-split fragment array whose rejoined form
+    // is unbalanced JSON, paired with a zod-shaped error. BOTH behaviors
+    // must hold on the SAME failure output — the fragment array collapses to
+    // EXACTLY ONE report (F2), and that single report keeps the actionable
+    // zod guidance AND appends the honest structural-incompleteness
+    // classification (F1) instead of discarding the zod guidance.
+    const fragments = JSON.stringify([
+      { agent_type: 'basher', prompt: 'Run tests' },
+    ])
+      .slice(0, -2)
+      .split(',')
+    const zodShapedError = Object.assign(
+      new Error('agents[0]: expected object, received string'),
+      {
+        issues: [
+          {
+            path: ['agents', 0],
+            message: 'Invalid input: expected object, received string',
+          },
+        ],
+      },
+    )
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      zodShapedError,
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const reports = (
+      output[0] as unknown as {
+        value: Array<{
+          agentType: string
+          agentName: string
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+            validationIssues?: Array<{ path: string; message: string }>
+          }
+        }>
+      }
+    ).value
+
+    // F2: ONE report for the whole tokenized payload, 'unknown'-typed.
+    expect(reports).toHaveLength(1)
+    expect(reports[0].agentType).toBe('unknown')
+    expect(reports[0].agentName).toBe('unknown')
+    expect(reports[0].value.truncated).toBe(true)
+    expect(reports[0].value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // F1: the zod guidance is PRESERVED and the truncation hint APPENDED
+    // after it, so both channels ride on the single combined report.
+    const hint = reports[0].value.recoveryHint ?? ''
+    expect(hint).toContain('expected object, received string')
+    expect(hint).toContain('structurally incomplete')
+    expect(hint.indexOf('expected object, received string')).toBeLessThan(
+      hint.indexOf('structurally incomplete'),
+    )
+    // The combined hint stays within SPAWN_RECOVERY_HINT_MAX_CHARS.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+    // validationIssues keep their existing contract on the combined shape.
+    expect(reports[0].value.validationIssues).toEqual([
+      {
+        path: 'agents.0',
+        message: 'Invalid input: expected object, received string',
+      },
+    ])
+    // No fragment content leaks into the hint or anywhere else.
+    expect(JSON.stringify(output)).not.toContain('Run tests')
+  })
+
+  it('classifies an over-cap fragment array without setting the truncation flag (pre-join length cap)', () => {
+    // 64 entries of 2,000 chars each: the joined length (128,063) exceeds
+    // MAX_TRUNCATION_REJOINED_LENGTH (65,536), so the pre-join length
+    // accounting fails closed BEFORE join() ever allocates — no truncated
+    // flag and no truncation hint, exactly like any other unclassifiable
+    // payload.
+    const fragments = Array.from({ length: 64 }, () => 'x'.repeat(2_000))
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: fragments },
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: {
+            errorMessage: string
+            recoveryHint?: string
+            truncated?: boolean
+          }
+        }>
+      }
+    ).value[0]
+
+    expect(report.value.truncated).toBeUndefined()
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+    // The non-validation error yields no error-derived hint, so the report
+    // carries no recoveryHint at all for the unclassifiable array.
+    expect(report.value.recoveryHint).toBeUndefined()
+  })
+
+  it('appends the auto-decode clarification to an existing hint for a decoded stringified array', () => {
+    // The stringified array parses cleanly, so the preprocess layer
+    // auto-decoded it before validation and the spawn failed for a real
+    // params reason. The error-derived hint survives with one bounded
+    // clarifying sentence appended, and no `truncated` key is added.
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: JSON.stringify([{ agent_type: 'basher', params: {} }]) },
+      new Error(
+        'Invalid params for agent basher: Missing required: command. Recovery: spawn Basher with a command param.',
+      ),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{
+          value: { recoveryHint?: string; truncated?: boolean }
+        }>
+      }
+    ).value[0]
+
+    expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+    const hint = report.value.recoveryHint ?? ''
+    expect(hint).toContain('Missing required: command')
+    expect(hint).toContain('Recovery:')
+    expect(hint).toContain(
+      'auto-decoded before validation and is not itself a failure cause',
+    )
+    expect(hint).toContain('the issues above are the real cause')
+    // The combined hint stays bounded.
+    expect(hint.length).toBeLessThanOrEqual(2_000 + '...[truncated]'.length)
+  })
+
+  it('keeps the auto-decode clarification when the error-derived hint is already at the cap', () => {
+    // Regression (spawn-stringified-note-truncated-at-cap): the sanitized
+    // base hint can already sit at exactly SPAWN_RECOVERY_HINT_MAX_CHARS —
+    // the canonical long-zod-issue shape — and the branch used to cap the
+    // COMBINED string, slicing the appended clarifying sentence off in
+    // precisely the case it exists for. The base hint is capped instead, so
+    // the note always survives within the same 2_000-char bound.
+    const prefix = 'Validation failed '
+    const atCap = `${prefix}${'a'.repeat(2_000 - prefix.length)}`
+    expect(atCap.length).toBe(2_000)
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: JSON.stringify([{ agent_type: 'basher', params: {} }]) },
+      new Error(atCap),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ value: { recoveryHint?: string } }>
+      }
+    ).value[0]
+
+    const hint = report.value.recoveryHint ?? ''
+    // The clarifying note survives at the tail of the capped hint, in full.
+    expect(hint).toContain(
+      'auto-decoded before validation and is not itself a failure cause',
+    )
+    expect(hint).toContain('the issues above are the real cause')
+    expect(hint.endsWith('the issues above are the real cause.')).toBe(true)
+    // The error-derived prefix and its truncation marker survive too...
+    expect(hint).toContain('Validation failed')
+    expect(hint).toContain('...[truncated]')
+    // ...and the combined hint stays within the same bound as before.
+    expect(hint.length).toBeLessThanOrEqual(2_000)
+  })
+
+  it('does not fabricate a hint for a decoded stringified array when the error has none', () => {
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      { agents: JSON.stringify([{ agent_type: 'editor' }]) },
+      new Error('terminal bridge disconnected'),
+    )
+
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ value: Record<string, unknown> }>
+      }
+    ).value[0]
+
+    // No `truncated` flag (nothing was cut) and no fabricated hint: the keys
+    // stay absent, never present-with-undefined.
+    expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+    expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+  })
+
+  it('does not flag legitimate string arrays as transport truncation', () => {
+    // Legitimate string arrays (prompts-style prose, bracket-prefixed
+    // labels) rejoin to balanced payloads, which detectTransportTruncation
+    // rejects, so the classifier stays silent and the error-derived hint
+    // passes through unchanged.
+    for (const agents of [
+      ['find the auth files', 'run the tests'],
+      ['[draft]', '[final]'],
+    ]) {
+      const output = buildSpawnAgentsHandlerFailureOutput(
+        { agents },
+        new Error('agents[0]: expected object, received string'),
+      )
+      const report = (
+        output[0] as unknown as {
+          value: Array<{
+            value: { recoveryHint?: string; truncated?: boolean }
+          }>
+        }
+      ).value[0]
+
+      expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+      const hint = report.value.recoveryHint ?? ''
+      expect(hint).toContain('expected object, received string')
+      expect(hint).not.toContain('cut in transport')
+    }
+  })
+
+  it('no-ops the truncation classifier when the agents field is absent', () => {
+    const output = buildSpawnAgentsHandlerFailureOutput(
+      {},
+      new Error('terminal bridge disconnected'),
+    )
+
+    expect(output[0]?.type).toBe('json')
+    const report = (
+      output[0] as unknown as {
+        value: Array<{ agentType: string; value: Record<string, unknown> }>
+      }
+    ).value[0]
+
+    // The empty-agents `[{}]` fallback report carries only the static marker.
+    expect(report.agentType).toBe('unknown')
+    expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
+    expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
+    expect(report.value.errorMessage).toBe(
+      'Agent spawn failed because the handler could not validate the request.',
+    )
+  })
+
+  it('preserves basher extractedLines as control-plane output', async () => {
+    const { normalizeSpawnedAgentOutput } =
+      await import('../tools/handlers/tool/spawn-agent-utils')
     const extractedLines = Array.from(
       { length: 80 },
       (_, index) => `failure line ${index + 1}: Expected x Received y`,
@@ -475,6 +1123,322 @@ describe('tool validation error handling', () => {
       expect(result.error).toContain('Parsing as JSON failed:')
       expect(result.error).toContain('payload_truncated')
     }
+  })
+
+  it('classifies a balanced-but-unparseable payload as payload_truncated only when the provider reported the cut', () => {
+    // Balanced and fully closed, with no duplicate separators to repair, so
+    // neither the structural heuristic nor the separator repair fires: only
+    // the provider-reported cut (finishReason === 'length') can flip the
+    // classification.
+    const balancedMalformed = '{"paths" "src/a.ts"}'
+
+    const withoutFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'provider-truncation-flag-absent-tool-call-id',
+        input: balancedMalformed,
+      },
+    })
+    expect('error' in withoutFlag).toBe(true)
+    if ('error' in withoutFlag) {
+      expect(withoutFlag.error).not.toContain('payload_truncated')
+    }
+
+    const withFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'provider-truncation-flag-present-tool-call-id',
+        input: balancedMalformed,
+      },
+      providerReportedTruncation: true,
+    })
+    expect('error' in withFlag).toBe(true)
+    if ('error' in withFlag) {
+      expect(withFlag.error).toContain('payload_truncated')
+    }
+  })
+
+  it('classifies an over-band payload from the provider cut only, never from size', () => {
+    // Companion to the small-payload test above, at the transport band: the
+    // band (MAX_TRANSPORT_SAFE_PAYLOAD_BYTES) is config-side only and never
+    // gates or sets the marker. A payload LARGER than the band that is
+    // balanced-but-unparseable must behave exactly like the small one —
+    // unclassified without the provider-reported cut, payload_truncated with
+    // it — so size alone can never flip (or suppress) the classification.
+    const oversizedMalformed =
+      '{"paths" "' + 'x'.repeat(MAX_TRANSPORT_SAFE_PAYLOAD_BYTES) + '"}'
+
+    const withoutFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'oversized-truncation-flag-absent-tool-call-id',
+        input: oversizedMalformed,
+      },
+    })
+    expect('error' in withoutFlag).toBe(true)
+    if ('error' in withoutFlag) {
+      expect(withoutFlag.error).not.toContain('payload_truncated')
+    }
+
+    const withFlag = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'oversized-truncation-flag-present-tool-call-id',
+        input: oversizedMalformed,
+      },
+      providerReportedTruncation: true,
+    })
+    expect('error' in withFlag).toBe(true)
+    if ('error' in withFlag) {
+      expect(withFlag.error).toContain('payload_truncated')
+    }
+  })
+
+  describe('oversized truncation classification (>1 MiB)', () => {
+    // ~1.1 MiB: past the 1 MiB recovery bound, well under the 8 MiB
+    // detection ceiling. Before the detection band was split from the
+    // recovery bound, a structural cut this large was invisible to the
+    // classifier and the executor reported a plain parse error with no
+    // payload_truncated code — the model could not tell a transport cut from
+    // malformed input.
+    const OVERSIZED = MAX_TRUNCATION_RECOVERY_BYTES + 105_000
+
+    it('classifies an over-1-MiB cut mid-string and names the recovery bound (no cursor possible)', () => {
+      const truncated = `{"edits":[{"type":"str_replace","path":"a.ts","replacements":[{"oldString":"x","newString":"${'y'.repeat(OVERSIZED)}`
+      expect(truncated.length).toBeGreaterThan(MAX_TRUNCATION_RECOVERY_BYTES)
+
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'edit_transaction',
+          toolCallId: 'oversized-truncated-tool-call-id',
+          input: truncated,
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('payload_truncated')
+        // The honest oversized note names the exact byte count, the recovery
+        // bound it exceeded, and the only actionable fix (split the call).
+        expect(result.error).toContain(
+          `The cut payload was ${truncated.length} bytes`,
+        )
+        expect(result.error).toContain(
+          `beyond the ${MAX_TRUNCATION_RECOVERY_BYTES}-byte recovery scan bound`,
+        )
+        expect(result.error).toContain('split')
+        // No cursor is claimed for a payload recovery never scanned.
+        expect(result.error).not.toContain('Resume cursor:')
+      }
+    })
+
+    it('explains the missing cursor for a sub-1-MiB cut with no clean container boundary', () => {
+      const truncated =
+        '{"edits":[{"type":"str_replace","path":"a.ts","replacements":[{"oldString":"x","newString":"yyy'
+      expect(truncated.length).toBeLessThan(MAX_TRUNCATION_RECOVERY_BYTES)
+
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'edit_transaction',
+          toolCallId: 'mid-string-truncated-tool-call-id',
+          input: truncated,
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('payload_truncated')
+        expect(result.error).toContain(
+          'The cut was not at a clean container boundary',
+        )
+        // The sub-boundary mid-string cut takes the boundary note, never the
+        // oversized-bytes note or a cursor.
+        expect(result.error).not.toContain('recovery scan bound')
+        expect(result.error).not.toContain('Resume cursor:')
+      }
+    })
+  })
+
+  it('threads the streamed transportTruncated marker into the payload_truncated classification', async () => {
+    // End-to-end companion to the parseRawToolCall-level test above: the
+    // stream-only `transportTruncated` marker on a tool-call chunk is consumed
+    // by tool-stream-parser and threaded through stream-parser's executor
+    // context into `parseRawToolCall` as `providerReportedTruncation`. For a
+    // balanced-but-malformed payload — where no structural truncation
+    // heuristic fires — only the provider-reported fact may flip the
+    // classification to payload_truncated.
+    const balancedMalformed = '{"paths" "src/a.ts"}'
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    const runStream = async (transportTruncated: boolean) => {
+      const chunk: StreamChunk = {
+        type: 'tool-call',
+        toolName: 'read_files',
+        toolCallId: transportTruncated
+          ? 'stream-marker-present-tool-call-id'
+          : 'stream-marker-absent-tool-call-id',
+        input: balancedMalformed as any,
+        ...(transportTruncated ? { transportTruncated: true as const } : {}),
+      }
+      async function* mockStream() {
+        yield chunk
+        return promptSuccess('mock-message-id')
+      }
+      const sessionState = getInitialSessionState(mockFileContext)
+      const responseChunks: (string | PrintModeEvent)[] = []
+      const result = await processStream({
+        ...agentRuntimeImpl,
+        agentContext: {},
+        agentState: sessionState.mainAgentState,
+        agentStepId: 'test-step-id',
+        agentTemplate: agentWithReadFiles,
+        ancestorRunIds: [],
+        clientSessionId: 'test-session',
+        fileContext: mockFileContext,
+        fingerprintId: 'test-fingerprint',
+        fullResponse: '',
+        localAgentTemplates: { 'test-agent': agentWithReadFiles },
+        messages: [],
+        prompt: 'test prompt',
+        repoId: undefined,
+        repoUrl: undefined,
+        runId: 'test-run-id',
+        signal: new AbortController().signal,
+        stream: mockStream(),
+        system: 'test system',
+        tools: {},
+        userId: 'test-user',
+        userInputId: 'test-input-id',
+        onCostCalculated: async () => {},
+        onResponseChunk: (chunk) => responseChunks.push(chunk),
+      })
+      return { result, responseChunks }
+    }
+
+    const errorEvents = (chunks: (string | PrintModeEvent)[]) =>
+      chunks.filter(
+        (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+          typeof chunk !== 'string' && chunk.type === 'error',
+      )
+
+    const withMarker = await runStream(true)
+    const withMarkerErrors = errorEvents(withMarker.responseChunks)
+    expect(withMarkerErrors.length).toBe(1)
+    expect(withMarkerErrors[0].message).toContain('payload_truncated')
+    expect(withMarker.result.hadToolCallError).toBe(true)
+
+    // Without the marker the same payload stays on the plain parse-failure
+    // path: the structural heuristic alone never classifies it as truncated.
+    const withoutMarker = await runStream(false)
+    const withoutMarkerErrors = errorEvents(withoutMarker.responseChunks)
+    expect(withoutMarkerErrors.length).toBe(1)
+    expect(withoutMarkerErrors[0].message).not.toContain('payload_truncated')
+  })
+
+  it('strips the transportTruncated marker from published and persisted tool calls', async () => {
+    // The marker is stream-only evidence: tool-stream-parser consumes it into
+    // providerReportedTruncation and yields the stripped payload, so the
+    // published tool_call event and the message-history tool-call part must
+    // never carry `transportTruncated` — every boundary into history routes
+    // through toToolCallStreamChunkPayload. Real payload fields (input,
+    // providerOptions) must still round-trip unchanged.
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    const markedValidChunk: StreamChunk = {
+      type: 'tool-call',
+      toolName: 'read_files',
+      toolCallId: 'stream-marker-stripped-tool-call-id',
+      input: { paths: ['test.ts'] },
+      transportTruncated: true,
+      providerOptions: {
+        openaiCompatible: {
+          extra_content: {
+            google: {
+              thought_signature: 'sig-789',
+            },
+          },
+        },
+      },
+    }
+
+    async function* mockStream() {
+      yield markedValidChunk
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithReadFiles,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithReadFiles },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    // A marked-but-valid call parses and executes without any error event.
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(0)
+
+    const toolCallEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'tool_call' }> =>
+        typeof chunk !== 'string' && chunk.type === 'tool_call',
+    )
+    expect(toolCallEvents.length).toBe(1)
+    expect(toolCallEvents[0].toolName).toBe('read_files')
+    expect(toolCallEvents[0].input).toEqual({ paths: ['test.ts'] })
+    // The stream-only marker never reaches the published event.
+    expect(Object.hasOwn(toolCallEvents[0], 'transportTruncated')).toBe(false)
+
+    // ...nor the persisted assistant tool-call part.
+    const assistantToolCallMessage = agentState.messageHistory.find(
+      (message): message is AssistantMessage =>
+        message.role === 'assistant' &&
+        message.content.some((part) => part.type === 'tool-call'),
+    )
+    const assistantToolCallPart = assistantToolCallMessage?.content.find(
+      (part) => part.type === 'tool-call',
+    )
+    expect(assistantToolCallPart?.toolCallId).toBe(
+      'stream-marker-stripped-tool-call-id',
+    )
+    expect(
+      Object.hasOwn(assistantToolCallPart ?? {}, 'transportTruncated'),
+    ).toBe(false)
+    // Real payload fields still round-trip alongside the stripped marker.
+    expect(assistantToolCallPart?.providerOptions).toEqual(
+      markedValidChunk.providerOptions,
+    )
   })
 
   it('should preserve provider options from parsed native tool calls', () => {
@@ -893,6 +1857,144 @@ describe('tool validation error handling', () => {
       expect(result.error).toContain('check every brace and bracket')
       expect(result.error).toContain('ambiguous brace nesting')
     }
+  })
+
+  it('gives targeted around-selector shape guidance for read_files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-around-empty-match-tool-call-id',
+        // An empty match fails min(1) and is NOT repaired (only plain-string
+        // entries are wrapped), so validation fails and the hint appears.
+        input: { around: [{ match: '' }] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      // The base hint is always present; the around-specific hint appends.
+      expect(result.error).toContain('combinable selectors `paths`')
+      expect(result.error).toContain('`around` is an array of objects')
+      expect(result.error).toContain('`match` is the literal anchor string')
+      expect(result.error).toContain(
+        'Example: { "paths": ["src/file.ts"], "around": [{ "match": "function handleSpawnAgents" }] }',
+      )
+    }
+  })
+
+  it('gives targeted symbols-selector shape guidance for read_files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-symbols-nonstring-path-tool-call-id',
+        input: { symbols: [{ path: 1 }] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`symbols` entries are objects { "path": string, "names": string[] }',
+      )
+      expect(result.error).toContain('never bare strings')
+      expect(result.error).toContain(
+        'Example: { "symbols": [{ "path": "src/file.ts", "names": ["parseToolCallContent"] }] }',
+      )
+    }
+  })
+
+  it('gives targeted windows-index guidance for read_files', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-windows-negative-window-tool-call-id',
+        // Only the exact integer 0 is clamped to 1; -1 still fails validation.
+        input: { windows: [{ path: 'a.ts', window: -1 }] },
+      },
+    })
+
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain(
+        '`windows` entries are objects { "path": string, "windowSize"?: number, "window"?: number }',
+      )
+      expect(result.error).toContain('1-indexed')
+      expect(result.error).toContain('the first window is 1, not 0')
+    }
+  })
+
+  it('emits one selector-repair telemetry debug diagnostic per repaired read_files call', () => {
+    // The repair stats are module-global: reset so the per-call byKind delta
+    // below is attributable to THIS parse alone (earlier read_files parses in
+    // this file would otherwise pollute the delta).
+    __resetReadFilesSelectorRepairStatsForTest()
+    const { logger, debugPayloads } = createRecordingLogger()
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-selector-repair-telemetry-tool-call-id',
+        // A bare-string `around` anchor is wrapped inside the read_files
+        // preprocess during safeParse, so the parse SUCCEEDS while the stats
+        // total increased across that safeParse — the runtime layer must emit
+        // the counter-plus-diagnostic signal (a repair is never silent).
+        input: { paths: ['a.ts'], around: 'anchor' },
+      },
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    // Match by the telemetry payload shape (repairedKinds present) rather
+    // than total debug-call count, so unrelated debug emissions on the same
+    // logger cannot break the assertion. Exactly one such diagnostic per
+    // repaired call is the contract.
+    const telemetryCalls = debugPayloads.filter(isSelectorRepairTelemetry)
+    expect(telemetryCalls).toHaveLength(1)
+    expect(telemetryCalls[0].toolName).toBe('read_files')
+    expect(telemetryCalls[0].toolCallId).toBe(
+      'read-files-selector-repair-telemetry-tool-call-id',
+    )
+    expect(telemetryCalls[0].repairedKinds).toEqual({ around_string: 1 })
+  })
+
+  it('emits no selector-repair telemetry for an already-valid read_files call', () => {
+    __resetReadFilesSelectorRepairStatsForTest()
+    const { logger, debugPayloads } = createRecordingLogger()
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-valid-no-repair-telemetry-tool-call-id',
+        input: { paths: ['a.ts'] },
+      },
+      logger,
+    })
+
+    expect('error' in result).toBe(false)
+    expect(debugPayloads.filter(isSelectorRepairTelemetry)).toHaveLength(0)
+  })
+
+  it('emits selector-repair telemetry even when the repaired read_files call still fails validation', () => {
+    // The emission rides the stats delta, not result.success: a repaired
+    // entry that still fails validation for another reason (no sole `paths`
+    // entry to infer the selector path) must still signal.
+    __resetReadFilesSelectorRepairStatsForTest()
+    const { logger, debugPayloads } = createRecordingLogger()
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'read-files-repaired-still-invalid-tool-call-id',
+        input: { around: 'anchor' },
+      },
+      logger,
+    })
+
+    expect('error' in result).toBe(true)
+    const telemetryCalls = debugPayloads.filter(isSelectorRepairTelemetry)
+    expect(telemetryCalls).toHaveLength(1)
+    expect(telemetryCalls[0].toolName).toBe('read_files')
+    expect(telemetryCalls[0].toolCallId).toBe(
+      'read-files-repaired-still-invalid-tool-call-id',
+    )
+    expect(telemetryCalls[0].repairedKinds).toEqual({ around_string: 1 })
   })
 
   it('repairs a single-agent stray-sibling spawn payload by folding prompt into the entry', () => {
@@ -1538,6 +2640,245 @@ describe('tool validation error handling', () => {
       })
 
       expect('error' in result).toBe(true)
+    })
+  })
+
+  describe('generic schema-driven stringified array/object unserialize (D21 slice 1)', () => {
+    beforeEach(() => {
+      __resetToolArgNormalizationStatsForTest()
+    })
+
+    it('unserializes a stringified array field and recurses into the items schema', () => {
+      // Snapshot primitives EAGERLY: getToolArgNormalizationStats returns the
+      // live module-level stats object, so holding that reference and reading
+      // `.total` inside a later assertion would observe the parse's own
+      // increment (the object-aliasing trap).
+      const beforeTotal = getToolArgNormalizationStats().total
+      const beforeForTool =
+        getToolArgNormalizationStats().byTool.read_files ?? 0
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-unserialize-ranges-tool-call-id',
+          input: {
+            ranges: '[{"path":"a.ts","startLine":"5","endLine":"10"}]',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        // The parsed array flowed into the normal items traversal, so the
+        // nested integer strings were coerced against the items schema too.
+        expect(result.input.ranges).toEqual([
+          { path: 'a.ts', startLine: 5, endLine: 10 },
+        ])
+      }
+      // Every successful unserialize is counted per tool (never silent).
+      const after = getToolArgNormalizationStats()
+      expect(after.total).toBe(beforeTotal + 1)
+      expect(after.byTool.read_files).toBe(beforeForTool + 1)
+    })
+
+    it('unserializes a fully stringified spawn_agents array including a nested stringified params object', () => {
+      // D21 slice-2 closure pin (PR-T3, option A decision 2026-09-28): the
+      // observed failure class — `agents[0]: expected object, received
+      // string` — is repaired by the generic walker at the tool-input level,
+      // so schema flattening of the published providerInputSchema is not
+      // needed. This test pins the walker's recursion coverage in code: the
+      // whole-array string unserializes against the declared array schema,
+      // and the nested stringified `params` object unserializes via the
+      // properties traversal (double-encoding covered by recursion, not just
+      // one level).
+      const beforeTotal = getToolArgNormalizationStats().total
+      const beforeForTool =
+        getToolArgNormalizationStats().byTool.spawn_agents ?? 0
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'spawn_agents',
+          toolCallId: 'd21-unserialize-agents-recursion-tool-call-id',
+          input: {
+            agents: JSON.stringify([
+              {
+                agent_type: 'basher',
+                prompt: 'Run tests',
+                params: JSON.stringify({ command: 'bun test' }),
+              },
+            ]),
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.agents).toEqual([
+          {
+            agent_type: 'basher',
+            prompt: 'Run tests',
+            params: { command: 'bun test' },
+          },
+        ])
+      }
+      // Both the whole-array and the nested-object unserializes count (the
+      // exact delta is an implementation detail; at least one per tool is the
+      // never-silent contract).
+      const after = getToolArgNormalizationStats()
+      expect(after.total).toBeGreaterThanOrEqual(beforeTotal + 1)
+      expect(after.byTool.spawn_agents).toBeGreaterThanOrEqual(
+        beforeForTool + 1,
+      )
+    })
+
+    it('unserializes a stringified string-array field', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-unserialize-paths-tool-call-id',
+          input: { paths: '["src/a.ts"]' },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        expect(result.input.paths).toEqual(['src/a.ts'])
+      }
+    })
+
+    it('unserializes a stringified object field and coerces its declared properties', () => {
+      const hash = getContentHash('line')
+      const readCapability = encodeReadCapabilityToken({
+        startLine: 100,
+        endLine: 156,
+        hash,
+        scope: {
+          projectId: mockFileContext.projectRoot,
+          path: 'src/a.ts',
+          runId: 'test-run-id',
+        },
+      })
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'replace_range',
+          toolCallId: 'd21-unserialize-occurrence-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            readCapability,
+            occurrence: '{"match":"literal block","occurrence":"2"}',
+            newContent: 'replacement',
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        // `occurrence` is object-typed in the schema, so the string
+        // unserialized; its properties were then visited, coercing the nested
+        // integer string while the string-typed `match` stays verbatim.
+        expect(result.input.occurrence?.match).toBe('literal block')
+        expect(result.input.occurrence?.occurrence).toBe(2)
+      }
+    })
+
+    it('fails closed when a declared-array field holds a non-JSON string', () => {
+      const before = getToolArgNormalizationStats().total
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-fail-closed-nonjson-tool-call-id',
+          input: { ranges: 'not valid json {' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      // A failed parse is never counted: only successful unserializes count.
+      expect(getToolArgNormalizationStats().total).toBe(before)
+    })
+
+    it('fails closed when a declared-array field parses to a non-array', () => {
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'read_files',
+          toolCallId: 'd21-fail-closed-nonarray-tool-call-id',
+          input: { ranges: '{"path":"a.ts"}' },
+        },
+      })
+
+      expect('error' in result).toBe(true)
+    })
+
+    it('never unserializes string-typed fields and does not count them', () => {
+      const before = getToolArgNormalizationStats()
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'str_replace',
+          toolCallId: 'd21-string-field-untouched-tool-call-id',
+          input: {
+            path: 'src/a.ts',
+            replacements: [{ oldString: '[1, 2, 3]', newString: '{"a":1}' }],
+          },
+        },
+      })
+
+      expect('error' in result).toBe(false)
+      if (!('error' in result)) {
+        // oldString/newString are declared string-typed in the schema, so
+        // JSON-looking content is never unserialized (schema-keyed guard).
+        expect(result.input.replacements[0].oldString).toBe('[1, 2, 3]')
+        expect(result.input.replacements[0].newString).toBe('{"a":1}')
+      }
+      const after = getToolArgNormalizationStats()
+      expect(after.total).toBe(before.total)
+    })
+
+    it('repairs a double-encoded bare-string agent_type input for spawn_agent_inline', () => {
+      // Same eager-snapshot harness as the unserialize cases above: the
+      // bare-field repair is a separate mechanism from the schema-driven
+      // unserialize, so the stats total must not move.
+      const beforeTotal = getToolArgNormalizationStats().total
+      // The fully-quoted literal parses as valid JSON, so it pins the
+      // validate-only half; the bare (unquoted) values are unparseable JSON,
+      // so only the allowlisted single-field repair can recover them (the
+      // double-encoded variant reaches that repair on its second parse pass).
+      for (const input of [
+        '{"agent_type":"basher"}',
+        '{"agent_type": basher}',
+        JSON.stringify('{"agent_type": basher}'),
+      ]) {
+        const result = parseRawToolCall({
+          rawToolCall: {
+            toolName: 'spawn_agent_inline',
+            toolCallId: 'bare-agent-type-spawn-inline-tool-call-id',
+            input,
+          },
+        })
+
+        expect('error' in result).toBe(false)
+        if (!('error' in result)) {
+          expect(result.input).toEqual({ agent_type: 'basher' })
+        }
+      }
+      expect(getToolArgNormalizationStats().total).toBe(beforeTotal)
+    })
+
+    it('keeps a bracketed bare-string agents input for spawn_agents on the stringInputError path', () => {
+      // Pins the deliberate spawn_agents exclusion: the allowlist has no
+      // spawn_agents entry, and the bracketed array value is unmatchable by
+      // the single-field regex anyway, so the payload stays a stringInputError.
+      const result = parseRawToolCall({
+        rawToolCall: {
+          toolName: 'spawn_agents',
+          toolCallId: 'bare-agents-string-spawn-tool-call-id',
+          input: '{"agents": [{"agent_type": basher}]}',
+        },
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain(
+          'expected the tool arguments to be an object, but received a string',
+        )
+        expect(result.error).toContain('Parsing as JSON failed:')
+      }
     })
   })
 
@@ -2281,6 +3622,300 @@ describe('tool validation error handling', () => {
     expect(errorUserMessage).toBeDefined()
   })
 
+  it('persists streaming XML parser errors into message history so the model can self-correct', async () => {
+    // Class A gap
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md):
+    // emitParserErrors forwards a malformed codebuff_tool_call parse error ONLY
+    // through the wrapper onResponseChunk callback — it is never yielded into
+    // the stream, so the consumption loop's error branch never fired for it
+    // and the wrapper's old `// do nothing` branch left the dropped call
+    // indistinguishable from a successful one: no TOOL_CALL_ERROR transcript
+    // entry, no hadToolCallError, no retry. The wrapper now records the failure
+    // exactly as createResponseHandler and the loop branch do, so the finally
+    // block persists it into the next model turn's prompt.
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    async function* mockStream() {
+      yield {
+        type: 'text' as const,
+        text: '<codebuff_tool_call>\n{"cb_tool_name": "read_files",\n</codebuff_tool_call>',
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    const result = await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithReadFiles,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithReadFiles },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    // The parser error still reaches the client, now carrying the bounded raw
+    // excerpt composed at emitParserErrors so the model can diff its JSON. The
+    // malformed block is the whole response, so the error is the only chunk.
+    expect(responseChunks).toHaveLength(1)
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain('JSON parsing failed')
+    expect(errorEvents[0].message).toContain(
+      'Original tool call input (excerpt):',
+    )
+
+    // Fail-safe unchanged: the malformed bytes never execute.
+    expect(
+      responseChunks.filter(
+        (chunk): chunk is PrintModeEvent =>
+          typeof chunk !== 'string' &&
+          (chunk.type === 'tool_call' || chunk.type === 'tool_result'),
+      ).length,
+    ).toBe(0)
+
+    // The turn-control retry safety net is armed: a malformed-only response
+    // now reports hadToolCallError exactly like an executor error, so
+    // run-agent-step.ts hasNoToolResults forces a retry step.
+    expect(result.hadToolCallError).toBe(true)
+
+    // The failure is persisted as a TOOL_CALL_ERROR user message the next
+    // model turn can see — the transcript channel executor errors already use.
+    const toolCallErrorMessages = agentState.messageHistory.filter(
+      (message) =>
+        message.role === 'user' && message.tags?.includes('TOOL_CALL_ERROR'),
+    )
+    expect(toolCallErrorMessages).toHaveLength(1)
+    const errorText = toolCallErrorMessages[0].content
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('')
+    expect(errorText).toContain('<system>Error during tool call: ')
+    expect(errorText).toContain('JSON parsing failed')
+    expect(errorText).toContain('Original tool call input (excerpt):')
+    expect(errorText).toContain('{"cb_tool_name": "read_files",')
+    expect(errorText).toContain(
+      'Please check the tool name and arguments and try again.',
+    )
+    expect(errorText).toContain('</system>')
+  })
+
+  it('persists an unterminated end-of-stream tool call as a TOOL_CALL_ERROR so the model can retry', async () => {
+    // EOF variant of the test above: a <codebuff_tool_call> that never gets
+    // its closing tag used to be dropped with ZERO feedback unless it
+    // overflowed the 64 KiB buffer. finalizeStreamParserState now reports it
+    // through the same error channel, so the existing wrapper routing
+    // (TOOL_CALL_ERROR persistence + hadToolCallError retry) applies with no
+    // wrapper changes
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    async function* mockStream() {
+      yield {
+        type: 'text' as const,
+        text: '<codebuff_tool_call>\n{"cb_tool_name": "read_files",\n',
+      }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    const result = await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithReadFiles,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithReadFiles },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    // The EOF report is the only chunk: the unterminated payload was held
+    // inside the parser state, never executed and never leaked as text.
+    expect(responseChunks).toHaveLength(1)
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain('ended before the closing tag')
+    expect(errorEvents[0].message).toContain(
+      'Original tool call input (excerpt):',
+    )
+    expect(errorEvents[0].message).toContain('Re-emit the complete tool call')
+
+    // Fail-safe unchanged: the EOF payload never executes.
+    expect(
+      responseChunks.filter(
+        (chunk): chunk is PrintModeEvent =>
+          typeof chunk !== 'string' &&
+          (chunk.type === 'tool_call' || chunk.type === 'tool_result'),
+      ).length,
+    ).toBe(0)
+
+    // The turn-control retry safety net is armed exactly like an executor
+    // error, so run-agent-step.ts hasNoToolResults forces a retry step.
+    expect(result.hadToolCallError).toBe(true)
+
+    // The dropped call is persisted as a TOOL_CALL_ERROR user message the
+    // next model turn can see — the transcript channel executor errors use.
+    const toolCallErrorMessages = agentState.messageHistory.filter(
+      (message) =>
+        message.role === 'user' && message.tags?.includes('TOOL_CALL_ERROR'),
+    )
+    expect(toolCallErrorMessages).toHaveLength(1)
+    const errorText = toolCallErrorMessages[0].content
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('')
+    expect(errorText).toContain('<system>Error during tool call: ')
+    expect(errorText).toContain('ended before the closing tag')
+    expect(errorText).toContain('Original tool call input (excerpt):')
+    expect(errorText).toContain('{"cb_tool_name": "read_files",')
+    expect(errorText).toContain('</system>')
+  })
+
+  it('persists the provider max-token cut into the TOOL_CALL_ERROR report when the finish chunk reports length', async () => {
+    // Variant of the EOF persistence test above carrying the stream-only
+    // `finish` marker: the provider reported the max-token cut
+    // (finishReason === 'length'), so the EOF tool-call error report gains
+    // the truncation annotation and the persisted TOOL_CALL_ERROR the next
+    // model turn reads explains that the response was CUT at the token
+    // limit — the model must finish the response, not shrink the payload
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    const agentWithReadFiles: AgentTemplate = {
+      ...testAgentTemplate,
+      toolNames: ['read_files', 'end_turn'],
+    }
+
+    async function* mockStream() {
+      yield {
+        type: 'text' as const,
+        text: '<codebuff_tool_call>\n{"cb_tool_name": "read_files",\n',
+      }
+      yield { type: 'finish' as const, finishReason: 'length' as const }
+      return promptSuccess('mock-message-id')
+    }
+
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agentState = sessionState.mainAgentState
+    const responseChunks: (string | PrintModeEvent)[] = []
+
+    const result = await processStream({
+      ...agentRuntimeImpl,
+      agentContext: {},
+      agentState,
+      agentStepId: 'test-step-id',
+      agentTemplate: agentWithReadFiles,
+      ancestorRunIds: [],
+      clientSessionId: 'test-session',
+      fileContext: mockFileContext,
+      fingerprintId: 'test-fingerprint',
+      fullResponse: '',
+      localAgentTemplates: { 'test-agent': agentWithReadFiles },
+      messages: [],
+      prompt: 'test prompt',
+      repoId: undefined,
+      repoUrl: undefined,
+      runId: 'test-run-id',
+      signal: new AbortController().signal,
+      stream: mockStream(),
+      system: 'test system',
+      tools: {},
+      userId: 'test-user',
+      userInputId: 'test-input-id',
+      onCostCalculated: async () => {},
+      onResponseChunk: (chunk) => responseChunks.push(chunk),
+    })
+
+    // The EOF report is the only chunk and carries the truncation
+    // annotation; the finish marker itself never reaches the response
+    // channel.
+    expect(responseChunks).toHaveLength(1)
+    const errorEvents = responseChunks.filter(
+      (chunk): chunk is Extract<PrintModeEvent, { type: 'error' }> =>
+        typeof chunk !== 'string' && chunk.type === 'error',
+    )
+    expect(errorEvents.length).toBe(1)
+    expect(errorEvents[0].message).toContain('ended before the closing tag')
+    expect(errorEvents[0].message).toContain('finish reason "length"')
+
+    // Fail-safe unchanged: the EOF payload never executes.
+    expect(
+      responseChunks.filter(
+        (chunk): chunk is PrintModeEvent =>
+          typeof chunk !== 'string' &&
+          (chunk.type === 'tool_call' || chunk.type === 'tool_result'),
+      ).length,
+    ).toBe(0)
+
+    // The turn-control retry safety net is armed exactly like an executor
+    // error, so run-agent-step.ts hasNoToolResults forces a retry step.
+    expect(result.hadToolCallError).toBe(true)
+
+    // The dropped call is persisted as a TOOL_CALL_ERROR user message and
+    // the truncation fact survives into the transcript the next model turn
+    // reads — the model learns the response was cut at the token limit.
+    const toolCallErrorMessages = agentState.messageHistory.filter(
+      (message) =>
+        message.role === 'user' && message.tags?.includes('TOOL_CALL_ERROR'),
+    )
+    expect(toolCallErrorMessages).toHaveLength(1)
+    const errorText = toolCallErrorMessages[0].content
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('')
+    expect(errorText).toContain('<system>Error during tool call: ')
+    expect(errorText).toContain('ended before the closing tag')
+    expect(errorText).toContain('finish reason "length"')
+    expect(errorText).toContain('</system>')
+  })
+
   it('should summarize missing spawned agent params clearly', async () => {
     const { validateAgentInput } =
       await import('../tools/handlers/tool/spawn-agent-utils')
@@ -2354,7 +3989,9 @@ describe('tool validation error handling', () => {
     }
 
     expect(message).toContain('Missing required: snapshot_id')
-    expect(message).toContain('manual spawns omit `params.snapshot_id` entirely')
+    expect(message).toContain(
+      'manual spawns omit `params.snapshot_id` entirely',
+    )
     expect(message).toContain('params.files')
     expect(message).toContain('wait for the gate')
     expect(message).not.toContain('set params.snapshot_id')
@@ -2402,9 +4039,8 @@ describe('tool validation error handling', () => {
   })
 
   it('spawn_agents tool description stops listing reviewer snapshot_id as a required manual param', async () => {
-    const { spawnAgentsParams } = await import(
-      '@codebuff/common/tools/params/tool/spawn-agents'
-    )
+    const { spawnAgentsParams } =
+      await import('@codebuff/common/tools/params/tool/spawn-agents')
     const description = spawnAgentsParams.description
     // The live tool description must not tell callers to supply snapshot_id
     // for reviewer specialists: manual spawns omit the key entirely (the
@@ -2693,9 +4329,9 @@ describe('tool validation error handling', () => {
         }>
       }
     ).output[0]?.value[0]
-    expect(
-      (toolResultEvent as unknown as { toolName: string }).toolName,
-    ).toBe('spawn_agents')
+    expect((toolResultEvent as unknown as { toolName: string }).toolName).toBe(
+      'spawn_agents',
+    )
     expect(
       (toolResultEvent as unknown as { toolCallId: string }).toolCallId,
     ).toBe('basher-missing-command-tool-call-id')
@@ -3879,11 +5515,11 @@ describe('executeToolCall queued → running transition', () => {
 })
 
 describe('getToolSet provider schema compaction', () => {
-  it('preserves schema descriptions for mutation tools and strips them for read-only tools', async () => {
+  it('preserves schema descriptions for mutation tools and read_files, strips them for other read-only tools', async () => {
     const { getToolSet } = await import('../tools/prompts')
 
     const toolSet = await getToolSet({
-      toolNames: ['edit_transaction', 'read_files'],
+      toolNames: ['edit_transaction', 'read_files', 'glob'],
       additionalToolDefinitions: async () => ({}),
       agentTools: {},
       skills: {},
@@ -3899,8 +5535,14 @@ describe('getToolSet provider schema compaction', () => {
     // model still sees guidance for the bare discriminated union; this asserts
     // the mutation-keyed `preserveDescriptions` wiring end-to-end via getToolSet.
     expect(schemaJson('edit_transaction')).toContain('description')
-    // Read-only tools stay fully compacted: no description annotations survive.
-    expect(schemaJson('read_files')).not.toContain('description')
+    // read_files is the deliberate read-only exception (its selector fields
+    // are the empirically highest shape-failure surface — see
+    // prompts-schema-handling.test.ts 'getToolSet keeps read_files selector
+    // field descriptions after compaction'); its per-field guidance survives.
+    expect(schemaJson('read_files')).toContain('description')
+    // Every other read-only tool stays fully compacted: no description
+    // annotations survive.
+    expect(schemaJson('glob')).not.toContain('description')
   })
 })
 

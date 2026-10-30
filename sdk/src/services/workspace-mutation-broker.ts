@@ -19,6 +19,14 @@ const DEFAULT_LOCK_POLL_MS = 20
 
 /** Newest receipts to report from listReceipts (no pruning this session). */
 const RECEIPT_LIST_LIMIT = 500
+/**
+ * Retention cap for finalized receipts (hr-09 P4.3). Receipts accumulated
+ * indefinitely; the listing was bounded but the directory was not, so a
+ * long-lived workspace grew without limit. Finalizing a receipt now prunes
+ * the OLDEST finalized receipts beyond this cap. Deliberately above
+ * RECEIPT_LIST_LIMIT so the newest full listing window is always intact.
+ */
+const RECEIPT_RETENTION_LIMIT = 1000
 
 export const WORKSPACE_MUTATION_AUTHORITY = 'cooperative_cas' as const
 
@@ -828,7 +836,37 @@ export class WorkspaceMutationBroker {
     await this.writeJsonDurable(finalPath, finalized)
     await this.removeIfExists(pendingPath)
     await this.fsyncDirectory(this.pendingDir)
+    await this.pruneOldReceipts()
     return finalized
+  }
+
+  /**
+   * Retention prune (hr-09 P4.3): delete the oldest finalized receipts beyond
+   * RECEIPT_RETENTION_LIMIT. Best-effort by design — a failed unlink logs and
+   * continues (the next finalize retries), never failing the mutation that
+   * just succeeded. Never touches the pending dir.
+   */
+  private async pruneOldReceipts(): Promise<void> {
+    let names: string[]
+    try {
+      names = (await fs.readdir(this.receiptsDir))
+        .filter((name) => name.endsWith('.json'))
+        .sort()
+    } catch {
+      return
+    }
+    if (names.length <= RECEIPT_RETENTION_LIMIT) return
+    const excess = names.slice(0, names.length - RECEIPT_RETENTION_LIMIT)
+    for (const name of excess) {
+      try {
+        await fs.unlink(path.join(this.receiptsDir, name))
+      } catch (error) {
+        if (errorCode(error) === 'ENOENT') continue
+        // Best-effort: log-free by design (no logger on this class); the
+        // next finalize retries the prune.
+      }
+    }
+    await this.fsyncDirectory(this.receiptsDir)
   }
 
   private receiptFileName(receipt: WorkspaceMutationReceipt): string {

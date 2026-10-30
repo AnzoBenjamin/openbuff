@@ -21,14 +21,17 @@ export type TerminalPolicyDecision =
   | { allowed: false; reason: string }
 
 const WORKSPACE_DENY_PATTERNS: Array<[RegExp, string]> = [
-  [/^(?:sudo|su)\b/i, 'privilege escalation is not allowed'],
   [
-    /^(?:apt|apt-get|dnf|yum|pacman|brew|choco|winget)\b/i,
+    /(?:^|[;&|\n\r(]\s*|\$\(\s*)(?:sudo|su)\b/i,
+    'privilege escalation is not allowed',
+  ],
+  [
+    /(?:^|[;&|\n\r(]\s*|\$\(\s*)(?:apt|apt-get|dnf|yum|pacman|brew|choco|winget)\b/i,
     'system package management is not allowed',
   ],
   [/\brm\s+-[^\n]*r[^\n]*\s+\/(?:\s|$)/i, 'root deletion is forbidden'],
   [
-    /^git\s+push\b[\s\S]*(?:--force(?:-with-lease)?|-f\b|--delete\b)/i,
+    /(?:^|[;&|\n\r(]\s*|\$\(\s*)git\s+push\b[\s\S]*(?:--force(?:-with-lease)?|-f\b|--delete\b)/i,
     'force and delete pushes are not allowed',
   ],
 ]

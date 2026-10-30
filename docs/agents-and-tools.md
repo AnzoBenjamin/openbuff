@@ -900,7 +900,7 @@ Three independent stages keep binary and oversized files out of the index AND ou
 2. `none` — if the token-annotated filtered tree fits the budget, render it as-is.
 3. `unimportant-files` — if the no-token filtered tree fits, render it without per-file token scores.
 4. `tokens` (`pruneFileTokenScores`) — iteratively strip the lowest-scoring per-file token annotations (batched, with a 5-tokens-per-name estimate) until the annotated tree fits.
-5. `depth-based` — if tokens pruning alone is not enough, remove the deepest files first (sorted by depth, sampled to estimate avg tokens per filename, removed in batches of `0.5 × tokensToRemove / avgTokensPerFileName + 100`, capped at 10 iterations). A no-progress safety break stops the loop if token count stops decreasing.
+5. `depth-based` — if tokens pruning alone is not enough, remove the deepest files first (sorted by depth, sampled to estimate avg tokens per filename, removed in batches of `0.5 × tokensToRemove / avgTokensPerFileName + 100`, capped at 10 iterations). The loop is bounded solely by that 10-iteration cap (no progress-based early exit), and a tokens-per-file-name fallback keeps the estimate finite when the sampled tree is empty.
 
 Gotchas:
 
@@ -1621,12 +1621,22 @@ runtime archives the pre-compaction transcript onto the new optional
 (`packages/agent-runtime/src/util/context-archive.ts`, capped at 8 snapshots
 of 200 messages with 4k-char per-message truncation; plain JSON, so sessions
 persisted before the field existed parse without it). The registered
-`recall_context` tool (granted to base2 CORE) searches those archived tool
-bodies with bounded case-insensitive AND-match snippets and returns
+`recall_context` tool (granted to base2 CORE) searches those archived
+conversation and tool bodies with bounded case-insensitive AND-match snippets and returns
 provenance, so pre-compaction content is always marked stale-until-verified;
-the archive itself never enters the model context. Eviction is deliberately
-NOT archived: tombstones already instruct a re-run, and a fresh read of live
-files is more faithful than a stale body. After a semantic pass, the runtime
+the archive itself never enters the model context. As of P2-T2 slice 1, this
+archive — including D26 `tool_result_eviction` snapshots — persists across
+sessions via the CLI chat-state restore path (`saveChatState` /
+`loadMostRecentChatState`) and the P2-3 mid-turn checkpoint
+(`saveCheckpoint` / `loadCheckpoint`), and the SDK's
+`applyOverridesToSessionState` restore clone preserves it wholesale, with
+regression tests in `cli/src/utils/__tests__/run-state-storage.test.ts`,
+`cli/src/utils/__tests__/turn-checkpoint.test.ts`, and
+`sdk/src/__tests__/initial-session-state.test.ts` proving deep-equal restore
+over which recall operates unchanged. Eviction snapshots are archived under a
+separate bounded retention policy so tombstoned tool results remain recoverable;
+a fresh read of live files is still preferred before acting on stale content.
+After a semantic pass, the runtime
 verifies the extraction
 (`packages/agent-runtime/src/util/compaction-verification.ts`): expected facts
 (paths read or written, truncated commands) are derived from the

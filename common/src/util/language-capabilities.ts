@@ -29,6 +29,23 @@ export type LanguageToolMetadata = Readonly<
   Record<LanguageToolRole, readonly string[]>
 >
 
+export type LanguageServerTransport = 'stdio' | 'tcp'
+
+/**
+ * Launchable spec for a single language tool: how to actually start it
+ * (argv/transport), how to detect it, and which files mark a project root.
+ * Distinct from the display-only `tools` metadata arrays.
+ */
+export type LanguageToolSpec = {
+  role: LanguageToolRole
+  argv: readonly string[]
+  transport?: LanguageServerTransport
+  port?: number
+  detect?: readonly string[]
+  rootMarkers?: readonly string[]
+  minVersion?: string
+}
+
 export type LanguageValidationStage =
   | 'syntax'
   | 'format'
@@ -61,6 +78,8 @@ export type LanguageCapability = {
   idiomGuidance: readonly string[]
   tools: LanguageToolMetadata
   validation: LanguageValidationMetadata
+  /** Optional launchable specs describing how to run each language's tooling. */
+  toolSpecs?: readonly LanguageToolSpec[]
 }
 
 const tools = (
@@ -107,6 +126,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['bun test', 'vitest', 'jest'],
       importOrganizer: ['tsserver', 'eslint', 'biome'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['typescript-language-server', '--stdio'],
+        transport: 'stdio',
+        detect: ['typescript-language-server', '--version'],
+        rootMarkers: ['tsconfig.json', 'jsconfig.json', 'package.json'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['typecheck', 'test'],
@@ -142,6 +170,20 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['pytest', 'unittest'],
       importOrganizer: ['ruff', 'isort'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['pyright-langserver', '--stdio'],
+        transport: 'stdio',
+        detect: ['pyright-langserver', '--version'],
+        rootMarkers: [
+          'pyproject.toml',
+          'setup.py',
+          'setup.cfg',
+          'requirements.txt',
+        ],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['typecheck', 'test'],
@@ -171,6 +213,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['cargo test'],
       importOrganizer: ['rust-analyzer'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['rust-analyzer'],
+        transport: 'stdio',
+        detect: ['rust-analyzer', '--version'],
+        rootMarkers: ['Cargo.toml'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['compile', 'test'],
@@ -200,6 +251,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['go test'],
       importOrganizer: ['goimports', 'gopls'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['gopls'],
+        transport: 'stdio',
+        detect: ['gopls', 'version'],
+        rootMarkers: ['go.mod'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['compile', 'test'],
@@ -229,6 +289,14 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['maven test', 'gradle test'],
       importOrganizer: ['jdtls', 'spotless'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['jdtls'],
+        transport: 'stdio',
+        rootMarkers: ['pom.xml', 'build.gradle', 'build.gradle.kts'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['compile', 'test'],
@@ -258,6 +326,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['dotnet test'],
       importOrganizer: ['Roslyn', 'dotnet format'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['csharp-ls'],
+        transport: 'stdio',
+        detect: ['csharp-ls', '--version'],
+        rootMarkers: [],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['compile', 'test'],
@@ -287,6 +364,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['ctest'],
       importOrganizer: ['clangd'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['clangd'],
+        transport: 'stdio',
+        detect: ['clangd', '--version'],
+        rootMarkers: ['compile_commands.json', 'CMakeLists.txt'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'compile'],
       project: ['compile', 'test'],
@@ -316,6 +402,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['rspec', 'minitest'],
       importOrganizer: ['ruby-lsp'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['ruby-lsp'],
+        transport: 'stdio',
+        detect: ['ruby-lsp', '--version'],
+        rootMarkers: ['Gemfile'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['test'],
@@ -345,6 +440,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['phpunit', 'pest'],
       importOrganizer: ['phpactor'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['intelephense', '--stdio'],
+        transport: 'stdio',
+        detect: ['intelephense', '--version'],
+        rootMarkers: ['composer.json'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['typecheck', 'test'],
@@ -374,6 +478,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['swift test'],
       importOrganizer: ['sourcekit-lsp'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['sourcekit-lsp'],
+        transport: 'stdio',
+        detect: ['sourcekit-lsp', '--help'],
+        rootMarkers: ['Package.swift'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['compile', 'test'],
@@ -403,6 +516,20 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['gradle test'],
       importOrganizer: ['kotlin-language-server', 'spotless'],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: ['kotlin-language-server'],
+        transport: 'stdio',
+        detect: ['kotlin-language-server', '--help'],
+        rootMarkers: [
+          'build.gradle.kts',
+          'build.gradle',
+          'settings.gradle.kts',
+          'settings.gradle',
+        ],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['compile', 'test'],
@@ -432,6 +559,15 @@ export const LANGUAGE_CAPABILITY_REGISTRY = {
       testRunner: ['GUT', 'GdUnit4'],
       importOrganizer: [],
     }),
+    toolSpecs: [
+      {
+        role: 'languageServer',
+        argv: [],
+        transport: 'tcp',
+        port: 6005,
+        rootMarkers: ['project.godot'],
+      },
+    ],
     validation: {
       focused: ['syntax', 'format', 'lint', 'typecheck'],
       project: ['compile', 'test'],
@@ -443,4 +579,10 @@ export function getLanguageCapability(
   id: SupportedLanguageId,
 ): LanguageCapability {
   return LANGUAGE_CAPABILITY_REGISTRY[id]
+}
+
+export function getLanguageToolSpecs(
+  id: SupportedLanguageId,
+): readonly LanguageToolSpec[] {
+  return LANGUAGE_CAPABILITY_REGISTRY[id].toolSpecs ?? []
 }

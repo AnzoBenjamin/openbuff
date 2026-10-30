@@ -61,6 +61,46 @@ interface ChatInputBarProps {
   inputBoxTitle: string | undefined
   isCompactHeight: boolean
   isNarrowWidth: boolean
+  // Columns reserved for the input row. Forwarded to MultilineInput so it
+  // wraps its value at the width this bar actually lays out; measuring at a
+  // different width is what let the box's height and the caller's centering
+  // decision disagree.
+  inputWidth: number
+  inputMinHeight?: number
+  /**
+   * Wrapped row count the caller already measured for `inputValue` at the
+   * columns this bar lays out. Forwarded to MultilineInput so the box takes its
+   * height from that single measurement instead of re-wrapping the same value
+   * on every keystroke of the render path. Omitted means the box measures the
+   * value itself, so this stays optional for callers that do not measure.
+   */
+  inputTotalLines?: number
+  /**
+   * The caller's own effective cap on those rows, forwarded so the box derives
+   * `isScrollable` from the same basis the CALLER's layout used. The forwarded
+   * row count is a pre-clamp fact shared by both branches, so a box that
+   * compared it only against its own `maxHeight` could report content as
+   * fitting while the caller's layout had already clamped it to scroll.
+   */
+  inputInputCap?: number
+  /**
+   * Whether that measurement turned the trailing gutter row on. Forwarded
+   * alongside `inputTotalLines` so the box's height is a pure function of the
+   * caller's measurement instead of also consulting the text renderable's
+   * lineInfo, which only exists after the first commit.
+   */
+  inputGutterEnabled?: boolean
+  /**
+   * The measurement's identity, produced by the CALLER over the same raw
+   * `inputValue` and columns it measured at (via
+   * `multilineInputMeasurementKey`). The box trusts `inputTotalLines` only
+   * when this key matches the value and wrap columns IT is drawing at, so a
+   * count measured for other content or another width falls back to a local
+   * wrap pass instead of sizing the box for text it is not drawing. Supplier-
+   * side, not fabricated here: a key the consumer derives from its own props
+   * can only ever agree with itself, which is the stale-read hole this closes.
+   */
+  inputMeasurementKey?: string
 
   // Feedback mode
   feedbackMode: boolean
@@ -111,6 +151,12 @@ export const ChatInputBar = ({
   inputBoxTitle,
   isCompactHeight,
   isNarrowWidth,
+  inputWidth,
+  inputMinHeight,
+  inputTotalLines,
+  inputInputCap,
+  inputGutterEnabled,
+  inputMeasurementKey,
   feedbackMode,
   handleExitFeedback,
   publishMode,
@@ -357,6 +403,12 @@ export const ChatInputBar = ({
             placeholder={effectivePlaceholder}
             focused={inputFocused && !feedbackMode}
             maxHeight={compactMaxHeight}
+            wrapWidth={inputWidth}
+            minHeight={inputMinHeight}
+            measuredTotalLines={inputTotalLines}
+            callerHeightCap={inputInputCap}
+            measuredGutterEnabled={inputGutterEnabled}
+            measurementKey={inputMeasurementKey}
             ref={inputRef}
             cursorPosition={cursorPosition}
           />
@@ -454,6 +506,12 @@ export const ChatInputBar = ({
                 placeholder={effectivePlaceholder}
                 focused={inputFocused && !feedbackMode}
                 maxHeight={Math.floor(terminalHeight / 2)}
+                wrapWidth={inputWidth}
+                minHeight={inputMinHeight}
+                measuredTotalLines={inputTotalLines}
+                callerHeightCap={inputInputCap}
+                measuredGutterEnabled={inputGutterEnabled}
+                measurementKey={inputMeasurementKey}
                 ref={inputRef}
                 cursorPosition={cursorPosition}
               />

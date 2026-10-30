@@ -37,6 +37,10 @@ export const BASE2_CORE_TOOL_NAMES: readonly ToolName[] = [
   'list_directory',
   'glob',
   'code_search',
+  'go_to_definition',
+  'find_references',
+  'hover_type',
+  'workspace_symbol',
   'ask_user',
   'skill',
   'suggest_followups',
@@ -64,6 +68,9 @@ export const BASE2_TIER_TOOL_NAMES: Record<
 > = {
   implement: [
     'edit_transaction',
+    'rename_symbol',
+    'code_action',
+    'extract_symbol',
     'create_plan',
     'update_plan_status',
     'inspect_workspace',

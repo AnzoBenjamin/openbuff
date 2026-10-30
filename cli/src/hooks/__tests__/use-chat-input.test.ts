@@ -1,8 +1,9 @@
 import { describe, test, expect, beforeEach, mock } from 'bun:test'
+import stringWidth from 'string-width'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-import { useChatInput } from '../use-chat-input'
+import { useChatInput, estimatedAgentModeToggleWidth } from '../use-chat-input'
 
 import type { InputValue } from '../../types/store'
 import type { AgentMode } from '../../utils/constants'
@@ -53,6 +54,9 @@ const baseOptions = {
   onSubmitPrompt: mock((_content: string, _mode: AgentMode) => {}),
   isCompactHeight: false,
   isNarrowWidth: false,
+  // Default mode renders no label/icon box in front of the input, so the text
+  // wraps at the full content width and the expectations below stay literal.
+  modeWidthAdjustment: 0,
 }
 
 describe('useChatInput', () => {
@@ -145,6 +149,21 @@ describe('useChatInput', () => {
     expect(result.current.inputWidth).toBe(78)
   })
 
+  test('subtracts the active mode prefix from the input width', () => {
+    // bash mode renders ` ! ` plus padding (widthAdjustment 4) in front of the
+    // text, so the rows the box wraps and the rows the caller measured only
+    // agree if the text width excludes those columns.
+    const { result } = renderHook(useChatInput, {
+      ...baseOptions,
+      agentMode: 'DEFAULT' as AgentMode,
+      separatorWidth: 80,
+      isCompactHeight: true,
+      modeWidthAdjustment: 4,
+    })
+
+    expect(result.current.inputWidth).toBe(80 - 2 - 4)
+  })
+
   test('clamps inputWidth to at least 1 for tiny separators', () => {
     const { result } = renderHook(useChatInput, {
       ...baseOptions,
@@ -153,5 +172,47 @@ describe('useChatInput', () => {
     })
 
     expect(result.current.inputWidth).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('estimatedAgentModeToggleWidth', () => {
+  // The gate mirrors the RENDER condition: the bar draws the toggle when the
+  // mode config says so and it is full-height and non-narrow. The SSR shim
+  // above cannot see store mutations, so the mode-dependent half of the gate
+  // is tested through this pure function instead of the hook.
+  test('a mode that keeps the toggle drawn estimates its width (help, homeDir)', () => {
+    // Both keep showAgentModeToggle: true while not being 'default' — the old
+    // `inputMode !== 'default'` gate estimated 0 for them, overstating the
+    // drawable columns by the toggle's width.
+    expect(estimatedAgentModeToggleWidth('help', 'DEFAULT', false, false)).toBe(
+      stringWidth('< DEFAULT') + 6,
+    )
+    expect(
+      estimatedAgentModeToggleWidth('homeDir', 'DEFAULT', false, false),
+    ).toBe(stringWidth('< DEFAULT') + 6)
+  })
+
+  test('a mode without the toggle estimates zero (bash)', () => {
+    expect(
+      estimatedAgentModeToggleWidth('bash', 'DEFAULT', false, false),
+    ).toBe(0)
+  })
+
+  test('compact height and narrow width estimate zero in every mode', () => {
+    expect(estimatedAgentModeToggleWidth('default', 'DEFAULT', true, false)).toBe(0)
+    expect(estimatedAgentModeToggleWidth('default', 'DEFAULT', false, true)).toBe(0)
+  })
+})
+
+describe('useChatInput width clamping', () => {
+  test('clamps inputWidth to at least one column when estimates exceed it', () => {
+    const { result } = renderHook(useChatInput, {
+      ...baseOptions,
+      agentMode: 'DEFAULT' as AgentMode,
+      separatorWidth: 10,
+    })
+    // 10 - 2 padding - 15 toggle is negative; the drawable area never drops
+    // below one column, which the wrap measurement needs to stay well-defined.
+    expect(result.current.inputWidth).toBe(1)
   })
 })

@@ -3,109 +3,103 @@
 /**
  * Stop development services started by start-services.ts
  *
- * Worktree-safe: Uses the port number from this worktree's config to only
- * kill processes running on that specific port.
- *
  * Bun automatically loads .env.local and .env.development.local,
  * so environment variables are available without manual sourcing.
+ *
+ * The tracked-service identity (TRACKED_SERVICE_ARGV, command matching, and
+ * the PID-ownership check) and the terminate logic are imported from
+ * start-services.ts — the single source of what is spawned and what counts
+ * as ours — so a change to the spawned argv can never leave this script
+ * silently failing to reap the tracked build.
+ *
+ * The whole PID-file lifecycle (read → terminate → unlink) runs under the
+ * same exclusive lock start-services.ts holds across its read → terminate →
+ * spawn → save sequence, so a concurrent stop can never unlink a start's
+ * freshly saved ownership record (which would leave the newly spawned build
+ * untracked and unreapable), and a concurrent start can never overwrite the
+ * record this stop is reaping.
  */
 
-import { spawnSync } from 'child_process'
-import { existsSync, readFileSync, unlinkSync } from 'fs'
-import { join, resolve } from 'path'
+import { unlinkSync } from 'fs'
 
-const PROJECT_ROOT = resolve(import.meta.dir, '..')
-const LOG_DIR = join(PROJECT_ROOT, 'debug', 'console')
-const PID_FILE = join(LOG_DIR, 'services.json')
+import {
+  PID_FILE,
+  acquireStartLock,
+  isProcessRunning,
+  isTrackedServiceProcess,
+  loadPids,
+  releaseStartLock,
+  terminateProcess,
+} from './start-services'
 
-interface ServicePids {
-  studio?: number
-  sdk?: number
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function loadPids(): ServicePids | null {
-  if (!existsSync(PID_FILE)) {
-    return null
+async function main(): Promise<void> {
+  if (!acquireStartLock()) {
+    // A concurrent `bun up` holds the start lock: its own terminate phase
+    // reaps any previously tracked build, and its freshly spawned build is
+    // saved to services.json under this same lock. Skipping here keeps the
+    // PID-file lifecycle serialized instead of racing it.
+    console.log('Another "bun up" is starting services; run `bun down` again after it finishes.')
+    return
   }
   try {
-    return JSON.parse(readFileSync(PID_FILE, 'utf-8'))
-  } catch {
-    return null
-  }
-}
+    const pids = loadPids()
+    let stopped = false
+    let keepPidFile = false
 
-function killPid(pid: number): boolean {
-  try {
-    process.kill(pid, 0) // Check if exists
-    process.kill(pid, 'SIGTERM')
-    return true
-  } catch {
-    return false
-  }
-}
+    // Kill tracked processes
+    if (pids) {
+      if (pids.sdk) {
+        if (!isProcessRunning(pids.sdk)) {
+          // Stale record: the tracked SDK build already exited (expected — the
+          // build is short-lived) or vanished. Nothing to signal.
+        } else if (!isTrackedServiceProcess(pids.sdk, pids.sdkStartTime)) {
+          // PID reuse or an unverifiable ownership record: the PID now belongs
+          // to an unrelated process, or the persisted start time is missing
+          // (records written by an older revision) or no longer matches — a
+          // recycled PID running the identical tracked argv is indistinguishable
+          // from the original build by command line alone. It must never be
+          // signalled; the ownership record is stale and safe to drop.
+        } else {
+          const outcome = await terminateProcess(pids.sdk, pids.sdkStartTime)
+          if (outcome === 'survived') {
+            // SIGKILL was delivered but the process survived its liveness
+            // window: keep services.json so the surviving tracked process still
+            // has an ownership record a later stop can reap, instead of
+            // orphaning it and reporting 'No services were running'.
+            keepPidFile = true
+          } else {
+            // 'terminated' (exit confirmed) and 'recycled' (the tracked build
+            // confirmed gone, its PID since reused by a foreign process) are
+            // both terminal gone outcomes: the record is stale and is dropped
+            // here. Keeping it for 'recycled' would preserve an ownership
+            // record that points at a foreign PID and tell the operator the
+            // build 'survived termination' for a process that is already gone.
+            stopped = true
+          }
+        }
+      }
 
-function killProcessesOnPort(port: string): boolean {
-  try {
-    const result = spawnSync('lsof', ['-ti', `:${port}`], { encoding: 'utf-8' })
-    if (!result.stdout) return false
-
-    const pids = result.stdout.trim().split('\n').filter(Boolean)
-    let killed = false
-
-    for (const pidStr of pids) {
-      const pid = parseInt(pidStr, 10)
-      if (!isNaN(pid) && killPid(pid)) {
-        killed = true
+      if (!keepPidFile) {
+        // Clean up PID file
+        try {
+          unlinkSync(PID_FILE)
+        } catch {
+          // Ignore
+        }
       }
     }
 
-    return killed
-  } catch {
-    return false
-  }
-}
-
-function killDrizzleStudio(): boolean {
-  const result = spawnSync('pkill', ['-f', `drizzle-kit.*${PROJECT_ROOT}`])
-  return result.status === 0
-}
-
-async function main(): Promise<void> {
-  let stopped = false
-  const pids = loadPids()
-
-  // Kill tracked processes
-  if (pids) {
-    if (pids.studio && killPid(pids.studio)) stopped = true
-    if (pids.sdk && killPid(pids.sdk)) stopped = true
-
-    // Clean up PID file
-    try {
-      unlinkSync(PID_FILE)
-    } catch {
-      // Ignore
+    if (stopped) {
+      console.log('✓ Optional services stopped')
+    } else if (keepPidFile) {
+      console.log(
+        `✗ SDK build (PID ${pids?.sdk}) survived termination; keeping ${PID_FILE} — run \`bun down\` again to stop it.`,
+      )
+    } else {
+      console.log('No services were running')
     }
-  }
-
-  // Also kill Drizzle Studio by port as a fallback.
-  if (killProcessesOnPort('4983')) {
-    stopped = true
-  }
-
-  // Kill drizzle studio for this project
-  if (killDrizzleStudio()) {
-    stopped = true
-  }
-
-  if (stopped) {
-    await sleep(500)
-    console.log('✓ Optional services stopped')
-  } else {
-    console.log('No services were running')
+  } finally {
+    releaseStartLock()
   }
 }
 

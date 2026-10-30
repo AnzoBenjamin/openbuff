@@ -1,0 +1,12 @@
+# Explicit channel pin — the already-paid tax (X-3b charter, §1).
+#
+# The DEPTH audit's napi incident: a transitive crate's MSRV (napi 3.13 needs
+# 1.88) silently exceeded the local rustc (1.87), forcing a
+# `.cargo/config.toml` `incompatible-rust-versions = "fallback"` workaround and
+# a lockfile re-resolution. An explicit pin makes the resolver fail loudly at
+# the toolchain boundary instead of drifting.
+#
+# Pin policy: bump deliberately, never implicitly. A bump is a reviewed change
+# that states the motivating MSRV/toolchain evidence in its commit message.
+[toolchain]
+channel = "1.87.0"

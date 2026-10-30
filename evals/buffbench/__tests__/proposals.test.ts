@@ -129,6 +129,127 @@ describe('proposal promotion policy', () => {
 })
 
 // ---------------------------------------------------------------------------
+// proposal promotion policy: significance guard (P8-T4a)
+// ---------------------------------------------------------------------------
+
+describe('proposal promotion policy: significance guard', () => {
+  test('blocks promotion when the Wilcoxon verdict is not applicable (n < 10)', () => {
+    const dryRun = applyProposals({
+      proposals: [
+        {
+          kind: 'append_system_prompt_guidance',
+          target: { agentId: 'test-agent' },
+          guidance: 'Read before editing.',
+          rationale: 'r',
+        },
+      ],
+      agentDefinitions: [baseAgent()],
+      dryRun: true,
+    })
+    const comparison = compareRuns(
+      [
+        {
+          agentId: 'test-agent',
+          runs: [],
+          averageScore: 6,
+          averageScoreExcludingFailures: 6,
+          averageCost: 20,
+          averageDuration: 10_000,
+        },
+      ],
+      [
+        {
+          agentId: 'test-agent',
+          runs: [],
+          averageScore: 6.9,
+          averageScoreExcludingFailures: 6.9,
+          averageCost: 20,
+          averageDuration: 10_000,
+        },
+      ],
+    )
+    // Only 8 paired nonzero diffs: below the P8-T4a minimum for the Wilcoxon
+    // normal approximation, so the comparison is underpowered and must NOT
+    // promote regardless of how large the observed delta is.
+    const pairedScores = Array.from({ length: 8 }, (_, i) => ({
+      before: i,
+      after: i + 1,
+    }))
+
+    const decision = decideProposalPromotion({
+      dryRun,
+      comparison,
+      policy: { requireSignificance: true },
+      pairedScores,
+    })
+
+    expect(decision.accepted).toBe(false)
+    expect(
+      decision.reasons.some((reason) =>
+        reason.includes('wilcoxon not applicable'),
+      ),
+    ).toBe(true)
+    expect(decision.comparisonSummary).toContain('not applicable')
+
+    const report = formatProposalPromotionReport(decision)
+    expect(report).toContain('Decision: REJECT')
+  })
+
+  test('accepts promotion for an adequately powered significant comparison (n >= 10)', () => {
+    const dryRun = applyProposals({
+      proposals: [
+        {
+          kind: 'append_system_prompt_guidance',
+          target: { agentId: 'test-agent' },
+          guidance: 'Read before editing.',
+          rationale: 'r',
+        },
+      ],
+      agentDefinitions: [baseAgent()],
+      dryRun: true,
+    })
+    const comparison = compareRuns(
+      [
+        {
+          agentId: 'test-agent',
+          runs: [],
+          averageScore: 6,
+          averageScoreExcludingFailures: 6,
+          averageCost: 20,
+          averageDuration: 10_000,
+        },
+      ],
+      [
+        {
+          agentId: 'test-agent',
+          runs: [],
+          averageScore: 6.5,
+          averageScoreExcludingFailures: 6.5,
+          averageCost: 20,
+          averageDuration: 10_000,
+        },
+      ],
+    )
+    // 12 improving pairs: the normal approximation applies, every diff is
+    // positive (maximum W), so p is tiny and the bootstrap CI lower bound
+    // equals the constant diff (1 > 0).
+    const pairedScores = Array.from({ length: 12 }, (_, i) => ({
+      before: i,
+      after: i + 1,
+    }))
+
+    const decision = decideProposalPromotion({
+      dryRun,
+      comparison,
+      policy: { requireSignificance: true },
+      pairedScores,
+    })
+
+    expect(decision.accepted).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // parseProposals
 // ---------------------------------------------------------------------------
 

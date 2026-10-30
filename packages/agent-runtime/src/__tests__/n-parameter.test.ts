@@ -47,16 +47,17 @@ describe('n parameter and GENERATE_N functionality', () => {
       addAgentStep: async () => 'test-agent-step-id',
 
       sendAction: () => {},
+      // Inject a deterministic id generator so identity ids are stable,
+      // replacing the previous spyOn(crypto, 'randomUUID').
+      idGen: {
+        uuid: () => 'mock-uuid-0000-0000-0000-000000000000',
+        prefixedId: (prefix: string, separator = '-') =>
+          `${prefix}${separator}mock-uuid-0000-0000-0000-000000000000`,
+      },
     }
 
     // Mock analytics
     spyOn(analytics, 'trackEvent').mockImplementation(() => {})
-
-    // Mock crypto.randomUUID
-    spyOn(crypto, 'randomUUID').mockImplementation(
-      () =>
-        'mock-uuid-0000-0000-0000-000000000000' as `${string}-${string}-${string}-${string}-${string}`,
-    )
 
     // Create mock template
     mockTemplate = {

@@ -54,7 +54,7 @@ function buildTitleSequence(
  * Write an escape sequence directly to the controlling terminal.
  * This bypasses OpenTUI's stdout capture by writing to /dev/tty directly.
  */
-function writeToTty(sequence: string): boolean {
+export function writeToTty(sequence: string): boolean {
   const ttyPath = process.platform === 'win32' ? 'CON' : '/dev/tty'
 
   let fd: number | null = null

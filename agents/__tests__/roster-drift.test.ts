@@ -3,14 +3,15 @@ import * as path from 'path'
 
 import { describe, expect, test, beforeAll } from 'bun:test'
 
-import {
-  formatCompactAgentCatalogLine,
-  getRequiredAgentParamKeys,
-} from '@codebuff/agent-runtime/templates/prompts'
 import { AGENT_PERSONAS } from '@codebuff/common/constants/agents'
 
 import baseDeep from '../base2/base-deep'
 import { createBase2 } from '../base2/base2'
+import {
+  SPAWN_CONTRACT_DELEGATED_PARAMS,
+  buildSpawnContractClauses,
+  getSpawnContractClauseCoverage,
+} from '../base2/spawn-contract'
 
 // External CLI / eval agents that live in .agents/ or evals (NOT bundled from agents/),
 // but are legitimately routed. routes.json may reference these.
@@ -90,16 +91,6 @@ function getAllTsFiles(dir: string): string[] {
 // the prebuild uses. Populated in beforeAll because the collection is async.
 const shippedIds = new Set<string>()
 
-type ShippedCatalogDef = {
-  id: string
-  displayName: unknown
-  spawnerPrompt: unknown
-  inputSchema: unknown
-}
-
-// Default-exported shipped definitions used to freeze compact catalog visibility.
-const shippedCatalogDefs: ShippedCatalogDef[] = []
-
 // Union of every id spawnable via an orchestrator/pattern spawnable set.
 const reachableViaOrchestrator = new Set<string>()
 
@@ -110,12 +101,6 @@ beforeAll(async () => {
       const id = module.default?.id
       if (typeof id === 'string') {
         shippedIds.add(id)
-        shippedCatalogDefs.push({
-          id,
-          displayName: module.default.displayName,
-          spawnerPrompt: module.default.spawnerPrompt,
-          inputSchema: module.default.inputSchema,
-        })
       }
     } catch {
       // Match prebuild's tolerant behavior: an unrelated non-agent .ts file
@@ -176,28 +161,28 @@ describe('roster drift guard', () => {
     expect(offenders).toEqual([])
   })
 
-  test('every shipped non-root catalog line names required spawn params', () => {
-    const offenders: Array<{ id: string; missing: string[] }> = []
-    for (const def of shippedCatalogDefs) {
-      if (ROOT_AGENT_IDS.has(def.id)) continue
-      const { id, displayName, spawnerPrompt, inputSchema } = def
-      const line = formatCompactAgentCatalogLine(id, {
-        id,
-        displayName,
-        spawnerPrompt,
-        inputSchema,
-      } as Parameters<typeof formatCompactAgentCatalogLine>[1])
-      const missing = getRequiredAgentParamKeys(
-        (inputSchema as { params?: unknown } | undefined)?.params,
-      ).filter((key) => !line.includes(key))
-      if (id === 'repair-editor' && !line.includes('handoff')) {
-        missing.push('handoff')
-      }
-      if (missing.length > 0) {
-        offenders.push({ id, missing })
-      }
+  test('derived spawn-contract clauses cover the base2 default spawnable roster', () => {
+    // D17: the retired prose-sync role ("every shipped non-root catalog line
+    // names required spawn params") is replaced by DERIVATION — the required
+    // params expectation comes from the shipped definitions via
+    // buildSpawnContractClauses(), and the emitted clauses must cover the
+    // live roster. The structural guards above (routes, personas,
+    // reachability, per-mode deltas, prompt alignment) are unchanged.
+    const roster = (createBase2('default').spawnableAgents ?? []) as string[]
+    const covered = new Set<string>()
+    for (const segment of getSpawnContractClauseCoverage()) {
+      for (const id of segment.agentIds) covered.add(id)
     }
-    expect(offenders).toEqual([])
+    for (const id of Object.keys(SPAWN_CONTRACT_DELEGATED_PARAMS)) {
+      covered.add(id)
+    }
+    const uncovered = roster.filter((id) => !covered.has(id))
+    expect(uncovered).toEqual([])
+    // The emitted paragraph is what base2 interpolates into its system
+    // prompt, so the derivation (not hand-maintained prose) owns the text.
+    const emitted = buildSpawnContractClauses()
+    expect(emitted.length).toBeGreaterThan(0)
+    expect(createBase2('default').systemPrompt).toContain(emitted)
   })
 })
 

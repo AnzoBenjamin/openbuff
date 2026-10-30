@@ -2247,10 +2247,11 @@ describe('parseGateStateBlock', () => {
   })
 
   // Published consumer contract: the documented `<gate-state>` schema is
-  // gate/status plus optional details, origin, advisories, and workflow. A
-  // payload carrying EVERY documented key must parse into exactly those keys,
-  // and producer-only keys the contract declares as ignored (repairRound /
-  // maxRepairRounds) must not leak into the block.
+  // gate/status plus optional details, origin, advisories, workflow,
+  // reviewers, and skipReason. A payload carrying EVERY documented key must
+  // parse into exactly those keys, and producer-only keys the contract
+  // declares as ignored (repairRound / maxRepairRounds) must not leak into
+  // the block.
   test('parses every key of the published gate-state schema and ignores producer-only keys', () => {
     const buffer = `<gate-state>${JSON.stringify({
       gate: 'validation/reviewer',
@@ -2263,6 +2264,8 @@ describe('parseGateStateBlock', () => {
         totalCount: 3,
         nextWorkflowAction: 'Implement wave 2 of the refactor',
       },
+      reviewers: ['reliability-reviewer'],
+      skipReason: 'specialist-rate-limited',
       repairRound: 2,
       maxRepairRounds: 5,
     })}</gate-state>`
@@ -2278,6 +2281,8 @@ describe('parseGateStateBlock', () => {
         totalCount: 3,
         nextWorkflowAction: 'Implement wave 2 of the refactor',
       },
+      reviewers: ['reliability-reviewer'],
+      skipReason: 'specialist-rate-limited',
       origin: 'Base2',
     })
     expect(Object.keys(parsed!).sort()).toEqual([
@@ -2286,6 +2291,8 @@ describe('parseGateStateBlock', () => {
       'gate',
       'gateStatus',
       'origin',
+      'reviewers',
+      'skipReason',
       'type',
       'workflow',
     ])
@@ -2429,6 +2436,168 @@ describe('parseGateStateBlock', () => {
       type: 'gate-state',
       gate: 'ci',
       gateStatus: 'passed',
+      origin: 'Base2',
+    })
+  })
+
+  // Additive reviewer attribution + machine skip reason: JSON-payload-only
+  // fields admitted only within the producer's bounds (at most 4 reviewers
+  // of at most 64 chars each; a 120-char skip reason), dropped whole on
+  // violation exactly like advisories/workflow.
+  test('parses reviewers and skipReason from the JSON payload form', () => {
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'validation/reviewer',
+      status: 'skipped',
+      details: 'specialist quota exhausted',
+      reviewers: ['reliability-reviewer', 'security-reviewer'],
+      skipReason: 'specialist-rate-limited',
+    })}</gate-state>`
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'validation/reviewer',
+      gateStatus: 'skipped',
+      details: 'specialist quota exhausted',
+      reviewers: ['reliability-reviewer', 'security-reviewer'],
+      skipReason: 'specialist-rate-limited',
+      origin: 'Base2',
+    })
+  })
+
+  test('drops reviewers that are not an all-strings array within producer bounds', () => {
+    const withReviewers = (reviewers: unknown) =>
+      `<gate-state>${JSON.stringify({
+        gate: 'ci',
+        status: 'skipped',
+        details: 'ok',
+        reviewers,
+      })}</gate-state>`
+    const expected = {
+      type: 'gate-state' as const,
+      gate: 'ci',
+      gateStatus: 'skipped' as const,
+      details: 'ok',
+      origin: 'Base2',
+    }
+    const invalidReviewers: unknown[] = [
+      // Not an array.
+      'reliability-reviewer',
+      // Mixed / non-string entries.
+      ['reliability-reviewer', 42],
+      // Empty entry.
+      ['reliability-reviewer', ''],
+      // Over the 4-entry cap.
+      Array.from({ length: 5 }, (_, index) => `reviewer-${index}`),
+      // Over the 64-char per-entry cap.
+      ['a'.repeat(65)],
+    ]
+    for (const reviewers of invalidReviewers) {
+      expect(parseGateStateBlock(withReviewers(reviewers))).toEqual(expected)
+    }
+  })
+
+  test('keeps reviewers exactly at the producer cap', () => {
+    const reviewers = [
+      ...Array.from({ length: 3 }, (_, index) => `reviewer-${index}`),
+      'b'.repeat(64),
+    ]
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'ci',
+      status: 'skipped',
+      reviewers,
+    })}</gate-state>`
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'skipped',
+      reviewers,
+      origin: 'Base2',
+    })
+  })
+
+  // Parse-side mirror of the producer sanitize: control characters cannot
+  // reach the renderer through the new fields either.
+  test('sanitizes control characters in reviewers and the skip reason', () => {
+    const controlChars = /[\u0000-\u001f\u007f]/
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'validation/reviewer',
+      status: 'skipped',
+      skipReason: 'specialist \u001b[31mrate\u0000 limited\u007f',
+      reviewers: ['reliability\u0000-reviewer\u007f', 'security-reviewer'],
+    })}</gate-state>`
+    const parsed = parseGateStateBlock(buffer)
+    expect(parsed!.skipReason).toBe('specialist [31mrate limited')
+    expect(parsed!.reviewers).toEqual([
+      'reliability-reviewer',
+      'security-reviewer',
+    ])
+    expect(controlChars.test(parsed!.skipReason!)).toBe(false)
+    for (const reviewer of parsed!.reviewers ?? []) {
+      expect(controlChars.test(reviewer)).toBe(false)
+    }
+  })
+
+  test('drops the skipReason field whole when it violates the producer bound', () => {
+    const withSkipReason = (skipReason: unknown) =>
+      `<gate-state>${JSON.stringify({
+        gate: 'ci',
+        status: 'skipped',
+        details: 'ok',
+        skipReason,
+      })}</gate-state>`
+    const expected = {
+      type: 'gate-state' as const,
+      gate: 'ci',
+      gateStatus: 'skipped' as const,
+      details: 'ok',
+      origin: 'Base2',
+    }
+    const invalidSkipReasons: unknown[] = [
+      // Not a string.
+      42,
+      ['specialist-rate-limited'],
+      // Empty / whitespace-only / controls-only after sanitization.
+      '',
+      '   ',
+      '\u0000\u001b\u007f',
+      // Over the 120-char bound.
+      'a'.repeat(121),
+    ]
+    for (const skipReason of invalidSkipReasons) {
+      expect(parseGateStateBlock(withSkipReason(skipReason))).toEqual(expected)
+    }
+  })
+
+  test('keeps a skipReason exactly at the producer cap', () => {
+    const skipReason = 'b'.repeat(120)
+    const buffer = `<gate-state>${JSON.stringify({
+      gate: 'ci',
+      status: 'skipped',
+      skipReason,
+    })}</gate-state>`
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'skipped',
+      skipReason,
+      origin: 'Base2',
+    })
+  })
+
+  // Parse contract: reviewers and skipReason are JSON-payload-only fields,
+  // exactly like advisories/workflow. The legacy line form never carried them.
+  test('does not read reviewers or skipReason from the legacy line form', () => {
+    const buffer = [
+      '<gate-state>',
+      'gate: ci',
+      'status: skipped',
+      'reviewers: reliability-reviewer',
+      'skipReason: specialist-rate-limited',
+      '</gate-state>',
+    ].join('\n')
+    expect(parseGateStateBlock(buffer)).toEqual({
+      type: 'gate-state',
+      gate: 'ci',
+      gateStatus: 'skipped',
       origin: 'Base2',
     })
   })

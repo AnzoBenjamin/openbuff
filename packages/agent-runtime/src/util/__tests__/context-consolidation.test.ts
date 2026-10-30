@@ -20,6 +20,13 @@ import {
 import { archivePreCompaction } from '../context-archive'
 import { maybeRunBackgroundConsolidation } from '../context-consolidation-runner'
 import { handleRecallContext } from '../../tools/handlers/tool/recall-context'
+// The REAL module is loaded (and its exports copied to a plain const) BEFORE
+// mock.module registers: after registration bun resolves reads on the
+// imported namespace through the mock registry, so referencing the namespace
+// inside the factory would re-enter the mock (self-recursion). The
+// registry-wide mock (afterAll(mock.restore) does NOT undo it) must keep the
+// other ~40 real exports working for sibling test files in this process.
+import * as spawnAgentUtilsReal from '../../tools/handlers/tool/spawn-agent-utils'
 
 import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
 import type { ContextConsolidation } from '@codebuff/common/types/context-consolidation'
@@ -247,7 +254,12 @@ const executeSubagentSpy = mock((..._args: unknown[]) => {
 const createAgentStateSpy = mock(() => ({}))
 const extractSubagentContextParamsSpy = mock(() => ({}))
 
+// Real exports first, overrides after, so the overrides win.
+const realSpawnAgentUtils = { ...spawnAgentUtilsReal }
+
+// Registry-wide leak class prevented: raw mock.module registrations are process-wide and survive mock.restore(), so a sibling spawn suite co-scheduled in this worker would crash on the unconditional throwing spy — the afterAll below re-registers the untouched real-module snapshot for them. This is the first registration for the specifier in this file, so the inline snapshot (captured from the real module before this registration) is untainted.
 mock.module('../../tools/handlers/tool/spawn-agent-utils', () => ({
+  ...realSpawnAgentUtils,
   createAgentState: createAgentStateSpy,
   executeSubagent: executeSubagentSpy,
   extractSubagentContextParams: extractSubagentContextParamsSpy,
@@ -263,6 +275,13 @@ describe('maybeRunBackgroundConsolidation', () => {
 
   afterAll(() => {
     mock.restore()
+    // Re-register the untouched real module: mock.module registrations are
+    // process-wide and survive mock.restore(), so sibling suites co-scheduled
+    // in this worker keep resolving the real spawn-agent-utils.
+    mock.module(
+      '../../tools/handlers/tool/spawn-agent-utils',
+      () => ({ ...realSpawnAgentUtils }),
+    )
   })
   test('canary-off: no import/spawn and no record when the gate is not exactly true', () => {
     for (const programmaticConfig of [undefined, {}, { backgroundSnapshotConsolidation: false }]) {
@@ -343,13 +362,23 @@ describe('maybeRunBackgroundConsolidation', () => {
   })
 })
 
-const invokeRecall = async (agentState: AgentState, query: string) => {
+// `query`/`toolCallId` mirror recall_context's two retrieval modes (the
+// schema requires at least one); omitted params stay out of the input object
+// so a by-ID call matches the wire shape the schema documents.
+const invokeRecall = async (
+  agentState: AgentState,
+  query?: string,
+  toolCallId?: string,
+) => {
   const { output } = await handleRecallContext({
     previousToolCallFinished: Promise.resolve(),
     toolCall: {
       toolName: 'recall_context',
       toolCallId: 'recall-1',
-      input: { query },
+      input: {
+        ...(query === undefined ? {} : { query }),
+        ...(toolCallId === undefined ? {} : { toolCallId }),
+      },
     } as CodebuffToolCall<'recall_context'>,
     agentState,
   })
@@ -391,8 +420,8 @@ describe('handleRecallContext consolidation merge failure paths', () => {
     })
     const value = await invokeRecall(agentState, 'eviction')
     expect(value.consolidations).toBeUndefined()
-    // Both result sets empty: the guidance message IS shown.
-    expect(value.message).toContain('No archived pre-compaction content matched')
+    // Both result sets empty: the guidance message IS shown (D27 message).
+    expect(value.message).toContain('No matching archived context')
   })
 
   test('shows the guidance message only when both matches and consolidations are empty', async () => {
@@ -429,6 +458,107 @@ describe('handleRecallContext consolidation merge failure paths', () => {
     expect(value.matches).toEqual([])
     expect(value.archivedAt).toEqual([])
     expect(value.snapshotsSearched).toBe(0)
-    expect(value.message).toContain('No archived pre-compaction content matched')
+    expect(value.message).toContain('No matching archived context')
+  })
+
+  test('searchConsolidations failure degrades to verbatim-only output instead of throwing', async () => {
+    // A corrupt stored consolidation (non-string summary) makes the keyword
+    // search throw; the handler's no-throw guarantee must hold: verbatim
+    // archive results survive, the consolidations field is omitted, and the
+    // failure is logged (best-effort degrade, not an error envelope).
+    const warn = mock(() => {})
+    const agentState = buildRunnerState({
+      contextConsolidations: [
+        { consolidatedAt: 99, sourceArchivedAts: [11], action: 'semantic_compaction', summary: null, coveredMessages: 2 },
+      ] as unknown as ContextConsolidation[],
+    })
+    const { output } = await handleRecallContext({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'recall_context',
+        toolCallId: 'recall-degrade',
+        input: { query: 'keystone-11' },
+      } as CodebuffToolCall<'recall_context'>,
+      agentState,
+      logger: { debug: mock(() => {}), info: mock(() => {}), warn, error: mock(() => {}) },
+    })
+    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0]
+      .value as { matches: unknown[]; consolidations?: unknown; message?: string }
+    expect(value.matches.length).toBeGreaterThan(0)
+    expect(value.consolidations).toBeUndefined()
+    expect(value.message).toBeUndefined()
+    expect(warn).toHaveBeenCalled()
+  })
+})
+
+/**
+ * D26 exact-ID retrieval: the eviction tombstone names `toolCallId=<id>` and
+ * promises recall_context as the recovery path, but buildRunnerState's
+ * archived bodies do not CONTAIN their own ids — the exact shape where a text
+ * search for the id matches nothing. The by-ID input must resolve the call
+ * the tombstone named, keep the consolidations search and the empty-result
+ * guidance message identical to the text path, and win when both params are
+ * present.
+ */
+describe('handleRecallContext exact-ID retrieval (by toolCallId)', () => {
+  test('exact ID resolves even when no archived body text contains the id string', async () => {
+    const agentState = buildRunnerState()
+    // The gap itself: as a TEXT query the id matches nothing (the id lives on
+    // the message identity, not inside any body), so the guidance message
+    // appears.
+    const asText = await invokeRecall(agentState, 'c-11')
+    expect(asText.matches).toEqual([])
+    expect(asText.message).toContain('No matching archived context')
+    // ...but the exact-ID path resolves the archived call and suppresses the
+    // guidance message, identically to any non-empty text result.
+    const byId = await invokeRecall(agentState, undefined, 'c-11')
+    expect(byId.matches).toHaveLength(1)
+    expect(byId.matches[0].toolCallId).toBe('c-11')
+    expect(byId.matches[0].snippet).toContain('keystone-11')
+    expect(byId.message).toBeUndefined()
+    // Provenance parity with the text path: newest-first timestamps, and the
+    // hit is in the OLDER snapshot so BOTH snapshots were visited.
+    expect(byId.archivedAt).toEqual([12, 11])
+    expect(byId.snapshotsSearched).toBe(2)
+  })
+
+  test('both params present: the exact ID wins and the consolidations search still runs on the query', async () => {
+    const agentState = buildRunnerState({
+      contextConsolidations: [
+        {
+          consolidatedAt: 99,
+          sourceArchivedAts: [11],
+          action: 'semantic_compaction',
+          summary: 'Discussed the keystone-12 eviction floor.',
+          coveredMessages: 2,
+        },
+      ],
+    })
+    // Control: as a TEXT query the term resolves the NEWER snapshot's c-12
+    // body — the match the ID must override.
+    const asText = await invokeRecall(agentState, 'keystone-12')
+    expect(asText.matches).toHaveLength(1)
+    expect(asText.matches[0].toolCallId).toBe('c-12')
+
+    // Both params present: the ID names c-11, so the exact-ID result wins
+    // over the query's own text match. The same query terms still hit the
+    // stored consolidation summary, proving the consolidations search keeps
+    // running on the query alongside the by-ID path.
+    const value = await invokeRecall(agentState, 'keystone-12', 'c-11')
+    expect(value.matches).toHaveLength(1)
+    expect(value.matches[0].toolCallId).toBe('c-11')
+    expect(value.matches[0].snippet).toContain('keystone-11')
+    expect(value.matches[0].snippet).not.toContain('keystone-12')
+    expect(value.consolidations).toHaveLength(1)
+    expect(value.consolidations![0].summary).toContain('keystone-12')
+    // Both result sets non-empty: no guidance message.
+    expect(value.message).toBeUndefined()
+  })
+
+  test('by-ID miss keeps the empty-result guidance message identical to the text path', async () => {
+    const agentState = buildRunnerState()
+    const value = await invokeRecall(agentState, undefined, 'no-such-call')
+    expect(value.matches).toEqual([])
+    expect(value.message).toContain('No matching archived context')
   })
 })

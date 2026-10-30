@@ -13,6 +13,27 @@ export type {
 export { collectWorkspaceMoves, run } from './run'
 export { getFilesStructured } from './tools/read-files'
 export { changeFile, changeFiles } from './tools/change-file'
+// The `changeFiles` `intentLog` parameter above is typed with
+// TransactionIntentLog, so the type closure and its factory/recovery helpers
+// are published beside it: external consumers must be able to name the
+// parameter type (and construct/recover a log) without reaching into
+// unpublished internals.
+export {
+  createTransactionIntentLog,
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  revertPathToPreImage,
+  transactionIntentLogFileName,
+} from './tools/transaction-intent-log'
+export type {
+  BeginTransactionParams,
+  IntentOutcome,
+  RecoveredInterruptedTransaction,
+  RecoveryOutcome,
+  RevertTransactionOutcome,
+  TransactionIntentEntry,
+  TransactionIntentLog,
+} from './tools/transaction-intent-log'
 export { replaceRange } from './tools/replace-range'
 export { readImages } from './tools/read-image'
 export { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'
@@ -21,6 +42,7 @@ export type { NodeFileSystemOptions } from './tools/node-filesystem'
 export {
   diagnosticParsers,
   parseLanguageDiagnostics,
+  structuredDiagnosticParsers,
 } from './tools/language-diagnostics'
 export type {
   DiagnosticParser,
@@ -28,7 +50,10 @@ export type {
   LanguageDiagnostic,
   LanguageDiagnosticPosition,
   LanguageDiagnosticRange,
+  LanguageDiagnosticRelatedInfo,
   LanguageDiagnosticSeverity,
+  LanguageDiagnosticTextEdit,
+  LanguageDiagnosticTextEditApplicability,
 } from './tools/language-diagnostics'
 export {
   FilesystemAuthority,
@@ -136,6 +161,66 @@ export type {
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 export * from './client'
+// P1-T3 backend seam + ACP-remote backend.
+export type { ClientBackend } from './client/backend'
+export { InProcessBackend, resolveClientBackend } from './client/backend'
+export {
+  AcpRemoteBackend,
+  acpSessionUpdateToPrintModeEvents,
+} from './client/acp-client'
+export { createServeBridge } from './serve/bridge'
+export type { ServeBridgeClient, ServeBridgeOptions } from './serve/bridge'
+export { sanitizeOutbound } from './serve/outbound-filter'
+// Published so hosts (the CLI serve command) can build a credential-only
+// `credentialEnv` for runServe: the well-known holdback keys plus every
+// `apiKeyEnv` name the provider configuration declares.
+export {
+  getConfiguredCredentialEnvKeys,
+  CREDENTIAL_ENV_KEYS as WELL_KNOWN_CREDENTIAL_ENV_KEYS,
+} from './serve/outbound'
+export { serveAcpOverSocket } from './serve/socket-listener'
+export type { ServeAcpOverSocketOptions } from './serve/socket-listener'
+export { runServe } from './serve/serve'
+export type { RunServeOptions } from './serve/serve'
+// P2-T7: local dashboard over run journals, receipts, and gate timelines —
+// a localhost+token HTTP server (127.0.0.1 ONLY, constant-time bearer/query
+// token auth) plus a static HTML export that inlines the data (never the
+// token). The provider is injectable; createDashProviderFromJournal adapts
+// a P2-T2 JournalReader (plus optional receipt/gate seams).
+export {
+  startDashServer,
+  generateDashToken,
+  renderDashHtml,
+  DASH_MAX_EVENTS,
+} from './dash/server'
+export type {
+  DashDataProvider,
+  DashRunEvent,
+  DashRunSummary,
+  DashServerHandle,
+  DashSnapshot,
+  StartDashServerParams,
+} from './dash/server'
+export {
+  createDashProviderFromJournal,
+  summarizePayload,
+} from './dash/provider'
+export type { CreateDashProviderFromJournalParams } from './dash/provider'
+export { exportDashStatic } from './dash/export'
+export type {
+  ExportDashStaticParams,
+  ExportDashStaticResult,
+} from './dash/export'
+export { createMcpServer, runMcp } from './mcp/server'
+export type {
+  CreateMcpServerOptions,
+  McpIndexManager,
+  McpServerClient,
+  McpSessionData,
+  RunMcpOptions,
+} from './mcp/server'
+export { AcpSessionData } from './services/acp/session-data'
+export type { AcpSessionDataOptions } from './services/acp/session-data'
 export * from './custom-tool'
 export * from './native/ripgrep'
 export * from './run-state'

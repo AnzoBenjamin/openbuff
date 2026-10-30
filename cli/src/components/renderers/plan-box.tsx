@@ -2,10 +2,11 @@ import { memo, useState } from 'react'
 
 import { useTheme } from '../../hooks/use-theme'
 import {
-  renderMarkdown,
+  hasMarkdown,
   type MarkdownPalette,
 } from '../../utils/markdown-renderer'
 import { BORDER_CHARS } from '../../utils/ui-constants'
+import { ContentWithMarkdown } from '../blocks/content-with-markdown'
 import { Button } from '../button'
 import { BuildModeButtons } from '../build-mode-buttons'
 import { HarnessBox } from './harness-box'
@@ -15,6 +16,7 @@ import type { PlanArtifactMetadata } from '../../types/chat'
 interface PlanBoxProps {
   planContent: string
   metadata?: PlanArtifactMetadata
+  /** Retained for call-site compatibility after the D47 Stage 2 renderer removal; no longer drives markdown wrapping (the native renderable wraps itself). */
   availableWidth: number
   markdownPalette: MarkdownPalette
   onBuildFast: () => void
@@ -72,12 +74,23 @@ export const PlanBox = memo(
 
     return (
       <HarnessBox tone="secondary" gap={1} paddingBottom={1}>
-        <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-          {renderMarkdown(planContent, {
-            codeBlockWidth: Math.max(10, availableWidth - 8),
-            palette: markdownPalette,
-          })}
-        </text>
+        {/* D47 Stage 2: the legacy remark renderer was removed, so markdown
+            plan content renders through the native markdown renderable (a
+            renderable cannot nest inside a text element) via
+            ContentWithMarkdown, whose try/catch degrades native setup failures
+            to plain text; plain text keeps the styled text path. */}
+        {hasMarkdown(planContent) ? (
+          <ContentWithMarkdown
+            content={planContent}
+            isStreaming={false}
+            codeBlockWidth={availableWidth}
+            palette={markdownPalette}
+          />
+        ) : (
+          <text style={{ wrapMode: 'word', fg: theme.foreground }}>
+            {planContent}
+          </text>
+        )}
         {hasMetadata && (
           <box style={{ flexDirection: 'column', gap: 0 }}>
             <text style={{ fg: theme.secondary }}>Artifacts</text>

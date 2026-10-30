@@ -34,11 +34,15 @@ import {
   coordinateEditApplication,
   invalidatePreparedEditPaths,
 } from './edit-application-coordinator'
-import { processEditTransaction } from '../../../process-edit-transaction'
+import {
+  attributeContentOffset,
+  processEditTransaction,
+} from '../../../process-edit-transaction'
 import {
   preflightValidateSyntax,
   formatPreflightErrorMessage,
 } from '../../../util/preflight-syntax-validation'
+import type { SyntaxValidationResult } from '../../../util/preflight-syntax-validation'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { FileProcessingState } from './write-file'
@@ -58,10 +62,11 @@ const TRANSACTION_SNAPSHOT_CONCURRENCY = 8
 /**
  * Conservative signal that a preflight syntax message is a transport-truncation
  * artifact (a payload cut in transit) rather than a genuine code-syntax error.
- * Only fires on SMALL payloads carrying `Unexpected )` / `Unexpected ,`: a real
- * file very rarely has more closers than openers, but a payload whose newString
- * was cut mid-expression ends exactly there. Genuine syntax errors on real file
- * content keep the normal preflight_failed path; this never overrides them.
+ * Fires on a payload carrying `Unexpected )` / `Unexpected ,` whose replacement
+ * content has more closers than openers: a real file very rarely has more
+ * closers than openers, but a payload whose newString was cut mid-expression
+ * ends exactly there. Genuine syntax errors on real file content keep the
+ * normal preflight_failed path; this never overrides them.
  *
  * The closer-over-opener heuristic on the edit payload alone can mislabel a
  * malformed-but-NOT-truncated edit whose newString legitimately has more
@@ -97,9 +102,11 @@ function looksLikeTruncatedEditContent(
     return false
   }
   const text = fragments.join('\n')
-  // Truncation only makes sense for sub-slab payloads; large payloads fail at
-  // argument-parse instead and never reach preflight.
-  if (text.length > 64 * 1024) return false
+  // Payload size never disqualifies the classification: large payloads are
+  // exactly the ones transport truncates, so a size bail-out would hide the
+  // very case this signal exists for. False positives on complete content stay
+  // blocked by the isRawDelimiterUnbalanced(filePostEditContent) corroboration
+  // below, which a non-truncated file always fails.
   const balance = (open: string, close: string): number => {
     let delta = 0
     for (const ch of text) {
@@ -176,6 +183,92 @@ function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
       Array.isArray(edit.replacements) &&
       edit.replacements.some((replacement) => Boolean(replacement.basedOnRead)))
   )
+}
+
+type ContentLedger = Parameters<typeof attributeContentOffset>[0]
+
+type PreflightFailureAttribution = {
+  editIndex: number
+  attributionSuffix: string
+}
+
+/**
+ * Refines the naive first-edit-on-path attribution with the transaction
+ * ledger: it records which edit produced each byte range of the candidate
+ * content, so the edit that actually emitted the broken bytes is named
+ * instead of the first edit that happened to touch the same path.
+ */
+function resolvePreflightFailureAttribution(params: {
+  syntaxValidation: SyntaxValidationResult
+  file: { path: string; content: string; ledger?: ContentLedger }
+  edits: TransactionEdit[]
+  fallbackEditIndex: number
+  originalIndexByContentEditIndex: Map<number, number>
+  initialContentByPath: Map<string, string | null>
+}): PreflightFailureAttribution {
+  const {
+    syntaxValidation,
+    file,
+    edits,
+    fallbackEditIndex,
+    originalIndexByContentEditIndex,
+    initialContentByPath,
+  } = params
+  let editIndex = fallbackEditIndex
+  let attributionSuffix = ''
+  if (typeof syntaxValidation.line === 'number' && syntaxValidation.line >= 1) {
+    // getLineCoordinates normalizes line endings, matching the normalized
+    // space the ledger is built in (via normalizeLineEndings), so this
+    // offset is comparable to the ledger's after-range offsets. On CRLF
+    // files a column may drift by the dropped \r — positions here are
+    // best-effort diagnostics, not anchors.
+    const { lines, visibleLineCount } = getLineCoordinates(file.content)
+    const clampedLine = Math.min(syntaxValidation.line, visibleLineCount)
+    let offset = 0
+    for (let index = 0; index < clampedLine - 1; index++) {
+      offset += lines[index]!.length + 1
+    }
+    if (
+      typeof syntaxValidation.column === 'number' &&
+      syntaxValidation.column >= 1
+    ) {
+      offset += Math.min(
+        syntaxValidation.column - 1,
+        lines[clampedLine - 1]!.length,
+      )
+    }
+    const attribution = attributeContentOffset(file.ledger ?? [], offset)
+    const originalContent = initialContentByPath.get(file.path)
+    // The ledger's owningEditIndex is an index into contentEdits (the
+    // array processEditTransaction received), so translate it back to the
+    // model's original edits[] index before reporting it.
+    const originalEditIndex =
+      attribution.owningEditIndex === null
+        ? undefined
+        : originalIndexByContentEditIndex.get(attribution.owningEditIndex)
+    if (
+      originalEditIndex !== undefined &&
+      originalEditIndex >= 0 &&
+      originalEditIndex < edits.length
+    ) {
+      editIndex = originalEditIndex
+      attributionSuffix = ` The failing content was produced by edit ${editIndex + 1} of ${edits.length} (near line ${syntaxValidation.line} of the candidate content).`
+    } else if (
+      attribution.originalOffset !== null &&
+      typeof originalContent === 'string'
+    ) {
+      // Best-effort: the ledger maps original offsets in line-ending
+      // normalized space, so on CRLF files the reported current-file line
+      // may drift by the dropped carriage returns.
+      const originalLine = originalContent
+        .slice(0, attribution.originalOffset)
+        .split('\n').length
+      attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content (line ${originalLine} of the current file).`
+    } else {
+      attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content.`
+    }
+  }
+  return { editIndex, attributionSuffix }
 }
 
 /**
@@ -349,6 +442,11 @@ export const handleEditTransaction = (async (
     requestClientToolCall,
     requestOptionalFile,
   } = params
+  // D22/PR-T4: with the edit-blocks flag enabled the provider schema accepts
+  // a raw block payload string, but the preprocess translates it into edit
+  // objects before this handler runs — a string can never reach here, and the
+  // runtime inputSchema deliberately has no string arm so this stays typed as
+  // the edit-object array.
   const edits = toolCall.input.edits.map((edit) => ({
     ...edit,
     path: normalizeToolPath(edit.path),
@@ -960,15 +1058,39 @@ export const handleEditTransaction = (async (
     runId,
     logger,
   )
-  const contentEdits = substitutedEdits.filter(
-    (edit) =>
+  // processEditTransaction receives ONLY the content edits (create/delete/move
+  // are applied by the client-change builder below), so every index it reports
+  // — including the transformation ledger's per-action editIndex — is an index
+  // into contentEdits. This map translates those back to the model's original
+  // edits[] indices so failure attribution keeps naming the submitted edit.
+  // processEditTransaction's own edit union covers exactly these six members,
+  // so the Extract keeps contentEdits assignable to its edits parameter.
+  const contentEdits: Extract<
+    TransactionEdit,
+    {
+      type:
+        | 'str_replace'
+        | 'structured'
+        | 'replace_range'
+        | 'rewrite_symbol'
+        | 'patch'
+        | 'write_file'
+    }
+  >[] = []
+  const originalIndexByContentEditIndex = new Map<number, number>()
+  substitutedEdits.forEach((edit, editIndex) => {
+    if (
       edit.type === 'str_replace' ||
       edit.type === 'structured' ||
       edit.type === 'replace_range' ||
       edit.type === 'rewrite_symbol' ||
       edit.type === 'patch' ||
-      edit.type === 'write_file',
-  )
+      edit.type === 'write_file'
+    ) {
+      originalIndexByContentEditIndex.set(contentEdits.length, editIndex)
+      contentEdits.push(edit)
+    }
+  })
   const transactionResult =
     contentEdits.length > 0
       ? await processEditTransaction({
@@ -1143,22 +1265,43 @@ export const handleEditTransaction = (async (
   // (Bun.Transpiler), Python (structural validation), and Go (structural
   // validation). In Node.js, JS/TS validation is gracefully skipped.
   for (const file of transactionResult.files) {
-    const syntaxValidation = preflightValidateSyntax(file.path, file.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      file.path,
+      file.content,
+    )
     if (!syntaxValidation.valid) {
       // A preflight syntax failure is NOT a stale-anchor failure: the edits
       // were structurally applied but the resulting content has a syntax
       // error. Don't force a re-read (markAllTransactionPathsAsRequiringRead)
       // — the agent only needs to fix the syntax, not re-read all files.
-      // Report the first edit index that targeted this path so the agent can
-      // identify which edit produced the broken content (multiple edits can
-      // target the same path; the first is the most actionable starting point).
-      const editIndex = edits.findIndex((edit) => edit.path === file.path)
+      // Report the edit that produced the broken content so the agent can fix
+      // it; the first-edit-on-path fallback below is only the starting point
+      // when the ledger cannot attribute the bytes.
+      const fallbackEditIndex = edits.findIndex(
+        (edit) => edit.path === file.path,
+      )
+      const { editIndex, attributionSuffix } =
+        resolvePreflightFailureAttribution({
+          syntaxValidation,
+          file,
+          edits,
+          fallbackEditIndex,
+          originalIndexByContentEditIndex,
+          initialContentByPath,
+        })
+      // The truncation classifier inspects the payload of the REFINED edit
+      // index. For single-edit and first-edit-on-path transactions the refined
+      // index equals the naive findIndex one, so the classification is
+      // byte-identical to the pre-attribution behavior.
       const truncated = looksLikeTruncatedEditContent(
         edits[editIndex] ??
           ({ type: 'delete', path: file.path } as TransactionEdit),
         syntaxValidation.message,
         file.content,
       )
+      // The attribution suffix rides along only on the genuine-syntax-error
+      // branch; a transport-truncated payload keeps its existing note.
+      const composedSyntaxMessage = `${syntaxValidation.message}${attributionSuffix}`
       return {
         output: [
           {
@@ -1169,13 +1312,15 @@ export const handleEditTransaction = (async (
                 file.path,
                 truncated
                   ? `${syntaxValidation.message} — the edit payload appears cut in transport (unbalanced delimiters). Re-send the edit; keep each edit's newString/content well under the transport-safe band.`
-                  : syntaxValidation.message,
+                  : composedSyntaxMessage,
               ),
               failures: [
                 {
                   editIndex,
                   path: file.path,
-                  errorMessage: syntaxValidation.message,
+                  errorMessage: truncated
+                    ? syntaxValidation.message
+                    : composedSyntaxMessage,
                   failureKind: truncated
                     ? PAYLOAD_TRUNCATED_ERROR_CODE
                     : 'preflight_failed',
@@ -1193,7 +1338,10 @@ export const handleEditTransaction = (async (
 
   for (const edit of edits) {
     if (edit.type !== 'create') continue
-    const syntaxValidation = preflightValidateSyntax(edit.path, edit.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      edit.path,
+      edit.content,
+    )
     if (!syntaxValidation.valid) {
       const truncated = looksLikeTruncatedEditContent(
         edit,

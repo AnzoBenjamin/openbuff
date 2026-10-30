@@ -1,4 +1,12 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test'
+import {
+  describe,
+  test,
+  expect,
+  mock,
+  beforeEach,
+  afterEach,
+  afterAll,
+} from 'bun:test'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -10,9 +18,15 @@ import {
   COMMAND_REGISTRY,
   defineCommand,
   defineCommandWithArgs,
+  findCommand,
   formatPlanListReport,
   planListActiveState,
 } from '../command-registry'
+import {
+  getLastDetachedSessionId,
+  setLastDetachedSessionId,
+} from '../../utils/attach-session'
+import { setAttachTarget } from '../../utils/codebuff-client'
 import {
   ACTIVE_SESSION_FILE_NAME,
   listPlanSessions,
@@ -25,6 +39,62 @@ import type {
   PlanStatusContentBlock,
   TextContentBlock,
 } from '../../types/chat'
+import type { OpenbuffClient } from '@openbuff/sdk'
+
+/**
+ * Hermetic codebuff-client double for the attach-mode exit tests. The /exit
+ * handler calls detachOnExit() with no deps, so the client seam is mocked at
+ * the codebuff-client module boundary (the mock applies retroactively to the
+ * already-imported live bindings in attach-session.ts and
+ * command-registry.ts). The detach becomes observable through
+ * getLastDetachedSessionId() without touching a real backend, and module
+ * state resets per test via setAttachTarget(undefined).
+ *
+ * The REAL module is snapshotted (await import) BEFORE the mock.module
+ * registration and its exports are spread in the factory; afterAll
+ * re-registers the original: mock.module is registry-wide for the whole test
+ * process, and CI's bun 1.3.5 does not isolate mock.module registrations
+ * across test files. Spreading keeps working implementations — e.g. the real
+ * ManagedOpenbuffClient, which codebuff-client.test.ts exercises — flowing
+ * through the mock, and the afterAll restore keeps the three attach-mode
+ * seams from leaking real-module drops into sibling files.
+ */
+type FakeBackend = {
+  detach?: () => Promise<string | undefined>
+  attach?: (sessionId: string) => Promise<void>
+}
+
+let fakeBackend: FakeBackend | undefined
+let fakeAttachTarget: { socketPath: string; token?: string } | undefined
+
+// Snapshot the real module BEFORE the mock.module registration so the real
+// exports can be spread in the factory and re-registered in afterAll.
+const realCodebuffClientModule = {
+  ...(await import('../../utils/codebuff-client')),
+}
+
+mock.module('../../utils/codebuff-client', () => ({
+  ...realCodebuffClientModule,
+  getAttachTarget: () => fakeAttachTarget,
+  setAttachTarget: (
+    target: { socketPath: string; token?: string } | undefined,
+  ) => {
+    fakeAttachTarget = target
+  },
+  getCodebuffClient: async (): Promise<OpenbuffClient> => {
+    if (!fakeAttachTarget) {
+      throw new Error('client must not be built outside attach mode')
+    }
+    return { backend: fakeBackend } as unknown as OpenbuffClient
+  },
+}))
+
+afterAll(() => {
+  // Restore the real codebuff-client module registry-wide: without this the
+  // attach-seam mock registration leaks into every other test file sharing
+  // this worker (bun does not isolate mock.module across test files).
+  mock.module('../../utils/codebuff-client', () => ({ ...realCodebuffClientModule }))
+})
 
 /**
  * Tests for the command factory pattern.
@@ -1170,6 +1240,24 @@ describe('command factory pattern', () => {
       }
     }
 
+    // Attach-mode module state must reset per test so the fake client and
+    // detach bookkeeping never leak across cases (mirrors the 'detach and
+    // attach commands' block). The afterEach matters as much as the
+    // beforeEach: mock.module is file-wide, so a leaked fake attach target
+    // would flip the later detach/attach describe's no-attach-mode
+    // assumptions.
+    beforeEach(() => {
+      setAttachTarget(undefined)
+      setLastDetachedSessionId(undefined)
+      fakeBackend = undefined
+    })
+
+    afterEach(() => {
+      setAttachTarget(undefined)
+      setLastDetachedSessionId(undefined)
+      fakeBackend = undefined
+    })
+
     test('drains the guarded-submit queue into session history before exiting', async () => {
       const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
       expect(exitCmd).toBeDefined()
@@ -1328,6 +1416,67 @@ describe('command factory pattern', () => {
         stubs.restore()
       }
     })
+
+    test('attach mode: exits without aborting the run and detaches first', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      fakeBackend = { detach: async () => 'sess-exit-1' }
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+        expect(abortController.signal.aborted).toBe(false)
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        // The remote run KEEPS RUNNING: the exit path detaches instead of
+        // aborting the attached run's controller.
+        expect(abortController.signal.aborted).toBe(false)
+        // The detach actually ran to completion before process.exit: the
+        // backend's session id was persisted for a later /attach.
+        expect(getLastDetachedSessionId()).toBe('sess-exit-1')
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
+
+    test('attach mode: a failing detach still exits without aborting', async () => {
+      const exitCmd = COMMAND_REGISTRY.find((c) => c.name === 'exit')
+      expect(exitCmd).toBeDefined()
+
+      setAttachTarget({ socketPath: '/tmp/openbuff-test.sock' })
+      fakeBackend = {
+        detach: async () => {
+          throw new Error('socket closed')
+        },
+      }
+
+      const stubs = stubProcessExitAndKill()
+      try {
+        const abortController = new AbortController()
+        const params = createMockParams({
+          abortControllerRef: { current: abortController },
+        })
+
+        exitCmd!.handler(params, '')
+        await new Promise((resolve) => setTimeout(resolve, 50))
+
+        // The detach failure is swallowed silently (no user-visible message
+        // at exit time) and must never block the exit.
+        expect(abortController.signal.aborted).toBe(false)
+        expect(getLastDetachedSessionId()).toBeUndefined()
+        expect(stubs.exitSpy).toHaveBeenCalledWith(0)
+      } finally {
+        stubs.restore()
+      }
+    })
   })
 
   describe('feedback command arg handling', () => {
@@ -1377,6 +1526,87 @@ describe('command factory pattern', () => {
 
       // Should still return openFeedbackMode
       expect(result).toEqual({ openFeedbackMode: true })
+    })
+  })
+
+  describe('detach and attach commands', () => {
+    /** Lets the fire-and-forget .then callbacks in the handlers run. */
+    const flushMicrotasks = () =>
+      new Promise((resolve) => setTimeout(resolve, 0))
+
+    /** The system message body from the single setMessages call. */
+    const systemMessageBody = (setMessagesCalls: unknown): string => {
+      const calls = setMessagesCalls as Array<
+        [(prev: unknown[]) => Array<{ content: string }>]
+      >
+      const next = calls[calls.length - 1][0]([])
+      return next[next.length - 1].content
+    }
+
+    beforeEach(() => {
+      setLastDetachedSessionId(undefined)
+    })
+
+    test('detach and attach are registered as no-arg commands', () => {
+      for (const name of ['detach', 'attach']) {
+        const cmd = COMMAND_REGISTRY.find((c) => c.name === name)
+        expect(cmd, `Command ${name} should exist`).toBeDefined()
+        expect(cmd?.acceptsArgs, `Command ${name} should not accept args`).toBe(
+          false,
+        )
+      }
+    })
+
+    test('/attach resolves to the attach command, not /image', () => {
+      // /image used to claim 'attach' as an alias, which would shadow /attach
+      // in findCommand's first-match scan.
+      expect(findCommand('attach')?.name).toBe('attach')
+      expect(findCommand('img')?.name).toBe('image')
+    })
+
+    test('/detach while streaming replies wait and does not attempt a detach', async () => {
+      const detachCmd = COMMAND_REGISTRY.find((c) => c.name === 'detach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({
+        inputValue: '/detach',
+        isStreaming: true,
+        setMessages,
+      })
+
+      detachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      const body = systemMessageBody(setMessages.mock.calls)
+      expect(body).toContain('wait')
+      // Between-turns only: the unavailable path is never reached mid-turn and
+      // the run is not aborted.
+      expect(body).not.toContain('unavailable')
+    })
+
+    test('/detach without attach mode replies that detach is unavailable', async () => {
+      // No attach target is set (module default), so the real detachSession
+      // short-circuits before any client is built — fully hermetic.
+      const detachCmd = COMMAND_REGISTRY.find((c) => c.name === 'detach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({ inputValue: '/detach', setMessages })
+
+      detachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      expect(systemMessageBody(setMessages.mock.calls)).toContain('unavailable')
+    })
+
+    test('/attach without a detached session replies with an error message', async () => {
+      const attachCmd = COMMAND_REGISTRY.find((c) => c.name === 'attach')
+      const setMessages = mock(() => {})
+      const params = createMockParams({ inputValue: '/attach', setMessages })
+
+      attachCmd!.handler(params, '')
+      await flushMicrotasks()
+
+      const body = systemMessageBody(setMessages.mock.calls)
+      expect(body).toContain('/attach')
+      expect(body).toContain('no detached session')
     })
   })
 })

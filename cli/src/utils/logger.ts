@@ -139,7 +139,7 @@ function createPinoLoggerForPath(p: string): void {
     const fileStream = pino.destination({
       dest: p, // absolute or relative file path
       mkdir: true, // create parent dirs if they don’t exist
-      sync: true, // set true if you *must* block on every write
+      sync: true,
     })
     pinoDestination = fileStream
 

@@ -1156,6 +1156,24 @@ describe('mutation receipts and reconciliation', () => {
     ).toBe(false)
   })
 
+  it('accepts an optional transactionId on commit receipts as a versioned addition', () => {
+    expect(
+      commitReceiptV1Schema.safeParse({
+        ...portableReceipt,
+        transactionId: 'tx-1',
+      }).success,
+    ).toBe(true)
+    // Receipts without the new field keep parsing byte-identically.
+    expect(commitReceiptV1Schema.safeParse(portableReceipt).success).toBe(true)
+    // The field, when present, must still be a nonempty id.
+    expect(
+      commitReceiptV1Schema.safeParse({
+        ...portableReceipt,
+        transactionId: '',
+      }).success,
+    ).toBe(false)
+  })
+
   it('rejects mutation inputs at per-action, aggregate, and array bounds before reconciliation', () => {
     expect(
       mutationResultExceedsCheapBoundsV1({

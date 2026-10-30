@@ -8,6 +8,8 @@ import { browserLogsParams } from './params/tool/browser-logs'
 import { checkBackgroundAgentParams } from './params/tool/check-background-agent'
 import { checkJobParams } from './params/tool/check-job'
 import { codeSearchParams } from './params/tool/code-search'
+import { codeActionParams } from './params/tool/code-action'
+import { extractSymbolParams } from './params/tool/extract-symbol'
 import { gitBranchParams } from './params/tool/git-branch'
 import { gitStatusParams } from './params/tool/git-status'
 import { killJobParams } from './params/tool/kill-job'
@@ -21,6 +23,10 @@ import { findFilesMatchingContentParams } from './params/tool/find-files-matchin
 import { globParams } from './params/tool/glob'
 import { listDirectoryParams } from './params/tool/list-directory'
 import { lookupAgentInfoParams } from './params/tool/lookup-agent-info'
+import { findReferencesParams } from './params/tool/find-references'
+import { goToDefinitionParams } from './params/tool/go-to-definition'
+import { hoverTypeParams } from './params/tool/hover-type'
+import { workspaceSymbolParams } from './params/tool/workspace-symbol'
 import { queryIndexParams } from './params/tool/query-index'
 import { recallContextParams } from './params/tool/recall-context'
 import { recordDecisionParams } from './params/tool/record-decision'
@@ -31,6 +37,7 @@ import { readOutlineParams } from './params/tool/read-outline'
 import { readSubtreeParams } from './params/tool/read-subtree'
 import { replaceRangeParams } from './params/tool/replace-range'
 import { rewriteSymbolParams } from './params/tool/rewrite-symbol'
+import { renameSymbolParams } from './params/tool/rename-symbol'
 import { renderUIParams } from './params/tool/render-ui'
 import { runFileChangeHooksParams } from './params/tool/run-file-change-hooks'
 import { runTerminalCommandParams } from './params/tool/run-terminal-command'
@@ -80,6 +87,8 @@ const canonicalToolParams = {
   check_background_agent: checkBackgroundAgentParams,
   check_job: checkJobParams,
   code_search: codeSearchParams,
+  code_action: codeActionParams,
+  extract_symbol: extractSymbolParams,
   git_status: gitStatusParams,
   git_branch: gitBranchParams,
   get_task: getTaskParams,
@@ -105,6 +114,10 @@ const canonicalToolParams = {
   list_directory: listDirectoryParams,
   lookup_agent_info: lookupAgentInfoParams,
   query_index: queryIndexParams,
+  find_references: findReferencesParams,
+  go_to_definition: goToDefinitionParams,
+  hover_type: hoverTypeParams,
+  workspace_symbol: workspaceSymbolParams,
   recall_context: recallContextParams,
   record_decision: recordDecisionParams,
   read_docs: readDocsParams,
@@ -115,6 +128,7 @@ const canonicalToolParams = {
   read_subtree: readSubtreeParams,
   replace_range: replaceRangeParams,
   rewrite_symbol: rewriteSymbolParams,
+  rename_symbol: renameSymbolParams,
   render_ui: renderUIParams,
   run_file_change_hooks: runFileChangeHooksParams,
   run_targeted_validation: runTargetedValidationParams,
@@ -304,6 +318,34 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   z.object({
     toolName: z.literal('query_index'),
     input: toolParams.query_index.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('find_references'),
+    input: toolParams.find_references.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('go_to_definition'),
+    input: toolParams.go_to_definition.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('code_action'),
+    input: toolParams.code_action.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('extract_symbol'),
+    input: toolParams.extract_symbol.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('rename_symbol'),
+    input: toolParams.rename_symbol.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('hover_type'),
+    input: toolParams.hover_type.inputSchema,
+  }),
+  z.object({
+    toolName: z.literal('workspace_symbol'),
+    input: toolParams.workspace_symbol.inputSchema,
   }),
   z.object({
     toolName: z.literal('read_image'),

@@ -7,6 +7,8 @@ import {
   toolNameParam,
 } from '../constants'
 
+import { areEditBlocksEnabled, parseEditBlocks } from './edit-blocks'
+
 import type { JSONValue } from '../../types/json'
 import type { ToolResultOutput } from '../../types/messages/content-part'
 
@@ -51,12 +53,20 @@ export function coerceToObject(val: unknown): unknown {
 }
 
 // Transport payloads are bounded by the model's per-response output budget, so
-// the classification/repair scan bound tracks the largest realistic tool-call
+// the recovery/repair scan bound tracks the largest realistic tool-call
 // payload (1 MiB) instead of the legacy 256KB cap that left oversized
-// truncated edits unclassified (they surfaced as generic syntax errors). All
-// scans under this bound are linear; recovery parse attempts are additionally
-// candidate-capped for oversized payloads to keep worst-case CPU bounded.
-const MAX_REPAIRABLE_JSON_LENGTH = 1_048_576
+// truncated edits unrecoverable. Truncation classification keeps its own
+// wider MAX_TRUNCATION_DETECT_LENGTH band (defined below) so an oversized
+// cut is still honestly classified even when it cannot be recovered. All
+// scans under these bounds are linear; recovery parse attempts are
+// additionally candidate-capped for oversized payloads to keep worst-case CPU
+// bounded.
+/**
+ * Recovery/repair bound (1 MiB) for JSON-shaped tool-call payloads. Exported so
+ * the agent runtime's stream parser caps truncated-tool-call salvage at the
+ * same bound instead of hardcoding a copy of the number that drifts.
+ */
+export const MAX_REPAIRABLE_JSON_LENGTH = 1_048_576
 /**
  * Legacy classification bound. Payloads at or under this size keep the
  * original try-every-candidate recovery behavior; larger payloads cap the
@@ -124,8 +134,29 @@ export function repairMalformedJsonSeparators(
 /** Machine-readable code for arguments cut in transport; distinct from malformed. */
 export const PAYLOAD_TRUNCATED_ERROR_CODE = 'payload_truncated' as const
 
+/**
+ * Recovery/repair bound (1 MiB): the byte ceiling under which
+ * tryRecoverTruncatedToolArguments and repairMalformedJsonSeparators
+ * operate. Exported so the agent runtime's truncation errors can cite the
+ * exact bound instead of hardcoding a copy that drifts.
+ */
+export const MAX_TRUNCATION_RECOVERY_BYTES = MAX_REPAIRABLE_JSON_LENGTH
+
+/**
+ * Detection-only ceiling (8 MiB). detectTransportTruncation is a single
+ * linear scan that runs ONLY on the JSON-parse error path (never after a
+ * successful parse), so it can afford a wider band than recovery. Without
+ * it, a >1 MiB payload cut mid-structure came back unclassified and the
+ * executor reported a plain 'expected object, received string' with no
+ * payload_truncated code — the model could not tell a transport cut from
+ * malformed input. The O(n) scan runs on the error path only, which is
+ * the accepted cost; recovery stays at MAX_TRUNCATION_RECOVERY_BYTES
+ * because each candidate prefix re-parses.
+ */
+const MAX_TRUNCATION_DETECT_LENGTH = 8 * MAX_REPAIRABLE_JSON_LENGTH
+
 /** Structural scan state for classification + boundary recovery (bounds CPU). */
-const MAX_TRUNCATION_SCAN_LENGTH = MAX_REPAIRABLE_JSON_LENGTH
+const MAX_TRUNCATION_SCAN_LENGTH = MAX_TRUNCATION_RECOVERY_BYTES
 
 type TruncationScanState = {
   depth: number
@@ -133,12 +164,21 @@ type TruncationScanState = {
   escapedData: boolean
 }
 
-/** Single pass over the raw argument string tracking string/escape/brace depth. */
-function scanTruncationState(input: string): TruncationScanState | undefined {
+/**
+ * Single pass over the raw argument string tracking string/escape/brace
+ * depth. maxScanLength is required (no default) so every call site states
+ * its own bound — detection passes the wider MAX_TRUNCATION_DETECT_LENGTH
+ * ceiling, recovery passes MAX_TRUNCATION_RECOVERY_BYTES — and the two
+ * bounds cannot silently drift together.
+ */
+function scanTruncationState(
+  input: string,
+  maxScanLength: number,
+): TruncationScanState | undefined {
   if (
     typeof input !== 'string' ||
     input.length === 0 ||
-    input.length > MAX_TRUNCATION_SCAN_LENGTH
+    input.length > maxScanLength
   ) {
     return undefined
   }
@@ -167,7 +207,7 @@ export function detectTransportTruncation(
   parseError?: string,
 ): boolean {
   if (typeof input !== 'string') return false
-  const state = scanTruncationState(input)
+  const state = scanTruncationState(input, MAX_TRUNCATION_DETECT_LENGTH)
   if (!state) return false
   // A balanced, fully-closed, no-dangling-string payload is never truncated,
   // regardless of what a fallback parse error claimed (malformed stays malformed).
@@ -198,21 +238,43 @@ export function detectTransportTruncation(
 export function tryRecoverTruncatedToolArguments(
   rawInput: string,
 ): Record<string, unknown> | undefined {
-  const state = scanTruncationState(rawInput)
+  const state = scanTruncationState(rawInput, MAX_TRUNCATION_RECOVERY_BYTES)
   if (!state || (state.depth === 0 && !state.inString && !state.escapedData)) {
     // Non-strings, empty/oversized inputs, mismatched closers, and complete
     // balanced payloads are never truncation-recovery candidates.
     return undefined
   }
-  // M3-T2: ONE forward pass over the raw input records every out-of-string
-  // `}`/`]` position together with the residual open-container stack at that
-  // point. The original implementation re-ran the string/escape/brace state
-  // machine over the whole prefix for EVERY candidate closer (O(n²) on the
-  // truncation-recovery hot path); recording the stack incrementally keeps
-  // the scan linear while producing byte-identical candidate strings.
-  type CandidateSnapshot = { pos: number; openStack: string[] }
+  // M3-T2 (memory fixed 2026-10-28c, reviewer finding
+  // truncation-candidate-stack-memory): ONE forward pass over the raw input
+  // records every out-of-string `}`/`]` position together with the residual
+  // open-container stack at that point, as a PERSISTENT linked stack — every
+  // push allocates one node that shares all older nodes (structural sharing),
+  // and each candidate records only { pos, node }. Recording is therefore
+  // O(1) memory per closer and O(input) overall, and the scan stays one
+  // linear pass in time. The earlier array form (openStack: [...openStack]
+  // per closer) was O(closers x depth) MEMORY: a <=1 MiB bracket-flood
+  // payload (~500k '[' then ~260k ']') passes scanTruncationState as
+  // unbalanced, reaches recovery, and allocated ~10^11 array slots —
+  // OOM-killing the process. Candidate strings stay byte-identical to that
+  // array form: the node→parent walk yields the same top-to-bottom closer
+  // sequence the array iteration produced.
+  type OpenStackNode = { ch: '{' | '['; parent: OpenStackNode | undefined }
+  type CandidateSnapshot = { pos: number; node: OpenStackNode | undefined }
+  // The stack ops route through function signatures on purpose: a direct
+  // `stackHead = stackHead?.parent` inside the loop hits TS's loop-carried
+  // narrowing quirk (the self-referential assignment degenerates the
+  // variable's narrowed type to `never`, TS2339 on `.parent`), while the
+  // parameter/return types keep the declared union in force.
+  const pushOpenNode = (
+    ch: '{' | '[',
+    parent: OpenStackNode | undefined,
+  ): OpenStackNode => ({ ch, parent })
+  const popOpenNode = (
+    node: OpenStackNode | undefined,
+  ): OpenStackNode | undefined =>
+    node === undefined ? undefined : node.parent
   const candidates: CandidateSnapshot[] = []
-  let openStack: string[] = []
+  let stackHead: OpenStackNode | undefined = undefined
   let inString = false
   let escapedData = false
   for (let i = 0; i < rawInput.length; i++) {
@@ -223,22 +285,25 @@ export function tryRecoverTruncatedToolArguments(
       else if (c === '"') inString = false
     } else if (c === '"') {
       inString = true
-    } else if (c === '{') {
-      openStack.push('{')
-    } else if (c === '[') {
-      openStack.push('[')
+    } else if (c === '{' || c === '[') {
+      stackHead = pushOpenNode(c, stackHead)
     } else if (c === '}' || c === ']') {
       // The candidate prefix ends AT this closer (inclusive), so the residual
-      // stack is the one AFTER this closer is consumed.
-      openStack.pop()
-      candidates.push({ pos: i, openStack: [...openStack] })
+      // stack is the one AFTER this closer is consumed. scanTruncationState
+      // already refused depth < 0, so every closer has a matching opener; the
+      // parent walk never mutates shared nodes.
+      stackHead = popOpenNode(stackHead)
+      candidates.push({ pos: i, node: stackHead })
     }
   }
   // Try candidates from LATEST to EARLIEST: append balanced closers for the
   // residual opens and let JSON.parse be the final gate. Same acceptance
   // semantics as before: the recovered object must be a plain non-empty
   // object. Oversized payloads cap the parse attempts at the latest N
-  // closers so per-candidate O(n) parses cannot accumulate into O(n²).
+  // closers so per-candidate O(n) parses cannot accumulate into O(n²); the
+  // per-candidate closer walk is O(depth) but only ever runs for TRIED
+  // candidates, and the suffix is assembled once via array+join (never
+  // re-roped per character).
   const candidateBudget =
     rawInput.length > LEGACY_MAX_REPAIRABLE_JSON_LENGTH
       ? MAX_TRUNCATION_RECOVERY_CANDIDATES
@@ -249,10 +314,14 @@ export function tryRecoverTruncatedToolArguments(
     k--
   ) {
     const snapshot = candidates[k]
-    let candidate = rawInput.slice(0, snapshot.pos + 1)
-    for (let i = snapshot.openStack.length - 1; i >= 0; i--) {
-      candidate += snapshot.openStack[i] === '{' ? '}' : ']'
+    const closers: string[] = []
+    for (let node = snapshot.node; node !== undefined; node = node.parent) {
+      closers.push(node.ch === '{' ? '}' : ']')
     }
+    const candidate =
+      closers.length > 0
+        ? rawInput.slice(0, snapshot.pos + 1) + closers.join('')
+        : rawInput.slice(0, snapshot.pos + 1)
     try {
       const recovered = JSON.parse(candidate)
       if (
@@ -361,10 +430,11 @@ export function parseJsonBounded(value: unknown, maxDepth = 3): unknown {
  * fragment — potentially 100+ — drowning out the actionable hint.
  *
  * Returns the recovered array when the rejoined fragments parse back into
- * an array. When the array is unrecoverable (no fragment parses as a
- * standalone object AND the rejoined string looks like JSON), returns the
- * joined string so Zod emits a single field-level error. Otherwise returns
- * the original value unchanged so legitimate string arrays survive.
+ * an array. When the rejoined fragments are one truncated container (no
+ * fragment parses as a standalone object), returns the joined string so Zod
+ * emits a single field-level error. Otherwise returns the original value
+ * unchanged so legitimate string arrays keep their array type — including
+ * arrays of bracket-prefixed labels such as ['[draft]', '[final]'].
  */
 function repairCommaSplitFragments(value: unknown): unknown {
   if (
@@ -391,32 +461,37 @@ function repairCommaSplitFragments(value: unknown): unknown {
     return reparsed
   }
 
-  // Only collapse to a single string when the rejoined fragments look like
-  // they could be a (possibly malformed) stringified JSON array/object.
-  // Legitimate string arrays like ['file1.ts', 'file2.ts'] rejoin to
-  // 'file1.ts,file2.ts' which does not start with '[' or '{', so they are
-  // returned unchanged.
+  // Only collapse to a single string when the rejoined fragments carry the
+  // genuine comma-split signature: a single JSON array/object cut off before
+  // its closers. Legitimate string arrays like ['file1.ts', 'file2.ts']
+  // rejoin to a balanced non-JSON string, and so do bracket-prefixed label
+  // arrays like ['[draft]', '[final]'] — those keep their original array type
+  // instead of being narrowed to a string and failing array validation.
   const firstChar = rejoined.trim()[0]
   if (firstChar !== '[' && firstChar !== '{') {
     return value
   }
+  if (!detectTransportTruncation(rejoined)) {
+    return value
+  }
 
-  // If every individual fragment also fails to parse as a standalone
-  // object, the array is unrecoverable. Return the joined string so Zod
-  // emits a single field-level error rather than one per-element error.
+  // A fragment that parses as a standalone object means these are
+  // individually serialized entries (repaired per entry by the caller), not
+  // fragments of one truncated container.
   const hasStandaloneObject = value.some((entry) => {
     const parsed = parseJsonBounded(entry)
     return (
       parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
     )
   })
-  if (!hasStandaloneObject) {
-    return rejoined
+  if (hasStandaloneObject) {
+    return value
   }
 
-  // At least one fragment parses as a standalone object — return the
-  // original array so the caller can apply per-entry repairs.
-  return value
+  // The rejoined fragments are one unrecoverable truncated container. Return
+  // the joined string so Zod emits a single field-level error rather than one
+  // per-element error.
+  return rejoined
 }
 
 /**
@@ -445,40 +520,73 @@ const ARRAY_PARAM_KEYS = [
 
 const MAX_TAGGED_PARAM_LENGTH = 65_536
 const ARG_TAG_PATTERN = /<\/?arg_(?:key|value)>/i
+/**
+ * A single-field provider arg-tag envelope: an optional leading `<arg_key>`
+ * (the provider's tool parser sometimes consumes it), a BARE IDENTIFIER key,
+ * and the `<arg_value>` opener. Requiring an identifier is what keeps ordinary
+ * prose that merely mentions `arg_key` from ever being unwrapped.
+ */
+const SINGLE_ARG_TAG_PREFIX =
+  /^\s*(?:<arg_key>)?([A-Za-z0-9_]+)<\/arg_key>\s*<arg_value>/i
+
+/**
+ * Unwrap a single-field provider arg-tag serialization such as
+ * `key</arg_key><arg_value>VALUE</arg_value>` (the leading `<arg_key>` and
+ * trailing `</arg_value>` may already have been consumed by the provider's
+ * tool parser). Returns `{ [key]: value }` only for an unambiguous
+ * single-field payload; anything with additional tag markers (multi-field or
+ * truncated) is returned unchanged so schema validation still fails closed.
+ *
+ * The extracted value stays a STRING: this only strips the provider's wrapper
+ * syntax, so the destination schema still validates (and parses) the field
+ * itself.
+ */
+export function unwrapSingleArgTagObject(value: unknown): unknown {
+  if (typeof value !== 'string' || value.length > MAX_TAGGED_PARAM_LENGTH) {
+    return value
+  }
+
+  const prefix = value.match(SINGLE_ARG_TAG_PREFIX)
+  const key = prefix?.[1]
+  if (!prefix || !key) return value
+
+  let unwrapped = value.slice(prefix[0].length)
+  const closingTag = unwrapped.match(/<\/arg_value>\s*$/i)
+  if (closingTag?.index !== undefined) {
+    unwrapped = unwrapped.slice(0, closingTag.index)
+  }
+
+  // Additional tag markers indicate a multi-field or truncated serialization,
+  // and an empty value carries no field content: fail closed so normal schema
+  // validation rejects the original instead of treating wrapper syntax as a
+  // real param value.
+  if (!unwrapped.trim() || ARG_TAG_PATTERN.test(unwrapped)) return value
+
+  return { [key]: unwrapped }
+}
 
 /**
  * Repairs a provider serialization that places a Basher command inside the
  * params string as `command</arg_key><arg_value>...`. The opening arg_key and
  * closing arg_value tags may already have been consumed by the provider's tool
- * parser. Keep this Basher-only: interpreting arbitrary agent params strings
- * as tagged data would make malformed custom-agent inputs ambiguous.
+ * parser. The tag parsing itself is the shared `unwrapSingleArgTagObject`
+ * helper so the two entry points cannot drift apart; this narrower wrapper
+ * only restricts the accepted field to `command`, so an envelope naming any
+ * other field still fails closed under normal schema validation.
  */
 function repairBasherTaggedParams(agentType: unknown, value: unknown): unknown {
+  if (agentType !== 'basher') return value
+
+  const unwrapped = unwrapSingleArgTagObject(value)
   if (
-    agentType !== 'basher' ||
-    typeof value !== 'string' ||
-    value.length > MAX_TAGGED_PARAM_LENGTH
+    unwrapped === null ||
+    typeof unwrapped !== 'object' ||
+    Array.isArray(unwrapped)
   ) {
     return value
   }
-
-  const prefix = value.match(
-    /^\s*(?:<arg_key>)?command<\/arg_key>\s*<arg_value>/i,
-  )
-  if (!prefix) return value
-
-  let command = value.slice(prefix[0].length)
-  const closingTag = command.match(/<\/arg_value>\s*$/i)
-  if (closingTag?.index !== undefined) {
-    command = command.slice(0, closingTag.index)
-  }
-
-  // Additional tag markers indicate a multi-field or truncated serialization.
-  // Leave it untouched so normal schema validation rejects it instead of
-  // accidentally treating wrapper syntax as part of a shell command.
-  if (!command.trim() || ARG_TAG_PATTERN.test(command)) return value
-
-  return { command }
+  const record = unwrapped as Record<string, unknown>
+  return typeof record.command === 'string' ? unwrapped : value
 }
 
 /**
@@ -535,11 +643,22 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
       repaired = true
     }
 
+    // A provider tool-call serializer can leak a single-field arg-tag envelope
+    // (`key</arg_key><arg_value>VALUE</arg_value>`) into a string param instead
+    // of a params object, and that happens for ANY agent type — not just
+    // Basher. Unwrap it for every entry before the Basher-specific step below;
+    // ambiguous payloads (multi-field or truncated) come back unchanged so
+    // validation still fails closed.
+    const unwrappedParams = unwrapSingleArgTagObject(record.params)
     const taggedParams = repairBasherTaggedParams(
       record.agent_type,
       record.params,
     )
-    const parsedParams = parseJsonBounded(taggedParams)
+    // Basher's command-only repair is the stricter form of the same unwrap, so
+    // prefer its result when it fired and fall back to the general unwrap.
+    const paramsValue =
+      taggedParams === record.params ? unwrappedParams : taggedParams
+    const parsedParams = parseJsonBounded(paramsValue)
     const canMergeParams =
       parsedParams === undefined ||
       (parsedParams !== null &&
@@ -551,7 +670,7 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
         ...((parsedParams ?? {}) as Record<string, unknown>),
       }
       let paramsRepaired =
-        taggedParams !== record.params || typeof record.params === 'string'
+        paramsValue !== record.params || typeof record.params === 'string'
 
       // Provider tool-call serializers sometimes preserve an agent-specific
       // array as a JSON string inside an otherwise valid params object (for
@@ -757,7 +876,34 @@ function canonicalizeTransactionEditType(rawType: unknown): string | undefined {
  * untouched because they could be create or write_file operations.
  */
 export function normalizeTransactionEditList(val: unknown): unknown {
-  const decoded = parseJsonBounded(val)
+  // PR-T4 wave 1: plain-text SEARCH/REPLACE edit blocks behind the
+  // default-off OPENBUFF_EDIT_BLOCKS flag. The cheap marker guard keeps
+  // every payload without that substring (including all plain JSON strings)
+  // on the existing path below with zero behavior change. On any parse
+  // error the original input is kept unchanged so the existing JSON
+  // pipeline produces its structured diagnostic — a block-parse failure
+  // only means the payload was not valid blocks, and the JSON repair
+  // paths remain authoritative for everything else.
+  let editsInput = val
+  if (
+    typeof val === 'string' &&
+    areEditBlocksEnabled() &&
+    val.includes('<<<<<<< SEARCH')
+  ) {
+    const parsedBlocks = parseEditBlocks(val)
+    if ('edits' in parsedBlocks) {
+      // Parsed blocks map onto the same shape the per-entry pipeline below
+      // produces, so type inference, canonicalization, and bounds apply
+      // unchanged. The input string itself is never mutated.
+      editsInput = parsedBlocks.edits.map((edit) => ({
+        type: 'str_replace' as const,
+        path: edit.path,
+        replacements: edit.replacements,
+      }))
+    }
+  }
+
+  const decoded = parseJsonBounded(editsInput)
   // A malformed/truncated serialized array must fail at `edits` itself. Do
   // not wrap it as a one-element array, which produces the misleading
   // `edits[0] expected object, received string` diagnostic and encourages the

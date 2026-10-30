@@ -16,6 +16,10 @@ export const terminalCommandOutputSchema = z.union([
     exitCode: z.number().optional(),
     /** Project-relative paths newly dirtied by a SYNC command (post − pre git status). */
     touchedPaths: z.array(z.string()).optional(),
+    /** Output persisted to a scratch file when the inline result was truncated (the artifact covers the accumulated stream, itself capped at the mid-stream limit); read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
   }),
   z.object({
     command: z.string(),
@@ -28,6 +32,10 @@ export const terminalCommandOutputSchema = z.union([
     stdoutOmittedForLength: z.literal(true),
     exitCode: z.number().optional(),
     touchedPaths: z.array(z.string()).optional(),
+    /** Full untruncated output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
   }),
   z.object({
     command: z.string(),
@@ -51,6 +59,13 @@ export const terminalCommandOutputSchema = z.union([
     timedOut: z.boolean().optional(),
     spawnFailed: z.boolean().optional(),
     permissionDenied: z.boolean().optional(),
+    /**
+     * The git-commit safety preflight could not inspect the staged diff
+     * (spawn/timeout/output-budget/header-decode failure). Distinct from
+     * permissionDenied: the commit was never judged, so a retry on transient
+     * failure is reasonable.
+     */
+    safetyPreflightFailed: z.boolean().optional(),
     permissionProfile: z
       .enum([
         'read-only',
@@ -69,6 +84,10 @@ export const terminalCommandOutputSchema = z.union([
     startingCwd: z.string().optional(),
     /** Project-relative paths newly dirtied before timeout/spawn failure (best-effort). */
     touchedPaths: z.array(z.string()).optional(),
+    /** Output persisted to a scratch file when the inline result was truncated (the artifact covers the accumulated stream, itself capped at the mid-stream limit); read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
   }),
 ])
 
@@ -143,6 +162,7 @@ Notes:
 - If the user references a specific file, it could be either from their cwd or from the project root. You **must** determine which they are referring to (either infer or ask). Then, you must specify the path relative to the project root (or use the cwd parameter)
 - Commands can succeed without giving any output, e.g. if no type errors were found.
 - Use SYNC for finite commands. For long-running or never-exiting commands (dev servers, watchers, \`tail -f\`), set process_type: BACKGROUND — fire-and-forget start that returns a jobId immediately. Live job_update streams progress to the user; call check_job only when you need agent-side readiness/exitCode/join (e.g. wait_for a pattern), not to poll solely for user progress.
+- When a SYNC command's output is truncated, the result includes fullLogPath — read the full output with read_logs (it accepts a path) instead of re-running the command.
 
 ${gitCommitGuidePrompt}
 

@@ -6,6 +6,16 @@ import {
   handleIndexCommandBlocks,
 } from '../index-command'
 
+/** Minimal valid MetadataIndex fixture for the /index scip seams. */
+const scipSnapshot = {
+  version: '2' as const,
+  projectRoot: '/root',
+  builtAt: 1,
+  fileCount: 0,
+  files: {},
+  graph: { nodes: {}, edges: [] as Array<never> },
+}
+
 const createDeps = (overrides: Record<string, unknown> = {}) => {
   const manager = {
     markStale: () => {},
@@ -16,6 +26,7 @@ const createDeps = (overrides: Record<string, unknown> = {}) => {
       ready: true,
       totalIndexed: 42,
       indexAge: 65_000,
+      snapshot: { snapshotId: 'snap-1' },
       status: {
         state: 'ready' as const,
         ready: true,
@@ -53,6 +64,8 @@ const createDeps = (overrides: Record<string, unknown> = {}) => {
       },
     }),
     isSemanticReady: () => false,
+    getSnapshot: () => scipSnapshot,
+    adoptMergedIndex: async () => true,
     ...overrides,
   }
   return {
@@ -63,6 +76,9 @@ const createDeps = (overrides: Record<string, unknown> = {}) => {
         semanticEnabled: true,
         manager,
       }),
+      // P3-T4: the scip tests must not hit the real getProjectRoot() (unset
+      // in tests); a stub root keeps the runner seam fully injectable.
+      getRoot: () => scipSnapshot.projectRoot,
     },
   }
 }
@@ -337,5 +353,176 @@ describe('handleIndexCommandBlocks disabled vs status/rebuild', () => {
       }),
     })) as import('../../types/chat').IndexStatusContentBlock
     expect(block.statusLine).toContain('disabled')
+  })
+})
+
+describe('/index scip', () => {
+  test('renders per-indexer lines, the total, and adopts the merged snapshot', async () => {
+    const mergedIndex = {
+      ...scipSnapshot,
+      graph: {
+        nodes: {},
+        edges: [
+          {
+            from: 'file:a.ts',
+            to: 'file:b.ts',
+            type: 'references' as const,
+            weight: 0.9,
+            confidence: 'precise' as const,
+          },
+        ],
+      },
+    }
+    const adoptions: Array<{ merged: unknown; expectedSnapshotId: string }> = []
+    const { deps } = createDeps({
+      adoptMergedIndex: async (
+        merged: unknown,
+        expectedSnapshotId: string,
+      ) => {
+        adoptions.push({ merged, expectedSnapshotId })
+        return true
+      },
+    })
+    let capturedOpts: { index?: unknown; indexers?: string[] } | undefined
+    const runScipIngest = async (
+      _root: string,
+      opts?: { index?: unknown; indexers?: string[] },
+    ) => {
+      capturedOpts = opts
+      return {
+        results: [
+          { indexer: 'typescript', status: 'ok' as const, edgesMerged: 12 },
+          {
+            indexer: 'python',
+            status: 'unavailable' as const,
+            error: 'scip-python not available (detection exit -1)',
+          },
+        ],
+        mergedTotal: 12,
+        mergedIndex,
+      }
+    }
+
+    const result = await handleIndexCommand('scip typescript', {
+      ...deps,
+      runScipIngest,
+    })
+
+    expect(result).toContain('typescript: ok (12 precise edges merged)')
+    expect(result).toContain(
+      'python: unavailable — scip-python not available (detection exit -1)',
+    )
+    expect(result).toContain(
+      'SCIP ingestion: 12 precise edges merged across 2 indexer(s).',
+    )
+    expect(result).toContain('adopted')
+    expect(adoptions).toHaveLength(1)
+    expect(adoptions[0]!.merged).toBe(mergedIndex)
+    expect(adoptions[0]!.expectedSnapshotId).toBe('snap-1')
+    expect(capturedOpts!.index).toBe(scipSnapshot)
+    expect(capturedOpts!.indexers).toEqual(['typescript'])
+  })
+
+  test('hints at PATH install when every indexer is unavailable', async () => {
+    const { deps } = createDeps()
+    const runScipIngest = async () => ({
+      results: [
+        {
+          indexer: 'typescript',
+          status: 'unavailable' as const,
+          error: 'scip-typescript not available (detection exit -1)',
+        },
+      ],
+      mergedTotal: 0,
+    })
+
+    const result = await handleIndexCommand('scip', { ...deps, runScipIngest })
+
+    expect(result).toContain(
+      'typescript: unavailable — scip-typescript not available (detection exit -1)',
+    )
+    expect(result).toContain(
+      'SCIP ingestion: 0 precise edges merged across 1 indexer(s).',
+    )
+    expect(result).toContain('PATH')
+    expect(result).not.toContain('adopted')
+  })
+
+  test('renders a runner failure fail-open instead of throwing', async () => {
+    const { deps } = createDeps()
+    const runScipIngest = async () => {
+      throw new Error('indexer exploded')
+    }
+
+    const result = await handleIndexCommand('scip', { ...deps, runScipIngest })
+
+    expect(result).toContain('SCIP ingestion failed: indexer exploded')
+  })
+
+  test('discards merged edges when a concurrent rebuild swapped the snapshot', async () => {
+    const { deps } = createDeps({ adoptMergedIndex: async () => false })
+    const runScipIngest = async () => ({
+      results: [
+        { indexer: 'typescript', status: 'ok' as const, edgesMerged: 5 },
+      ],
+      mergedTotal: 5,
+      mergedIndex: scipSnapshot,
+    })
+
+    const result = await handleIndexCommand('scip', { ...deps, runScipIngest })
+
+    expect(result).toContain(
+      'Index rebuilt during scan; merged edges discarded',
+    )
+    expect(result).toContain('rerun /index scip')
+  })
+
+  test('reports not-ready when the manager has no snapshot', async () => {
+    const { deps } = createDeps({ getSnapshot: () => null })
+
+    const result = await handleIndexCommand('scip', deps)
+
+    expect(result).toBe('Index not ready; run /index rebuild first.')
+  })
+
+  test('respects the disabled index state', async () => {
+    const result = await handleIndexCommand('scip', {
+      getManager: () => ({
+        enabled: false,
+        semanticEnabled: false,
+        manager: null,
+      }),
+    })
+
+    expect(result).toContain('disabled in openbuff.json')
+  })
+
+  test('blocks path returns the scip report as a string like explain', async () => {
+    const { deps } = createDeps()
+    const runScipIngest = async () => ({
+      results: [
+        { indexer: 'typescript', status: 'ok' as const, edgesMerged: 3 },
+      ],
+      mergedTotal: 3,
+      mergedIndex: scipSnapshot,
+    })
+
+    const result = await handleIndexCommandBlocks('scip', {
+      ...deps,
+      runScipIngest,
+    })
+
+    expect(typeof result).toBe('string')
+    expect(result as string).toContain(
+      'SCIP ingestion: 3 precise edges merged across 1 indexer(s).',
+    )
+  })
+
+  test('usage line lists the scip subcommand', async () => {
+    const { deps } = createDeps()
+
+    const result = await handleIndexCommand('bogus', deps)
+
+    expect(result).toContain('scip')
   })
 })

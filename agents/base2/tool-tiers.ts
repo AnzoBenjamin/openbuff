@@ -43,13 +43,17 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'browser_logs',
   'check_background_agent',
   'check_job',
+  'code_action',
+  'extract_symbol',
   'code_search',
   'create_plan',
   'end_turn',
   'find_files',
   'find_files_matching_content',
+  'find_references',
   'git_status',
   'git_branch',
+  'go_to_definition',
   'get_task',
   'get_change_review_bundle',
   'inspect_workspace',
@@ -66,6 +70,7 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'list_jobs',
   'lookup_agent_info',
   'query_index',
+  'hover_type',
   'recall_context',
   'record_decision',
   'read_docs',
@@ -76,6 +81,7 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'read_outline',
   'read_subtree',
   'replace_range',
+  'rename_symbol',
   'rewrite_symbol',
   'render_ui',
   'run_file_change_hooks',
@@ -91,6 +97,7 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'update_plan_status',
   'update_subgoal',
   'web_search',
+  'workspace_symbol',
   'write_file',
   'write_audit_findings',
 ] as const satisfies readonly AllToolNames[]
@@ -177,14 +184,18 @@ export function resolveModelToolNames(
   }
   const unlocked = new Set<UnlockedToolTier>(unlockedTiers)
   // Deduped so a name listed in both CORE and a tier surfaces exactly once.
-  return [
-    ...new Set<AllToolNames>([
-      ...BASE2_CORE_TOOL_NAMES,
-      // Single pass over the canonical tier order: no intermediate filtered
-      // array, and locked tiers contribute nothing.
-      ...NON_CORE_TIERS.flatMap((tier) =>
-        unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
-      ),
-    ]),
-  ].filter((name) => modeAllowsTool(name, gates))
+  // The source name arrays are `as const` readonly literal tuples; a readonly
+  // array cannot spread into a mutable AllToolNames[], and the flatMap union
+  // defeats the Set constructor overload. Concatenate instead: concat widens
+  // each readonly ToolName tuple to AllToolNames cleanly, and Set dedupes.
+  const combined = (BASE2_CORE_TOOL_NAMES as readonly AllToolNames[]).concat(
+    // Single pass over the canonical tier order: no intermediate filtered
+    // array, and locked tiers contribute nothing.
+    ...NON_CORE_TIERS.flatMap((tier): readonly AllToolNames[] =>
+      unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
+    ),
+  )
+  return [...new Set<AllToolNames>(combined)].filter((name): name is AllToolNames =>
+    modeAllowsTool(name, gates),
+  )
 }

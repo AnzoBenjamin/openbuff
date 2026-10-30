@@ -21,6 +21,13 @@ import type {
   TaskMemoryEvidenceV1,
   TaskMemoryV1,
 } from '@codebuff/common/types/task-memory'
+import {
+  computeTriggerSignature,
+  MemoryPlaybookSchema,
+  type MemoryPlaybook,
+  type PlaybookCounters,
+  type PlaybookTrigger,
+} from '@codebuff/common/types/memory-playbook'
 
 function makeEvidence(
   overrides: Partial<TaskMemoryEvidenceV1> = {},
@@ -2022,5 +2029,797 @@ describe('/memory blocks compact-memory', () => {
     expect(compactCalls).toHaveLength(1)
     expect(compactCalls[0]?.['mode']).toBe('preview')
     expect(collectArchiveFiles(root)).toHaveLength(0)
+  })
+})
+
+describe('/memory blocks playbooks', () => {
+  const NOW = Date.now()
+  const DAY_MS = 24 * 60 * 60 * 1000
+
+  function makePlaybookRow(overrides: {
+    playbookId: string
+    title: string
+    /** Lets an existing-row fixture carry a proposal's exact trigger. */
+    trigger?: PlaybookTrigger
+    enforcement?: 'block' | 'warn' | 'inject-only'
+    status?: 'candidate' | 'active' | 'verified' | 'retired'
+    counters?: Partial<PlaybookCounters>
+    createdAt?: number
+    expiresAt?: number
+  }): MemoryPlaybook {
+    // The trigger override flows into the row AND its triggerSignature, so
+    // a fixture row and the proposal it collides with hash identically —
+    // no second fixture shape is needed for the same-signature find().
+    const trigger: PlaybookTrigger =
+      overrides.trigger ?? {
+        tool: 'run_terminal_command',
+        requireEvidence: [],
+      }
+    return MemoryPlaybookSchema.parse({
+      schemaVersion: 1,
+      playbookId: overrides.playbookId,
+      workspaceId: 'project-1',
+      title: overrides.title,
+      instruction: `Instruction for ${overrides.title}`,
+      trigger,
+      scope: { repos: [] },
+      status: overrides.status ?? 'active',
+      enforcement: overrides.enforcement ?? 'warn',
+      counters: {
+        fired: 0,
+        blocked: 0,
+        compliedAfterBlock: 0,
+        falsePositives: 0,
+        bypassed: 0,
+        ...overrides.counters,
+      },
+      provenance: {
+        origin: 'repository',
+        recordedBy: 'test',
+        sourceEventIds: [],
+        metadata: {},
+      },
+      triggerSignature: computeTriggerSignature(trigger, { repos: [] }),
+      ...(overrides.expiresAt !== undefined
+        ? { expiresAt: overrides.expiresAt }
+        : {}),
+      createdAt: overrides.createdAt ?? NOW - 60_000,
+      updatedAt: NOW - 60_000,
+    })
+  }
+
+  /** One row per lifecycle branch plus a row that yields no action. */
+  function makeLifecycleRows(): MemoryPlaybook[] {
+    return [
+      makePlaybookRow({
+        playbookId: 'pb-promote',
+        title: 'Shadow candidate rule',
+        enforcement: 'inject-only',
+        counters: { fired: 8, lastFiredAt: NOW - 60_000 },
+      }),
+      makePlaybookRow({
+        playbookId: 'pb-verify',
+        title: 'Enforced effective rule',
+        counters: { fired: 10, blocked: 3, compliedAfterBlock: 3 },
+      }),
+      makePlaybookRow({
+        playbookId: 'pb-noise',
+        title: 'Noisy rule',
+        counters: { fired: 4, falsePositives: 2 },
+      }),
+      makePlaybookRow({
+        playbookId: 'pb-dud',
+        title: 'Stale shadow rule',
+        enforcement: 'inject-only',
+        createdAt: NOW - 31 * DAY_MS,
+        counters: { fired: 1 },
+      }),
+      makePlaybookRow({
+        playbookId: 'pb-quiet',
+        title: 'Quiet healthy rule',
+        counters: { fired: 2 },
+      }),
+    ]
+  }
+
+  function playbookRepository(rows: MemoryPlaybook[]) {
+    const statusCalls: Array<{ playbookId: string; status: string }> = []
+    const upsertCalls: Array<Record<string, unknown>> = []
+    const repository = {
+      listAllPlaybooks: async () => rows,
+      setPlaybookStatus: async (playbookId: string, status: string) => {
+        statusCalls.push({ playbookId, status })
+      },
+      upsertPlaybookByTriggerSignature: async (input: unknown) => {
+        upsertCalls.push(input as Record<string, unknown>)
+        return rows[0]
+      },
+    }
+    return { repository, statusCalls, upsertCalls }
+  }
+
+  function playbooksDeps(
+    repository: unknown,
+  ): ReturnType<typeof createDeps>['deps'] {
+    const { deps } = createDeps({ memory: makeMemory() })
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        requestedAuthority: 'shadow-v2',
+        effectiveAuthority: 'shadow-v2',
+        projectId: 'project-1',
+        operator: {},
+        repository,
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+    return deps
+  }
+
+  test('playbooks previews rows and proposed transitions without writes', async () => {
+    const rows = makeLifecycleRows()
+    const { repository, statusCalls, upsertCalls } = playbookRepository(rows)
+    const deps = playbooksDeps(repository)
+
+    const block = await handleMemoryCommandBlocks('playbooks', deps)
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('secondary')
+    const text = block.lines.join('\n')
+    expect(text).toContain('Playbooks: 5 total.')
+    expect(text).toContain(
+      '- [active/inject-only] Shadow candidate rule — fired 8, blocked 0, complied 0, FP 0, bypassed 0, last fired',
+    )
+    expect(text).toContain('Proposed lifecycle transitions:')
+    // The reason is the evaluator's canonical promote sentence (pinned in
+    // playbook-lifecycle.test.ts); the fixture fired 60s ago, so the computed
+    // last-fired distance is 0d.
+    expect(text).toContain(
+      'Promote Shadow candidate rule → active/warn (Shadow rule fired 8 times with zero false positives, last fired 0d ago; promote to warn enforcement.)',
+    )
+    expect(text).toContain('Verify Enforced effective rule → verified')
+    expect(text).toContain('Retire Noisy rule → retired/noise')
+    expect(text).toContain('Retire Stale shadow rule → retired/dud')
+    expect(text).not.toContain('Quiet healthy rule →')
+    expect(text).not.toContain('No lifecycle transitions proposed.')
+    expect(
+      block.lines.filter((line) => /^- (Promote|Verify|Retire) /.test(line)),
+    ).toHaveLength(4)
+    expect(block.insertCommands).toEqual([
+      { label: 'Insert apply command', command: '/memory playbooks --apply' },
+    ])
+    // Dry-run default: no writes at all.
+    expect(statusCalls).toHaveLength(0)
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  test('playbooks --apply performs the proposed transitions', async () => {
+    const rows = makeLifecycleRows()
+    const promote = rows[0]!
+    const { repository, statusCalls, upsertCalls } = playbookRepository(rows)
+    const deps = playbooksDeps(repository)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks --apply',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('success')
+    const text = block.lines.join('\n')
+    expect(text).toContain('Outcome: applied.')
+    expect(text).toContain(
+      'Applied: Promote Shadow candidate rule → active/warn',
+    )
+    // Verify/retire actions go through setPlaybookStatus, in the evaluator's
+    // deterministic action order (code-point sort by playbookId: dud, noise,
+    // promote, verify — the promote goes through the upsert instead).
+    expect(statusCalls).toEqual([
+      { playbookId: 'pb-dud', status: 'retired' },
+      { playbookId: 'pb-noise', status: 'retired' },
+      { playbookId: 'pb-verify', status: 'verified' },
+    ])
+    // The promote goes through the signature upsert — enforcement flips to
+    // 'warn' (never 'block') and the row's current contents are passed
+    // verbatim so operator edits are preserved.
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0]).toMatchObject({
+      workspaceId: 'project-1',
+      title: promote.title,
+      instruction: promote.instruction,
+      trigger: promote.trigger,
+      scope: promote.scope,
+      provenance: promote.provenance,
+      status: 'active',
+      enforcement: 'warn',
+    })
+    expect(block.insertCommands).toBeUndefined()
+  })
+
+  test('playbooks --apply preserves an expiring row expiry in the promote upsert', async () => {
+    const expiresAt = NOW + 7 * DAY_MS
+    // A single expiring shadow candidate whose counters earn the promote, so
+    // the promote upsert is the batch's only write.
+    const rows = [
+      makePlaybookRow({
+        playbookId: 'pb-promote',
+        title: 'Expiring shadow candidate rule',
+        enforcement: 'inject-only',
+        counters: { fired: 8, lastFiredAt: NOW - 60_000 },
+        expiresAt,
+      }),
+    ]
+    const { repository, statusCalls, upsertCalls } = playbookRepository(rows)
+    const deps = playbooksDeps(repository)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks --apply',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('success')
+    expect(block.lines.join('\n')).toContain('Outcome: applied.')
+    // The promote upsert forwards the row's CURRENT expiry verbatim: the
+    // repository's UPDATE binds expires_at unconditionally, so a promote
+    // that dropped the field would silently clear the operator-set expiry
+    // while flipping enforcement to 'warn'.
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0]).toMatchObject({
+      workspaceId: 'project-1',
+      title: 'Expiring shadow candidate rule',
+      status: 'active',
+      enforcement: 'warn',
+      expiresAt,
+    })
+    expect(statusCalls).toHaveLength(0)
+  })
+
+  test('playbooks bounds shown transitions and apply performs exactly the shown batch', async () => {
+    // 62 promote-eligible rows exceed both render bounds while report()
+    // caps at 100 lines: the preview must count what it hides, and --apply
+    // must perform exactly the batch the preview showed.
+    const rows = Array.from({ length: 62 }, (_, index) =>
+      makePlaybookRow({
+        playbookId: `pb-promote-${String(index).padStart(2, '0')}`,
+        title: `Shadow candidate ${index}`,
+        enforcement: 'inject-only',
+        counters: { fired: 8, lastFiredAt: NOW - 60_000 },
+      }),
+    )
+    const { repository, statusCalls, upsertCalls } = playbookRepository(rows)
+    const deps = playbooksDeps(repository)
+
+    const preview = await handleMemoryCommandBlocks('playbooks', deps)
+
+    if (preview.state !== 'report') throw new Error('expected report')
+    expect(preview.tone).toBe('secondary')
+    const previewText = preview.lines.join('\n')
+    expect(previewText).toContain('Playbooks: 62 total.')
+    expect(previewText).toContain('Showing the first 30 of 62 playbooks.')
+    expect(previewText).toContain(
+      'Showing the first 60 of 62 proposed transitions; --apply performs the shown batch.',
+    )
+    expect(
+      preview.lines.filter((line) => /^- (Promote|Verify|Retire) /.test(line)),
+    ).toHaveLength(60)
+    // The hidden tail is truly hidden — counted, never silently rendered.
+    expect(previewText).not.toContain('Shadow candidate 60')
+    expect(previewText).not.toContain('Shadow candidate 61')
+    // Worst case stays under report()'s 100-line cap:
+    // 1 total + 30 rows + 1 rows-overflow + 1 header + 60 transitions + 1 overflow.
+    expect(preview.lines).toHaveLength(94)
+
+    const applied = await handleMemoryCommandBlocks(
+      'playbooks --apply',
+      deps,
+    )
+
+    if (applied.state !== 'report') throw new Error('expected report')
+    expect(applied.tone).toBe('success')
+    const appliedText = applied.lines.join('\n')
+    expect(appliedText).toContain('Outcome: applied.')
+    expect(appliedText).toContain(
+      '2 more proposed transitions remain; re-run /memory playbooks --apply for the next batch.',
+    )
+    expect(appliedText).not.toContain('Shadow candidate 60')
+    // 1 Outcome + 60 Applied lines + 1 remainder — under report()'s cap.
+    expect(applied.lines).toHaveLength(62)
+    // Apply performs exactly the shown batch — the first 60 promote-eligible
+    // rows in the evaluator's deterministic playbookId code-point order.
+    expect(upsertCalls).toHaveLength(60)
+    expect(statusCalls).toHaveLength(0)
+    expect(upsertCalls[0]).toMatchObject({ title: 'Shadow candidate 0' })
+    expect(upsertCalls[59]).toMatchObject({ title: 'Shadow candidate 59' })
+  })
+
+  test('playbooks reports a clean error when the operator read is absent', async () => {
+    const deps = playbooksDeps({})
+
+    const block = await handleMemoryCommandBlocks('playbooks', deps)
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    const text = block.lines.join('\n')
+    expect(text).toContain('not available')
+    expect(text).not.toMatch(/undefined|TypeError|cannot read/i)
+  })
+
+  test('playbooks --apply reports a clean error when writers are absent', async () => {
+    const rows = makeLifecycleRows()
+    // The operator read exists but neither writer does: apply mode must fail
+    // closed before any write is attempted.
+    const deps = playbooksDeps({
+      listAllPlaybooks: async () => rows,
+    })
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks --apply',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    const text = block.lines.join('\n')
+    expect(text).toContain('not available')
+    expect(text).not.toMatch(/undefined|TypeError|cannot read/i)
+  })
+
+  test('playbooks on an empty store reports no transitions and no apply affordance', async () => {
+    const { repository, statusCalls, upsertCalls } = playbookRepository([])
+    const deps = playbooksDeps(repository)
+
+    const block = await handleMemoryCommandBlocks('playbooks', deps)
+
+    if (block.state !== 'report') throw new Error('expected report')
+    const text = block.lines.join('\n')
+    expect(text).toContain('Playbooks: 0 total.')
+    expect(text).toContain('No lifecycle transitions proposed.')
+    expect(block.insertCommands).toBeUndefined()
+    expect(statusCalls).toHaveLength(0)
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  // ---------------------------------------------------------------------
+  // `playbooks propose` — the Phase-4 candidate authoring path. Candidates
+  // ride the inject-only shadow channel (status 'active', enforcement
+  // 'inject-only'), so authoring can never enforce; promotion to 'warn' is
+  // the lifecycle evaluator's job, never this verb's.
+  // ---------------------------------------------------------------------
+
+  const PROPOSAL = {
+    title: 'Verify CI before push',
+    instruction:
+      'Run the local CI check in a separate command before the first push.',
+    // requireEvidence is required by PlaybookTriggerSchema (a candidate
+    // with no evidence requirements carries an empty array), and the two
+    // literals need const assertions so the trigger satisfies the schema's
+    // literal union types at the computeTriggerSignature call sites below.
+    trigger: {
+      tool: 'run_terminal_command' as const,
+      terminalAction: 'git-push' as const,
+      requireEvidence: [],
+    },
+  }
+
+  /** playbooksDeps plus a real mkdtemp root so the proposal file is contained. */
+  function proposeDeps(
+    repository: unknown,
+    root: string,
+  ): ReturnType<typeof createDeps>['deps'] {
+    const deps = playbooksDeps(repository)
+    deps.getRootDir = () => root
+    return deps
+  }
+
+  function writeProposal(root: string, name: string, body: unknown): void {
+    writeFileSync(
+      join(root, name),
+      typeof body === 'string' ? body : JSON.stringify(body),
+    )
+  }
+
+  test('propose previews the shadow candidate without writes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-preview-'))
+    writeProposal(root, 'proposal.json', PROPOSAL)
+    const { repository, upsertCalls } = playbookRepository([])
+    const deps = proposeDeps(repository, root)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('secondary')
+    const text = block.lines.join('\n')
+    expect(text).toContain(`Proposal: ${PROPOSAL.title}.`)
+    expect(text).toContain('Trigger: run_terminal_command git-push.')
+    expect(text).toContain('Scope: repos 0.')
+    expect(text).toContain('Expires at: (none).')
+    expect(text).toContain('Would create: active/inject-only shadow candidate')
+    expect(text).toContain(
+      `signature ${computeTriggerSignature(PROPOSAL.trigger, { repos: [] })}`,
+    )
+    // Fresh creation: the existing-rule framing and delta lines appear only
+    // when a same-signature row is found.
+    expect(text).not.toContain('Existing rule found')
+    expect(text).not.toContain('Would update the existing rule')
+    expect(text).toContain('Preview only; no writes were performed.')
+    expect(block.insertCommands?.[0]?.command).toBe(
+      '/memory playbooks propose proposal.json --apply',
+    )
+    expect(block.insertCommands?.[0]?.command).toContain('--apply')
+    // Dry-run default: no writes at all.
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  test('propose --apply creates an active/inject-only shadow candidate', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-apply-'))
+    writeProposal(root, 'proposal.json', PROPOSAL)
+    const { repository, upsertCalls } = playbookRepository([])
+    const deps = proposeDeps(repository, root)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json --apply',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('success')
+    const text = block.lines.join('\n')
+    expect(text).toContain('Outcome: applied.')
+    expect(text).toContain(
+      `Created candidate: ${PROPOSAL.title} (active/inject-only — shadow channel).`,
+    )
+    // The preservation-only line is gone: a fresh create has no existing
+    // rule to preserve, and a same-signature refresh reports the concrete
+    // delta instead (see the existing-rule tests below).
+    expect(text).not.toContain('refreshed in place')
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0]).toMatchObject({
+      workspaceId: 'project-1',
+      title: PROPOSAL.title,
+      instruction: PROPOSAL.instruction,
+      status: 'active',
+      enforcement: 'inject-only',
+      provenance: { origin: 'user', recordedBy: 'memory-cli' },
+    })
+    // A proposal without an expiry must not carry an expiresAt key at all:
+    // the store binds expires_at unconditionally from this field.
+    expect('expiresAt' in (upsertCalls[0] ?? {})).toBe(false)
+    expect(block.insertCommands).toBeUndefined()
+  })
+
+  test('propose --apply forwards an explicit expiry through the upsert', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-expiry-'))
+    const expiresAt = NOW + 7 * DAY_MS
+    writeProposal(root, 'proposal.json', { ...PROPOSAL, expiresAt })
+    const { repository, upsertCalls } = playbookRepository([])
+    const deps = proposeDeps(repository, root)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json --apply',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('success')
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0]).toMatchObject({
+      status: 'active',
+      enforcement: 'inject-only',
+      expiresAt,
+    })
+  })
+
+  test('propose surfaces the existing same-signature delta and preserves the row expiry', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-existing-'))
+    writeProposal(root, 'proposal.json', PROPOSAL)
+    const expiresAt = NOW + 7 * DAY_MS
+    const signature = computeTriggerSignature(PROPOSAL.trigger, { repos: [] })
+    // A lifecycle-promoted (warn) rule carrying the proposal's exact trigger
+    // and an operator-set expiry: re-proposing it must never silently clear
+    // the expiry or demote warn → inject-only without surfacing the delta.
+    const rows = [
+      makePlaybookRow({
+        playbookId: 'pb-existing',
+        title: 'Existing promoted rule',
+        trigger: PROPOSAL.trigger,
+        enforcement: 'warn',
+        counters: { fired: 5, lastFiredAt: NOW - 60_000 },
+        expiresAt,
+      }),
+    ]
+    const { repository, statusCalls, upsertCalls } = playbookRepository(rows)
+    const deps = proposeDeps(repository, root)
+
+    const preview = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json',
+      deps,
+    )
+
+    if (preview.state !== 'report') throw new Error('expected report')
+    expect(preview.tone).toBe('secondary')
+    const previewText = preview.lines.join('\n')
+    expect(previewText).toContain(
+      `Existing rule found: "Existing promoted rule" (active/warn, expires at ${expiresAt}).`,
+    )
+    expect(previewText).toContain(
+      'Enforcement: warn → inject-only (shadow channel).',
+    )
+    expect(previewText).toContain(
+      `Expiry: ${expiresAt} preserved from the existing rule.`,
+    )
+    expect(previewText).toContain(
+      `Would update the existing rule (signature ${signature}): warn → inject-only (shadow channel); ${expiresAt} preserved from the existing rule.`,
+    )
+    // The proposal-state lines render the EFFECTIVE state: the proposal
+    // omits an expiry, so the preview shows the preserved one a write keeps.
+    expect(previewText).toContain(`Expires at: ${expiresAt} epoch ms.`)
+    expect(previewText).not.toContain('Would create:')
+    expect(previewText).toContain('Preview only; no writes were performed.')
+    // Dry-run default: no writes at all.
+    expect(upsertCalls).toHaveLength(0)
+    expect(statusCalls).toHaveLength(0)
+
+    const applied = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json --apply',
+      deps,
+    )
+
+    if (applied.state !== 'report') throw new Error('expected report')
+    expect(applied.tone).toBe('success')
+    const appliedText = applied.lines.join('\n')
+    expect(appliedText).toContain('Outcome: applied.')
+    expect(appliedText).toContain(
+      `Updated existing rule "Existing promoted rule" (signature ${signature}).`,
+    )
+    expect(appliedText).toContain(
+      'Enforcement: warn → inject-only (shadow channel).',
+    )
+    expect(appliedText).toContain(
+      `Expiry: ${expiresAt} preserved from the existing rule.`,
+    )
+    expect(appliedText).toContain(
+      'Id, createdAt, and counters are preserved; row contents are refreshed from the proposal.',
+    )
+    expect(appliedText).not.toContain('Created candidate:')
+    // The upsert forwards the EXISTING row's expiry — the proposal omits
+    // one, and the store binds expires_at unconditionally — while still
+    // riding the inject-only shadow channel.
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0]).toMatchObject({
+      workspaceId: 'project-1',
+      status: 'active',
+      enforcement: 'inject-only',
+      expiresAt,
+    })
+  })
+
+  test('propose surfaces a newly-set expiry delta and forwards the proposed expiry', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-new-expiry-'))
+    const expiresAt = NOW + 14 * DAY_MS
+    writeProposal(root, 'proposal.json', { ...PROPOSAL, expiresAt })
+    const signature = computeTriggerSignature(PROPOSAL.trigger, { repos: [] })
+    // An existing same-signature rule with NO expiry: an explicit proposal
+    // expiry is honored as intent and the delta names the change.
+    const rows = [
+      makePlaybookRow({
+        playbookId: 'pb-existing',
+        title: 'Existing unexpired rule',
+        trigger: PROPOSAL.trigger,
+        enforcement: 'inject-only',
+        counters: { fired: 2 },
+      }),
+    ]
+    const { repository, upsertCalls } = playbookRepository(rows)
+    const deps = proposeDeps(repository, root)
+
+    const preview = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json',
+      deps,
+    )
+
+    if (preview.state !== 'report') throw new Error('expected report')
+    const previewText = preview.lines.join('\n')
+    expect(previewText).toContain(
+      'Existing rule found: "Existing unexpired rule" (active/inject-only).',
+    )
+    expect(previewText).toContain(`Expiry: newly set to ${expiresAt}.`)
+    expect(previewText).toContain(
+      `Would update the existing rule (signature ${signature}): newly set to ${expiresAt}.`,
+    )
+    // Already active/inject-only with no prior expiry: no enforcement or
+    // status delta is invented — only the expiry change is enumerated.
+    expect(previewText).not.toContain('Enforcement:')
+    expect(previewText).not.toContain('Status:')
+
+    const applied = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json --apply',
+      deps,
+    )
+
+    if (applied.state !== 'report') throw new Error('expected report')
+    const appliedText = applied.lines.join('\n')
+    expect(appliedText).toContain('Outcome: applied.')
+    expect(appliedText).toContain(`Expiry: newly set to ${expiresAt}.`)
+    expect(appliedText).toContain(
+      'Id, createdAt, and counters are preserved; row contents are refreshed from the proposal.',
+    )
+    // The upsert carries the PROPOSAL's expiry — explicit intent wins.
+    expect(upsertCalls).toHaveLength(1)
+    expect(upsertCalls[0]).toMatchObject({
+      status: 'active',
+      enforcement: 'inject-only',
+      expiresAt,
+    })
+  })
+
+  test('propose surfaces a status change in the existing-rule delta', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-status-'))
+    writeProposal(root, 'proposal.json', PROPOSAL)
+    const signature = computeTriggerSignature(PROPOSAL.trigger, { repos: [] })
+    const rows = [
+      makePlaybookRow({
+        playbookId: 'pb-retired',
+        title: 'Retired shadow rule',
+        trigger: PROPOSAL.trigger,
+        status: 'retired',
+        enforcement: 'inject-only',
+      }),
+    ]
+    const { repository, upsertCalls } = playbookRepository(rows)
+    const deps = proposeDeps(repository, root)
+
+    const preview = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json',
+      deps,
+    )
+
+    if (preview.state !== 'report') throw new Error('expected report')
+    const text = preview.lines.join('\n')
+    expect(text).toContain(
+      'Existing rule found: "Retired shadow rule" (retired/inject-only).',
+    )
+    expect(text).toContain('Status: retired → active.')
+    expect(text).toContain(
+      `Would update the existing rule (signature ${signature}): retired → active.`,
+    )
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  test('propose refreshes an identical existing rule without inventing a delta', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-no-delta-'))
+    writeProposal(root, 'proposal.json', PROPOSAL)
+    const signature = computeTriggerSignature(PROPOSAL.trigger, { repos: [] })
+    const rows = [
+      makePlaybookRow({
+        playbookId: 'pb-same',
+        title: 'Existing shadow rule',
+        trigger: PROPOSAL.trigger,
+        enforcement: 'inject-only',
+      }),
+    ]
+    const { repository, upsertCalls } = playbookRepository(rows)
+    const deps = proposeDeps(repository, root)
+
+    const preview = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json',
+      deps,
+    )
+
+    if (preview.state !== 'report') throw new Error('expected report')
+    const text = preview.lines.join('\n')
+    expect(text).toContain(
+      'Existing rule found: "Existing shadow rule" (active/inject-only).',
+    )
+    // Nothing changes but the refreshed row contents, so the framing line
+    // says exactly that instead of inventing an enforcement/status/expiry
+    // delta.
+    expect(text).toContain(
+      `Would update the existing rule (signature ${signature}): no enforcement, status, or expiry change; row contents are refreshed from the proposal.`,
+    )
+    expect(text).not.toContain('Enforcement:')
+    expect(text).not.toContain('Expiry:')
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  test('propose fails closed with a clean error when the operator read is absent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-noread-'))
+    writeProposal(root, 'proposal.json', PROPOSAL)
+    // The existing-row read is load-bearing for the preservation/delta
+    // contract, so both the preview and --apply must fail closed without it.
+    const deps = proposeDeps({}, root)
+
+    for (const command of [
+      'playbooks propose proposal.json',
+      'playbooks propose proposal.json --apply',
+    ]) {
+      const block = await handleMemoryCommandBlocks(command, deps)
+      if (block.state !== 'report') throw new Error('expected report')
+      expect(block.tone).toBe('error')
+      const text = block.lines.join('\n')
+      expect(text).toContain('not available')
+      expect(text).not.toMatch(/undefined|TypeError|cannot read/i)
+    }
+  })
+
+  test('propose reports a clean error for malformed JSON', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-malformed-'))
+    writeProposal(root, 'malformed.json', '{')
+    const { repository, upsertCalls } = playbookRepository([])
+    const deps = proposeDeps(repository, root)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks propose malformed.json',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    const text = block.lines.join('\n')
+    expect(text).toContain('could not be validated safely')
+    expect(text).not.toMatch(/\/tmp|SyntaxError/i)
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  test('propose rejects a traversal path with a clean error', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-traversal-'))
+    const { repository, upsertCalls } = playbookRepository([])
+    const deps = proposeDeps(repository, root)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks propose ../escape.json',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    const text = block.lines.join('\n')
+    expect(text).toContain(
+      'Proposal requires a project-relative JSON path.',
+    )
+    expect(text).not.toMatch(/\/tmp|escape/i)
+    expect(upsertCalls).toHaveLength(0)
+  })
+
+  test('propose --apply reports a clean error when the writer is absent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-nowriter-'))
+    writeProposal(root, 'proposal.json', PROPOSAL)
+    const deps = proposeDeps({ listAllPlaybooks: async () => [] }, root)
+
+    const block = await handleMemoryCommandBlocks(
+      'playbooks propose proposal.json --apply',
+      deps,
+    )
+
+    if (block.state !== 'report') throw new Error('expected report')
+    expect(block.tone).toBe('error')
+    const text = block.lines.join('\n')
+    expect(text).toContain('not available')
+    expect(text).not.toMatch(/undefined|TypeError|cannot read/i)
+  })
+
+  test('propose without a JSON path returns the usage error', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'memory-propose-usage-'))
+    const { repository, upsertCalls } = playbookRepository([])
+    const deps = proposeDeps(repository, root)
+
+    for (const command of [
+      'playbooks propose',
+      'playbooks propose notes.txt',
+    ]) {
+      const block = await handleMemoryCommandBlocks(command, deps)
+      if (block.state !== 'report') throw new Error('expected report')
+      expect(block.tone).toBe('error')
+      const text = block.lines.join('\n')
+      expect(text).toContain('Usage: /memory')
+      expect(text).toContain(
+        'playbooks propose <project-relative-json-path>',
+      )
+    }
+    expect(upsertCalls).toHaveLength(0)
   })
 })

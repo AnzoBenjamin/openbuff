@@ -4,6 +4,8 @@ import { handleAskUser } from './tool/ask-user'
 import { handleBrowserLogs } from './tool/browser-logs'
 import { handleCheckBackgroundAgent } from './tool/check-background-agent'
 import { handleCheckJob } from './tool/check-job'
+import { handleCodeAction } from './tool/code-action'
+import { handleExtractSymbol } from './tool/extract-symbol'
 import { handleCodeSearch } from './tool/code-search'
 import { handleCreatePlan } from './tool/create-plan'
 import { handleEditTransaction } from './tool/edit-transaction'
@@ -21,7 +23,12 @@ import { handleReadLogs } from './tool/read-logs'
 import { handleListJobs } from './tool/list-jobs'
 import { handleListDirectory } from './tool/list-directory'
 import { handleLookupAgentInfo } from './tool/lookup-agent-info'
+import { handleFindReferences } from './tool/find-references'
+import { handleGoToDefinition } from './tool/go-to-definition'
+import { handleHoverType } from './tool/hover-type'
+import { handleWorkspaceSymbol } from './tool/workspace-symbol'
 import { handleQueryIndex } from './tool/query-index'
+import { handleRenameSymbol } from './tool/rename-symbol'
 import { handleRecallContext } from './tool/recall-context'
 import { handleRecordDecision } from './tool/record-decision'
 import { handleReadDocs } from './tool/read-docs'
@@ -102,6 +109,13 @@ export const codebuffToolHandlers = {
   list_directory: handleListDirectory,
   lookup_agent_info: handleLookupAgentInfo,
   query_index: handleQueryIndex,
+  find_references: handleFindReferences,
+  go_to_definition: handleGoToDefinition,
+  hover_type: handleHoverType,
+  rename_symbol: handleRenameSymbol,
+  code_action: handleCodeAction,
+  extract_symbol: handleExtractSymbol,
+  workspace_symbol: handleWorkspaceSymbol,
   recall_context: handleRecallContext,
   record_decision: handleRecordDecision,
   read_docs: handleReadDocs,

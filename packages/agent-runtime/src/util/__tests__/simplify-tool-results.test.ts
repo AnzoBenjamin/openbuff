@@ -128,6 +128,93 @@ describe('simplifyReadFileResults', () => {
 })
 
 describe('simplifyTerminalCommandResults', () => {
+  it('should excerpt head and tail when output exceeds the default budget', () => {
+    const longStdout = 'a'.repeat(1400) + 'b'.repeat(2000) + 'z'.repeat(600)
+    const input: CodebuffToolOutput<'run_terminal_command'> = [
+      {
+        type: 'json',
+        value: { command: 'bun test', stdout: longStdout, exitCode: 1 },
+      },
+    ]
+
+    const result = simplifyTerminalCommandResults({
+      messageContent: input,
+      logger,
+    })
+
+    // 2_000-char budget redistributed: head 70% (1400) + tail 30% (600),
+    // with the dropped middle reported via the repo truncation marker.
+    expect(result).toEqual([
+      {
+        type: 'json',
+        value: {
+          command: 'bun test',
+          status: 'failed',
+          stdoutOmittedForLength: true,
+          stdoutExcerpt:
+            'a'.repeat(1400) +
+            '…[2000 chars truncated]…' +
+            'z'.repeat(600),
+          exitCode: 1,
+        },
+      },
+    ])
+  })
+
+  it('should raise the excerpt ceiling with maxExcerptChars while staying bounded', () => {
+    const longStdout = 'a'.repeat(2200) + 'z'.repeat(1000)
+    const input: CodebuffToolOutput<'run_terminal_command'> = [
+      {
+        type: 'json',
+        value: { command: 'bun test', stdout: longStdout, exitCode: 1 },
+      },
+    ]
+
+    const defaulted = simplifyTerminalCommandResults({
+      messageContent: input,
+      logger,
+    })
+    const raised = simplifyTerminalCommandResults({
+      messageContent: input,
+      logger,
+      maxExcerptChars: 3000,
+    })
+
+    // Default 2_000 budget: head 70% (1400) + tail 30% (600).
+    expect(defaulted).toEqual([
+      {
+        type: 'json',
+        value: {
+          command: 'bun test',
+          status: 'failed',
+          stdoutOmittedForLength: true,
+          stdoutExcerpt:
+            'a'.repeat(1400) +
+            '…[1200 chars truncated]…' +
+            'z'.repeat(600),
+          exitCode: 1,
+        },
+      },
+    ])
+    // Raised 3_000 budget: head 70% (2100) + tail 30% (900) — still bounded,
+    // never the full un-bounded output.
+    expect(raised).toEqual([
+      {
+        type: 'json',
+        value: {
+          command: 'bun test',
+          status: 'failed',
+          stdoutOmittedForLength: true,
+          stdoutExcerpt:
+            'a'.repeat(2100) +
+            '…[200 chars truncated]…' +
+            'z'.repeat(900),
+          exitCode: 1,
+        },
+      },
+    ])
+  })
+
   it('should simplify terminal command results with stdout', () => {
     const input: CodebuffToolOutput<'run_terminal_command'> = [
       {
@@ -1060,6 +1147,48 @@ describe('simplifyToolResultContent', () => {
           status: 'passed',
           stdoutOmittedForLength: true,
           stdoutExcerpt: stdout,
+          exitCode: 0,
+        },
+      },
+    ])
+  })
+
+  it('should thread maxExcerptChars to the per-tool simplifier', () => {
+    const longStdout = 'a'.repeat(2600) + 'z'.repeat(400)
+    const content: CodebuffToolOutput<'code_search'> = [
+      {
+        type: 'json',
+        value: {
+          stdout: longStdout,
+          exitCode: 0,
+          message: 'Found matches',
+        },
+      },
+    ]
+
+    const result = simplifyToolResultContent({
+      toolName: 'code_search',
+      content,
+      logger,
+      maxExcerptChars: 2500,
+    })
+
+    // Raised 2_500 budget: head floor(2500*0.7)=1750 chars + tail 750, the
+    // dropped middle reported by the repo truncation marker. The tail keeps
+    // the LAST 750 chars of `'a'×2600 + 'z'×400`, i.e. the trailing 350 'a'
+    // then the 400 'z' — head+tail distribution, not a suffix slice.
+    expect(result).toEqual([
+      {
+        type: 'json',
+        value: {
+          message: 'Found matches',
+          status: 'passed',
+          stdoutOmittedForLength: true,
+          stdoutExcerpt:
+            'a'.repeat(1750) +
+            '…[500 chars truncated]…' +
+            'a'.repeat(350) +
+            'z'.repeat(400),
           exitCode: 0,
         },
       },

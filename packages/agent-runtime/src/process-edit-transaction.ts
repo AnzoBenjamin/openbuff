@@ -169,6 +169,14 @@ type TransactionFileChange = {
   content: string
   patch: string
   messages: string[]
+  /**
+   * Transformation ledger for this path: which edit produced each byte range
+   * of the candidate content. Lets the handler attribute a preflight syntax
+   * failure to the exact originating edit instead of the first edit that
+   * touched the path. Empty when this path's original-snapshot provenance
+   * became unmappable mid-transaction.
+   */
+  ledger: TransformationLedgerEntry[]
 }
 
 export async function processEditTransaction(params: {
@@ -318,10 +326,15 @@ export async function processEditTransaction(params: {
     }
     const priorContent = currentContent ?? ''
     workingContentByPath.set(effectiveEdit.path, result.content)
+    // The loop-scoped editIndex is the FIRST index of a coalesced adjacent
+    // same-path str_replace run, so every entry of that run records the run's
+    // first index (best effort): the coalesced batch applies as one action and
+    // the ledger cannot split it back per originating edit.
     const ledgerResult = appendTransformationLedgerEntries(
       transformationLedgerByPath.get(effectiveEdit.path) ?? [],
       normalizeLineEndings(priorContent),
       normalizeLineEndings(result.content),
+      editIndex,
     )
     if ('error' in ledgerResult) {
       unmappableOriginalPaths.add(effectiveEdit.path)
@@ -383,6 +396,9 @@ export async function processEditTransaction(params: {
       content: finalContent,
       patch,
       messages: messagesByPath.get(path) ?? [],
+      ledger: unmappableOriginalPaths.has(path)
+        ? []
+        : (transformationLedgerByPath.get(path) ?? []),
     })
   }
 
@@ -631,6 +647,15 @@ function buildTransactionRecovery(params: {
 
 type TransformationLedgerEntry = {
   actionIndex: number
+  /**
+   * Index (into the edits array this module received) of the edit that
+   * produced this action, stamped when the ledger entries are appended. For a
+   * coalesced adjacent same-path str_replace run this is the run's FIRST
+   * index — the coalesced batch applies as one action, so the ledger cannot
+   * attribute the individual replacements of the run back to their own edits
+   * (best-effort limitation).
+   */
+  editIndex: number
   originalStart: number
   originalEnd: number
   beforeStart: number
@@ -895,10 +920,79 @@ function mapWorkingOffsetToOriginal(
   return offset
 }
 
+/**
+ * Attributes a candidate-content offset back to the edit that produced it.
+ *
+ * This is a backward action-group walk that MIRRORS mapWorkingOffsetToOriginal
+ * above: the same contiguous-same-actionIndex grouping, the same
+ * last-entry-first ordering, and the same left-affinity actionDelta
+ * accumulation, so an offset that no entry owns maps to exactly the original
+ * offset the mirrored walk would return. The one addition is ownership: the
+ * FIRST non-deletion entry in a group whose after-range contains the offset is
+ * the edit that produced those bytes, so its editIndex is returned (with
+ * originalOffset null) instead of continuing the offset translation.
+ */
+export function attributeContentOffset(
+  ledger: TransformationLedgerEntry[],
+  workingOffset: number,
+): { owningEditIndex: number | null; originalOffset: number | null } {
+  let offset = workingOffset
+  for (let index = ledger.length - 1; index >= 0; ) {
+    const actionIndex = ledger[index]!.actionIndex
+    let firstIndex = index
+    while (
+      firstIndex > 0 &&
+      ledger[firstIndex - 1]!.actionIndex === actionIndex
+    ) {
+      firstIndex--
+    }
+    // Ownership first: the first non-deletion entry in this group whose
+    // after-range contains the offset produced those bytes.
+    for (let entryIndex = firstIndex; entryIndex <= index; entryIndex++) {
+      const entry = ledger[entryIndex]!
+      if (
+        entry.afterStart !== entry.afterEnd &&
+        offset >= entry.afterStart &&
+        offset < entry.afterEnd
+      ) {
+        return { owningEditIndex: entry.editIndex, originalOffset: null }
+      }
+    }
+    // No entry in this group owns the offset: shift it exactly like
+    // mapWorkingOffsetToOriginal would (left affinity) and walk the earlier
+    // group.
+    let actionDelta = 0
+    for (let entryIndex = firstIndex; entryIndex <= index; entryIndex++) {
+      const entry = ledger[entryIndex]!
+      const isDeletion = entry.afterStart === entry.afterEnd
+      // Strictly inside an entry's after-range is unrepresentable. Ownership
+      // above returns first for exactly that case on non-deletion entries (a
+      // deletion entry has an empty after-range), so this is unreachable today
+      // — kept as the same fail-closed guard the mirrored walk carries.
+      if (offset > entry.afterStart && offset < entry.afterEnd) {
+        return { owningEditIndex: null, originalOffset: null }
+      }
+      if (
+        offset > entry.afterEnd ||
+        (offset === entry.afterEnd && !isDeletion)
+      ) {
+        actionDelta +=
+          entry.afterEnd -
+          entry.afterStart -
+          (entry.beforeEnd - entry.beforeStart)
+      }
+    }
+    offset -= actionDelta
+    index = firstIndex - 1
+  }
+  return { owningEditIndex: null, originalOffset: offset }
+}
+
 function appendTransformationLedgerEntries(
   existingLedger: TransformationLedgerEntry[],
   beforeContent: string,
   afterContent: string,
+  owningEditIndex: number,
 ): { ledger: TransformationLedgerEntry[] } | { error: string } {
   if (beforeContent === afterContent) return { ledger: existingLedger }
   const actionIndex = (existingLedger.at(-1)?.actionIndex ?? -1) + 1
@@ -935,6 +1029,7 @@ function appendTransformationLedgerEntries(
     entries.push({
       ...pending,
       actionIndex,
+      editIndex: owningEditIndex,
       originalStart,
       originalEnd,
     })

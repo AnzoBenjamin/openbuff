@@ -1,33 +1,12 @@
-import { getChangeReviewBundle } from './get-change-review-bundle'
-import { runFileChangeHooks } from './file-change-hooks'
+import { computeWorktreeSnapshotIdentity } from './get-change-review-bundle'
+import {
+  runFileChangeHooks,
+  type DiagnosticDeltaHook,
+} from './file-change-hooks'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
-
-function bundleValue(
-  output: Awaited<ReturnType<typeof getChangeReviewBundle>>,
-):
-  | {
-      snapshotId: string
-      workspaceRevision?: number
-      workspaceSnapshotId?: string
-    }
-  | { errorMessage: string } {
-  const value = output[0]?.type === 'json' ? output[0].value : undefined
-  return value && 'snapshotId' in value
-    ? {
-        snapshotId: value.snapshotId,
-        workspaceRevision: value.workspaceRevision,
-        workspaceSnapshotId: value.workspaceSnapshotId,
-      }
-    : {
-        errorMessage:
-          value && 'errorMessage' in value
-            ? value.errorMessage
-            : 'Unable to attest validation snapshot.',
-      }
-}
 
 export async function runTargetedValidation(params: {
   cwd: string
@@ -38,16 +17,33 @@ export async function runTargetedValidation(params: {
   signal?: AbortSignal
   fileSystem?: CodebuffFileSystem
   runHooks?: typeof runFileChangeHooks
+  /**
+   * Opt-in diagnostic-delta preflight injector, forwarded to
+   * runFileChangeHooks (a no-op unless OPENBUFF_DIAGNOSTIC_PREFLIGHT is set).
+   */
+  diagnosticDelta?: DiagnosticDeltaHook
   workspaceState?: WorkspaceStateV1
 }): Promise<CodebuffToolOutput<'run_targeted_validation'>> {
   const artifactKinds = params.artifactKinds ?? []
-  const before = bundleValue(
-    await getChangeReviewBundle({
-      cwd: params.cwd,
-      workspaceState: params.workspaceState,
-      signal: params.signal,
-    }),
-  )
+  // Snapshot identity only (perf: bundle-identity-unbounded-sync-io): both
+  // drift checks used to build two FULL change-review bundles per call — each
+  // hashing the complete `git diff --binary HEAD` output and synchronously
+  // reading every changed file's complete bytes — while consulting only the
+  // snapshotId. computeWorktreeSnapshotIdentity computes the exact same
+  // snapshotId without the presentation diff, harness-store lookups, or the
+  // semgrep scan, with bounded asynchronous per-file reads. That id is
+  // content-keyed (files/diff/HEAD), so these before/after drift checks fail
+  // closed only on REAL worktree drift during validation — a harness
+  // workspace-journal advance (every confirmed edit plus the conservative
+  // advances on validation/hooks/terminal/custom-tool calls) no longer
+  // registers as drift. A FAILED after-pass recomputation still fails
+  // closed, but is reported as a re-attestation error rather than drift (see
+  // the after-check below).
+  const before = await computeWorktreeSnapshotIdentity({
+    cwd: params.cwd,
+    workspaceState: params.workspaceState,
+    signal: params.signal,
+  })
   if ('errorMessage' in before || before.snapshotId !== params.snapshotId) {
     return [
       {
@@ -56,14 +52,8 @@ export async function runTargetedValidation(params: {
           schemaVersion: 1,
           snapshotId:
             'snapshotId' in before ? before.snapshotId : params.snapshotId,
-          workspaceRevision:
-            'workspaceRevision' in before
-              ? before.workspaceRevision
-              : params.workspaceState?.revision,
-          workspaceSnapshotId:
-            'workspaceSnapshotId' in before
-              ? before.workspaceSnapshotId
-              : params.workspaceState?.snapshotId,
+          workspaceRevision: params.workspaceState?.revision,
+          workspaceSnapshotId: params.workspaceState?.snapshotId,
           files: params.files,
           artifactKinds,
           status: 'failed',
@@ -81,24 +71,41 @@ export async function runTargetedValidation(params: {
     env: params.env,
     signal: params.signal,
     fileSystem: params.fileSystem,
+    diagnosticDelta: params.diagnosticDelta,
   })
   const results = hookOutput.flatMap((part) =>
     part.type === 'json' && Array.isArray(part.value) ? part.value : [],
   ) as Array<Record<string, unknown>>
-  const after = bundleValue(
-    await getChangeReviewBundle({
-      cwd: params.cwd,
-      workspaceState: params.workspaceState,
-      signal: params.signal,
-    }),
-  )
+  const after = await computeWorktreeSnapshotIdentity({
+    cwd: params.cwd,
+    workspaceState: params.workspaceState,
+    signal: params.signal,
+  })
+  // A FAILED post-validation identity recomputation is not worktree drift
+  // (reliability: after-identity-error-reported-as-drift): the after pass can
+  // fail on transient infrastructure — a runGitBounded timeout on
+  // rev-parse/status/diff, or hashIdentityFileBytes rejecting on an
+  // unreadable changed file — without any file changing. It still fails
+  // closed, but must be reported as a re-attestation error with the reason
+  // surfaced, mirroring the before-check's stale-vs-unavailable distinction,
+  // so recovery retries the call instead of hunting a concurrent writer.
+  const afterIdentityError =
+    'errorMessage' in after ? after.errorMessage : undefined
   const snapshotChanged =
-    'errorMessage' in after || after.snapshotId !== before.snapshotId
+    'snapshotId' in after && after.snapshotId !== before.snapshotId
+  // Both a genuine drift and a failed re-attestation reject the evidence with
+  // status 'failed' / assurance 'none'; only the summary distinguishes them.
+  const snapshotRejected = snapshotChanged || afterIdentityError !== undefined
+  // A diagnostic-delta preflight rejection (diagnostic_delta_rejected) is a
+  // hard validation failure even though that hook-result arm carries no
+  // exitCode/errorMessage/permissionDenied — it signals NEW error-severity
+  // diagnostics introduced by the validated files, so it must fail the gate.
   const failed = results.some(
     (result) =>
       (typeof result.exitCode === 'number' && result.exitCode !== 0) ||
       typeof result.errorMessage === 'string' ||
-      result.permissionDenied === true,
+      result.permissionDenied === true ||
+      result.validationStatus === 'diagnostic_delta_rejected',
   )
   const skipped =
     results.length === 0 ||
@@ -110,27 +117,30 @@ export async function runTargetedValidation(params: {
       ),
     )
   const status =
-    snapshotChanged || failed ? 'failed' : skipped ? 'skipped' : 'passed'
+    snapshotRejected || failed ? 'failed' : skipped ? 'skipped' : 'passed'
   return [
     {
       type: 'json',
       value: {
         schemaVersion: 1,
         snapshotId: before.snapshotId,
-        workspaceRevision: before.workspaceRevision,
-        workspaceSnapshotId: before.workspaceSnapshotId,
+        workspaceRevision: params.workspaceState?.revision,
+        workspaceSnapshotId: params.workspaceState?.snapshotId,
         files: params.files,
         artifactKinds,
         status,
         assurance:
-          snapshotChanged || failed ? 'none' : skipped ? 'reduced' : 'full',
-        summary: snapshotChanged
-          ? 'Validation evidence rejected because the worktree changed during validation.'
-          : failed
-            ? 'One or more targeted validation checks failed.'
-            : skipped
-              ? 'No matching configured validation checks ran.'
-              : 'Targeted validation checks passed for the attested snapshot.',
+          snapshotRejected || failed ? 'none' : skipped ? 'reduced' : 'full',
+        summary:
+          afterIdentityError !== undefined
+            ? `Validation evidence rejected because the post-validation snapshot could not be re-attested: ${afterIdentityError}`
+            : snapshotChanged
+              ? 'Validation evidence rejected because the worktree changed during validation.'
+              : failed
+                ? 'One or more targeted validation checks failed.'
+                : skipped
+                  ? 'No matching configured validation checks ran.'
+                  : 'Targeted validation checks passed for the attested snapshot.',
         results,
       },
     },
