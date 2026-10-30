@@ -728,8 +728,11 @@ export function buildDefaultSpawnSupervised(
   // the LAST settled result UNCHANGED — it already carries the crash
   // reason. An attempt that THROWS (e.g. a failed bridge bind) is not a
   // crash: the rejection propagates exactly as in the flags-off seam.
-  return async (request, options) => {
-    let result = await runSettledAttempt(request, options)
+  // code-reviewer advisory (fix-wave 2026-10-30): the previous per-call
+  // parameter reused the build-time `options` name and shadowed it inside
+  // this loop; it is now `callOptions` so the two scopes read distinctly.
+  return async (request, callOptions) => {
+    let result = await runSettledAttempt(request, callOptions)
     let attemptNumber = 0
     while (
       attemptNumber < policy.maxAttempts &&
@@ -737,7 +740,7 @@ export function buildDefaultSpawnSupervised(
       // cancel-softlock fix: a parent-abort kill settles as a RESTARTABLE
       // transport crash (signal death ⇒ nonzero_exit with no receipt), so
       // the loop must never respawn the child the parent just cancelled.
-      options?.signal?.aborted !== true
+      callOptions?.signal?.aborted !== true
     ) {
       attemptNumber += 1
       await scheduleRestart(computeRestartDelayMs(policy, attemptNumber))
@@ -745,7 +748,7 @@ export function buildDefaultSpawnSupervised(
         attempt: attemptNumber,
         crashReason: result.crashReason,
       })
-      result = await runSettledAttempt(request, options)
+      result = await runSettledAttempt(request, callOptions)
     }
     return result
   }
