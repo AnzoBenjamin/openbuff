@@ -1141,6 +1141,178 @@
         }
       ],
       "note": "byte-over per-send arms append one build row per shape (500kb few-rows + 27kb worst-case many-rows; each shape stableKey is versioned with its payload shape); count-over arms time the steady-state count-cap per-send path at the production 20k-event cap"
+    },
+    {
+      "recordedAt": "2026-10-30T05:09:49.555Z",
+      "iterations": {
+        "journalOpen": 30,
+        "validateAgents": 30
+      },
+      "arms": [
+        {
+          "stableKey": "validate-agents:local",
+          "label": "validateAgents(local) per send",
+          "n": 30,
+          "median": 34.374788999999964,
+          "min": 20.367201999999907,
+          "max": 57.717988000000105,
+          "p95": 52.447832999999946
+        },
+        {
+          "stableKey": "load-provider-config:cached",
+          "label": "loadProviderConfigSync() cached",
+          "n": 200,
+          "median": 0.5291110000002845,
+          "min": 0.40671199999997043,
+          "max": 21.740895999999793,
+          "p95": 0.92693700000018
+        },
+        {
+          "stableKey": "open+close:byte-on:tiny",
+          "label": "journal open+close (awaited), byte cap ON [tiny (~0.1MB)]",
+          "n": 30,
+          "median": 0.3171750000001339,
+          "min": 0.24733299999979863,
+          "max": 0.7173139999999876,
+          "p95": 0.6292490000000726
+        },
+        {
+          "stableKey": "open+close:byte-on:mid",
+          "label": "journal open+close (awaited), byte cap ON [mid (~50MB)]",
+          "n": 30,
+          "median": 0.26262199999973745,
+          "min": 0.2281169999996564,
+          "max": 0.8299449999999524,
+          "p95": 0.4978329999999005
+        },
+        {
+          "stableKey": "per-send-append:byte-on:mid",
+          "label": "journal open+append(existing runId)+close (per-send shape) [mid (~50MB)]",
+          "n": 30,
+          "median": 0.4386420000000726,
+          "min": 0.33865400000013324,
+          "max": 0.7387339999995675,
+          "p95": 0.6672399999997651
+        },
+        {
+          "stableKey": "open+close:byte-disabled:mid",
+          "label": "journal open+close (awaited), byte dimension disabled [mid (~50MB)] (upper bound)",
+          "n": 30,
+          "median": 0.2561200000000099,
+          "min": 0.22267699999974866,
+          "max": 0.7232050000002346,
+          "p95": 0.5631949999997232
+        },
+        {
+          "stableKey": "open+close:byte-on:big",
+          "label": "journal open+close (awaited), byte cap ON [big (~160MB)]",
+          "n": 30,
+          "median": 0.24861599999985629,
+          "min": 0.22288699999990058,
+          "max": 0.3611270000001241,
+          "p95": 0.3426019999997152
+        },
+        {
+          "stableKey": "per-send-append:byte-on:big",
+          "label": "journal open+append(existing runId)+close (per-send shape) [big (~160MB)]",
+          "n": 30,
+          "median": 0.4032859999997527,
+          "min": 0.3368819999996049,
+          "max": 0.6097019999997428,
+          "p95": 0.5657499999997526
+        },
+        {
+          "stableKey": "open+close:byte-disabled:big",
+          "label": "journal open+close (awaited), byte dimension disabled [big (~160MB)] (upper bound)",
+          "n": 30,
+          "median": 0.2526740000002974,
+          "min": 0.21777799999927083,
+          "max": 0.3422709999995277,
+          "p95": 0.33756199999970704
+        },
+        {
+          "stableKey": "open+close:byte-on:hot",
+          "label": "journal open+close (awaited), byte cap ON [hot (~250MB single run)]",
+          "n": 30,
+          "median": 0.2508399999996982,
+          "min": 0.22045299999990675,
+          "max": 0.7003720000002431,
+          "p95": 0.3677589999997508
+        },
+        {
+          "stableKey": "per-send-append:byte-on:hot",
+          "label": "journal open+append(existing runId)+close (per-send shape) [hot (~250MB single run)]",
+          "n": 30,
+          "median": 0.39650299999993877,
+          "min": 0.31348699999944074,
+          "max": 0.7847299999993993,
+          "p95": 0.51648699999987
+        },
+        {
+          "stableKey": "open+close:byte-disabled:hot",
+          "label": "journal open+close (awaited), byte dimension disabled [hot (~250MB single run)] (upper bound)",
+          "n": 30,
+          "median": 0.25354500000048574,
+          "min": 0.21261799999956565,
+          "max": 0.3742709999996805,
+          "p95": 0.3586220000006506
+        },
+        {
+          "stableKey": "open+close:byte-on:byte-over",
+          "label": "journal open+close (awaited), byte cap ON [byte-over (~600MB single run)]",
+          "n": 30,
+          "median": 0.3500960000001214,
+          "min": 0.23111299999982293,
+          "max": 0.7316410000003088,
+          "p95": 0.6475629999995363
+        },
+        {
+          "stableKey": "per-send-append:byte-on:byte-over:500kb",
+          "label": "journal open+append(existing runId)+close (per-send shape) [byte-over (~600MB single run)]",
+          "n": 30,
+          "median": 2.5303210000001854,
+          "min": 2.1327470000005633,
+          "max": 4.189930999999888,
+          "p95": 3.8981340000000273
+        },
+        {
+          "stableKey": "open+close:byte-on:byte-over:27kb",
+          "label": "journal open+close (awaited), byte cap ON [byte-over many-rows (~566MB, worst-case ~19.9k retained rows)]",
+          "n": 30,
+          "median": 0.2540260000005219,
+          "min": 0.2231179999998858,
+          "max": 0.7221229999995558,
+          "p95": 0.43764999999984866
+        },
+        {
+          "stableKey": "per-send-append:byte-on:byte-over:27kb",
+          "label": "journal open+append(existing runId)+close (per-send shape) [byte-over many-rows (~566MB, worst-case ~19.9k retained rows)]",
+          "n": 30,
+          "median": 0.7201900000000023,
+          "min": 0.664664999998422,
+          "max": 1.5086769999998069,
+          "p95": 0.9640359999993962
+        },
+        {
+          "stableKey": "open+close:count-over",
+          "label": "journal open+close (awaited), production caps ON [count-over (~22k events, at the 20k cap)]",
+          "n": 30,
+          "median": 0.2817079999986163,
+          "min": 0.22772600000098464,
+          "max": 0.5165680000009161,
+          "p95": 0.5082220000003872
+        },
+        {
+          "stableKey": "per-send-append:count-over",
+          "label": "journal open+append(existing runId)+close (per-send shape) [count-over steady state]",
+          "n": 30,
+          "median": 1.741783999999825,
+          "min": 1.599067000001014,
+          "max": 2.475268000000142,
+          "p95": 2.026786999998876
+        }
+      ],
+      "note": "byte-over per-send arms append one build row per shape (500kb few-rows + 27kb worst-case many-rows; each shape stableKey is versioned with its payload shape); count-over arms time the steady-state count-cap per-send path at the production 20k-event cap"
     }
   ]
 }
