@@ -170,9 +170,9 @@ function makeAbortableBarrier(
 // `errorMessage` intentionally no longer embeds the underlying handler error
 // message. It used to be `Agent spawn failed: <error message>`; that format
 // was retired because the raw handler error can carry internal detail that
-// should not be echoed into agent-visible tool output (the sibling
-// native_tool_result_error path likewise never echoes raw internals). The
-// contract is now the static, safe string below plus an optional sanitized
+// should not be echoed into agent-visible tool output. The contract uses a
+// static safe string that distinguishes recognized validation failures from
+// other handler failures, plus an optional sanitized
 // per-agent `recoveryHint` derived only from the safe prefix of a
 // validateAgentInput message (formatValidationIssues + exact params contract
 // + Recovery:); the raw `Original params/prompt value` section and any
@@ -181,6 +181,8 @@ function makeAbortableBarrier(
 // reintroduce the interpolated format, and do not pin it in tests.
 const SPAWN_HANDLER_FAILURE_MESSAGE =
   'Agent spawn failed because the handler could not validate the request.'
+const SPAWN_HANDLER_EXECUTION_FAILURE_MESSAGE =
+  'Agent spawn failed while processing the request. The underlying error was logged.'
 
 const SPAWN_RECOVERY_HINT_MAX_CHARS = 2_000
 
@@ -394,6 +396,10 @@ export function buildSpawnAgentsHandlerFailureOutput(
   const payloadClassification = classifySerializedSpawnAgentsPayload(rawAgents)
   const recoveryHint = extractSanitizedSpawnRecoveryHint(error)
   const validationIssues = extractSpawnValidationIssues(error)
+  const isValidationFailure =
+    recoveryHint !== undefined ||
+    validationIssues !== undefined ||
+    payloadClassification === 'transport-truncated'
 
   // A comma-split fragment array classified as transport-truncated is ONE
   // serialized payload tokenized on commas: mapping per fragment would emit
@@ -416,11 +422,12 @@ export function buildSpawnAgentsHandlerFailureOutput(
         : 'unknown'
     // The per-agent value is assembled additively so an ABSENT channel never
     // puts an `undefined` into the JSON payload (jsonToolResult<T extends
-    // JSONValue> requires concrete values). `errorMessage` stays the stable
-    // machine-readable marker at exactly the same text; the two diagnostic
-    // channels below are present only when they actually have data.
+    // JSONValue> requires concrete values). `errorMessage` is a static safe
+    // classification; diagnostic channels appear only when they have data.
     const value: JSONObject = {
-      errorMessage: SPAWN_HANDLER_FAILURE_MESSAGE,
+      errorMessage: isValidationFailure
+        ? SPAWN_HANDLER_FAILURE_MESSAGE
+        : SPAWN_HANDLER_EXECUTION_FAILURE_MESSAGE,
     }
     if (typeof recoveryHint === 'string' && recoveryHint.length > 0) {
       // String() is the identity on the already-sanitized primitive and keeps
@@ -1878,7 +1885,7 @@ function getToolValidationHint(
       ),
     )
     const base = [
-      'Expected shape: combinable selectors `paths`, `ranges`, `windows`, `around`, `symbol`, `symbols` — e.g. { "paths": ["src/file.ts"], "windows": [{ "path": "src/file.ts", "window": 1 }], "around": [{ "match": "function handleSpawnAgents" }], "symbols": [{ "path": "src/file.ts", "names": ["parseToolCallContent"] }] }.',
+      'Provide at least one of the combinable selectors `paths`, `ranges`, `windows`, `around`, `symbol`, `symbols`. Simplest example: { "paths": ["src/file.ts"] }.',
       'Selector entries are objects, and `window`/`occurrence` are 1-indexed. A sole `paths` entry infers the path for selector entries that omit `path`.',
     ].join('\n')
     const targetedHints: string[] = []
@@ -2258,6 +2265,9 @@ export function getFilesystemToolPaths(
       paths: [
         ...strings(input.paths),
         ...objectPaths(input.ranges),
+        ...objectPaths(input.windows),
+        ...objectPaths(input.around),
+        ...objectPaths(input.symbol),
         ...objectPaths(input.symbols),
       ],
     }
@@ -2789,13 +2799,20 @@ export async function executeToolCall<T extends ToolName>(
     const inputLabel = toolCall.formattedInput
       ? 'Relevant invalid input excerpts'
       : 'Original tool call input'
+    // Structured invalid-arguments marker: every parseRawToolCall validation
+    // failure (string-input, schema-validation, or misbraced-payload
+    // rejection) funnels through this ToolCallError emission, so the
+    // repeated-invalid-call degeneration guard in stream-parser.ts arms its
+    // signature from this flag instead of matching `message` prose, which is
+    // free to reword or localize.
     onResponseChunk({
       type: 'error',
 
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
       userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
-    })
+      invalidArgumentsValidation: true,
+    } as PrintModeEvent & { invalidArgumentsValidation?: true })
     logger.debug(
       { toolCall, error: toolCall.error },
       `${toolName} error: ${toolCall.error}`,
@@ -3997,10 +4014,11 @@ export function parseRawCustomToolCall(params: {
   const { customToolDefs, rawToolCall, autoInsertEndStepParam = false } = params
   const toolName = rawToolCall.toolName
 
-  if (
-    !(customToolDefs && toolName in customToolDefs) &&
-    !toolName.includes(MCP_TOOL_SEPARATOR)
-  ) {
+  // MCP server membership alone is not permission to invoke an arbitrary
+  // server tool: only tools discovered for this agent are exposed. Requiring
+  // a real own entry also prevents inherited property names from bypassing
+  // discovery or validation.
+  if (!Object.prototype.hasOwnProperty.call(customToolDefs, toolName)) {
     return {
       toolName,
       toolCallId: rawToolCall.toolCallId,
@@ -4161,12 +4179,17 @@ export async function executeCustomToolCall(
     const inputLabel = toolCall.formattedInput
       ? 'Relevant invalid input excerpts'
       : 'Original tool call input'
+    // Structured invalid-arguments marker for custom/MCP tool validation
+    // failures (mirrors the native emission above): the repeated-invalid-call
+    // degeneration guard in stream-parser.ts arms its signature from this
+    // flag instead of matching `message` prose.
     onResponseChunk({
       type: 'error',
       message: `${toolCall.error}\n\n${inputLabel}:\n${formattedInput}`,
       userMessage: malformedToolCallUserMessage(toolName),
       autoRecovering: true,
-    })
+      invalidArgumentsValidation: true,
+    } as PrintModeEvent & { invalidArgumentsValidation?: true })
     logger.debug(
       { toolCall, error: toolCall.error },
 

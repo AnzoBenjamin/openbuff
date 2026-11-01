@@ -85,10 +85,7 @@ import {
   getConfirmedAppliedActionsV1,
   isFileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
-import {
-  countTokensJson,
-  IncrementalTokenCounter,
-} from './util/token-counter'
+import { countTokensJson, IncrementalTokenCounter } from './util/token-counter'
 import {
   COMPACTION_NO_PROGRESS_FRACTION,
   DEFAULT_MAX_CONTEXT_TOKENS,
@@ -183,7 +180,10 @@ function redactMessageForLog(message: Message): Message {
   if (typeof content === 'string') {
     // Shape-preserving copy: only the string content is rewritten. The union
     // spread needs the two-step cast TS requires for mixed-content unions.
-    return { ...message, content: redactSecretValues(content) } as unknown as Message
+    return {
+      ...message,
+      content: redactSecretValues(content),
+    } as unknown as Message
   }
   if (!Array.isArray(content)) {
     return message
@@ -539,6 +539,7 @@ export const runAgentStep = async (
   // instead of falling through to the validation/reviewer gate, which would
   // re-yield STEP and re-trigger the step-cap, causing an infinite loop.
   hitStepCap?: boolean
+  toolCallErrorSignature?: string
   messageId: string | null
   nResponses?: string[]
 }> => {
@@ -806,7 +807,11 @@ export const runAgentStep = async (
     // shape every step), so the converged family factor absorbs the
     // tokenizer/envelope divergence uniformly across providers.
     try {
-      recordTokenObservation(model, preRequestInputTokenEstimate, usage.inputTokens)
+      recordTokenObservation(
+        model,
+        preRequestInputTokenEstimate,
+        usage.inputTokens,
+      )
     } catch {
       // Never let calibration affect the request path.
     }
@@ -863,7 +868,8 @@ export const runAgentStep = async (
       system: redactSecretValues(system),
       // M1-T5: prompt is a string or undefined here (the params type pins it);
       // array-shaped message content above is redacted per text part.
-      prompt: typeof prompt === 'string' ? redactSecretValues(prompt) : undefined,
+      prompt:
+        typeof prompt === 'string' ? redactSecretValues(prompt) : undefined,
       params: spawnParams,
       agentContext,
       systemTokens,
@@ -883,19 +889,23 @@ export const runAgentStep = async (
 
   // Handle n parameter for generating multiple responses
   if (params.n !== undefined) {
-// P3-T10: attach the per-project calibration store (fail-open when no
+    // P3-T10: attach the per-project calibration store (fail-open when no
     // project root) and snapshot the estimator's view of this request's
     // input BEFORE the call, so usage can be compared when it arrives.
     setTokenCalibrationStorePath(
       params.fileContext?.projectRoot
-        ? path.join(params.fileContext.projectRoot, '.openbuff', 'token-calibration.json')
+        ? path.join(
+            params.fileContext.projectRoot,
+            '.openbuff',
+            'token-calibration.json',
+          )
         : undefined,
     )
     preRequestInputTokenEstimate = countTokensJson(
       { system, messages: agentState.messageHistory },
       model,
     )
-        const result = await promptAiSdk({
+    const result = await promptAiSdk({
       ...params,
       messages: agentState.messageHistory,
       model,
@@ -1039,6 +1049,7 @@ export const runAgentStep = async (
     fullResponse: fullResponseAfterStream,
     fullResponseChunks,
     hadToolCallError,
+    toolCallErrorSignature,
     messageId,
     toolCalls,
     toolResults: newToolResults,
@@ -1358,6 +1369,7 @@ export const runAgentStep = async (
     agentState,
     fullResponse,
     shouldEndTurn,
+    toolCallErrorSignature,
     messageId,
     nResponses: undefined,
   }
@@ -1767,9 +1779,8 @@ export async function loopAgentSteps(
                               buildRuntimeAgentReceipt,
                               mergeChildEvidenceIntoParent,
                               reconcileAgentReceiptIntoParent,
-                            } = await import(
-                              './tools/handlers/tool/spawn-agent-utils'
-                            )
+                            } =
+                              await import('./tools/handlers/tool/spawn-agent-utils')
                             const receipt = buildRuntimeAgentReceipt({
                               agentType,
                               agentId: childState.agentId,
@@ -1806,9 +1817,10 @@ export async function loopAgentSteps(
                             if (resumedCredits > 0) {
                               initialAgentState.creditsUsed += resumedCredits
                             }
-                            const intent = initialAgentState.backgroundAgentJobs?.find(
-                              (entry) => entry.jobId === jobId,
-                            )
+                            const intent =
+                              initialAgentState.backgroundAgentJobs?.find(
+                                (entry) => entry.jobId === jobId,
+                              )
                             if (intent) {
                               intent.status = 'completed'
                               intent.completedAt = clock.now()
@@ -2342,6 +2354,8 @@ export async function loopAgentSteps(
 
     let shouldEndTurn = false
     let outputSchemaRetryCount = 0
+    let lastToolCallErrorSignature: string | undefined
+    let repeatedToolCallErrors = 0
     let currentPrompt = prompt
     let currentParams = spawnParams
     let totalSteps = 0
@@ -2507,7 +2521,9 @@ export async function loopAgentSteps(
           ) {
             return undefined
           }
-          const parsed = MemoryTurnContextV2Schema.safeParse(state.memoryV2Context)
+          const parsed = MemoryTurnContextV2Schema.safeParse(
+            state.memoryV2Context,
+          )
           return parsed.success && parsed.data.userInputId === userInputId
             ? parsed.data
             : undefined
@@ -2549,7 +2565,9 @@ export async function loopAgentSteps(
           // Validation can empty the set (restored-session garbage), so gate
           // on the COMPILED result, not the raw array — an empty band message
           // must never ship.
-          const text = compileActivePlaybooksContext(state.playbookContext ?? [])
+          const text = compileActivePlaybooksContext(
+            state.playbookContext ?? [],
+          )
           return text
             ? userMessage({
                 content: withSystemTags(text),
@@ -2581,14 +2599,11 @@ export async function loopAgentSteps(
         // recounted here. Behavior and every consumed number are unchanged.
         let systemAndToolsTokens =
           countTokensJson(system) + countTokensJson(toolsForTokenCount)
-        incrementalTokenCounter.setSystemAndToolsTokens(
-          systemAndToolsTokens,
-        )
+        incrementalTokenCounter.setSystemAndToolsTokens(systemAndToolsTokens)
 
         const estimateContextTokensLocally = () =>
-          incrementalTokenCounter.messagesTokens(
-            messagesWithStepPrompt,
-          ) + systemAndToolsTokens
+          incrementalTokenCounter.messagesTokens(messagesWithStepPrompt) +
+          systemAndToolsTokens
 
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
         const contextTokensBeforeProgrammatic =
@@ -2712,8 +2727,7 @@ export async function loopAgentSteps(
 
         const contextTokensForTrigger = currentAgentState.contextTokenCount
         const exceededSemanticTrigger =
-          contextTokensForTrigger + 1_000 >
-          semanticBudget.triggerBudgetTokens
+          contextTokensForTrigger + 1_000 > semanticBudget.triggerBudgetTokens
         // Governed trigger: the loop-local governor decides whether THIS
         // iteration may announce (and pay for) a semantic pass, replacing the
         // old announce-every-over-trigger-iteration behavior. The `+1_000`
@@ -3221,21 +3235,58 @@ export async function loopAgentSteps(
           }),
         })
 
-        // Check if output is required but missing
+        // Check the authoritative reviewer schema before ending the child, not
+        // only after the parent receives its receipt. This catches a defined but
+        // invalid output (for example from a degraded or stale handler schema)
+        // while the reviewer still has its reads and findings in context.
+        const isReviewer = agentType.toLowerCase().includes('reviewer')
+        let reviewerOutputIssue: string | undefined
+        if (
+          shouldEndTurn &&
+          !agentTemplate.handleSteps &&
+          agentTemplate.outputMode === 'structured_output' &&
+          isReviewer &&
+          currentAgentState.output !== undefined
+        ) {
+          const output = currentAgentState.output
+          const record = output && typeof output === 'object' && !Array.isArray(output)
+            ? output as Record<string, unknown>
+            : undefined
+          const isCodeReviewer = /(?:^|\/)code-reviewer(?:@|$)/i.test(agentType)
+          if ((isCodeReviewer || record?.family !== 'advisory') &&
+              !['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING'].includes(String(record?.verdict))) {
+            reviewerOutputIssue = 'The reviewer receipt is missing a valid verdict. Set verdict to LOOKS_GOOD, NON_BLOCKING, or BLOCKING based on your completed review.'
+          } else if (agentTemplate.outputSchema) {
+            const validation = agentTemplate.outputSchema.safeParse(output)
+            if (!validation.success) {
+              const issues = validation.error.issues.slice(0, 8).map((issue) =>
+                `${issue.path.join('.') || 'output'}: ${issue.message}`,
+              ).join('; ')
+              reviewerOutputIssue = `The reviewer receipt failed its output schema: ${issues}`
+            }
+          }
+          if (reviewerOutputIssue) {
+            currentAgentState.lastSetOutputError ??= reviewerOutputIssue
+          }
+        }
+
+        // Check if output is required but missing or an invalid reviewer
+        // receipt needs correction in the same child.
         // Omitted knob → unlimited retries (the post-cap-removal default), so
         // the step cap / cancellation remains the only bound. A configured
         // positive integer exhausts after that many retries; the loop then
         // falls through to the existing shouldEndTurn break and the parent
         // receives a null structured value.
-        const maxMissingOutputRetries = params.maxMissingOutputRetries
+        const maxMissingOutputRetries = params.maxMissingOutputRetries ??
+          (isReviewer ? 2 : undefined)
         if (
-          agentTemplate.outputSchema &&
+          (agentTemplate.outputSchema || reviewerOutputIssue !== undefined) &&
           // Skip for programmatic agents: the generator (not the model) drives
           // behavior, and restarting the loop here would re-run handleSteps from
           // the top (its generator is torn down once it returns). A userMessage
           // reminder also has no effect on a generator-driven agent.
           !agentTemplate.handleSteps &&
-          currentAgentState.output === undefined &&
+          (currentAgentState.output === undefined || reviewerOutputIssue !== undefined) &&
           shouldEndTurn &&
           // A turn ended by the STEP CAP must not be nudged back into the
           // loop: at the cap runAgentStep short-circuits WITHOUT consuming a
@@ -3269,7 +3320,7 @@ export async function loopAgentSteps(
           const attemptSuffix = `(attempt ${outputSchemaRetryCount})`
           const outputSchemaMessage = withSystemTags(
             rejection
-              ? `Your set_output call was rejected and your output is still unset ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Rejection: ${rejection}`
+              ? `${currentAgentState.output === undefined ? 'Your set_output call was rejected and your output is still unset' : 'Your structured output needs correction'} ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Keep your completed review and existing file reads; do not repeat the review. Rejection: ${rejection}`
               : `You must use the "set_output" tool to provide a result that matches the output schema before ending your turn ${attemptSuffix}. A prose answer or a Markdown JSON block does not populate structured output; the parent receives null.`,
           )
 
@@ -3372,9 +3423,8 @@ export async function loopAgentSteps(
               ? stepAttemptError.message
               : String(stepAttemptError)
           const countPersistentMessages = (messages: Message[]) =>
-            messages.filter(
-              (message) => message.timeToLive === undefined,
-            ).length
+            messages.filter((message) => message.timeToLive === undefined)
+              .length
           const attemptCommittedNothingVisible =
             countPersistentMessages(currentAgentState.messageHistory) ===
             countPersistentMessages(stepHistoryBefore)
@@ -3488,6 +3538,7 @@ export async function loopAgentSteps(
           agentState: newAgentState,
           shouldEndTurn: llmShouldEndTurn,
           hitStepCap: llmHitStepCap,
+          toolCallErrorSignature,
           messageId,
           nResponses: generatedResponses,
         } = llmStep
@@ -3511,6 +3562,21 @@ export async function loopAgentSteps(
 
         Object.assign(initialAgentState, newAgentState)
         currentAgentState = initialAgentState
+        if (toolCallErrorSignature) {
+          repeatedToolCallErrors =
+            toolCallErrorSignature === lastToolCallErrorSignature
+              ? repeatedToolCallErrors + 1
+              : 1
+          lastToolCallErrorSignature = toolCallErrorSignature
+          if (repeatedToolCallErrors >= 3) {
+            throw new Error(
+              'Stopped after three consecutive identical invalid tool calls. Check the tool arguments or provider configuration and retry.',
+            )
+          }
+        } else {
+          lastToolCallErrorSignature = undefined
+          repeatedToolCallErrors = 0
+        }
         shouldEndTurn = llmShouldEndTurn
         // Preserve the step-cap flag so the next programmatic-step invocation
         // can forward it to the generator (orchestrators like base2 use it to

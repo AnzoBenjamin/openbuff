@@ -5,7 +5,6 @@ import {
   createJsonErrorResponseHandler,
   createJsonResponseHandler,
   generateId,
-  isParsableJson,
   parseProviderOptions,
   postJsonToApi,
 } from '@ai-sdk/provider-utils'
@@ -17,6 +16,7 @@ import { mapOpenAICompatibleFinishReason } from './map-openai-compatible-finish-
 import { openaiCompatibleProviderOptions } from './openai-compatible-chat-options'
 import { defaultOpenAICompatibleErrorStructure } from '../openai-compatible-error'
 import { prepareTools } from './openai-compatible-prepare-tools'
+import { StreamingJsonCompletion } from '../../utils/streaming-json-completion'
 
 import type { OpenAICompatibleChatModelId } from './openai-compatible-chat-options'
 import type { ProviderErrorStructure } from '../openai-compatible-error'
@@ -450,6 +450,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
         arguments: string
       }
       hasFinished: boolean
+      jsonCompletion: StreamingJsonCompletion
       providerMetadata?: SharedV2ProviderMetadata
     }> = []
 
@@ -717,51 +718,72 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                   // phantom call holds the orphaned argument suffix.
                   //
                   // To be robust, treat a delta with a falsy name for an
-                  // unknown index as a continuation of the most-recently
-                  // created unfinished tool call: append its arguments there
-                  // (which typically completes the truncated JSON) instead of
-                  // creating a phantom bucket. If there is no unfinished call
-                  // to attach to, drop the stray fragment rather than throwing.
+                  // unknown index as a continuation of an unfinished tool
+                  // call and append its arguments there (which typically
+                  // completes the truncated JSON) instead of creating a
+                  // phantom bucket. When several calls are unfinished, the
+                  // suffix goes to the call whose accumulated arguments are
+                  // still syntactically incomplete (unmatched container
+                  // depth > 0): a call whose JSON already closed cannot own
+                  // further text, and blindly appending to the merely-newest
+                  // call corrupts its arguments while leaving the earlier
+                  // truncated call broken (reliability finding
+                  // openai-compat-continuation-mis-merge). When eligibility
+                  // is ambiguous, drop the stray fragment rather than
+                  // guessing.
                   if (
                     toolCallDelta.function?.name == null ||
                     toolCallDelta.function.name === ''
                   ) {
-                    let lastUnfinished: (typeof toolCalls)[number] | undefined
-                    for (let j = toolCalls.length - 1; j >= 0; j--) {
-                      const candidate = toolCalls[j]
-                      if (candidate != null && !candidate.hasFinished) {
-                        lastUnfinished = candidate
-                        break
-                      }
-                    }
+                    const unfinished = toolCalls.filter(
+                      (candidate) => candidate != null && !candidate.hasFinished,
+                    )
+                    // Prefer the primary (latched) counter; a merged argument
+                    // body that already canonicalized its first serialized
+                    // value reports unmatchedContainerDepth === 0 even while
+                    // a SECOND serialized value appended to the same stream is
+                    // still unclosed, so fall back to the never-latched
+                    // unmatchedDepthAfterClose before treating the target as
+                    // ambiguous (reliability finding
+                    // streaming-json-completion-mode-latch-drops-container-tracking-across-fragments).
+                    const continuationTarget =
+                      unfinished.find(
+                        (candidate) =>
+                          candidate.jsonCompletion.unmatchedContainerDepth >
+                            0 ||
+                          candidate.jsonCompletion.unmatchedDepthAfterClose > 0,
+                      ) ?? (unfinished.length === 1 ? unfinished[0] : undefined)
 
-                    if (lastUnfinished != null) {
+                    if (continuationTarget != null) {
                       const argDelta = toolCallDelta.function?.arguments ?? ''
                       if (argDelta.length > 0) {
-                        lastUnfinished.function!.arguments += argDelta
+                        continuationTarget.function!.arguments += argDelta
                         controller.enqueue({
                           type: 'tool-input-delta',
-                          id: lastUnfinished.id,
+                          id: continuationTarget.id,
                           delta: argDelta,
                         })
                       }
 
                       if (
-                        lastUnfinished.function?.name != null &&
-                        isParsableJson(lastUnfinished.function.arguments)
+                        continuationTarget.function?.name != null &&
+                        continuationTarget.jsonCompletion.isParsable(
+                          continuationTarget.function.arguments,
+                          argDelta,
+                        )
                       ) {
                         controller.enqueue({
                           type: 'tool-input-end',
-                          id: lastUnfinished.id,
+                          id: continuationTarget.id,
                         })
                         controller.enqueue({
                           type: 'tool-call',
-                          toolCallId: lastUnfinished.id ?? generateId(),
-                          toolName: lastUnfinished.function.name,
-                          input: lastUnfinished.function.arguments,
-                          providerMetadata: lastUnfinished.providerMetadata,
+                          toolCallId: continuationTarget.id ?? generateId(),
+                          toolName: continuationTarget.function.name,
+                          input: continuationTarget.function.arguments,
+                          providerMetadata: continuationTarget.providerMetadata,
                         })
-                        lastUnfinished.hasFinished = true
+                        continuationTarget.hasFinished = true
                       }
                     }
 
@@ -785,6 +807,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                       arguments: toolCallDelta.function.arguments ?? '',
                     },
                     hasFinished: false,
+                    jsonCompletion: new StreamingJsonCompletion(),
                     providerMetadata,
                   }
 
@@ -805,7 +828,12 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
 
                     // check if tool call is complete
                     // (some providers send the full tool call in one chunk):
-                    if (isParsableJson(toolCall.function.arguments)) {
+                    if (
+                      toolCall.jsonCompletion.isParsable(
+                        toolCall.function.arguments,
+                        toolCall.function.arguments,
+                      )
+                    ) {
                       controller.enqueue({
                         type: 'tool-input-end',
                         id: toolCall.id,
@@ -837,23 +865,24 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                   providerMetadata,
                 )
 
-                if (toolCallDelta.function?.arguments != null) {
-                  toolCall.function!.arguments +=
-                    toolCallDelta.function?.arguments ?? ''
-                }
+                const argDelta = toolCallDelta.function?.arguments ?? ''
+                toolCall.function!.arguments += argDelta
 
                 // send delta
                 controller.enqueue({
                   type: 'tool-input-delta',
                   id: toolCall.id,
-                  delta: toolCallDelta.function.arguments ?? '',
+                  delta: argDelta,
                 })
 
                 // check if tool call is complete
                 if (
                   toolCall.function?.name != null &&
                   toolCall.function?.arguments != null &&
-                  isParsableJson(toolCall.function.arguments)
+                  toolCall.jsonCompletion.isParsable(
+                    toolCall.function.arguments,
+                    argDelta,
+                  )
                 ) {
                   controller.enqueue({
                     type: 'tool-input-end',

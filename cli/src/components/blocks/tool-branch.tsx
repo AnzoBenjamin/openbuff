@@ -4,6 +4,12 @@ import { ContentWithMarkdown } from './content-with-markdown'
 import { useTheme } from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
 import { shouldCollapseToolByDefault } from '../../utils/constants'
+import {
+  boundedFallbackJson,
+  formatFallbackOutput,
+  hasFallbackInputValue,
+  summarizeFallbackInput,
+} from '../../utils/fallback-input-summary'
 import { renderToolComponent } from '../tools/registry'
 import { ToolCallItem } from '../tools/tool-call-item'
 
@@ -66,12 +72,30 @@ export const ToolBranch = memo(
         ? shouldCollapseToolByDefault(toolBlock.toolName)
         : true)
 
-    const inputContent = `\`\`\`json\n${JSON.stringify(toolBlock.input, null, 2)}\n\`\`\``
-    const codeBlockLang =
-      toolBlock.toolName === 'run_terminal_command' ? '' : 'yaml'
-    const resultContent = toolBlock.output
-      ? `\n\n**Result:**\n\`\`\`${codeBlockLang}\n${toolBlock.output}\n\`\`\``
+    // Registered renderers cover the shipped tools; this branch is the
+    // fallback for custom, MCP, and restored-removed tools. It used to
+    // fenced-dump the whole input as pretty-printed JSON - the raw-JSON wall
+    // the humanized renderers replace - so scalar and string-list entries now
+    // read as `key: value` rows, and only an input with no readable scalar
+    // still renders as bounded JSON.
+    const inputSummary = summarizeFallbackInput(toolBlock.input)
+    const inputContent =
+      inputSummary.length > 0
+        ? inputSummary
+        : hasFallbackInputValue(toolBlock.input)
+          ? `\`\`\`json\n${boundedFallbackJson(toolBlock.input)}\n\`\`\``
+          : ''
+    // The result is plain text under a bold label; terminal output keeps its
+    // plain fence because a shell transcript reads better as a code block.
+    const resultBody = toolBlock.output
+      ? formatFallbackOutput(toolBlock.output)
       : ''
+    const resultContent =
+      resultBody.length > 0
+        ? toolBlock.toolName === 'run_terminal_command'
+          ? `\n\n**Result:**\n\`\`\`\n${resultBody}\n\`\`\``
+          : `\n\n**Result:**\n${resultBody}`
+        : ''
     const fullContent = inputContent + resultContent
 
     const lines = fullContent.split('\n').filter((line) => line.trim())

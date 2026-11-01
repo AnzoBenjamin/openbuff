@@ -133,6 +133,7 @@ export async function* processStreamWithTools(params: {
     ) => void | Promise<void>
   }
   onResponseChunk: (chunk: PrintModeText | PrintModeError) => void
+  onParserError?: (error: StreamParserError) => void
   logger: Logger
   loggerOptions?: {
     userId?: string
@@ -153,6 +154,7 @@ export async function* processStreamWithTools(params: {
     processors,
     defaultProcessor,
     onResponseChunk,
+    onParserError,
     logger,
     loggerOptions,
     trackEvent,
@@ -258,6 +260,7 @@ export async function* processStreamWithTools(params: {
     // instead of guessing which call was malformed
     // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
     for (const error of errors) {
+      onParserError?.(error)
       let message =
         error.rawExcerpt !== undefined
           ? `${error.message}\n\nOriginal tool call input (excerpt): ${error.rawExcerpt}`

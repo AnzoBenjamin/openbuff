@@ -352,6 +352,67 @@ export function buildQualifiedName(
   return [...containers.map((c) => c.name), sym.name].join('/')
 }
 
+/** Build names for a batch without scanning every symbol for every name. */
+export function buildQualifiedNames(symbols: SymbolRange[]): string[] {
+  if (symbols.length === 0) return []
+  const sorted = symbols
+    .map((symbol, index) => ({ symbol, index }))
+    .sort(
+      (a, b) => a.symbol.startLine - b.symbol.startLine || a.index - b.index,
+    )
+  // Segment maxima prune disjoint ranges while retaining overlapping and
+  // equal ranges. AST ranges are usually nested, but need not be assumed so.
+  let leafCount = 1
+  while (leafCount < sorted.length) leafCount *= 2
+  const maxEnds = new Array<number>(leafCount * 2).fill(-Infinity)
+  for (let i = 0; i < sorted.length; i++) {
+    maxEnds[leafCount + i] = sorted[i].symbol.endLine
+  }
+  for (let i = leafCount - 1; i > 0; i--) {
+    maxEnds[i] = Math.max(maxEnds[i * 2], maxEnds[i * 2 + 1])
+  }
+  return symbols.map((symbol) => {
+    let low = 0
+    let high = sorted.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (sorted[middle].symbol.startLine <= symbol.startLine) low = middle + 1
+      else high = middle
+    }
+    const containers: typeof sorted = []
+    const visit = (node: number, left: number, right: number): void => {
+      if (left >= low || maxEnds[node] < symbol.endLine) return
+      if (right - left === 1) {
+        const item = sorted[left]
+        if (
+          item &&
+          item.symbol !== symbol &&
+          isStrictContainer(item.symbol, symbol)
+        ) {
+          containers.push(item)
+        }
+        return
+      }
+      const middle = (left + right) >>> 1
+      visit(node * 2, left, middle)
+      visit(node * 2 + 1, middle, right)
+    }
+    visit(1, 0, leafCount)
+    containers.sort(
+      (a, b) =>
+        a.symbol.depth - b.symbol.depth ||
+        b.symbol.endLine -
+          b.symbol.startLine -
+          (a.symbol.endLine - a.symbol.startLine) ||
+        a.index - b.index,
+    )
+    return [
+      ...containers.map(({ symbol: parent }) => parent.name),
+      symbol.name,
+    ].join('/')
+  })
+}
+
 export function assignDepths(symbols: SymbolRange[]): SymbolRange[] {
   const sorted = [...symbols].sort(
     (a, b) => a.startLine - b.startLine || b.endLine - a.endLine,
@@ -410,8 +471,7 @@ export function assignDepths(symbols: SymbolRange[]): SymbolRange[] {
     // openCount already includes sym's own copy when it was merged into the
     // equal-range frame; subtract it plus the equal-range siblings (which are
     // not strict containers) to match the previous filter exactly.
-    sym.depth =
-      equalCopies > 0 ? openCount - 1 - equalCopies : openCount
+    sym.depth = equalCopies > 0 ? openCount - 1 - equalCopies : openCount
     // Languages without a distinct method node (Python, Rust impl fns, Ruby)
     // model methods as plain functions. Relabel a function whose nearest
     // (smallest-span) enclosing definition is a type/impl container so

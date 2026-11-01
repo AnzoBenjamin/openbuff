@@ -1654,6 +1654,126 @@ describe('CLI-level race condition: abort run A, attempt run B before A resolves
  * - validation failure (success: false)
  * - validation exception
  */
+/**
+ * Queue-gate ordering (reliability finding
+ * queue-gate-reopens-before-batched-updater-settles): the terminal message
+ * write and the timer stop must settle BEFORE finalizeQueueState reopens
+ * the queue gate (setStreamStatus('idle') / resumeQueue), so a queued
+ * follow-up send can never begin mutating the same chat-store messages
+ * batch while the previous turn's batched AI-message write-out is still in
+ * flight.
+ */
+describe('handleRunCompletion and handleRunError settle writes before reopening the queue gate', () => {
+  test('success path stops the timer and marks complete before finalizeQueueState', () => {
+    let messages = createBaseMessages()
+    const timerController = createMockTimerController()
+    const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+      messages = fn(messages)
+    })
+
+    const eventOrder: string[] = []
+    let messageCompleteAtFinalize = false
+    const originalStop = timerController.stop
+    timerController.stop = (outcome) => {
+      eventOrder.push(outcome)
+      return originalStop(outcome)
+    }
+
+    const runState = {
+      sessionState: undefined,
+      output: { type: 'lastMessage' as const, value: [] },
+    }
+
+    handleRunCompletion({
+      runState,
+      actualCredits: 1,
+      agentMode: 'DEFAULT' as any,
+      timerController,
+      updater,
+      aiMessageId: 'ai-1',
+      wasAbortedByUser: false,
+      setStreamStatus: () => {},
+      setCanProcessQueue: () => {},
+      updateChainInProgress: () => {},
+      setHasReceivedPlanResponse: () => {},
+      isProcessingQueueRef: { current: true },
+      isQueuePausedRef: { current: false },
+      resumeQueue: () => {
+        // Snapshot whether the terminal write already settled at the
+        // moment the gate is reopened.
+        messageCompleteAtFinalize =
+          messages.find((m) => m.id === 'ai-1')?.isComplete === true
+        eventOrder.push('finalize')
+      },
+    })
+
+    // Order: the timer settled FIRST, then the gate reopened LAST.
+    expect(eventOrder).toEqual(['success', 'finalize'])
+    // The terminal markComplete write had settled before the gate reopened:
+    // a queued follow-up starting after finalizeQueueState cannot mutate the
+    // same batch while this turn's write-out is in flight.
+    expect(messageCompleteAtFinalize).toBe(true)
+    expect(messages.find((m) => m.id === 'ai-1')?.isComplete).toBe(true)
+  })
+
+  test('error path sets the error and stops the timer before finalizeQueueState', () => {
+    let messages: ChatMessage[] = [
+      {
+        id: 'ai-1',
+        variant: 'ai',
+        content: '',
+        blocks: [],
+        timestamp: 'now',
+      },
+    ]
+    const timerController = createMockTimerController()
+    const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+      messages = fn(messages)
+    })
+
+    let timerStoppedBeforeFinalize = false
+    const originalStop = timerController.stop
+    timerController.stop = (outcome) => {
+      // Record that the timer outcome is known while finalize has not yet
+      // reopened the gate (setCanProcessQueue fires as finalize's LAST step).
+      const result = originalStop(outcome)
+      void result
+      timerStoppedBeforeFinalize = true
+      return result
+    }
+
+    let timerStoppedAtCanProcessQueue = false
+    let isErrorCompleteAtCanProcessQueue = false
+
+    handleRunError({
+      error: new Error('Something failed'),
+      timerController,
+      updater,
+      setIsRetrying: () => {},
+      setStreamStatus: () => {},
+      // setCanProcessQueue fires inside finalizeQueueState, which must run
+      // AFTER the terminal setError write and the timer stop have settled.
+      setCanProcessQueue: () => {
+        timerStoppedAtCanProcessQueue = timerStoppedBeforeFinalize
+        isErrorCompleteAtCanProcessQueue =
+          messages.find((m) => m.id === 'ai-1')?.isComplete === true
+      },
+      updateChainInProgress: () => {},
+      isProcessingQueueRef: { current: true },
+      isQueuePausedRef: { current: false },
+    })
+
+    expect(timerController.stopCalls).toEqual(['error'])
+    // The timer stop and the terminal error write had both settled by the
+    // moment finalizeQueueState reopened the queue gate.
+    expect(timerStoppedAtCanProcessQueue).toBe(true)
+    expect(isErrorCompleteAtCanProcessQueue).toBe(true)
+    expect(messages.find((m) => m.id === 'ai-1')?.userError).toBe(
+      'Something failed',
+    )
+  })
+})
+
 describe('resetEarlyReturnState', () => {
   describe('prepareUserMessage exception path', () => {
     test('resets chain in progress to false', () => {

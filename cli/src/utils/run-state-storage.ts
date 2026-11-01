@@ -14,6 +14,7 @@ import {
 } from './persistence-queue'
 import { logger } from './logger'
 import { sanitizeForChatPersistence } from './payload-sanitizer'
+import { runPersistenceCodec } from './persistence-codec'
 
 import type { ChatMessage, ContentBlock } from '../types/chat'
 import type { RunState } from '@openbuff/sdk'
@@ -21,13 +22,35 @@ import type {
   AgentState,
   SessionState,
 } from '@codebuff/common/types/session-state'
-import { z } from 'zod'
 import { flushContextArchiveSnapshots } from '../services/memory-v2/context-archive-sync'
 
 const RUN_STATE_FILENAME = 'run-state.json'
 const CHAT_MESSAGES_FILENAME = 'chat-messages.json'
 const CHAT_STATE_FILENAME = 'chat-state.json'
 const CHECKPOINT_FILENAME = 'turn-checkpoint.json'
+
+/**
+ * A checkpoint temp file younger than this is never swept even when its
+ * owning pid cannot be verified: the window comfortably exceeds any
+ * write-then-rename interval, so a live sibling session's pre-rename temp
+ * file is never deleted.
+ */
+const STALE_TEMP_FILE_SWEEP_MIN_AGE_MS = 5 * 60_000
+
+/**
+ * True when `pid` refers to a live process. `kill(pid, 0)` signals nothing;
+ * EPERM means the process exists but is owned by another user, which must
+ * still be treated as alive — never sweep a tmp file we cannot prove is
+ * orphaned (reliability finding checkpoint-sweep-cross-pid-race).
+ */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
 
 type SavedChatState = {
   runState: RunState
@@ -45,18 +68,21 @@ type PersistedChatState = {
 // only need the fields the restore path reads — so older-but-valid sessions
 // keep loading unchanged; anything that fails is treated as a corrupt session
 // and the caller starts fresh instead of rendering broken messages.
-const persistedMessagesSchema = z.array(
-  z.looseObject({
-    id: z.string(),
-    variant: z.string(),
-    timestamp: z.string(),
-  }),
-)
-
 const validatePersistedMessages = (messages: unknown): ChatMessage[] | null => {
-  const parsed = persistedMessagesSchema.safeParse(messages)
-  if (!parsed.success) return null
-  return parsed.data as ChatMessage[]
+  if (!Array.isArray(messages)) return null
+  for (const message of messages) {
+    if (
+      message === null ||
+      typeof message !== 'object' ||
+      Array.isArray(message) ||
+      typeof message.id !== 'string' ||
+      typeof message.variant !== 'string' ||
+      typeof message.timestamp !== 'string'
+    ) {
+      return null
+    }
+  }
+  return messages as ChatMessage[]
 }
 
 function quarantineCorruptStateFile(filePath: string): string | null {
@@ -93,9 +119,7 @@ function hasUnrecognizedEnvelopeVersion(parsed: unknown): boolean {
     return false
   }
   const version = (parsed as { version?: unknown }).version
-  return (
-    version !== undefined && version !== CHAT_STATE_ENVELOPE_VERSION
-  )
+  return version !== undefined && version !== CHAT_STATE_ENVELOPE_VERSION
 }
 
 /**
@@ -241,6 +265,142 @@ export function loadChatStateFromDirectory(
   return loadChatStateFromCompatibilityFiles(chatDir)
 }
 
+const CODEC_WORKER_MIN_CHARS = 64 * 1024
+
+async function parsePersistedAsync<T>(text: string, signal?: AbortSignal): Promise<T> {
+  if (text.length >= CODEC_WORKER_MIN_CHARS) {
+    try {
+      return await runPersistenceCodec<T>('parse', text, signal)
+    } catch (error) {
+      if (signal?.aborted) throw error
+      // Worker startup can fail on an unsupported host. Preserve the existing
+      // parsing and corruption-recovery behavior as a fail-open fallback.
+    }
+  }
+  return sanitizeForChatPersistence(JSON.parse(text)) as T
+}
+
+/** Async counterpart used by the TUI restore path; the sync API remains for
+ * callers that need it. Large JSON payloads are parsed on a worker. */
+export async function loadChatStateFromDirectoryAsync(
+  chatDir: string,
+  signal?: AbortSignal,
+): Promise<SavedChatState | null> {
+  const options = { encoding: 'utf8' as const, signal }
+  const compatibility = async (): Promise<SavedChatState | null> => {
+    try {
+      const [runText, messagesText] = await Promise.all([
+        fs.promises.readFile(path.join(chatDir, RUN_STATE_FILENAME), options),
+        fs.promises.readFile(
+          path.join(chatDir, CHAT_MESSAGES_FILENAME),
+          options,
+        ),
+      ])
+      if (signal?.aborted) return null
+      const [runState, messages] = await Promise.all([
+        parsePersistedAsync<RunState>(runText, signal),
+        parsePersistedAsync<unknown>(messagesText, signal),
+      ])
+      if (signal?.aborted) return null
+      if (!runState || validatePersistedMessages(messages) === null) return null
+      return {
+        runState,
+        messages: messages as ChatMessage[],
+        chatId: path.basename(chatDir),
+      }
+    } catch {
+      return null
+    }
+  }
+  const filePath = path.join(chatDir, CHAT_STATE_FILENAME)
+  let raw: string
+  try {
+    raw = await fs.promises.readFile(filePath, options)
+  } catch (error) {
+    if (signal?.aborted) return null
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      quarantineCorruptStateFile(filePath)
+    }
+    return compatibility()
+  }
+  if (signal?.aborted) return null
+  let parsed: unknown
+  try {
+    parsed = await parsePersistedAsync<unknown>(raw, signal)
+  } catch {
+    if (signal?.aborted) return null
+    quarantineCorruptStateFile(filePath)
+    return compatibility()
+  }
+  if (hasUnrecognizedEnvelopeVersion(parsed)) return compatibility()
+  const persisted = parsed as PersistedChatState
+  if (
+    !persisted ||
+    typeof persisted !== 'object' ||
+    Array.isArray(persisted) ||
+    persisted.version !== 1 ||
+    !persisted.runState ||
+    validatePersistedMessages(persisted.messages) === null
+  ) {
+    quarantineCorruptStateFile(filePath)
+    return compatibility()
+  }
+  return {
+    runState: persisted.runState,
+    messages: persisted.messages,
+    chatId: path.basename(chatDir),
+  }
+}
+
+export async function loadMostRecentChatStateAsync(
+  chatId?: string,
+  signal?: AbortSignal,
+): Promise<SavedChatState | null> {
+  try {
+    let chatDir: string | null = null
+    if (chatId && chatId.trim().length > 0) {
+      if (!isValidChatId(chatId)) return null
+      const candidate = path.join(getProjectDataDir(), 'chats', chatId.trim())
+      if (!(await fs.promises.stat(candidate)).isDirectory()) return null
+      chatDir = candidate
+    } else {
+      const chatsDir = path.join(getProjectDataDir(), 'chats')
+      const names = await fs.promises.readdir(chatsDir)
+      const candidates: Array<{ fullPath: string; mtime: number } | null> = []
+      for (
+        let start = 0;
+        start < names.length && !signal?.aborted;
+        start += 32
+      ) {
+        candidates.push(
+          ...(await Promise.all(
+            names.slice(start, start + 32).map(async (name) => {
+              const fullPath = path.join(chatsDir, name)
+              try {
+                const stat = await fs.promises.stat(fullPath)
+                return stat.isDirectory()
+                  ? { fullPath, mtime: stat.mtimeMs }
+                  : null
+              } catch {
+                return null
+              }
+            }),
+          )),
+        )
+      }
+      const dirs = candidates.filter(
+        (item): item is { fullPath: string; mtime: number } => item !== null,
+      )
+      dirs.sort((a, b) => b.mtime - a.mtime)
+      chatDir = dirs[0]?.fullPath ?? null
+    }
+    if (!chatDir || signal?.aborted) return null
+    return await loadChatStateFromDirectoryAsync(chatDir, signal)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Queue one atomic chat-state output file: temp file + rename, coalesced per
  * file path on the persistence queue so a rapid save burst writes each file
@@ -348,15 +508,116 @@ export function saveChatState(
   runState: RunState,
   messages: ChatMessage[],
 ): void {
+  // Capture at call time before the queued worker runs. The clone also gives
+  // the fallback the same immutable snapshot if the worker cannot start.
+  let snapshot: { runState: RunState; messages: ChatMessage[] }
+  try {
+    snapshot = structuredClone({
+      runState,
+      messages: messages.map((message) => {
+        if (message.metadata?.runState === undefined) return message
+        const { runState: _historicalRunState, ...metadata } = message.metadata
+        return { ...message, metadata }
+      }),
+    })
+  } catch {
+    // Preserve support for unusual non-cloneable live state.
+    saveChatStateSynchronously(runState, messages)
+    return
+  }
+  const chatStatePath = getChatStatePath()
+  schedulePersistenceWrite({
+    targetKey: chatStatePath,
+    label: chatStatePath,
+    onError: (error) => logger.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      'Failed to save chat state',
+    ),
+    run: async () => {
+      let serialized: { runState: string; messages: string; archive: RunState | null }
+      try {
+        serialized = await runPersistenceCodec('serialize', snapshot)
+      } catch {
+        const cleanRunState = sanitizeForChatPersistence(snapshot.runState)
+        serialized = {
+          runState: JSON.stringify(cleanRunState),
+          messages: JSON.stringify(sanitizeForChatPersistence(snapshot.messages)),
+          archive: cleanRunState,
+        }
+      }
+      let diskVersion: number | undefined
+      try {
+        const raw = await fs.promises.readFile(chatStatePath, 'utf8')
+        const parsed = await parsePersistedAsync<unknown>(raw)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const version = (parsed as { version?: unknown }).version
+          if (typeof version === 'number') diskVersion = version
+        }
+      } catch {
+        // Missing or corrupt files follow the existing overwrite behavior.
+      }
+      if (
+        diskVersion === undefined ||
+        diskVersion === CHAT_STATE_ENVELOPE_VERSION
+      ) {
+        try {
+          await atomicWriteJsonFile(
+            chatStatePath,
+            `{"version":1,"runState":${serialized.runState},"messages":${serialized.messages}}`,
+            { mode: 0o600 },
+          )
+        } catch (error) {
+          logger.error(
+            {
+              filePath: chatStatePath,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            'Failed to save chat state',
+          )
+        }
+      } else {
+        logger.warn(
+          { chatStatePath, diskVersion },
+          'Chat state envelope has an unrecognized version; leaving file in place and updating only the legacy compatibility files',
+        )
+      }
+      // The legacy sidecar outputs are scheduled as their OWN per-target
+      // queue entries (scheduleChatStateWrite) and never written inline from
+      // this chatStatePath-keyed run(): a queued sidecar write must stay
+      // visible to cancelAndDrainPendingWriteFor(runStatePath) /
+      // (messagesPath), which cannot see files written inline under a
+      // different target key (reliability finding
+      // cleared-state-resurrection-async-save). These synchronous enqueues
+      // join the pump's current loop, so the sidecars still land right after
+      // the envelope, in the same relative order as before.
+      scheduleChatStateWrite(getRunStatePath(), serialized.runState)
+      scheduleChatStateWrite(getChatMessagesPath(), serialized.messages)
+      if (serialized.archive) {
+        void flushContextArchiveSnapshots(serialized.archive).catch((error) => {
+          logger.warn({ error: error instanceof Error ? error.message : String(error) }, 'Context archive flush failed (non-fatal)')
+        })
+      }
+    },
+  })
+}
+
+function saveChatStateSynchronously(
+  runState: RunState,
+  messages: ChatMessage[],
+): void {
   try {
     const persistedRunState = sanitizeForChatPersistence(runState)
-    const persistedMessages = sanitizeForChatPersistence(messages)
-    const envelope: PersistedChatState = {
-      version: 1,
-      runState: persistedRunState,
-      messages: persistedMessages,
-    }
-
+    // Older messages may carry a full historical RunState in metadata. The
+    // authoritative continuation state is the envelope's runState; message
+    // metadata is for rendering and undo already excludes this field. Do not
+    // repeatedly persist transcript-sized snapshots from old sessions.
+    const persistedMessages = sanitizeForChatPersistence(
+      messages.map((message) => {
+        if (message.metadata?.runState === undefined) return message
+        const { runState: _historicalRunState, ...metadata } = message.metadata
+        return { ...message, metadata }
+      }),
+    )
     // Serialize (sanitize + compact JSON) happens synchronously so the
     // persisted bytes always match THIS call's arguments and the caller still
     // sees an up-to-date in-memory snapshot; only the disk IO (queued via
@@ -378,6 +639,10 @@ export function saveChatState(
     // this call's writes are queued.
     const chatStatePath = getChatStatePath()
     const diskVersion = readEnvelopeVersion(chatStatePath)
+    // The envelope and compatibility files carry exactly the same sanitized
+    // trees. Serialize each once and reuse the bytes for all three files.
+    const serializedRunState = JSON.stringify(persistedRunState)
+    const serializedMessages = JSON.stringify(persistedMessages)
     if (
       diskVersion !== undefined &&
       diskVersion !== CHAT_STATE_ENVELOPE_VERSION
@@ -391,13 +656,13 @@ export function saveChatState(
         'Chat state envelope has an unrecognized version; leaving it in place and updating only the legacy compatibility files',
       )
     } else {
-      scheduleChatStateWrite(chatStatePath, JSON.stringify(envelope))
+      scheduleChatStateWrite(
+        chatStatePath,
+        `{"version":1,"runState":${serializedRunState},"messages":${serializedMessages}}`,
+      )
     }
-    scheduleChatStateWrite(getRunStatePath(), JSON.stringify(persistedRunState))
-    scheduleChatStateWrite(
-      getChatMessagesPath(),
-      JSON.stringify(persistedMessages),
-    )
+    scheduleChatStateWrite(getRunStatePath(), serializedRunState)
+    scheduleChatStateWrite(getChatMessagesPath(), serializedMessages)
 
     // Cross-session context-archive persistence: fire-and-forget flush of the
     // run's compaction archive into the memory-v2 store (the recall_context
@@ -533,17 +798,44 @@ export function saveCheckpoint(
       targetKey: checkpointPath,
       label: checkpointPath,
       run: async () => {
-        // Sweep stale temp files from prior crashed writes (a previous pid
-        // that died between write and rename). Bounded to the checkpoint's
-        // own directory and the `.tmp.` prefix so we never touch unrelated
-        // files.
+        // Sweep stale temp files from prior crashed writes. Bounded to the
+        // checkpoint's own directory and the `.tmp.<pid>` prefix so we never
+        // touch unrelated files. A concurrent sibling session's pre-rename
+        // tmp file must NOT be swept: only remove a candidate when its
+        // owning pid is provably dead (a previous process that died between
+        // write and rename); entries with an unparsable pid suffix fall
+        // back to an mtime staleness window longer than any reasonable
+        // write (reliability finding checkpoint-sweep-cross-pid-race).
+        const sweepPrefix = `${CHECKPOINT_FILENAME}.tmp.`
         try {
           for (const entry of await readdir(dir)) {
             if (
-              entry.startsWith(`${CHECKPOINT_FILENAME}.tmp.`) &&
-              entry !== path.basename(tempPath)
+              !entry.startsWith(sweepPrefix) ||
+              entry === path.basename(tempPath)
             ) {
-              await unlink(path.join(dir, entry))
+              continue
+            }
+            const candidatePath = path.join(dir, entry)
+            const pidSuffix = entry.slice(sweepPrefix.length)
+            let stale = false
+            if (/^\d+$/.test(pidSuffix)) {
+              stale = !isPidAlive(Number.parseInt(pidSuffix, 10))
+            } else {
+              try {
+                stale =
+                  Date.now() - fs.statSync(candidatePath).mtimeMs >
+                  STALE_TEMP_FILE_SWEEP_MIN_AGE_MS
+              } catch {
+                // Vanished between readdir and stat: already gone.
+                continue
+              }
+            }
+            if (!stale) continue
+            try {
+              await unlink(candidatePath)
+            } catch {
+              // Best-effort: a concurrent rename or lock on this entry must
+              // not block the checkpoint write below.
             }
           }
         } catch {

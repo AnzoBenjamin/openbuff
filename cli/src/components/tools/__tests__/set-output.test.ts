@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
-import {
-  extractReceiptCore,
-  SetOutputComponent,
-} from '../set-output'
+import { extractReceiptCore, SetOutputComponent } from '../set-output'
 import { summarizeSpawnResult } from '../spawn-agents'
+import { CheckBackgroundAgentComponent } from '../check-background-agent'
 import { getToolRendererDisposition } from '../registry'
+import { chatThemes } from '../../../utils/theme-system'
+import { initializeThemeStore } from '../../../hooks/use-theme'
+
+initializeThemeStore()
 
 describe('extractReceiptCore', () => {
   test('distills a reviewer receipt: verdict, message, findings, coverage', () => {
@@ -55,7 +59,7 @@ describe('extractReceiptCore', () => {
     expect(core.message).toBe('boom')
   })
 
-  test('caps finding titles at five and labels them', () => {
+  test('retains finding titles including reviewer text fields', () => {
     const core = extractReceiptCore({
       data: {
         status: 'success',
@@ -66,10 +70,86 @@ describe('extractReceiptCore', () => {
           { detail: 'four' },
           { message: 'five' },
           { title: 'six' },
+          { text: 'seventh finding' },
         ],
       },
     })
-    expect(core.findings).toEqual(['one', 'two', 'three', 'four', 'five'])
+    expect(core.findings).toEqual([
+      'one',
+      'two',
+      'three',
+      'four',
+      'five',
+      'six',
+      'seventh finding',
+    ])
+  })
+
+  test('presents advisories and nested dimensions without stringified JSON', () => {
+    const core = extractReceiptCore({
+      data: {
+        verdict: 'NON_BLOCKING',
+        advisories: '["first advisory", "second advisory"]',
+        dimensions: {
+          reliability: 'inspect retry path',
+          performance: 'limit allocations',
+        },
+        findings: [{ text: 'fix the retry loop' }],
+      },
+    })
+    expect(core.outcomeKind).toBe('warn')
+    expect(core.advisories).toEqual(['first advisory', 'second advisory'])
+    expect(core.findings).toEqual(['fix the retry loop'])
+    expect(core.fields).toContainEqual({
+      label: 'dimensions · reliability',
+      value: 'inspect retry path',
+    })
+    expect(core.fields).toContainEqual({
+      label: 'dimensions · performance',
+      value: 'limit allocations',
+    })
+  })
+
+  test('renders stringified findings and reviewer coverage from the original call', () => {
+    const core = extractReceiptCore({
+      findings: '[{"text":"repair timeout","correction":"add a deadline"}]',
+      requirementCoverage: '[{"status":"satisfied"}]',
+      reviewedFiles: '["src/a.ts"]',
+    })
+    expect(core.findings).toEqual(['repair timeout\nFix: add a deadline'])
+    expect(core.coverage).toEqual({ satisfied: 1, total: 1 })
+    expect(core.reviewedFileCount).toBe(1)
+  })
+
+  test('includes the evidence and correction from a reviewer finding', () => {
+    const core = extractReceiptCore({
+      findings: [
+        {
+          text: 'retry loses an error',
+          severity: 'high',
+          evidence: ['src/retry.ts:12'],
+          correction: 'preserve the cause',
+        },
+      ],
+    })
+    expect(core.findings).toEqual([
+      'HIGH: retry loses an error\nEvidence: src/retry.ts:12\nFix: preserve the cause',
+    ])
+  })
+
+  test('does not hide a structured result or incomplete requirements', () => {
+    const core = extractReceiptCore({
+      result: { path: 'src/a.ts' },
+      requirementCoverage: [{ requirement: 'retry', status: 'missing' }],
+    })
+    expect(core.fields).toContainEqual({
+      label: 'result · path',
+      value: 'src/a.ts',
+    })
+    expect(core.fields).toContainEqual({
+      label: 'requirement coverage 1 · status',
+      value: 'missing',
+    })
   })
 
   test('an unrecognized envelope degrades to a neutral one-liner', () => {
@@ -94,7 +174,10 @@ describe('summarizeSpawnResult', () => {
   test('receipt errors dominate: error color with the message', () => {
     const summary = summarizeSpawnResult({
       agentType: 'editor',
-      agentReceipt: { status: 'failed', errors: [{ message: 'edit rejected' }] },
+      agentReceipt: {
+        status: 'failed',
+        errors: [{ message: 'edit rejected' }],
+      },
     })
     expect(summary.color).toBe('error')
     expect(summary.glyph).toBe('✗')
@@ -114,4 +197,92 @@ describe('set_output rendering registration', () => {
     expect(getToolRendererDisposition('set_output')).toBe('custom')
     expect(SetOutputComponent.toolName).toBe('set_output')
   })
+
+  test('shows validation failure instead of claiming the submitted verdict succeeded', () => {
+    let preview = ''
+    const block = {
+      type: 'tool',
+      toolName: 'set_output',
+      toolCallId: '1',
+      input: { data: { verdict: 'LOOKS_GOOD' } },
+      lifecycle: 'failed',
+      outputRaw: [
+        {
+          type: 'json',
+          value: { errorMessage: 'advisories must be an array' },
+        },
+      ],
+    } as const
+    const Render = () => {
+      const config = SetOutputComponent.render(block, chatThemes.dark, {
+        availableWidth: 100,
+        indentationOffset: 0,
+        labelWidth: 0,
+      })
+      preview = config.collapsedPreview ?? ''
+      return config.content as React.ReactElement
+    }
+    const markup = renderToStaticMarkup(React.createElement(Render))
+    expect(markup).toContain('output failed')
+    expect(markup).toContain('advisories must be an array')
+    expect(preview).toContain('output failed')
+    expect(preview).not.toContain('LOOKS_GOOD')
+  })
+
+  test('shows a structured rejection as failed even when the tool lifecycle completed', () => {
+    let preview = ''
+    const block = {
+      type: 'tool', toolName: 'set_output', toolCallId: 'rejected',
+      input: { data: { verdict: 'LOOKS_GOOD' } },
+      lifecycle: 'completed',
+      outputRaw: [{ type: 'json', value: {
+        message: 'Output validation error: verdict is required',
+        errorMessage: 'Output validation error: verdict is required',
+      } }],
+    } as const
+    const Render = () => {
+      const config = SetOutputComponent.render(block, chatThemes.dark, {
+        availableWidth: 100, indentationOffset: 0, labelWidth: 0,
+      })
+      preview = config.collapsedPreview ?? ''
+      return config.content as React.ReactElement
+    }
+    const markup = renderToStaticMarkup(React.createElement(Render))
+    expect(markup).toContain('output failed')
+    expect(markup).toContain('verdict is required')
+    expect(preview).not.toContain('LOOKS_GOOD')
+  })
+})
+
+test('background agent results render structured details without a JSON envelope', () => {
+  const Render = () => {
+    const config = CheckBackgroundAgentComponent.render(
+      {
+        type: 'tool',
+        toolName: 'check_background_agent',
+        toolCallId: 'job-1',
+        input: { jobId: 'job-1' },
+        outputRaw: [
+          {
+            type: 'json',
+            value: {
+              jobId: 'job-1',
+              state: 'completed',
+              result: {
+                verdict: 'NON_BLOCKING',
+                advisories: ['inspect retry behavior'],
+              },
+            },
+          },
+        ],
+      },
+      chatThemes.dark,
+      { availableWidth: 100, indentationOffset: 0, labelWidth: 0 },
+    )
+    return config.content as React.ReactElement
+  }
+  const markup = renderToStaticMarkup(React.createElement(Render))
+  expect(markup).toContain('NON_BLOCKING')
+  expect(markup).toContain('inspect retry behavior')
+  expect(markup).not.toContain('&quot;verdict&quot;')
 })

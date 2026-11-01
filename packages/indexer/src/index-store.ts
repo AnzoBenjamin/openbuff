@@ -184,7 +184,11 @@ export async function saveIndex(
   index: MetadataIndex,
   projectRoot: string,
   cacheDir = '.codebuff-index',
-  options: { expectedBuiltAt?: number | null } = {},
+  options: {
+    expectedBuiltAt?: number | null
+    /** Reports whether the complete document was read back byte-for-byte. */
+    onVerifiedWrite?: (verified: boolean) => void
+  } = {},
 ): Promise<boolean> {
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
@@ -218,7 +222,10 @@ export async function saveIndex(
     // is rebuildable at load, in increasing cost order (see
     // reduceIndexForByteCap). The reduction never mutates the caller's
     // in-memory index, which index-manager keeps serving.
-    const reduced = reduceIndexForByteCap(index, MAX_METADATA_INDEX_BYTES)
+    const reduced = reduceIndexForByteCapWithPayload(
+      index,
+      MAX_METADATA_INDEX_BYTES,
+    )
     if (reduced.size > MAX_METADATA_INDEX_BYTES) {
       // Tier 4: even the fully reduced doc does not fit — skip persisting
       // entirely (metadata AND sidecar; the sidecar must never describe a
@@ -234,7 +241,18 @@ export async function saveIndex(
         `[index-store] metadata index over write cap; persisting without ${reduced.tiers.join('/')} (${reduced.size} bytes)`,
       )
     }
-    await atomicWriteJson(indexPath, reduced.index)
+    const written = await atomicWriteJson(indexPath, reduced.index, reduced.compact)
+    if (options.onVerifiedWrite) {
+      let verified = false
+      if (!reduced.reduced) {
+        try {
+          verified = (await fs.promises.readFile(indexPath, 'utf8')) === written
+        } catch {
+          // The manager will use its normal validation/recovery path.
+        }
+      }
+      options.onVerifiedWrite(verified)
+    }
     // Sidecar shares the same lock txn + CAS/newest-wins gate above so it
     // can never describe a snapshot that lost the race, and is built from
     // the ORIGINAL full index — not the reduced doc. Best-effort: a
@@ -322,22 +340,42 @@ export function reduceIndexForByteCap(
   index: MetadataIndex,
   maxBytes: number,
 ): { index: MetadataIndex; reduced: boolean; tiers: string[]; size: number } {
+  const { compact: _compact, ...result } = reduceIndexForByteCapWithPayload(
+    index,
+    maxBytes,
+  )
+  return result
+}
+
+function reduceIndexForByteCapWithPayload(
+  index: MetadataIndex,
+  maxBytes: number,
+): {
+  index: MetadataIndex
+  reduced: boolean
+  tiers: string[]
+  size: number
+  compact: string
+} {
   let doc = index
-  let size = JSON.stringify(doc).length
+  let compact = JSON.stringify(doc)
+  let size = compact.length
   const tiers: string[] = []
   if (
     size > maxBytes &&
     (doc.queryData !== undefined || doc.parseData !== undefined)
   ) {
     doc = { ...doc, queryData: undefined, parseData: undefined }
-    size = JSON.stringify(doc).length
+    compact = JSON.stringify(doc)
+    size = compact.length
     tiers.push('queryData/parseData')
   }
   if (size > maxBytes) {
     const files = stripFileField(doc.files, 'contentSample')
     if (files !== doc.files) {
       doc = { ...doc, files }
-      size = JSON.stringify(doc).length
+      compact = JSON.stringify(doc)
+      size = compact.length
       tiers.push('contentSample')
     }
   }
@@ -345,11 +383,12 @@ export function reduceIndexForByteCap(
     const files = stripFileField(doc.files, 'chunks')
     if (files !== doc.files) {
       doc = { ...doc, files }
-      size = JSON.stringify(doc).length
+      compact = JSON.stringify(doc)
+      size = compact.length
       tiers.push('chunks')
     }
   }
-  return { index: doc, reduced: tiers.length > 0, tiers, size }
+  return { index: doc, reduced: tiers.length > 0, tiers, size, compact }
 }
 
 export interface CachedSemanticVector {
@@ -1276,9 +1315,10 @@ const COMPACT_WRITE_THRESHOLD_CHARS = 1_048_576
 async function atomicWriteJson(
   filePath: string,
   value: unknown,
-): Promise<void> {
+  serializedCompact?: string,
+): Promise<string> {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  const compact = JSON.stringify(value)
+  const compact = serializedCompact ?? JSON.stringify(value)
   let payload: string
   if (compact.length > COMPACT_WRITE_THRESHOLD_CHARS) {
     // Oversized document: a single compact serialization, written directly.
@@ -1300,6 +1340,7 @@ async function atomicWriteJson(
     await handle.close()
     handle = undefined
     await fs.promises.rename(temporaryPath, filePath)
+    return payload
   } finally {
     await handle?.close().catch(() => {})
     await fs.promises.rm(temporaryPath, { force: true }).catch(() => {})

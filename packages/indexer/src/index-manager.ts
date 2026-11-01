@@ -367,20 +367,32 @@ export class IndexManager {
     this.waitTimedOut = false
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      await Promise.race([
+      // The race outcome MUST NOT be re-derived from the persistent
+      // this.waitTimedOut flag afterwards: the timer callback is the only
+      // writer permitted to set it, and clearTimeout in the finally block
+      // below guarantees a buildPromise-winning call can never observe a
+      // post-resolution tick flipping it stale-true (reliability finding
+      // waituntilready-stale-timeout-flag-not-cleared).
+      const timedOut = await Promise.race([
         this.buildPromise,
-        new Promise<void>((resolve) => {
+        new Promise<boolean>((resolve) => {
           timer = setTimeout(() => {
             this.waitTimedOut = true
-            resolve()
+            resolve(true)
           }, timeoutMs)
           timer.unref?.()
         }),
       ])
+      // clearTimeout in the finally block below prevents the timer from
+      // ever firing after the buildPromise side already won, so the flag
+      // stays false on a build that completed successfully.
+      if (!timedOut) {
+        this.waitTimedOut = false
+      }
+      return !timedOut
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
-    return !this.waitTimedOut
   }
 
   /**
@@ -614,8 +626,10 @@ export class IndexManager {
         index.workspaceRevision = mutationDelta.revision
       }
       stage = 'persist'
+      let verifiedWrite = false
       const persisted = await saveIndex(index, this.projectRoot, cacheDir, {
         expectedBuiltAt,
+        onVerifiedWrite: (verified) => { verifiedWrite = verified },
       })
       if (!persisted) {
         this.forceRefresh = true
@@ -646,7 +660,12 @@ export class IndexManager {
       } else if (persisted && !index.parserDegraded) {
         this.degradedDeltaRequeued = false
       }
-      if (persisted) {
+      if (persisted && verifiedWrite) {
+        // The store read back the exact bytes under its write lock. The
+        // locally-built snapshot is already available, so avoid parsing and
+        // validating the same document again on the event loop.
+        this.index = index
+      } else if (persisted) {
         // Fail-closed verification: only trust disk when it still holds the
         // snapshot we just built. Verified by comparing snapshot content
         // directly rather than by re-deriving a content digest, so the check
@@ -926,6 +945,16 @@ export class IndexManager {
    * @returns the number of precise edges added by the merge.
    */
   ingestScipDump(dumpJson: unknown): number {
+    // Detached-instance gate: mirror adoptMergedIndex's seam contract — a
+    // holder evicted from the registry (MAX_INSTANCE_ROOTS) must merge
+    // SCIP edges into the snapshot the registered singleton actually
+    // serves, not its own (possibly still-null) private copy that the
+    // singleton would discard on the next rebuild (reliability finding
+    // scip-ingest-missing-detached-gate).
+    const registered = IndexManager.instances.get(this.instanceKey)
+    if (registered && registered !== this) {
+      return registered.ingestScipDump(dumpJson)
+    }
     if (!this.index) {
       throw new Error(
         'ingestScipDump requires a built index; call waitUntilReady() first.',

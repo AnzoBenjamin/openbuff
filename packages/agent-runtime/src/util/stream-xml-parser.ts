@@ -80,6 +80,8 @@ export type StreamParserError = {
    * (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
    */
   rawExcerpt?: string
+  /** True only when rawExcerpt contains the entire malformed payload. */
+  rawExcerptComplete?: boolean
   /**
    * Salvaged survivor of a tool_call_buffer_exceeded overflow: the
    * JSON-stringified complete top-level fields recovered from the
@@ -491,6 +493,7 @@ export function finalizeStreamParserState(state: StreamParserState): {
         message: `Discarded unterminated ${toolXmlName} content at end of stream after ${state.buffer.length} buffered characters: the response ended before the closing tag.`,
         bufferedLength: state.buffer.length,
         rawExcerpt: toBoundedRawExcerpt(state.buffer),
+        rawExcerptComplete: state.buffer.length <= MAX_TOOL_CALL_RAW_EXCERPT_LENGTH,
       })
     }
     // Reset in both inside-call cases: the buffered payload is dropped
@@ -533,6 +536,7 @@ function parseToolCallContent(content: string): {
         code: 'invalid_tool_call_json',
         message: `Ignored empty ${toolXmlName} content.`,
         rawExcerpt,
+        rawExcerptComplete: content.length <= MAX_TOOL_CALL_RAW_EXCERPT_LENGTH,
       },
     }
   }
@@ -548,6 +552,7 @@ function parseToolCallContent(content: string): {
           code: 'invalid_tool_call_json',
           message: `Ignored ${toolXmlName} content because it did not parse to a JSON object.`,
           rawExcerpt,
+          rawExcerptComplete: content.length <= MAX_TOOL_CALL_RAW_EXCERPT_LENGTH,
         },
       }
     }
@@ -564,6 +569,7 @@ function parseToolCallContent(content: string): {
           code: 'missing_tool_name',
           message: `Ignored ${toolXmlName} content because ${MISSING_TOOL_NAME_REASON}`,
           rawExcerpt,
+          rawExcerptComplete: content.length <= MAX_TOOL_CALL_RAW_EXCERPT_LENGTH,
         },
       }
     }
@@ -579,6 +585,7 @@ function parseToolCallContent(content: string): {
           err instanceof Error ? err.message : String(err)
         }`,
         rawExcerpt,
+        rawExcerptComplete: content.length <= MAX_TOOL_CALL_RAW_EXCERPT_LENGTH,
       },
     }
   }

@@ -632,6 +632,14 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
     const repairedRecord = { ...record }
     let repaired = false
 
+    // A spawn entry is nested inside `agents`, so the top-level alias
+    // normalizer cannot see its camelCase agentType. Accept the mechanical
+    // alias without overriding an explicitly supplied canonical field.
+    if (record.agent_type === undefined && typeof record.agentType === 'string') {
+      repairedRecord.agent_type = record.agentType
+      repaired = true
+    }
+
     const parsedHandoff = parseJsonBounded(record.handoff)
     if (
       typeof record.handoff === 'string' &&
@@ -692,7 +700,7 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
       // to spawn_agents for Basher's explicit command field. Never derive a
       // shell command from `prompt`: prose is not executable authority.
       if (
-        record.agent_type === 'basher' &&
+        repairedRecord.agent_type === 'basher' &&
         typeof record.command === 'string' &&
         paramsRecord.command === undefined
       ) {

@@ -66,9 +66,23 @@ const providerSchemaAnnotationKeys = new Set([
   'title',
 ])
 
+// These schema keywords contain a map whose keys are user-defined names, not
+// schema keywords. A field named "title" or "description" is data and must
+// survive compaction even when schema annotations of the same name are removed.
+const providerSchemaNameMapKeys = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'dependentRequired',
+  'dependencies',
+])
+
 function compactJsonSchemaValue(
   value: unknown,
   preserveDescriptions?: boolean,
+  isNameMap = false,
 ): unknown {
   if (Array.isArray(value)) {
     return value.map((child) =>
@@ -81,24 +95,37 @@ function compactJsonSchemaValue(
 
   const compacted: Record<string, unknown> = {}
   for (const [key, childValue] of Object.entries(value)) {
-    // Descriptions are the one annotation mutation tools keep so the model
-    // still sees per-field guidance for a bare discriminated union; every
-    // other annotation key stays stripped for token economy.
-    if (key === 'description' && preserveDescriptions) {
+    // Literal values in const/enum are not schemas and may themselves have
+    // fields named title, description, or other annotation keywords.
+    if (!isNameMap && (key === 'const' || key === 'enum')) {
       compacted[key] = childValue
       continue
     }
-    if (providerSchemaAnnotationKeys.has(key)) {
+    // Descriptions are the one annotation mutation tools keep so the model
+    // still sees per-field guidance for a bare discriminated union; every
+    // other annotation key stays stripped for token economy.
+    if (!isNameMap && key === 'description' && preserveDescriptions) {
+      compacted[key] = childValue
       continue
     }
-    compacted[key] = compactJsonSchemaValue(childValue, preserveDescriptions)
+    if (!isNameMap && providerSchemaAnnotationKeys.has(key)) {
+      continue
+    }
+    compacted[key] = compactJsonSchemaValue(
+      childValue,
+      preserveDescriptions,
+      !isNameMap && providerSchemaNameMapKeys.has(key),
+    )
   }
   return compacted
 }
 
 export function compactToolInputSchemaForProvider(
   schema: z.ZodType,
-  options?: { preserveDescriptions?: boolean },
+  options?: {
+    preserveDescriptions?: boolean
+    toolName?: string
+  },
 ): ReturnType<typeof jsonSchema> {
   const preserveDescriptions = options?.preserveDescriptions === true
   const safeSchema = ensureJsonSchemaCompatible(schema)
@@ -107,12 +134,95 @@ export function compactToolInputSchemaForProvider(
     preserveDescriptions,
   ) as JSONSchema7
 
+  // Zod refinements do not survive JSON Schema conversion. Publish the
+  // cross-field requirements explicitly so an empty object is not advertised
+  // as a valid call to providers with native schema enforcement.
+  const alternatives: Record<string, JSONSchema7[]> = {
+    read_files: [
+      'paths',
+      'ranges',
+      'windows',
+      'around',
+      'symbol',
+      'symbols',
+    ].map((name) => ({
+      required: [name],
+      properties: { [name]: { minItems: 1 } },
+    })),
+    read_logs: [{ required: ['path'] }, { required: ['jobId'] }],
+    recall_context: [{ required: ['query'] }, { required: ['toolCallId'] }],
+    update_plan_status: [
+      { required: ['updates'], properties: { updates: { minItems: 1 } } },
+      { required: ['append'] },
+      { required: ['sessionStatus'] },
+      { required: ['currentTask'] },
+      { required: ['checkpoint'] },
+      {
+        required: ['requestCommittedSurfaceReview'],
+        properties: { requestCommittedSurfaceReview: { const: true } },
+      },
+    ],
+    query_index: [
+      { required: ['query'], properties: { query: { minLength: 1 } } },
+      { required: ['mode'], properties: { mode: { const: 'commands' } } },
+      {
+        required: ['mode', 'query'],
+        properties: {
+          mode: { enum: ['search', 'explain'] },
+          query: { minLength: 1 },
+        },
+      },
+      {
+        required: ['mode', 'from'],
+        properties: {
+          mode: { enum: ['neighbors', 'references'] },
+          from: { minLength: 1 },
+        },
+      },
+      {
+        required: ['mode', 'query'],
+        properties: { mode: { const: 'neighbors' }, query: { minLength: 1 } },
+      },
+      {
+        required: ['mode', 'to'],
+        properties: { mode: { const: 'references' }, to: { minLength: 1 } },
+      },
+      {
+        required: ['mode', 'query'],
+        properties: { mode: { const: 'references' }, query: { minLength: 1 } },
+      },
+      {
+        required: ['mode', 'from', 'to'],
+        properties: {
+          mode: { const: 'path' },
+          from: { minLength: 1 },
+          to: { minLength: 1 },
+        },
+      },
+      {
+        required: ['mode', 'query'],
+        properties: { mode: { const: 'path' }, query: { minLength: 1 } },
+      },
+    ],
+  }
+  if (options?.toolName && alternatives[options.toolName]) {
+    compactedSchema.anyOf = alternatives[options.toolName]
+  }
+  if (options?.toolName === 'update_plan_status') {
+    const updates = compactedSchema.properties?.updates as JSONSchema7 | undefined
+    if (updates && !Array.isArray(updates.items) && typeof updates.items === 'object') {
+      updates.items.anyOf = [{ required: ['taskId'] }, { required: ['task'] }]
+    }
+  }
   return jsonSchema(compactedSchema)
 }
 
 function compactToolDefinitionForProvider(
   toolDefinition: ToolSet[string],
-  options?: { preserveDescriptions?: boolean },
+  options?: {
+    preserveDescriptions?: boolean
+    toolName?: string
+  },
 ): ToolSet[string] {
   const inputSchema = (toolDefinition as { inputSchema?: unknown }).inputSchema
   if (!inputSchema) {
@@ -518,6 +628,7 @@ export async function getToolSet(params: {
       }
       toolSet[toolName] = compactToolDefinitionForProvider(resolvedToolDef, {
         preserveDescriptions,
+        toolName,
       })
     }
   }

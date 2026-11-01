@@ -23,6 +23,20 @@ export const MAX_POSTING_CANDIDATE_PATHS = 4096
  */
 const MIN_EXACT_TOKEN_LENGTH_TO_SKIP_SUBSTRING_SCAN = 8
 
+/** Per-query scratch state; never retained across mutable index snapshots. */
+export interface PostingQueryContext {
+  postings: Record<string, string[]>
+  tokens?: string[]
+  expansions: Map<string, string[]>
+}
+
+export function createPostingQueryContext(
+  index: MetadataIndex,
+): PostingQueryContext | undefined {
+  const postings = index.queryData?.postings
+  return postings ? { postings, expansions: new Map() } : undefined
+}
+
 /** Build deterministic, JSON-persistable query accelerators. */
 export function buildIndexQueryData(
   files: Record<string, IndexedFile>,
@@ -58,16 +72,57 @@ export function buildIndexQueryData(
   return { postings: persistedPostings, documentFrequencies, adjacency }
 }
 
+/** Async build variant preserves the same ordering while yielding between files. */
+export async function buildIndexQueryDataAsync(
+  files: Record<string, IndexedFile>,
+  graph: IndexGraph,
+  yieldToEventLoop: () => Promise<void>,
+): Promise<IndexQueryData> {
+  const postings = new Map<string, Set<string>>()
+  for (const file of Object.values(files)) {
+    await yieldToEventLoop()
+    for (const token of collectFilePostingTokens(file)) {
+      let paths = postings.get(token)
+      if (!paths) {
+        paths = new Set()
+        postings.set(token, paths)
+      }
+      paths.add(file.path)
+    }
+  }
+  const persistedPostings: Record<string, string[]> = {}
+  const documentFrequencies: Record<string, number> = {}
+  let tokenIndex = 0
+  for (const token of Array.from(postings.keys()).sort()) {
+    if (tokenIndex++ % 128 === 0) await yieldToEventLoop()
+    const paths = Array.from(postings.get(token) ?? []).sort()
+    persistedPostings[token] = paths
+    documentFrequencies[token] = paths.length
+  }
+  const adjacency: Record<string, number[]> = {}
+  for (let edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+    if (edgeIndex % 256 === 0) await yieldToEventLoop()
+    const edge = graph.edges[edgeIndex]
+    ;(adjacency[edge.from] ??= []).push(edgeIndex)
+    if (edge.to !== edge.from) (adjacency[edge.to] ??= []).push(edgeIndex)
+  }
+  return { postings: persistedPostings, documentFrequencies, adjacency }
+}
+
 /** Return the bounded union of posting lists that can satisfy query tokens. */
 export function getPostingCandidates(
   index: MetadataIndex,
   queryTokens: string[],
+  context?: PostingQueryContext,
 ): Set<string> | null {
   const postings = index.queryData?.postings
   if (!postings || queryTokens.length === 0) return null
 
   const candidates = new Set<string>()
-  const postingTokens = Object.keys(postings)
+  // Reuse only within a single query and only for the same postings object.
+  // This avoids stale accelerators when callers modify an index in place.
+  const scratch = context?.postings === postings ? context : undefined
+  let vocabulary: string[] | undefined
   for (const rawToken of queryTokens) {
     const token = normalizePostingToken(rawToken)
     if (!token) continue
@@ -75,7 +130,10 @@ export function getPostingCandidates(
     // Exact postings are always added, cap or not: the result must stay a
     // superset of the exact-match results.
     if (exact) for (const filePath of exact) candidates.add(filePath)
-    if (exact && token.length >= MIN_EXACT_TOKEN_LENGTH_TO_SKIP_SUBSTRING_SCAN) {
+    if (
+      exact &&
+      token.length >= MIN_EXACT_TOKEN_LENGTH_TO_SKIP_SUBSTRING_SCAN
+    ) {
       continue
     }
     // Once the union is generously large, stop expanding substrings; later
@@ -84,6 +142,17 @@ export function getPostingCandidates(
 
     // Preserve the historical substring matching contract without scanning
     // every file: scan the compact posting vocabulary and union its lists.
+    const cached = scratch?.expansions.get(token)
+    const postingTokens =
+      cached ??
+      (scratch
+        ? (scratch.tokens ??= Object.keys(postings))
+        : (vocabulary ??= Object.keys(postings)))
+    // A single-token scan is also used for document-frequency calculation.
+    // Its matched token order can be replayed by the candidate pass. Stop
+    // retaining unusually large expansions so scratch memory stays bounded.
+    let expansion: string[] | undefined =
+      !cached && scratch && queryTokens.length === 1 ? [] : undefined
     for (const indexedToken of postingTokens) {
       if (
         indexedToken === token ||
@@ -93,9 +162,14 @@ export function getPostingCandidates(
       ) {
         continue
       }
+      if (expansion) {
+        if (expansion.length < 8192) expansion.push(indexedToken)
+        else expansion = undefined
+      }
       for (const filePath of postings[indexedToken]) candidates.add(filePath)
       if (candidates.size >= MAX_POSTING_CANDIDATE_PATHS) break
     }
+    if (expansion) scratch?.expansions.set(token, expansion)
   }
   return candidates
 }
@@ -111,12 +185,13 @@ export function getPostingCandidates(
 export function getPostingDocumentFrequency(
   index: MetadataIndex,
   token: string,
+  context?: PostingQueryContext,
 ): number | undefined {
   const normalized = normalizePostingToken(token)
   if (!normalized || !index.queryData) return undefined
   const exact = index.queryData.documentFrequencies[normalized]
   if (exact !== undefined) return exact
-  const candidates = getPostingCandidates(index, [normalized])
+  const candidates = getPostingCandidates(index, [normalized], context)
   if (!candidates) return undefined
   // The union was truncated at the cap: its size is not a document frequency.
   if (candidates.size >= MAX_POSTING_CANDIDATE_PATHS) return undefined

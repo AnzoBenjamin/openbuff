@@ -1,4 +1,5 @@
 import { commitTaskMemory } from '../../../util/task-memory'
+import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
@@ -29,6 +30,13 @@ export const handleSetMessages = (async (params: {
   const nextMessages = toolCall.input.messages
   agentState.messageHistory = nextMessages
   agentState.taskMemory = nextTaskMemory
+
+  // A pruner has no assistant reply: its completed transaction is its output.
+  // Set this only after both replacements succeed so a rejected memory revision
+  // cannot be mistaken for a successful compaction.
+  if (isContextPrunerAgentId(agentState.agentType)) {
+    agentState.output = { message: 'Context update applied.' }
+  }
 
   return { output: [{ type: 'json', value: { message: 'Messages set.' } }] }
 }) satisfies CodebuffToolHandlerFunction<'set_messages'>

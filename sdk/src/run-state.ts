@@ -1,5 +1,6 @@
 import * as os from 'os'
 import path from 'path'
+import { createHash } from 'node:crypto'
 
 import { getFileTokenScores } from '@codebuff/code-map/parse'
 import { getSystemInfo } from '@codebuff/common/util/system-info'
@@ -16,6 +17,7 @@ import {
   sanitizeAgentStateSecurityMaps,
 } from '@codebuff/common/types/session-state'
 import { getErrorObject } from '@codebuff/common/util/error'
+import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
 
 import { getSdkEnv } from './env'
@@ -42,6 +44,7 @@ import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 import type {
   AgentOutput,
+  AgentState,
   SessionState,
 } from '@codebuff/common/types/session-state'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
@@ -186,7 +189,26 @@ type ProjectIndexInput = {
   filePaths: string[]
   readFile?: (filePath: string) => string | null | Promise<string | null>
   logger?: Logger
+  fsIdentity: CodebuffFileSystem
 }
+
+// Keep only the last reusable project index. The cache contains digests, not
+// source text; callers receive copies so later session mutations cannot alter
+// the retained result. Incomplete parses must be retried normally.
+let completeProjectIndexCache:
+  | {
+      cwd: string
+      fsIdentity: CodebuffFileSystem
+      scoreProject: typeof getFileTokenScores
+      filePaths: string[]
+      digests: Map<string, string>
+      fileTokenScores: Record<string, any>
+      tokenCallers: Record<string, any>
+    }
+  | undefined
+
+const contentDigest = (content: string): string =>
+  createHash('sha256').update(content).digest('hex')
 
 const MAX_DISCOVERED_PROJECT_READ_BYTES = 1_000_000
 
@@ -201,26 +223,95 @@ const MAX_DISCOVERED_PROJECT_READ_BYTES = 1_000_000
  */
 export const SESSION_STATE_MAX_TOTAL_PARSE_BYTES = 64_000_000
 
-async function computeProjectIndex(params: ProjectIndexInput): Promise<{
+export async function computeProjectIndex(
+  params: ProjectIndexInput,
+  scoreProject: typeof getFileTokenScores = getFileTokenScores,
+): Promise<{
   fileTree: FileTreeNode[]
   fileTokenScores: Record<string, any>
   tokenCallers: Record<string, any>
 }> {
-  const { cwd, fileTree, filePaths, readFile, logger } = params
+  const { cwd, fileTree, filePaths, readFile, logger, fsIdentity } = params
   let fileTokenScores = {}
   let tokenCallers = {}
 
   if (filePaths.length > 0) {
     try {
-      const tokenData = await getFileTokenScores(
+      const cached = completeProjectIndexCache
+      if (
+        readFile &&
+        cached &&
+        cached.cwd === cwd &&
+        cached.fsIdentity === fsIdentity &&
+        cached.scoreProject === scoreProject &&
+        cached.filePaths.length === filePaths.length &&
+        filePaths.every((filePath, i) => filePath === cached.filePaths[i])
+      ) {
+        let unchanged = true
+        for (const filePath of cached.digests.keys()) {
+          let content: string | null
+          try {
+            content = await readFile(filePath)
+          } catch {
+            unchanged = false
+            break
+          }
+          if (
+            content === null ||
+            contentDigest(content) !== cached.digests.get(filePath)
+          ) {
+            unchanged = false
+            break
+          }
+        }
+        if (unchanged) {
+          return {
+            fileTree,
+            fileTokenScores: structuredClone(cached.fileTokenScores),
+            tokenCallers: structuredClone(cached.tokenCallers),
+          }
+        }
+      }
+      const digests = new Map<string, string>()
+      const trackingReader =
+        readFile &&
+        (async (filePath: string) => {
+          const content = await readFile(filePath)
+          if (content !== null) digests.set(filePath, contentDigest(content))
+          return content
+        })
+      const tokenData = await scoreProject(
         cwd,
         filePaths,
-        readFile,
+        trackingReader,
         undefined,
         { maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES },
       )
       fileTokenScores = tokenData.tokenScores
       tokenCallers = tokenData.tokenCallers
+      // Unsupported extensions are deterministically skipped independent of
+      // file contents. Any other skipped file (budget, I/O, grammar failure)
+      // may become parseable later and must prevent caching.
+      const onlyUnsupported =
+        tokenData.coverage.skippedFiles === tokenData.diagnostics.length &&
+        tokenData.diagnostics.every(
+          (diagnostic) =>
+            diagnostic.stage === 'language' &&
+            diagnostic.message.startsWith(
+              'No tree-sitter language configuration available',
+            ),
+        )
+      if (onlyUnsupported && digests.size === tokenData.coverage.parsedFiles) {
+        completeProjectIndexCache = {
+          cwd,
+          fsIdentity,
+          scoreProject,
+          filePaths: [...filePaths],
+          digests,
+          fileTokenScores: structuredClone(fileTokenScores),
+          tokenCallers: structuredClone(tokenCallers),
+        }
+      }
       if (tokenData.coverage?.truncated) {
         logger?.debug?.(
           {
@@ -259,6 +350,7 @@ function getProjectIndexInput(params: {
       fileTree: buildFileTree(filePaths),
       filePaths,
       readFile: (filePath: string) => projectFiles[filePath] || null,
+      fsIdentity: fs,
       logger,
     }
   }
@@ -269,6 +361,7 @@ function getProjectIndexInput(params: {
       fileTree: discoveredProject.fileTree,
       filePaths: discoveredProject.filePaths.sort(),
       readFile: createDiscoveredProjectReader({ cwd, fs, logger }),
+      fsIdentity: fs,
       logger,
     }
   }
@@ -391,7 +484,10 @@ async function getGitChanges(params: {
       return ''
     })
 
-  const diff = childProcessToPromise(spawn('git', ['diff'], { cwd }), GIT_CHANGES_TIMEOUT_MS)
+  const diff = childProcessToPromise(
+    spawn('git', ['diff'], { cwd }),
+    GIT_CHANGES_TIMEOUT_MS,
+  )
     .then(({ stdout }) => stdout)
     .catch((error) => {
       logger.debug?.({ error }, 'Failed to get git diff')
@@ -830,24 +926,16 @@ export function withMessageHistory({
   runState: RunState
   messages: Message[]
 }): RunState {
-  // Targeted copy, mirroring the spread-based copies used elsewhere in this
-  // file: only the replaced fields get new identities (root, sessionState,
-  // mainAgentState, messageHistory) while every other nested object is shared.
-  // Consumers rely on root AND sessionState object identity change for
-  // run-progress detection; they do not require any other nested object to be
-  // fresh, and downstream writers of the shared nested state (taskMemory,
-  // workspaceState, playbookContext) are all copy-on-write — they assign
-  // freshly built revisions instead of mutating in place — so structural
-  // isolation for the replaced fields is preserved without a deep clone. The
-  // caller's `messages` array is installed verbatim, exactly as the old deep
-  // clone did before it was overwritten by this same assignment.
+  // Runtime controls can be mutated in place or frozen by the CLI store.
+  // Copy those controls while retaining shared transcript bodies and the
+  // copy-on-write memory nodes. Install the supplied history as before.
   const newRunState = runState.sessionState
     ? {
         ...runState,
         sessionState: {
           ...runState.sessionState,
           mainAgentState: {
-            ...runState.sessionState.mainAgentState,
+            ...copyAgentStateForResume(runState.sessionState.mainAgentState),
             messageHistory: messages,
           },
         },
@@ -876,6 +964,40 @@ export function withMessageHistory({
 }
 
 /**
+ * A saved state may be frozen by the CLI store. Runtime control fields are
+ * mutated in place (for example base2ActiveWork and childRunIds), so a resumed
+ * run must own them even when the saved state is not frozen. Exclude immutable
+ * transcript/archive payloads and copy-on-write memory before cloning controls:
+ * copying a whole session would re-walk every historical tool result.
+ */
+function copyAgentStateForResume(state: AgentState): AgentState {
+  const {
+    messageHistory,
+    compactionArchive,
+    contextConsolidations,
+    taskMemory,
+    workspaceState,
+    playbookContext,
+    subagents,
+    ...controls
+  } = state
+  return {
+    ...cloneDeep(controls),
+    messageHistory: [...messageHistory],
+    subagents: subagents.map(copyAgentStateForResume),
+    ...(compactionArchive === undefined
+      ? {}
+      : { compactionArchive: [...compactionArchive] }),
+    ...(contextConsolidations === undefined
+      ? {}
+      : { contextConsolidations: [...contextConsolidations] }),
+    ...(taskMemory === undefined ? {} : { taskMemory }),
+    ...(workspaceState === undefined ? {} : { workspaceState }),
+    ...(playbookContext === undefined ? {} : { playbookContext }),
+  }
+}
+
+/**
  * Applies overrides to an existing session state, allowing specific fields to be updated
  * even when continuing from a previous run.
  */
@@ -894,29 +1016,14 @@ export async function applyOverridesToSessionState(
     logger?: Logger
   },
 ): Promise<SessionState> {
-  // Targeted copy instead of a JSON round-trip: fresh identities for the
-  // nodes this function and the continuing run write to — root, fileContext
-  // (its properties are reassigned below: fileTree, fileTokenScores,
-  // tokenCallers, knowledgeFiles, agentTemplates, customToolDefinitions) and
-  // mainAgentState — while deeper, copy-on-write nodes (taskMemory,
-  // workspaceState, message history entries) are shared verbatim. SessionState
-  // on disk is exactly { fileContext, mainAgentState }, so spreading both
-  // children covers every field. Notes restating the old JSON-clone contract:
-  // - Every writer of the shared nested state (commitTaskMemory,
-  //   recordToolEvidenceInTaskMemory, mergeAgentReceiptIntoTaskMemory,
-  //   advanceWorkspaceState) assigns a freshly built revision instead of
-  //   mutating in place, so sharing them cannot leak mutations back into the
-  //   base state.
-  // - The caller's hostile-input surface is unchanged: sanitizeAgentStateSecurityMaps
-  //   still fully replaces mainAgentState below, so the persisted security
-  //   maps always pass through shape validation before use.
-  // - Concurrent in-place use of baseSessionState while this awaited function
-  //   runs is unchanged: the base fileContext/mainAgentState nodes are never
-  //   written, only read.
+  // Copy the nodes this function and the continuing run mutate. Historical
+  // message bodies, archived snapshots and copy-on-write memory remain shared;
+  // runtime controls and appendable arrays must not alias a previous run.
+  // Security maps still pass through the restore sanitizer below.
   const sessionState: SessionState = {
     ...baseSessionState,
     fileContext: { ...baseSessionState.fileContext },
-    mainAgentState: { ...baseSessionState.mainAgentState },
+    mainAgentState: copyAgentStateForResume(baseSessionState.mainAgentState),
   }
 
   // Runtime guard for the targeted-copy contract (dev/test only): freeze the

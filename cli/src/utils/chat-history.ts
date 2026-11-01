@@ -45,9 +45,11 @@ async function mapInBatches<T, R>(
   items: T[],
   batchSize: number,
   mapper: (item: T) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results: R[] = []
   for (let index = 0; index < items.length; index += batchSize) {
+    if (signal?.aborted) break
     results.push(
       ...(await Promise.all(items.slice(index, index + batchSize).map(mapper))),
     )
@@ -139,6 +141,9 @@ export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
 
 export async function getAllChatsAsync(
   maxChats: number = 500,
+  signal?: AbortSignal,
+  onInitial?: (entries: ChatHistoryEntry[]) => void,
+  initialCount = 25,
 ): Promise<ChatHistoryEntry[]> {
   const chatsDir = getChatsDir()
   try {
@@ -163,33 +168,47 @@ export async function getAllChatsAsync(
             return null
           }
         },
+        signal,
       )
     )
       .filter((info): info is ChatDirInfo => info !== null)
       .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
       .slice(0, maxChats)
 
-    const entries = await mapInBatches(
-      infos,
-      16,
-      async (info): Promise<ChatHistoryEntry | null> => {
-        try {
-          const messages = JSON.parse(
-            await fs.promises.readFile(info.messagesPath, 'utf8'),
-          ) as ChatMessage[]
-          if (messages.length === 0) return null
-          return {
-            chatId: info.chatId,
-            lastPrompt: getFirstUserPrompt(messages),
-            timestamp: info.mtime,
-            messageCount: messages.length,
+    const loadEntries = (items: ChatDirInfo[]) =>
+      mapInBatches(
+        items,
+        16,
+        async (info): Promise<ChatHistoryEntry | null> => {
+          try {
+            const messages = JSON.parse(
+              await fs.promises.readFile(info.messagesPath, {
+                encoding: 'utf8',
+                signal,
+              }),
+            ) as ChatMessage[]
+            if (messages.length === 0) return null
+            return {
+              chatId: info.chatId,
+              lastPrompt: getFirstUserPrompt(messages),
+              timestamp: info.mtime,
+              messageCount: messages.length,
+            }
+          } catch {
+            return null
           }
-        } catch {
-          return null
-        }
-      },
+        },
+        signal,
+      )
+    const first = onInitial ? infos.slice(0, initialCount) : []
+    const initial = await loadEntries(first)
+    const valid = (entry: ChatHistoryEntry | null): entry is ChatHistoryEntry =>
+      entry !== null
+    if (onInitial && !signal?.aborted) onInitial(initial.filter(valid))
+    const remaining = await loadEntries(
+      onInitial ? infos.slice(initialCount) : infos,
     )
-    return entries.filter((entry): entry is ChatHistoryEntry => entry !== null)
+    return [...initial, ...remaining].filter(valid)
   } catch {
     return []
   }

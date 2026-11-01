@@ -14,6 +14,9 @@ const definition: AgentDefinition = {
   id: 'context-pruner',
   publisher,
   displayName: 'Context Pruner',
+  // This programmatic agent edits history and does not produce assistant text.
+  // set_messages records its successful transaction as structured output.
+  outputMode: 'structured_output',
 
   spawnerPrompt: `Spawn this agent between steps to prune context, summarizing the conversation into a condensed format when context exceeds the limit.`,
 

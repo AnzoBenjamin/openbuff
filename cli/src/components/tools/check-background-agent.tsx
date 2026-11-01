@@ -1,4 +1,5 @@
 import { useTheme } from '../../hooks/use-theme'
+import { formatFallbackOutput } from '../../utils/fallback-input-summary'
 import {
   getStructuredErrorMessages,
   getToolOutputRecords,
@@ -71,10 +72,16 @@ export const CheckBackgroundAgentComponent = defineToolComponent({
     const tail = events.slice(-MAX_EVENTS)
 
     const result = record?.result
-    const resultText =
-      result !== undefined && result !== null
-        ? trimText(typeof result === 'string' ? result : JSON.stringify(result))
-        : undefined
+    let resultText: string | undefined
+    if (result !== undefined && result !== null) {
+      try {
+        resultText = formatFallbackOutput(
+          typeof result === 'string' ? result : JSON.stringify(result),
+        )
+      } catch {
+        resultText = '[result could not be displayed]'
+      }
+    }
 
     return {
       collapsedPreview: summary,

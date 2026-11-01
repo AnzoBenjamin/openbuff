@@ -7,6 +7,7 @@ import {
   exactFamilyMatcher,
   getTokenizerForModel,
   IncrementalTokenCounter,
+  longTokenCountCacheSizeForTest,
   registerExactTokenCounter,
   tokenCountCacheSizeForTest,
   tokenFudgeFactorForModel,
@@ -75,16 +76,19 @@ describe('countTokensJson', () => {
 })
 
 describe('token-count LRU bound (M3-T2)', () => {
-  test('oversized transcript-sized input is never cached (cache stays empty)', () => {
+  test('long input uses a bounded digest cache without retaining text in the ordinary cache', () => {
     // A serialized-history-shaped string far above the 8 KB cacheability
     // bound: counting it repeatedly must never grow the LRU (the audit's
     // unbounded-entry-size finding).
     const oversized = 'x'.repeat(64_000)
     const before = tokenCountCacheSizeForTest()
+    const longBefore = longTokenCountCacheSizeForTest()
     const first = countTokensJson(oversized)
     const second = countTokensJson(oversized)
     expect(second).toBe(first)
     expect(tokenCountCacheSizeForTest()).toBe(before)
+    expect(longTokenCountCacheSizeForTest()).toBe(longBefore + 1)
+    expect(countTokensJson(oversized, 'openai/gpt-4o')).toBeLessThan(first)
   })
 
   test('moderately sized repeatable inputs are still cached for cost', () => {
@@ -134,9 +138,7 @@ describe('IncrementalTokenCounter (M3-T2)', () => {
     const a = { role: 'user', content: 'hello world' }
     const b = { role: 'assistant', content: 'hi there' }
     const total = counter.messagesTokens([a, b])
-    expect(total).toBe(
-      counter.messageTokens(a) + counter.messageTokens(b),
-    )
+    expect(total).toBe(counter.messageTokens(a) + counter.messageTokens(b))
     // Repeat call: same total, no additional bencoding of a/b.
     expect(counter.messagesTokens([a, b])).toBe(total)
     // A rewritten message (new reference) is counted once from scratch.
@@ -375,64 +377,59 @@ describe('exact token counter seam (P3-T10)', () => {
   })
 })
 
-describe(
-  'IncrementalTokenCounter model threading (audit: fudge factors dead on hot path)',
-  () => {
-    // Sized for a fast, deterministic BPE count: >100 chars so it follows the
-    // same cacheable path the hot path uses, well under the 8k cache bound.
-    const probeText = 'hot path pricing coverage message '.repeat(30)
+describe('IncrementalTokenCounter model threading (audit: fudge factors dead on hot path)', () => {
+  // Sized for a fast, deterministic BPE count: >100 chars so it follows the
+  // same cacheable path the hot path uses, well under the 8k cache bound.
+  const probeText = 'hot path pricing coverage message '.repeat(30)
 
-    test("model 'openai/gpt-4o' yields LOWER counts than the no-model default (factor 1.0 vs 1.35)", () => {
-      const noModel = new IncrementalTokenCounter()
-      const openai = new IncrementalTokenCounter('openai/gpt-4o')
-      const message = { role: 'user', content: probeText }
-      const baseline = noModel.messageTokens(message)
-      const threaded = openai.messageTokens(message)
-      expect(threaded).toBeLessThan(baseline)
-      // Exact external contract: each path equals countTokensJson with the
-      // corresponding model argument (legacy 1.35 sentinel vs the 1.0 factor).
-      expect(baseline).toBe(countTokensJson(message))
-      expect(threaded).toBe(countTokensJson(message, 'openai/gpt-4o'))
-      // messagesTokens delegates to messageTokens, so the sum prices with the
-      // threaded model too.
-      expect(openai.messagesTokens([message])).toBe(threaded)
-    })
+  test("model 'openai/gpt-4o' yields LOWER counts than the no-model default (factor 1.0 vs 1.35)", () => {
+    const noModel = new IncrementalTokenCounter()
+    const openai = new IncrementalTokenCounter('openai/gpt-4o')
+    const message = { role: 'user', content: probeText }
+    const baseline = noModel.messageTokens(message)
+    const threaded = openai.messageTokens(message)
+    expect(threaded).toBeLessThan(baseline)
+    // Exact external contract: each path equals countTokensJson with the
+    // corresponding model argument (legacy 1.35 sentinel vs the 1.0 factor).
+    expect(baseline).toBe(countTokensJson(message))
+    expect(threaded).toBe(countTokensJson(message, 'openai/gpt-4o'))
+    // messagesTokens delegates to messageTokens, so the sum prices with the
+    // threaded model too.
+    expect(openai.messagesTokens([message])).toBe(threaded)
+  })
 
-    test("model 'anthropic/claude-...' is identical to the no-model default", () => {
-      const noModel = new IncrementalTokenCounter()
-      const anthropic = new IncrementalTokenCounter(
-        'anthropic/claude-sonnet-4-5',
-      )
-      const message = { role: 'user', content: probeText }
-      // Both resolve to the Anthropic 1.35 factor (the sentinel default), so
-      // threading a Claude model must not change any count.
-      expect(anthropic.messageTokens(message)).toBe(
-        noModel.messageTokens(message),
-      )
-    })
+  test("model 'anthropic/claude-...' is identical to the no-model default", () => {
+    const noModel = new IncrementalTokenCounter()
+    const anthropic = new IncrementalTokenCounter('anthropic/claude-sonnet-4-5')
+    const message = { role: 'user', content: probeText }
+    // Both resolve to the Anthropic 1.35 factor (the sentinel default), so
+    // threading a Claude model must not change any count.
+    expect(anthropic.messageTokens(message)).toBe(
+      noModel.messageTokens(message),
+    )
+  })
 
-    test('setModel switches pricing for subsequently-counted NEW messages', () => {
-      // WeakMap memoization caveat (documented on setModel): already-counted
-      // message objects keep their memoized count after setModel — only NEW
-      // message objects are priced with the new model's factor. That is
-      // acceptable because counts are comparable-within-iteration estimates;
-      // evicting the memo on setModel would change the pinned reset/eviction
-      // behavior instead.
-      const counter = new IncrementalTokenCounter()
-      const beforeMessage = { role: 'user', content: probeText }
-      const beforeCount = counter.messageTokens(beforeMessage)
-      expect(beforeCount).toBe(countTokensJson(beforeMessage))
+  test('setModel switches pricing for subsequently-counted NEW messages', () => {
+    // WeakMap memoization caveat (documented on setModel): already-counted
+    // message objects keep their memoized count after setModel — only NEW
+    // message objects are priced with the new model's factor. That is
+    // acceptable because counts are comparable-within-iteration estimates;
+    // evicting the memo on setModel would change the pinned reset/eviction
+    // behavior instead.
+    const counter = new IncrementalTokenCounter()
+    const beforeMessage = { role: 'user', content: probeText }
+    const beforeCount = counter.messageTokens(beforeMessage)
+    expect(beforeCount).toBe(countTokensJson(beforeMessage))
 
-      counter.setModel('openai/gpt-4o')
+    counter.setModel('openai/gpt-4o')
 
-      // The already-counted object keeps its memoized (legacy-default) count.
-      expect(counter.messageTokens(beforeMessage)).toBe(beforeCount)
-      // A NEW message object is priced with the new model's factor.
-      const afterMessage = { role: 'user', content: probeText }
-      expect(counter.messageTokens(afterMessage)).toBe(
-        countTokensJson(afterMessage, 'openai/gpt-4o'),
-      )
-      expect(counter.messageTokens(afterMessage)).toBeLessThan(beforeCount)
-    })
-  },
-)
+    // The already-counted object keeps its memoized (legacy-default) count.
+    expect(counter.messageTokens(beforeMessage)).toBe(beforeCount)
+    // A NEW message object is priced with the new model's factor.
+    const afterMessage = { role: 'user', content: probeText }
+    expect(counter.messageTokens(afterMessage)).toBe(
+      countTokensJson(afterMessage, 'openai/gpt-4o'),
+    )
+    expect(counter.messageTokens(afterMessage)).toBeLessThan(beforeCount)
+  })
+})

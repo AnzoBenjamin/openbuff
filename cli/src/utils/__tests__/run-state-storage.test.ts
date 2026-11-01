@@ -17,6 +17,7 @@ import {
   loadMostRecentChatState,
   isValidChatId,
   loadChatStateFromDirectory,
+  loadChatStateFromDirectoryAsync,
   loadChatStateFromCompatibilityFiles,
 } from '../run-state-storage'
 import type { ChatMessage, ContentBlock } from '../../types/chat'
@@ -483,7 +484,9 @@ describe('run-state-storage', () => {
         JSON.stringify({ version: 1, runState: {}, messages: [] }),
       )
       saveChatState(
-        { output: { type: 'error', message: 'fresh output' } } as unknown as RunState,
+        {
+          output: { type: 'error', message: 'fresh output' },
+        } as unknown as RunState,
         [
           {
             id: 'fresh-msg-1',
@@ -531,6 +534,78 @@ describe('run-state-storage', () => {
   })
 
   describe('file serialization format', () => {
+    test('async restore preserves large transcripts and redacts old credentials', async () => {
+      const text = 'large message '.repeat(10_000)
+      const envelope = {
+        version: 1,
+        runState: { output: { type: 'error', message: 'saved' }, accessToken: 'secret' },
+        messages: [{ id: 'large', variant: 'user', timestamp: '', content: text }],
+      }
+      fs.writeFileSync(path.join(mockCurrentChatDir, 'chat-state.json'), JSON.stringify(envelope))
+      const restored = await loadChatStateFromDirectoryAsync(mockCurrentChatDir)
+      expect(restored?.messages[0].content).toBe(text)
+      expect((restored?.runState as unknown as { accessToken: string }).accessToken).toBe('[REDACTED]')
+    })
+
+    test('async restore loads valid envelopes and recovers corrupt ones', async () => {
+      const runState = { output: { type: 'error', message: 'recover' } } as RunState
+      const messages: ChatMessage[] = [
+        { id: 'm', variant: 'user', timestamp: '', content: 'hello' },
+      ]
+      const envelopePath = path.join(mockCurrentChatDir, 'chat-state.json')
+      fs.writeFileSync(
+        envelopePath,
+        JSON.stringify({ version: 1, runState, messages }),
+      )
+      expect(await loadChatStateFromDirectoryAsync(mockCurrentChatDir)).toEqual(
+        {
+          runState,
+          messages,
+          chatId: 'test-chat-123',
+        },
+      )
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'run-state.json'),
+        JSON.stringify(runState),
+      )
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'chat-messages.json'),
+        JSON.stringify(messages),
+      )
+      fs.writeFileSync(envelopePath, '{ bad')
+      expect(await loadChatStateFromDirectoryAsync(mockCurrentChatDir)).toEqual(
+        {
+          runState,
+          messages,
+          chatId: 'test-chat-123',
+        },
+      )
+      expect(fs.existsSync(envelopePath)).toBe(false)
+      expect(
+        fs
+          .readdirSync(mockCurrentChatDir)
+          .some((name) => name.startsWith('chat-state.json.corrupt.')),
+      ).toBe(true)
+    })
+
+    test('async restore leaves newer envelopes untouched and honors cancellation', async () => {
+      const envelopePath = path.join(mockCurrentChatDir, 'chat-state.json')
+      const newer = JSON.stringify({ version: 2, runState: {}, messages: [] })
+      fs.writeFileSync(envelopePath, newer)
+      expect(
+        await loadChatStateFromDirectoryAsync(mockCurrentChatDir),
+      ).toBeNull()
+      expect(fs.readFileSync(envelopePath, 'utf8')).toBe(newer)
+      const controller = new AbortController()
+      controller.abort()
+      expect(
+        await loadChatStateFromDirectoryAsync(
+          mockCurrentChatDir,
+          controller.signal,
+        ),
+      ).toBeNull()
+      expect(fs.readFileSync(envelopePath, 'utf8')).toBe(newer)
+    })
     test('recovers from compatibility files when the envelope is corrupt', () => {
       const runState = {
         output: { type: 'error', message: 'Recovered output' },
@@ -790,8 +865,7 @@ describe('run-state-storage', () => {
      */
     const buildCompactionArchive = () => {
       const toolBody = (seed: string, pad: number): string =>
-        JSON.stringify({ note: seed, refreshTokenCount: 3 }) +
-        '='.repeat(pad)
+        JSON.stringify({ note: seed, refreshTokenCount: 3 }) + '='.repeat(pad)
       return [
         {
           archivedAt: 1_000,
@@ -1002,6 +1076,42 @@ describe('run-state-storage', () => {
       const raw = fs.readFileSync(getChatStatePath(), 'utf8')
       expect(raw.startsWith('{"version":1,')).toBe(true)
       expect(raw).not.toContain('\n  ')
+    })
+
+    test('queued worker saves the call-time snapshot despite later mutation', async () => {
+      const runState = { output: { type: 'error', message: 'before' } } as RunState
+      const messages: ChatMessage[] = [{
+        id: 'snapshot', variant: 'user', timestamp: new Date().toISOString(),
+        content: 'before', blocks: [],
+      }]
+      saveChatState(runState, messages)
+      ;(runState.output as { message: string }).message = 'after'
+      messages[0].content = 'after'
+      await drainPersistenceQueue()
+      const saved = JSON.parse(fs.readFileSync(getChatStatePath(), 'utf8'))
+      expect(saved.runState.output.message).toBe('before')
+      expect(saved.messages[0].content).toBe('before')
+    })
+
+    test('omits redundant historical run states while preserving message metadata', async () => {
+      const runState = {
+        output: { type: 'error', message: 'current' },
+      } as unknown as RunState
+      const messages = [
+        {
+          id: 'prior',
+          variant: 'ai',
+          content: 'answer',
+          timestamp: '',
+          metadata: { runState: { history: 'large' }, isCollapsed: true },
+        },
+      ] as ChatMessage[]
+      saveChatState(runState, messages)
+      await drainPersistenceQueue()
+      const envelope = JSON.parse(fs.readFileSync(getChatStatePath(), 'utf8'))
+      expect(envelope.runState).toEqual(runState)
+      expect(envelope.messages[0].metadata).toEqual({ isCollapsed: true })
+      expect(messages[0].metadata?.runState).toEqual({ history: 'large' })
     })
 
     test('saveCheckpoint writes through the queue without blocking on disk IO', async () => {

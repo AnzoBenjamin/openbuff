@@ -3,13 +3,12 @@ import { TextAttributes } from '@opentui/core'
 
 import { SimpleToolCallItem } from './tool-call-item'
 import { defineToolComponent } from './types'
-import { splitPatternSegments } from './discovery-results'
+import { splitPatternSegments, statusGlyph } from './discovery-results'
 import { useTheme } from '../../hooks/use-theme'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig, ToolRenderOptions } from './types'
-import { statusGlyph } from './discovery-results'
 
 type QueryIndexResult = {
   path?: unknown
@@ -65,6 +64,17 @@ const DETAIL_INDENT = 3
 /** Width reserved for the leading numeric prefix (e.g. "1. "). */
 const NUMBER_PREFIX_WIDTH = 3
 
+/**
+ * UI component for `query_index`.
+ *
+ * Layout follows the discovery cards (`code_search` / `glob`): one bold
+ * `Index <summary> <glyph>` header, then the ranked results as the primary
+ * body — numbered path in the directory color with indented dim detail rows
+ * for why it matched — and only then a compact dim footer carrying the index
+ * telemetry (corpus size, snapshot, coverage, diagnostics). Raw score floats
+ * and content hashes are agent-facing telemetry and are never rendered; the
+ * rank order already communicates relevance.
+ */
 export const QueryIndexComponent = defineToolComponent({
   toolName: 'query_index',
 
@@ -132,93 +142,7 @@ export const QueryIndexComponent = defineToolComponent({
                 <span fg={contentColor}>{contentGlyph}</span>
               </>
             }
-            descriptionColor={theme.primary}
           />
-          <box
-            style={{
-              flexDirection: 'column',
-              gap: 0,
-              paddingLeft: INDENT_LEFT,
-              width: '100%',
-            }}
-          >
-            {status !== 'ready' ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={error ? theme.error : theme.muted}>
-                  {`State: ${status}`}
-                </span>
-              </text>
-            ) : null}
-            {totalIndexed !== null ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.muted}>
-                  {`Corpus: ${totalIndexed} indexed file${totalIndexed === 1 ? '' : 's'}${indexAge === null ? '' : ` · age ${formatAge(indexAge)}`}`}
-                </span>
-              </text>
-            ) : null}
-            {error || message ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={error ? theme.error : theme.muted}>
-                  {wrapTextPreservingNewlines(error ?? message, detailColWidth)}
-                </span>
-              </text>
-            ) : null}
-            {structuredStatus?.semantic ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span
-                  fg={theme.muted}
-                >{`Vector embeddings: ${structuredStatus.semantic}`}</span>
-              </text>
-            ) : null}
-            {snapshot ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.muted}>
-                  {`Snapshot: ${snapshot.snapshotId.slice(0, 16)}${snapshot.workspaceRevision === undefined ? '' : ` · workspace r${snapshot.workspaceRevision}`}`}
-                </span>
-              </text>
-            ) : null}
-            {structuredStatus?.lastBuildError ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.error}>
-                  {wrapTextPreservingNewlines(
-                    `Build error (${structuredStatus.lastBuildError.stage ?? 'unknown'}): ${structuredStatus.lastBuildError.message ?? 'unknown error'}${structuredStatus.lastBuildError.retryable ? ' · retryable' : ''}`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {coverage?.truncated ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Partial coverage at ${coverage.maxFiles ?? 'configured limit'} files; skipped ${coverage.skippedFiles ?? 'unknown'} under ${(coverage.skippedPrefixes ?? []).join(', ') || 'unknown prefixes'}.`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {coverage?.parser?.truncated ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Parser coverage: ${coverage.parser.parsedFiles ?? 'unknown'}/${coverage.parser.requestedFiles ?? 'unknown'} parsed; skipped ${coverage.parser.skippedFiles ?? 'unknown'}${coverage.parser.skippedLanguages?.length ? ` across ${coverage.parser.skippedLanguages.join(', ')}` : ''}.`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {diagnostics.slice(0, 5).map((diagnostic, index) => (
-              <text key={`diagnostic-${index}`} style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ))}
-
-          </box>
           {results.length > 0 ? (
             <box
               style={{
@@ -336,6 +260,86 @@ export const QueryIndexComponent = defineToolComponent({
               })}
             </box>
           ) : null}
+          {/* Footer: index telemetry, demoted below the results so the ranked
+              paths stay the visual focus. */}
+          {status !== 'ready' ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={error ? theme.error : theme.muted}>
+                {`State: ${status}`}
+              </span>
+            </text>
+          ) : null}
+          {totalIndexed !== null ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`${totalIndexed} indexed file${totalIndexed === 1 ? '' : 's'}${indexAge === null ? '' : ` · age ${formatAge(indexAge)}`}`}
+              </span>
+            </text>
+          ) : null}
+          {error || message ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={error ? theme.error : theme.muted}>
+                {wrapTextPreservingNewlines(error ?? message, detailColWidth)}
+              </span>
+            </text>
+          ) : null}
+          {structuredStatus?.semantic ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`Vector embeddings: ${structuredStatus.semantic}`}
+              </span>
+            </text>
+          ) : null}
+          {snapshot ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`Snapshot: ${snapshot.snapshotId.slice(0, 16)}${snapshot.workspaceRevision === undefined ? '' : ` · workspace r${snapshot.workspaceRevision}`}`}
+              </span>
+            </text>
+          ) : null}
+          {structuredStatus?.lastBuildError ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.error}>
+                {wrapTextPreservingNewlines(
+                  `Build error (${structuredStatus.lastBuildError.stage ?? 'unknown'}): ${structuredStatus.lastBuildError.message ?? 'unknown error'}${structuredStatus.lastBuildError.retryable ? ' · retryable' : ''}`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {coverage?.truncated ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Partial coverage at ${coverage.maxFiles ?? 'configured limit'} files; skipped ${coverage.skippedFiles ?? 'unknown'} under ${(coverage.skippedPrefixes ?? []).join(', ') || 'unknown prefixes'}.`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {coverage?.parser?.truncated ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Parser coverage: ${coverage.parser.parsedFiles ?? 'unknown'}/${coverage.parser.requestedFiles ?? 'unknown'} parsed; skipped ${coverage.parser.skippedFiles ?? 'unknown'}${coverage.parser.skippedLanguages?.length ? ` across ${coverage.parser.skippedLanguages.join(', ')}` : ''}.`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {diagnostics.slice(0, 5).map((diagnostic, index) => (
+            <text
+              key={`diagnostic-${index}`}
+              style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}
+            >
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ))}
         </box>
       )
     }
@@ -569,7 +573,6 @@ function formatRelated(result: QueryIndexResult): string {
   const reason = typeof first.reason === 'string' ? `: ${first.reason}` : ''
   return truncate(`related to ${first.path}${reason}`, 120)
 }
-
 
 function truncate(text: string, maxLength: number): string {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`

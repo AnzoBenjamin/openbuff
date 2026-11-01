@@ -10,7 +10,12 @@ import type {
 
 import { MAX_INDEX_AGE_MS } from './index-store'
 import { getPageRankAdjacency, personalizedPageRank } from './pagerank'
-import { getPostingCandidates, getPostingDocumentFrequency } from './query-data'
+import {
+  createPostingQueryContext,
+  getPostingCandidates,
+  getPostingDocumentFrequency,
+} from './query-data'
+import type { PostingQueryContext } from './query-data'
 
 export interface QueryOptions {
   limit?: number
@@ -265,8 +270,11 @@ function querySearch(
   }
 
   const directResults = new Map<string, QueryIndexResult>()
-  const idf = computeIdfForTokens(index, tokens)
-  const candidates = commandIntent ? null : getPostingCandidates(index, tokens)
+  const postingContext = createPostingQueryContext(index)
+  const idf = computeIdfForTokens(index, tokens, postingContext)
+  const candidates = commandIntent
+    ? null
+    : getPostingCandidates(index, tokens, postingContext)
   const filesToScore = candidates
     ? Array.from(candidates, (filePath) => index.files[filePath]).filter(
         (file): file is IndexedFile => Boolean(file),
@@ -594,6 +602,7 @@ const idfCache = new WeakMap<MetadataIndex, Map<string, number>>()
 function computeIdfForTokens(
   index: MetadataIndex,
   tokens: string[],
+  postingContext?: PostingQueryContext,
 ): Map<string, number> {
   const total = index.fileCount
   const idf = new Map<string, number>()
@@ -613,7 +622,7 @@ function computeIdfForTokens(
       idf.set(token, cached)
       continue
     }
-    let df = getPostingDocumentFrequency(index, token)
+    let df = getPostingDocumentFrequency(index, token, postingContext)
     if (df === undefined) {
       df = 0
       for (const file of Object.values(index.files)) {
@@ -792,9 +801,7 @@ function getRelatedFiles(
     const tokenMatchedNeighbor =
       tokens.length === 0 ||
       tokens.some((token) =>
-        (neighborNode?.label ?? '')
-          .toLowerCase()
-          .includes(token.toLowerCase()),
+        (neighborNode?.label ?? '').toLowerCase().includes(token.toLowerCase()),
       )
     if (
       (neighborType === 'concept' || neighborType === 'import') &&
@@ -893,8 +900,9 @@ function findSeedPaths(
 ): string[] {
   if (explicitPath && index.files[explicitPath]) return [explicitPath]
   if (fallbackPath && index.files[fallbackPath]) return [fallbackPath]
-  const idf = computeIdfForTokens(index, tokens)
-  const candidates = getPostingCandidates(index, tokens)
+  const postingContext = createPostingQueryContext(index)
+  const idf = computeIdfForTokens(index, tokens, postingContext)
+  const candidates = getPostingCandidates(index, tokens, postingContext)
   const files = candidates
     ? Array.from(candidates, (filePath) => index.files[filePath]).filter(
         (file): file is IndexedFile => Boolean(file),

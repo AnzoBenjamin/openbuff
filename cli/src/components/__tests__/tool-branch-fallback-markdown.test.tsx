@@ -14,11 +14,12 @@ initializeThemeStore()
  * Stage 2 pattern, unapplied in ToolBranch).
  *
  * `ToolBranch` is the fallback renderer for every tool WITHOUT a registered
- * component (web_search, read_image, render_3d_preview, custom tools, ...).
- * recall_context / list_jobs / check_background_agent have since gained
- * registered components, so the fixture uses web_search to keep exercising
- * the fallback path. Its fallback text always contains a fenced code block built from the
- * tool input (`inputContent`), so `ContentWithMarkdown` returns a native
+ * component (read_image, render_3d_preview, custom tools, ...). web_search,
+ * recall_context, list_jobs, and check_background_agent have since gained
+ * registered components, so the fixture migrated to read_image to keep
+ * exercising the fallback path. Its fallback body always contains markdown
+ * syntax — the bold `Result` label, plus a JSON fence for an input with no
+ * readable `key: value` row — so `ContentWithMarkdown` returns a native
  * <markdown> renderable for every such block — and before the fix ToolBranch
  * wrapped that renderable inside a `<text>` element. A renderable cannot nest
  * inside a `<text>` element: OpenTUI's TextNodeRenderable throws during
@@ -74,8 +75,8 @@ const makeToolBlock = (
 ): ToolContentBlock => ({
   type: 'tool',
   toolCallId: 'tool-fallback-1',
-  toolName: 'web_search',
-  input: { query: 'archive eviction floor' },
+  toolName: 'read_image',
+  input: { path: 'screenshots/current-01.png' },
   output: 'matches: archive-recall-index.ts:209 buildArchiveRecallRows',
   ...overrides,
 })
@@ -114,11 +115,18 @@ describe('ToolBranch fallback renders markdown at box level', () => {
       expect(frame).toContain('INPUT BAR BELOW')
       expect(frame).not.toContain('Could not render this tool block.')
       // The fallback path renders the tool header...
-      expect(frame).toContain('web_search')
-      // ...and the expanded body paints both the fenced input and the plain
-      // result string (tokens are asserted whole: word wrap never splits them).
-      expect(frame).toContain('query')
-      expect(frame).toContain('match')
+      expect(frame).toContain('read_image')
+      // Body text is asserted only on synchronous paths (the collapsed preview
+      // below). This fixture's fallback content is markdown-shaped by design —
+      // the bold `**Result:**` label plus hyphenated tokens — so
+      // ContentWithMarkdown returns the native <markdown> renderable, which
+      // parses after mount and paints on a later frame. single-block-markdown
+      // .test.tsx documents that precedent: captured frames never assert
+      // markdown body text. This file's regression pin is that the block-level
+      // <markdown> no longer throws during commit (the D47 Stage 2 crash),
+      // which the assertions above cover. Human-shaped fallback rows are pinned
+      // synchronously by the collapsed case below and exhaustively in
+      // utils/__tests__/fallback-input-summary.test.ts.
     },
   )
 
@@ -131,8 +139,14 @@ describe('ToolBranch fallback renders markdown at box level', () => {
 
       expect(frame).toContain('STATUS LINE ABOVE')
       expect(frame).toContain('INPUT BAR BELOW')
-    expect(frame).not.toContain('Could not render this tool block.')
-    expect(frame).toContain('web_search')
+      expect(frame).not.toContain('Could not render this tool block.')
+      expect(frame).toContain('read_image')
+      // The collapsed preview is a synchronous <text> path (ToolCallItem paints
+      // finishedPreview directly), so — unlike the async markdown body — it IS
+      // assertable in a captured frame. It carries the last non-empty body
+      // line, with markdown punctuation stripped, which pins the human-shaped
+      // fallback result reaching the UI rather than a raw JSON fence.
+      expect(frame).toContain('archive-recall-index.ts:209')
     },
   )
 })

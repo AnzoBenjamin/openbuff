@@ -13,7 +13,7 @@ import { getOpenbuffProviderReadiness } from '../utils/openbuff-provider'
 import {
   clearCheckpoint,
   loadCheckpoint,
-  loadMostRecentChatState,
+  loadMostRecentChatStateAsync,
   saveChatState,
   saveCheckpoint,
   type TurnCheckpoint,
@@ -163,21 +163,52 @@ export const useSendMessage = ({
   }
   const streamRefs = streamRefsRef.current
   const activeRunOwnerRef = useRef<symbol | null>(null)
+  const restorePromiseRef = useRef<Promise<void> | null>(null)
+  const restoreAbortRef = useRef<AbortController | null>(null)
 
-  // P6.4: The restore path performs synchronous fs reads; deferring it until
-  // after the first paint lets the TUI shell render immediately and the
-  // restored state is swapped in once ready. The persisted format is unchanged.
+  // Keep the latest scrollToLatest reachable without putting it in the restore
+  // effect's dependency array: scrollToLatest's useCallback (useChatScrollbox)
+  // depends on `messages` plus scroll helpers, so its identity changes on every
+  // store message mutation. Listing it in the restore effect's deps would tear
+  // down and re-run an in-flight one-shot restore (aborting the controller,
+  // nulling restorePromiseRef, and scheduling a second load of the same chat),
+  // opening a window where handleSendMessage's `await restorePromiseRef.current`
+  // observes null and proceeds from pre-restore state.
+  const scrollToLatestRef = useRef(scrollToLatest)
+  useEffect(() => {
+    scrollToLatestRef.current = scrollToLatest
+  })
+
   useEffect(() => {
     if (!continueChat || previousRunStateRef.current) return
     let cancelled = false
-    const timer = setTimeout(() => {
-      if (cancelled) return
-      const loadedState = loadMostRecentChatState(continueChatId ?? undefined)
-      if (!loadedState) return
+    let scrollTimer: ReturnType<typeof setTimeout> | undefined
+    const controller = new AbortController()
+    restoreAbortRef.current = controller
+    const restore = async () => {
+      const loadedState = await loadMostRecentChatStateAsync(
+        continueChatId ?? undefined,
+        controller.signal,
+      )
+      if (cancelled || controller.signal.aborted || !loadedState) return
+      // The effect's own one-shot cancellation token: effect cleanup sets
+      // `cancelled` (a replaced run) and clearMessages aborts `controller`.
+      // Every late store write below is gated on it so a completed send or a
+      // replaced effect run can never have its messages overwritten by this
+      // load.
+      const restoreIsLive = () => !cancelled && !controller.signal.aborted
       const { setRunState, setMessages } = useChatStore.getState()
+      if (!restoreIsLive()) return
       previousRunStateRef.current = loadedState.runState
       setRunState(loadedState.runState)
       setMessages(loadedState.messages)
+      // Wait for React to commit the restored messages before targeting the
+      // bottom. scrollToLatestRef reads the latest scrollToLatest without
+      // making it a dependency of this effect. scrollToLatest also verifies
+      // against the settled layout.
+      scrollTimer = setTimeout(() => {
+        if (!cancelled) scrollToLatestRef.current()
+      }, 0)
       // Cross-session context-archive hydration (SEAM: this restore effect —
       // the place where loadMostRecentChatState's result is applied to the
       // live session via setRunState, so it is where durable memory-v2
@@ -277,11 +308,21 @@ export const useSendMessage = ({
           void clearCheckpoint()
         }
       }
-    }, 0)
+    }
+    const restorePromise = restore()
+    restorePromiseRef.current = restorePromise
     return () => {
       cancelled = true
-      clearTimeout(timer)
+      controller.abort()
+      if (restoreAbortRef.current === controller) restoreAbortRef.current = null
+      if (restorePromiseRef.current === restorePromise)
+        restorePromiseRef.current = null
+      if (scrollTimer !== undefined) clearTimeout(scrollTimer)
     }
+    // Deps intentionally exclude scrollToLatest (reached through
+    // scrollToLatestRef above): this is a one-shot restore per
+    // continueChat/continueChatId and must never be aborted or restarted by
+    // scroll or UI-state identity changes.
   }, [continueChat, continueChatId])
 
   const updateChainInProgress = useCallback(
@@ -331,6 +372,7 @@ export const useSendMessage = ({
   )
 
   function clearMessages() {
+    restoreAbortRef.current?.abort()
     previousRunStateRef.current = null
     useChatStore.getState().setRunState(null)
   }
@@ -408,6 +450,9 @@ export const useSendMessage = ({
       let finalContent: string
 
       try {
+        // A prompt submitted during restore must fork from the restored state
+        // and append after its messages, rather than being overwritten by it.
+        await restorePromiseRef.current
         const prepared = await prepareUserMessage({
           content,
           agentMode,

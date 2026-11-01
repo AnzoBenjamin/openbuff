@@ -1,10 +1,46 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  buildIndexQueryData,
+  buildIndexQueryDataAsync,
+  createPostingQueryContext,
   getPostingCandidates,
   getPostingDocumentFrequency,
 } from './query-data'
 import type { MetadataIndex } from './types'
+
+test('yielding accelerator construction matches the synchronous result', async () => {
+  const files = {
+    'a.ts': {
+      path: 'a.ts',
+      symbols: ['authLogin'],
+      headings: [],
+      concepts: ['login'],
+      imports: ['./b'],
+      chunks: [{ qualifiedName: 'User/login', kind: 'method' }],
+    },
+    'b.ts': {
+      path: 'b.ts',
+      symbols: ['login'],
+      headings: ['Getting started'],
+      concepts: [],
+      imports: [],
+    },
+  } as unknown as MetadataIndex['files']
+  const graph = {
+    nodes: {},
+    edges: [
+      { from: 'a', to: 'b', type: 'references', weight: 1 },
+      { from: 'b', to: 'b', type: 'references', weight: 1 },
+    ],
+  } as MetadataIndex['graph']
+  let yields = 0
+  const result = await buildIndexQueryDataAsync(files, graph, async () => {
+    yields++
+  })
+  expect(result).toEqual(buildIndexQueryData(files, graph))
+  expect(yields).toBeGreaterThan(0)
+})
 
 /** Minimal MetadataIndex fixture: getPostingCandidates only reads queryData.postings. */
 function makeIndex(postings: Record<string, string[]>): MetadataIndex {
@@ -35,9 +71,7 @@ describe('getPostingCandidates', () => {
 
   test('returns exact posting paths for an exact token', () => {
     const index = makeIndex({ auth: ['src/a.ts'], login: ['src/b.ts'] })
-    expect(getPostingCandidates(index, ['auth'])).toEqual(
-      new Set(['src/a.ts']),
-    )
+    expect(getPostingCandidates(index, ['auth'])).toEqual(new Set(['src/a.ts']))
   })
 
   test('normalizes query tokens before lookup', () => {
@@ -96,6 +130,22 @@ describe('getPostingCandidates', () => {
 })
 
 describe('getPostingDocumentFrequency', () => {
+  test('replays frequency expansions without changing candidate order or cap', () => {
+    const postings: Record<string, string[]> = { before: ['src/file10.ts'] }
+    for (let i = 0; i < 5000; i++) postings[`aaa${i}`] = [`src/file${i}.ts`]
+    postings.after = ['src/after.ts']
+    const index = makeIndex(postings)
+    const context = createPostingQueryContext(index)
+    expect(getPostingDocumentFrequency(index, 'aaa', context)).toBeUndefined()
+    expect(
+      Array.from(
+        getPostingCandidates(index, ['before', 'aaa', 'after'], context)!,
+      ),
+    ).toEqual(
+      Array.from(getPostingCandidates(index, ['before', 'aaa', 'after'])!),
+    )
+  })
+
   test('reports an exact posting document frequency and uncapped union sizes', () => {
     const index = makeIndex({ auth: ['src/a.ts'], login: ['src/b.ts'] })
     // Exact posting: the persisted document frequency wins.

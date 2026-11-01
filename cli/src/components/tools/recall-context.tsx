@@ -1,9 +1,36 @@
-import { useTheme } from '../../hooks/use-theme'
 import {
   getStructuredErrorMessages,
   getToolOutputRecords,
 } from '../../utils/tool-result-normalizer'
+import {
+  DetailRow,
+  ErrorRow,
+  formatCount,
+  OverflowNote,
+  previewWithGlyph,
+  readNumber,
+  readRecordArray,
+  ResultBody,
+  ResultHeader,
+  ResultShell,
+  rowWidth,
+  statusGlyphFor,
+  truncateText,
+} from './human-result'
 import { defineToolComponent } from './types'
+
+import type { ToolRenderConfig, ToolRenderOptions } from './types'
+
+/**
+ * Human-facing renderer for `recall_context`.
+ *
+ * Recalled archive matches are evidence the agent resurrected from a
+ * compacted transcript, so they read as one discovery card: a header naming
+ * the archive pointer recall, a match-count summary, and a bounded list of
+ * `step N · toolName` entries with trimmed snippets. An empty archive, a
+ * failure, and an over-long match list each degrade to a short human line
+ * instead of the raw envelope JSON.
+ */
 
 const MAX_MATCHES = 6
 const SNIPPET_CHARS = 160
@@ -13,73 +40,83 @@ function trimSnippet(value: unknown): string {
   if (typeof value !== 'string') return ''
   const collapsed = value.replace(/\s+/g, ' ').trim()
   return collapsed.length > SNIPPET_CHARS
-    ? collapsed.slice(0, SNIPPET_CHARS) + '…'
+    ? `${collapsed.slice(0, SNIPPET_CHARS - 1)}…`
     : collapsed
 }
 
-/**
- * Human-readable renderer for `recall_context`. Summarizes the archived-match
- * count, lists a bounded set of `step N · toolName` lines with trimmed
- * snippets, surfaces the empty-archive `message`, and notes the
- * `consolidations` count when present. Guards every field access so an
- * unexpected shape degrades to a minimal summary instead of throwing.
- */
 export const RecallContextComponent = defineToolComponent({
   toolName: 'recall_context',
-  render(toolBlock) {
-    const theme = useTheme()
+  render(toolBlock, theme, options): ToolRenderConfig {
     const record = getToolOutputRecords(toolBlock.outputRaw)[0]
     const error = getStructuredErrorMessages(
       toolBlock.outputRaw ?? toolBlock.output,
     )[0]
+    const width = rowWidth(options.availableWidth)
 
-    const matchesRaw = record?.matches
-    const matches: unknown[] = Array.isArray(matchesRaw) ? matchesRaw : []
+    const matches = readRecordArray(record?.matches)
     const message =
       typeof record?.message === 'string' ? record.message : undefined
-    const consolidationsRaw = record?.consolidations
-    const consolidations = Array.isArray(consolidationsRaw)
-      ? consolidationsRaw.length
-      : undefined
+    const consolidations = readNumber(record?.consolidations)
 
+    const statuses = statusGlyphFor(
+      error ? 'failed' : matches.length === 0 ? 'empty' : 'ready',
+      theme,
+    )
     const summary = error
       ? `Recall failed · ${error}`
-      : `Recall · ${matches.length} match${matches.length === 1 ? '' : 'es'}`
+      : `Recall · ${formatCount(matches.length, 'match', 'matches')}`
     const shown = matches.slice(0, MAX_MATCHES)
-    const moreCount = matches.length - shown.length
+    const hiddenCount = matches.length - shown.length
 
     return {
-      collapsedPreview: summary,
+      collapsedPreview: previewWithGlyph(summary, statuses.glyph),
       content: (
-        <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-          <text fg={error ? theme.error : theme.foreground}>{summary}</text>
-          {message ? <text fg={theme.muted}>{message}</text> : null}
-          {shown.map((match, index) => {
-            const entry = match as Record<string, unknown>
-            const step =
-              typeof entry?.step === 'number' ? entry.step : '?'
-            const name =
-              typeof entry?.toolName === 'string' ? entry.toolName : 'unknown'
-            const snippet = trimSnippet(entry?.snippet)
-            return (
-              <box
-                key={index}
-                style={{ flexDirection: 'column', gap: 0, width: '100%' }}
-              >
-                <text fg={theme.muted}>{`step ${step} · ${name}`}</text>
-                {snippet ? <text fg={theme.muted}>{snippet}</text> : null}
-              </box>
-            )
-          })}
-          {moreCount > 0 ? (
-            <text fg={theme.muted}>{`…${moreCount} more`}</text>
-          ) : null}
-          {consolidations !== undefined ? (
-            <text fg={theme.muted}>
-              {`${consolidations} consolidation${consolidations === 1 ? '' : 's'}`}
-            </text>
-          ) : null}
-        </box>
+        <ResultShell>
+          <ResultHeader
+            name="Recall"
+            summary={truncateText(summary, 60)}
+            glyph={statuses.glyph}
+            glyphColor={statuses.color}
+          />
+          <ResultBody>
+            {error ? <ErrorRow message={error} width={width} /> : null}
+            {message && !error ? (
+              <DetailRow
+                value={message}
+                width={width}
+                valueColor={theme.muted}
+              />
+            ) : null}
+            {shown.map((entry, index) => {
+              const step =
+                typeof entry.step === 'number' ? entry.step : undefined
+              const name =
+                typeof entry.toolName === 'string' && entry.toolName.trim()
+                  ? entry.toolName
+                  : 'unknown tool'
+              const snippet = trimSnippet(entry.snippet)
+              return (
+                <DetailRow
+                  key={`${name}-${index}`}
+                  label={
+                    step === undefined ? name : `step ${step} · ${name}`
+                  }
+                  value={snippet || '(no snippet recorded)'}
+                  width={width}
+                  valueColor={theme.muted}
+                />
+              )
+            })}
+            <OverflowNote hiddenCount={hiddenCount} noun="match" />
+            {consolidations !== undefined && consolidations > 0 ? (
+              <DetailRow
+                value={formatCount(consolidations, 'consolidation')}
+                width={width}
+                valueColor={theme.muted}
+              />
+            ) : null}
+          </ResultBody>
+        </ResultShell>
       ),
     }
   },

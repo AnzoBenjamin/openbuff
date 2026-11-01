@@ -1,7 +1,12 @@
 import { LRUCache } from '@codebuff/common/util/lru-cache'
 import { encode } from 'gpt-tokenizer/esm/model/gpt-4o'
+import { createHash } from 'node:crypto'
 
 const TOKEN_COUNT_CACHE = new LRUCache<string, number>(1000)
+// Long inputs retain only a digest and raw count, never the transcript. This
+// bounds memory independently of the length of tool results while allowing
+// unchanged message bodies to be counted cheaply on later requests.
+const LONG_TOKEN_COUNT_CACHE = new LRUCache<string, number>(1000)
 
 /**
  * M3-T2: Maximum serialized input length eligible for the token-count LRU.
@@ -11,14 +16,8 @@ const TOKEN_COUNT_CACHE = new LRUCache<string, number>(1000)
  * process-wide. Inputs above this bound are simply re-encoded (never cached);
  * the incremental per-message counting path keeps the cost bounded instead.
  *
- * SEC-TC-RESCAN-1 / SEC-TC-BAND-1 (deliberate tradeoff, no code change per
- * both security reviews): inputs in the 8KB–100KB band fall between this
- * cache bound and MAX_BPE_ENCODE_CHARS, so they are re-encoded in full on
- * every call. That is bounded CPU (sub-second even for worst-case homogeneous
- * content at 100k chars) and keeping the band uncached preserves the memory
- * bound that motivated this constant; cover the band with the cache (or
- * narrow its lower edge so typical tool-result bodies hit it) only if
- * eviction-loop profiles ever show repeated same-input encodes dominating.
+ * Inputs above this threshold use a bounded digest-keyed cache instead of
+ * retaining their potentially large text as keys.
  *
  * SEC-TC-CACHE-KEY-1: the cache stores the RAW BPE token count, BEFORE the
  * per-model fudge factor — the factor is applied after the cache lookup — so
@@ -357,11 +356,18 @@ export function tokenCountCacheSizeForTest(): number {
   return TOKEN_COUNT_CACHE.size
 }
 
+export function longTokenCountCacheSizeForTest(): number {
+  return LONG_TOKEN_COUNT_CACHE.size
+}
+
 /**
  * M3-T2: one-off estimate for a pre-serialized string/object, used by the
  * incremental accounting path below to price NEW message content only.
  */
-function estimateTokensForSerialized(serialized: string, model?: string): number {
+function estimateTokensForSerialized(
+  serialized: string,
+  model?: string,
+): number {
   try {
     if (serialized.length > MAX_BPE_ENCODE_CHARS) {
       // Oversized input: bounded estimate instead of a minutes-long BPE
@@ -386,7 +392,14 @@ function estimateTokensForSerialized(serialized: string, model?: string): number
           fudgeFactorForModel(model),
       )
     }
-    const cached = TOKEN_COUNT_CACHE.get(serialized)
+    const longKey =
+      serialized.length > MAX_CACHEABLE_INPUT_CHARS
+        ? createHash('sha256').update(serialized).digest('hex')
+        : undefined
+    const cached =
+      longKey === undefined
+        ? TOKEN_COUNT_CACHE.get(serialized)
+        : LONG_TOKEN_COUNT_CACHE.get(longKey)
     if (cached !== undefined) {
       // Cached value is the RAW BPE count (SEC-TC-CACHE-KEY-1): the per-model
       // factor is applied here, after the lookup, so entries are
@@ -397,7 +410,9 @@ function estimateTokensForSerialized(serialized: string, model?: string): number
       serialized.replace(BPE_SPECIAL_TOKEN_ESCAPE, '< |'),
       { allowedSpecial: 'all' },
     ).length
-    if (
+    if (longKey !== undefined) {
+      LONG_TOKEN_COUNT_CACHE.set(longKey, rawCount)
+    } else if (
       serialized.length > 100 &&
       serialized.length <= MAX_CACHEABLE_INPUT_CHARS
     ) {
@@ -525,8 +540,7 @@ export function countTokensJson(text: string | object, model?: string): number {
           : typeof salvageError,
       )
       return Math.ceil(
-        (UNSERIALIZABLE_OBJECT_FALLBACK_CHARS / 3) *
-          fudgeFactorForModel(model),
+        (UNSERIALIZABLE_OBJECT_FALLBACK_CHARS / 3) * fudgeFactorForModel(model),
       )
     }
   }

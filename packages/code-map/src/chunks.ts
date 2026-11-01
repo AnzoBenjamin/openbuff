@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { extractImportSitesFromLines } from './import-sites'
 import { hasLanguageConfiguration } from './languages'
 import {
-  buildQualifiedName,
+  buildQualifiedNames,
   getLanguageTag,
   parseFileStructureWithCallSites,
 } from './structure'
@@ -355,7 +355,6 @@ function lastNameSegment(qualifiedName: string): string {
   return parts[parts.length - 1] ?? qualifiedName
 }
 
-
 async function buildChunks(
   content: string,
   filePath: string,
@@ -382,8 +381,9 @@ async function buildChunks(
   const callSites: ChunkCallSite[] = rawCallSites
   const importSites = extractChunkImportSites(lines, filePath)
 
-  const chunks: CodeChunk[] = symbols.map((sym) => {
-    const qualifiedName = buildQualifiedName(symbols, sym)
+  const qualifiedNames = buildQualifiedNames(symbols)
+  const chunks: CodeChunk[] = symbols.map((sym, index) => {
+    const qualifiedName = qualifiedNames[index]
     const chunkLines = sliceLines(lines, sym.startLine, sym.endLine)
     const chunkText = chunkLines.join('\n')
     const hash = sha256Hex(chunkText)

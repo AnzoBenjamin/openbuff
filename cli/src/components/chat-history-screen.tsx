@@ -1,5 +1,5 @@
 import { TextAttributes } from '@opentui/core'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from './button'
 import { MultilineInput } from './multiline-input'
@@ -38,6 +38,13 @@ interface ChatHistoryScreenProps {
   onNewChat: () => void
 }
 
+export const filterOutDeletedChats = <
+  T extends { chatId: string },
+>(
+  loaded: T[],
+  deletedIds: ReadonlySet<string>,
+): T[] => deletedIds.size === 0 ? loaded : loaded.filter((c) => !deletedIds.has(c.chatId))
+
 export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
   onSelectChat,
   onCancel,
@@ -55,26 +62,38 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
   >([])
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
 
+  // Chat ids deleted since this mount. The background getAllChatsAsync
+  // snapshot is taken before any delete can happen, so without filtering it
+  // the terminal .then(all) write would resurrect chats the user deleted
+  // while the load was still in flight.
+  const deletedIdsRef = useRef<ReadonlySet<string>>(new Set())
+
   // Load more chats in the background after initial render
   useEffect(() => {
     let cancelled = false
-    void getAllChatsAsync(LAYOUT.INITIAL_CHATS).then((initial) => {
-      if (cancelled) return
-      setChats(initial)
-      return getAllChatsAsync(
-        LAYOUT.INITIAL_CHATS + LAYOUT.BACKGROUND_CHATS,
-      ).then((all) => {
-        if (!cancelled) setChats(all)
-      })
+    const controller = new AbortController()
+    void getAllChatsAsync(
+      LAYOUT.INITIAL_CHATS + LAYOUT.BACKGROUND_CHATS,
+      controller.signal,
+      (initial) => {
+        if (!cancelled)
+          setChats(filterOutDeletedChats(initial, deletedIdsRef.current))
+      },
+      LAYOUT.INITIAL_CHATS,
+    ).then((all) => {
+      if (!cancelled)
+        setChats(filterOutDeletedChats(all, deletedIdsRef.current))
     })
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [])
 
   const handleDeleteChat = useCallback((chatId: string) => {
     const deleted = deleteChatSession(chatId)
     if (deleted) {
+      deletedIdsRef.current = new Set(deletedIdsRef.current).add(chatId)
       setChats((prev) => prev.filter((chat) => chat.chatId !== chatId))
       setStatusMessage('Chat deleted')
       return

@@ -18,6 +18,7 @@ import { remintConfirmedPostEditAnchors } from '../util/read-authorization'
 import { withSystemTags } from '../util/messages'
 import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 import { normalizeToolPath } from './handlers/tool/write-file'
+import { createHash } from 'node:crypto'
 
 import type { CustomToolCall, ExecuteToolCallParams } from './tool-executor'
 import type { AgentTemplate } from '../templates/types'
@@ -34,6 +35,15 @@ import type { ProviderMetadata } from '@codebuff/common/types/messages/provider-
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { Subgoal } from '@codebuff/common/types/session-state'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
+
+// Structured invalid-arguments marker on the error event emitted by
+// tool-executor's validation failure paths when publishing a ToolCallError.
+// The shared PrintModeEvent contract is additive-optional, so the marker is
+// typed locally here (the sole consumption point: the degeneration guard in
+// createResponseHandler) rather than widening the shared event types.
+type InvalidArgumentsValidationError = PrintModeEvent & {
+  invalidArgumentsValidation?: boolean
+}
 
 /**
  * Tools that only perform read operations and are safe to run concurrently with
@@ -111,6 +121,10 @@ export async function processStream(
     []
   const assistantMessages: Message[] = []
   let hadToolCallError = false
+  // Only verified argument-validation failures may arm the repeated-call
+  // guard. Provider/transport/policy errors are also emitted as `error`
+  // events, but are not evidence that an identical invalid call was made.
+  const invalidCallSignatures: string[] = []
   let unknownWorkspaceMutationMayHaveRun = false
   const errorMessages: Message[] = []
   // Per-path write barriers. Writes on DIFFERENT paths run concurrently;
@@ -284,11 +298,35 @@ export async function processStream(
   // === RESPONSE HANDLER ===
   // Creates a response handler that captures tool events into assistantMessages.
   // When isXmlMode=true, also captures tool_result events for interleaved ordering.
-  function createResponseHandler() {
+  function createResponseHandler(toolName: string, input: unknown) {
     return (chunk: string | PrintModeEvent) => {
       if (typeof chunk !== 'string') {
         if (chunk.type === 'error') {
           hadToolCallError = true
+          // Arm the repeated-invalid-call degeneration guard ONLY on the
+          // structured flag emitted by tool-executor's validation failure
+          // paths (both native and custom executors set it for every
+          // ToolCallError). Never key this on `message` prose: the human text
+          // may be reworded, localized, or varied per tool, and prose drift
+          // would silently disarm the three-identical-invalid-calls break in
+          // loopAgentSteps without any failure signal. Provider/transport/
+          // policy errors also arrive as `error` events but carry no flag, so
+          // they cannot falsely arm an identical-invalid-calls count, which
+          // matches the prior prose rule's scope.
+          if (
+            (chunk as InvalidArgumentsValidationError)
+              .invalidArgumentsValidation === true
+          ) {
+            try {
+              const serialized = JSON.stringify([toolName, input])
+              invalidCallSignatures.push(
+                createHash('sha256').update(serialized).digest('hex'),
+              )
+            } catch {
+              // Unserializable inputs cannot be compared safely. Preserve the
+              // feedback, but do not claim that repeated calls were identical.
+            }
+          }
           errorMessages.push(
             userMessage({
               content: withSystemTags(
@@ -306,7 +344,6 @@ export async function processStream(
   // === TOOL EXECUTION ===
   // Unified callback factory for both native and custom tools.
   function createToolExecutionCallback(toolName: string, isXmlMode: boolean) {
-    const responseHandler = createResponseHandler()
     return {
       onTagStart: () => {},
       onTagEnd: async (
@@ -322,6 +359,7 @@ export async function processStream(
           return
         }
         const toolCallId = context?.toolCallId ?? generateCompactId()
+        const responseHandler = createResponseHandler(toolName, input)
         // Deprecated compatibility shim: `apply_patch` was removed from the native registry but
         // retained in the exported ToolName/ToolParamsMap as @deprecated for type-compat.
         // Keep a runtime alias so existing callers still succeed with a deprecation warning
@@ -769,6 +807,15 @@ export async function processStream(
     ]),
     defaultProcessor: (name: string) =>
       createToolExecutionCallback(name, false),
+    onParserError: (error) => {
+      if (error.rawExcerptComplete && error.rawExcerpt !== undefined) {
+        invalidCallSignatures.push(
+          createHash('sha256')
+            .update(JSON.stringify([error.code, error.rawExcerpt]))
+            .digest('hex'),
+        )
+      }
+    },
     loggerOptions: {
       userId,
       model: agentTemplate.model,
@@ -986,6 +1033,12 @@ export async function processStream(
     fullResponse: fullResponseChunks.join(''),
     fullResponseChunks,
     hadToolCallError,
+    // Only error-only generations count toward the loop guard. A generation
+    // that also performed a valid tool call made progress and resets it.
+    toolCallErrorSignature:
+      invalidCallSignatures.length > 0 && toolCalls.length === 0
+        ? JSON.stringify([...new Set(invalidCallSignatures)].sort())
+        : undefined,
     messageId,
     toolCalls,
     toolResults,

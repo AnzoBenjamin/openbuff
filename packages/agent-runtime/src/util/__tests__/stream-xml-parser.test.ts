@@ -353,6 +353,7 @@ Thinking about the task...
           code: 'invalid_tool_call_json',
           message: 'Ignored empty codebuff_tool_call content.',
           rawExcerpt: '   ',
+          rawExcerptComplete: true,
         },
       ])
     })
@@ -792,6 +793,7 @@ use {x} like this: {"cb_tool_name": "test_tool", "path": "foo.ts"} hope that hel
           // model emitted
           // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
           rawExcerpt: payload,
+          rawExcerptComplete: true,
         },
       ])
       // Reset: the payload is reported as dropped tool-call content and

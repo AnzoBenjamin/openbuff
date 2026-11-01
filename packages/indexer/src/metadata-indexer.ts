@@ -26,7 +26,7 @@ import {
   resolveGuidRef,
 } from './asset-refs'
 import { sanitizeIndexCacheDir } from './index-store'
-import { buildIndexQueryData } from './query-data'
+import { buildIndexQueryDataAsync } from './query-data'
 import type {
   GraphWeights,
   IndexedFile,
@@ -482,7 +482,7 @@ export async function buildMetadataIndex(
     if (indexed) indexedFiles[file.relativePath] = indexed
   }
 
-  const index = createMetadataIndex(
+  const index = await createMetadataIndex(
     projectRoot,
     indexedFiles,
     tokenCallers,
@@ -738,13 +738,14 @@ export async function updateMetadataIndex(
     const aliases = loadTsAliases(projectRoot)
     // One fail-open ts resolution tier per pass (null when the typescript
     // module is unavailable).
-    const graph = buildGraph(
+    const graph = await buildGraph(
       graphFiles,
       {},
       aliases,
       resolveGraphWeights(config.weights?.graph),
       parseData,
       createTsModuleResolver({ projectRoot, files: graphFiles, aliases }),
+      yieldToEventLoop,
     )
     return {
       ...existing,
@@ -753,7 +754,7 @@ export async function updateMetadataIndex(
       parserDegraded: undefined,
       files: graphFiles,
       graph,
-      queryData: buildIndexQueryData(graphFiles, graph),
+      queryData: await buildIndexQueryDataAsync(graphFiles, graph, yieldToEventLoop),
       // Carry the RECOMPUTED parse evidence, not the (possibly stale) spread
       // from `existing`, so a self-healed failure clears here.
       parseData,
@@ -878,7 +879,7 @@ export async function updateMetadataIndex(
     }
   }
 
-  const index = createMetadataIndex(
+  const index = await createMetadataIndex(
     projectRoot,
     updatedFiles,
     tokenCallers,
@@ -1069,22 +1070,24 @@ async function indexWalkedFile(params: {
   }
 }
 
-function createMetadataIndex(
+async function createMetadataIndex(
   projectRoot: string,
   files: Record<string, IndexedFile>,
   tokenCallers: Record<string, Record<string, string[]>>,
   graphWeights?: GraphWeights,
   parseDiagnostics: ParseDiagnostic[] = [],
   parseData: Record<string, ParsedFileTokens> = {},
-): MetadataIndex {
+): Promise<MetadataIndex> {
   const aliases = loadTsAliases(projectRoot)
-  const graph = buildGraph(
+  const yieldToEventLoop = createEventLoopYieldGate()
+  const graph = await buildGraph(
     files,
     tokenCallers,
     aliases,
     resolveGraphWeights(graphWeights),
     parseData,
     createTsModuleResolver({ projectRoot, files, aliases }),
+    yieldToEventLoop,
   )
   return {
     version: '2',
@@ -1093,7 +1096,7 @@ function createMetadataIndex(
     fileCount: Object.keys(files).length,
     files,
     graph,
-    queryData: buildIndexQueryData(files, graph),
+    queryData: await buildIndexQueryDataAsync(files, graph, yieldToEventLoop),
     parseData,
     parseDiagnostics,
   }
@@ -1196,14 +1199,15 @@ function createParseDiagnostic(
   }
 }
 
-function buildGraph(
+async function buildGraph(
   files: Record<string, IndexedFile>,
   tokenCallers: Record<string, Record<string, string[]>>,
   aliases: TsAliasMap | undefined,
   weights: Required<GraphWeights>,
   parseData: Record<string, ParsedFileTokens> = {},
   tsResolver: TsModuleResolver | null = null,
-): IndexGraph {
+  yieldToEventLoop: () => Promise<void> = createEventLoopYieldGate(),
+): Promise<IndexGraph> {
   const nodes: Record<string, IndexNode> = {}
   const edges: IndexEdge[] = []
 
@@ -1212,6 +1216,7 @@ function buildGraph(
   const guidToPathMap = buildGuidToPathMap(files)
 
   for (const file of Object.values(files)) {
+    await yieldToEventLoop()
     const fileId = fileNodeId(file.path)
     nodes[fileId] = {
       id: fileId,
@@ -1335,6 +1340,7 @@ function buildGraph(
   }
 
   for (const [definingFile, callersByToken] of Object.entries(tokenCallers)) {
+    await yieldToEventLoop()
     if (!files[definingFile]) continue
     for (const [token, callers] of Object.entries(callersByToken)) {
       for (const callerFile of callers) {
@@ -1351,31 +1357,43 @@ function buildGraph(
   }
 
   edges.push(
-    ...buildModuleAwareCallEdges(
+    ...(await buildModuleAwareCallEdges(
       files,
       parseData,
       aliases,
       weights.calls,
       tsResolver,
-    ),
+      yieldToEventLoop,
+    )),
   )
 
   return { nodes, edges: dedupeEdges(edges) }
 }
 
-function buildModuleAwareCallEdges(
+async function buildModuleAwareCallEdges(
   files: Record<string, IndexedFile>,
   parseData: Record<string, ParsedFileTokens>,
   aliases: TsAliasMap | undefined,
   weight: number,
   tsResolver: TsModuleResolver | null = null,
-): IndexEdge[] {
+  yieldToEventLoop: () => Promise<void> = createEventLoopYieldGate(),
+): Promise<IndexEdge[]> {
   const definitions = new Map<string, string[]>()
+  const definitionMembership = new Map<string, Set<string>>()
   for (const [filePath, parsed] of Object.entries(parseData)) {
+    await yieldToEventLoop()
     if (!files[filePath]) continue
     for (const symbol of parsed.identifiers) {
       const paths = definitions.get(symbol) ?? []
-      if (!paths.includes(filePath)) paths.push(filePath)
+      let members = definitionMembership.get(symbol)
+      if (!members) {
+        members = new Set()
+        definitionMembership.set(symbol, members)
+      }
+      if (!members.has(filePath)) {
+        members.add(filePath)
+        paths.push(filePath)
+      }
       definitions.set(symbol, paths)
     }
   }
@@ -1395,6 +1413,7 @@ function buildModuleAwareCallEdges(
 
   const edges: IndexEdge[] = []
   for (const [callerPath, parsed] of Object.entries(parseData)) {
+    await yieldToEventLoop()
     const caller = files[callerPath]
     if (!caller) continue
     const importedFiles = new Set(

@@ -103,7 +103,7 @@ describe('tool validation error handling', () => {
     // buildSpawnAgentsHandlerFailureOutput in tool-executor.ts.
     const output = buildSpawnAgentsHandlerFailureOutput(
       { agents: [{ agent_type: 'editor' }] },
-      new Error('Editor brief is incomplete'),
+      new Error('Editor agent requires a concrete implementation brief'),
     )
 
     expect(output[0]).toMatchObject({
@@ -121,7 +121,7 @@ describe('tool validation error handling', () => {
     })
     // The underlying handler error message must NOT leak into the
     // agent-visible output (regression guard for the retired format).
-    expect(JSON.stringify(output)).not.toContain('Editor brief is incomplete')
+    expect(JSON.stringify(output)).not.toContain('Original params value')
   })
 
   it('includes a sanitized per-agent recoveryHint alongside the static failure string', () => {
@@ -238,8 +238,9 @@ describe('tool validation error handling', () => {
     expect(Object.hasOwn(report.value, 'validationIssues')).toBe(false)
     expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
     expect(report.value.errorMessage).toBe(
-      'Agent spawn failed because the handler could not validate the request.',
+      'Agent spawn failed while processing the request. The underlying error was logged.',
     )
+    expect(JSON.stringify(output)).not.toContain('terminal bridge disconnected')
   })
 
   it('bounds the validationIssues entry count and per-string length', () => {
@@ -613,7 +614,7 @@ describe('tool validation error handling', () => {
 
     expect(report.value.truncated).toBeUndefined()
     expect(report.value.errorMessage).toBe(
-      'Agent spawn failed because the handler could not validate the request.',
+      'Agent spawn failed while processing the request. The underlying error was logged.',
     )
     // The non-validation error yields no error-derived hint, so the report
     // carries no recoveryHint at all for the unclassifiable array.
@@ -706,7 +707,7 @@ describe('tool validation error handling', () => {
     expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
     expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
     expect(report.value.errorMessage).toBe(
-      'Agent spawn failed because the handler could not validate the request.',
+      'Agent spawn failed while processing the request. The underlying error was logged.',
     )
   })
 
@@ -756,7 +757,7 @@ describe('tool validation error handling', () => {
     expect(Object.hasOwn(report.value, 'truncated')).toBe(false)
     expect(Object.hasOwn(report.value, 'recoveryHint')).toBe(false)
     expect(report.value.errorMessage).toBe(
-      'Agent spawn failed because the handler could not validate the request.',
+      'Agent spawn failed while processing the request. The underlying error was logged.',
     )
   })
 
@@ -1084,6 +1085,17 @@ describe('tool validation error handling', () => {
           note: 'keep,,literal',
         })
       }
+    }
+  })
+
+  it('rejects undiscovered MCP tools and inherited custom-tool names', () => {
+    const definitions = Object.create({ inherited_tool: { inputSchema: z.object({}) } })
+    for (const toolName of ['server__undiscovered', 'inherited_tool']) {
+      const result = parseRawCustomToolCall({
+        customToolDefs: definitions,
+        rawToolCall: { toolName, toolCallId: 'missing', input: {} },
+      })
+      expect('error' in result && result.error).toContain('not found')
     }
   })
 
@@ -1782,6 +1794,20 @@ describe('tool validation error handling', () => {
       if (!('error' in result)) {
         expect(result.input.agents).toEqual([entry])
       }
+    }
+  })
+
+  it('normalizes a nested agentType alias at the runtime tool boundary', () => {
+    const result = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'spawn_agents',
+        toolCallId: 'spawn-camel-case-agent',
+        input: { agents: [{ agentType: 'thinker', prompt: 'Consider this' }] },
+      },
+    })
+    expect('error' in result).toBe(false)
+    if (!('error' in result)) {
+      expect(result.input.agents[0].agent_type).toBe('thinker')
     }
   })
 
@@ -3575,6 +3601,19 @@ describe('tool validation error handling', () => {
     // Verify hadToolCallError is true so the agent loop continues
     expect(result.hadToolCallError).toBe(true)
 
+    // Structured degeneration-guard signal (finding
+    // invalid-call-guard-prose-coupling): the validation-failure error event
+    // must carry the machine-readable `invalidArgumentsValidation` flag, and
+    // processStream must arm `toolCallErrorSignature` from that flag — NOT
+    // from matching `message` prose, which is free to reword or localize. If
+    // this regresses to prose matching, the three-identical-invalid-calls
+    // livelock break in loopAgentSteps silently disarms with no failure signal.
+    expect(
+      (errorEvents[0] as { invalidArgumentsValidation?: boolean })
+        .invalidArgumentsValidation,
+    ).toBe(true)
+    expect(result.toolCallErrorSignature).toBeDefined()
+
     // Verify NO tool_call event was emitted (since validation failed before that point)
     const toolCallEvents = responseChunks.filter(
       (chunk): chunk is Extract<PrintModeEvent, { type: 'tool_call' }> =>
@@ -3704,6 +3743,17 @@ describe('tool validation error handling', () => {
     // now reports hadToolCallError exactly like an executor error, so
     // run-agent-step.ts hasNoToolResults forces a retry step.
     expect(result.hadToolCallError).toBe(true)
+
+    // Negative guard for the structured degeneration signal: streaming parser
+    // errors are NOT argument-validation failures, so they carry no
+    // `invalidArgumentsValidation` flag. Signatures for malformed-call
+    // retryability arm through the separate onParserError channel (structurally
+    // keyed, not prose-keyed), so this assertion pins only the flag's absence
+    // — the executor deduplication channel cannot leak onto a parser error.
+    const parserErrorEvent = errorEvents[0] as {
+      invalidArgumentsValidation?: boolean
+    }
+    expect(parserErrorEvent.invalidArgumentsValidation).toBeUndefined()
 
     // The failure is persisted as a TOOL_CALL_ERROR user message the next
     // model turn can see — the transcript channel executor errors already use.

@@ -238,22 +238,24 @@ export const prepareUserMessage = async (params: {
   const { setMessages, lastMessageMode, setLastMessageMode, scrollToLatest } =
     deps
 
-  const { pendingBashMessages, clearPendingBashMessages } =
-    useChatStore.getState()
+  // Atomic drain: the read and the clear are one store transaction, so a
+  // concurrent send or exit-time queue drain can neither re-append a drained
+  // item (interruption between read and clear) nor drop one (two readers, one
+  // clearing first) (reliability finding
+  // pending-attachments-and-bash-messages-non-atomic-drain).
+  const pendingBashMessages =
+    useChatStore.getState().drainPendingBashMessages()
   const { bashMessages, bashContextForPrompt } =
     processBashContext(pendingBashMessages)
 
   if (bashMessages.length > 0) {
     setMessages((prev) => [...prev, ...bashMessages])
   }
-  clearPendingBashMessages()
 
-  // Split attachments by kind
+  // Atomic drain as above; explicit `attachments` (a queued prompt's already
+  // detached attachments) bypass the store queue entirely.
   const allAttachments =
-    attachments ?? useChatStore.getState().pendingAttachments
-  if (!attachments && allAttachments.length > 0) {
-    useChatStore.getState().clearPendingAttachments()
-  }
+    attachments ?? useChatStore.getState().drainPendingAttachments()
 
   const pendingImages = allAttachments.filter(
     (a): a is PendingImageAttachment => a.kind === 'image',
@@ -480,6 +482,15 @@ export const handleRunCompletion = (params: {
 
   const output = runState.output
   const finalizeAfterError = () => {
+    // The caller has already applied the terminal error write (setError) right
+    // before this helper runs; the timer stop must also settle BEFORE the
+    // queue gate reopens (reliability finding
+    // queue-gate-reopens-before-batched-updater-settles):
+    // finalizeQueueState releases setStreamStatus('idle') / the chain lock,
+    // and a queued follow-up that starts afterwards would mutate the same
+    // chat-store messages batch while the previous turn's writes are still
+    // in flight.
+    timerController.stop('error')
     finalizeQueueState({
       setStreamStatus,
       setCanProcessQueue,
@@ -487,7 +498,6 @@ export const handleRunCompletion = (params: {
       isProcessingQueueRef,
       isQueuePausedRef,
     })
-    timerController.stop('error')
   }
 
   if (!output) {
@@ -511,9 +521,11 @@ export const handleRunCompletion = (params: {
   // fires exactly once per successful turn.
   notifyTerminal(
     { body: 'Turn complete' },
-    { write: (sequence) => {
+    {
+      write: (sequence) => {
         writeToTty(sequence)
-      } },
+      },
+    },
   )
 
   // P2-T4: Successful turn — fire-and-forget git-plumbing snapshot of the
@@ -529,14 +541,14 @@ export const handleRunCompletion = (params: {
     .then((outcome) => logTurnSnapshotFailure(outcome, 'turn'))
     .catch(() => undefined)
 
-  finalizeQueueState({
-    setStreamStatus,
-    setCanProcessQueue,
-    updateChainInProgress,
-    isProcessingQueueRef,
-    isQueuePausedRef,
-    resumeQueue,
-  })
+  // The previous turn's terminal message write must settle BEFORE the queue
+  // gate reopens (reliability finding
+  // queue-gate-reopens-before-batched-updater-settles):
+  // finalizeQueueState releases setStreamStatus('idle') / resumeQueue() / the
+  // chain lock, and a queued follow-up that starts afterwards would mutate
+  // the same chat-store messages batch while this turn's batched AI-message
+  // write-out is still in flight. Settle the timer and markComplete first;
+  // reopen the queue gate LAST.
   const timerResult = timerController.stop('success')
 
   if (agentMode === 'PLAN') {
@@ -560,9 +572,17 @@ export const handleRunCompletion = (params: {
     ...(completionTime && { completionTime }),
     ...(actualCredits !== undefined && { credits: actualCredits }),
     ...(cacheHitRate !== undefined && { cacheHitRate }),
-    metadata: {
-      runState,
-    },
+  })
+
+  // Queue gate reopens only after the timer stop and markComplete above
+  // have settled (see the comment at the start of this block).
+  finalizeQueueState({
+    setStreamStatus,
+    setCanProcessQueue,
+    updateChainInProgress,
+    isProcessingQueueRef,
+    isQueuePausedRef,
+    resumeQueue,
   })
 }
 
@@ -593,6 +613,21 @@ export const handleRunError = (params: {
 
   logger.error({ error: errorInfo }, 'SDK client.run() failed')
   setIsRetrying(false)
+
+  // The previous turn's terminal message write and the timer stop must
+  // settle BEFORE the queue gate reopens (reliability finding
+  // queue-gate-reopens-before-batched-updater-settles):
+  // finalizeQueueState releases setStreamStatus('idle') / the chain lock,
+  // and a queued follow-up that starts afterwards would mutate the same
+  // chat-store messages batch while this turn's writes are still in flight.
+  timerController.stop('error')
+
+  // Use setError for all errors so they display in UserErrorBanner consistently
+  const errorMessage = errorInfo.message || 'An unexpected error occurred'
+  updater.setError(errorMessage)
+
+  // Queue gate reopens only after the timer stop and terminal setError
+  // above have settled.
   finalizeQueueState({
     setStreamStatus,
     setCanProcessQueue,
@@ -600,9 +635,4 @@ export const handleRunError = (params: {
     isProcessingQueueRef,
     isQueuePausedRef,
   })
-  timerController.stop('error')
-
-  // Use setError for all errors so they display in UserErrorBanner consistently
-  const errorMessage = errorInfo.message || 'An unexpected error occurred'
-  updater.setError(errorMessage)
 }

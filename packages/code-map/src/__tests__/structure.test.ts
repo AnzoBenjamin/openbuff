@@ -1,6 +1,34 @@
 import { describe, expect, test } from 'bun:test'
 
-import { parseFileStructure } from '../structure'
+import {
+  buildQualifiedName,
+  buildQualifiedNames,
+  parseFileStructure,
+} from '../structure'
+import type { SymbolRange } from '../structure'
+
+describe('batch qualified names', () => {
+  test('matches individual lookups with overlapping, nested, equal and unsorted ranges', () => {
+    let seed = 19
+    const next = () => (seed = (seed * 1664525 + 1013904223) >>> 0)
+    const symbols: SymbolRange[] = Array.from({ length: 300 }, (_, index) => {
+      const startLine = (next() % 40) + 1
+      return {
+        name: `symbol${index}`,
+        kind: 'function',
+        startLine,
+        endLine: startLine + (next() % 30),
+        depth: next() % 5,
+      }
+    })
+    // Equal-range duplicates and equal-sort keys keep original stable order.
+    symbols.push({ ...symbols[0], name: 'duplicate' })
+    expect(buildQualifiedNames(symbols)).toEqual(
+      symbols.map((symbol) => buildQualifiedName(symbols, symbol)),
+    )
+    expect(buildQualifiedNames([])).toEqual([])
+  })
+})
 
 describe('parseFileStructure', () => {
   test('captures top-level const arrow/function definitions (exported and not)', async () => {

@@ -175,6 +175,35 @@ describe('index cache ownership', () => {
     expect((await loadIndex(root))?.builtAt).toBe(200)
   })
 
+  test('reports a verified exact write only when the CAS succeeds', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-verified-'),
+    )
+    const index = {
+      version: '2' as const,
+      projectRoot: root,
+      builtAt: 100,
+      fileCount: 0,
+      files: {},
+      graph: { nodes: {}, edges: [] },
+    }
+    const checks: boolean[] = []
+    expect(
+      await saveIndex(index, root, '.codebuff-index', {
+        expectedBuiltAt: null,
+        onVerifiedWrite: (verified) => checks.push(verified),
+      }),
+    ).toBe(true)
+    expect(checks).toEqual([true])
+    expect(
+      await saveIndex({ ...index, builtAt: 200 }, root, '.codebuff-index', {
+        expectedBuiltAt: null,
+        onVerifiedWrite: (verified) => checks.push(verified),
+      }),
+    ).toBe(false)
+    expect(checks).toEqual([true])
+  })
+
   test('round-trips durable parse summaries and query accelerators', async () => {
     const root = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), 'openbuff-index-derived-data-'),
@@ -767,10 +796,7 @@ describe('index cache ownership', () => {
     // generous MAX_METADATA_INDEX_BYTES for the metadata core, NOT the 8MB
     // sidecar bound) must reject the artifact before any read+JSON.parse
     // happens. Sparse via truncate so the test never materializes 64MB.
-    const handle = await fs.promises.open(
-      path.join(dir, 'metadata.json'),
-      'w',
-    )
+    const handle = await fs.promises.open(path.join(dir, 'metadata.json'), 'w')
     await handle.truncate(MAX_METADATA_INDEX_BYTES + 1)
     await handle.close()
     expect(await loadIndex(root)).toBeNull()

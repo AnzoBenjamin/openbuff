@@ -156,6 +156,12 @@ type ChatStoreActions = {
   addPendingAttachment: (attachment: PendingAttachment) => void
   removePendingAttachment: (id: string) => void
   clearPendingAttachments: () => void
+  /**
+   * Atomic drain: returns the queued attachments and clears them inside a
+   * single store transaction (reliability finding
+   * pending-attachments-and-bash-messages-non-atomic-drain).
+   */
+  drainPendingAttachments: () => PendingAttachment[]
   // Convenience aliases for backwards compatibility
   addPendingImage: (image: Omit<PendingImageAttachment, 'kind'>) => void
   removePendingImage: (path: string) => void
@@ -175,6 +181,12 @@ type ChatStoreActions = {
   ) => void
   removePendingBashMessage: (id: string) => void
   clearPendingBashMessages: () => void
+  /**
+   * Atomic drain: returns the queued bash messages and clears them inside a
+   * single store transaction (reliability finding
+   * pending-attachments-and-bash-messages-non-atomic-drain).
+   */
+  drainPendingBashMessages: () => PendingBashMessage[]
   setSuggestedFollowups: (state: SuggestedFollowupsState | null) => void
   markFollowupClicked: (toolCallId: string, index: number) => void
   pushMessageSnapshot: () => void
@@ -207,20 +219,18 @@ export const MAX_PAST_MESSAGE_SNAPSHOTS = 20
  * (store.runState / previousRunState), never a snapshot.
  */
 const cloneMessageSnapshot = (messages: ChatMessage[]): ChatMessage[] => {
+  // Project the large per-message historical run states out before cloning.
+  // Undo uses the store's current runState, not these historical copies.
+  const projected = messages.map((message) => {
+    if (message.metadata?.runState === undefined) return message
+    const { runState: _strippedRunState, ...restMetadata } = message.metadata
+    return { ...message, metadata: restMetadata }
+  })
   const cloned =
     typeof structuredClone === 'function'
-      ? (structuredClone(messages) as ChatMessage[])
-      : (JSON.parse(JSON.stringify(messages)) as ChatMessage[])
-  return cloned.map((message) => {
-    if (message.metadata?.runState === undefined) {
-      return message
-    }
-    const { runState: _strippedRunState, ...restMetadata } = message.metadata
-    return {
-      ...message,
-      metadata: restMetadata,
-    }
-  })
+      ? (structuredClone(projected) as ChatMessage[])
+      : (JSON.parse(JSON.stringify(projected)) as ChatMessage[])
+  return cloned
 }
 
 const initialState: ChatStoreState = {
@@ -462,6 +472,23 @@ export const useChatStore = create<ChatStore>()(
         state.pendingAttachments = []
       }),
 
+    /**
+     * Atomic drain: returns the queued attachments and clears them inside
+     * one set() transaction (reliability finding
+     * pending-attachments-and-bash-messages-non-atomic-drain), so a
+     * concurrent reader can never observe the same pending item twice nor
+     * a read-then-cleared gap between the read and the clear.
+     */
+    drainPendingAttachments: () => {
+      let drained: PendingAttachment[] = []
+      set((state) => {
+        if (state.pendingAttachments.length === 0) return
+        drained = state.pendingAttachments.map((a) => ({ ...a }))
+        state.pendingAttachments = []
+      })
+      return drained
+    },
+
     // Backwards-compatible convenience methods that delegate to canonical functions
     addPendingImage: (image) => {
       useChatStore.getState().addPendingAttachment({ ...image, kind: 'image' })
@@ -575,6 +602,23 @@ export const useChatStore = create<ChatStore>()(
       set((state) => {
         state.pendingBashMessages = []
       }),
+
+    /**
+     * Atomic drain: returns the queued bash messages and clears them inside
+     * one set() transaction (reliability finding
+     * pending-attachments-and-bash-messages-non-atomic-drain), so a
+     * concurrent reader can never observe the same pending item twice nor
+     * a read-then-cleared gap between the read and the clear.
+     */
+    drainPendingBashMessages: () => {
+      let drained: PendingBashMessage[] = []
+      set((state) => {
+        if (state.pendingBashMessages.length === 0) return
+        drained = state.pendingBashMessages.map((m) => ({ ...m }))
+        state.pendingBashMessages = []
+      })
+      return drained
+    },
 
     setSuggestedFollowups: (suggestedFollowups) =>
       set((state) => {

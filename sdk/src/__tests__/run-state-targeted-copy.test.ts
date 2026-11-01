@@ -20,10 +20,8 @@ import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
  *
  * - `withMessageHistory` must give the ROOT RunState, its sessionState, and
  *   the mainAgentState NEW identities (consumers detect run progress from the
- *   root and sessionState identity change), while every other nested object
- *   (taskMemory, workspaceState, fileContext) is preserved verbatim by
- *   identity. The replaced messageHistory must be structurally isolated from
- *   the old history the way the old JSON round-trip clone isolated it.
+ *   root and sessionState identity change). Copy-on-write memory and
+ *   fileContext remain shared, while mutable runtime controls are isolated.
  * - `applyOverridesToSessionState` must return a fresh root, fileContext, and
  *   mainAgentState (all three get in-place property writes during the run) and
  *   never write through to the base session state.
@@ -127,7 +125,7 @@ describe('withMessageHistory targeted copy', () => {
     })
   })
 
-  test('preserves every other nested object verbatim (same identities as the old deep-clone copy)', () => {
+  test('shares copy-on-write memory but owns mutable runtime controls', () => {
     const oldSessionState = makeSessionState()
     const oldRunState: RunState = {
       sessionState: oldSessionState,
@@ -144,16 +142,14 @@ describe('withMessageHistory targeted copy', () => {
     expect(newMain).toBeDefined()
     if (!newMain) return
 
-    // Schema-preserved siblings: identity-sharing is the contract (all
-    // downstream writers are copy-on-write), so the targeted copy must NOT
-    // re-clone them.
+    // Memory nodes are copy-on-write; mutable controls must be independent.
     expect(newMain.taskMemory).toBe(oldMain.taskMemory)
     expect(newMain.taskMemory).toEqual(oldMain.taskMemory)
     expect(newMain.workspaceState).toBe(oldMain.workspaceState)
-    expect(newMain.readAuthorizationsByPath).toBe(
+    expect(newMain.readAuthorizationsByPath).not.toBe(
       oldMain.readAuthorizationsByPath,
     )
-    expect(newMain.subagents).toBe(oldMain.subagents)
+    expect(newMain.subagents).not.toBe(oldMain.subagents)
     expect(newRunState.output).toBe(oldRunState.output)
     // SessionState has exactly { fileContext, mainAgentState } on disk, and
     // withMessageHistory does not replace fileContext: it is carried through
@@ -190,6 +186,24 @@ describe('withMessageHistory targeted copy', () => {
     expect(newRunState.sessionState?.mainAgentState.taskMemory).toBe(
       freshMemory,
     )
+  })
+
+  test('copies gate controls before a prior run is frozen', () => {
+    const sessionState = makeSessionState()
+    const work = { changedFiles: ['old.ts'] }
+    sessionState.mainAgentState.base2ActiveWork = work
+    const updated = withMessageHistory({
+      runState: { sessionState, output: { type: 'error', message: 'pending' } },
+      messages: makeMessages('new'),
+    })
+
+    Object.freeze(work.changedFiles)
+    Object.freeze(work)
+    const copied = updated.sessionState!.mainAgentState
+      .base2ActiveWork as typeof work
+    copied.changedFiles.push('new.ts')
+    expect(work.changedFiles).toEqual(['old.ts'])
+    expect(copied.changedFiles).toEqual(['old.ts', 'new.ts'])
   })
 
   // Runtime guard for the targeted-copy contract (dev/test only):
@@ -238,6 +252,108 @@ describe('withMessageHistory targeted copy', () => {
 })
 
 describe('applyOverridesToSessionState targeted copy', () => {
+  const freezeTree = (value: unknown): void => {
+    if (value === null || typeof value !== 'object' || Object.isFrozen(value))
+      return
+    for (const child of Object.values(value)) freezeTree(child)
+    Object.freeze(value)
+  }
+
+  test.each([false, true])(
+    'owns mutable controls without cloning transcript bodies (frozen base: %s)',
+    async (frozen) => {
+      const base = makeSessionState()
+      const original = base.mainAgentState
+      const activeWork = {
+        currentPhase: 'idle',
+        pendingGateFiles: ['original.ts'],
+      }
+      original.base2ActiveWork = activeWork
+      original.childRunIds = ['existing-child']
+      original.agentContext = { goal: { logs: ['original log'] } }
+      original.backgroundAgentJobs = [{
+        jobId: 'job-1',
+        agentType: 'editor',
+        status: 'running',
+        startedAt: 1,
+      }]
+      original.compactionArchive = [{
+        archivedAt: 1,
+        action: 'mechanical_trim',
+        keepRecentSteps: 1,
+        messages: makeMessages('archived body'),
+      }]
+      original.subagents = [{
+        ...getInitialAgentState(),
+        childRunIds: ['grandchild'],
+        messageHistory: makeMessages('child history'),
+      }]
+      if (frozen) freezeTree(base)
+
+      const resumed = (await applyOverridesToSessionState(undefined, base, {}))
+        .mainAgentState
+      const resumedWork = resumed.base2ActiveWork as typeof activeWork
+      expect(() => {
+        resumedWork.currentPhase = 'reviewing'
+        resumedWork.pendingGateFiles.push('new.ts')
+        resumed.childRunIds.push('new-child')
+        resumed.agentContext.goal.logs.push('new log')
+        resumed.backgroundAgentJobs![0].status = 'completed'
+        resumed.subagents[0].childRunIds.push('new-grandchild')
+        resumed.messageHistory.push(makeMessages('new message')[0])
+      }).not.toThrow()
+
+      expect(activeWork).toEqual({
+        currentPhase: 'idle',
+        pendingGateFiles: ['original.ts'],
+      })
+      expect(original.childRunIds).toEqual(['existing-child'])
+      expect(original.agentContext.goal.logs).toEqual(['original log'])
+      expect(original.backgroundAgentJobs[0].status).toBe('running')
+      expect(original.subagents[0].childRunIds).toEqual(['grandchild'])
+      expect(original.messageHistory).toHaveLength(2)
+      expect(resumed.messageHistory[0]).toBe(original.messageHistory[0])
+      expect(resumed.subagents[0]).not.toBe(original.subagents[0])
+      expect(resumed.subagents[0].messageHistory[0]).toBe(
+        original.subagents[0].messageHistory[0],
+      )
+      expect(resumed.compactionArchive).not.toBe(original.compactionArchive)
+      expect(resumed.compactionArchive![0]).toBe(original.compactionArchive[0])
+      expect(resumed.taskMemory).toBe(original.taskMemory)
+      expect(resumed.workspaceState).toBe(original.workspaceState)
+    },
+  )
+
+  test('gate bookkeeping remains writable if the previous state is frozen after resuming', async () => {
+    const base = makeSessionState()
+    const work = {
+      touchedFiles: ['old.ts'],
+      changedFiles: ['old.ts'],
+      pendingGateFiles: ['old.ts'],
+      gatePassedFileMarkers: { 'new.ts': 'old-hash' } as Record<string, string>,
+      validationEvidence: [
+        { fileMarkers: { 'new.ts': 'old-hash' } as Record<string, string> },
+      ],
+    }
+    base.mainAgentState.base2ActiveWork = work
+
+    const resumed = await applyOverridesToSessionState(undefined, base, {})
+    // Immer can freeze a saved state after a run starts. The active run must
+    // still be able to record an edit and invalidate nested gate evidence.
+    freezeTree(base)
+    const active = resumed.mainAgentState.base2ActiveWork as typeof work
+    active.touchedFiles.push('new.ts')
+    active.changedFiles.push('new.ts')
+    active.pendingGateFiles.push('new.ts')
+    delete active.gatePassedFileMarkers['new.ts']
+    delete active.validationEvidence[0].fileMarkers['new.ts']
+
+    expect(work.changedFiles).toEqual(['old.ts'])
+    expect(work.gatePassedFileMarkers['new.ts']).toBe('old-hash')
+    expect(work.validationEvidence[0].fileMarkers['new.ts']).toBe('old-hash')
+    expect(active.changedFiles).toEqual(['old.ts', 'new.ts'])
+  })
+
   test('returns a fresh root/fileContext/mainAgentState without mutating the base state', async () => {
     // cwd is undefined so the function performs no filesystem work; with no
     // overrides the function is a pure re-rooted copy plus sanitization.
@@ -254,8 +370,11 @@ describe('applyOverridesToSessionState targeted copy', () => {
     expect(result.mainAgentState.workspaceState).toBe(
       base.mainAgentState.workspaceState,
     )
-    expect(result.mainAgentState.messageHistory).toBe(
+    expect(result.mainAgentState.messageHistory).not.toBe(
       base.mainAgentState.messageHistory,
+    )
+    expect(result.mainAgentState.messageHistory[0]).toBe(
+      base.mainAgentState.messageHistory[0],
     )
 
     // Writing into the fresh root/fileContext must never leak into base. The

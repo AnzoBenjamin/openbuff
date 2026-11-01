@@ -32,6 +32,33 @@ import {
 } from './background-job-tools'
 import { CheckBackgroundAgentComponent } from './check-background-agent'
 import { ListJobsComponent } from './list-jobs'
+import {
+  CreatePlanComponent,
+  EvaluateAuditCoverageComponent,
+  GitBranchComponent,
+  InspectCodebaseStructureComponent,
+  InspectFeatureCompletenessComponent,
+  ReadOutlineComponent,
+  RecordDecisionComponent,
+  RunTargetedValidationComponent,
+  UpdatePlanStatusComponent,
+  WebSearchComponent,
+  WriteAuditFindingsComponent,
+} from './plan-intelligence-tools'
+import {
+  GetAffectedTestsComponent,
+  GetBuildTargetsComponent,
+  GetChangeReviewBundleComponent,
+  GetTaskComponent,
+  InspectEnvironmentComponent,
+  InspectWorkspaceComponent,
+} from './harness-intelligence-tools'
+import {
+  CodeActionComponent,
+  ExtractSymbolComponent,
+  RenameSymbolComponent,
+  RewriteSymbolComponent,
+} from './semantic-edit-tools'
 import { RecallContextComponent } from './recall-context'
 
 import type { ToolRenderConfig, ToolRenderOptions, ToolBlock } from './types'
@@ -122,6 +149,34 @@ const toolComponentRegistry = new Map<
   [SkillComponent.toolName, SkillComponent],
   [SpawnAgentsComponent.toolName, SpawnAgentsComponent],
   [SetOutputComponent.toolName, SetOutputComponent],
+  // Semantic / LSP edit tools: one shared apply core, one published result
+  // shape, one renderer family (cli/src/components/tools/semantic-edit-tools.tsx).
+  [RenameSymbolComponent.toolName, RenameSymbolComponent],
+  [CodeActionComponent.toolName, CodeActionComponent],
+  [ExtractSymbolComponent.toolName, ExtractSymbolComponent],
+  [RewriteSymbolComponent.toolName, RewriteSymbolComponent],
+  // Harness / audit-intelligence observation tools.
+  [InspectWorkspaceComponent.toolName, InspectWorkspaceComponent],
+  [GetChangeReviewBundleComponent.toolName, GetChangeReviewBundleComponent],
+  [GetTaskComponent.toolName, GetTaskComponent],
+  [InspectEnvironmentComponent.toolName, InspectEnvironmentComponent],
+  [GetAffectedTestsComponent.toolName, GetAffectedTestsComponent],
+  [GetBuildTargetsComponent.toolName, GetBuildTargetsComponent],
+  // Plan artifacts, audit coverage, and validation evidence.
+  [CreatePlanComponent.toolName, CreatePlanComponent],
+  [UpdatePlanStatusComponent.toolName, UpdatePlanStatusComponent],
+  [RecordDecisionComponent.toolName, RecordDecisionComponent],
+  [WriteAuditFindingsComponent.toolName, WriteAuditFindingsComponent],
+  [GitBranchComponent.toolName, GitBranchComponent],
+  [ReadOutlineComponent.toolName, ReadOutlineComponent],
+  [WebSearchComponent.toolName, WebSearchComponent],
+  [InspectCodebaseStructureComponent.toolName, InspectCodebaseStructureComponent],
+  [
+    InspectFeatureCompletenessComponent.toolName,
+    InspectFeatureCompletenessComponent,
+  ],
+  [EvaluateAuditCoverageComponent.toolName, EvaluateAuditCoverageComponent],
+  [RunTargetedValidationComponent.toolName, RunTargetedValidationComponent],
 ])
 
 /**

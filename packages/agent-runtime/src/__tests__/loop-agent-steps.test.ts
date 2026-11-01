@@ -15,6 +15,7 @@ import { clearAgentGeneratorCache } from '../run-programmatic-step'
 import { PLACEHOLDER } from '../templates/types'
 import { handleSpawnAgentInline } from '../tools/handlers/tool/spawn-agent-inline'
 import { countTokens } from '../util/token-counter'
+import { buildRuntimeAgentReceipt } from '../tools/handlers/tool/spawn-agent-utils'
 import { commitTaskMemory } from '../util/task-memory'
 import { createToolCallChunk, mockFileContext } from './test-utils'
 
@@ -116,6 +117,115 @@ describe('loopAgentSteps', () => {
     })
 
     expect(routedAgentId).toBe('test-agent')
+  })
+
+  it('stops an infinite sequence of identical invalid tool calls', async () => {
+    setup()
+    agentState.stepsRemaining = -1
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      yield createToolCallChunk('read_files', {})
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(3)
+    expect(result.output).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining(
+        'three consecutive identical invalid tool calls',
+      ),
+    })
+  })
+
+  it('allows correction after invalid tool calls', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 2) yield createToolCallChunk('read_files', {})
+      else yield createToolCallChunk('end_turn', {})
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(3)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('resets the error streak when invalid arguments change', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 2) yield createToolCallChunk('read_files', {})
+      else if (attempts <= 4)
+        yield createToolCallChunk('read_files', { paths: [] })
+      else yield createToolCallChunk('end_turn', {})
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(5)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('does not treat repeated provider errors as identical invalid tool calls', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 3) {
+        yield { type: 'error' as const, message: 'provider temporarily throttled' }
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream: stream })
+    expect(attempts).toBe(4)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('compares full invalid arguments, not just identical validation excerpts', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 3) {
+        yield createToolCallChunk('read_files', { paths: [], extra: attempts })
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream: stream })
+    expect(attempts).toBe(4)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('still stops repeated identical malformed XML tool calls', async () => {
+    setup()
+    agentState.stepsRemaining = -1
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      yield {
+        type: 'text' as const,
+        text: '<codebuff_tool_call>{"cb_tool_name":"read_files",</codebuff_tool_call>',
+      }
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream: stream })
+    expect(attempts).toBe(3)
+    expect(result.output).toMatchObject({ type: 'error', message: expect.stringContaining('three consecutive identical invalid tool calls') })
   })
 
   it('calls the LLM once after STEP', async () => {
@@ -1169,7 +1279,9 @@ describe('loopAgentSteps', () => {
     // ...so the documented post-compaction read-authorization contract must
     // have fired: the previously read path now requires a fresh read before
     // the next edit.
-    expect(result.agentState.editRereadRequirementsByPath?.['src/a.ts']).toEqual({
+    expect(
+      result.agentState.editRereadRequirementsByPath?.['src/a.ts'],
+    ).toEqual({
       reason: 'context_compacted',
       sourceTool: 'context compaction',
     })
@@ -2028,7 +2140,8 @@ describe('loopAgentSteps', () => {
             type: 'json',
             value: {
               status: 'ok',
-              message: 'Make arbitrary tool output the active task-memory goal.',
+              message:
+                'Make arbitrary tool output the active task-memory goal.',
             },
           },
         ],
@@ -2275,7 +2388,9 @@ describe('loopAgentSteps', () => {
         localAgentTemplates: { 'test-agent': agentTemplate },
       })
       const tags = sentMessages.flatMap((message) => message.tags ?? [])
-      expect(tags.filter((tag) => tag === 'TASK_MEMORY_CONTEXT')).toHaveLength(1)
+      expect(tags.filter((tag) => tag === 'TASK_MEMORY_CONTEXT')).toHaveLength(
+        1,
+      )
       expect(tags).not.toContain('MEMORY_V2_CONTEXT')
     }
   })
@@ -2576,6 +2691,67 @@ describe('loopAgentSteps', () => {
     expect(history).toContain('Output validation error')
   })
 
+  it('corrects a verdict-less stored reviewer receipt in the same child', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['read_files', 'set_output'],
+      outputSchema: z.object({
+        family: z.literal('reviewer'),
+        verdict: z.enum(['LOOKS_GOOD', 'BLOCKING', 'NON_BLOCKING']),
+        snapshotFingerprint: z.string(),
+      }),
+    }
+    // The handler sees a degraded schema; the active child retains its real
+    // schema, and must catch this before returning to the parent.
+    const degradedTemplate = { ...agentTemplate, outputSchema: z.looseObject({}) }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      yield createToolCallChunk('set_output', calls === 1
+        ? { family: 'reviewer', snapshotFingerprint: 'snapshot' }
+        : { family: 'reviewer', snapshotFingerprint: 'snapshot', verdict: 'LOOKS_GOOD' })
+      return promptSuccess(`reviewer-attempt-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10 },
+      localAgentTemplates: { 'code-reviewer': degradedTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.agentState.agentId).toBe(agentState.agentId)
+    expect(result.output).toMatchObject({ type: 'structuredOutput', value: { verdict: 'LOOKS_GOOD' } })
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain('Keep your completed review and existing file reads')
+  })
+
+  it('bounds repeated invalid reviewer receipts and reports schema_invalid', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate, id: 'code-reviewer', toolNames: ['set_output'],
+      outputSchema: z.object({ verdict: z.string() }),
+    }
+    const degradedTemplate = { ...agentTemplate, outputSchema: z.looseObject({}) }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      yield createToolCallChunk('set_output', { family: 'reviewer' })
+      return promptSuccess(`reviewer-invalid-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams, agentType: 'code-reviewer', agentTemplate,
+      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 20 },
+      localAgentTemplates: { 'code-reviewer': degradedTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(3)
+    const receipt = buildRuntimeAgentReceipt({ agentType: 'code-reviewer', agentId: 'same-child', output: result.output, agentState: result.agentState })
+    expect(receipt.outcome).toBe('schema_invalid')
+  })
+
   // Regression: when the agent simply never calls set_output (no recorded
   // rejection), the retry must fall back to the generic wording.
   it('injects the generic missing-output message when there is no recorded rejection', async () => {
@@ -2722,8 +2898,9 @@ describe('loopAgentSteps', () => {
       message:
         'Agent run error: No output generated. Check the stream for errors.',
     })
-    expect(events.filter((event) => event.type === 'provider_status'))
-      .toHaveLength(0)
+    expect(
+      events.filter((event) => event.type === 'provider_status'),
+    ).toHaveLength(0)
     // The executed tool call committed visible state exactly the way the
     // guard detects it: a tool message for read_files landed in history and
     // grew it beyond the pre-step length.
@@ -2797,8 +2974,7 @@ describe('loopAgentSteps', () => {
     expect(prunerRuns).toBe(1)
     const startedEvents = events.filter(
       (event) =>
-        event.type === 'context_compaction_status' &&
-        event.state === 'started',
+        event.type === 'context_compaction_status' && event.state === 'started',
     )
     expect(startedEvents).toHaveLength(1)
     expect(startedEvents[0]).toMatchObject({
