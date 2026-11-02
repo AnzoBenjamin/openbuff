@@ -7,6 +7,13 @@ import { get3dAssetFormat } from '@codebuff/common/util/file'
 import { getChildProcessEnv } from '../env'
 import { resolveFilePathForFileSystemOperation } from './path-utils'
 import { readImages } from './read-image'
+import { prune3dMutationArtifacts } from './3d-artifact-retention'
+export {
+  MUTATION_RETAINED_ATTEMPT_ARTIFACTS,
+  MUTATION_ARTIFACT_PRUNE_MAX_STATS,
+  MUTATION_ARTIFACT_RETENTION_MS,
+  MUTATION_PRUNE_STRIDE_EDITS,
+} from './3d-artifact-retention'
 import { isReadPathBlocked } from './read-policy'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
@@ -19,11 +26,33 @@ const MAX_TEXT_ASSET_BYTES = 24 * 1024 * 1024
 const BLENDER_TIMEOUT_MS = 120_000
 const BLENDER_JSON_MARKER = 'OPENBUFF_3D_JSON:'
 /**
- * Cap on the serialized OPENBUFF_3D_OPERATIONS child-env payload. A huge
- * operations array can exceed the OS per-env-var/exec limit (E2BIG) and fail
- * the Blender spawn outright; refuse earlier with a clear error instead.
+ * Suffixes of the files one edit attempt writes. Each name is
+ * `<attemptId><suffix>`, so a release tells THIS attempt's files from a sibling
+ * attempt's by prefix alone (see `tryReleaseArtifactDir`) without keeping a
+ * fixed cleanup list in sync with the write path.
  */
-const MAX_OPERATIONS_ENV_CHARS = 100_000
+const ARTIFACT_WORKING_COPY_SUFFIX = '.blend'
+const ARTIFACT_EDIT_SCRIPT_SUFFIX = '.py'
+const ARTIFACT_OPERATIONS_SUFFIX = '.json'
+/**
+ * Cap on the serialized operations JSON this tool will WRITE TO DISK.
+ *
+ * The operations array no longer crosses to Blender as one env var: it is
+ * written to `operations.json` next to the edit script and Blender is handed
+ * only the short PATH via OPENBUFF_3D_OPERATIONS_PATH. That is a MECHANISM
+ * change and is described only as such: the payload stops being an env string,
+ * so the OS per-env-string ceiling is no longer on its path.
+ *
+ * The value is deliberately UNCHANGED by that mechanism change. Moving the
+ * payload to a file removes the env-ceiling pressure that would have justified
+ * a larger bound, and no measurement supports accepting a bigger payload, so
+ * the previous 100_000-char sanity bound stands: an unmeasured cap raise is not
+ * shipped, and nothing auto-splits a larger payload. It exists so a runaway
+ * operations array fails with one clear, actionable message instead of writing
+ * an enormous artifact file. `__tests__/3d-assets.test.ts` pins the below/at/2x
+ * behavior against this value.
+ */
+export const MAX_OPERATIONS_FILE_CHARS = 100_000
 
 type JsonRecord = Record<string, unknown>
 
@@ -240,7 +269,8 @@ for view in views:
 const BLENDER_EDIT_SCRIPT = String.raw`
 import bpy, json, math, os
 
-operations = json.loads(os.environ['OPENBUFF_3D_OPERATIONS'])
+with open(os.environ['OPENBUFF_3D_OPERATIONS_PATH'], 'r', encoding='utf-8') as operations_file:
+    operations = json.load(operations_file)
 changed = []
 for operation in operations:
     kind = operation['type']
@@ -290,12 +320,25 @@ function jsonOutput<T extends 'inspect_3d_asset' | 'render_3d_preview'>(
   return [{ type: 'json', value }] as CodebuffToolOutput<T>
 }
 
+/**
+ * Result of one Blender invocation.
+ *
+ * A success shape carries the process `exitCode` EXPLICITLY so a caller does not
+ * have to infer "the artifact is trustworthy" from "the process ran". Every
+ * non-zero exit and every spawn error is mapped to the failure shape below, so
+ * `exitCode: 0` here means a clean exit that the edit path can require before it
+ * reads or commits the working copy.
+ */
+type BlenderResult =
+  | { ok: true; stdout: string; exitCode: 0 }
+  | { ok: false; error: string }
+
 async function runBlender(
   args: string[],
   timeout = BLENDER_TIMEOUT_MS,
   environment: Record<string, string> = {},
   signal?: AbortSignal,
-): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
+): Promise<BlenderResult> {
   if (signal?.aborted) {
     return { ok: false, error: 'Blender operation cancelled.' }
   }
@@ -315,9 +358,7 @@ async function runBlender(
     let forcedError: string | undefined
     let settled = false
 
-    const finish = (
-      result: { ok: true; stdout: string } | { ok: false; error: string },
-    ) => {
+    const finish = (result: BlenderResult) => {
       if (settled) return
       settled = true
       clearTimeout(timeoutId)
@@ -344,8 +385,14 @@ async function runBlender(
         sink(chunk.toString('utf8'))
       }
     }
-    child.stdout.on('data', makeAppendOutput((text) => (stdout += text)))
-    child.stderr.on('data', makeAppendOutput((text) => (stderr += text)))
+    child.stdout.on(
+      'data',
+      makeAppendOutput((text) => (stdout += text)),
+    )
+    child.stderr.on(
+      'data',
+      makeAppendOutput((text) => (stderr += text)),
+    )
     child.on('error', (error) => finish({ ok: false, error: error.message }))
     child.on('close', (code) => {
       if (forcedError) {
@@ -374,7 +421,11 @@ async function runBlender(
         })
         return
       }
-      finish({ ok: true, stdout })
+      // A clean exit is part of the RESULT, not something each caller has to
+      // re-derive: the failure branches above already cover a non-zero exit or a
+      // spawn error, so a success shape reports `exitCode: 0` explicitly and the
+      // edit path can require it before it treats the working copy as trustworthy.
+      finish({ ok: true, stdout, exitCode: 0 })
     })
     const timeoutId = setTimeout(
       () => stop(`Blender operation timed out after ${timeout}ms.`),
@@ -857,8 +908,146 @@ export async function edit3dAsset(params: {
       ? params.operationId
       : randomUUID()
   const actionId = `${operationId}:0`
-  const notApplied = (message: string, beforeHash: string | null = null) =>
-    [
+  /*
+   * RELEASE TARGET: ONE stable directory per operation, not one per attempt.
+   *
+   * The attempt's artifacts are FILES inside it, named with an attempt uuid
+   * prefix (`<attemptId>.blend`, `<attemptId>.py`, `<attemptId>.json`). That
+   * split is what makes a terminal release possible at all: the contracted
+   * adapter surface (`CodebuffFileSystemBase`) has `unlink` but no `rmdir`/`rm`,
+   * so a per-attempt DIRECTORY could be emptied and never removed — every
+   * rejected, cancelled, timed-out or threw attempt would leave one empty leaf
+   * directory in the user's project forever, and the release could never
+   * honestly report success. Emptied FILES are confirmable, so the baseline
+   * "directories remaining after N non-applied attempts" is a real 0: a
+   * non-applied attempt creates no directory at all.
+   *
+   * Why the filenames stay attempt-scoped: `operationId` is REUSABLE (it is
+   * caller-supplied whenever it matches the pattern above, and a retrying
+   * caller reuses exactly that correlated id). A retry that did not end in
+   * `applied` must not delete a previous attempt's `*.blend` — the file the
+   * previous receipt's `artifactPath` promises is readable — while that
+   * mutation is durable. Prefix-scoped release makes that impossible by
+   * construction: this call only ever unlinks its own files, which it wrote
+   * with `{ flag: 'wx' }` into paths no earlier attempt has ever used.
+   */
+  const attemptId = randomUUID()
+  const attemptArtifactPrefix = `${attemptId}.`
+  /*
+   * Set the instant the guarded commit WINS (or its outcome becomes UNKNOWN).
+   * From then on this attempt's files are no longer expendable scratch: the
+   * `applied` path's receipt names one as `artifactPath`, and an unknown commit
+   * outcome must keep the working copy for reconciliation, so no later exit may
+   * release them (see `releaseArtifactDir`).
+   */
+  let committed = false
+  let retainAttemptArtifacts = false
+  let ownedArtifactDir: string | undefined
+  /*
+   * Read one attempt's file names out of the release target. `null` means the
+   * listing could not be OBSERVED (the call rejected, or an adapter answered
+   * with something that is not an entry list), which is deliberately distinct
+   * from "the directory holds none of my files": an unobservable listing can
+   * never confirm a release.
+   */
+  const listArtifactDir = async (dir: string): Promise<string[] | null> => {
+    try {
+      const entries: unknown = await params.fs.readdir(dir)
+      return Array.isArray(entries)
+        ? entries.map((entry) => String(entry))
+        : null
+    } catch {
+      return null
+    }
+  }
+  /*
+   * A release is never assumed: success means NO file of THIS attempt remains
+   * observable in the release target. Only then is ownership surrendered, so a
+   * partial removal stays releasable by the next `releaseArtifactDir()` call
+   * instead of leaving a full asset copy nobody can find again.
+   */
+  const tryReleaseArtifactDir = async (dir: string): Promise<boolean> => {
+    // Only CONTRACTED adapter members are used here: `readdir` and `unlink` are
+    // the entirety of `CodebuffFileSystemBase`'s removal surface. `rm`/`rmdir`
+    // are NOT part of that published contract, so probing for them structurally
+    // would change behaviour per adapter instead of per contract; the layout
+    // above is what removes the need for them.
+    try {
+      // Enumerate instead of unlinking a fixed list of names, filtered to this
+      // attempt's prefix: an artifact added to the write path is released here
+      // without editing this function, and a sibling attempt's files are never
+      // candidates.
+      const entries = await listArtifactDir(dir)
+      if (entries === null) return false
+      for (const entry of entries) {
+        if (!entry.startsWith(attemptArtifactPrefix)) continue
+        try {
+          await params.fs.unlink(path.join(dir, entry))
+        } catch {
+          // Best-effort per entry; the confirmation below decides the result.
+        }
+      }
+      // Positive confirmation, re-observed AFTER the unlinks: a resolved unlink
+      // is never treated as proof that the file is gone.
+      const remaining = await listArtifactDir(dir)
+      if (remaining === null) return false
+      return !remaining.some((entry) => entry.startsWith(attemptArtifactPrefix))
+    } catch {
+      // Any unexpected throw must not escape into the caller: ownership stays
+      // set so a later release retries, and the structured receipt is returned.
+      return false
+    }
+  }
+  /**
+   * Best-effort removal of the now-EMPTY release target.
+   *
+   * The contracted adapter surface has `unlink` but no removal capability, so an
+   * abandoned attempt could leave `<...>/mutations/<operationId>/current` behind
+   * as an empty leaf directory — and a long-lived (correlated, reused)
+   * operationId accumulates one such directory per aborted attempt in the user's
+   * project. Only adapters that DO offer `rmdir` are pruned, only when the
+   * directory is observed empty, and only after the file release was confirmed,
+   * so no retained artifact is ever removed.
+   */
+  const removeEmptyArtifactDir = async (dir: string): Promise<void> => {
+    const adapter = params.fs as CodebuffFileSystem & {
+      rmdir?: (target: string) => Promise<unknown>
+    }
+    if (typeof adapter.rmdir !== 'function') return
+    try {
+      const remaining = await listArtifactDir(dir)
+      if (remaining === null || remaining.length > 0) return
+      await adapter.rmdir(dir)
+    } catch {
+      // Best-effort: a directory left behind is never worse than a failed call.
+    }
+  }
+  const releaseArtifactDir = async (): Promise<void> => {
+    // Durable provenance, not scratch: see `committed` above. Releasing here
+    // would turn a returned receipt's `artifactPath` into a dangling pointer
+    // while the source edit stays applied, and an UNKNOWN commit outcome needs
+    // the working copy for reconciliation.
+    if (committed || retainAttemptArtifacts) return
+    const dir = ownedArtifactDir
+    if (!dir) return
+    // Ownership is only surrendered once removal is CONFIRMED, so a failure
+    // keeps the reference and the next release attempt retries it instead of
+    // leaking.
+    if (await tryReleaseArtifactDir(dir)) {
+      ownedArtifactDir = undefined
+      await removeEmptyArtifactDir(dir)
+    }
+  }
+
+  const notApplied = async (
+    message: string,
+    beforeHash: string | null = null,
+  ): Promise<CodebuffToolOutput<'edit_3d_asset'>> => {
+    // Cleanup is best-effort and must never replace the receipt: a throw here
+    // would turn a structured `not_applied` result into an exception, which is
+    // strictly worse for the caller than an unreleased directory.
+    await releaseArtifactDir().catch(() => {})
+    return [
       {
         type: 'json' as const,
         value: {
@@ -893,14 +1082,15 @@ export async function edit3dAsset(params: {
           freshCapabilities: [],
         },
       },
-    ] as CodebuffToolOutput<'edit_3d_asset'>
+    ]
+  }
 
   try {
     if (params.signal?.aborted) {
-      return notApplied('Blender operation cancelled.')
+      return await notApplied('Blender operation cancelled.')
     }
     if (!params.fs.conditionalCommit) {
-      return notApplied(
+      return await notApplied(
         'Guarded 3D edits require a filesystem adapter with conditionalCommit authority.',
       )
     }
@@ -911,11 +1101,13 @@ export async function edit3dAsset(params: {
       fileFilter: params.fileFilter,
     })
     if (asset.format !== 'blend') {
-      return notApplied('Declarative 3D edits currently require a .blend file.')
+      return await notApplied(
+        'Declarative 3D edits currently require a .blend file.',
+      )
     }
     const requestedHash = params.sourceHash.replace(/^sha256:/, '')
     if (requestedHash !== asset.sourceHash) {
-      return notApplied(
+      return await notApplied(
         'The source hash is stale. Inspect the asset again before editing.',
         `sha256:${asset.sourceHash}`,
       )
@@ -927,138 +1119,284 @@ export async function edit3dAsset(params: {
       '3d',
       'mutations',
       operationId,
+      'current',
     )
     const artifactDir = path.join(params.cwd, ...relativeArtifactDir.split('/'))
-    const workingPath = path.join(artifactDir, 'working.blend')
-    const editScriptPath = path.join(artifactDir, 'edit-asset.py')
-    await params.fs.mkdir(artifactDir, { recursive: true })
-    await params.fs.writeFile(workingPath, asset.data, { flag: 'wx' })
-    await params.fs.writeFile(editScriptPath, BLENDER_EDIT_SCRIPT, {
-      flag: 'wx',
-    })
+    ownedArtifactDir = artifactDir
+    /*
+     * OWNERSHIP IS STRUCTURAL from here on, not a convention each exit has to
+     * remember: the `finally` below releases this attempt's files on EVERY
+     * non-`applied` exit — the structured `not_applied` returns, a throw from
+     * any adapter await, a timeout rejection, or an exit shape added later.
+     * Release is a no-op once `committed`/`retainAttemptArtifacts` is set.
+     */
+    try {
+      // Attempt-scoped FILENAMES inside one stable release target: a release
+      // unlinks exactly this attempt's prefix, so it never touches a sibling
+      // attempt's artifact, and it needs no directory removal (which the
+      // contracted adapter surface does not offer).
+      const workingPath = path.join(
+        artifactDir,
+        `${attemptId}${ARTIFACT_WORKING_COPY_SUFFIX}`,
+      )
+      const editScriptPath = path.join(
+        artifactDir,
+        `${attemptId}${ARTIFACT_EDIT_SCRIPT_SUFFIX}`,
+      )
+      // CHEAP REJECTION FIRST, before the directory exists: an oversized
+      // operations payload must leave ZERO trace, which is only true if the
+      // `mkdir` and the attempt's writes below are never reached. (Everything
+      // after the mkdir is reclaimed by the release path; nothing before it
+      // needs reclaiming at all.)
+      const operationsJson = JSON.stringify(params.operations)
+      if (operationsJson.length > MAX_OPERATIONS_FILE_CHARS) {
+        return await notApplied(
+          `The operations payload is too large (${operationsJson.length} chars; the limit is ${MAX_OPERATIONS_FILE_CHARS}). Split the edit into smaller batches.`,
+        )
+      }
+      await params.fs.mkdir(artifactDir, { recursive: true })
+      await params.fs.writeFile(workingPath, asset.data, { flag: 'wx' })
+      await params.fs.writeFile(editScriptPath, BLENDER_EDIT_SCRIPT, {
+        flag: 'wx',
+      })
 
-    const operationsEnv = JSON.stringify(params.operations)
-    if (operationsEnv.length > MAX_OPERATIONS_ENV_CHARS) {
-      return notApplied(
-        `The operations payload is too large to hand to Blender (${operationsEnv.length} chars; the limit is ${MAX_OPERATIONS_ENV_CHARS}). Split the edit into smaller batches.`,
+      // The payload travels as a FILE, not as an env value: `{ flag: 'wx' }`
+      // matches the sibling working-copy/edit-script writes. The name carries
+      // this attempt's uuid, so `wx` can only ever collide with this call's own
+      // earlier write — never with a previous attempt's artifacts.
+      const operationsPath = path.join(
+        artifactDir,
+        `${attemptId}${ARTIFACT_OPERATIONS_SUFFIX}`,
       )
-    }
-    const blender = await runBlender(
-      ['--background', workingPath, '--python', editScriptPath],
-      BLENDER_TIMEOUT_MS,
-      {
-        OPENBUFF_3D_OPERATIONS: operationsEnv,
-      },
-      params.signal,
-    )
-    if (!blender.ok)
-      return notApplied(blender.error, `sha256:${asset.sourceHash}`)
-    const markerIndex = blender.stdout.lastIndexOf(BLENDER_JSON_MARKER)
-    if (markerIndex < 0) {
-      return notApplied(
-        'Blender saved no structured mutation receipt.',
-        `sha256:${asset.sourceHash}`,
-      )
-    }
-    const mutationReceipt = JSON.parse(
-      blender.stdout
-        .slice(markerIndex + BLENDER_JSON_MARKER.length)
-        .split(/\r?\n/, 1)[0],
-    ) as JsonRecord
-    const changedOperations = Array.isArray(mutationReceipt.changed)
-      ? mutationReceipt.changed
-      : []
-    const validation = await runBlender(
-      ['--background', workingPath, '--python-expr', BLENDER_INSPECT_SCRIPT],
-      BLENDER_TIMEOUT_MS,
-      {},
-      params.signal,
-    )
-    if (!validation.ok || !validation.stdout.includes(BLENDER_JSON_MARKER)) {
-      return notApplied(
-        validation.ok
-          ? 'The edited Blender file failed structured validation.'
-          : validation.error,
-        `sha256:${asset.sourceHash}`,
-      )
-    }
-    if (params.signal?.aborted) {
-      return notApplied(
-        'Blender operation cancelled before commit.',
-        `sha256:${asset.sourceHash}`,
-      )
-    }
-    const editedData = Buffer.from(await params.fs.readFile(workingPath))
-    const editedHash = sha256(editedData)
-    const committed = await params.fs.conditionalCommit(
-      asset.resolved.operationPath,
-      editedData,
-      { expectedHash: `sha256:${asset.sourceHash}` },
-    )
-    if (!committed.applied) {
-      return notApplied(
-        'The source changed before the guarded commit. No source file was overwritten.',
-        committed.actualHash,
-      )
-    }
+      await params.fs.writeFile(operationsPath, operationsJson, { flag: 'wx' })
 
-    const preview = await render3dPreview({
-      path: asset.resolved.relativePath,
-      views: ['perspective'],
-      mode: 'clay',
-      width: 512,
-      height: 512,
-      cwd: params.cwd,
-      fs: params.fs,
-      signal: params.signal,
-      fileFilter: params.fileFilter,
-    })
-    const previewReceipt = preview.find((part) => part.type === 'json')
-
-    return [
-      {
-        type: 'json',
-        value: {
-          kind: 'file_mutation_result',
-          version: 1,
-          operationId,
-          outcome: 'applied',
-          actions: [
-            {
-              actionId,
-              index: 0,
-              action: 'update',
-              path: asset.resolved.relativePath,
-              outcome: 'applied',
-              beforeHash: `sha256:${asset.sourceHash}`,
-              afterHash: `sha256:${editedHash}`,
-            },
-          ],
-          authorityTier: 'conditional_commit',
-          errors: [],
-          freshCapabilities: [],
+      const blender = await runBlender(
+        ['--background', workingPath, '--python', editScriptPath],
+        BLENDER_TIMEOUT_MS,
+        {
+          // Only a short path crosses as an env value now, so it is safe on
+          // every platform regardless of payload size.
+          OPENBUFF_3D_OPERATIONS_PATH: operationsPath,
         },
-      },
-      {
-        type: 'json',
-        value: {
-          assetMutation: {
-            sourcePath: asset.resolved.relativePath,
-            sourceHash: asset.sourceHash,
-            resultHash: editedHash,
-            artifactPath: path.posix.join(relativeArtifactDir, 'working.blend'),
-            producer: 'blender',
-            createdAt: new Date().toISOString(),
-            operations: changedOperations,
-            validation: 'reopened_and_inspected',
-            preview:
-              previewReceipt?.type === 'json' ? previewReceipt.value : null,
+        params.signal,
+      )
+      // A clean exit is REQUIRED, not implied by "the process started and
+      // returned": a Blender that crashed after writing a partial or complete
+      // working copy must not let this attempt proceed to validation and commit
+      // with a file whose provenance is unverified. A non-clean exit routes
+      // through `notApplied`, so the structural release in the `finally` still
+      // reclaims this attempt's files.
+      if (!blender.ok || blender.exitCode !== 0) {
+        return await notApplied(
+          blender.ok
+            ? "Blender exited without a clean status, so this attempt's working copy is not trusted."
+            : blender.error,
+          `sha256:${asset.sourceHash}`,
+        )
+      }
+      const markerIndex = blender.stdout.lastIndexOf(BLENDER_JSON_MARKER)
+      if (markerIndex < 0) {
+        return await notApplied(
+          'Blender saved no structured mutation receipt.',
+          `sha256:${asset.sourceHash}`,
+        )
+      }
+      const mutationReceipt = JSON.parse(
+        blender.stdout
+          .slice(markerIndex + BLENDER_JSON_MARKER.length)
+          .split(/\r?\n/, 1)[0],
+      ) as JsonRecord
+      const changedOperations = Array.isArray(mutationReceipt.changed)
+        ? mutationReceipt.changed
+        : []
+      const validation = await runBlender(
+        ['--background', workingPath, '--python-expr', BLENDER_INSPECT_SCRIPT],
+        BLENDER_TIMEOUT_MS,
+        {},
+        params.signal,
+      )
+      if (!validation.ok || !validation.stdout.includes(BLENDER_JSON_MARKER)) {
+        return await notApplied(
+          validation.ok
+            ? 'The edited Blender file failed structured validation.'
+            : validation.error,
+          `sha256:${asset.sourceHash}`,
+        )
+      }
+      if (params.signal?.aborted) {
+        return await notApplied(
+          'Blender operation cancelled before commit.',
+          `sha256:${asset.sourceHash}`,
+        )
+      }
+      const editedData = Buffer.from(await params.fs.readFile(workingPath))
+      const editedHash = sha256(editedData)
+      let commitResult: Awaited<
+        ReturnType<NonNullable<CodebuffFileSystem['conditionalCommit']>>
+      >
+      try {
+        commitResult = await params.fs.conditionalCommit(
+          asset.resolved.operationPath,
+          editedData,
+          { expectedHash: `sha256:${asset.sourceHash}` },
+        )
+      } catch (error) {
+        /*
+         * COMMIT OUTCOME UNKNOWN. The guarded write REJECTED (abort, adapter
+         * error, process shutdown), so the edit may or may not have landed.
+         * Neither "reverted" nor "applied" is asserted: the attempt's files
+         * are RETAINED and named in the receipt so the operator can reconcile,
+         * instead of the ambiguity being reported as a clean `not_applied`
+         * while the only copy of the attempted result is deleted.
+         */
+        retainAttemptArtifacts = true
+        const unknownMessage = `The guarded commit failed while it was being applied (${
+          error instanceof Error ? error.message : String(error)
+        }), so the OUTCOME IS UNKNOWN: the source edit may or may not have been written. The attempted result was retained at ${relativeArtifactDir} (working copy ${attemptId}${ARTIFACT_WORKING_COPY_SUFFIX}); compare it against ${asset.resolved.relativePath} before retrying.`
+        return [
+          {
+            type: 'json' as const,
+            value: {
+              kind: 'file_mutation_result' as const,
+              version: 1 as const,
+              operationId,
+              outcome: 'commit_outcome_unknown' as const,
+              actions: [
+                {
+                  actionId,
+                  index: 0,
+                  action: 'update' as const,
+                  path: params.path,
+                  outcome: 'commit_outcome_unknown' as const,
+                  beforeHash: `sha256:${asset.sourceHash}`,
+                  afterHash: null,
+                  error: {
+                    code: 'application_unconfirmed' as const,
+                    message: unknownMessage,
+                    retryable: false,
+                  },
+                },
+              ],
+              authorityTier: null,
+              errors: [
+                {
+                  code: 'application_unconfirmed' as const,
+                  message: unknownMessage,
+                  retryable: false,
+                },
+              ],
+              freshCapabilities: [],
+            },
+          },
+        ]
+      }
+      if (!commitResult.applied) {
+        return await notApplied(
+          'The source changed before the guarded commit. No source file was overwritten.',
+          commitResult.actualHash,
+        )
+      }
+      /*
+       * The commit has WON. The source file is edited from here, so the receipt
+       * and the artifact its `artifactPath` names must both survive: every exit
+       * below is either the `applied` return or a not-applied exit that still
+       * must NOT release these files.
+       */
+      committed = true
+
+      const preview = await render3dPreview({
+        path: asset.resolved.relativePath,
+        views: ['perspective'],
+        mode: 'clay',
+        width: 512,
+        height: 512,
+        cwd: params.cwd,
+        fs: params.fs,
+        signal: params.signal,
+        fileFilter: params.fileFilter,
+      })
+      const previewJsonPart = preview.find((part) => part.type === 'json')
+      const previewBody =
+        previewJsonPart?.type === 'json' ? previewJsonPart.value : undefined
+      // The committed edit and its `artifactPath` are retained from here on, so
+      // the receipt must always SELF-DESCRIBE the preview: when
+      // `render3dPreview` fails or is cancelled it returns an `{ error }` json
+      // part and no media, and publishing `preview: null` there would leave a
+      // retained full-asset artifact with nothing explaining why no preview
+      // came back. The error text is surfaced verbatim instead.
+      const previewSummary = previewBody ?? {
+        error:
+          'The post-commit preview could not be rendered (the edit was cancelled or Blender failed after the commit won). The applied edit and artifactPath below remain valid.',
+      }
+      // The receipt below names `<attemptId>.blend`, so that path is protected
+      // from reclamation BEFORE the prune can consider it — including on the
+      // over-count branch, which no longer relies on the current attempt being
+      // the newest one.
+      // Bounded reclamation of OLDER retained copies. Runs only after the
+      // commit won, so a non-applied attempt never pays for it, and it never
+      // touches the copy this receipt names (the prune skips `attemptId`).
+      await prune3dMutationArtifacts({
+        fs: params.fs,
+        currentOperationDir: artifactDir,
+        attemptId,
+      })
+
+      return [
+        {
+          type: 'json',
+          value: {
+            kind: 'file_mutation_result',
+            version: 1,
+            operationId,
+            outcome: 'applied',
+            actions: [
+              {
+                actionId,
+                index: 0,
+                action: 'update',
+                path: asset.resolved.relativePath,
+                outcome: 'applied',
+                beforeHash: `sha256:${asset.sourceHash}`,
+                afterHash: `sha256:${editedHash}`,
+              },
+            ],
+            authorityTier: 'conditional_commit',
+            errors: [],
+            freshCapabilities: [],
           },
         },
-      },
-      ...preview.filter((part) => part.type === 'media'),
-    ]
+        {
+          type: 'json',
+          value: {
+            assetMutation: {
+              sourcePath: asset.resolved.relativePath,
+              sourceHash: asset.sourceHash,
+              resultHash: editedHash,
+              artifactPath: path.posix.join(
+                relativeArtifactDir,
+                `${attemptId}${ARTIFACT_WORKING_COPY_SUFFIX}`,
+              ),
+              producer: 'blender',
+              createdAt: new Date().toISOString(),
+              operations: changedOperations,
+              validation: 'reopened_and_inspected',
+              preview: previewSummary,
+              previewRendered: previewJsonPart !== undefined,
+            },
+          },
+        },
+        ...preview.filter((part) => part.type === 'media'),
+      ]
+    } finally {
+      // Structural release: every non-`applied` exit above — structured
+      // `not_applied`, a throw from any adapter await, a commit rejection, or
+      // an exit shape added later — passes through here. A no-op once the
+      // commit won or its outcome became unknown.
+      await releaseArtifactDir().catch(() => {})
+    }
   } catch (error) {
-    return notApplied(error instanceof Error ? error.message : String(error))
+    return await notApplied(
+      error instanceof Error ? error.message : String(error),
+    )
   }
 }

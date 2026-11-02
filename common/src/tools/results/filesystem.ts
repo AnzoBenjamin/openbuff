@@ -18,9 +18,11 @@ export const FILESYSTEM_RESULT_MAX_CAPABILITIES = 128
  * window/around/symbol block (decorated `content` and exact `sourceContent`),
  * rather than to their combined size. The read_files params module re-exports
  * this as MAX_READ_BLOCK_BYTES so the request-side and result-side budgets
- * cannot drift.
+ * cannot drift. Matches FILESYSTEM_RESULT_CONTENT_MAX_BYTES (the whole-file /
+ * range ceiling) so a block can never be rejected for a payload the
+ * whole-file path would have accepted.
  */
-export const READ_FILES_BLOCK_CONTENT_MAX_BYTES = 4 * 1024 * 1024
+export const READ_FILES_BLOCK_CONTENT_MAX_BYTES = 10 * 1024 * 1024
 
 const boundedMutationContentSchema = z
   .string()

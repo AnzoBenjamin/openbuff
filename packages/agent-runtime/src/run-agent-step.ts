@@ -1778,12 +1778,12 @@ export async function loopAgentSteps(
                           // drive chain: every step is guarded.
                           try {
                             const {
-                              buildRuntimeAgentReceipt,
+                              buildRuntimeAgentReceiptWithArtifacts,
                               mergeChildEvidenceIntoParent,
                               reconcileAgentReceiptIntoParent,
                             } =
                               await import('./tools/handlers/tool/spawn-agent-utils')
-                            const receipt = buildRuntimeAgentReceipt({
+                            const receipt = await buildRuntimeAgentReceiptWithArtifacts({
                               agentType,
                               agentId: childState.agentId,
                               output: result.output,

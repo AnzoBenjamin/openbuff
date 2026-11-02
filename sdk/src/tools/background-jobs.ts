@@ -175,7 +175,7 @@ const metadataFilesCreatedByThisProcess = new Set<string>()
  */
 const ORPHANED_JOB_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_BACKGROUND_LOG_BYTES = 10 * 1024 * 1024
-export const MAX_BACKGROUND_READ_BYTES = 100_000
+export const MAX_BACKGROUND_READ_BYTES = 1_000_000
 /**
  * Max bytes emitJobOutputLines retains in `lineCarry` without seeing a newline
  * before it force-emits the carry as a single event. This bounds carry growth

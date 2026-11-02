@@ -1,5 +1,7 @@
 # CLI Package Knowledge
 
+- Generated tool types now include `list_directory` pagination (`offset`, `limit`, and continuation via `nextOffset`). The starter-type mirror in `cli/src/data/initial-agent-type-sources.generated.ts` is regenerated from the canonical schemas so newly initialized agent directories receive the same contract.
+
 ## Conversation rendering and restore
 
 - Message wrappers and native Markdown use the available width. Before viewport measurements arrive, the message window starts from the newest estimated viewport instead of mounting the full list.

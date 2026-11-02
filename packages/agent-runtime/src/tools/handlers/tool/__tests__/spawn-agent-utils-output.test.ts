@@ -24,7 +24,12 @@ import {
   executeSubagent,
   finalizeOwnedLibrarianClone,
   normalizeSpawnedAgentOutput,
+  flushOversizeArtifactWrites,
+  PARENT_AGENT_OUTPUT_MAX_CHARS,
+  PARENT_AGENT_OUTPUT_STRING_CHARS,
 } from '../spawn-agent-utils'
+
+import { flushOversizeArtifactSweeps } from '../oversize-artifact'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 
@@ -33,6 +38,15 @@ import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 // a lossy replacement of run-agent-step.
 const realRunAgentStep = { ...(await import('../../../../run-agent-step')) }
 
+async function normalizeAndPersist(
+  ...args: Parameters<typeof normalizeSpawnedAgentOutput>
+) {
+  const output = normalizeSpawnedAgentOutput(...args)
+  await flushOversizeArtifactWrites(args[2])
+  await flushOversizeArtifactSweeps()
+  return output
+}
+
 /**
  * Direct coverage for the M0-T3 sub-agent output durability contract on
  * `normalizeSpawnedAgentOutput`: a child that ended without set_output (or
@@ -40,10 +54,10 @@ const realRunAgentStep = { ...(await import('../../../../run-agent-step')) }
  * marker instead of an undefined/null/empty value, and a run-level error
  * output must keep its errorMessage while gaining an explicit `partial: true`.
  */
-describe('normalizeSpawnedAgentOutput missing-output durability', () => {
-  test('maps missing/blank final output to an explicit partial diagnostic marker', () => {
+describe('normalizeSpawnedAgentOutput missing-output durability', async () => {
+  test('maps missing/blank final output to an explicit partial diagnostic marker', async () => {
     for (const missing of [undefined, null, '', '   ']) {
-      const normalized = normalizeSpawnedAgentOutput(missing, 'test-writer')
+      const normalized = await normalizeAndPersist(missing, 'test-writer')
       expect(normalized).toEqual({
         summary: '',
         partial: true,
@@ -52,8 +66,8 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     }
   })
 
-  test('uses a generic agent label when agentType is not provided', () => {
-    const normalized = normalizeSpawnedAgentOutput(undefined)
+  test('uses a generic agent label when agentType is not provided', async () => {
+    const normalized = await normalizeAndPersist(undefined)
     expect(normalized.partial).toBe(true)
     expect(normalized.summary).toBe('')
     expect(normalized.errorMessage).toBe(
@@ -61,8 +75,8 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     )
   })
 
-  test('keeps the errorMessage for a run-level error output and marks it partial', () => {
-    const normalized = normalizeSpawnedAgentOutput(
+  test('keeps the errorMessage for a run-level error output and marks it partial', async () => {
+    const normalized = await normalizeAndPersist(
       { type: 'error', message: 'child crashed before producing output' },
       'test-writer',
     )
@@ -72,8 +86,8 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     })
   })
 
-  test('keeps the fallback errorMessage for an empty run-level error message', () => {
-    const normalized = normalizeSpawnedAgentOutput(
+  test('keeps the fallback errorMessage for an empty run-level error message', async () => {
+    const normalized = await normalizeAndPersist(
       { type: 'error', message: '   ' },
       'test-writer',
     )
@@ -83,8 +97,8 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     })
   })
 
-  test('leaves real structured output untouched (no partial marker)', () => {
-    const normalized = normalizeSpawnedAgentOutput(
+  test('leaves real structured output untouched (no partial marker)', async () => {
+    const normalized = await normalizeAndPersist(
       { type: 'structuredOutput', value: { status: 'completed' } },
       'test-writer',
     )
@@ -96,9 +110,9 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
   // attestation core — without it the gate's walker finds zero structured
   // entries and parks the run on "did not return the required structured
   // snapshot attestation" despite a complete review.
-  test('preserves the attestation core through the oversize summary fallback', () => {
+  test('preserves the attestation core through the oversize summary fallback', async () => {
     const fingerprint = 'v3:' + 'b'.repeat(64)
-    const big = 'x'.repeat(33_000)
+    const big = 'x'.repeat(200_000)
     const payload: Record<string, string> = {}
     for (const field of [
       'text',
@@ -115,7 +129,7 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     // The review is nested one level below the surface so the oversize
     // fallback's verdict-shaped fast path does NOT apply — this is the
     // destructive `{ type: 'agentReceipt', summary }` branch.
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       {
         nested: {
           schemaVersion: 1,
@@ -127,7 +141,7 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
         },
       },
       'security-reviewer',
-    ) as any
+    )) as any
     expect(normalized.type).toBe('agentReceipt')
     expect(normalized.truncated).toBe(true)
     expect(normalized.verdict).toBe('LOOKS_GOOD')
@@ -135,13 +149,13 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     expect(normalized.reviewedFiles).toEqual(['src/a.ts'])
   })
 
-  test('bounds the attestation-core findings on the oversize summary fallback', () => {
+  test('bounds the attestation-core findings on the oversize summary fallback', async () => {
     const fingerprint = 'v3:' + 'f'.repeat(64)
     const rawFindings = Array.from({ length: 200 }, (_, index) => ({
       id: `F-${index}`,
       detail: 'd'.repeat(20_000),
     }))
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       {
         nested: {
           schemaVersion: 1,
@@ -153,7 +167,7 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
         },
       },
       'security-reviewer',
-    ) as any
+    )) as any
     expect(normalized.type).toBe('agentReceipt')
     expect(normalized.truncated).toBe(true)
     expect(normalized.verdict).toBe('LOOKS_GOOD')
@@ -164,14 +178,18 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
     expect(normalized.findings.length).toBeLessThanOrEqual(48)
     for (const finding of normalized.findings) {
       expect(typeof finding.detail).toBe('string')
-      expect(finding.detail.length).toBeLessThanOrEqual(4_000)
+      expect(finding.detail.length).toBeLessThanOrEqual(
+        PARENT_AGENT_OUTPUT_STRING_CHARS,
+      )
     }
     // The whole parent-visible receipt stays within the module's max-chars
     // bound.
-    expect(JSON.stringify(normalized).length).toBeLessThanOrEqual(256_000)
+    expect(JSON.stringify(normalized).length).toBeLessThanOrEqual(
+      PARENT_AGENT_OUTPUT_MAX_CHARS,
+    )
   })
 
-  test('preserves the attestation core through the depth-collapse fallback', () => {
+  test('preserves the attestation core through the depth-collapse fallback', async () => {
     let deep: any = {
       schemaVersion: 1,
       verdict: 'LOOKS_GOOD',
@@ -180,10 +198,10 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
       reviewedFiles: ['src/a.ts'],
     }
     for (let i = 0; i < 9; i += 1) deep = { nested: deep }
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       deep,
       'security-reviewer',
-    ) as any
+    )) as any
     // The depth-7 collapse fires seven `nested` wrappers down; walk to the
     // collapsed node instead of hard-coding its depth. The walk keys on the
     // collapsed node's own type, NOT on `truncated: true`: the envelope ROOT
@@ -216,7 +234,7 @@ describe('normalizeSpawnedAgentOutput missing-output durability', () => {
  * merge collapses unambiguous text-only assistant runs into one message so
  * compaction stops reporting 100+ omittedItems and clipping the answer.
  */
-describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
+describe('normalizeSpawnedAgentOutput lastMessage fragment merge', async () => {
   const fragments = (...texts: string[]) => ({
     type: 'lastMessage',
     value: texts.map((text) => ({
@@ -225,8 +243,8 @@ describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
     })),
   })
 
-  test('merges multiple text-only assistant fragments into one message', () => {
-    const normalized = normalizeSpawnedAgentOutput(
+  test('merges multiple text-only assistant fragments into one message', async () => {
+    const normalized = await normalizeAndPersist(
       fragments('Part one.', 'Part two.', 'Part three.'),
       'researcher-web',
     )
@@ -243,8 +261,8 @@ describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
     })
   })
 
-  test('ignores extra message fields such as tags when merging', () => {
-    const normalized = normalizeSpawnedAgentOutput(
+  test('ignores extra message fields such as tags when merging', async () => {
+    const normalized = await normalizeAndPersist(
       {
         type: 'lastMessage',
         value: [
@@ -273,11 +291,11 @@ describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
     })
   })
 
-  test('leaves a single-message lastMessage unchanged (no merge)', () => {
-    const normalized = normalizeSpawnedAgentOutput(
+  test('leaves a single-message lastMessage unchanged (no merge)', async () => {
+    const normalized = (await normalizeAndPersist(
       fragments('only fragment'),
       'researcher-web',
-    ) as any
+    )) as any
     expect(Array.isArray(normalized.value)).toBe(true)
     expect(normalized.value).toHaveLength(1)
     expect(normalized.value[0].content).toEqual([
@@ -285,7 +303,7 @@ describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
     ])
   })
 
-  test('returns a mixed-role fragment list unchanged', () => {
+  test('returns a mixed-role fragment list unchanged', async () => {
     const input = {
       type: 'lastMessage',
       value: [
@@ -293,10 +311,10 @@ describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
         { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
       ],
     }
-    expect(normalizeSpawnedAgentOutput(input, 'researcher-web')).toEqual(input)
+    expect(await normalizeAndPersist(input, 'researcher-web')).toEqual(input)
   })
 
-  test('returns a fragment list with non-text content parts unchanged', () => {
+  test('returns a fragment list with non-text content parts unchanged', async () => {
     const input = {
       type: 'lastMessage',
       value: [
@@ -310,18 +328,18 @@ describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
         },
       ],
     }
-    expect(normalizeSpawnedAgentOutput(input, 'researcher-web')).toEqual(input)
+    expect(await normalizeAndPersist(input, 'researcher-web')).toEqual(input)
   })
 
-  test('returns a lastMessage with a non-array value unchanged', () => {
+  test('returns a lastMessage with a non-array value unchanged', async () => {
     const input = { type: 'lastMessage', value: 'plain text' }
-    expect(normalizeSpawnedAgentOutput(input, 'researcher-web')).toEqual(input)
+    expect(await normalizeAndPersist(input, 'researcher-web')).toEqual(input)
   })
 
-  test('never mutates the input', () => {
+  test('never mutates the input', async () => {
     const input = fragments('one', 'two') as Record<string, unknown>
     const snapshot = JSON.parse(JSON.stringify(input))
-    normalizeSpawnedAgentOutput(input, 'researcher-web')
+    await normalizeAndPersist(input, 'researcher-web')
     expect(input).toEqual(snapshot)
   })
 })
@@ -334,31 +352,33 @@ describe('normalizeSpawnedAgentOutput lastMessage fragment merge', () => {
  * directory is unwritable the fields are omitted entirely and the receipt
  * shape stays unchanged.
  */
-describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
+describe('normalizeSpawnedAgentOutput oversize artifact persistence', async () => {
   const oversizeFindings = (count: number) =>
-    Array.from({ length: count }, () => 'f'.repeat(4_000))
+    Array.from({ length: count }, () => 'f'.repeat(16_000))
 
-  test('persists the full oversize output to a content-addressed artifact file', () => {
+  test('persists the full oversize output to a content-addressed artifact file', async () => {
     const findings = oversizeFindings(100)
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       { findings },
       'security-reviewer',
-    ) as any
+    )) as any
     expect(normalized.type).toBe('agentReceipt')
     expect(normalized.truncated).toBe(true)
     expect(typeof normalized.artifactPath).toBe('string')
     expect(normalized.artifact).toBe(
       'Full untruncated output persisted; read with read_files.',
     )
-    expect(normalized.artifactBytes).toBeGreaterThan(256_000)
+    expect(normalized.artifactBytes).toBeGreaterThan(
+      PARENT_AGENT_OUTPUT_MAX_CHARS,
+    )
     // The persisted artifact round-trips: for this payload compaction is
-    // lossless (control-plane arrays are preserved and each 4000-char string
+    // lossless (control-plane arrays are preserved and each 16000-char string
     // sits exactly at the per-string cap), so the file holds the full output.
     const persisted = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
     expect(persisted).toEqual({ findings })
   })
 
-  test('persists the artifact with owner-only 0o600 permissions', () => {
+  test('persists the artifact with owner-only 0o600 permissions', async () => {
     // Unique payload so this test mints a FRESH artifact file: writeFileSync's
     // mode option only applies at file creation (an open-with-truncate on an
     // existing file keeps its old permissions), so asserting on a reused
@@ -367,10 +387,10 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
       ...oversizeFindings(100),
       `perms-probe-${Date.now()}-${Math.random()}`,
     ]
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       { findings },
       'security-reviewer',
-    ) as any
+    )) as any
     expect(typeof normalized.artifactPath).toBe('string')
     // Owner-only read/write regardless of the process umask: the artifact
     // holds the FULL untruncated child output in a shared tmp directory.
@@ -378,7 +398,7 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     expect(mode).toBe(0o600)
   })
 
-  test('sweeps artifacts older than the 24h retention TTL on persist', () => {
+  test('sweeps artifacts older than the 24h retention TTL on persist', async () => {
     const dir = join(osTmpdir(), 'openbuff-spawn-output')
     mkdirSync(dir, { recursive: true })
     // Pre-clean the shared scratch dir so the probe sits within the first 50
@@ -403,40 +423,40 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     const twentyFiveHoursAgo = new Date(Date.now() - 25 * 60 * 60 * 1000)
     utimesSync(stalePath, twentyFiveHoursAgo, twentyFiveHoursAgo)
 
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       { findings: oversizeFindings(100) },
       'security-reviewer',
-    ) as any
+    )) as any
     expect(typeof normalized.artifactPath).toBe('string')
     expect(statSync(normalized.artifactPath).isFile()).toBe(true)
     // The stale artifact was swept; the fresh one survives.
     expect(() => statSync(stalePath)).toThrow()
   })
 
-  test('content-addresses the artifact deterministically', () => {
+  test('content-addresses the artifact deterministically', async () => {
     const findings = oversizeFindings(100)
-    const first = normalizeSpawnedAgentOutput(
+    const first = (await normalizeAndPersist(
       { findings },
       'security-reviewer',
-    ) as any
-    const second = normalizeSpawnedAgentOutput(
+    )) as any
+    const second = (await normalizeAndPersist(
       { findings },
       'security-reviewer',
-    ) as any
+    )) as any
     expect(first.artifactPath).toBe(second.artifactPath)
   })
 
-  test('recreates the artifact directory when it is removed externally between persists', () => {
+  test('recreates the artifact directory when it is removed externally between persists', async () => {
     // reliability-reviewer: oversize-artifact-dir-flag-never-reset — the
     // module-scope ensured-dir cache must not let one external removal (or a
     // raced mkdir) permanently break every later persist.
     const dir = join(osTmpdir(), 'openbuff-spawn-output')
     const payload = { findings: oversizeFindings(100) }
     // First persist ensures the directory and warms the module-scope cache.
-    const first = normalizeSpawnedAgentOutput(
+    const first = (await normalizeAndPersist(
       payload,
       'security-reviewer',
-    ) as any
+    )) as any
     expect(typeof first.artifactPath).toBe('string')
     expect(statSync(first.artifactPath).isFile()).toBe(true)
 
@@ -446,19 +466,19 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     // The next persist must end up re-running mkdir (via cache invalidation
     // on the failed write attempt) and still produce the recovery artifact
     // instead of a permanent artifactError.
-    const second = normalizeSpawnedAgentOutput(
+    const second = (await normalizeAndPersist(
       payload,
       'security-reviewer',
-    ) as any
-    expect(second.artifactPersisted).toBeUndefined()
+    )) as any
+    expect(second.artifactPersisted).toBe(true)
     expect(second.artifactError).toBeUndefined()
     expect(typeof second.artifactPath).toBe('string')
     expect(statSync(second.artifactPath).isFile()).toBe(true)
   })
 
-  test('adds artifact fields to the reviewer verdict-shaped fast path when it truncates', () => {
+  test('adds artifact fields to the reviewer verdict-shaped fast path when it truncates', async () => {
     const findings = oversizeFindings(70)
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       {
         schemaVersion: 1,
         verdict: 'LOOKS_GOOD',
@@ -468,7 +488,7 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
         findings,
       },
       'security-reviewer',
-    ) as any
+    )) as any
     // The verdict-shaped fast path replaced the bulky payload with the trimmed
     // shape; the artifact pointer still travels at the top level.
     expect(normalized.value.verdict).toBe('LOOKS_GOOD')
@@ -476,20 +496,22 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     expect(normalized.artifact).toBe(
       'Full untruncated output persisted; read with read_files.',
     )
-    expect(normalized.artifactBytes).toBeGreaterThan(256_000)
+    expect(normalized.artifactBytes).toBeGreaterThan(
+      PARENT_AGENT_OUTPUT_MAX_CHARS,
+    )
   })
 
-  test('leaves the non-oversize path free of artifact fields', () => {
-    const normalized = normalizeSpawnedAgentOutput(
+  test('leaves the non-oversize path free of artifact fields', async () => {
+    const normalized = (await normalizeAndPersist(
       { status: 'completed', summary: 'done' },
       'researcher-web',
-    ) as any
+    )) as any
     expect('artifactPath' in normalized).toBe(false)
     expect('artifactBytes' in normalized).toBe(false)
     expect('artifact' in normalized).toBe(false)
   })
 
-  test('omits the artifact fields entirely when tmp persistence fails', () => {
+  test('omits the artifact fields entirely when tmp persistence fails', async () => {
     // Point TMPDIR at a regular FILE: mkdirSync under it fails with ENOTDIR on
     // every POSIX runner (root included), exercising the never-throw path.
     const scratchDir = mkdtempSync(join(osTmpdir(), 'openbuff-artifact-probe-'))
@@ -498,10 +520,10 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     const previousTmpdir = process.env.TMPDIR
     process.env.TMPDIR = blockerFile
     try {
-      const normalized = normalizeSpawnedAgentOutput(
+      const normalized = (await normalizeAndPersist(
         { findings: oversizeFindings(100) },
         'security-reviewer',
-      ) as any
+      )) as any
       expect(normalized.type).toBe('agentReceipt')
       expect(normalized.truncated).toBe(true)
       expect(normalized.artifactPath).toBeUndefined()
@@ -517,7 +539,7 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     }
   })
 
-  test('adds an explicit artifactError diagnostic when persistence fails', () => {
+  test('adds an explicit artifactError diagnostic when persistence fails', async () => {
     // Point TMPDIR at a regular FILE: mkdirSync under it fails with ENOTDIR on
     // every POSIX runner (root included). The failure must not be silent: the
     // receipt carries artifactPersisted:false + artifactError so the parent
@@ -528,13 +550,13 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     const previousTmpdir = process.env.TMPDIR
     process.env.TMPDIR = blockerFile
     try {
-      const normalized = normalizeSpawnedAgentOutput(
+      const normalized = (await normalizeAndPersist(
         { findings: oversizeFindings(100) },
         'security-reviewer',
-      ) as any
+      )) as any
       expect(normalized.artifactPersisted).toBe(false)
       expect(typeof normalized.artifactError).toBe('string')
-      expect(normalized.artifactError).toContain('NOT be persisted')
+      expect(normalized.artifactError).toMatch(/could not be persisted/i)
       expect(normalized.artifactError).toContain('not fully recoverable')
     } finally {
       if (previousTmpdir === undefined) {
@@ -546,7 +568,7 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     }
   })
 
-  test('does not collapse a non-reviewer oversize receipt to review-shaped value fields', () => {
+  test('does not collapse a non-reviewer oversize receipt to review-shaped value fields', async () => {
     // The review-shaped fast path keeps ONLY the fixed reviewer receipt
     // fields, so it must not fire for a non-reviewer agent whose payload
     // happens to carry a requirementCoverage array — its other fields (here:
@@ -555,9 +577,9 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     const requirementCoverage = Array.from({ length: 60 }, (_, index) => ({
       id: `R-${index}`,
       covered: true,
-      evidence: ['e'.repeat(6_000)],
+      evidence: ['e'.repeat(20_000)],
     }))
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       {
         type: 'structuredOutput',
         value: {
@@ -568,7 +590,7 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
         },
       },
       'repair-editor',
-    ) as any
+    )) as any
     expect(normalized.type).toBe('agentReceipt')
     expect(normalized.truncated).toBe(true)
     expect(normalized.agentType).toBe('repair-editor')
@@ -583,9 +605,9 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
     expect(persisted.value.answer).toBe('y'.repeat(34_000))
   })
 
-  test('still uses the review-shaped fast path for reviewer-family oversize payloads', () => {
+  test('still uses the review-shaped fast path for reviewer-family oversize payloads', async () => {
     const findings = oversizeFindings(70)
-    const normalized = normalizeSpawnedAgentOutput(
+    const normalized = (await normalizeAndPersist(
       {
         type: 'structuredOutput',
         value: {
@@ -599,7 +621,7 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
         },
       },
       'custom-specialist',
-    ) as any
+    )) as any
     // family: 'reviewer' alone routes the payload through the fixed-field
     // collapse even when agentType does not match *reviewer*.
     expect(normalized.value.verdict).toBe('LOOKS_GOOD')
@@ -609,52 +631,76 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
 
 /**
  * Clipped-but-not-oversize recovery: the COMMON truncation case is a child
- * whose payload fits the 256k whole-payload budget yet still lost content to
+ * whose payload fits the 1M whole-payload budget yet still lost content to
  * leaf compaction — a 40k–250k payload, or a single `message`/`summary` leaf
  * past the 32k high-fidelity cap. That case used to return a clipped fragment
  * with NO artifactPath and no root truncation flag, so the orchestrator could
  * neither read the full output back nor tell the result had been cut (the D19
  * classifier only inspects the ROOT, so it reported `outcome: 'ok'`).
  */
-describe('normalizeSpawnedAgentOutput output budget', () => {
+describe('normalizeSpawnedAgentOutput output budget', async () => {
   const clippedPayload = () => ({
     type: 'structuredOutput',
     value: { status: 'completed', message: 'm'.repeat(40_000) },
   })
 
-  test('preserves a long message when the complete output fits the total budget', () => {
+  test('preserves a long message when the complete output fits the total budget', async () => {
     const payload = clippedPayload()
     expect(JSON.stringify(payload).length).toBeLessThan(256_000)
 
-    const normalized = normalizeSpawnedAgentOutput(payload, 'researcher-web') as any
+    const normalized = (await normalizeAndPersist(
+      payload,
+      'researcher-web',
+    )) as any
     expect(normalized.truncated).toBeUndefined()
     expect(normalized.type).toBe('structuredOutput')
     expect(normalized.value.status).toBe('completed')
     expect(normalized.value.message).toBe(payload.value.message)
   })
 
-  test('marks and preserves a recoverable artifact when object keys are omitted', () => {
-    const payload = { type: 'structuredOutput', value: Object.fromEntries(
-      Array.from({ length: 70 }, (_, index) => [`field${index}`, index]),
-    ) }
-    const normalized = normalizeSpawnedAgentOutput(payload, 'researcher-web') as any
+  test('marks and preserves a recoverable artifact when object keys are omitted', async () => {
+    const payload = {
+      type: 'structuredOutput',
+      value: Object.fromEntries(
+        Array.from({ length: 70 }, (_, index) => [`field${index}`, index]),
+      ),
+    }
+    const normalized = (await normalizeAndPersist(
+      payload,
+      'researcher-web',
+    )) as any
     expect(normalized.truncated).toBe(true)
     expect(normalized.truncation.omittedItems).toBe(6)
-    expect(JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))).toEqual(payload)
+    expect(JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))).toEqual(
+      payload,
+    )
   })
 
-  test('persists the original reviewer evidence when a receipt exceeds the budget', () => {
-    const evidence = ['x'.repeat(300_000), 'second', 'third', 'fourth']
-    const payload = { type: 'structuredOutput', value: {
-      family: 'reviewer', verdict: 'BLOCKING', findings: [{ evidence }],
-    } }
-    const normalized = normalizeSpawnedAgentOutput(payload, 'reliability-reviewer') as any
+  test('persists the original reviewer evidence when a receipt exceeds the budget', async () => {
+    const evidence = [
+      'x'.repeat(PARENT_AGENT_OUTPUT_MAX_CHARS + 1),
+      'second',
+      'third',
+      'fourth',
+    ]
+    const payload = {
+      type: 'structuredOutput',
+      value: {
+        family: 'reviewer',
+        verdict: 'BLOCKING',
+        findings: [{ evidence }],
+      },
+    }
+    const normalized = (await normalizeAndPersist(
+      payload,
+      'reliability-reviewer',
+    )) as any
     expect(normalized.truncated).toBe(true)
     const saved = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
     expect(saved.value.findings[0].evidence).toEqual(evidence)
   })
 
-  test('degrades to artifact diagnostic fields (never throws) when persistence fails', () => {
+  test('degrades to artifact diagnostic fields (never throws) when persistence fails', async () => {
     // TMPDIR pointed at a regular FILE makes mkdirSync fail with ENOTDIR on
     // every POSIX runner (root included), exercising the never-throw path.
     const scratchDir = mkdtempSync(join(osTmpdir(), 'openbuff-clipped-probe-'))
@@ -663,10 +709,16 @@ describe('normalizeSpawnedAgentOutput output budget', () => {
     const previousTmpdir = process.env.TMPDIR
     process.env.TMPDIR = blockerFile
     try {
-      const normalized = normalizeSpawnedAgentOutput(
-        { type: 'structuredOutput', value: { status: 'completed', message: 'm'.repeat(300_000) } },
+      const normalized = (await normalizeAndPersist(
+        {
+          type: 'structuredOutput',
+          value: {
+            status: 'completed',
+            message: 'm'.repeat(PARENT_AGENT_OUTPUT_MAX_CHARS + 1),
+          },
+        },
         'researcher-web',
-      ) as any
+      )) as any
       // The clipping is still reported honestly; only the recovery pointer
       // degrades to an explicit diagnostic.
       expect(normalized.truncated).toBe(true)
@@ -694,7 +746,7 @@ describe('normalizeSpawnedAgentOutput output budget', () => {
  * - R3: edit_transaction results that existed but parsed to zero mutation
  *   receipts get an explicit diagnostic naming the unbacked claimed paths.
  */
-describe('buildRuntimeAgentReceipt spawn receipt hardening', () => {
+describe('buildRuntimeAgentReceipt spawn receipt hardening', async () => {
   const appliedMutationResult = (path: string, callId: string) => {
     const receiptId = `receipt-${callId}`
     const action = {
@@ -729,7 +781,7 @@ describe('buildRuntimeAgentReceipt spawn receipt hardening', () => {
     }
   }
 
-  test('credits receipt-backed findings when output overclaims other paths (R1)', () => {
+  test('credits receipt-backed findings when output overclaims other paths (R1)', async () => {
     const handoff = {
       schemaVersion: 1,
       taskId: 'task-overclaim',
@@ -794,7 +846,7 @@ describe('buildRuntimeAgentReceipt spawn receipt hardening', () => {
     ).toBe(true)
   })
 
-  test('does not throw for a handoff lacking findings (R2 happy-path hardening)', () => {
+  test('does not throw for a handoff lacking findings (R2 happy-path hardening)', async () => {
     const handoff = {
       schemaVersion: 1,
       taskId: 'task-no-findings',
@@ -828,7 +880,7 @@ describe('buildRuntimeAgentReceipt spawn receipt hardening', () => {
     expect(receipt.findingsAddressed).toEqual([])
   })
 
-  test('does not throw for a handoff with an invalid role (R2 happy-path hardening)', () => {
+  test('does not throw for a handoff with an invalid role (R2 happy-path hardening)', async () => {
     const handoff = {
       schemaVersion: 1,
       taskId: 'task-bad-role',
@@ -858,7 +910,7 @@ describe('buildRuntimeAgentReceipt spawn receipt hardening', () => {
     expect(receipt.role).toBe('specialist')
   })
 
-  test('falls back to a field-complete failed receipt when the core build throws (R2)', () => {
+  test('falls back to a field-complete failed receipt when the core build throws (R2)', async () => {
     const throwingOutput = new Proxy(
       {},
       {
@@ -891,7 +943,7 @@ describe('buildRuntimeAgentReceipt spawn receipt hardening', () => {
     ).toBe(true)
   })
 
-  test('diagnoses zero parseable mutation receipts despite edit_transaction results (R3)', () => {
+  test('diagnoses zero parseable mutation receipts despite edit_transaction results (R3)', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'repair-editor',
       agentId: 'repair-zero-attestations',
@@ -950,8 +1002,8 @@ function hasUndefinedValuedKey(value: unknown, depth = 0): boolean {
  *   `review` field so the gate's walker can attest even when the bulky
  *   structured result payload was truncated in transit.
  */
-describe('buildRuntimeAgentReceipt output durability', () => {
-  test('does not throw on an explicitly-undefined key inside structured output', () => {
+describe('buildRuntimeAgentReceipt output durability', async () => {
+  test('does not throw on an explicitly-undefined key inside structured output', async () => {
     const reviewLike = {
       schemaVersion: 1,
       verdict: 'LOOKS_GOOD',
@@ -975,7 +1027,7 @@ describe('buildRuntimeAgentReceipt output durability', () => {
     expect(JSON.parse(JSON.stringify(output))).toEqual(output)
   })
 
-  test('attaches the compact review core to the receipt for the gate walker', () => {
+  test('attaches the compact review core to the receipt for the gate walker', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'security-reviewer',
       agentId: 'sec-review-1',
@@ -1008,7 +1060,7 @@ describe('buildRuntimeAgentReceipt output durability', () => {
  * never resolve to `completed` unless runtime-attested mutations are the
  * completion authority (RF-2), with exactly one diagnostic error appended.
  */
-describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
+describe('buildRuntimeAgentReceipt typed handoff outcome', async () => {
   const appliedMutationResult = (path: string, callId: string) => {
     const receiptId = `receipt-${callId}`
     const action = {
@@ -1043,7 +1095,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     }
   }
 
-  test('downgrades a missing child output to partial with outcome missing_output (D24 regression)', () => {
+  test('downgrades a missing child output to partial with outcome missing_output (D24 regression)', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a1',
@@ -1067,7 +1119,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     })
   })
 
-  test('records schema_invalid from a stale lastSetOutputError and downgrades to partial', () => {
+  test('records schema_invalid from a stale lastSetOutputError and downgrades to partial', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a-schema-invalid',
@@ -1088,9 +1140,9 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     ])
   })
 
-  test('keeps a truncated reviewer receipt at its resolved status (no downgrade)', () => {
+  test('keeps a truncated reviewer receipt at its resolved status (no downgrade)', async () => {
     const fingerprint = 'v3:' + 'd'.repeat(64)
-    const big = 'x'.repeat(33_000)
+    const big = 'x'.repeat(200_000)
     const payload: Record<string, string> = {}
     for (const field of [
       'text',
@@ -1126,7 +1178,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.errors).toEqual([])
   })
 
-  test('marks a degrade-envelope crash as crashed and partial with a non-retryable error', () => {
+  test('marks a degrade-envelope crash as crashed and partial with a non-retryable error', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'thinker',
       agentId: 'a-crash-envelope',
@@ -1136,13 +1188,14 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.status).toBe('partial')
     expect(receipt.errors).toEqual([
       {
-        message: "thinker receipt outcome 'crashed': Subagent thinker crashed: boom",
+        message:
+          "thinker receipt outcome 'crashed': Subagent thinker crashed: boom",
         retryable: false,
       },
     ])
   })
 
-  test('records crashed for a params.error run without duplicating the crash error', () => {
+  test('records crashed for a params.error run without duplicating the crash error', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'thinker',
       agentId: 'a-crash-error',
@@ -1156,7 +1209,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.errors).toEqual([{ message: 'boom', retryable: false }])
   })
 
-  test('keeps outcome ok with completed status for a normal structured output', () => {
+  test('keeps outcome ok with completed status for a normal structured output', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a-ok',
@@ -1170,13 +1223,16 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.errors).toEqual([])
   })
 
-  test('records structural truncation under the size bound without downgrading status', () => {
+  test('records structural truncation under the size bound without downgrading status', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a-clipped-sub256k',
       output: {
         type: 'structuredOutput',
-        value: { status: 'completed', items: Array.from({ length: 60 }, (_, index) => index) },
+        value: {
+          status: 'completed',
+          items: Array.from({ length: 60 }, (_, index) => index),
+        },
       },
     })
     expect(receipt.outcome).toBe('truncated')
@@ -1187,7 +1243,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(typeof output.artifactPath).toBe('string')
   })
 
-  test('mutation authority keeps a mutation agent completed despite missing_output', () => {
+  test('mutation authority keeps a mutation agent completed despite missing_output', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'editor',
       agentId: 'a-editor-missing-output',
@@ -1218,7 +1274,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     ])
   })
 
-  test('a child self-declared completed status does not rescue a schema_invalid run', () => {
+  test('a child self-declared completed status does not rescue a schema_invalid run', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a-self-declared',
@@ -1241,7 +1297,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     ])
   })
 
-  test('agentReceiptSchema accepts outcome and legacy receipts without it', () => {
+  test('agentReceiptSchema accepts outcome and legacy receipts without it', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a-schema-field',
@@ -1251,9 +1307,9 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
       },
     })
     expect(receipt.outcome).toBe('ok')
-    expect(agentReceiptSchema.parse({ ...receipt, outcome: 'ok' }).outcome).toBe(
-      'ok',
-    )
+    expect(
+      agentReceiptSchema.parse({ ...receipt, outcome: 'ok' }).outcome,
+    ).toBe('ok')
     // Legacy receipts without the additive field keep parsing under .strict().
     const legacy: Record<string, unknown> = { ...receipt }
     delete legacy.outcome
@@ -1264,7 +1320,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
   // structured `supervisedOutcome` field is honored by the outcome derivation
   // so a non-crash supervised settle keeps its PR-T1 classification instead of
   // collapsing into a non-retryable 'crashed'.
-  test('honors supervisedOutcome missing_output as retryable, not crashed', () => {
+  test('honors supervisedOutcome missing_output as retryable, not crashed', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'thinker',
       agentId: 'a-sup-missing',
@@ -1288,7 +1344,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     ])
   })
 
-  test('honors supervisedOutcome schema_invalid as retryable with the settle detail', () => {
+  test('honors supervisedOutcome schema_invalid as retryable with the settle detail', async () => {
     const settleMessage =
       'Subagent thinker crashed: supervised receipt failed agentReceiptSchema (schema_invalid): stderr tail'
     const receipt = buildRuntimeAgentReceipt({
@@ -1312,7 +1368,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     ])
   })
 
-  test('honors supervisedOutcome truncated without downgrading the status', () => {
+  test('honors supervisedOutcome truncated without downgrading the status', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a-sup-truncated',
@@ -1330,7 +1386,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.errors).toEqual([])
   })
 
-  test('a genuine params.error crash still wins over a supervisedOutcome field', () => {
+  test('a genuine params.error crash still wins over a supervisedOutcome field', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'thinker',
       agentId: 'a-sup-crash-wins',
@@ -1344,10 +1400,12 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     // The risk guard: the crash path is unchanged when params.error exists.
     expect(receipt.outcome).toBe('crashed')
     expect(receipt.status).toBe('failed')
-    expect(receipt.errors).toEqual([{ message: 'genuine crash', retryable: false }])
+    expect(receipt.errors).toEqual([
+      { message: 'genuine crash', retryable: false },
+    ])
   })
 
-  test('downgrades a round-tripped empty-output placeholder to partial with outcome missing_output', () => {
+  test('downgrades a round-tripped empty-output placeholder to partial with outcome missing_output', async () => {
     // A null child output normalized parent-side (or across the supervision
     // bridge) arrives as the empty placeholder; previously its outcome read
     // 'ok' and the final fallback resolved 'completed' — completed-with-null.
@@ -1371,13 +1429,15 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     ])
   })
 
-  test('downgrades a blank lastMessage settle to partial with outcome missing_output', () => {
+  test('downgrades a blank lastMessage settle to partial with outcome missing_output', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'file-picker',
       agentId: 'fp-blank-last-message',
       output: {
         type: 'lastMessage',
-        value: [{ role: 'assistant', content: [{ type: 'text', text: '   ' }] }],
+        value: [
+          { role: 'assistant', content: [{ type: 'text', text: '   ' }] },
+        ],
       },
     })
     expect(receipt.outcome).toBe('missing_output')
@@ -1390,7 +1450,7 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     ).toBe(true)
   })
 
-  test('keeps a real set_output value from being downgraded by an empty output envelope', () => {
+  test('keeps a real set_output value from being downgraded by an empty output envelope', async () => {
     // The empty-output guard keys on the child state having no set_output
     // value and no harvested answer; a state-backed output is authoritative.
     const receipt = buildRuntimeAgentReceipt({
@@ -1422,11 +1482,11 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
  * set_output validation rejection must still settle schema_invalid, so the fix
  * cannot have disabled the legitimate fail-closed signal.
  */
-describe('reviewer receipt survives the degenerate ACK-echo retry (end-to-end settle)', () => {
+describe('reviewer receipt survives the degenerate ACK-echo retry (end-to-end settle)', async () => {
   // Real 64-hex token so the receipt also satisfies the gate-attestable shape.
   const fingerprint = 'v3:' + 'a'.repeat(64)
 
-  test('settles a published receipt plus an echoed tool ACK with the real verdict', () => {
+  test('settles a published receipt plus an echoed tool ACK with the real verdict', async () => {
     const agentState = getInitialAgentState()
     agentState.agentType = 'security-reviewer'
     // Post-guard child state: the child first published this receipt, then
@@ -1462,7 +1522,7 @@ describe('reviewer receipt survives the degenerate ACK-echo retry (end-to-end se
     expect(settledOutput.snapshotFingerprint).toBe(fingerprint)
   })
 
-  test('still settles a genuine set_output validation rejection as schema_invalid', () => {
+  test('still settles a genuine set_output validation rejection as schema_invalid', async () => {
     const agentState = getInitialAgentState()
     agentState.agentType = 'code-reviewer'
     // A real rejection leaves the error on the child state and no receipt
@@ -1495,8 +1555,8 @@ describe('reviewer receipt survives the degenerate ACK-echo retry (end-to-end se
  * miss, and the audit-shard case still STRICTLY requires a write_audit_findings
  * structuralReceipt.
  */
-describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
-  test('credits a general-agent final assistant answer without task_completed', () => {
+describe('buildRuntimeAgentReceipt general-agent completion contract', async () => {
+  test('credits a general-agent final assistant answer without task_completed', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'ga-answer-lastmessage',
@@ -1517,7 +1577,7 @@ describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
     ).toBe(false)
   })
 
-  test('credits a general-agent non-empty summary answer without task_completed', () => {
+  test('credits a general-agent non-empty summary answer without task_completed', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'ga-answer-summary',
@@ -1532,7 +1592,7 @@ describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
     ).toBe(false)
   })
 
-  test('still flags an answerless/step-capped general-agent as a retryable miss', () => {
+  test('still flags an answerless/step-capped general-agent as a retryable miss', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'ga-answerless',
@@ -1550,13 +1610,12 @@ describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
     expect(
       receipt.errors.some(
         (error) =>
-          error.retryable === true &&
-          error.message.includes('task_completed'),
+          error.retryable === true && error.message.includes('task_completed'),
       ),
     ).toBe(true)
   })
 
-  test('does not credit an explicit empty placeholder output as a final answer', () => {
+  test('does not credit an explicit empty placeholder output as a final answer', async () => {
     // The `{ summary: '', partial: true }` placeholder normalizeSpawnedAgentOutput
     // emits must stay a retryable miss — the partial guard rejects it.
     const receipt = buildRuntimeAgentReceipt({
@@ -1572,13 +1631,12 @@ describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
     expect(
       receipt.errors.some(
         (error) =>
-          error.retryable === true &&
-          error.message.includes('task_completed'),
+          error.retryable === true && error.message.includes('task_completed'),
       ),
     ).toBe(true)
   })
 
-  test('keeps the audit-shard write_audit_findings requirement strict even with a final answer', () => {
+  test('keeps the audit-shard write_audit_findings requirement strict even with a final answer', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'ga-audit-missing',
@@ -1622,8 +1680,8 @@ describe('buildRuntimeAgentReceipt general-agent completion contract', () => {
  * now classifies it as retryable schema_invalid. Advisory-family specialists
  * (family: 'advisory', no verdict) and non-reviewer agents stay outcome 'ok'.
  */
-describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
-  test('classifies a degenerate reviewer-family payload without a verdict as retryable schema_invalid', () => {
+describe('buildRuntimeAgentReceipt reviewer-family verdict guard', async () => {
+  test('classifies a degenerate reviewer-family payload without a verdict as retryable schema_invalid', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'security-reviewer',
       agentId: 'sec-degenerate-1',
@@ -1643,7 +1701,7 @@ describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
     ])
   })
 
-  test('falls back to the agentType reviewer match when the payload omits family', () => {
+  test('falls back to the agentType reviewer match when the payload omits family', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'code-reviewer',
       agentId: 'code-degenerate-1',
@@ -1659,7 +1717,7 @@ describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
     expect(receipt.errors[0]?.message).toContain('verdict field')
   })
 
-  test('keeps an advisory-family specialist at outcome ok despite no verdict', () => {
+  test('keeps an advisory-family specialist at outcome ok despite no verdict', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'product-reviewer',
       agentId: 'advisory-1',
@@ -1673,7 +1731,7 @@ describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
     expect(receipt.errors).toEqual([])
   })
 
-  test('keeps a valid reviewer receipt with a verdict at outcome ok', () => {
+  test('keeps a valid reviewer receipt with a verdict at outcome ok', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'security-reviewer',
       agentId: 'sec-valid-1',
@@ -1692,7 +1750,7 @@ describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
     expect(receipt.errors).toEqual([])
   })
 
-  test('leaves non-reviewer agents without a verdict untouched', () => {
+  test('leaves non-reviewer agents without a verdict untouched', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'test-writer',
       agentId: 'tw-no-verdict',
@@ -1714,7 +1772,7 @@ describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
  * as a verdict-less degenerate receipt, settled retryable schema_invalid,
  * and the parent re-reviewed forever despite the real verdict inside.
  */
-describe('reviewer receipt stringified-payload coercion', () => {
+describe('reviewer receipt stringified-payload coercion', async () => {
   const reviewerFinding = {
     id: 'F-1',
     text: 'Handle the proto signature change.',
@@ -1725,7 +1783,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
   }
   const fingerprint = 'v3:' + 'a'.repeat(64)
 
-  test('builds an ok receipt from a structuredOutput value that is a JSON string of the full reviewer receipt', () => {
+  test('builds an ok receipt from a structuredOutput value that is a JSON string of the full reviewer receipt', async () => {
     const fullReceipt = {
       family: 'reviewer',
       schemaVersion: 1,
@@ -1734,11 +1792,13 @@ describe('reviewer receipt stringified-payload coercion', () => {
       coverage: 'covered',
       reviewedFiles: ['src/proto/client.ts'],
       findings: [reviewerFinding],
-      requirementCoverage: [{
-        id: 'R-1',
-        covered: true,
-        evidence: ['covered by F-1'],
-      }],
+      requirementCoverage: [
+        {
+          id: 'R-1',
+          covered: true,
+          evidence: ['covered by F-1'],
+        },
+      ],
       dimensions: { compatibility: 'PASS', security: 'SKIP' },
     }
     const receipt = buildRuntimeAgentReceipt({
@@ -1755,7 +1815,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(receipt.review?.verdict).toBe('NON_BLOCKING')
   })
 
-  test('coerces stringified inner fields on an object value so findings become native arrays', () => {
+  test('coerces stringified inner fields on an object value so findings become native arrays', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'compatibility-reviewer',
       agentId: 'compat-inner-str-1',
@@ -1785,7 +1845,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(Array.isArray(inner?.reviewedFiles)).toBe(true)
   })
 
-  test('coerces a schemaVersion string "1" to the number 1', () => {
+  test('coerces a schemaVersion string "1" to the number 1', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'compatibility-reviewer',
       agentId: 'compat-schema-str-1',
@@ -1806,7 +1866,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(inner?.schemaVersion).toBe(1)
   })
 
-  test('falls through unchanged when the value string is not valid JSON (schema_invalid)', () => {
+  test('falls through unchanged when the value string is not valid JSON (schema_invalid)', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'compatibility-reviewer',
       agentId: 'compat-bad-json-1',
@@ -1820,7 +1880,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(receipt.errors[0]?.retryable).toBe(true)
   })
 
-  test('falls through unchanged when the value string parses to an array (schema_invalid)', () => {
+  test('falls through unchanged when the value string parses to an array (schema_invalid)', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'compatibility-reviewer',
       agentId: 'compat-array-json-1',
@@ -1836,7 +1896,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
   // Memoization followup: the same stringified value seen twice within one
   // settle chain must produce the same coerced receipt both times, and the
   // memo must not leak state across distinct payloads.
-  test('a repeated stringified value settles identically on the second settle', () => {
+  test('a repeated stringified value settles identically on the second settle', async () => {
     const stringifiedReceipt = JSON.stringify({
       schemaVersion: 1,
       family: 'reviewer',
@@ -1865,7 +1925,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
   // Receipt-riding-one-level-deeper envelope (live bug: compatibility-
   // reviewer settled schema_invalid when the receipt traveled as an object
   // whose `output` key is a JSON-encoded string of the full receipt).
-  test('unwraps a structuredOutput value whose output key is a JSON string of the full reviewer receipt', () => {
+  test('unwraps a structuredOutput value whose output key is a JSON string of the full reviewer receipt', async () => {
     const fullReceipt = {
       family: 'reviewer',
       schemaVersion: 1,
@@ -1897,7 +1957,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
   // discriminator, so every structuredOutput-specific unwrap branch missed it
   // and the settle read the degenerate {message: 'Output set'} ack instead,
   // looping schema_invalid forever).
-  test('unwraps a keyless json-part envelope ({ jsonKey, value }) carrying a stringified reviewer receipt', () => {
+  test('unwraps a keyless json-part envelope ({ jsonKey, value }) carrying a stringified reviewer receipt', async () => {
     const fullReceipt = {
       family: 'reviewer',
       schemaVersion: 1,
@@ -1923,7 +1983,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(receipt.review?.verdict).toBe('LOOKS_GOOD')
   })
 
-  test('unwraps a keyless json-part envelope whose value is a native receipt object', () => {
+  test('unwraps a keyless json-part envelope whose value is a native receipt object', async () => {
     const fullReceipt = {
       family: 'reviewer',
       schemaVersion: 1,
@@ -1943,7 +2003,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(receipt.review?.verdict).toBe('NON_BLOCKING')
   })
 
-  test('leaves a keyless json-part envelope with a verdict-less value untouched (schema_invalid)', () => {
+  test('leaves a keyless json-part envelope with a verdict-less value untouched (schema_invalid)', async () => {
     // A jsonKey envelope whose parsed/native value has NO verdict must NOT be
     // promoted to structuredOutput — the verdict guard still catches it as
     // the degenerate receipt it is.
@@ -1959,7 +2019,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
     expect(receipt.errors[0]?.retryable).toBe(true)
   })
 
-  test('falls through unchanged when the nested output string parses to an array (schema_invalid)', () => {
+  test('falls through unchanged when the nested output string parses to an array (schema_invalid)', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'compatibility-reviewer',
       agentId: 'compat-nested-output-array',
@@ -1976,7 +2036,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
   })
 
   // eslint-disable-next-line no-useless-escape
-  test('keeps a schema-echo structuredOutput value settling schema_invalid', () => {
+  test('keeps a schema-echo structuredOutput value settling schema_invalid', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'compatibility-reviewer',
       agentId: 'compat-schema-echo-1',
@@ -2004,7 +2064,7 @@ describe('reviewer receipt stringified-payload coercion', () => {
  * an ENOENT race may still be treated as cleaned because the ownership goal
  * (the clone is already gone) already holds.
  */
-describe('finalizeOwnedLibrarianClone cleanup failure reporting', () => {
+describe('finalizeOwnedLibrarianClone cleanup failure reporting', async () => {
   const logger = {
     debug() {},
     info() {},
@@ -2152,7 +2212,7 @@ describe('finalizeOwnedLibrarianClone cleanup failure reporting', () => {
  * register the abandoned child runId in the parent's childRunIds chain before
  * rethrowing, instead of leaking the clone and orphaning the runId.
  */
-describe('executeSubagent cancellation cleanup', () => {
+describe('executeSubagent cancellation cleanup', async () => {
   const librarianTemplate = {
     id: 'librarian',
     displayName: 'Librarian',
@@ -2285,8 +2345,8 @@ describe('executeSubagent cancellation cleanup', () => {
  * artifact must have been swept instead of being perpetually skipped beyond
  * the cap.
  */
-describe('oversize artifact sweep forward progress', () => {
-  test('consecutive persists sweep the whole stale backlog beyond the per-call cap', () => {
+describe('oversize artifact sweep forward progress', async () => {
+  test('consecutive persists sweep the whole stale backlog beyond the per-call cap', async () => {
     const dir = join(osTmpdir(), 'openbuff-spawn-output')
     mkdirSync(dir, { recursive: true })
     // Pre-clean the shared scratch dir so stale-backlog counting is exact.
@@ -2319,19 +2379,19 @@ describe('oversize artifact sweep forward progress', () => {
     // each round so every round really persists a NEW artifact and so the
     // rotation cursor must advance to reach the remaining stale entries.
     for (let round = 0; round < 3; round += 1) {
-      const normalized = normalizeSpawnedAgentOutput(
+      const normalized = (await normalizeAndPersist(
         {
           findings: [
             ...Array.from({ length: 100 }, (_, index) =>
               // Pad each finding above the oversize bound (well past the
-              // 256k-total persisted payload threshold) so every round really
+              // 1M-total persisted payload threshold) so every round really
               // persists an artifact, keeping round-unique content.
-              `round-${round}-finding-${index}`.padEnd(4_000, 'p'),
+              `round-${round}-finding-${index}`.padEnd(16_000, 'p'),
             ),
           ],
         },
         'security-reviewer',
-      ) as any
+      )) as any
       expect(typeof normalized.artifactPath).toBe('string')
     }
 

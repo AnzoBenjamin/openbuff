@@ -23,7 +23,7 @@ import {
   buildSpawnParamsWithHandoff,
   deriveSpawnTemplateCapabilities,
   validateVersionedAgentHandoff,
-  buildRuntimeAgentReceipt,
+  buildRuntimeAgentReceiptWithArtifacts,
   reconcileAgentReceiptIntoParent,
   mergeChildEvidenceIntoParent,
   createCombinedAbortSignal,
@@ -684,7 +684,7 @@ export const handleSpawnAgents = (async (
       attachBackgroundAgentPromise(
         job,
         detachedPromise
-          .then((result) => {
+          .then(async (result) => {
             // Exception-safe settle chain: the lease release and shard
             // completion in the finally below run even when an early settle
             // step throws, so a fault mid-settle can neither leak the
@@ -702,14 +702,14 @@ export const handleSpawnAgents = (async (
               // receipt here exactly as before.
               const receipt =
                 result.supervisedReceipt ??
-                buildRuntimeAgentReceipt({
+                (await buildRuntimeAgentReceiptWithArtifacts({
                   agentType,
                   agentId: result.agentState.agentId,
                   handoff: validated.handoff,
                   spawnParams: validated.runtimeSpawnParams,
                   output: result.output,
                   agentState: result.agentState,
-                })
+                }))
               // Fold the child's in-process playbook-gate evidence into the
               // parent's ledger before reconciling, so delegated work (e.g.
               // CI run inside basher) satisfies the parent's rules. No-op for
@@ -781,7 +781,7 @@ export const handleSpawnAgents = (async (
               })
             }
           })
-          .catch((error) => {
+          .catch(async (error) => {
             // Same exception-safe settle chain on the failure/cancellation
             // path: the finally below guarantees the lease release and shard
             // completion even when an early settle step throws, and a
@@ -798,7 +798,7 @@ export const handleSpawnAgents = (async (
               // subagent timeouts and a parent-signal abort — keep the
               // error/failed path unchanged.
               const cancelled = backgroundAgentJobWasCancelled(job)
-              const receipt = buildRuntimeAgentReceipt({
+              const receipt = await buildRuntimeAgentReceiptWithArtifacts({
                 agentType,
                 agentId: subAgentState.agentId,
                 handoff: validated.handoff,
@@ -1038,14 +1038,14 @@ export const handleSpawnAgents = (async (
           // path keeps building the receipt here exactly as before.
           const receipt =
             result.value.supervisedReceipt ??
-            buildRuntimeAgentReceipt({
+            (await buildRuntimeAgentReceiptWithArtifacts({
               agentType,
               agentId: agentState.agentId,
               handoff,
               spawnParams: validated.runtimeSpawnParams,
               output,
               agentState,
-            })
+            }))
           // Fold the child's in-process playbook-gate evidence into the
           // parent's ledger before reconciling, so delegated work (e.g. CI
           // run inside basher) satisfies the parent's rules. No-op for a
@@ -1078,7 +1078,7 @@ export const handleSpawnAgents = (async (
         } else {
           const agentTypeStr = validated.input.agent_type
           const handoff = validated.handoff
-          const receipt = buildRuntimeAgentReceipt({
+          const receipt = await buildRuntimeAgentReceiptWithArtifacts({
             agentType: agentTypeStr,
             agentId: validated.subAgentState.agentId,
             handoff,

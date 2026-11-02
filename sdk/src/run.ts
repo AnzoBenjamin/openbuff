@@ -2880,6 +2880,8 @@ export async function handleToolCall({
     } else if (toolName === 'list_directory') {
       result = await listDirectory({
         directoryPath: (input as { path: string }).path,
+        offset: (input as { offset?: number }).offset,
+        limit: (input as { limit?: number }).limit,
         projectPath: requireCwd(cwd, 'list_directory'),
         fs,
         fileFilter,

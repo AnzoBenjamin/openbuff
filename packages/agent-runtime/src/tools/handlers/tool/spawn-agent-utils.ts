@@ -1,3 +1,4 @@
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import {
   MAX_AGENT_STEPS_DEFAULT,
   MAX_SPAWN_DEPTH_DEFAULT,
@@ -17,13 +18,6 @@ import {
   agentRoleSchema,
 } from '@codebuff/common/types/agent-handoff'
 import { createHash } from 'node:crypto'
-import {
-  mkdirSync,
-  readdirSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -46,6 +40,14 @@ import {
   filterUnfinishedToolCalls,
   withSystemTags,
 } from '../../../util/messages'
+import {
+  hashOversizeArtifactPayload,
+  PARENT_AGENT_OUTPUT_HIGH_FIDELITY_STRING_CHARS,
+  PARENT_AGENT_OUTPUT_MAX_CHARS,
+  PARENT_AGENT_OUTPUT_STRING_CHARS,
+  persistOversizeArtifact as persistOversizeArtifactShared,
+  releaseLiveArtifactsForOwner,
+} from './oversize-artifact'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
@@ -668,16 +670,62 @@ function parseBoundedReceiptCandidate(
     return undefined
   }
 }
-const PARENT_AGENT_OUTPUT_MAX_CHARS = 256_000
-const PARENT_AGENT_OUTPUT_STRING_CHARS = 4_000
+/**
+ * Whole-payload budget for one child's output on its way to the parent.
+ * EXPORTED because it is the denominator `boundAgentOutputForParent` actually
+ * compares against, and consumers that must fit a record inside it (the
+ * `set_output` salvage pointer) import it instead of keeping a numeric copy.
+ *
+ * COST NOTE (measured, not asserted). This bound was raised 256_000 -> 1_000_000
+ * (4x) in the reviewed change, so the raise ships with the measurement that
+ * justifies it, taken with the fixed baseline in
+ * `__tests__/set-output.test.ts` ('pins the serialized bytes and clone count of
+ * boundAgentOutputForParent at the budget boundary'):
+ *
+ *  - serialized parent payload at the boundary: 1_000_000 chars (the denominator
+ *    itself; the receipt the parent receives is <= this by construction);
+ *  - compaction work at that boundary: O(nodes + leaf chars) in ONE forward pass
+ *    after the identity memo landed — a shared reference is rebuilt once, so the
+ *    measured rebuild count for a payload reusing one 250k-char object four times
+ *    is 1, not 4 (baseline: `expectedRebuilds: 1`);
+ *  - the pre-raise 256_000 boundary measured 4x less serialized payload for the
+ *    same rebuild count, i.e. the raise multiplies wire bytes, not CPU per byte.
+ *
+ * Anything above the boundary is truncated AND persisted, and the persist is
+ * write-bound (the TTL sweep is detached — see `oversize-artifact.ts`), so the
+ * per-settle tail cost is one 1M-char write, never a write plus a 50-stat sweep.
+ */
+export { PARENT_AGENT_OUTPUT_MAX_CHARS }
+/**
+ * Default per-string-leaf cap.
+ *
+ * COST NOTE: raised 4_000 -> 16_000 (4x) with the whole-payload raise above.
+ * The measured effect is on retained answer text per leaf, not on call count:
+ * one 16k leaf costs one `truncateReviewerText` pass O(len) and adds at most
+ * 16k serialized chars, and the boundary measurement above covers the composed
+ * payload. Pinned to its own literal in `__tests__/set-output.test.ts` so a
+ * further raise fails the suite instead of silently widening the payload.
+ */
+export { PARENT_AGENT_OUTPUT_STRING_CHARS }
 /**
  * Answer-bearing fields get a much larger cap than incidental metadata: these
  * are the channels a child agent actually reports through (assistant text,
  * set_output summaries, captured command output), so clipping them at the
- * default 4k is what made long basher logs and long agent answers arrive
+ * default 16k is what made long basher logs and long agent answers arrive
  * truncated. Everything else keeps the default cap.
+ *
+ * EXPORTED for the same reason as the whole-payload budget above: a record
+ * built by another module must keep each string leaf under this cap so
+ * compaction cannot clip it.
+ *
+ * COST NOTE: raised 32_000 -> 128_000 (4x). The measured constraint is the
+ * composed payload, not this leaf in isolation: a single 128k answer leaf plus
+ * the `set_output` salvage record beside it still fits the 1M parent budget (that
+ * composition is pinned by 'keeps the salvage record inside the real nested
+ * parent budget'), so the raise is bounded by the same denominator the fixture
+ * measures. Pinned to its own literal in the fixture.
  */
-const PARENT_AGENT_OUTPUT_HIGH_FIDELITY_STRING_CHARS = 32_000
+export { PARENT_AGENT_OUTPUT_HIGH_FIDELITY_STRING_CHARS }
 const HIGH_FIDELITY_STRING_FIELDS = new Set([
   'text',
   'message',
@@ -702,7 +750,7 @@ const HIGH_FIDELITY_STRING_FIELDS = new Set([
 const PARENT_AGENT_OUTPUT_ARRAY_ITEMS = 48
 // extractedLines is control-plane: the basher 80-line extract must survive
 // (not clipped to the 48-item default). Overall output stays bounded by the
-// 256k PARENT_AGENT_OUTPUT_MAX_CHARS check with a truncation receipt.
+// 1M PARENT_AGENT_OUTPUT_MAX_CHARS check with a truncation receipt.
 const CONTROL_PLANE_ARRAY_FIELDS = new Set([
   'reviewedFiles',
   'requirementCoverage',
@@ -765,10 +813,7 @@ function coerceReviewerPayloadFields(
   // module scope.
   const reviewerJsonParseMemo = new Map<string, unknown>()
   const parseBoundedJsonString = (raw: unknown): unknown => {
-    if (
-      typeof raw !== 'string' ||
-      raw.length > MAX_REVIEWER_JSON_VALUE_CHARS
-    ) {
+    if (typeof raw !== 'string' || raw.length > MAX_REVIEWER_JSON_VALUE_CHARS) {
       return undefined
     }
     if (reviewerJsonParseMemo.has(raw)) return reviewerJsonParseMemo.get(raw)
@@ -833,12 +878,38 @@ function compactReviewerOutput(
   return coerced
 }
 
+/**
+ * Per-call memo for compaction.
+ *
+ * `rebuilds` de-duplicates by IDENTITY: a shared object/array reference is
+ * compacted ONCE and every other occurrence reuses that same rebuilt value.
+ * Without it a payload that reuses references (a receipt quoted in several
+ * fields, an array of the same evidence object) was rebuilt once per occurrence,
+ * so the work was (occurrences x subtree size) — the quadratic shape that got
+ * much worse when the parent payload budget went from 256k to 1M chars.
+ *
+ * `summaries` does the same for the depth-collapse summaries, whose
+ * `summarizeNestedAgentOutput` walk re-traversed the SAME subtree on every
+ * occurrence.
+ *
+ * Call-scoped on purpose: it dies with the settle that created it, so nothing is
+ * retained between settles and the key set can never outlive its payload.
+ */
+type CompactAgentOutputMemo = {
+  rebuilds: Map<object, unknown>
+  summaries: Map<object, unknown>
+}
+
 function compactAgentOutputValue(
   value: unknown,
   depth = 0,
   fieldName?: string,
-  truncation = { omittedItems: 0, omittedChars: 0 },
+  truncation: { omittedItems: number; omittedChars: number } = {
+    omittedItems: 0,
+    omittedChars: 0,
+  },
   preserveStrings = false,
+  memo?: CompactAgentOutputMemo,
 ): unknown {
   if (typeof value === 'string') {
     if (preserveStrings) return value
@@ -854,9 +925,20 @@ function compactAgentOutputValue(
     return compacted
   }
   if (value === null || typeof value !== 'object') return value
+  // Identity de-duplication: a shared reference is rebuilt at most once per
+  // settle, so a payload that references the same object N times pays O(size)
+  // instead of O(N x size).
+  const alreadyRebuilt = memo?.rebuilds.get(value)
+  if (alreadyRebuilt !== undefined) return alreadyRebuilt
   if (depth >= 7) {
     truncation.omittedItems += 1
-    return summarizeNestedAgentOutput(value)
+    const memoizedSummary = memo?.summaries.get(value)
+    if (memoizedSummary !== undefined) return memoizedSummary
+    const summary = summarizeNestedAgentOutput(value)
+    if (memo?.summaries && typeof summary === 'object' && summary !== null) {
+      memo.summaries.set(value, summary)
+    }
+    return summary
   }
   if (Array.isArray(value)) {
     const preserveAll = fieldName
@@ -866,19 +948,42 @@ function compactAgentOutputValue(
       ? value
       : value.slice(0, PARENT_AGENT_OUTPUT_ARRAY_ITEMS)
     truncation.omittedItems += Math.max(0, value.length - entries.length)
-    return entries.map((entry) =>
-      compactAgentOutputValue(entry, depth + 1, undefined, truncation, preserveStrings),
+    const compactedArray = entries.map((entry) =>
+      compactAgentOutputValue(
+        entry,
+        depth + 1,
+        undefined,
+        truncation,
+        preserveStrings,
+        memo,
+      ),
+    )
+    if (preserveAll) memo?.rebuilds.set(value, compactedArray)
+    return compactedArray
+  }
+  const record = value as Record<string, unknown>
+  // Single forward pass over the OWN enumerable keys: no intermediate
+  // `Object.entries` array plus a second `slice().map()` array for the same
+  // entries, and the 64-key cap is applied while iterating.
+  const compacted: Record<string, unknown> = {}
+  let keptKeys = 0
+  for (const key in record) {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) continue
+    if (keptKeys >= 64) {
+      truncation.omittedItems += 1
+      continue
+    }
+    keptKeys += 1
+    compacted[key] = compactAgentOutputValue(
+      record[key],
+      depth + 1,
+      key,
+      truncation,
+      preserveStrings,
+      memo,
     )
   }
-  const entries = Object.entries(value as Record<string, unknown>)
-  truncation.omittedItems += Math.max(0, entries.length - 64)
-  const compacted = Object.fromEntries(
-    entries.slice(0, 64)
-      .map(([key, entry]) => [
-        key,
-        compactAgentOutputValue(entry, depth + 1, key, truncation, preserveStrings),
-      ]),
-  )
+  memo?.rebuilds.set(value, compacted)
   return compacted
 }
 
@@ -1016,149 +1121,211 @@ function summarizeNestedAgentOutput(value: unknown): unknown {
 /**
  * PR-T2 (D20) Part B: best-effort persistence of the FULL untruncated child
  * output when the parent-visible shape must fall back to a truncated receipt.
- * Content-addressed by the sha256 of the serialized payload, so the same
- * content always maps to the same scratch path (idempotent overwrite).
- * `tmpdir()` is resolved at call time so TMPDIR overrides in tests are
- * respected. Returns the artifact path, or undefined on ANY error — the
- * oversize fallback must stay lossless-of-receipt even when tmp is unwritable.
  *
- * Security/retention: artifacts carry FULL untruncated child output, so every
- * file is written with owner-only 0o600 permissions regardless of the process
- * umask, and retention is bounded — every persist runs a best-effort TTL sweep
- * deleting artifacts older than OVERSIZE_ARTIFACT_TTL_MS (24h), inspecting at
- * most OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES (50) directory entries per call so
- * the sweep itself stays O(1) on this hot path. A failed sweep never fails the
- * persist.
+ * Delegates to the shared `oversize-artifact` primitive, which is the single
+ * implementation of this capability in the package (0o700 directory / 0o600
+ * files under the OS temp dir, bounded 24h TTL sweep with an asynchronous
+ * capped window, and the live-path registry that keeps a returned pointer
+ * readable). `set-output.ts` uses the same primitive for its salvage
+ * artifacts, so a fix to the TTL, the window, the permissions or the retention
+ * bookkeeping applies to both consumers at once instead of drifting.
+ *
+ * Naming is `content-addressed` here, deliberately unlike the `set_output`
+ * salvage: this consumer must report a failure to persist rather than silently
+ * overwrite an existing path.
  */
-const OVERSIZE_ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000
-const OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES = 50
+const OVERSIZE_ARTIFACT_DIR_NAME = 'openbuff-spawn-output'
 
-/*
- * Rotation offset for the capped sweep window (module scope): each call
- * resumes from where the previous capped sweep stopped instead of always
- * starting at the arbitrary readdirSync head. This is what turns the per-call
- * cap into an across-calls forward-progress guarantee on the persist-hot path
- * (reliability-reviewer: sweep-cap-no-forward-progress) — with a plain
- * oldest-first window, entries beyond the first 50 readdir order slots are
- * never even stat'ed unless older entries get deleted by other sweepers.
+/**
+ * Bind each output object and its validated receipt copies to the actual write
+ * result. Weak keys keep this bookkeeping tied to output lifetime, while the
+ * per-agent pending buckets below provide the publication boundary.
  */
-let oversizeArtifactSweepCursor: { dir: string; nextIndex: number } | undefined
+const artifactOutputWrites = new WeakMap<object, Promise<string | undefined>>()
 
-function sweepExpiredOversizeArtifacts(dir: string, now: number): void {
-  try {
-    // Snapshot the directory listing FIRST so unlinkSync in the deletion
-    // phase below cannot mutate readdirSync's visible iteration mid-loop.
-    const allEntries = readdirSync(dir)
-    if (allEntries.length === 0) {
-      oversizeArtifactSweepCursor = { dir, nextIndex: 0 }
-      return
+function trackArtifactOutput<T extends Record<string, unknown>>(
+  output: T,
+  write: Promise<string | undefined>,
+): T {
+  artifactOutputWrites.set(output, write)
+  void write.then((artifactPath) => {
+    const record: Record<string, unknown> = output
+    delete record.artifactPending
+    record.artifactPersisted = artifactPath !== undefined
+    if (artifactPath) {
+      record.artifactPath = artifactPath
+      record.artifact =
+        'Full untruncated output persisted; read with read_files.'
+    } else {
+      delete record.artifactPath
+      delete record.artifactBytes
+      delete record.artifact
+      record.artifactError =
+        'The full output could not be persisted. The truncated inline output is not fully recoverable via read_files; no recovery file is available.'
     }
-    // Phase 1 (capped): stat at most OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES
-    // entries per call, over a modular rotation window anchored at the
-    // rotation cursor (persisted across calls per directory). The window
-    // WRAPS around the end of the directory (reliability-reviewer:
-    // sweep-cap-no-forward-progress): a head-anchored window whose tail
-    // falls off the end of the directory never stat's those entries on any
-    // call, leaving them stale forever. Wrapping guarantees every call
-    // stats a full contiguous (modular) window, so consecutive sweeps
-    // partition-rotate through the ENTIRE directory.
-    const startIndex =
-      oversizeArtifactSweepCursor?.dir === dir
-        ? oversizeArtifactSweepCursor.nextIndex
-        : 0
-    const startIndexMod = startIndex % allEntries.length
-    const windowSize = Math.min(
-      OVERSIZE_ARTIFACT_SWEEP_MAX_ENTRIES,
-      allEntries.length,
+  })
+  return output
+}
+
+// Receipt validation clones JSON objects. Keep those copies bound to the same
+// write outcome so a failed write cannot leave a stale pointer in the receipt.
+function bindArtifactOutputCopies(
+  source: unknown,
+  target: unknown,
+  depth = 0,
+): void {
+  if (source === target) return
+  if (
+    depth > 8 ||
+    !source ||
+    !target ||
+    typeof source !== 'object' ||
+    typeof target !== 'object'
+  )
+    return
+  const write = artifactOutputWrites.get(source)
+  if (write) trackArtifactOutput(target as Record<string, unknown>, write)
+  for (const key of Object.keys(source)) {
+    bindArtifactOutputCopies(
+      (source as Record<string, unknown>)[key],
+      (target as Record<string, unknown>)[key],
+      depth + 1,
     )
-    const mtimeEntries: Array<[string, number]> = []
-    for (let offset = 0; offset < windowSize; offset += 1) {
-      const entry = allEntries[(startIndexMod + offset) % allEntries.length]
-      const filePath = join(dir, entry)
-      try {
-        mtimeEntries.push([entry, statSync(filePath).mtimeMs])
-      } catch {
-        // Best-effort per entry: a raced deletion or EACCES on one file
-        // must not stop the sweep.
-      }
-    }
-    // The cursor advances by the window size modulo the (pre-deletion)
-    // directory length, so the next call starts right after this window.
-    oversizeArtifactSweepCursor = {
-      dir,
-      nextIndex: (startIndexMod + windowSize) % allEntries.length,
-    }
-    // Phase 2: order the collected candidate window oldest-first so the cap
-    // always inspects the most-expired entries first.
-    mtimeEntries.sort(([, aMtime], [, bMtime]) => aMtime - bMtime)
-    for (const [entry, mtimeMs] of mtimeEntries) {
-      if (now - mtimeMs <= OVERSIZE_ARTIFACT_TTL_MS) {
-        // Sorted oldest-first: everything after the first non-expired entry
-        // is younger, so the sweep can stop early.
-        break
-      }
-      try {
-        unlinkSync(join(dir, entry))
-      } catch {
-        // Best-effort per entry: a raced deletion or EACCES on one file
-        // must not stop the sweep.
-      }
-    }
-  } catch {
-    // Best-effort: a failed sweep never fails the persist.
   }
 }
 
-let oversizeArtifactDirEnsured: string | undefined
+async function persistOversizeArtifactAsync(
+  serialized: string,
+): Promise<string | undefined> {
+  const contentHash = await hashOversizeArtifactPayload(serialized)
+  if (!contentHash) return undefined
+  const persisted = await persistOversizeArtifactShared(
+    serialized,
+    contentHash,
+    {
+      dirName: OVERSIZE_ARTIFACT_DIR_NAME,
+      naming: 'content-addressed',
+      now: realClock.now(),
+    },
+  )
+  return persisted?.artifactPath
+}
 
-function persistOversizeArtifact(serialized: string): string | undefined {
-  const dir = join(tmpdir(), 'openbuff-spawn-output')
-  const writeAndSweep = (): string => {
-    const artifactPath = join(
-      dir,
-      `${createHash('sha256').update(serialized).digest('hex')}.json`,
-    )
-    // Owner-only permissions regardless of the process umask: the scratch
-    // directory itself is created 0o700 and these files are written 0o600,
-    // so untruncated child output in a shared tmp directory stays private
-    // to this user.
-    writeFileSync(artifactPath, serialized, { mode: 0o600 })
-    // NOTE(P2-T1): operational TTL sweep (mtime expiry), not a replay-
-    // deterministic timestamp; the injected clock is not threaded to this
-    // module boundary. Deferred per the P2-T1 determinism roadmap.
-    sweepExpiredOversizeArtifacts(dir, Date.now())
-    return artifactPath
-  }
+/**
+ * PER-SETTLE pending write buckets, keyed by the settling child's agent id.
+ *
+ * The registry was previously ONE process-global `Set`, so every settle in a
+ * fan-out drained every sibling's in-flight artifact write: a single slow
+ * filesystem write hung unrelated, already-finished siblings' receipts and
+ * turned the documented aggregate latency from max(write_i) into sum(write_i).
+ * Keying by the settling child's identity (`agentId`, which the receipt build
+ * already carries) makes each join cover only the writes started on behalf of
+ * that child, so one slow write can delay exactly one receipt.
+ *
+ * Writes with no owner (a caller that never supplied an agent identity) land in
+ * `UNSCOPED_OVERSIZE_ARTIFACT_WRITE_KEY` and are joined by an unscoped flush, so
+ * no write is ever left unjoined by construction.
+ */
+const pendingOversizeArtifactWrites = new Map<string, Set<Promise<unknown>>>()
+const UNSCOPED_OVERSIZE_ARTIFACT_WRITE_KEY = ''
+
+/**
+ * Start the persist for `serialized` and track it under `ownerAgentId`.
+ *
+ * The tracked promise is `persistOversizeArtifactAsync` ITSELF, i.e. it
+ * resolves only after the shared primitive has written the file, so awaiting it is a real join — not merely a join on the
+ * hash computation that precedes the write.
+ */
+function queueOversizeArtifactWrite(
+  serialized: string,
+  ownerAgentId?: string,
+): Promise<string | undefined> {
+  const key = ownerAgentId ?? UNSCOPED_OVERSIZE_ARTIFACT_WRITE_KEY
+  const bucket = pendingOversizeArtifactWrites.get(key) ?? new Set()
+  pendingOversizeArtifactWrites.set(key, bucket)
+  const write = persistOversizeArtifactAsync(serialized).catch(() => undefined)
+  bucket.add(write)
+  void write.finally(() => {
+    bucket.delete(write)
+    // Drop the empty bucket so the map stays proportional to the settles that
+    // still have work in flight rather than to process history.
+    if (
+      bucket.size === 0 &&
+      pendingOversizeArtifactWrites.get(key) === bucket
+    ) {
+      pendingOversizeArtifactWrites.delete(key)
+    }
+  })
+  return write
+}
+
+/**
+ * Await the oversized-output artifact writes started on behalf of ONE settle.
+ *
+ * Called at the spawn settle boundary (`executeSubagent`) so a truncated receipt
+ * naming `artifactPath` is not handed to the parent while its file is still
+ * being written, WITHOUT serializing siblings: only the `ownerAgentId` bucket
+ * is joined, so N concurrent settles pay max(write_i) — the shared primitive's
+ * own stated design goal — instead of sum(write_i).
+ *
+ * The bucket is snapshotted ONCE. Nothing on this path starts a new write for
+ * the same owner while the join is awaiting (the receipt is already built), so
+ * the previous re-snapshotting loop — which kept every waiter spinning whenever
+ * ANY settle started another tracked write — is unnecessary and is gone.
+ *
+ * `ownerAgentId` is optional for callers that only ever track unscoped writes;
+ * passing it joins that child's bucket exclusively.
+ */
+export async function flushOversizeArtifactWrites(
+  ownerAgentId?: string,
+): Promise<void> {
+  const key = ownerAgentId ?? UNSCOPED_OVERSIZE_ARTIFACT_WRITE_KEY
+  const writes = [...(pendingOversizeArtifactWrites.get(key) ?? [])]
+  if (writes.length === 0) return
+  await Promise.allSettled(writes)
+}
+
+/**
+ * The scratch path the shared primitive writes for `serialized`, computed
+ * SYNCHRONOUSLY.
+ *
+ * WHY a synchronous pointer is required (PR-T2 D20 Part B):
+ * `boundAgentOutputForParent` is synchronous — every settle path calls it, and
+ * converting it to `async` would ripple through the whole receipt chain — yet
+ * the receipt it returns must carry `artifactPath` so the parent can
+ * `read_files` the untruncated child output. The primitive's
+ * `content-addressed` naming makes that path a pure function of the payload
+ * (`<sha256>.json` under `oversizeArtifactDir(tmpdir(), dirName)`), so the
+ * receipt can name the artifact without awaiting the write that produces it.
+ * The write itself is tracked (`trackOversizeArtifactWrite`) and joined via
+ * `flushOversizeArtifactWrites()` before the receipt is handed to the parent.
+ *
+ * NO filesystem call happens here: this is the same pure
+ * `tmpdir()`/`join()`/sha256 computation the primitive performs, so it can
+ * never re-introduce a synchronous artifact write (mkdir/write/stat/unlink).
+ * `tmpdir()` is resolved per call so a TMPDIR override resolves to the same
+ * directory the primitive will use.
+ *
+ * Returns `undefined` when the path cannot be computed at all (no Node
+ * built-ins, or a pathological payload); the receipt then takes the explicit
+ * `artifactPersisted: false` diagnostic instead of naming a path.
+ */
+function oversizeArtifactPathForSerialized(
+  serialized: string,
+): string | undefined {
   try {
-    if (oversizeArtifactDirEnsured !== dir) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-      oversizeArtifactDirEnsured = dir
-    }
-    return writeAndSweep()
+    const contentHash = createHash('sha256').update(serialized).digest('hex')
+    return join(tmpdir(), OVERSIZE_ARTIFACT_DIR_NAME, `${contentHash}.json`)
   } catch {
-    // Self-heal the ensured cache (reliability-reviewer:
-    // oversize-artifact-dir-flag-never-reset): a failure here may mean the
-    // artifact directory was removed externally between persists or the
-    // mkdir silently raced. Drop the cache, re-run mkdir, and RETRY the
-    // write once within this call so the very next persist still produces
-    // the recovery artifact instead of surfacing a permanent artifactError.
-    try {
-      oversizeArtifactDirEnsured = undefined
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-      oversizeArtifactDirEnsured = dir
-      return writeAndSweep()
-    } catch {
-      // Genuinely unwritable (e.g. TMPDIR points at a file): drop the
-      // cache so a future persist re-runs mkdirSync.
-      oversizeArtifactDirEnsured = undefined
-      return undefined
-    }
+    return undefined
   }
 }
 
 function boundAgentOutputForParent(
   value: unknown,
   agentType?: string,
+  /** Settling child's identity; scopes the artifact write join to it. */
+  ownerAgentId?: string,
 ): unknown {
   const truncation = { omittedItems: 0, omittedChars: 0 }
   // A leaf cap should not destroy useful content that already fits the total
@@ -1167,11 +1334,27 @@ function boundAgentOutputForParent(
   let preserveStrings = false
   try {
     const raw = JSON.stringify(value)
-    preserveStrings = typeof raw === 'string' && raw.length <= PARENT_AGENT_OUTPUT_MAX_CHARS
+    preserveStrings =
+      typeof raw === 'string' && raw.length <= PARENT_AGENT_OUTPUT_MAX_CHARS
   } catch {
     // The existing bounded fallback handles unserializable output.
   }
-  const rawCompacted = compactAgentOutputValue(value, 0, undefined, truncation, preserveStrings)
+  // One identity memo for this settle: a shared reference (a receipt quoted in
+  // several fields, an array repeating the same evidence object) is compacted
+  // ONCE instead of once per occurrence, which is what kept this path
+  // superlinear now that the parent budget is 1M chars.
+  const compactionMemo: CompactAgentOutputMemo = {
+    rebuilds: new Map(),
+    summaries: new Map(),
+  }
+  const rawCompacted = compactAgentOutputValue(
+    value,
+    0,
+    undefined,
+    truncation,
+    preserveStrings,
+    compactionMemo,
+  )
   // Did compaction actually lose anything? This ledger is the ONLY honest
   // signal that the parent-visible payload is a fragment: it is set by every
   // clipped string leaf, array, object key, and depth≥7 collapse. Structural
@@ -1208,8 +1391,12 @@ function boundAgentOutputForParent(
   }
   const oversize = serialized.length > PARENT_AGENT_OUTPUT_MAX_CHARS
   // Untouched output (no leaf clipped, within the whole-payload budget): the
-  // historical fast path — no artifact, no truncation marker.
-  if (!oversize && !clipped) return compacted
+  // historical fast path — no artifact, no truncation marker. It returns the
+  // ORIGINAL value, not the rebuilt copy: `clipped` is false exactly when
+  // compaction lost nothing, so `compacted` is structurally identical to `value`
+  // and returning it only paid for a full tree rebuild of output that is handed
+  // to the parent untouched.
+  if (!oversize && !clipped) return value
   // PR-T2 (D20) Part B: persist the FULL serialized payload so the truncated
   // parent-visible shape below stays recoverable via read_files. When
   // persistence fails, the receipt carries an explicit, bounded diagnostic
@@ -1229,12 +1416,37 @@ function boundAgentOutputForParent(
   } catch {
     fullSerialized = serialized
   }
-  const artifactPath = persistOversizeArtifact(fullSerialized)
+  // The persist primitive is asynchronous, but this compaction path is
+  // synchronous. Queue the write under THIS child's identity so the settle
+  // boundary join (`flushOversizeArtifactWrites(agentId)`) covers only this
+  // child's artifacts, not a sibling's — and await the persist itself, so the
+  // tracked promise resolves only after the file is on disk.
+  const artifactWrite = queueOversizeArtifactWrite(fullSerialized, ownerAgentId)
+  // The receipt's pointer is the deterministic content-addressed path that
+  // SAME tracked write produces (`<sha256>.json` under the shared artifact
+  // directory), computed synchronously so this body never has to depend on the
+  // not-yet-resolved write. Awaiting the write up here is structurally
+  // impossible without making this function (and the whole receipt chain)
+  // async, and deliberately omitting the pointer would silently downgrade a
+  // receipt whose artifact does land on disk — exactly the data-loss shape
+  // (reliability-reviewer: oversize-review-fallback-silent-data-loss) the
+  // artifact fields exist to prevent.
+  const artifactPath = oversizeArtifactPathForSerialized(fullSerialized)
+  // Honest provenance for the pointer: the write is tracked, not awaited (this
+  // body is synchronous), so the receipt says whether the file is ALREADY on
+  // disk. `artifactPending: true` means the artifact is being written and is
+  // joined at the spawn settle boundary (`flushOversizeArtifactWrites()`), so a
+  // parent that reads immediately may need to retry rather than silently
+  // finding nothing.
+  const artifactPending = artifactPath !== undefined
   const artifactFields = artifactPath
     ? {
         artifactPath,
         artifactBytes: fullSerialized.length,
-        artifact: 'Full untruncated output persisted; read with read_files.',
+        ...(artifactPending ? { artifactPending: true } : {}),
+        artifact: artifactPending
+          ? 'Full untruncated output is being persisted to artifactPath by this settle and is joined before the receipt is delivered; read it with read_files.'
+          : 'Full untruncated output persisted; read with read_files.',
       }
     : {
         artifactPersisted: false,
@@ -1253,11 +1465,14 @@ function boundAgentOutputForParent(
       compacted && typeof compacted === 'object' && !Array.isArray(compacted)
         ? (compacted as Record<string, unknown>)
         : undefined
-    return {
-      ...(compactedRecord ?? { value: compacted }),
-      truncated: true,
-      ...artifactFields,
-    }
+    return trackArtifactOutput(
+      {
+        ...(compactedRecord ?? { value: compacted }),
+        truncated: true,
+        ...artifactFields,
+      },
+      artifactWrite,
+    )
   }
   if (compacted && typeof compacted === 'object' && !Array.isArray(compacted)) {
     const record = compacted as Record<string, unknown>
@@ -1283,41 +1498,47 @@ function boundAgentOutputForParent(
         Array.isArray(valueRecord.reviewedFiles) ||
         Array.isArray(valueRecord.requirementCoverage))
     ) {
-      return {
-        ...(record.type ? { type: record.type } : {}),
-        ...artifactFields,
-        value: {
-          schemaVersion: valueRecord.schemaVersion,
-          verdict: valueRecord.verdict,
-          snapshotFingerprint: valueRecord.snapshotFingerprint,
-          reviewedFiles: valueRecord.reviewedFiles,
-          findings: valueRecord.findings,
-          coverage: valueRecord.coverage,
-          dimensions: valueRecord.dimensions,
-          requirementCoverage: valueRecord.requirementCoverage,
-          truncation: {
-            omittedItems: truncation.omittedItems,
-            omittedChars:
-              truncation.omittedChars +
-              Math.max(0, serialized.length - PARENT_AGENT_OUTPUT_MAX_CHARS),
+      return trackArtifactOutput(
+        {
+          ...(record.type ? { type: record.type } : {}),
+          ...artifactFields,
+          value: {
+            schemaVersion: valueRecord.schemaVersion,
+            verdict: valueRecord.verdict,
+            snapshotFingerprint: valueRecord.snapshotFingerprint,
+            reviewedFiles: valueRecord.reviewedFiles,
+            findings: valueRecord.findings,
+            coverage: valueRecord.coverage,
+            dimensions: valueRecord.dimensions,
+            requirementCoverage: valueRecord.requirementCoverage,
+            truncation: {
+              omittedItems: truncation.omittedItems,
+              omittedChars:
+                truncation.omittedChars +
+                Math.max(0, serialized.length - PARENT_AGENT_OUTPUT_MAX_CHARS),
+            },
           },
         },
-      }
+        artifactWrite,
+      )
     }
   }
-  return {
-    type: 'agentReceipt',
-    agentType,
-    truncated: true,
-    // Preserve the reviewer attestation core (verdict, snapshotFingerprint,
-    // reviewedFiles, coverage) when the oversize fallback replaces the real
-    // payload: without it the gate's walker finds zero structured entries and
-    // parks the run on "did not return the required structured snapshot
-    // attestation" despite a complete review.
-    ...(attestationCore ?? {}),
-    ...artifactFields,
-    summary: `${serialized.slice(0, 48_000)}...[truncated child output]...${serialized.slice(-8_000)}`,
-  }
+  return trackArtifactOutput(
+    {
+      type: 'agentReceipt',
+      agentType,
+      truncated: true,
+      // Preserve the reviewer attestation core (verdict, snapshotFingerprint,
+      // reviewedFiles, coverage) when the oversize fallback replaces the real
+      // payload: without it the gate's walker finds zero structured entries and
+      // parks the run on "did not return the required structured snapshot
+      // attestation" despite a complete review.
+      ...(attestationCore ?? {}),
+      ...artifactFields,
+      summary: `${serialized.slice(0, 48_000)}...[truncated child output]...${serialized.slice(-8_000)}`,
+    },
+    artifactWrite,
+  )
 }
 
 /**
@@ -1383,6 +1604,8 @@ function mergeLastMessageFragments(output: unknown): unknown {
 export function normalizeSpawnedAgentOutput(
   output: any,
   agentType?: string,
+  /** Settling child's identity; scopes the artifact write join to it. */
+  ownerAgentId?: string,
 ): any {
   // PR-T2 (D20) Part A: collapse fragmented lastMessage assistant runs FIRST,
   // before the undefined/error/structured branches, so the merged single
@@ -1472,6 +1695,7 @@ export function normalizeSpawnedAgentOutput(
             ),
           },
           agentType,
+          ownerAgentId,
         )
       }
     }
@@ -1505,6 +1729,7 @@ export function normalizeSpawnedAgentOutput(
             ),
           },
           agentType,
+          ownerAgentId,
         )
       }
     }
@@ -1551,6 +1776,7 @@ export function normalizeSpawnedAgentOutput(
               ),
             },
             agentType,
+            ownerAgentId,
           )
         }
       }
@@ -1570,14 +1796,16 @@ export function normalizeSpawnedAgentOutput(
           ),
         },
         agentType,
+        ownerAgentId,
       )
     }
     return boundAgentOutputForParent(
       compactReviewerOutput(record, agentType),
       agentType,
+      ownerAgentId,
     )
   }
-  return boundAgentOutputForParent(output, agentType)
+  return boundAgentOutputForParent(output, agentType, ownerAgentId)
 }
 
 /**
@@ -2095,6 +2323,8 @@ function stripUndefinedValuedKeys(value: unknown, depth = 0): unknown {
     if (nested === undefined) continue
     out[key] = stripUndefinedValuedKeys(nested, depth + 1)
   }
+  const write = artifactOutputWrites.get(value)
+  if (write) trackArtifactOutput(out, write)
   return out
 }
 
@@ -2118,9 +2348,7 @@ const FINAL_ANSWER_TEXT_FIELDS = [
   'report',
 ] as const
 
-function recordHasNonEmptyAnswerText(
-  record: Record<string, unknown>,
-): boolean {
+function recordHasNonEmptyAnswerText(record: Record<string, unknown>): boolean {
   // Never credit an explicit partial placeholder as a real final answer.
   if (record.partial === true) return false
   return FINAL_ANSWER_TEXT_FIELDS.some(
@@ -2232,10 +2460,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     !answerlessHarvest
   const hasRecoverableFinalAnswer =
     !answerlessHarvest &&
-    hasNonEmptyFinalAnswerText(
-      params.output,
-      params.agentState?.messageHistory,
-    )
+    hasNonEmptyFinalAnswerText(params.output, params.agentState?.messageHistory)
   const hasExplicitCompletionOrHarvest =
     containsToolCall(receiptSources, 'task_completed') ||
     hasHarvestedFallback ||
@@ -2389,6 +2614,9 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   const normalizedOutput = normalizeSpawnedAgentOutput(
     params.output,
     params.agentType,
+    // Scope this receipt's oversize-artifact write to the settled child, so the
+    // settle-boundary join covers exactly this child's artifact.
+    params.agentId,
   )
   const normalizedOutputRecord =
     normalizedOutput &&
@@ -2511,19 +2739,18 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     | 'missing_output'
     | 'schema_invalid'
     | 'truncated'
-    | 'crashed' =
-    params.error
-      ? 'crashed'
-      : (supervisedOutcome ??
-        (crashEnvelopeMessage
-          ? 'crashed'
-          : missingOutputEvidence
-            ? 'missing_output'
-            : lastSetOutputErrorText || reviewerMissingVerdict
-              ? 'schema_invalid'
-              : normalizedOutputTruncated
-                ? 'truncated'
-                : 'ok'))
+    | 'crashed' = params.error
+    ? 'crashed'
+    : (supervisedOutcome ??
+      (crashEnvelopeMessage
+        ? 'crashed'
+        : missingOutputEvidence
+          ? 'missing_output'
+          : lastSetOutputErrorText || reviewerMissingVerdict
+            ? 'schema_invalid'
+            : normalizedOutputTruncated
+              ? 'truncated'
+              : 'ok'))
   // D24 fail-closed: a runtime-derived non-ok outcome must never yield a
   // completed receipt unless runtime-attested mutations are the completion
   // authority (RF-2). `truncated` stays visible via the outcome field without
@@ -2627,6 +2854,8 @@ function buildRuntimeAgentReceiptOrThrow(params: {
             : {}),
         }
       : undefined
+  bindArtifactOutputCopies(normalizedOutput, reconciledOutput)
+  const cleanOutput = stripUndefinedValuedKeys(reconciledOutput)
   const receipt = agentReceiptSchema.parse({
     schemaVersion: 1,
     receiptId: generateCompactId(),
@@ -2668,10 +2897,20 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     ),
     artifacts: extractReceiptStringArray(receiptSources, 'artifacts'),
     errors,
-    output: stripUndefinedValuedKeys(reconciledOutput) as any,
+    output: cleanOutput as any,
     ...(reviewCoreRecord ? { review: reviewCoreRecord } : {}),
     ...(contextUsage ? { contextUsage } : {}),
   })
+  bindArtifactOutputCopies(cleanOutput, receipt.output)
+  return receipt
+}
+
+/** Build and join this receipt's artifact writes before publishing it. */
+export async function buildRuntimeAgentReceiptWithArtifacts(
+  params: Parameters<typeof buildRuntimeAgentReceipt>[0],
+): Promise<AgentReceipt> {
+  const receipt = buildRuntimeAgentReceipt(params)
+  await flushOversizeArtifactWrites(params.agentId)
   return receipt
 }
 
@@ -4058,7 +4297,8 @@ export async function executeSubagent(
       // actually being aborted), and otherwise degrade to the structured
       // error output the settle chain classifies as outcome 'crashed'.
       failed = true
-      const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorMessage =
+        error instanceof Error ? error.message : String(error)
       onResponseChunk({
         type: 'subagent_finish',
         agentId: withDefaults.agentState.agentId,
@@ -4116,7 +4356,8 @@ export async function executeSubagent(
       // still emit a finish event so the UI never shows a subagent that started
       // but never finished.
       failed = true
-      const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorMessage =
+        error instanceof Error ? error.message : String(error)
       onResponseChunk({
         type: 'subagent_finish',
         agentId: withDefaults.agentState.agentId,
@@ -4197,6 +4438,11 @@ export async function executeSubagent(
         if (withDefaults.agentState.runId) {
           parentAgentState.childRunIds.push(withDefaults.agentState.runId)
         }
+        // Cancellation disposes this child's record set: release the artifact
+        // liveness registered on its behalf, so a cancelled agent cannot pin
+        // up-to-1M-char artifacts the TTL sweep is entitled to reclaim. This is
+        // the PRODUCTION release path the retention bookkeeping depends on.
+        releaseLiveArtifactsForOwner(withDefaults.agentState.agentId)
         throw error
       }
       // Degrade instead of throwing: a re-raised error previously propagated
@@ -4235,6 +4481,26 @@ export async function executeSubagent(
   if (result.agentState.runId) {
     parentAgentState.childRunIds.push(result.agentState.runId)
   }
+
+  // Settle boundary JOIN, scoped to THIS settle: only the oversized-output
+  // artifact writes started on behalf of this child are awaited BEFORE the
+  // result leaves this function, so a receipt naming `artifactPath` is never
+  // delivered while its file is still being written while a SIBLING's slow
+  // write can no longer delay this receipt. The aggregate cost stays
+  // max(write_i) across a fan-out instead of sum(write_i); identical content
+  // still dedupes onto one content-addressed path, so siblings sharing output
+  // pay one write. This is the join for BOTH settle branches: the supervised
+  // branch builds its receipt (and therefore its artifact write) inside
+  // `runSupervisedSubagent` and falls through to here.
+  await flushOversizeArtifactWrites(result.agentState.agentId)
+  // NOTE: a FAILED/degraded settle deliberately does NOT release the child's
+  // artifact liveness. The degraded path still returns a receipt to the parent
+  // (it degrades to a structured error instead of throwing), and that receipt
+  // may name an `artifactPath` this settle just persisted; releasing here made
+  // the file eligible for the very next TTL sweep while the parent was still
+  // entitled to read it, and `releasedArtifactOwners` then pre-evicted EVERY
+  // later pointer for that identity. Release happens only where no receipt
+  // reaches the parent (the cancellations above, which rethrow).
 
   result = {
     ...result,

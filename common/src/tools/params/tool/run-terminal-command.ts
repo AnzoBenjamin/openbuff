@@ -16,10 +16,12 @@ export const terminalCommandOutputSchema = z.union([
     exitCode: z.number().optional(),
     /** Project-relative paths newly dirtied by a SYNC command (post − pre git status). */
     touchedPaths: z.array(z.string()).optional(),
-    /** Output persisted to a scratch file when the inline result was truncated (the artifact covers the accumulated stream, itself capped at the mid-stream limit); read with read_logs/read_files. */
+    /** Full streamed output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
     fullLogPath: z.string().optional(),
     /** Byte length of the persisted full-output artifact. */
     logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
   }),
   z.object({
     command: z.string(),
@@ -36,6 +38,8 @@ export const terminalCommandOutputSchema = z.union([
     fullLogPath: z.string().optional(),
     /** Byte length of the persisted full-output artifact. */
     logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
   }),
   z.object({
     command: z.string(),
@@ -84,10 +88,12 @@ export const terminalCommandOutputSchema = z.union([
     startingCwd: z.string().optional(),
     /** Project-relative paths newly dirtied before timeout/spawn failure (best-effort). */
     touchedPaths: z.array(z.string()).optional(),
-    /** Output persisted to a scratch file when the inline result was truncated (the artifact covers the accumulated stream, itself capped at the mid-stream limit); read with read_logs/read_files. */
+    /** Full streamed output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
     fullLogPath: z.string().optional(),
     /** Byte length of the persisted full-output artifact. */
     logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
   }),
 ])
 

@@ -1,5 +1,7 @@
 # Common Package Knowledge
 
+- Output budgets: `common/src/tools/results/filesystem.ts` allows 10 MiB per read block; job output retention defaults to 1 MiB. `list_directory` exposes paginated `offset`/`limit` input and `truncated`/`nextOffset` output. Terminal results can report unavailable full logs explicitly. Complete large `set_output` objects remain eligible for schema validation; undecodable large strings use artifact recovery.
+
 This package contains code shared across the Openbuff monorepo, especially the local/BYOK `cli`, `sdk`, agents, and runtime packages.
 
 ## Shared Provider and Message Boundaries

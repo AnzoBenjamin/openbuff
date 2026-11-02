@@ -12,11 +12,9 @@
 //    each fail mode is load-bearing on its own path.
 
 /**
- * Hard ceiling on the serialized JSON text accepted in the set_output `data`
- * field. Oversized payloads historically slipped through decoding and vanished
- * downstream as transport-truncated garbage, so oversize is rejected before any
- * decode attempt — with explicit recovery guidance instead of failing silently
- * (M0-T3 sub-agent output durability).
+ * Parse bound for envelope recovery and inline salvage threshold for
+ * undecodable set_output strings. Complete native or decoded output objects
+ * follow normal schema validation; oversized text stays recoverable on disk.
  */
 export const MODEL_PAYLOAD_JSON_CHAR_LIMIT = 1_000_000
 

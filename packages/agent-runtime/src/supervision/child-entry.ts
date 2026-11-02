@@ -807,6 +807,7 @@ export async function runSupervisedChildEntry(
     agentState: unknown
     output: unknown
   }>
+  let flushArtifactWrites: (agentId: string) => Promise<void>
   let buildRuntimeAgentReceiptFn: (params: {
     agentType: string
     agentId: string
@@ -815,10 +816,11 @@ export async function runSupervisedChildEntry(
     error?: unknown
   }) => AgentReceipt
   try {
-    const [{ loopAgentSteps }, { buildRuntimeAgentReceipt }] = await Promise.all([
+    const [{ loopAgentSteps }, { buildRuntimeAgentReceipt, flushOversizeArtifactWrites }] = await Promise.all([
       import('../run-agent-step'),
       import('../tools/handlers/tool/spawn-agent-utils'),
     ])
+    flushArtifactWrites = flushOversizeArtifactWrites
     loopAgentStepsFn = loopAgentSteps as unknown as typeof loopAgentStepsFn
     buildRuntimeAgentReceiptFn =
       buildRuntimeAgentReceipt as unknown as typeof buildRuntimeAgentReceiptFn
@@ -982,13 +984,15 @@ export async function runSupervisedChildEntry(
     // this process. Crash receipts carry no evidence by construction —
     // buildFailedChildReceipt runs where the thrown loop's agentState is
     // unreachable.
-    return buildSupervisedSuccessReceipt({
+    const receipt = buildSupervisedSuccessReceipt({
       agentType: request.agentType,
       agentId,
       output: loopResult.output,
       agentState: loopResult.agentState,
       buildRuntimeAgentReceipt: buildRuntimeAgentReceiptFn,
     })
+    await flushArtifactWrites(agentId)
+    return receipt
   } catch (error) {
     return buildFailedChildReceipt({
       agentType: request.agentType,

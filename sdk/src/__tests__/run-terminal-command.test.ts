@@ -308,7 +308,9 @@ describe('runTerminalCommand cwd containment', () => {
       }
 
       expect(job?.status).toBe('error')
-      expect(fs.statSync(job!.logFile).size).toBeLessThanOrEqual(10 * 1024 * 1024)
+      expect(fs.statSync(job!.logFile).size).toBeLessThanOrEqual(
+        10 * 1024 * 1024,
+      )
     } finally {
       if (value?.jobId !== undefined) {
         killBackgroundJob(value.jobId, 'SIGKILL')
@@ -501,11 +503,7 @@ describe('runTerminalCommand staged-commit safety preflight', () => {
     })
   }
 
-  function stageFile(
-    projectRoot: string,
-    name: string,
-    content: string,
-  ): void {
+  function stageFile(projectRoot: string, name: string, content: string): void {
     fs.writeFileSync(path.join(projectRoot, name), content)
     const added = spawnSync('git', ['add', name], {
       cwd: projectRoot,
@@ -560,11 +558,7 @@ describe('runTerminalCommand staged-commit safety preflight', () => {
   it('blocks a commit whose staged content holds private-key material', async () => {
     const projectRoot = initTempGitRepo('terminal-staged-secret-content-')
     try {
-      stageFile(
-        projectRoot,
-        'notes.txt',
-        '-----BEGIN RSA PRIVATE KEY-----\n',
-      )
+      stageFile(projectRoot, 'notes.txt', '-----BEGIN RSA PRIVATE KEY-----\n')
 
       const result = await runApprovedCommit(
         projectRoot,
@@ -690,9 +684,9 @@ describe('runTerminalCommand staged-commit safety preflight', () => {
           'bulk line\n',
         )
       }
-      expect(
-        spawnSync('git', ['add', '.'], { cwd: projectRoot }).status,
-      ).toBe(0)
+      expect(spawnSync('git', ['add', '.'], { cwd: projectRoot }).status).toBe(
+        0,
+      )
       __resetStagedDiffScanStatsForTest()
 
       const result = await runApprovedCommit(
@@ -815,7 +809,9 @@ describe('runTerminalCommand staged-commit safety preflight', () => {
       names: ['x b/y', 'z'],
     })
     // Not a header at all.
-    expect(__parseStagedDiffHeaderForTest('index 123..456 100644')).toBeUndefined()
+    expect(
+      __parseStagedDiffHeaderForTest('index 123..456 100644'),
+    ).toBeUndefined()
     // Header-shaped but undecodable: unterminated quote, unknown escape.
     expect(
       __parseStagedDiffHeaderForTest('diff --git "a/x.txt "b/y.txt"'),
@@ -944,11 +940,13 @@ describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
 describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
   it('stores pre-start dirty snapshot on the job without emitting touchedPaths', async () => {
     const projectRoot = initTempGitRepo('terminal-bg-dirty-')
-    let value: {
-      jobId?: string
-      touchedPaths?: string[]
-      backgroundProcessStatus?: string
-    } | undefined
+    let value:
+      | {
+          jobId?: string
+          touchedPaths?: string[]
+          backgroundProcessStatus?: string
+        }
+      | undefined
     try {
       fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
 
@@ -1198,6 +1196,67 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
     expect(value.stdout?.length).toBe(1000)
     expect(value.fullLogPath).toBeUndefined()
     expect(value.logBytes).toBeUndefined()
+  })
+
+  it('recovers the middle of both streams beyond the old accumulation cap', async () => {
+    const result = await runTerminalCommand({
+      command:
+        "head -c 150000 /dev/zero | tr '\\0' A; printf '😀MIDDLE\\n'; head -c 150000 /dev/zero | tr '\\0' Z; head -c 160000 /dev/zero | tr '\\0' B >&2",
+      process_type: 'SYNC',
+      permission_profile: 'full-access',
+      cwd: process.cwd(),
+      projectRoot: process.cwd(),
+      timeout_seconds: 10,
+    })
+    const value = result[0].value as {
+      stdout?: string
+      stderr?: string
+      fullLogPath?: string
+      logBytes?: number
+    }
+    expect(value.fullLogPath).toBeDefined()
+    try {
+      const bytes = fs.readFileSync(value.fullLogPath!)
+      const full = JSON.parse(bytes.toString('utf8'))
+      expect(full.stdout).toBe(
+        'A'.repeat(150_000) + '😀MIDDLE\n' + 'Z'.repeat(150_000),
+      )
+      expect(full.stderr).toBe('B'.repeat(160_000))
+      expect(value.logBytes).toBe(bytes.byteLength)
+      expect(value.stdout!.length).toBeLessThan(60_000)
+      expect(value.stderr!.length).toBeLessThan(60_000)
+    } finally {
+      fs.rmSync(path.dirname(value.fullLogPath!), {
+        recursive: true,
+        force: true,
+      })
+    }
+  })
+
+  it('reports unavailable full logs without returning a nonexistent path', async () => {
+    if (process.platform === 'win32') return
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-log-failure-'))
+    const blocker = path.join(root, 'not-a-directory')
+    fs.writeFileSync(blocker, 'x')
+    const previous = process.env.TMPDIR
+    process.env.TMPDIR = blocker
+    try {
+      const result = await runTerminalCommand({
+        command: 'head -c 160000 /dev/zero',
+        process_type: 'SYNC',
+        permission_profile: 'full-access',
+        cwd: process.cwd(),
+        projectRoot: process.cwd(),
+        timeout_seconds: 10,
+      })
+      expect(result[0].value).toMatchObject({ logPersisted: false })
+      expect(result[0].value).not.toHaveProperty('fullLogPath')
+      expect(result[0].value).toHaveProperty('logError')
+    } finally {
+      if (previous === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = previous
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('persists the full untruncated output and returns a pointer when stdout exceeds the limit', async () => {

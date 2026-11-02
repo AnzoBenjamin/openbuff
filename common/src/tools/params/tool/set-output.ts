@@ -156,6 +156,11 @@ export const setOutputParams = {
         message: z.string(),
         errorMessage: z.string().optional(),
         status: z.literal('ignored').optional(),
+        // Machine-readable discriminator marking that `agentState.output` was
+        // stored as a BOUNDED POINTER record (a truncated head/tail plus an
+        // artifactPath), not as the child's payload. Without it a caller can
+        // only tell the two apart by parsing the ACK prose.
+        salvaged: z.boolean().optional(),
       }),
     }),
   ]),

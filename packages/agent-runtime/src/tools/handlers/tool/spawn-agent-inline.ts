@@ -11,7 +11,7 @@ import {
   buildSpawnParamsWithHandoff,
   deriveSpawnTemplateCapabilities,
   validateVersionedAgentHandoff,
-  buildRuntimeAgentReceipt,
+  buildRuntimeAgentReceiptWithArtifacts,
   reconcileAgentReceiptIntoParent,
   mergeChildEvidenceIntoParent,
 } from './spawn-agent-utils'
@@ -149,7 +149,7 @@ export const handleSpawnAgentInline = (async (
     // ledger pair and no task-memory receipt record ever mention it. It exists
     // only so this envelope is shaped like the others; treat it as an opaque
     // per-skip marker, not a spawn id that can be looked up.
-    const receipt = buildRuntimeAgentReceipt({
+    const receipt = await buildRuntimeAgentReceiptWithArtifacts({
       agentType,
       agentId: generateCompactId(),
       handoff,
@@ -414,14 +414,14 @@ export const handleSpawnAgentInline = (async (
     // the in-process path keeps building the receipt here exactly as before.
     const receipt =
       result.supervisedReceipt ??
-      buildRuntimeAgentReceipt({
+      (await buildRuntimeAgentReceiptWithArtifacts({
         agentType,
         agentId: result.agentState.agentId,
         handoff,
         spawnParams: effectiveSpawnParams,
         output: result.output,
         agentState: result.agentState,
-      })
+      }))
     // Fold the child's in-process playbook-gate evidence into the parent's
     // ledger before reconciling, so delegated work (e.g. CI run inside
     // basher) satisfies the parent's rules. No-op for a supervised settle:

@@ -631,6 +631,10 @@ export interface KillJobParams {
 export interface ListDirectoryParams {
   /** Directory path to list, relative to the project root. */
   path: string
+  /** Continue a listing using the previous nextOffset. Defaults to 0. */
+  offset?: number
+  /** Maximum entries per page, defaults to 5000. */
+  limit?: number
 }
 
 /**

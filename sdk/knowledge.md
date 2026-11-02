@@ -1,5 +1,7 @@
 # SDK Package Knowledge
 
+- Output recovery: SYNC terminal overflow is streamed to a full JSON artifact through `sdk/src/tools/terminal-output-spool.ts`; failures return `logPersisted: false` without a path. Directory listings accept `offset` and `limit`, return `nextOffset` when more visible entries remain, and apply read policy before pagination. Background output reads now allow 1,000,000 bytes. Blender operations use an attempt-owned JSON file; `sdk/src/tools/3d-artifact-retention.ts` retains recent receipts across calls with per-project adapter state, a rotating bounded stat window, and scans across operation directories.
+
 ## Request token overhead
 
 - `countToolSurfaceTokensForCalibration` exposes the SDK request's tool-surface token projection, honoring the provider's `includeTools` decision. The runtime retains its own tool-definition projection without importing SDK internals.

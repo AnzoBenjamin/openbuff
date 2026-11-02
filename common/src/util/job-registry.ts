@@ -216,7 +216,7 @@ export const DEFAULT_JOB_EVENT_BUFFER_LIMIT = 500
  * of the oldest events, so a chatty job of either kind stays byte-bounded and
  * cannot OOM the runtime.
  */
-export const DEFAULT_JOB_OUTPUT_BYTE_LIMIT = 256 * 1024
+export const DEFAULT_JOB_OUTPUT_BYTE_LIMIT = 1 * 1024 * 1024
 
 /**
  * Agent-kind event ring bound: agent_chunk traffic is voluminous, so agent

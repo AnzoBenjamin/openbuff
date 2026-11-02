@@ -53,12 +53,16 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { SessionEvidenceLog } from '../../memory/session-evidence-log'
 
-const canSpawn =
-  typeof Bun !== 'undefined' && typeof Bun.spawn === 'function'
+const canSpawn = typeof Bun !== 'undefined' && typeof Bun.spawn === 'function'
 
 function captureWrite(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = []
-  return { lines, write: (line) => { lines.push(line) } }
+  return {
+    lines,
+    write: (line) => {
+      lines.push(line)
+    },
+  }
 }
 
 function makeRequest(
@@ -181,8 +185,8 @@ describe('child-entry cancellation and cleanup ordering', () => {
       join(import.meta.dir, '../child-entry.ts'),
       'utf8',
     )
-    expect(childEntrySource).toContain(
-      'const loopPromise = Promise.resolve(\n      loopAgentStepsFn(loopParams),\n    ).then((value) => value as { agentState: unknown; output: unknown })',
+    expect(childEntrySource).toMatch(
+      /const loopPromise = Promise\.resolve\([\s\S]*?loopAgentStepsFn\(loopParams\)[\s\S]*?\.then\(\s*\(value\) => value as/,
     )
     expect(childEntrySource).toContain(
       'return buildFailedChildReceipt({\n      agentType: request.agentType,\n      agentId,\n      message: error instanceof Error ? error.message : String(error),\n    })',
@@ -227,9 +231,9 @@ describe('supervised success receipt evidence transport (sessionEvidence)', () =
   function makeChildStateWithLedger(
     commands: string[],
   ): AgentState & { sessionEvidenceLog?: SessionEvidenceLog } {
-    const state = buildChildAgentState(
-      makeRequest(),
-    ) as AgentState & { sessionEvidenceLog?: SessionEvidenceLog }
+    const state = buildChildAgentState(makeRequest()) as AgentState & {
+      sessionEvidenceLog?: SessionEvidenceLog
+    }
     if (commands.length > 0) {
       const log = createSessionEvidenceLog()
       state.sessionEvidenceLog = log
@@ -304,9 +308,9 @@ describe('supervised success receipt evidence transport (sessionEvidence)', () =
 
   it('an absent or empty ledger omits sessionEvidence from the built receipt entirely', () => {
     // Absent ledger: the fresh child state carries no ledger member at all.
-    expect('sessionEvidence' in buildReceipt(makeChildStateWithLedger([]))).toBe(
-      false,
-    )
+    expect(
+      'sessionEvidence' in buildReceipt(makeChildStateWithLedger([])),
+    ).toBe(false)
     // Empty ledger: nothing was recorded, so the field stays off — receipts
     // stay lean and byte-identical to the pre-evidence shape.
     const emptyLedgerChild = makeChildStateWithLedger([])
@@ -322,7 +326,11 @@ describe('child-state rehydration validation (json-roundtrip repair)', () => {
       child: {
         agentId: 'child-entry-agent-1',
         messageHistory: [
-          { role: 'user', content: [{ type: 'text', text: 'hi' }], sentAt: 1234 },
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'hi' }],
+            sentAt: 1234,
+          },
         ],
         systemPrompt: 'be brief',
         taskMemory: {
@@ -364,12 +372,7 @@ describe('child-state rehydration validation (json-roundtrip repair)', () => {
     // 0 / negative / string / NaN all fail the finite-positive-number check,
     // so the fresh initial-state default (undefined) stands in — the same
     // dropped-field contract as messageHistory/taskMemory/workspaceState.
-    for (const bad of [
-      0,
-      -5,
-      '1000000',
-      Number.NaN,
-    ] as unknown as number[]) {
+    for (const bad of [0, -5, '1000000', Number.NaN] as unknown as number[]) {
       const state = buildChildAgentState({
         ...makeRequest(),
         child: {
@@ -546,7 +549,10 @@ describe('rehydrateLocalAgentTemplates (transport-boundary zod repair)', () => {
             required: ['command'],
           },
         },
-        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+        outputSchema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' } },
+        },
       } as never,
     })
     const template = rehydrated['test-agent']
@@ -554,15 +560,31 @@ describe('rehydrateLocalAgentTemplates (transport-boundary zod repair)', () => {
     // Every schema member must now be a live zod schema: it carries a
     // callable safeParse, so asSchema no longer routes to the zod-v3
     // converter that crashes on schema._def.typeName.
-    expect(typeof (template.inputSchema?.prompt as { safeParse?: unknown })?.safeParse).toBe('function')
-    expect(typeof (template.inputSchema?.params as { safeParse?: unknown })?.safeParse).toBe('function')
-    expect(typeof (template.outputSchema as { safeParse?: unknown })?.safeParse).toBe('function')
+    expect(
+      typeof (template.inputSchema?.prompt as { safeParse?: unknown })
+        ?.safeParse,
+    ).toBe('function')
+    expect(
+      typeof (template.inputSchema?.params as { safeParse?: unknown })
+        ?.safeParse,
+    ).toBe('function')
+    expect(
+      typeof (template.outputSchema as { safeParse?: unknown })?.safeParse,
+    ).toBe('function')
     // And the coerced schemas still VALIDATE correctly (structure preserved).
     expect(
-      (template.inputSchema?.prompt as { safeParse: (v: unknown) => { success: boolean } }).safeParse('hello').success,
+      (
+        template.inputSchema?.prompt as {
+          safeParse: (v: unknown) => { success: boolean }
+        }
+      ).safeParse('hello').success,
     ).toBe(true)
     expect(
-      (template.inputSchema?.params as { safeParse: (v: unknown) => { success: boolean } }).safeParse({ command: 'ls' }).success,
+      (
+        template.inputSchema?.params as {
+          safeParse: (v: unknown) => { success: boolean }
+        }
+      ).safeParse({ command: 'ls' }).success,
     ).toBe(true)
   })
 
@@ -584,7 +606,9 @@ describe('rehydrateLocalAgentTemplates (transport-boundary zod repair)', () => {
       template.inputSchema?.params,
       template.outputSchema,
     ]) {
-      expect(typeof (member as { safeParse?: unknown })?.safeParse).toBe('function')
+      expect(typeof (member as { safeParse?: unknown })?.safeParse).toBe(
+        'function',
+      )
     }
   })
 
@@ -659,50 +683,44 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
     return { sent, actions, onResponseChunk, warns }
   }
 
-  it(
-    "string chunks forward verbatim through the bridged sendSubagentChunk keyed to the child's OWN agentId/agentType and the request's verbatim userInputId",
-    () => {
-      const { sent, onResponseChunk } = makeForwarder()
-      onResponseChunk('hello ')
-      onResponseChunk('world')
-      // The exact foreground-spawn forwarding shape (spawn-agents.ts
-      // onResponseChunk): the child's own agentId — the CLI appends to the
-      // EXISTING agent block it already created from the spawn event — and
-      // the parent's verbatim userInputId.
-      expect(sent).toEqual([
-        {
-          userInputId: 'ui-parent-1',
-          agentId: 'child-entry-agent-1',
-          agentType: 'thinker',
-          chunk: 'hello ',
-          prompt: 'Probe',
-        },
-        {
-          userInputId: 'ui-parent-1',
-          agentId: 'child-entry-agent-1',
-          agentType: 'thinker',
-          chunk: 'world',
-          prompt: 'Probe',
-        },
-      ])
-    },
-  )
-
-  it(
-    'a text-type PrintModeEvent forwards its non-empty text as the string chunk through the same sendSubagentChunk call',
-    () => {
-      const { sent, onResponseChunk } = makeForwarder()
-      onResponseChunk({ type: 'text', text: 'reasoning delta' } as PrintModeEvent)
-      expect(sent).toHaveLength(1)
-      expect(sent[0]).toEqual({
+  it("string chunks forward verbatim through the bridged sendSubagentChunk keyed to the child's OWN agentId/agentType and the request's verbatim userInputId", () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk('hello ')
+    onResponseChunk('world')
+    // The exact foreground-spawn forwarding shape (spawn-agents.ts
+    // onResponseChunk): the child's own agentId — the CLI appends to the
+    // EXISTING agent block it already created from the spawn event — and
+    // the parent's verbatim userInputId.
+    expect(sent).toEqual([
+      {
         userInputId: 'ui-parent-1',
         agentId: 'child-entry-agent-1',
         agentType: 'thinker',
-        chunk: 'reasoning delta',
+        chunk: 'hello ',
         prompt: 'Probe',
-      })
-    },
-  )
+      },
+      {
+        userInputId: 'ui-parent-1',
+        agentId: 'child-entry-agent-1',
+        agentType: 'thinker',
+        chunk: 'world',
+        prompt: 'Probe',
+      },
+    ])
+  })
+
+  it('a text-type PrintModeEvent forwards its non-empty text as the string chunk through the same sendSubagentChunk call', () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk({ type: 'text', text: 'reasoning delta' } as PrintModeEvent)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toEqual({
+      userInputId: 'ui-parent-1',
+      agentId: 'child-entry-agent-1',
+      agentType: 'thinker',
+      chunk: 'reasoning delta',
+      prompt: 'Probe',
+    })
+  })
 
   it('an EMPTY text event forwards nothing (no sendSubagentChunk call)', () => {
     const { sent, onResponseChunk } = makeForwarder()
@@ -770,124 +788,115 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
     expect(sent[1]?.chunk).toBe('next')
   })
 
-  it(
-    "non-text PrintModeEvent variants (tool_call, subagent_start, phase, error) are relayed VERBATIM over the bridged sendAction channel as 'response-chunk' actions — exactly one notification per event",
-    () => {
-      const { sent, actions, onResponseChunk } = makeForwarder()
-      const toolCallEvent = {
-        type: 'tool_call',
-        toolCallId: 'tc-1',
-        toolName: 'read_files',
-        input: {},
-      } as unknown as PrintModeEvent
-      const subagentStartEvent = {
-        type: 'subagent_start',
-        agentId: 'nested-1',
-        agentType: 'editor',
-        displayName: 'Editor',
-        onlyChild: false,
-      } as PrintModeEvent
-      const phaseEvent = {
-        type: 'phase',
-        phase: 'thinking',
-      } as unknown as PrintModeEvent
-      const errorEvent = {
-        type: 'error',
-        message: 'boom',
-      } as unknown as PrintModeEvent
-      for (const event of [
-        toolCallEvent,
-        subagentStartEvent,
-        phaseEvent,
-        errorEvent,
-      ]) {
-        onResponseChunk(event)
-      }
-      // The display channel stays clean: it carries text and reasoning
-      // chunks only (the documented forward rule in the child-entry
-      // docblock; handleStepsLogChunk's log-record shape does not fit
-      // display events).
-      expect(sent).toHaveLength(0)
-      // Each event is relayed VERBATIM as a `response-chunk` action over
-      // the bridged sendAction channel — the exact shape the parent's
-      // sendAction handler routes to onResponseChunk → handleEvent (the
-      // same createEventHandler path the in-process stream uses), so the
-      // child's tool/lifecycle events render like the orchestrator's own.
-      // Exactly ONE notification per event (no per-token/per-field
-      // fan-out), keeping the notify budget bounded.
-      expect(actions).toEqual([
-        {
-          action: {
-            type: 'response-chunk',
-            userInputId: 'ui-parent-1',
-            chunk: toolCallEvent,
-          },
+  it("non-text PrintModeEvent variants (tool_call, subagent_start, phase, error) are relayed VERBATIM over the bridged sendAction channel as 'response-chunk' actions — exactly one notification per event", () => {
+    const { sent, actions, onResponseChunk } = makeForwarder()
+    const toolCallEvent = {
+      type: 'tool_call',
+      toolCallId: 'tc-1',
+      toolName: 'read_files',
+      input: {},
+    } as unknown as PrintModeEvent
+    const subagentStartEvent = {
+      type: 'subagent_start',
+      agentId: 'nested-1',
+      agentType: 'editor',
+      displayName: 'Editor',
+      onlyChild: false,
+    } as PrintModeEvent
+    const phaseEvent = {
+      type: 'phase',
+      phase: 'thinking',
+    } as unknown as PrintModeEvent
+    const errorEvent = {
+      type: 'error',
+      message: 'boom',
+    } as unknown as PrintModeEvent
+    for (const event of [
+      toolCallEvent,
+      subagentStartEvent,
+      phaseEvent,
+      errorEvent,
+    ]) {
+      onResponseChunk(event)
+    }
+    // The display channel stays clean: it carries text and reasoning
+    // chunks only (the documented forward rule in the child-entry
+    // docblock; handleStepsLogChunk's log-record shape does not fit
+    // display events).
+    expect(sent).toHaveLength(0)
+    // Each event is relayed VERBATIM as a `response-chunk` action over
+    // the bridged sendAction channel — the exact shape the parent's
+    // sendAction handler routes to onResponseChunk → handleEvent (the
+    // same createEventHandler path the in-process stream uses), so the
+    // child's tool/lifecycle events render like the orchestrator's own.
+    // Exactly ONE notification per event (no per-token/per-field
+    // fan-out), keeping the notify budget bounded.
+    expect(actions).toEqual([
+      {
+        action: {
+          type: 'response-chunk',
+          userInputId: 'ui-parent-1',
+          chunk: toolCallEvent,
         },
-        {
-          action: {
-            type: 'response-chunk',
-            userInputId: 'ui-parent-1',
-            chunk: subagentStartEvent,
-          },
+      },
+      {
+        action: {
+          type: 'response-chunk',
+          userInputId: 'ui-parent-1',
+          chunk: subagentStartEvent,
         },
-        {
-          action: {
-            type: 'response-chunk',
-            userInputId: 'ui-parent-1',
-            chunk: phaseEvent,
-          },
+      },
+      {
+        action: {
+          type: 'response-chunk',
+          userInputId: 'ui-parent-1',
+          chunk: phaseEvent,
         },
-        {
-          action: {
-            type: 'response-chunk',
-            userInputId: 'ui-parent-1',
-            chunk: errorEvent,
-          },
+      },
+      {
+        action: {
+          type: 'response-chunk',
+          userInputId: 'ui-parent-1',
+          chunk: errorEvent,
         },
-      ])
-    },
-  )
+      },
+    ])
+  })
 
-  it(
-    'text and reasoning_delta events do NOT touch the sendAction relay channel (display-only boundary)',
-    () => {
-      const { sent, actions, onResponseChunk } = makeForwarder()
-      onResponseChunk({ type: 'text', text: 'delta' } as PrintModeEvent)
-      onResponseChunk({
-        type: 'reasoning_delta',
-        text: 'thought',
-        ancestorRunIds: ['run-root'],
-        runId: 'run-1',
-      } as PrintModeEvent)
-      // Text/reasoning deltas ride the display channel only; the sendAction
-      // relay is reserved for the remaining (tool/lifecycle) variants.
-      expect(actions).toHaveLength(0)
-      expect(sent).toHaveLength(2)
-    },
-  )
+  it('text and reasoning_delta events do NOT touch the sendAction relay channel (display-only boundary)', () => {
+    const { sent, actions, onResponseChunk } = makeForwarder()
+    onResponseChunk({ type: 'text', text: 'delta' } as PrintModeEvent)
+    onResponseChunk({
+      type: 'reasoning_delta',
+      text: 'thought',
+      ancestorRunIds: ['run-root'],
+      runId: 'run-1',
+    } as PrintModeEvent)
+    // Text/reasoning deltas ride the display channel only; the sendAction
+    // relay is reserved for the remaining (tool/lifecycle) variants.
+    expect(actions).toHaveLength(0)
+    expect(sent).toHaveLength(2)
+  })
 
-  it(
-    "a reasoning_delta event forwards its non-empty text as a reasoning chunk (chunkKind 'reasoning' + the event's ancestorRunIds) keyed to the child's OWN agentId/agentType and the request's verbatim userInputId",
-    () => {
-      const { sent, onResponseChunk } = makeForwarder()
-      onResponseChunk({
-        type: 'reasoning_delta',
-        text: 'thinking...',
-        ancestorRunIds: ['run-root', 'run-child'],
-        runId: 'run-1',
-      } as PrintModeEvent)
-      expect(sent).toHaveLength(1)
-      expect(sent[0]).toEqual({
-        userInputId: 'ui-parent-1',
-        agentId: 'child-entry-agent-1',
-        agentType: 'thinker',
-        chunk: 'thinking...',
-        prompt: 'Probe',
-        chunkKind: 'reasoning',
-        ancestorRunIds: ['run-root', 'run-child'],
-      })
-    },
-  )
+  it("a reasoning_delta event forwards its non-empty text as a reasoning chunk (chunkKind 'reasoning' + the event's ancestorRunIds) keyed to the child's OWN agentId/agentType and the request's verbatim userInputId", () => {
+    const { sent, onResponseChunk } = makeForwarder()
+    onResponseChunk({
+      type: 'reasoning_delta',
+      text: 'thinking...',
+      ancestorRunIds: ['run-root', 'run-child'],
+      runId: 'run-1',
+    } as PrintModeEvent)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toEqual({
+      userInputId: 'ui-parent-1',
+      agentId: 'child-entry-agent-1',
+      agentType: 'thinker',
+      chunk: 'thinking...',
+      prompt: 'Probe',
+      chunkKind: 'reasoning',
+      ancestorRunIds: ['run-root', 'run-child'],
+    })
+  })
 
   it('an EMPTY reasoning_delta event forwards nothing (no sendSubagentChunk call)', () => {
     const { sent, onResponseChunk } = makeForwarder()
@@ -900,43 +909,40 @@ describe('buildChildOnResponseChunk (supervised child live display forwarding)',
     expect(sent).toHaveLength(0)
   })
 
-  it(
-    'a THROWING sendSubagentChunk never crashes the forwarder: the failure is warned at most once and later chunks still forward',
-    () => {
-      const sent: Parameters<SendSubagentChunkFn>[0][] = []
-      const { logger, warns } = makeLogger()
-      let failNext = true
-      const onResponseChunk = buildChildOnResponseChunk({
-        sendSubagentChunk: (params) => {
-          if (failNext) {
-            failNext = false
-            throw new Error('bridge socket closed mid-run')
-          }
-          sent.push(params)
-        },
-        sendAction: () => {},
-        agentId: 'child-entry-agent-1',
-        agentType: 'thinker',
-        userInputId: 'ui-parent-1',
-        prompt: 'Probe',
-        logger,
-      })
-      // First chunk: the dep throws — swallowed, never propagated.
-      expect(() => onResponseChunk('first')).not.toThrow()
-      expect(sent).toHaveLength(0)
-      expect(warns).toHaveLength(1)
-      expect(warns[0]).toContain('display-stream forwarding failed')
-      // Later chunks still attempt to forward (only the WARN is once).
-      onResponseChunk('second')
-      expect(sent).toHaveLength(1)
-      expect(sent[0]?.chunk).toBe('second')
-      // And a SECOND failure is swallowed without another warn.
-      failNext = true
-      expect(() => onResponseChunk('third')).not.toThrow()
-      expect(warns).toHaveLength(1)
-      expect(sent).toHaveLength(1)
-    },
-  )
+  it('a THROWING sendSubagentChunk never crashes the forwarder: the failure is warned at most once and later chunks still forward', () => {
+    const sent: Parameters<SendSubagentChunkFn>[0][] = []
+    const { logger, warns } = makeLogger()
+    let failNext = true
+    const onResponseChunk = buildChildOnResponseChunk({
+      sendSubagentChunk: (params) => {
+        if (failNext) {
+          failNext = false
+          throw new Error('bridge socket closed mid-run')
+        }
+        sent.push(params)
+      },
+      sendAction: () => {},
+      agentId: 'child-entry-agent-1',
+      agentType: 'thinker',
+      userInputId: 'ui-parent-1',
+      prompt: 'Probe',
+      logger,
+    })
+    // First chunk: the dep throws — swallowed, never propagated.
+    expect(() => onResponseChunk('first')).not.toThrow()
+    expect(sent).toHaveLength(0)
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('display-stream forwarding failed')
+    // Later chunks still attempt to forward (only the WARN is once).
+    onResponseChunk('second')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.chunk).toBe('second')
+    // And a SECOND failure is swallowed without another warn.
+    failNext = true
+    expect(() => onResponseChunk('third')).not.toThrow()
+    expect(warns).toHaveLength(1)
+    expect(sent).toHaveLength(1)
+  })
 })
 
 describe('child-entry process contract (P2-T8)', () => {
@@ -1004,13 +1010,15 @@ describe('child-entry process contract (P2-T8)', () => {
         const exitCode = await proc.exited
         expect(exitCode).toBe(0)
         expect(stdout.endsWith('\n')).toBe(true)
-        const lines = stdout.split('\n').filter((line) => line.trim().length > 0)
+        const lines = stdout
+          .split('\n')
+          .filter((line) => line.trim().length > 0)
         expect(lines).toHaveLength(1)
         const parsed = agentReceiptSchema.safeParse(JSON.parse(lines[0]))
         expect(parsed.success).toBe(true)
-        expect(
-          (parsed.data as AgentReceipt).errors[0]?.code,
-        ).toBe('unsupported-deps')
+        expect((parsed.data as AgentReceipt).errors[0]?.code).toBe(
+          'unsupported-deps',
+        )
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
@@ -1048,7 +1056,9 @@ describe('child-entry process contract (P2-T8)', () => {
         const exitCode = await proc.exited
         expect(exitCode).toBe(0)
         expect(stdout.endsWith('\n')).toBe(true)
-        const lines = stdout.split('\n').filter((line) => line.trim().length > 0)
+        const lines = stdout
+          .split('\n')
+          .filter((line) => line.trim().length > 0)
         expect(lines).toHaveLength(1)
         // The whole envelope survived the process boundary: no mid-flush cut.
         expect(lines[0].length).toBeGreaterThan(1_000_000)
