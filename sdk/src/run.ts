@@ -326,6 +326,8 @@ export type OpenbuffClientOptions = {
   /** Optional directory path to load skills from. Skills found here will be available to the `skill` tool. */
   skillsDir?: string
   projectFiles?: Record<string, string>
+  /** Use paths to defer repository-wide symbol parsing to retrieval tools. Defaults to symbols. */
+  projectContextMode?: 'paths' | 'symbols'
   knowledgeFiles?: Record<string, string>
   agentDefinitions?: AgentDefinition[]
   /**
@@ -745,6 +747,7 @@ async function runOnce({
   cwd,
   skillsDir,
   projectFiles,
+  projectContextMode,
   knowledgeFiles,
   agentDefinitions,
   mcpServers,
@@ -1036,6 +1039,7 @@ async function runOnce({
         agentDefinitions,
         customToolDefinitions,
         projectFiles,
+        projectContextMode,
         maxAgentSteps,
       },
       { fs, logger },
@@ -1049,6 +1053,7 @@ async function runOnce({
       agentDefinitions,
       customToolDefinitions,
       projectFiles,
+      projectContextMode,
       maxAgentSteps,
       fs,
       spawn,

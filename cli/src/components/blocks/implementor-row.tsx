@@ -48,6 +48,7 @@ export const ImplementorGroup = memo(
     const { columnWidth: cardWidth, columnGroups } = useGridLayout(
       implementors,
       availableWidth,
+      true,
     )
 
     return (

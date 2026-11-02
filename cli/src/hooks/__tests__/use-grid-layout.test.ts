@@ -9,6 +9,26 @@ import {
 } from '../use-grid-layout'
 
 describe('computeGridLayout', () => {
+  test('keeps existing agent column assignments as the roster grows', () => {
+    for (const width of [120, 180, 250]) {
+      const initial = ['a', 'b', 'c', 'd']
+      const before = computeGridLayout(initial, width, true)
+      for (let count = 5; count <= 12; count++) {
+        const next = computeGridLayout(
+          Array.from({ length: count }, (_, i) => String.fromCharCode(97 + i)),
+          width,
+          true,
+        )
+        expect(next.columns).toBe(before.columns)
+        expect(next.columnWidth).toBe(before.columnWidth)
+        for (let column = 0; column < before.columns; column++) {
+          expect(
+            next.columnGroups[column].filter((id) => initial.includes(id)),
+          ).toEqual(before.columnGroups[column])
+        }
+      }
+    }
+  })
   describe('threshold constants', () => {
     test('thresholds are in ascending order', () => {
       expect(WIDTH_MD_THRESHOLD).toBeLessThan(WIDTH_LG_THRESHOLD)

@@ -46,6 +46,17 @@ through a hosted Openbuff/Codebuff service in this primary flow.
 
 **File:** `sdk/src/run.ts`
 
+The CLI requests `projectContextMode: 'paths'`: startup and continued turns
+refresh the project paths and knowledge files without parsing every source
+file for symbol scores before contacting the model. `query_index` and
+`read_subtree` still retrieve symbols on demand. SDK callers default to
+`'symbols'` and can opt into the same path-only startup mode.
+
+Run `bun scripts/benchmark-turn-startup.ts` from the repository root to
+compare both modes for initial and continued sessions without model requests.
+Recorded local preparation timings are in
+[`scripts/benchmark-turn-startup-results.json`](../scripts/benchmark-turn-startup-results.json).
+
 1. `run()` → `runOnce()` is called with the prompt, agent ID, cost mode, and
    session state.
 2. When `cwd` is present and the host did not inject a custom filesystem, the

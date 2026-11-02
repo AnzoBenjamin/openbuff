@@ -4,6 +4,8 @@
 
 ## Conversation rendering and restore
 
+- CLI runs set `projectContextMode: 'paths'` in `cli/src/utils/create-run-config.ts`, keeping current paths and instructions while deferring repository-wide symbol parsing to `query_index` and `read_subtree`. The local preparation benchmark is `bun scripts/benchmark-turn-startup.ts` from the repository root; recorded results live in `scripts/benchmark-turn-startup-results.json`.
+- Message trees preserve unchanged root and child array references, and message components subscribe to their own children. Subagent and implementor grids use stable column counts as rosters grow; viewport overscan is capped at two viewport heights so tall agent turns do not mount most of the history during scrolling.
 - Message wrappers and native Markdown use the available width. Before viewport measurements arrive, the message window starts from the newest estimated viewport instead of mounting the full list.
 - Restoring a conversation requests an immediate jump to the latest message and verifies the settled bottom. Manual scroll-to-latest retains its animation.
 - A `spawn_agents` batch registers its streaming agent IDs in one state update.

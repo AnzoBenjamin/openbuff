@@ -6,6 +6,8 @@ import { MIN_COLUMN_WIDTH } from '../utils/layout-helpers'
 export interface GridLayoutProps<T> {
   items: T[]
   availableWidth: number
+  /** Keep column assignment stable as agents join the grid. */
+  stableColumns?: boolean
   getItemKey: (item: T) => string
   renderItem: (item: T, index: number, columnWidth: number) => ReactNode
   footer?: ReactNode
@@ -15,6 +17,7 @@ export interface GridLayoutProps<T> {
 function GridLayoutInner<T>({
   items,
   availableWidth,
+  stableColumns = false,
   getItemKey,
   renderItem,
   footer,
@@ -23,6 +26,7 @@ function GridLayoutInner<T>({
   const { columns, columnWidth, columnGroups } = useGridLayout(
     items,
     availableWidth,
+    stableColumns,
   )
 
   if (items.length === 0) return null

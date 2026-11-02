@@ -114,6 +114,7 @@ export type InitialSessionStateOptions = {
   /** Optional directory path to load skills from. When provided, skills are loaded from this directory instead of the default locations. */
   skillsDir?: string
   projectFiles?: Record<string, string>
+  projectContextMode?: 'paths' | 'symbols'
   knowledgeFiles?: Record<string, string>
   /** User-provided knowledge files that will be merged with home directory files */
   userKnowledgeFiles?: Record<string, string>
@@ -767,7 +768,9 @@ export async function initialSessionState(
   const projectIndex = cwd
     ? getProjectIndexInput({ cwd, fs, logger, projectFiles, discoveredProject })
     : undefined
-  if (projectIndex) {
+  if (projectIndex && params.projectContextMode === 'paths') {
+    fileTree = projectIndex.fileTree
+  } else if (projectIndex) {
     const result = await computeProjectIndex(projectIndex)
     fileTree = result.fileTree
     fileTokenScores = result.fileTokenScores
@@ -1006,6 +1009,7 @@ export async function applyOverridesToSessionState(
   baseSessionState: SessionState,
   overrides: {
     projectFiles?: Record<string, string>
+    projectContextMode?: 'paths' | 'symbols'
     knowledgeFiles?: Record<string, string>
     agentDefinitions?: AgentDefinition[]
     customToolDefinitions?: CustomToolDefinition[]
@@ -1072,7 +1076,13 @@ export async function applyOverridesToSessionState(
     })
     if (projectIndex) {
       const { fileTree, fileTokenScores, tokenCallers } =
-        await computeProjectIndex(projectIndex)
+        overrides.projectContextMode === 'paths'
+          ? {
+              fileTree: projectIndex.fileTree,
+              fileTokenScores: {},
+              tokenCallers: {},
+            }
+          : await computeProjectIndex(projectIndex)
       sessionState.fileContext.fileTreeSource =
         overrides.projectFiles !== undefined ? 'virtual' : 'live'
       sessionState.fileContext.fileTree = fileTree

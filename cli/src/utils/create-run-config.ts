@@ -240,6 +240,9 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     prompt,
     content,
     previousRun: previousRunState ?? undefined,
+    // The CLI has on-demand query_index/read_subtree retrieval. Parsing every
+    // source file before every prompt adds seconds before provider dispatch.
+    projectContextMode: 'paths' as const,
     agentDefinitions,
     maxAgentSteps: resolveMaxAgentSteps(),
     maxMissingOutputRetries: resolveMaxMissingOutputRetries(),

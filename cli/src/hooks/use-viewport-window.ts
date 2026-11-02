@@ -1022,8 +1022,10 @@ export const useViewportWindow = ({
   const overscanPx = useMemo(() => {
     if (messages.length === 0) return 0
     const avg = messageListHeight / messages.length
-    return Math.max(1, Math.ceil(avg * overscan))
-  }, [messages.length, messageListHeight, overscan])
+    // Tall multi-agent turns can span thousands of rows. An average-message
+    // overscan then mounts most of the history on every scroll frame.
+    return Math.max(1, Math.min(viewportHeight * 2, Math.ceil(avg * overscan)))
+  }, [messages.length, messageListHeight, overscan, viewportHeight])
 
   const { startIndex, endIndex, bottomSpacerHeight } = useMemo(
     () =>

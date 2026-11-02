@@ -230,10 +230,14 @@ export function useChatMessages({
   }, [setMessages])
 
   // Build message tree from flat messages array
-  const { tree: messageTree, topLevelMessages } = useMemo(
-    () => buildMessageTree(messages),
-    [messages],
-  )
+  const previousTreeRef = useRef<
+    ReturnType<typeof buildMessageTree> | undefined
+  >(undefined)
+  const { tree: messageTree, topLevelMessages } = useMemo(() => {
+    const next = buildMessageTree(messages, previousTreeRef.current)
+    previousTreeRef.current = next
+    return next
+  }, [messages])
 
   // Compute visible messages slice (from the end)
   const visibleTopLevelMessages = useMemo(() => {

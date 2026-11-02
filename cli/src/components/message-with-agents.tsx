@@ -28,6 +28,8 @@ interface AgentChildrenGridProps {
   availableWidth: number
 }
 
+const EMPTY_AGENT_CHILDREN: ChatMessage[] = []
+
 const AgentChildrenGrid = memo(
   ({ agentChildren, depth, availableWidth }: AgentChildrenGridProps) => {
     const theme = useMessageBlockStore((state) => state.context.theme)
@@ -79,6 +81,7 @@ const AgentChildrenGrid = memo(
             <GridLayout
               key={getItemKey(group[0])}
               items={group}
+              stableColumns
               availableWidth={availableWidth}
               getItemKey={getItemKey}
               renderItem={renderAgentChild}
@@ -108,20 +111,19 @@ export const MessageWithAgents = memo(
     const isAgent = message.variant === 'agent'
 
     // Use useShallow for grouped selectors to prevent unnecessary re-renders
-    const {
-      theme,
-      markdownPalette,
-      messageTree,
-      isWaitingForResponse,
-      timerStartTime,
-    } = useMessageBlockStore(
-      useShallow((state) => ({
-        theme: state.context.theme,
-        markdownPalette: state.context.markdownPalette,
-        messageTree: state.context.messageTree,
-        isWaitingForResponse: state.context.isWaitingForResponse,
-        timerStartTime: state.context.timerStartTime,
-      })),
+    const { theme, markdownPalette, isWaitingForResponse, timerStartTime } =
+      useMessageBlockStore(
+        useShallow((state) => ({
+          theme: state.context.theme,
+          markdownPalette: state.context.markdownPalette,
+          isWaitingForResponse: state.context.isWaitingForResponse,
+          timerStartTime: state.context.timerStartTime,
+        })),
+      )
+
+    const agentChildren = useMessageBlockStore(
+      (state) =>
+        state.context.messageTree?.get(message.id) ?? EMPTY_AGENT_CHILDREN,
     )
 
     const {
@@ -236,7 +238,6 @@ export const MessageWithAgents = memo(
     const isLoading =
       isAi && message.content === '' && !message.blocks && isWaitingForResponse
 
-    const agentChildren = messageTree?.get(message.id) ?? []
     const hasAgentChildren = agentChildren.length > 0
     // Show vertical line for user messages (including bash commands which are now user messages)
     const showVerticalLine = isUser
@@ -415,15 +416,18 @@ interface AgentMessageProps {
 const AgentMessage = memo(
   ({ message, depth, availableWidth }: AgentMessageProps): ReactNode => {
     // Use useShallow for grouped selectors to prevent unnecessary re-renders
-    const { theme, markdownPalette, messageTree, onToggleCollapsed } =
-      useMessageBlockStore(
-        useShallow((state) => ({
-          theme: state.context.theme,
-          markdownPalette: state.context.markdownPalette,
-          messageTree: state.context.messageTree,
-          onToggleCollapsed: state.callbacks.onToggleCollapsed,
-        })),
-      )
+    const { theme, markdownPalette, onToggleCollapsed } = useMessageBlockStore(
+      useShallow((state) => ({
+        theme: state.context.theme,
+        markdownPalette: state.context.markdownPalette,
+        onToggleCollapsed: state.callbacks.onToggleCollapsed,
+      })),
+    )
+
+    const agentChildren = useMessageBlockStore(
+      (state) =>
+        state.context.messageTree?.get(message.id) ?? EMPTY_AGENT_CHILDREN,
+    )
 
     // Derive streaming boolean for this specific message to avoid re-renders when other agents change
     const isStreaming = useChatStore((state) =>
@@ -443,8 +447,6 @@ const AgentMessage = memo(
 
     // Get or initialize collapse state from message metadata
     const isCollapsed = message.metadata?.isCollapsed ?? false
-
-    const agentChildren = messageTree?.get(message.id) ?? []
 
     const bulletChar = '• '
     const fullPrefix = bulletChar

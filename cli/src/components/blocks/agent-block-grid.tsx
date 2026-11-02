@@ -29,8 +29,12 @@ export const AgentBlockGrid = memo(
     )
 
     const renderItem = useCallback(
-      (agentBlock: AgentContentBlock, idx: number, columnWidth: number) =>
-        renderAgentBranch(agentBlock, `${keyPrefix}-agent-${idx}`, columnWidth),
+      (agentBlock: AgentContentBlock, _idx: number, columnWidth: number) =>
+        renderAgentBranch(
+          agentBlock,
+          `${keyPrefix}-agent-${agentBlock.agentId}`,
+          columnWidth,
+        ),
       [keyPrefix, renderAgentBranch],
     )
 
@@ -55,6 +59,7 @@ export const AgentBlockGrid = memo(
           <GridLayout
             key={getItemKey(group[0])}
             items={group}
+            stableColumns
             availableWidth={availableWidth}
             getItemKey={getItemKey}
             renderItem={renderItem}
