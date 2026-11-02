@@ -451,6 +451,8 @@ describe('inspect3dAsset', () => {
     const fixture = Buffer.from('fixture')
     fs.writeFileSync(path.join(root, 'scene.blend'), fixture)
     const baseFileSystem = createNodeFileSystem()
+    const controller = new AbortController()
+    let commitCalled = false
 
     /*
      * A hostile adapter whose `readdir` RESOLVES to a non-iterable. That throws
@@ -464,13 +466,24 @@ describe('inspect3dAsset', () => {
       Object.create(baseFileSystem),
       {
         mutationAuthority: 'cooperative_cas' as const,
-        conditionalCommit: async () => ({ applied: true as const }),
+        conditionalCommit: async () => {
+          commitCalled = true
+          return { applied: true as const }
+        },
+        writeFile: async (
+          ...args: Parameters<typeof baseFileSystem.writeFile>
+        ) => {
+          await baseFileSystem.writeFile(...args)
+          // Cancel after the attempt files exist, before starting Blender.
+          // This exercises failed cleanup even when Blender is not installed.
+          if (String(args[0]).endsWith('.json')) controller.abort()
+        },
         readdir: (async () => null) as unknown as typeof baseFileSystem.readdir,
       },
     )
 
-    // An invalid Blender fixture creates attempt files before the process
-    // rejects it, exercising cleanup through the hostile filesystem adapter.
+    // Cancellation preserves the real diagnosis when cleanup cannot enumerate
+    // its own files; no external executable is needed for this failure path.
     const result = await edit3dAsset({
       path: 'scene.blend',
       sourceHash: hashFileContent(fixture).replace(/^sha256:/, ''),
@@ -478,6 +491,7 @@ describe('inspect3dAsset', () => {
       cwd: root,
       fs: fileSystem,
       operationId: 'cleanup-throws',
+      signal: controller.signal,
     })
 
     // The receipt is still returned, with its real diagnosis.
@@ -485,9 +499,10 @@ describe('inspect3dAsset', () => {
       type: 'json',
       value: {
         outcome: 'not_applied',
-        errors: [{ message: expect.stringContaining('Blender') }],
+        errors: [{ message: expect.stringContaining('cancelled') }],
       },
     })
+    expect(commitCalled).toBe(false)
     // Ownership is NOT surrendered on an unconfirmed release: this attempt's
     // files stay in the shared release target so a later release attempt can
     // retry rather than leaking an unreclaimable copy.

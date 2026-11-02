@@ -1,5 +1,7 @@
 # SDK Package Knowledge
 
+- CI regression coverage: the failed-cleanup test in `sdk/src/__tests__/3d-assets.test.ts` cancels after writing attempt metadata, before launching Blender, and verifies no guarded commit occurred. It exercises retained artifacts without requiring Blender on CI runners. Symbol batch tests in `packages/agent-runtime/src/__tests__/read-files-edit-state.test.ts` cover both complete reads within the current budget and omitted symbols above it.
+
 - Output recovery: SYNC terminal overflow is streamed to a full JSON artifact through `sdk/src/tools/terminal-output-spool.ts`; failures return `logPersisted: false` without a path. Directory listings accept `offset` and `limit`, return `nextOffset` when more visible entries remain, and apply read policy before pagination. Background output reads now allow 1,000,000 bytes. Blender operations use an attempt-owned JSON file; `sdk/src/tools/3d-artifact-retention.ts` retains recent receipts across calls with per-project adapter state, a rotating bounded stat window, and scans across operation directories.
 
 ## Request token overhead
