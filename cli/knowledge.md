@@ -1,5 +1,11 @@
 # CLI Package Knowledge
 
+## Conversation rendering and restore
+
+- Message wrappers and native Markdown use the available width. Before viewport measurements arrive, the message window starts from the newest estimated viewport instead of mounting the full list.
+- Restoring a conversation requests an immediate jump to the latest message and verifies the settled bottom. Manual scroll-to-latest retains its animation.
+- A `spawn_agents` batch registers its streaming agent IDs in one state update.
+
 ## Long-running Agent UX
 
 - Productive agent runs are unlimited by default. `maxAgentSteps` is an optional fixed cap; `-1` selects unlimited mode.
