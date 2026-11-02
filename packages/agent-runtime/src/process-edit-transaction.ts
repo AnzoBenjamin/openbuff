@@ -366,7 +366,7 @@ export async function processEditTransaction(params: {
       tool: 'edit_transaction',
       error: [
         `edit_transaction aborted during preflight at edit ${firstFailure.editIndex + 1} of ${edits.length}, so NO files were changed.`,
-        'The detailed cause is listed once in failures below. If that failure requires fresh read/capability state, re-read EVERY target in this transaction in the current run, then rebuild and retry the whole transaction from that one current snapshot. Do not refresh only the first failed path while replaying stale tokens for the remaining targets.',
+        'See failures and the recovery packet below for the cause and required next action. Resubmit the complete transaction after addressing the failure.',
       ].join('\n\n'),
       failures,
       requiresFreshRead: recovery.requiresFreshRead,
@@ -1111,11 +1111,13 @@ async function processTransactionEdit(params: {
   switch (edit.type) {
     case 'str_replace': {
       const initialContent = await initialContentPromise
+      const originalContent = await originalContentPromise
       return processStrReplace({
         path: edit.path,
         replacements: edit.replacements,
         atomic: true,
         transactionContext: true,
+        ...(originalContent !== null && { recoverySnapshot: originalContent }),
         requireFreshReadCapability,
         readCapabilityScope: readCapabilityIssuer
           ? { ...readCapabilityIssuer, path: edit.path }

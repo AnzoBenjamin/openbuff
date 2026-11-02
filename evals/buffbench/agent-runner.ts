@@ -1,7 +1,8 @@
-import { execSync, exec } from 'child_process'
+import { execFile, exec } from 'child_process'
 import { promisify } from 'util'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 import { withTimeout } from '@codebuff/common/util/promise'
 
@@ -99,6 +100,7 @@ export async function runAgentOnCommit({
             parentSha: commit.parentSha,
             initCommand,
             env,
+            signal: timeoutSignal,
           },
           async (repoDir) => {
             // Select the appropriate runner
@@ -158,21 +160,9 @@ export async function runAgentOnCommit({
               }
             }
 
-            for (const filePath of contextFilePaths) {
-              try {
-                const content = execSync(
-                  `git show ${commit.parentSha}:${JSON.stringify(filePath)}`,
-                  {
-                    cwd: repoDir,
-                    encoding: 'utf-8',
-                    maxBuffer: 10 * 1024 * 1024,
-                  },
-                )
-                contextFiles[filePath] = content
-              } catch (error) {
-                contextFiles[filePath] = ''
-              }
-            }
+            contextFiles = await readContextFiles(
+              repoDir, commit.parentSha, [...contextFilePaths], timeoutSignal,
+            )
 
             // Run final check commands if specified
             const resolvedFinalCheckCommands =
@@ -228,6 +218,33 @@ export async function runAgentOnCommit({
       ],
     }),
   }
+}
+
+/** Read parent revisions concurrently while preserving order and per-file fallback. */
+export async function readContextFiles(
+  cwd: string,
+  revision: string,
+  paths: readonly string[],
+  signal?: AbortSignal,
+): Promise<Record<string, string>> {
+  const result: Record<string, string> = {}
+  for (let start = 0; start < paths.length; start += 8) {
+    signal?.throwIfAborted()
+    const batch = paths.slice(start, start + 8)
+    const contents = await Promise.all(batch.map(async (filePath) => {
+      try {
+        const { stdout } = await execFileAsync('git', ['show', `${revision}:${filePath}`], {
+          cwd, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, signal,
+        })
+        return stdout
+      } catch (error) {
+        if (signal?.aborted) throw error
+        return ''
+      }
+    }))
+    batch.forEach((filePath, index) => { result[filePath] = contents[index] })
+  }
+  return result
 }
 
 export function cacheRecallEvalToFinalCheckOutput(

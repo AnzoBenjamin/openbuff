@@ -283,7 +283,14 @@ export const handleReadFiles = (async (
 
   const successfulReadPaths = new Set(
     fileResults
-      .filter((result) => result.status !== 'error')
+      // A truncated file/range exposes no edit anchor and cannot establish
+      // that the agent saw the content needed to recover from a failed edit.
+      .filter(
+        (result) =>
+          result.status === 'ok' &&
+          'complete' in result &&
+          result.complete === true,
+      )
       .map((result) => result.path),
   )
 
@@ -664,31 +671,45 @@ export const handleReadFiles = (async (
       continue
     }
 
-    successfulReadPaths.add(request.path)
-    // Symbol-only success may clear failed_edit gates but never mints whole-file
-    // auth, so it must not drop context_compacted.
-    const symbolRereadReq = getEditRereadRequirement(
-      fileProcessingState,
-      request.path,
-    )
-    if (symbolRereadReq?.reason !== 'context_compacted') {
-      clearEditRereadRequirement(fileProcessingState, request.path, {
-        clearContextCompacted: true,
-      })
+    // Keep each complete slice and its capability up to the response budget;
+    // never discard already useful slices because a later one is too large.
+    let returnedBytes = 0
+    const returnedSlices: typeof slices = []
+    const omittedSymbols: string[] = []
+    for (const slice of slices) {
+      const bytes = Buffer.byteLength(slice.content, 'utf8')
+      if (bytes > MAX_READ_BLOCK_BYTES || returnedBytes + bytes > MAX_READ_BLOCK_BYTES) {
+        omittedSymbols.push(slice.symbol)
+      } else {
+        returnedSlices.push(slice)
+        returnedBytes += bytes
+      }
     }
-    delete fileProcessingState.promisesByPath[request.path]
-    const slicesTooLarge =
-      slices.reduce((total, slice) => total + slice.content.length, 0) > 100_000
+    if (returnedSlices.length > 0) {
+      successfulReadPaths.add(request.path)
+      const symbolRereadReq = getEditRereadRequirement(
+        fileProcessingState,
+        request.path,
+      )
+      if (symbolRereadReq?.reason !== 'context_compacted') {
+        clearEditRereadRequirement(fileProcessingState, request.path, {
+          clearContextCompacted: true,
+        })
+      }
+      delete fileProcessingState.promisesByPath[request.path]
+    }
     symbolResults.push({
       selector: 'symbols',
       requestIndex,
       path: request.path,
-      status: missingSymbols.length > 0 || slicesTooLarge ? 'partial' : 'ok',
+      status: missingSymbols.length > 0 || omittedSymbols.length > 0 ? 'partial' : 'ok',
       requestedSymbols: request.names,
       missingSymbols,
-      ...(slicesTooLarge
-        ? { slicesOmittedForLength: true as const }
-        : { slices }),
+      slices: returnedSlices,
+      ...(omittedSymbols.length > 0 && {
+        omittedSymbols,
+        recovery: `Some symbol slices exceeded the ${MAX_READ_BLOCK_BYTES}-byte response budget. Request omitted symbols separately, or use smaller ranges/windows for a single oversized symbol.`,
+      }),
     })
   }
 

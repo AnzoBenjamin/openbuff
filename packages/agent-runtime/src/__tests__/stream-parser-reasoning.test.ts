@@ -114,6 +114,16 @@ describe('stream parser reasoning history', () => {
     expect(textParts).toEqual(['Visible answer.'])
   })
 
+  it('retains reasoning required by the resolved provider', async () => {
+    async function* mockStream(): AsyncGenerator<StreamChunk, PromptResult<string | null>> {
+      yield { type: 'reasoning', text: 'First ', replayRequired: true }
+      yield { type: 'reasoning', text: 'second', replayRequired: true }
+      yield { type: 'text', text: 'Answer' }
+      return { aborted: false, value: 'msg-id' }
+    }
+    expect(getReasoningParts(await runStream(mockStream()))).toEqual(['First second'])
+  })
+
   it('consolidates consecutive reasoning chunks into a single message when enabled', async () => {
     async function* mockStream(): AsyncGenerator<
       StreamChunk,

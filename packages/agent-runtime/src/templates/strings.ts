@@ -27,6 +27,7 @@ import { getAgentTemplate } from './agent-registry'
 import {
   buildFullSpawnableAgentsSpec,
   formatCompactAgentCatalogLine,
+  formatGenericAgentInputContract,
   getModelVisibleSpawnableAgents,
 } from './prompts'
 import { PLACEHOLDER, placeholderValues } from './types'
@@ -410,7 +411,7 @@ export async function getAgentPrompt<T extends StringField>(
             agentId: agentType,
             localAgentTemplates: agentTemplates,
           })
-          return formatCompactAgentCatalogLine(
+          const line = formatCompactAgentCatalogLine(
             agentType,
             template,
             params.resolveModelContextWindow?.({
@@ -418,6 +419,9 @@ export async function getAgentPrompt<T extends StringField>(
               model: template?.model,
             }),
           )
+          return agentTemplate.spawnableAgentToolMode === 'generic' && template
+            ? `${line}\n${formatGenericAgentInputContract(agentType, template)}`
+            : line
         }),
       )
       addendum += `\n\nYou can spawn the following agents:\n\n${agentDescriptions.join('\n')}`

@@ -25,6 +25,71 @@ const toolCallMetadata = {
 }
 
 describe('OpenAICompatibleChatLanguageModel tool-call metadata', () => {
+  it('includes usage sent after a tool-call finish chunk', async () => {
+    const events = [
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call-1',
+                  type: 'function',
+                  function: { name: 'read_docs', arguments: '{}' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+      {
+        choices: [],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: 7,
+          total_tokens: 27,
+          prompt_tokens_details: { cached_tokens: 12 },
+          completion_tokens_details: { reasoning_tokens: 3 },
+        },
+      },
+    ]
+    const fetch = (async () =>
+      new Response(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') +
+          'data: [DONE]\n\n',
+        { headers: { 'content-type': 'text/event-stream' } },
+      )) as unknown as FetchFunction
+    const model = new OpenAICompatibleChatLanguageModel('test-model', {
+      provider: 'agent-platform.chat',
+      headers: () => ({}),
+      url: () => 'https://example.test',
+      fetch,
+      includeUsage: true,
+    })
+    const result = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'Use docs' }] }],
+    } as any)
+    const chunks: LanguageModelV2StreamPart[] = []
+    const reader = result.stream.getReader()
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+    }
+    expect(chunks.find((chunk) => chunk.type === 'finish')).toMatchObject({
+      finishReason: 'tool-calls',
+      usage: {
+        inputTokens: 20,
+        outputTokens: 7,
+        totalTokens: 27,
+        cachedInputTokens: 12,
+        reasoningTokens: 3,
+      },
+    })
+  })
   it('rejects a non-streaming response with no choices', async () => {
     const fetch = (async () =>
       Response.json({
@@ -203,6 +268,69 @@ describe('OpenAICompatibleChatLanguageModel malformed tool-call streaming', () =
     }
     return chunks
   }
+
+  function toolDelta(index: number, name: string | undefined, args: string) {
+    return {
+      id: 'chatcmpl-test',
+      model: 'test-model',
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index,
+                ...(name ? { id: `call-${index}`, type: 'function' } : {}),
+                function: { ...(name ? { name } : {}), arguments: args },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    }
+  }
+
+  it('replaces an empty placeholder with later streamed object arguments', async () => {
+    const chunks = await collectStreamChunks([
+      toolDelta(0, 'read_outline', ''),
+      toolDelta(0, undefined, '{}'),
+      toolDelta(0, undefined, '{"path":'),
+      toolDelta(0, undefined, '"src/example.ts"}'),
+    ])
+    const calls = chunks.filter((chunk) => chunk.type === 'tool-call')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      toolName: 'read_outline',
+      input: '{"path":"src/example.ts"}',
+    })
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === 'tool-input-delta')
+        .map((chunk) => (chunk as { delta: string }).delta)
+        .join(''),
+    ).toBe('{"path":"src/example.ts"}')
+  })
+
+  it('delivers a genuine empty object at stream end alongside other calls', async () => {
+    const chunks = await collectStreamChunks([
+      toolDelta(0, 'git_status', '{}'),
+      toolDelta(1, 'read_outline', '{"path":"src/example.ts"}'),
+      toolDelta(0, undefined, '  '),
+    ])
+    const calls = chunks.filter((chunk) => chunk.type === 'tool-call')
+    expect(calls).toHaveLength(2)
+    expect(calls).toContainEqual(
+      expect.objectContaining({ toolName: 'git_status', input: '{}  ' }),
+    )
+    expect(
+      chunks
+        .filter(
+          (chunk) => chunk.type === 'tool-input-delta' && chunk.id === 'call-0',
+        )
+        .map((chunk) => (chunk as { delta: string }).delta)
+        .join(''),
+    ).toBe('{}  ')
+  })
 
   it('preserves structured provider metadata on streaming error chunks', async () => {
     const chunks = await collectStreamChunks([

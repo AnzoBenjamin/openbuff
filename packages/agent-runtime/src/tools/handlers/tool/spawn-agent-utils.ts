@@ -614,9 +614,6 @@ export function deriveSpawnTemplateCapabilities(params: {
 // Pure output-bounding helpers with no filesystem or receipt coupling.
 // ───────────────────────────────────────────────────────────────────────────
 
-const REVIEWER_EVIDENCE_ITEM_LIMIT = 3
-const REVIEWER_EVIDENCE_CHARS = 360
-const REVIEWER_REQUIREMENT_EVIDENCE_LIMIT = 2
 /**
  * Upper size bound for JSON-parsing reviewer payload strings, both the
  * whole-receipt `structuredOutput.value` branches in normalizeSpawnedAgentOutput
@@ -830,61 +827,10 @@ function compactReviewerOutput(
   // without coercion such a payload reads as a verdict-less degenerate
   // receipt and the parent re-reviews forever.
   const coerced = coerceReviewerPayloadFields(output)
-  if (typeof coerced.verdict !== 'string') {
-    return coerced
-  }
-
-  const findings = Array.isArray(coerced.findings)
-    ? coerced.findings.map((finding) => {
-        if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
-          return finding
-        }
-        const record = finding as Record<string, unknown>
-        return {
-          ...record,
-          ...(Array.isArray(record.evidence)
-            ? {
-                evidence: record.evidence
-                  .slice(0, REVIEWER_EVIDENCE_ITEM_LIMIT)
-                  .map((item) =>
-                    truncateReviewerText(item, REVIEWER_EVIDENCE_CHARS),
-                  ),
-              }
-            : {}),
-        }
-      })
-    : coerced.findings
-
-  const requirementCoverage = Array.isArray(coerced.requirementCoverage)
-    ? coerced.requirementCoverage.map((requirement) => {
-        if (
-          !requirement ||
-          typeof requirement !== 'object' ||
-          Array.isArray(requirement)
-        ) {
-          return requirement
-        }
-        const record = requirement as Record<string, unknown>
-        return {
-          ...record,
-          ...(Array.isArray(record.evidence)
-            ? {
-                evidence: record.evidence
-                  .slice(0, REVIEWER_REQUIREMENT_EVIDENCE_LIMIT)
-                  .map((item) =>
-                    truncateReviewerText(item, REVIEWER_EVIDENCE_CHARS),
-                  ),
-              }
-            : {}),
-        }
-      })
-    : coerced.requirementCoverage
-
-  return {
-    ...coerced,
-    findings,
-    requirementCoverage,
-  }
+  // The shared parent-output budget handles oversized receipts and persists
+  // the full value when it clips. Truncating evidence here would discard it
+  // before that recovery path can see or save the original.
+  return coerced
 }
 
 function compactAgentOutputValue(
@@ -892,8 +838,10 @@ function compactAgentOutputValue(
   depth = 0,
   fieldName?: string,
   truncation = { omittedItems: 0, omittedChars: 0 },
+  preserveStrings = false,
 ): unknown {
   if (typeof value === 'string') {
+    if (preserveStrings) return value
     const compacted = truncateReviewerText(
       value,
       fieldName && HIGH_FIDELITY_STRING_FIELDS.has(fieldName)
@@ -919,15 +867,16 @@ function compactAgentOutputValue(
       : value.slice(0, PARENT_AGENT_OUTPUT_ARRAY_ITEMS)
     truncation.omittedItems += Math.max(0, value.length - entries.length)
     return entries.map((entry) =>
-      compactAgentOutputValue(entry, depth + 1, undefined, truncation),
+      compactAgentOutputValue(entry, depth + 1, undefined, truncation, preserveStrings),
     )
   }
+  const entries = Object.entries(value as Record<string, unknown>)
+  truncation.omittedItems += Math.max(0, entries.length - 64)
   const compacted = Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .slice(0, 64)
+    entries.slice(0, 64)
       .map(([key, entry]) => [
         key,
-        compactAgentOutputValue(entry, depth + 1, key, truncation),
+        compactAgentOutputValue(entry, depth + 1, key, truncation, preserveStrings),
       ]),
   )
   return compacted
@@ -1212,16 +1161,21 @@ function boundAgentOutputForParent(
   agentType?: string,
 ): unknown {
   const truncation = { omittedItems: 0, omittedChars: 0 }
-  const rawCompacted = compactAgentOutputValue(value, 0, undefined, truncation)
+  // A leaf cap should not destroy useful content that already fits the total
+  // parent budget. Keep structural bounds, and clip strings only when the full
+  // serialized output exceeds that budget or cannot be serialized.
+  let preserveStrings = false
+  try {
+    const raw = JSON.stringify(value)
+    preserveStrings = typeof raw === 'string' && raw.length <= PARENT_AGENT_OUTPUT_MAX_CHARS
+  } catch {
+    // The existing bounded fallback handles unserializable output.
+  }
+  const rawCompacted = compactAgentOutputValue(value, 0, undefined, truncation, preserveStrings)
   // Did compaction actually lose anything? This ledger is the ONLY honest
   // signal that the parent-visible payload is a fragment: it is set by every
-  // clipped string leaf (32k high-fidelity / 4k default), every clipped array
-  // (48-item default), and every depth≥7 collapse. The size gate below is a
-  // DIFFERENT concern (whole-payload budget), so a 40k–250k child — or a
-  // single 40k `message`/`summary` leaf — used to slip through the size gate
-  // and reach the parent as a silent fragment with no artifactPath and no
-  // recovery path. Track `clipped` from the ledger and treat it as truncation
-  // everywhere below, independent of the payload's total size.
+  // clipped string leaf, array, object key, and depth≥7 collapse. Structural
+  // clipping can still occur under the size budget, so track it independently.
   const clipped = truncation.omittedItems > 0 || truncation.omittedChars > 0
   const compacted =
     rawCompacted &&
@@ -1287,10 +1241,8 @@ function boundAgentOutputForParent(
         artifactError:
           'Oversize agent output could NOT be persisted to the oversize artifact directory (tmp unwritable); the parent-visible payload below is truncated and not fully recoverable via read_files.',
       }
-  // Clipped but WITHIN the whole-payload budget: this is the common case the
-  // defect left unrecoverable (a child whose payload is 40k–250k chars, or
-  // whose single message/summary leaf exceeds 32k). Persisting a payload this
-  // size is cheap and is the whole point: keep the caller's own shape (so the
+  // Structurally clipped but WITHIN the whole-payload budget: keep the caller's
+  // own shape (so the
   // structured `value` wrapper every consumer walks survives untouched), but
   // stamp `truncated: true` on the envelope root — the D19 outcome classifier
   // only inspects the normalized output ROOT, so leaf-level clipping would
@@ -2550,7 +2502,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   // schema_invalid settle detail. A degenerate reviewer-family payload names
   // the real problem (missing verdict) instead of the generic fallback.
   const schemaInvalidDetail = reviewerMissingVerdict
-    ? `${params.agentType} returned a reviewer-family receipt without a verdict field (degenerate structured output; automated re-review will be triggered)`
+    ? `${params.agentType} returned a reviewer-family receipt without a verdict field; the review cannot be accepted.`
     : (lastSetOutputErrorText ??
       crashEnvelopeMessage ??
       'set_output failed schema validation')

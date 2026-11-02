@@ -696,6 +696,7 @@ function createConfiguredOpenAICompatibleModel(
     includeUsage: undefined,
     supportsStructuredOutputs: provider.supportsStructuredOutputs,
     stringifyTextContent: resolvedModel.compatibility.stringifyTextContent,
+    reasoningReplay: resolvedModel.compatibility.reasoningReplay === 'required',
   })
 }
 

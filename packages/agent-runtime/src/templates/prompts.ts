@@ -23,13 +23,14 @@ export type ResolveModelContextWindow = NonNullable<
   AgentRuntimeDeps['resolveModelContextWindow']
 >
 
-function ensureJsonSchemaCompatible(schema: z.ZodType): z.ZodType {
+function ensureJsonSchemaCompatible(schema: z.ZodType, agentType: string): z.ZodType {
   try {
     z.toJSONSchema(schema, { io: 'input' })
     return schema
-  } catch {
-    const fallback = z.object({}).passthrough()
-    return schema.description ? fallback.describe(schema.description) : fallback
+  } catch (error) {
+    throw new Error(`Cannot publish spawn input schema for agent ${agentType}`, {
+      cause: error,
+    })
   }
 }
 
@@ -286,6 +287,29 @@ export function buildAgentToolInputSchema(
     )
 }
 
+/** Exact child-specific portion of a generic spawn entry, rendered from the
+ * same input schemas used for direct agent tools. The shared `agent_type`,
+ * `handoff`, and `background` fields are already described by spawn_agents. */
+export function formatGenericAgentInputContract(
+  agentType: AgentTemplateType,
+  agentTemplate: AgentTemplate,
+): string {
+  const fields: Record<string, z.ZodType> = {}
+  if (agentTemplate.inputSchema?.prompt) {
+    fields.prompt = coerceJsonSchemaMember(agentTemplate.inputSchema.prompt) as z.ZodType
+  }
+  if (agentTemplate.inputSchema?.params) {
+    fields.params = coerceJsonSchemaMember(agentTemplate.inputSchema.params) as z.ZodType
+  }
+  try {
+    const schema = z.toJSONSchema(z.object(fields), { io: 'input' })
+    delete schema.$schema
+    return `Spawn input for ${agentType} (native JSON; merge these fields into the agent entry): ${JSON.stringify(schema)}`
+  } catch (error) {
+    throw new Error(`Cannot publish spawn input schema for agent ${agentType}`, { cause: error })
+  }
+}
+
 /**
  * Builds AI SDK tool definitions for spawnable agents.
  * These tools allow the model to call agents directly as tool calls.
@@ -328,6 +352,7 @@ export async function buildAgentToolSet(
     const toolName = getAgentToolName(agentType)
     const inputSchema = ensureJsonSchemaCompatible(
       buildAgentToolInputSchema(agentTemplate),
+      agentType,
     )
 
     // Use the same structure as other tools in toolParams
@@ -376,6 +401,7 @@ params: None`
     agentTemplate.inheritParentSystemPrompt &&
       "This agent inherits the parent's system prompt for prompt caching.",
     inputSchemaStr,
+    formatGenericAgentInputContract(agentType, agentTemplate),
   ).join('\n')
 }
 

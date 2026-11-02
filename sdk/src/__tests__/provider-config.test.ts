@@ -10,10 +10,25 @@ import {
   loadProviderConfigSync,
   providerConfigFileSchema,
   resolveContextWindowTokens,
+  resolveConfiguredProviderModel,
   writeProviderConfigFile,
 } from '../provider-config'
 
 const originalEnv = { ...process.env }
+
+test('reasoning replay defaults for IFM and can be configured for other endpoints', () => {
+  function resolve(baseURL: string, reasoningReplay?: 'required' | 'none') {
+    const config = providerConfigFileSchema.parse({
+      providers: { example: { baseURL, models: ['model'], ...(reasoningReplay && { compatibility: { reasoningReplay } }) } },
+    })
+    return resolveConfiguredProviderModel({ model: 'example/model', loadedConfig: { config, sourceFilePaths: [] }, env: {} })?.compatibility.reasoningReplay
+  }
+  expect(resolve('https://api.ifm.ai/v1')).toBe('required')
+  expect(resolve('https://api.ifm.ai/v1', 'none')).toBe('none')
+  expect(resolve('https://example.com/v1')).toBeUndefined()
+  expect(resolve('https://example.com/v1', 'required')).toBe('required')
+  expect(resolve('https://api.ifm.ai.example.com/v1')).toBeUndefined()
+})
 const originalCwd = process.cwd()
 
 function resetEnv() {

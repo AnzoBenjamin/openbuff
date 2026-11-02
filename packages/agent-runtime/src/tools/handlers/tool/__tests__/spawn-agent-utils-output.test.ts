@@ -616,36 +616,42 @@ describe('normalizeSpawnedAgentOutput oversize artifact persistence', () => {
  * neither read the full output back nor tell the result had been cut (the D19
  * classifier only inspects the ROOT, so it reported `outcome: 'ok'`).
  */
-describe('normalizeSpawnedAgentOutput clipped non-oversize recovery', () => {
+describe('normalizeSpawnedAgentOutput output budget', () => {
   const clippedPayload = () => ({
     type: 'structuredOutput',
     value: { status: 'completed', message: 'm'.repeat(40_000) },
   })
 
-  test('persists the full payload and flags truncation at the root when a leaf is clipped under the size bound', () => {
+  test('preserves a long message when the complete output fits the total budget', () => {
     const payload = clippedPayload()
-    // Pin the regime: the serialized payload is far below the 256k bound (so
-    // the historical size-gated artifact path never fired) while the
-    // high-fidelity `message` leaf exceeds its 32k cap (so content IS lost).
     expect(JSON.stringify(payload).length).toBeLessThan(256_000)
 
     const normalized = normalizeSpawnedAgentOutput(payload, 'researcher-web') as any
-    expect(normalized.truncated).toBe(true)
-    expect(normalized.truncation.omittedChars).toBeGreaterThan(0)
-    expect(typeof normalized.artifactPath).toBe('string')
-    expect(normalized.artifact).toBe(
-      'Full untruncated output persisted; read with read_files.',
-    )
-    expect(normalized.artifactBytes).toBeGreaterThan(256_000 - 256_000)
-    // The caller's own envelope shape survives (the structured value wrapper
-    // every consumer walks is untouched apart from the clipped leaf).
+    expect(normalized.truncated).toBeUndefined()
     expect(normalized.type).toBe('structuredOutput')
     expect(normalized.value.status).toBe('completed')
-    expect(normalized.value.message.length).toBeLessThan(40_000)
-    // The recovery path is real: read_files on the artifact yields the FULL
-    // untruncated output.
-    const persisted = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
-    expect(persisted).toEqual(payload)
+    expect(normalized.value.message).toBe(payload.value.message)
+  })
+
+  test('marks and preserves a recoverable artifact when object keys are omitted', () => {
+    const payload = { type: 'structuredOutput', value: Object.fromEntries(
+      Array.from({ length: 70 }, (_, index) => [`field${index}`, index]),
+    ) }
+    const normalized = normalizeSpawnedAgentOutput(payload, 'researcher-web') as any
+    expect(normalized.truncated).toBe(true)
+    expect(normalized.truncation.omittedItems).toBe(6)
+    expect(JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))).toEqual(payload)
+  })
+
+  test('persists the original reviewer evidence when a receipt exceeds the budget', () => {
+    const evidence = ['x'.repeat(300_000), 'second', 'third', 'fourth']
+    const payload = { type: 'structuredOutput', value: {
+      family: 'reviewer', verdict: 'BLOCKING', findings: [{ evidence }],
+    } }
+    const normalized = normalizeSpawnedAgentOutput(payload, 'reliability-reviewer') as any
+    expect(normalized.truncated).toBe(true)
+    const saved = JSON.parse(readFileSync(normalized.artifactPath, 'utf8'))
+    expect(saved.value.findings[0].evidence).toEqual(evidence)
   })
 
   test('degrades to artifact diagnostic fields (never throws) when persistence fails', () => {
@@ -658,7 +664,7 @@ describe('normalizeSpawnedAgentOutput clipped non-oversize recovery', () => {
     process.env.TMPDIR = blockerFile
     try {
       const normalized = normalizeSpawnedAgentOutput(
-        clippedPayload(),
+        { type: 'structuredOutput', value: { status: 'completed', message: 'm'.repeat(300_000) } },
         'researcher-web',
       ) as any
       // The clipping is still reported honestly; only the recovery pointer
@@ -1164,18 +1170,13 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', () => {
     expect(receipt.errors).toEqual([])
   })
 
-  test('records truncated (not ok) for a clipped payload under the size bound, without downgrading status', () => {
-    // The classifier inspects the normalized output ROOT. A sub-256k payload
-    // whose `message` leaf was clipped used to carry NO root truncation flag,
-    // so a clipped result settled as `outcome: 'ok'`. The root now reports
-    // `truncated: true`, which must yield `outcome: 'truncated'` while the
-    // completed status is preserved (truncated is not a failure).
+  test('records structural truncation under the size bound without downgrading status', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
       agentId: 'a-clipped-sub256k',
       output: {
         type: 'structuredOutput',
-        value: { status: 'completed', message: 'm'.repeat(40_000) },
+        value: { status: 'completed', items: Array.from({ length: 60 }, (_, index) => index) },
       },
     })
     expect(receipt.outcome).toBe('truncated')
@@ -1636,7 +1637,7 @@ describe('buildRuntimeAgentReceipt reviewer-family verdict guard', () => {
     expect(receipt.errors).toEqual([
       {
         message:
-          "security-reviewer receipt outcome 'schema_invalid': security-reviewer returned a reviewer-family receipt without a verdict field (degenerate structured output; automated re-review will be triggered)",
+          "security-reviewer receipt outcome 'schema_invalid': security-reviewer returned a reviewer-family receipt without a verdict field; the review cannot be accepted.",
         retryable: true,
       },
     ])

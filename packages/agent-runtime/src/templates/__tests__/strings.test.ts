@@ -854,6 +854,46 @@ describe('getAgentPrompt', () => {
       expect(result).not.toContain('Required params: `command`')
     })
 
+    test('generic spawn catalog publishes the complete child input shape', async () => {
+      const child = createMockAgentTemplate({
+        id: 'typed-child',
+        displayName: 'Typed Child',
+        spawnerPrompt: 'Use params.files to inspect files.',
+        inputSchema: {
+          prompt: z.string().optional(),
+          params: z.object({
+            files: z.array(z.object({ path: z.string(), lines: z.array(z.number()) })),
+            mode: z.enum(['brief', 'full']).optional(),
+          }),
+        },
+      })
+      const parent = createMockAgentTemplate({
+        id: 'main-agent',
+        displayName: 'Main Agent',
+        spawnableAgents: ['typed-child'],
+        spawnableAgentToolMode: 'generic',
+        instructionsPrompt: 'Main agent instructions.',
+      })
+      const result = await getAgentPrompt({
+        agentTemplate: parent,
+        promptType: { type: 'instructionsPrompt' },
+        fileContext: createMockFileContext(),
+        agentState: createMockAgentState('main-agent'),
+        agentTemplates: { 'main-agent': parent, 'typed-child': child },
+        additionalToolDefinitions: async () => ({}),
+        logger: createMockLogger(),
+        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+      })
+      const contractLine = result!.split('\n').find((line) => line.startsWith('Spawn input for typed-child'))!
+      const schema = JSON.parse(contractLine.slice(contractLine.indexOf(': {') + 2))
+      expect(schema.required).toEqual(['params'])
+      expect(schema.properties.params.required).toContain('files')
+      expect(schema.properties.params.properties.files.items.properties.lines.items.type).toBe('number')
+      expect(schema.properties.params.properties.mode.enum).toEqual(['brief', 'full'])
+    })
+
     test('compact catalog names required params for live roster agents', () => {
       const roster = [
         gitCommitter,

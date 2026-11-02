@@ -1,25 +1,70 @@
 import { describe, expect, it } from 'bun:test'
 import { toolParams } from '@codebuff/common/tools/list'
+import {
+  compileToolJsonSchemas,
+  resolveToolParameterSchema,
+} from '@codebuff/common/tools/compile-tool-definitions'
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 import z from 'zod/v4'
 import { hasDecisionRationale } from '@codebuff/common/util/decision-rationale'
 import { compactToolInputSchemaForProvider, getToolSet } from '../tools/prompts'
 
 describe('provider tool input contracts', () => {
-  it('preserves declared property names across every convertible built-in schema', () => {
+  it('publishes the same built-in constraints in generated artifacts and provider schemas', async () => {
+    const artifacts = compileToolJsonSchemas()
+    const tools = await getToolSet({
+      toolNames: Object.keys(artifacts),
+      additionalToolDefinitions: async () => ({}),
+      agentTools: {},
+      skills: {},
+    })
+    const clean = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(clean)
+      if (!value || typeof value !== 'object') return value
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(
+            ([key]) =>
+              !['$schema', 'errorMessage', 'markdownDescription'].includes(key),
+          )
+          .map(([key, entry]) => [key, clean(entry)]),
+      )
+    }
+    for (const [name, artifact] of Object.entries(artifacts)) {
+      const schema = (tools[name].inputSchema as { jsonSchema: unknown })
+        .jsonSchema
+      expect(clean(schema), name).toEqual(clean(artifact))
+    }
+  })
+  it('preserves nested types and constraints across every built-in provider schema', () => {
     const skipped: string[] = []
     let checked = 0
     const verify = (original: unknown, compacted: unknown, path: string) => {
       if (!original || typeof original !== 'object' || Array.isArray(original))
         return
-      if (
-        !compacted ||
-        typeof compacted !== 'object' ||
-        Array.isArray(compacted)
-      )
-        return
+      expect(compacted, path).toBeObject()
+      expect(Array.isArray(compacted), path).toBe(false)
       const source = original as Record<string, unknown>
       const target = compacted as Record<string, unknown>
+      for (const key of [
+        'type',
+        'required',
+        'enum',
+        'const',
+        'minimum',
+        'maximum',
+        'exclusiveMinimum',
+        'exclusiveMaximum',
+        'minLength',
+        'maxLength',
+        'minItems',
+        'maxItems',
+        'pattern',
+        'format',
+      ]) {
+        if (key in source)
+          expect(target[key], `${path}.${key}`).toEqual(source[key])
+      }
       if (
         source.properties &&
         typeof source.properties === 'object' &&
@@ -42,10 +87,18 @@ describe('provider tool input contracts', () => {
         'then',
         'else',
       ]) {
-        if (source[key]) verify(source[key], target[key], `${path}.${key}`)
+        if (source[key] && typeof source[key] === 'object') {
+          verify(source[key], target[key], `${path}.${key}`)
+        } else if (key in source) {
+          expect(target[key], `${path}.${key}`).toEqual(source[key])
+        }
       }
       for (const key of ['anyOf', 'oneOf', 'allOf', 'prefixItems']) {
-        if (Array.isArray(source[key]) && Array.isArray(target[key])) {
+        if (Array.isArray(source[key])) {
+          expect(Array.isArray(target[key]), `${path}.${key}`).toBe(true)
+          expect((target[key] as unknown[]).length, `${path}.${key}`).toBe(
+            (source[key] as unknown[]).length,
+          )
           source[key].forEach((item, index) =>
             verify(
               item,
@@ -59,7 +112,9 @@ describe('provider tool input contracts', () => {
     for (const [name, definition] of Object.entries(toolParams)) {
       let original: unknown
       try {
-        original = z.toJSONSchema(definition.inputSchema, { io: 'input' })
+        original = z.toJSONSchema(resolveToolParameterSchema(definition), {
+          io: 'input',
+        })
       } catch {
         skipped.push(name)
         continue
@@ -67,7 +122,9 @@ describe('provider tool input contracts', () => {
       checked++
       verify(
         original,
-        compactToolInputSchemaForProvider(definition.inputSchema).jsonSchema,
+        compactToolInputSchemaForProvider(
+          resolveToolParameterSchema(definition),
+        ).jsonSchema,
         name,
       )
     }
@@ -101,9 +158,9 @@ describe('provider tool input contracts', () => {
       'default',
       'nested',
     ])
-    expect(
-      (properties.title as Record<string, unknown>).description,
-    ).toBeUndefined()
+    expect((properties.title as Record<string, unknown>).description).toBe(
+      'a title',
+    )
     expect(validator.safeParse(payload).success).toBe(true)
     expect(validator.safeParse({ ...payload, title: undefined }).success).toBe(
       false,

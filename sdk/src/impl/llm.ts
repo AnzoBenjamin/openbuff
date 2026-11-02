@@ -69,7 +69,7 @@ import type {
   ToolCallStreamChunk,
 } from '@codebuff/common/types/contracts/llm'
 import type { OpenRouterProviderOptions } from '@codebuff/internal/openrouter-ai-sdk'
-import type { GenerateObjectResult, LanguageModel } from 'ai'
+import type { GenerateObjectResult, LanguageModel, ModelMessage } from 'ai'
 import type z from 'zod/v4'
 import { trimMessagesToFitTokenLimit } from '@codebuff/agent-runtime/util/messages'
 import { getModelContextMessageLimit } from '@codebuff/agent-runtime/util/context-pruning'
@@ -621,6 +621,56 @@ function getPlainToolInputSchema(inputSchema: unknown): unknown {
   return undefined
 }
 
+/** Render the actual active tool surface for providers without native tools. */
+export function buildTextToolInstructions(tools: unknown): string {
+  if (!tools || typeof tools !== 'object' || Object.keys(tools).length === 0) return ''
+  const entries = Object.entries(tools as Record<string, unknown>).map(([name, value]) => {
+    const definition = value as { description?: string; inputSchema?: unknown }
+    let schema = getPlainToolInputSchema(definition.inputSchema)
+    if (schema === undefined) {
+      try {
+        schema = asSchema(definition.inputSchema as Parameters<typeof asSchema>[0]).jsonSchema
+      } catch {
+        throw new Error(`Cannot render input schema for tool ${name} on a provider without native tools`)
+      }
+    }
+    if (schema === undefined) throw new Error(`Missing input schema for tool ${name} on a provider without native tools`)
+    return JSON.stringify({ name, description: definition.description, inputSchema: schema })
+  })
+  return [
+    'You can call only the tools listed below. Each inputSchema describes the JSON object parameters for that tool.',
+    'To call a tool, output <codebuff_tool_call> followed by one JSON object with "cb_tool_name" set to the tool name and the tool parameters as other fields, followed by </codebuff_tool_call>. Use JSON arrays and objects, not strings containing JSON.',
+    ...entries,
+  ].join('\n')
+}
+
+/** Convert prior native tool exchanges into text for providers without tool roles. */
+export function textOnlyToolHistory(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message): ModelMessage => {
+    if (message.role === 'tool') {
+      return {
+        role: 'user',
+        content: message.content.map((part) => ({
+          type: 'text' as const,
+          text: `Tool result for ${part.toolName} (${part.toolCallId}): ${JSON.stringify(part.output)}`,
+        })),
+      }
+    }
+    if (message.role !== 'assistant' || typeof message.content === 'string') return message
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === 'tool-call'
+          ? {
+              type: 'text' as const,
+              text: `<codebuff_tool_call>\n${JSON.stringify({ cb_tool_name: part.toolName, ...part.input as object })}\n</codebuff_tool_call>`,
+            }
+          : part,
+      ),
+    }
+  })
+}
+
 /**
  * Size-aware token reservation for a tool whose `inputSchema` is an opaque
  * validation-library schema instance. The instance itself is never
@@ -1149,6 +1199,7 @@ export async function* promptAiSdkStream(
           supportsTools: boolean
           stripProviderMetadata: boolean
           stripCacheControl: boolean
+          reasoningReplay?: 'required' | 'none'
         }
 
         try {
@@ -1217,14 +1268,50 @@ export async function* promptAiSdkStream(
           // and retries can resolve a different model whose compatibility
           // layer strips `tools` from the request, and the emergency brake
           // must subtract the overhead of the request actually sent.
-          const requestOverheadTokens = countRequestOverheadTokens({
-            system: streamParams.system,
+          const textToolInstructions = compatibility.supportsTools === false
+            ? buildTextToolInstructions(streamParams.tools)
+            : ''
+          const requestSystem = [streamParams.system, textToolInstructions].filter(Boolean).join('\n\n')
+          let requestOverheadTokens = countRequestOverheadTokens({
+            system: requestSystem,
             tools: streamParams.tools,
             includeTools: compatibility.supportsTools !== false,
           })
+          if (compatibility.supportsTools === false) {
+            // Reserve the expansion from rendering historical calls/results as
+            // text before trimming. Counting the complete history is a safe
+            // upper bound even if trimming subsequently removes some calls.
+            const history = convertCbToModelMessages({
+              messages: params.messages,
+              includeCacheControl: false,
+              logger,
+            })
+            requestOverheadTokens += Math.max(
+              0,
+              countTokensJson(textOnlyToolHistory(history)) - countTokensJson(history),
+            )
+          }
 
+          const requestMessages = convertCbToModelMessages({
+            ...params,
+            messages: getMessagesForModelContext({
+              messages: params.messages,
+              contextWindowTokens: contextWindowTokens ?? undefined,
+              maxTotalTokensOverride: providerMessageLimitOverride,
+              systemTokens: requestOverheadTokens,
+              logger,
+              trackEvent,
+              userId,
+              userInputId,
+              model: effectiveModel,
+              onTrimmed: params.onRequestContextTrimmed,
+            }),
+            includeCacheControl:
+              isChatGptOAuth && compatibility.stripCacheControl === false,
+          })
           response = streamText({
             ...streamParams,
+            system: requestSystem || undefined,
             // Provider-config default output ceiling (defaultCapabilities/modelCapabilities
             // context.outputTokens). The caller's explicit maxOutputTokens (agent template)
             // always wins; this only fills the gap when the template leaves it unset.
@@ -1241,23 +1328,9 @@ export async function* promptAiSdkStream(
               : {}),
             prompt: undefined,
             model: aiSDKModel,
-            messages: convertCbToModelMessages({
-              ...params,
-              messages: getMessagesForModelContext({
-                messages: params.messages,
-                contextWindowTokens: contextWindowTokens ?? undefined,
-                maxTotalTokensOverride: providerMessageLimitOverride,
-                systemTokens: requestOverheadTokens,
-                logger,
-                trackEvent,
-                userId,
-                userInputId,
-                model: effectiveModel,
-                onTrimmed: params.onRequestContextTrimmed,
-              }),
-              includeCacheControl:
-                isChatGptOAuth && compatibility.stripCacheControl === false,
-            }),
+            messages: compatibility.supportsTools === false
+              ? textOnlyToolHistory(requestMessages)
+              : requestMessages,
             ...(isChatGptOAuth && { maxRetries: 0 }),
             ...(hasProviderOptions(requestProviderOptions)
               ? { providerOptions: requestProviderOptions }
@@ -1558,12 +1631,19 @@ export async function* promptAiSdkStream(
                       | undefined
                   )?.reasoning?.exclude,
               )
-              if (!reasoningExcluded) {
+              if (
+                !reasoningExcluded ||
+                compatibility.reasoningReplay === 'required'
+              ) {
                 hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'reasoning',
                   text: chunkValue.text,
+                  ...(compatibility.reasoningReplay === 'required' && {
+                    replayRequired: true,
+                  }),
+                  ...(reasoningExcluded && { suppressDisplay: true }),
                 }
               }
             }

@@ -1,3 +1,4 @@
+import { applyToolSchemaConstraints } from '@codebuff/common/tools/provider-schema'
 import { endsAgentStepParam } from '@codebuff/common/tools/constants'
 import { toolParams } from '@codebuff/common/tools/list'
 import { getToolMetadata } from '@codebuff/common/tools/metadata'
@@ -42,28 +43,28 @@ function ensureJsonSchemaCompatible(schema: z.ZodType): z.ZodType {
   try {
     z.toJSONSchema(schema, { io: 'input' })
     return schema
-  } catch {
-    const fallback = z.object({}).passthrough()
-    return schema.description ? fallback.describe(schema.description) : fallback
+  } catch (error) {
+    throw new Error(`Cannot publish tool input schema: ${String(error)}`, {
+      cause: error,
+    })
   }
 }
 
 function toJsonSchemaSafe(schema: z.ZodType): Record<string, unknown> {
   try {
     return z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>
-  } catch {
-    return { type: 'object', properties: {} }
+  } catch (error) {
+    throw new Error(`Cannot publish tool input schema: ${String(error)}`, {
+      cause: error,
+    })
   }
 }
 
 const providerSchemaAnnotationKeys = new Set([
   '$schema',
   'description',
-  'default',
   'errorMessage',
-  'examples',
   'markdownDescription',
-  'title',
 ])
 
 // These schema keywords contain a map whose keys are user-defined names, not
@@ -97,13 +98,11 @@ function compactJsonSchemaValue(
   for (const [key, childValue] of Object.entries(value)) {
     // Literal values in const/enum are not schemas and may themselves have
     // fields named title, description, or other annotation keywords.
-    if (!isNameMap && (key === 'const' || key === 'enum')) {
+    if (!isNameMap && ['const', 'enum', 'default', 'examples'].includes(key)) {
       compacted[key] = childValue
       continue
     }
-    // Descriptions are the one annotation mutation tools keep so the model
-    // still sees per-field guidance for a bare discriminated union; every
-    // other annotation key stays stripped for token economy.
+    // Field descriptions explain semantics that types alone cannot express.
     if (!isNameMap && key === 'description' && preserveDescriptions) {
       compacted[key] = childValue
       continue
@@ -127,93 +126,14 @@ export function compactToolInputSchemaForProvider(
     toolName?: string
   },
 ): ReturnType<typeof jsonSchema> {
-  const preserveDescriptions = options?.preserveDescriptions === true
+  const preserveDescriptions = options?.preserveDescriptions !== false
   const safeSchema = ensureJsonSchemaCompatible(schema)
   const compactedSchema = compactJsonSchemaValue(
     toJsonSchemaSafe(safeSchema),
     preserveDescriptions,
   ) as JSONSchema7
 
-  // Zod refinements do not survive JSON Schema conversion. Publish the
-  // cross-field requirements explicitly so an empty object is not advertised
-  // as a valid call to providers with native schema enforcement.
-  const alternatives: Record<string, JSONSchema7[]> = {
-    read_files: [
-      'paths',
-      'ranges',
-      'windows',
-      'around',
-      'symbol',
-      'symbols',
-    ].map((name) => ({
-      required: [name],
-      properties: { [name]: { minItems: 1 } },
-    })),
-    read_logs: [{ required: ['path'] }, { required: ['jobId'] }],
-    recall_context: [{ required: ['query'] }, { required: ['toolCallId'] }],
-    update_plan_status: [
-      { required: ['updates'], properties: { updates: { minItems: 1 } } },
-      { required: ['append'] },
-      { required: ['sessionStatus'] },
-      { required: ['currentTask'] },
-      { required: ['checkpoint'] },
-      {
-        required: ['requestCommittedSurfaceReview'],
-        properties: { requestCommittedSurfaceReview: { const: true } },
-      },
-    ],
-    query_index: [
-      { required: ['query'], properties: { query: { minLength: 1 } } },
-      { required: ['mode'], properties: { mode: { const: 'commands' } } },
-      {
-        required: ['mode', 'query'],
-        properties: {
-          mode: { enum: ['search', 'explain'] },
-          query: { minLength: 1 },
-        },
-      },
-      {
-        required: ['mode', 'from'],
-        properties: {
-          mode: { enum: ['neighbors', 'references'] },
-          from: { minLength: 1 },
-        },
-      },
-      {
-        required: ['mode', 'query'],
-        properties: { mode: { const: 'neighbors' }, query: { minLength: 1 } },
-      },
-      {
-        required: ['mode', 'to'],
-        properties: { mode: { const: 'references' }, to: { minLength: 1 } },
-      },
-      {
-        required: ['mode', 'query'],
-        properties: { mode: { const: 'references' }, query: { minLength: 1 } },
-      },
-      {
-        required: ['mode', 'from', 'to'],
-        properties: {
-          mode: { const: 'path' },
-          from: { minLength: 1 },
-          to: { minLength: 1 },
-        },
-      },
-      {
-        required: ['mode', 'query'],
-        properties: { mode: { const: 'path' }, query: { minLength: 1 } },
-      },
-    ],
-  }
-  if (options?.toolName && alternatives[options.toolName]) {
-    compactedSchema.anyOf = alternatives[options.toolName]
-  }
-  if (options?.toolName === 'update_plan_status') {
-    const updates = compactedSchema.properties?.updates as JSONSchema7 | undefined
-    if (updates && !Array.isArray(updates.items) && typeof updates.items === 'object') {
-      updates.items.anyOf = [{ required: ['taskId'] }, { required: ['task'] }]
-    }
-  }
+  applyToolSchemaConstraints(compactedSchema, options?.toolName)
   return jsonSchema(compactedSchema)
 }
 
@@ -590,17 +510,6 @@ export async function getToolSet(params: {
         ...toolDef,
         inputSchema: providerInputSchemaFor(toolDef),
       }
-      // Mutation tools keep schema field descriptions so the model still sees
-      // per-field guidance for a bare discriminated union (e.g.
-      // edit_transaction); read-only/other tools stay fully compacted.
-      // read_files is the one read-only exception: its selector fields are the
-      // empirically highest shape-failure surface, and Anthropic-published
-      // guidance attributes error-rate reductions to per-field descriptions —
-      // non-mutation compaction was stripping all selector guidance.
-      const preserveDescriptions =
-        getToolMetadata(toolName as ToolName).kind === 'mutation' ||
-        toolName === 'read_files'
-
       // For the skill tool, replace the placeholder with the actual available
       // skills (or an explicit "no skills" notice when none are loaded) before
       // compacting. Every branch funnels into the single compaction call below.
@@ -627,7 +536,6 @@ export async function getToolSet(params: {
         }
       }
       toolSet[toolName] = compactToolDefinitionForProvider(resolvedToolDef, {
-        preserveDescriptions,
         toolName,
       })
     }
@@ -635,14 +543,28 @@ export async function getToolSet(params: {
 
   const toolDefinitions = await additionalToolDefinitions()
   for (const [toolName, toolDefinition] of Object.entries(toolDefinitions)) {
-    const clonedDef = cloneDeep(toolDefinition)
-    // Custom tool inputSchema may be JSON Schema (from SDK) or Zod (from MCP)
-    // Ensure it's a Zod schema for the AI SDK
-    const zodSchema = ensureZodSchema(clonedDef.inputSchema)
-    const safeSchema = ensureJsonSchemaCompatible(zodSchema)
+    const clonedDef = cloneDeep({ ...toolDefinition, inputSchema: undefined })
+    // Custom tool inputSchema may be supplied as JSON Schema or Zod.
+    const input = toolDefinition.inputSchema
+    const isZod =
+      input &&
+      typeof (input as { safeParse?: unknown }).safeParse === 'function'
+    // Preserve JSON Schema supplied by MCP/custom tools exactly. Converting to
+    // Zod and back can discard constraints, annotations, or references.
+    let inputSchema: ReturnType<typeof jsonSchema>
+    try {
+      inputSchema = isZod
+        ? compactToolInputSchemaForProvider(input as z.ZodType)
+        : jsonSchema(cloneDeep(input) as JSONSchema7)
+    } catch (error) {
+      throw new Error(
+        `Cannot publish input schema for tool ${toolName}: ${String(error)}`,
+        { cause: error },
+      )
+    }
     toolSet[toolName] = {
       ...clonedDef,
-      inputSchema: compactToolInputSchemaForProvider(safeSchema),
+      inputSchema,
     } as (typeof toolSet)[string]
   }
 

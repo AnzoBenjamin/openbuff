@@ -207,6 +207,26 @@ describe('promptAiSdkStream tool-call buffering across attempts', () => {
     return toolCallChunks
   }
 
+  test('sends the tool schema as text when the resolved provider has no native tools', async () => {
+    writeProviderConfig({})
+    const modelResult = makeModelResult({ model: 'local/primary' })
+    modelResult.compatibility.supportsTools = false
+    getModelSpy = spyOn(modelProvider, 'getModelForRequest').mockResolvedValue(modelResult)
+    let request: Record<string, unknown> | undefined
+    streamTextSpy = spyOn(ai, 'streamText').mockImplementation(((params: unknown) => {
+      request = params as Record<string, unknown>
+      return fakeStreamResponse({ chunks: [{ type: 'finish', finishReason: 'stop' }] })
+    }) as typeof ai.streamText)
+    const params = makePromptParams() as Record<string, unknown>
+    params.system = 'Existing instructions'
+    params.tools = { read: { description: 'Read files', inputSchema: { jsonSchema: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } } }
+    for await (const _ of promptAiSdkStream(params as never)) { /* drain */ }
+    expect(request?.tools).toBeUndefined()
+    expect(request?.system).toContain('Existing instructions')
+    expect(request?.system).toContain('"paths":{"type":"array","items":{"type":"string"}}')
+    expect(request?.system).toContain('"required":["paths"]')
+  })
+
   test('drops the failed attempt\'s buffered tool calls when the retry succeeds', async () => {
     writeProviderConfig({})
     getModelSpy = spyOn(

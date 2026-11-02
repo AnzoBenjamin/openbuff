@@ -63,6 +63,7 @@ import { getAgentPrompt } from './templates/strings'
 import { getToolSet } from './tools/prompts'
 import { processStream } from './tools/stream-parser'
 import { getAgentOutput } from './util/agent-output'
+import { reviewerVerdictIssue } from './util/reviewer-output'
 import {
   initBudgetFromTemplate,
   checkBudgetExceeded,
@@ -540,6 +541,7 @@ export const runAgentStep = async (
   // re-yield STEP and re-trigger the step-cap, causing an infinite loop.
   hitStepCap?: boolean
   toolCallErrorSignature?: string
+  toolCallErrorTools?: string[]
   messageId: string | null
   nResponses?: string[]
 }> => {
@@ -1050,6 +1052,7 @@ export const runAgentStep = async (
     fullResponseChunks,
     hadToolCallError,
     toolCallErrorSignature,
+    toolCallErrorTools,
     messageId,
     toolCalls,
     toolResults: newToolResults,
@@ -1370,6 +1373,7 @@ export const runAgentStep = async (
     fullResponse,
     shouldEndTurn,
     toolCallErrorSignature,
+    toolCallErrorTools,
     messageId,
     nResponses: undefined,
   }
@@ -1424,11 +1428,9 @@ export async function loopAgentSteps(
     // contextTokenCount exceeds this threshold, the loop proactively trims
     // message history via trimMessagesToFitTokenLimit. Defaults to 190k.
     maxContextLength?: number
-    // Optional cap on the missing-output retry loop below: when the knob is
-    // omitted the retry fires on EVERY turn-end that still lacks required
-    // output (bounded only by the configured step cap / cancellation); a
-    // positive integer caps the retries and then the structured agent
-    // returns a null value.
+    // Optional cap on structured-output corrections. When omitted, reviewers
+    // get two retries and other agents remain bounded by the configured step
+    // cap or cancellation. A positive integer overrides that default.
     maxMissingOutputRetries?: number
     resolveModelContextWindow?: (params: {
       agentId?: string
@@ -3239,7 +3241,19 @@ export async function loopAgentSteps(
         // only after the parent receives its receipt. This catches a defined but
         // invalid output (for example from a degraded or stale handler schema)
         // while the reviewer still has its reads and findings in context.
-        const isReviewer = agentType.toLowerCase().includes('reviewer')
+        const outputRecord =
+          currentAgentState.output && typeof currentAgentState.output === 'object'
+            ? (currentAgentState.output as Record<string, unknown>)
+            : undefined
+        const outputSchemaShape = (agentTemplate.outputSchema as
+          | { shape?: Record<string, unknown> }
+          | undefined)?.shape
+        const isReviewer =
+          agentType.toLowerCase().includes('reviewer') ||
+          outputRecord?.family === 'reviewer' ||
+          (outputSchemaShape !== undefined &&
+            'family' in outputSchemaShape &&
+            'verdict' in outputSchemaShape)
         let reviewerOutputIssue: string | undefined
         if (
           shouldEndTurn &&
@@ -3249,22 +3263,21 @@ export async function loopAgentSteps(
           currentAgentState.output !== undefined
         ) {
           const output = currentAgentState.output
-          const record = output && typeof output === 'object' && !Array.isArray(output)
-            ? output as Record<string, unknown>
-            : undefined
-          const isCodeReviewer = /(?:^|\/)code-reviewer(?:@|$)/i.test(agentType)
-          if ((isCodeReviewer || record?.family !== 'advisory') &&
-              !['LOOKS_GOOD', 'NON_BLOCKING', 'BLOCKING'].includes(String(record?.verdict))) {
-            reviewerOutputIssue = 'The reviewer receipt is missing a valid verdict. Set verdict to LOOKS_GOOD, NON_BLOCKING, or BLOCKING based on your completed review.'
-          } else if (agentTemplate.outputSchema) {
+          reviewerOutputIssue = reviewerVerdictIssue(agentType, output)
+          if (!reviewerOutputIssue && agentTemplate.outputSchema) {
             const validation = agentTemplate.outputSchema.safeParse(output)
             if (!validation.success) {
-              const issues = validation.error.issues.slice(0, 8).map((issue) =>
-                `${issue.path.join('.') || 'output'}: ${issue.message}`,
-              ).join('; ')
+              const issues = validation.error.issues
+                .slice(0, 8)
+                .map((issue) => `${issue.path.join('.') || 'output'}: ${issue.message}`)
+                .join('; ')
               reviewerOutputIssue = `The reviewer receipt failed its output schema: ${issues}`
             }
           }
+          // A failed correction can leave an earlier valid receipt in state.
+          // The parent treats the outstanding rejection as schema_invalid, so
+          // give this child the same chance to correct it before it exits.
+          reviewerOutputIssue ??= currentAgentState.lastSetOutputError
           if (reviewerOutputIssue) {
             currentAgentState.lastSetOutputError ??= reviewerOutputIssue
           }
@@ -3272,13 +3285,11 @@ export async function loopAgentSteps(
 
         // Check if output is required but missing or an invalid reviewer
         // receipt needs correction in the same child.
-        // Omitted knob → unlimited retries (the post-cap-removal default), so
-        // the step cap / cancellation remains the only bound. A configured
-        // positive integer exhausts after that many retries; the loop then
-        // falls through to the existing shouldEndTurn break and the parent
-        // receives a null structured value.
-        const maxMissingOutputRetries = params.maxMissingOutputRetries ??
-          (isReviewer ? 2 : undefined)
+        // Default to two correction attempts for reviewers; other agents keep
+        // the existing step-cap/cancellation bound. An explicit retry setting
+        // takes precedence for either family.
+        const maxMissingOutputRetries =
+          params.maxMissingOutputRetries ?? (isReviewer ? 2 : undefined)
         if (
           (agentTemplate.outputSchema || reviewerOutputIssue !== undefined) &&
           // Skip for programmatic agents: the generator (not the model) drives
@@ -3286,7 +3297,8 @@ export async function loopAgentSteps(
           // the top (its generator is torn down once it returns). A userMessage
           // reminder also has no effect on a generator-driven agent.
           !agentTemplate.handleSteps &&
-          (currentAgentState.output === undefined || reviewerOutputIssue !== undefined) &&
+          (currentAgentState.output === undefined ||
+            reviewerOutputIssue !== undefined) &&
           shouldEndTurn &&
           // A turn ended by the STEP CAP must not be nudged back into the
           // loop: at the cap runAgentStep short-circuits WITHOUT consuming a
@@ -3539,6 +3551,7 @@ export async function loopAgentSteps(
           shouldEndTurn: llmShouldEndTurn,
           hitStepCap: llmHitStepCap,
           toolCallErrorSignature,
+          toolCallErrorTools,
           messageId,
           nResponses: generatedResponses,
         } = llmStep
@@ -3569,8 +3582,11 @@ export async function loopAgentSteps(
               : 1
           lastToolCallErrorSignature = toolCallErrorSignature
           if (repeatedToolCallErrors >= 3) {
+            const toolDetails = toolCallErrorTools?.length
+              ? ` Tool arguments failed validation for: ${toolCallErrorTools.join(', ')}. See the preceding tool validation feedback for details.`
+              : ''
             throw new Error(
-              'Stopped after three consecutive identical invalid tool calls. Check the tool arguments or provider configuration and retry.',
+              `Stopped after three consecutive identical invalid tool calls.${toolDetails} Check the tool arguments or provider configuration and retry.`,
             )
           }
         } else {

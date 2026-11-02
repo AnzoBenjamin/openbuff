@@ -1163,9 +1163,9 @@ export const handleEditTransaction = (async (
     const invalidationPaths = narrowInvalidationToFailingPaths
       ? failingPaths
       : uniquePaths
-    // Match / atomic-batch aborts and capability failures both require one new
-    // snapshot for every transaction target so multi-file retries cannot reuse
-    // other paths from memory. Pure syntax failures never reach this branch.
+    // Revoke only the affected paths; retained authorizations are revalidated
+    // against live content on their next use. Pure syntax failures do not reach
+    // this branch.
     const requiresFreshRead =
       requiresFreshCapability ||
       isMatchOrAtomicAbort ||
@@ -1234,7 +1234,7 @@ export const handleEditTransaction = (async (
     // transaction still has to be resent (nothing was applied).
     const multiTargetRecoveryProse = narrowInvalidationToFailingPaths
       ? [
-          `Only ${failingPaths.join(', ')} lost read authorization and needs a fresh read; every other transaction target retains valid read state and does NOT need re-reading (this supersedes the generic re-read-every-target note above). Re-read ${failingPaths.join(', ')} only — for an anchored-scope or capability failure, a range that contains the target lines for that path is enough — then resend the whole transaction because no files were changed.`,
+          `Only ${failingPaths.join(', ')} lost read authorization and needs a fresh read; every other transaction target retains valid read state and does NOT need re-reading. Re-read ${failingPaths.join(', ')} only — for an anchored-scope or capability failure, a range that contains the target lines for that path is enough — then resend the whole transaction because no files were changed.`,
         ]
       : requiresFreshRead
         ? [

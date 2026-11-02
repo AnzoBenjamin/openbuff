@@ -12,6 +12,7 @@ import {
 } from '@codebuff/common/util/model-payload-recovery'
 
 import { getAgentTemplate } from '../../../templates/agent-registry'
+import { reviewerVerdictIssue } from '../../../util/reviewer-output'
 import { formatValueForError } from '../../../util/format-value'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
@@ -84,13 +85,13 @@ export const handleSetOutput = (async (params: {
     typeof rawOutputData === 'string' &&
     rawOutputData.length > MAX_SET_OUTPUT_JSON_CHARS
   ) {
-    const oversizedMessage = `Output was not set because the set_output data string was ${rawOutputData.length} characters, exceeding the ${MAX_SET_OUTPUT_JSON_CHARS}-character payload limit; split the result across multiple smaller set_output calls, or persist it to a file and reference the path instead of inlining it.`
+    const oversizedMessage = `Output was not set because the set_output data string was ${rawOutputData.length} characters, exceeding the ${MAX_SET_OUTPUT_JSON_CHARS}-character payload limit. Shorten the receipt and resend it as one complete object, or persist details to a file and reference the path if the output schema permits it. Each set_output call replaces the previous output.`
     // Recorded on agent state because this rejection also ends the turn
     // (set_output is in TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so the loop's
     // missing-output retry is the only place that can report it to the model.
     agentState.lastSetOutputError = oversizedMessage
     return {
-      output: jsonToolResult({ message: oversizedMessage }),
+      output: jsonToolResult({ message: oversizedMessage, errorMessage: oversizedMessage }),
     }
   }
   const decodedData = decodeJsonObjectString(rawOutput?.data)
@@ -102,14 +103,14 @@ export const handleSetOutput = (async (params: {
     // certainly lost its tail in transit, and the caller needs chunking /
     // smaller-payload guidance rather than only a formatting retry.
     const malformedJsonMessage = detectTransportTruncation(rawOutput.data)
-      ? `${baseGuidance} The payload appears to have been truncated in transport (partial) — send a smaller payload: split the result across multiple smaller set_output calls or persist it to a file and reference the path.`
+      ? `${baseGuidance} The payload appears to have been truncated in transport (partial). Shorten the receipt and resend it as one complete object, or persist details to a file and reference the path if the output schema permits it. Each set_output call replaces the previous output.`
       : baseGuidance
     // Recorded on agent state because this rejection also ends the turn
     // (set_output is in TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so the loop's
     // missing-output retry is the only place that can report it to the model.
     agentState.lastSetOutputError = malformedJsonMessage
     return {
-      output: jsonToolResult({ message: malformedJsonMessage }),
+      output: jsonToolResult({ message: malformedJsonMessage, errorMessage: malformedJsonMessage }),
     }
   }
   const decodedOutput =
@@ -126,6 +127,10 @@ export const handleSetOutput = (async (params: {
     agentState.agentType?.toLowerCase().includes('reviewer') === true ||
     decodedOutput.family === 'reviewer' ||
     decodedDataRecord?.family === 'reviewer'
+  const shouldNormalizeStructuredReceipt =
+    shouldNormalizeReviewerOutput ||
+    decodedOutput.family === 'advisory' ||
+    decodedDataRecord?.family === 'advisory'
 
   let agentTemplate = null
   if (agentState.agentType) {
@@ -156,7 +161,7 @@ export const handleSetOutput = (async (params: {
       'set_output could not validate its payload because the agent template for the declared agent type could not be resolved',
     )
     return {
-      output: jsonToolResult({ message: unresolvableTemplateMessage }),
+      output: jsonToolResult({ message: unresolvableTemplateMessage, errorMessage: unresolvableTemplateMessage }),
     }
   }
 
@@ -189,7 +194,7 @@ export const handleSetOutput = (async (params: {
   ) {
     // A repeated bogus call must not resurrect a stale rejection.
     agentState.lastSetOutputError = undefined
-    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK }) }
+    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK, status: 'ignored' }) }
   }
 
   const decodedNestedOutputRecord =
@@ -211,6 +216,20 @@ export const handleSetOutput = (async (params: {
 
   let finalOutput: unknown
   if (agentTemplate?.outputSchema) {
+    // Converted JSON schemas may pass through undeclared properties rather
+    // than stripping them. Detect whether a sole data envelope contains a
+    // declared output field, while preserving schemas that declare `data`.
+    const schemaShape = (agentTemplate.outputSchema as unknown as {
+      shape?: Record<string, unknown>
+    }).shape
+    const dataContainsDeclaredFields =
+      schemaShape != null &&
+      typeof schemaShape === 'object' &&
+      !Object.prototype.hasOwnProperty.call(schemaShape, 'data') &&
+      decodedDataRecord !== undefined &&
+      Object.keys(decodedDataRecord).some((key) =>
+        Object.prototype.hasOwnProperty.call(schemaShape, key),
+      )
     const candidates: Array<{
       source:
         | 'output'
@@ -221,7 +240,7 @@ export const handleSetOutput = (async (params: {
         | 'normalized-nested-output'
       value: unknown
     }> = [{ source: 'output', value: decodedOutput }]
-    if (shouldNormalizeReviewerOutput) {
+    if (shouldNormalizeStructuredReceipt) {
       candidates.push({
         source: 'normalized-output',
         value: normalizeStructuredOutputValue(decodedOutput),
@@ -229,7 +248,7 @@ export const handleSetOutput = (async (params: {
     }
     if (decodedDataRecord) {
       candidates.push({ source: 'data', value: decodedDataRecord })
-      if (shouldNormalizeReviewerOutput) {
+      if (shouldNormalizeStructuredReceipt) {
         candidates.push({
           source: 'normalized-data',
           value: normalizeStructuredOutputValue(decodedDataRecord),
@@ -243,7 +262,7 @@ export const handleSetOutput = (async (params: {
         source: 'nested-output',
         value: decodedNestedOutputRecord,
       })
-      if (shouldNormalizeReviewerOutput) {
+      if (shouldNormalizeStructuredReceipt) {
         candidates.push({
           source: 'normalized-nested-output',
           value: normalizeStructuredOutputValue(decodedNestedOutputRecord),
@@ -256,7 +275,25 @@ export const handleSetOutput = (async (params: {
     }> = []
     for (const candidate of candidates) {
       try {
-        finalOutput = agentTemplate.outputSchema.parse(candidate.value)
+        const parsedOutput = agentTemplate.outputSchema.parse(candidate.value)
+        // With an all-optional object schema, parsing { data: receipt } at
+        // the top level can succeed as {} after unknown-key stripping. That
+        // silently discards the entire receipt. Try the data candidate unless
+        // the schema actually retained a declared/passthrough data field.
+        if (
+          (candidate.source === 'output' ||
+            candidate.source === 'normalized-output') &&
+          decodedDataRecord &&
+          Object.keys(decodedOutput).length === 1 &&
+          parsedOutput !== null &&
+          typeof parsedOutput === 'object' &&
+          !Array.isArray(parsedOutput) &&
+          (!Object.prototype.hasOwnProperty.call(parsedOutput, 'data') ||
+            dataContainsDeclaredFields)
+        ) {
+          continue
+        }
+        finalOutput = parsedOutput
         failures.length = 0
         break
       } catch (error) {
@@ -323,7 +360,7 @@ export const handleSetOutput = (async (params: {
         'set_output validation error',
       )
       agentState.lastSetOutputError = errorMessage
-      return { output: jsonToolResult({ message: errorMessage }) }
+      return { output: jsonToolResult({ message: errorMessage, errorMessage }) }
     }
   } else {
     // When no outputSchema, use the data field if it is the only field
@@ -331,6 +368,14 @@ export const handleSetOutput = (async (params: {
     const keys = Object.keys(decodedOutput)
     const hasOnlyDataField = keys.length === 1 && keys[0] === 'data'
     finalOutput = hasOnlyDataField ? decodedOutput.data : decodedOutput
+  }
+
+  // A degraded or absent schema must not let a reviewer publish a receipt the
+  // parent will reject only after the child and its review context have ended.
+  const verdictIssue = reviewerVerdictIssue(agentState.agentType, finalOutput)
+  if (verdictIssue) {
+    agentState.lastSetOutputError = verdictIssue
+    return { output: jsonToolResult({ message: verdictIssue, errorMessage: verdictIssue }) }
   }
 
   // Receipt-overwrite guard (Phase 3): the decision is delegated to the shared
@@ -354,7 +399,7 @@ export const handleSetOutput = (async (params: {
   ) {
     // A repeated bogus call must not resurrect a stale rejection.
     agentState.lastSetOutputError = undefined
-    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK }) }
+    return { output: jsonToolResult({ message: RECEIPT_GUARD_ACK, status: 'ignored' }) }
   }
   // Set the output (completely replaces previous output)
   agentState.output = finalOutput as Record<string, unknown>

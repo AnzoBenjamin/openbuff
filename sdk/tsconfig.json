@@ -21,6 +21,6 @@
       "@codebuff/code-map/*": ["../packages/code-map/src/*"]
     }
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "scripts/build.ts"],
   "exclude": ["node_modules", "dist"]
 }

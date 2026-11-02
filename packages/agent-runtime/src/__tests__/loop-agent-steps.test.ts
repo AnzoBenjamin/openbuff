@@ -133,6 +133,9 @@ describe('loopAgentSteps', () => {
       promptAiSdkStream: stream,
     })
     expect(attempts).toBe(3)
+    expect(result.output.type).toBe('error')
+    if (result.output.type !== 'error') throw new Error('Expected an error')
+    expect(result.output.message).toContain('Tool arguments failed validation for: read_files')
     expect(result.output).toMatchObject({
       type: 'error',
       message: expect.stringContaining(
@@ -2703,28 +2706,26 @@ describe('loopAgentSteps', () => {
         snapshotFingerprint: z.string(),
       }),
     }
-    // The handler sees a degraded schema; the active child retains its real
-    // schema, and must catch this before returning to the parent.
-    const degradedTemplate = { ...agentTemplate, outputSchema: z.looseObject({}) }
     let calls = 0
     const stream = mock(async function* () {
       calls++
-      yield createToolCallChunk('set_output', calls === 1
-        ? { family: 'reviewer', snapshotFingerprint: 'snapshot' }
-        : { family: 'reviewer', snapshotFingerprint: 'snapshot', verdict: 'LOOKS_GOOD' })
+      if (calls === 1) yield { type: 'text' as const, text: 'Review complete.' }
+      else yield createToolCallChunk('set_output', { family: 'reviewer', snapshotFingerprint: 'snapshot', verdict: 'LOOKS_GOOD' })
       return promptSuccess(`reviewer-attempt-${calls}`)
     })
     const result = await loopAgentSteps({
       ...baseParams,
       agentType: 'code-reviewer',
       agentTemplate,
-      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10 },
-      localAgentTemplates: { 'code-reviewer': degradedTemplate },
+      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10, output: { family: 'reviewer', snapshotFingerprint: 'snapshot' } },
+      localAgentTemplates: { 'code-reviewer': agentTemplate },
       promptAiSdkStream: stream,
     })
     expect(calls).toBe(2)
     expect(result.agentState.agentId).toBe(agentState.agentId)
     expect(result.output).toMatchObject({ type: 'structuredOutput', value: { verdict: 'LOOKS_GOOD' } })
+    const receipt = buildRuntimeAgentReceipt({ agentType: 'code-reviewer', agentId: 'same-child', output: result.output, agentState: result.agentState })
+    expect(receipt.outcome).toBe('ok')
     expect(JSON.stringify(result.agentState.messageHistory)).toContain('Keep your completed review and existing file reads')
   })
 
@@ -2750,6 +2751,101 @@ describe('loopAgentSteps', () => {
     expect(calls).toBe(3)
     const receipt = buildRuntimeAgentReceipt({ agentType: 'code-reviewer', agentId: 'same-child', output: result.output, agentState: result.agentState })
     expect(receipt.outcome).toBe('schema_invalid')
+  })
+
+  it('repairs other reviewer schema errors without repeating the review', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate, id: 'code-reviewer', toolNames: ['set_output'],
+      outputSchema: z.object({ verdict: z.string(), snapshotFingerprint: z.string() }),
+    }
+    const degradedTemplate = { ...agentTemplate, outputSchema: z.looseObject({}) }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      yield createToolCallChunk('set_output', calls === 1
+        ? { verdict: 'LOOKS_GOOD' }
+        : { verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' })
+      return promptSuccess(`reviewer-schema-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams, agentType: 'code-reviewer', agentTemplate,
+      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10 },
+      localAgentTemplates: { 'code-reviewer': degradedTemplate }, promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.output).toMatchObject({ value: { snapshotFingerprint: 'snapshot' } })
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain('snapshotFingerprint')
+  })
+
+  it('lets a reviewer correct a rejected replacement after an earlier valid receipt', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate, id: 'code-reviewer', toolNames: ['set_output'],
+      outputSchema: z.object({ verdict: z.enum(['LOOKS_GOOD', 'BLOCKING']), snapshotFingerprint: z.string() }),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      if (calls === 1) {
+        yield createToolCallChunk('set_output', { verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' })
+        yield createToolCallChunk('set_output', { verdict: 'INVALID', snapshotFingerprint: 'snapshot' })
+      } else {
+        yield createToolCallChunk('set_output', { verdict: 'BLOCKING', snapshotFingerprint: 'snapshot' })
+      }
+      return promptSuccess(`reviewer-correction-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams, agentType: 'code-reviewer', agentTemplate,
+      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10 },
+      localAgentTemplates: { 'code-reviewer': agentTemplate }, promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.output).toMatchObject({ value: { verdict: 'BLOCKING' } })
+    expect(result.agentState.lastSetOutputError).toBeUndefined()
+  })
+
+  it('does not require a verdict for a valid advisory specialist receipt', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate, id: 'product-reviewer', toolNames: ['set_output'],
+      outputSchema: z.object({ family: z.literal('advisory'), recommendations: z.array(z.string()) }),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      yield createToolCallChunk('set_output', { family: 'advisory', recommendations: [] })
+      return promptSuccess(`advisory-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams, agentType: 'product-reviewer', agentTemplate,
+      agentState: { ...agentState, agentType: 'product-reviewer', stepsRemaining: 10 },
+      localAgentTemplates: { 'product-reviewer': agentTemplate }, promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(1)
+    expect(result.output).toMatchObject({ value: { family: 'advisory', recommendations: [] } })
+  })
+
+  it('repairs a reviewer-family specialist even when its id and stale output omit reviewer', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate, id: 'performance-specialist', toolNames: ['set_output'],
+      outputSchema: z.object({ family: z.literal('reviewer'), verdict: z.string(), snapshotFingerprint: z.string() }),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      if (calls === 1) yield { type: 'text' as const, text: 'Review complete.' }
+      else yield createToolCallChunk('set_output', { family: 'reviewer', verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' })
+      return promptSuccess(`specialist-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams, agentType: 'performance-specialist', agentTemplate,
+      agentState: { ...agentState, agentType: 'performance-specialist', stepsRemaining: 10, output: { snapshotFingerprint: 'snapshot' } },
+      localAgentTemplates: { 'performance-specialist': agentTemplate }, promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.output).toMatchObject({ value: { family: 'reviewer', verdict: 'LOOKS_GOOD' } })
   })
 
   // Regression: when the agent simply never calls set_output (no recorded

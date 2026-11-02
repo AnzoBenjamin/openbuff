@@ -61,6 +61,7 @@ export type OpenAICompatibleChatConfig = {
    * Some strict OpenAI-compatible APIs reject the content part array form.
    */
   stringifyTextContent?: boolean
+  reasoningReplay?: boolean
 }
 
 const TOOL_CALL_METADATA_KEYS = new Set(['index', 'id', 'type', 'function'])
@@ -290,6 +291,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
         // messages:
         messages: convertToOpenAICompatibleChatMessages(prompt, {
           stringifyTextContent: this.config.stringifyTextContent,
+          reasoningReplay: this.config.reasoningReplay,
         }),
 
         // tools:
@@ -450,6 +452,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
         arguments: string
       }
       hasFinished: boolean
+      pendingEmptyObject: boolean
       jsonCompletion: StreamingJsonCompletion
       providerMetadata?: SharedV2ProviderMetadata
     }> = []
@@ -482,6 +485,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
     }
     let isFirstChunk = true
     const providerOptionsName = this.providerOptionsName
+    const includeUsage = this.config.includeUsage === true
     let isActiveReasoning = false
     let isActiveText = false
     let finishEmitted = false
@@ -510,6 +514,14 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
       for (const toolCall of toolCalls.filter(
         (toolCall) => !toolCall.hasFinished && toolCall.function?.name,
       )) {
+        if (toolCall.pendingEmptyObject) {
+          controller.enqueue({
+            type: 'tool-input-delta',
+            id: toolCall.id,
+            delta: toolCall.function.arguments,
+          })
+          toolCall.pendingEmptyObject = false
+        }
         controller.enqueue({
           type: 'tool-input-end',
           id: toolCall.id,
@@ -555,6 +567,66 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
       finishEmitted = true
     }
 
+    function appendToolArguments(
+      toolCall: (typeof toolCalls)[number],
+      argDelta: string,
+      controller: TransformStreamDefaultController<LanguageModelV2StreamPart>,
+    ) {
+      if (
+        !toolCall.pendingEmptyObject &&
+        toolCall.function.arguments.length === 0 &&
+        /^\s*\{\s*\}\s*$/.test(argDelta)
+      ) {
+        toolCall.function.arguments += argDelta
+        toolCall.pendingEmptyObject = true
+        return
+      }
+      if (toolCall.pendingEmptyObject) {
+        if (argDelta.trim().length === 0) {
+          toolCall.function.arguments += argDelta
+          return
+        }
+        // Some proxies send a complete empty placeholder and then the real
+        // object. Do not publish the placeholder until it is clear whether it
+        // was the actual call: streamed input deltas cannot be retracted.
+        if (argDelta.trimStart().startsWith('{')) {
+          toolCall.function.arguments = ''
+          toolCall.jsonCompletion = new StreamingJsonCompletion()
+        } else {
+          controller.enqueue({
+            type: 'tool-input-delta',
+            id: toolCall.id,
+            delta: toolCall.function.arguments,
+          })
+        }
+        toolCall.pendingEmptyObject = false
+      }
+      toolCall.function.arguments += argDelta
+      if (argDelta.length > 0) {
+        controller.enqueue({
+          type: 'tool-input-delta',
+          id: toolCall.id,
+          delta: argDelta,
+        })
+      }
+      if (
+        toolCall.jsonCompletion.isParsable(
+          toolCall.function.arguments,
+          argDelta,
+        )
+      ) {
+        controller.enqueue({ type: 'tool-input-end', id: toolCall.id })
+        controller.enqueue({
+          type: 'tool-call',
+          toolCallId: toolCall.id ?? generateId(),
+          toolName: toolCall.function.name,
+          input: toolCall.function.arguments,
+          providerMetadata: toolCall.providerMetadata,
+        })
+        toolCall.hasFinished = true
+      }
+    }
+
     const chunkSchema = this.chunkSchema
     return {
       stream: response.pipeThrough(
@@ -566,7 +638,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
             controller.enqueue({ type: 'stream-start', warnings })
           },
 
-          transform(chunk: ParseResult<z.infer<typeof chunkSchema>>, controller) {
+          transform(
+            chunk: ParseResult<z.infer<typeof chunkSchema>>,
+            controller,
+          ) {
             // Emit raw chunk if requested (before anything else)
             if (options.includeRawChunks) {
               controller.enqueue({ type: 'raw', rawValue: chunk.rawValue })
@@ -736,7 +811,8 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                     toolCallDelta.function.name === ''
                   ) {
                     const unfinished = toolCalls.filter(
-                      (candidate) => candidate != null && !candidate.hasFinished,
+                      (candidate) =>
+                        candidate != null && !candidate.hasFinished,
                     )
                     // Prefer the primary (latched) counter; a merged argument
                     // body that already canonicalized its first serialized
@@ -756,35 +832,11 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
 
                     if (continuationTarget != null) {
                       const argDelta = toolCallDelta.function?.arguments ?? ''
-                      if (argDelta.length > 0) {
-                        continuationTarget.function!.arguments += argDelta
-                        controller.enqueue({
-                          type: 'tool-input-delta',
-                          id: continuationTarget.id,
-                          delta: argDelta,
-                        })
-                      }
-
-                      if (
-                        continuationTarget.function?.name != null &&
-                        continuationTarget.jsonCompletion.isParsable(
-                          continuationTarget.function.arguments,
-                          argDelta,
-                        )
-                      ) {
-                        controller.enqueue({
-                          type: 'tool-input-end',
-                          id: continuationTarget.id,
-                        })
-                        controller.enqueue({
-                          type: 'tool-call',
-                          toolCallId: continuationTarget.id ?? generateId(),
-                          toolName: continuationTarget.function.name,
-                          input: continuationTarget.function.arguments,
-                          providerMetadata: continuationTarget.providerMetadata,
-                        })
-                        continuationTarget.hasFinished = true
-                      }
+                      appendToolArguments(
+                        continuationTarget,
+                        argDelta,
+                        controller,
+                      )
                     }
 
                     continue
@@ -807,6 +859,9 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                       arguments: toolCallDelta.function.arguments ?? '',
                     },
                     hasFinished: false,
+                    pendingEmptyObject: /^\s*\{\s*\}\s*$/.test(
+                      toolCallDelta.function.arguments ?? '',
+                    ),
                     jsonCompletion: new StreamingJsonCompletion(),
                     providerMetadata,
                   }
@@ -818,7 +873,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                     toolCall.function?.arguments != null
                   ) {
                     // send delta if the argument text has already started:
-                    if (toolCall.function.arguments.length > 0) {
+                    if (
+                      toolCall.function.arguments.length > 0 &&
+                      !toolCall.pendingEmptyObject
+                    ) {
                       controller.enqueue({
                         type: 'tool-input-delta',
                         id: toolCall.id,
@@ -829,6 +887,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                     // check if tool call is complete
                     // (some providers send the full tool call in one chunk):
                     if (
+                      !toolCall.pendingEmptyObject &&
                       toolCall.jsonCompletion.isParsable(
                         toolCall.function.arguments,
                         toolCall.function.arguments,
@@ -866,38 +925,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
                 )
 
                 const argDelta = toolCallDelta.function?.arguments ?? ''
-                toolCall.function!.arguments += argDelta
-
-                // send delta
-                controller.enqueue({
-                  type: 'tool-input-delta',
-                  id: toolCall.id,
-                  delta: argDelta,
-                })
-
-                // check if tool call is complete
-                if (
-                  toolCall.function?.name != null &&
-                  toolCall.function?.arguments != null &&
-                  toolCall.jsonCompletion.isParsable(
-                    toolCall.function.arguments,
-                    argDelta,
-                  )
-                ) {
-                  controller.enqueue({
-                    type: 'tool-input-end',
-                    id: toolCall.id,
-                  })
-
-                  controller.enqueue({
-                    type: 'tool-call',
-                    toolCallId: toolCall.id ?? generateId(),
-                    toolName: toolCall.function.name,
-                    input: toolCall.function.arguments,
-                    providerMetadata: toolCall.providerMetadata,
-                  })
-                  toolCall.hasFinished = true
-                }
+                appendToolArguments(toolCall, argDelta, controller)
               }
             }
 
@@ -905,9 +933,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
             // chunk for a tool-call turn but keep the SSE connection open
             // instead of closing with [DONE]. Once the provider has explicitly
             // said the assistant turn ended because of tool calls, all useful
-            // tool-call data has arrived; finish locally so agent tool
-            // execution can continue across providers.
-            if (finishReason === 'tool-calls') {
+            // tool-call data has arrived. When usage was requested, however,
+            // a later choices-free chunk can contain token counts, so wait for
+            // stream completion instead of discarding it.
+            if (finishReason === 'tool-calls' && !includeUsage) {
               emitFinish(controller)
               controller.terminate()
             }

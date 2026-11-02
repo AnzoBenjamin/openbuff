@@ -15,7 +15,7 @@ function getOpenAIMetadata(message: {
 
 export function convertToOpenAICompatibleChatMessages(
   prompt: LanguageModelV2Prompt,
-  options: { stringifyTextContent?: boolean } = {},
+  options: { stringifyTextContent?: boolean; reasoningReplay?: boolean } = {},
 ): OpenAICompatibleChatPrompt {
   const messages: OpenAICompatibleChatPrompt = []
   for (const { role, content, ...message } of prompt) {
@@ -129,7 +129,7 @@ export function convertToOpenAICompatibleChatMessages(
           reasoning_content:
             reasoningContent.length > 0
               ? reasoningContent
-              : toolCalls.length > 0
+              : toolCalls.length > 0 || options.reasoningReplay
                 ? ''
                 : undefined,
           tool_calls: toolCalls.length > 0 ? toolCalls : undefined,

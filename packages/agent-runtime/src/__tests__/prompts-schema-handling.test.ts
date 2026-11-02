@@ -76,7 +76,7 @@ describe('Schema handling error recovery', () => {
   })
 
   describe('ensureJsonSchemaCompatible in templates/prompts.ts', () => {
-    test('handles schema that cannot be converted to JSON Schema', async () => {
+    test('reports a schema that cannot be converted to JSON Schema', async () => {
       // Create a schema that will fail JSON Schema conversion
       // z.function() cannot be converted to JSON Schema
       const problematicSchema = z.function()
@@ -103,20 +103,14 @@ describe('Schema handling error recovery', () => {
         stepPrompt: '',
       }
 
-      // buildAgentToolSet uses ensureJsonSchemaCompatible internally
-      // It should not throw even with problematic schema
-      const toolSet = await buildAgentToolSet({
+      await expect(buildAgentToolSet({
         spawnableAgents: ['test-agent'],
         agentTemplates: { 'test-agent': agentTemplate },
         logger: createMockLogger(),
         apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
         databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
         fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
-      })
-
-      // Should have created a tool without throwing
-      expect(toolSet['test_agent']).toBeDefined()
-      expect(toolSet['test-agent']).toBeUndefined()
+      })).rejects.toThrow('Cannot publish spawn input schema for agent test-agent')
     })
 
     test('generic spawn mode omits redundant per-agent native tools', async () => {
@@ -374,7 +368,9 @@ describe('Schema handling error recovery', () => {
       // object/absent type branch).
       const coerced = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
       const safeParse = (
-        coerced as unknown as { safeParse: (v: unknown) => { success: boolean } }
+        coerced as unknown as {
+          safeParse: (v: unknown) => { success: boolean }
+        }
       ).safeParse
       expect(typeof safeParse).toBe('function')
       expect(safeParse({ any: 'object' }).success).toBe(true)
@@ -391,7 +387,9 @@ describe('Schema handling error recovery', () => {
       ) as Record<string, unknown>
       const coerced = coerceJsonSchemaMember(husk) as z.ZodType
       const safeParse = (
-        coerced as unknown as { safeParse: (v: unknown) => { success: boolean } }
+        coerced as unknown as {
+          safeParse: (v: unknown) => { success: boolean }
+        }
       ).safeParse
       expect(typeof safeParse).toBe('function')
       expect(safeParse({ prompt: 'x' }).success).toBe(true)
@@ -719,23 +717,14 @@ describe('Schema handling error recovery', () => {
       expect(description).toContain('Params:')
     })
 
-    test('buildToolDescription uses fallback for schemas that fail toJSONSchema', () => {
-      // z.function() cannot be converted to JSON Schema
-      const problematicSchema = z.function()
-
-      const description = buildToolDescription({
-        toolName: 'fallback_test',
-        schema: problematicSchema as unknown as z.ZodType,
-        description: 'Testing fallback behavior',
-        endsAgentStep: false,
-      })
-
-      // Should use fallback - verify the Params section exists and doesn't crash
-      expect(description).toContain('### fallback_test')
-      expect(description).toContain('Testing fallback behavior')
-      // The fallback schema is z.object({}).passthrough() which has no properties
-      // So it should show 'Params: None'
-      expect(description).toContain('Params: None')
+    test('buildToolDescription rejects schemas that cannot be published', () => {
+      expect(() =>
+        buildToolDescription({
+          toolName: 'fallback_test',
+          schema: z.function() as unknown as z.ZodType,
+          endsAgentStep: false,
+        }),
+      ).toThrow('Cannot publish tool input schema')
     })
 
     test('buildToolDescription handles valid schemas', () => {
@@ -810,25 +799,44 @@ describe('Schema handling error recovery', () => {
       expect(parseAgentType('read_files').success).toBe(false)
     })
 
-    test('getToolSet handles custom tools with problematic schemas', async () => {
-      // Create a custom tool definition with a schema that can't be converted
-      const customToolDefs = {
-        problematic_tool: {
-          description: 'A problematic tool',
-          inputSchema: z.function() as unknown as z.ZodType,
-          endsAgentStep: true,
-        },
-      }
+    test('getToolSet reports which custom tool has an unpublishable schema', async () => {
+      await expect(
+        getToolSet({
+          toolNames: [],
+          additionalToolDefinitions: async () => ({
+            problematic_tool: {
+              inputSchema: z.function() as unknown as z.ZodType,
+            },
+          }),
+          agentTools: {},
+          skills: {},
+        }),
+      ).rejects.toThrow('Cannot publish input schema for tool problematic_tool')
+    })
 
-      const toolSet = await getToolSet({
+    test('getToolSet preserves custom JSON Schema constraints and guidance', async () => {
+      const inputSchema = {
+        type: 'object',
+        properties: {
+          paths: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Project paths',
+          },
+        },
+        required: ['paths'],
+        additionalProperties: false,
+      }
+      const tools = await getToolSet({
         toolNames: [],
-        additionalToolDefinitions: async () => customToolDefs,
+        additionalToolDefinitions: async () => ({ custom: { inputSchema } }),
         agentTools: {},
         skills: {},
       })
-
-      // Should have the tool defined without throwing
-      expect(toolSet['problematic_tool']).toBeDefined()
+      expect(
+        (tools.custom.inputSchema as unknown as { jsonSchema: unknown })
+          .jsonSchema,
+      ).toEqual(inputSchema)
     })
 
     test('getToolSet compacts provider-facing builtin tool schemas', async () => {
@@ -890,12 +898,12 @@ describe('Schema handling error recovery', () => {
         '1-indexed window number',
       )
 
-      // The asymmetry is deliberate: another non-mutation, non-read_files tool
-      // still has every description stripped by provider compaction.
-      expect(JSON.stringify(globJsonSchema)).not.toContain('description')
+      expect(JSON.stringify(globJsonSchema)).toContain(
+        'Glob pattern to match files',
+      )
     })
 
-    test('compactToolInputSchemaForProvider preserves descriptions only when requested', () => {
+    test('compactToolInputSchemaForProvider preserves descriptions by default', () => {
       const schema = (toolParams.edit_transaction.providerInputSchema ??
         toolParams.edit_transaction.inputSchema) as z.ZodType
 
@@ -923,7 +931,7 @@ describe('Schema handling error recovery', () => {
       })
 
       expect(containsDescriptionKey(schemaJson(preserved))).toBe(true)
-      expect(containsDescriptionKey(schemaJson(stripped))).toBe(false)
+      expect(containsDescriptionKey(schemaJson(stripped))).toBe(true)
       expect(containsDescriptionKey(schemaJson(strippedOmitted))).toBe(false)
     })
 
@@ -1316,10 +1324,8 @@ describe('Schema handling error recovery', () => {
       // The transported members keep their validation structure: never the
       // bare permissive { type: 'object' } husk, and never the live zod
       // member (whose JSON.stringify would crash asSchema in the child).
-      const transportedParams = transported.inputSchema?.params as unknown as Record<
-        string,
-        unknown
-      >
+      const transportedParams = transported.inputSchema
+        ?.params as unknown as Record<string, unknown>
       const transportedOutput = transported.outputSchema as unknown as Record<
         string,
         unknown
@@ -1330,10 +1336,8 @@ describe('Schema handling error recovery', () => {
         type: 'object',
         required: ['findings'],
       })
-      const findings = (transportedOutput.properties as Record<
-        string,
-        unknown
-      >).findings as Record<string, unknown>
+      const findings = (transportedOutput.properties as Record<string, unknown>)
+        .findings as Record<string, unknown>
       expect(findings.type).toBe('array')
 
       // Both members are plain JSON-Schema objects that round-trip the
@@ -1394,9 +1398,9 @@ describe('Schema handling error recovery', () => {
       })
       // The exact spawn boundary: JSON.stringify → JSON.parse. The REQUEST
       // RECORD is stringified and the template looked up by id afterwards.
-      const roundTripped = JSON.parse(
-        JSON.stringify(transportedRecord),
-      )['code-reviewer']
+      const roundTripped = JSON.parse(JSON.stringify(transportedRecord))[
+        'code-reviewer'
+      ]
       const resolved = ensureAgentTemplateZodSchemas(roundTripped)
 
       const isLiveZod = (member: unknown) => {

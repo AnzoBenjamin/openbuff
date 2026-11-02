@@ -122,6 +122,30 @@ function makeMemoryRepositoryStub(script?: {
 }
 
 describe('createMcpServer', () => {
+  test('code_search distinguishes invalid patterns from no matches over MCP', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-search-errors-'))
+    writeFileSync(join(projectRoot, 'example.ts'), 'const greeting = 1\n')
+    const server = createMcpServer({ client: {}, sessionData: { projectRoot } })
+    const { client, close } = await connectPair(server)
+    try {
+      const invalidPattern = await client.callTool({
+        name: 'code_search',
+        arguments: { pattern: '[' },
+      })
+      expect(invalidPattern.isError).toBe(true)
+      expect(JSON.stringify(invalidPattern.content)).not.toContain('No matches')
+      const noMatch = await client.callTool({
+        name: 'code_search',
+        arguments: { pattern: 'not-present-anywhere' },
+      })
+      expect(noMatch.isError).toBeUndefined()
+      expect(JSON.stringify(noMatch.content)).toContain('0 matches')
+    } finally {
+      await close()
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
   test('tools/list returns exactly the read-only tool names', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-server-tools-'))
     try {

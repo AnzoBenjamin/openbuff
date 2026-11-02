@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 import z from 'zod/v4'
 
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
@@ -57,6 +58,7 @@ describe('handleSetOutput', () => {
         type: 'json',
         value: {
           message: expect.stringContaining('malformed or incomplete JSON text'),
+          errorMessage: expect.stringContaining('malformed or incomplete JSON text'),
         },
       },
     ])
@@ -106,7 +108,7 @@ describe('handleSetOutput', () => {
     expect(output).toEqual([
       {
         type: 'json',
-        value: { message: expect.stringContaining('verdict') },
+        value: { message: expect.stringContaining('verdict'), errorMessage: expect.stringContaining('verdict') },
       },
     ])
   })
@@ -324,6 +326,212 @@ describe('handleSetOutput', () => {
     })
   })
 
+  test.each([
+    { submitted: ['first', 'second'], expected: ['first', 'second'] },
+    { submitted: '["first","second"]', expected: ['first', 'second'] },
+    { submitted: 'first', expected: ['first'] },
+  ])('preserves reviewer advisories as an array: $submitted', async ({
+    submitted,
+    expected,
+  }) => {
+    const template: AgentTemplate = {
+      id: 'advisory-shape-reviewer',
+      displayName: 'Reviewer',
+      spawnerPrompt: 'Review code',
+      model: 'claude-3-5-sonnet-20241022',
+      inputSchema: {},
+      outputMode: 'structured_output',
+      outputSchema: z.object({
+        family: z.literal('reviewer'),
+        verdict: z.literal('LOOKS_GOOD'),
+        advisories: z.array(z.string()),
+        requirementCoverage: z.array(
+          z.object({ evidence: z.array(z.string()) }),
+        ),
+      }),
+      includeMessageHistory: false,
+      inheritParentSystemPrompt: false,
+      mcpServers: {},
+      toolNames: ['set_output'],
+      spawnableAgents: [],
+      systemPrompt: '',
+      instructionsPrompt: '',
+      stepPrompt: '',
+    }
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'set_output',
+        toolCallId: 'advisory-shape',
+        input: {
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          advisories: submitted,
+          requirementCoverage: [
+            {
+              evidence: Array.isArray(submitted)
+                ? ['src/a.ts:1']
+                : '["src/a.ts:1"]',
+            },
+          ],
+        },
+      } as unknown as CodebuffToolCall<'set_output'>,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual({
+      family: 'reviewer',
+      verdict: 'LOOKS_GOOD',
+      advisories: expected,
+      requirementCoverage: [{ evidence: ['src/a.ts:1'] }],
+    })
+  })
+
+  test('rejects an incomplete stringified advisory array instead of treating it as prose', async () => {
+    const template = {
+      id: 'truncated-advisory-reviewer',
+      outputSchema: z.object({
+        family: z.literal('reviewer'),
+        advisories: z.array(z.string()),
+      }),
+    } as unknown as AgentTemplate
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'set_output',
+        toolCallId: 'truncated-advisories',
+        input: { family: 'reviewer', advisories: '["unfinished' },
+      } as unknown as CodebuffToolCall<'set_output'>,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.output).toBeUndefined()
+    expect(output[0]?.type === 'json' && output[0].value.message).toContain(
+      'Output validation error',
+    )
+  })
+
+  test('normalizes stringified advisory-family list fields against the declared schema', async () => {
+    const template = {
+      id: 'architect',
+      outputSchema: z.object({
+        family: z.literal('advisory'),
+        recommendations: z.array(z.string()),
+        evidence: z.array(z.string()),
+      }),
+    } as unknown as AgentTemplate
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'set_output',
+        toolCallId: 'advisory-family',
+        input: {
+          family: 'advisory',
+          recommendations: '["fix"]',
+          evidence: '["src/a.ts:1"]',
+        },
+      } as unknown as CodebuffToolCall<'set_output'>,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual({
+      family: 'advisory',
+      recommendations: ['fix'],
+      evidence: ['src/a.ts:1'],
+    })
+  })
+
+  test.each([
+    {
+      schema: z.object({ note: z.string().optional() }),
+      input: { data: { note: 'saved' } },
+      expected: { note: 'saved' },
+    },
+    {
+      schema: z.object({ data: z.object({ note: z.string() }) }),
+      input: { data: { note: 'saved' } },
+      expected: { data: { note: 'saved' } },
+    },
+    {
+      // The JSON-schema converter keeps unknown top-level keys by default.
+      schema: convertJsonSchemaToZod({
+        type: 'object',
+        properties: { note: { type: 'string' } },
+      }),
+      input: { data: { note: 'saved' } },
+      expected: { note: 'saved' },
+    },
+  ])('does not discard a data-wrapped receipt when output properties are optional', async ({
+    schema,
+    input,
+    expected,
+  }) => {
+    const template = {
+      id: 'optional-output-agent',
+      outputSchema: schema,
+    } as unknown as AgentTemplate
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'set_output',
+        toolCallId: 'optional-output',
+        input,
+      } as unknown as CodebuffToolCall<'set_output'>,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(output).toEqual([{ type: 'json', value: { message: 'Output set' } }])
+    expect(agentState.output).toEqual(expected)
+  })
+
+  test('rejects an invalid data-wrapped receipt rather than accepting a stripped empty object', async () => {
+    const template = {
+      id: 'optional-output-agent',
+      outputSchema: z.object({ note: z.string().optional() }),
+    } as unknown as AgentTemplate
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolName: 'set_output',
+        toolCallId: 'invalid-optional-output',
+        input: { data: { note: 42 } },
+      } as unknown as CodebuffToolCall<'set_output'>,
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+
+    expect(agentState.output).toBeUndefined()
+    expect(output[0]?.type === 'json' && output[0].value.message).toContain(
+      'Output validation error',
+    )
+  })
+
   test('reports top-level field errors instead of an absent data-field error', async () => {
     const template: AgentTemplate = {
       id: 'reviewer-error-test',
@@ -451,6 +659,7 @@ describe('handleSetOutput', () => {
       outputMode: 'structured_output',
       outputSchema: z.object({
         family: z.literal('reviewer'),
+        verdict: z.literal('LOOKS_GOOD'),
         schemaVersion: z.number(),
         reviewedFiles: z.array(z.string()),
         findings: z.array(z.string()),
@@ -472,6 +681,7 @@ describe('handleSetOutput', () => {
       input: {
         data: {
           family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
           schemaVersion: '1',
           reviewedFiles: '["src/a.ts"]',
           findings: '[]',
@@ -490,6 +700,7 @@ describe('handleSetOutput', () => {
 
     expect(agentState.output).toEqual({
       family: 'reviewer',
+      verdict: 'LOOKS_GOOD',
       schemaVersion: 1,
       reviewedFiles: ['src/a.ts'],
       findings: [],
@@ -776,6 +987,26 @@ describe('handleSetOutput', () => {
     stepPrompt: 'Test step prompt',
   })
 
+  test('rejects a verdict-less code-reviewer receipt even when its schema is degraded', async () => {
+    const template = { ...rejectionTemplate('code-reviewer'), outputSchema: z.looseObject({}) }
+    const agentState = getInitialSessionState(mockFileContext).mainAgentState
+    agentState.agentType = template.id
+    const { output } = await handleSetOutput({
+      ...TEST_AGENT_RUNTIME_IMPL,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { toolName: 'set_output', toolCallId: 'degraded-review', input: { snapshotFingerprint: 'snapshot' } },
+      agentState,
+      apiKey: 'test-api-key',
+      localAgentTemplates: { [template.id]: template },
+    } as unknown as Parameters<typeof handleSetOutput>[0])
+    expect(agentState.output).toBeUndefined()
+    expect(agentState.lastSetOutputError).toContain('valid verdict')
+    expect(output).toEqual([{ type: 'json', value: {
+      message: expect.stringContaining('valid verdict'),
+      errorMessage: expect.stringContaining('valid verdict'),
+    } }])
+  })
+
   test('fails closed when the declared agent type has no resolvable template', async () => {
     const agentState = getInitialSessionState(mockFileContext).mainAgentState
     // Truthy agentType with NO resolvable template (no local template matches
@@ -860,8 +1091,9 @@ describe('handleSetOutput', () => {
     // The limit and the actual length must both be explicit.
     expect(message).toContain(String(MAX_SET_OUTPUT_JSON_CHARS))
     expect(message).toContain(String(oversized.length))
-    // Recovery guidance: chunk into smaller calls or persist to a file.
-    expect(message).toContain('split')
+    // set_output replaces the whole value; it cannot accumulate chunks.
+    expect(message).toContain('one complete object')
+    expect(message).toContain('replaces the previous output')
     expect(message).toContain('file')
     expect(typeof agentState.lastSetOutputError).toBe('string')
     expect(agentState.lastSetOutputError).toBe(message)
@@ -889,7 +1121,8 @@ describe('handleSetOutput', () => {
     expect(agentState.output).toBeUndefined()
     const message = output[0]?.type === 'json' ? output[0].value.message : ''
     expect(message).toContain('truncated in transport')
-    expect(message).toContain('split')
+    expect(message).toContain('one complete object')
+    expect(message).toContain('replaces the previous output')
     expect(typeof agentState.lastSetOutputError).toBe('string')
     expect(agentState.lastSetOutputError).toBe(message)
   })
@@ -1175,7 +1408,7 @@ describe('handleSetOutput', () => {
       expect(agentState.output).toEqual(validReceipt)
       // Guard ack (not the plain 'Output set') so the model learns why.
       expect(second.output).toEqual([
-        { type: 'json', value: { message: RECEIPT_GUARD_ACK } },
+        { type: 'json', value: { message: RECEIPT_GUARD_ACK, status: 'ignored' } },
       ])
       // A repeated bogus call must not resurrect a stale error.
       expect(agentState.lastSetOutputError).toBeUndefined()

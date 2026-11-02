@@ -125,6 +125,7 @@ export async function processStream(
   // guard. Provider/transport/policy errors are also emitted as `error`
   // events, but are not evidence that an identical invalid call was made.
   const invalidCallSignatures: string[] = []
+  const invalidCallToolNames = new Set<string>()
   let unknownWorkspaceMutationMayHaveRun = false
   const errorMessages: Message[] = []
   // Per-path write barriers. Writes on DIFFERENT paths run concurrently;
@@ -317,6 +318,9 @@ export async function processStream(
             (chunk as InvalidArgumentsValidationError)
               .invalidArgumentsValidation === true
           ) {
+            if (/^[a-zA-Z0-9_.-]{1,80}$/.test(toolName)) {
+              invalidCallToolNames.add(toolName)
+            }
             try {
               const serialized = JSON.stringify([toolName, input])
               invalidCallSignatures.push(
@@ -895,7 +899,10 @@ export async function processStream(
       }
 
       if (chunk.type === 'reasoning') {
-        if (includeReasoningInMessageHistory && chunk.text) {
+        if (
+          (includeReasoningInMessageHistory || chunk.replayRequired) &&
+          chunk.text
+        ) {
           const last = assistantMessages[assistantMessages.length - 1]
           const lastPart =
             last?.role === 'assistant' && Array.isArray(last.content)
@@ -909,13 +916,15 @@ export async function processStream(
             )
           }
         }
-        onResponseChunk({
-          type: 'reasoning_delta',
-          text: chunk.text,
-          ancestorRunIds,
-          runId,
-          agentId: agentState.agentId,
-        })
+        if (!chunk.suppressDisplay) {
+          onResponseChunk({
+            type: 'reasoning_delta',
+            text: chunk.text,
+            ancestorRunIds,
+            runId,
+            agentId: agentState.agentId,
+          })
+        }
       } else if (chunk.type === 'text') {
         onResponseChunk(chunk.text)
         fullResponseChunks.push(chunk.text)
@@ -1039,6 +1048,10 @@ export async function processStream(
       invalidCallSignatures.length > 0 && toolCalls.length === 0
         ? JSON.stringify([...new Set(invalidCallSignatures)].sort())
         : undefined,
+    toolCallErrorTools:
+      invalidCallSignatures.length > 0 && toolCalls.length === 0
+        ? [...invalidCallToolNames].sort()
+        : [],
     messageId,
     toolCalls,
     toolResults,

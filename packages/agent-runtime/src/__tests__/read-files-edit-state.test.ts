@@ -492,6 +492,7 @@ describe('read_files edit-state recovery', () => {
     const path = 'src/large.ts'
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
+    fileProcessingState.failedEditRequiresReadByPath[path] = true
 
     const result = await handleReadFiles({
       ...defaultTestHandlerAuthority,
@@ -524,6 +525,54 @@ describe('read_files edit-state recovery', () => {
     expect(
       fileProcessingState.readAuthorizationHashesByPath?.[path],
     ).toBeUndefined()
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+  })
+
+  it('returns a symbol larger than the former hidden 100k limit', async () => {
+    const path = 'src/large-symbol.ts'
+    const content = `export function target() {\n  return '${'x'.repeat(101_000)}'\n}\n`
+    const fileProcessingState = createFileProcessingState()
+    fileProcessingState.failedEditRequiresReadByPath[path] = true
+
+    const result = await handleReadFiles({
+      ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'read-oversize-symbol',
+        toolName: 'read_files',
+        input: { symbols: [{ path, names: ['target'] }] },
+      },
+      fileContext: mockFileContext,
+      fileProcessingState,
+      requestFiles: async () => buildReadFilesResultV1([]),
+      requestOptionalFile: async () => content,
+      logger,
+    } as any)
+
+    expect(result.output[0]).toMatchObject({
+      type: 'json',
+      value: { results: [{ status: 'ok', slices: [{ symbol: 'target' }] }] },
+    })
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).not.toBe(true)
+  })
+
+  it('returns complete slices and identifies omitted symbols when a batch exceeds its budget', async () => {
+    const path = 'src/large-symbol-batch.ts'
+    const content = `export function first() { return '${'a'.repeat(2_200_000)}' }\nexport function second() { return '${'b'.repeat(2_200_000)}' }\n`
+    const result = await handleReadFiles({
+      ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { toolCallId: 'read-large-symbol-batch', toolName: 'read_files', input: { symbols: [{ path, names: ['first', 'second'] }] } },
+      fileContext: mockFileContext,
+      fileProcessingState: createFileProcessingState(),
+      requestFiles: async () => buildReadFilesResultV1([]),
+      requestOptionalFile: async () => content,
+      logger,
+    } as any)
+    expect(result.output[0]).toMatchObject({
+      type: 'json',
+      value: { results: [{ status: 'partial', slices: [{ symbol: 'first' }], omittedSymbols: ['second'], recovery: expect.stringContaining('separately') }] },
+    })
   })
 
   it('rejects a canonical result whose selector path does not match the request', async () => {

@@ -62,8 +62,10 @@ export function resolveCheckBackgroundAgentWaitBounds(params: {
     typeof requestedSeconds === 'number' && Number.isFinite(requestedSeconds)
       ? Math.max(0, requestedSeconds * 1000)
       : 0
+  const explicitPoll = requestedSeconds === 0
   return {
-    follow: Boolean(params.waitFor) || requestedTimeoutMs > 0,
+    follow:
+      !explicitPoll && (Boolean(params.waitFor) || requestedTimeoutMs > 0),
     timeoutMs: Math.min(
       requestedTimeoutMs > 0
         ? requestedTimeoutMs
@@ -175,7 +177,7 @@ export const handleCheckBackgroundAgent = (async ({
   const {
     jobId,
     wait_for,
-    timeout_seconds = 0,
+    timeout_seconds,
     cancel = false,
     cursor,
   } = toolCall.input

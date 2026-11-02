@@ -59,6 +59,23 @@ function basedOnRead(params: {
 }
 
 describe('processEditTransaction', () => {
+  it('reports original snapshot ranges after a preceding structured edit', async () => {
+    const path = 'src/helper.ts'
+    const result = await processEditTransaction({
+      initialContentByPath: new Map([[path, 'const header = 1;\nconst targetValue = 123;\nconst tail = 3;\n']]),
+      logger,
+      edits: [
+        { type: 'structured', path, operation: { kind: 'insert_text', position: { line: 1, column: 1 }, text: '// staged\n' } },
+        { type: 'str_replace', path, replacements: [{ oldString: 'const targetValue = 999;', newString: 'const targetValue = 456;', allowMultiple: false }] },
+      ],
+    })
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.failures[0]?.errorMessage).toContain('unchanged file snapshot')
+      expect(result.failures[0]?.errorMessage).toContain('startLine: 2, endLine: 2')
+    }
+  })
+
   it('preflights and returns patches for multiple files when every edit succeeds', async () => {
     const initialContentByPath = new Map<string, string | null>([
       ['src/helper.ts', 'export const value = 1\n'],

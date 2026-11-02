@@ -101,6 +101,8 @@ const providerCompatibilitySchema = z
     supportsStopSequences: z.boolean().default(false),
     /** If true, Openbuff omits non-provider request metadata for this provider. */
     stripProviderMetadata: z.boolean().default(true),
+    /** Replay assistant reasoning on providers that require it. */
+    reasoningReplay: z.enum(['required', 'none']).optional(),
   })
   .default(DEFAULT_PROVIDER_COMPATIBILITY)
 
@@ -300,6 +302,7 @@ const anthropicCompatibilitySchema = z
     supportsRequiredToolChoice: z.boolean().default(true),
     supportsStopSequences: z.boolean().default(true),
     stripProviderMetadata: z.boolean().default(false),
+    reasoningReplay: z.enum(['required', 'none']).optional(),
   })
   .default(DEFAULT_ANTHROPIC_COMPATIBILITY)
 
@@ -2043,6 +2046,11 @@ export function resolveConfiguredProviderModel(params: {
       compatibility: {
         ...DEFAULT_PROVIDER_COMPATIBILITY,
         ...(provider.compatibility ?? {}),
+        ...(provider.type === 'openai-compatible' &&
+          provider.compatibility.reasoningReplay === undefined &&
+          new URL(provider.baseURL).hostname.toLowerCase() === 'api.ifm.ai'
+          ? { reasoningReplay: 'required' as const }
+          : {}),
       },
     }
   }

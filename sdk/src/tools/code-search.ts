@@ -35,6 +35,24 @@ const DEFAULT_EXCLUDED_GLOBS = [
 
 const MAX_MATCH_LINE_LENGTH = 1_000
 
+/**
+ * Search the project with ripgrep.
+ *
+ * OUTPUT CONTRACT — the resolved `stdout` has two mutually exclusive shapes,
+ * discriminated by the caller's `flags`:
+ *
+ * - RANKED/ENVELOPE MODE (default; no `-l`): each match renders as
+ *   `filename:line:content`, wrapped by `formatCodeSearchOutput`, plus bounded
+ *   truncation notes. Hosts parse lines for a path, a line number and content.
+ * - FILES-ONLY MODE (`-l`/`--files-with-matches` in `flags`): the result is a
+ *   bare newline-separated list of matching paths with no line numbers and no
+ *   envelope. A host that parses `filename:line:content` MUST check the
+ *   requested flags first and treat every line as a path.
+ *
+ * Both modes share the same error surface (`{ errorMessage }`) and the same
+ * `exitCode`/`message`/`stderr` metadata, so an invalid pattern or a missing
+ * binary is reported identically in either mode.
+ */
 export function codeSearch({
   projectPath,
   pattern,
@@ -51,6 +69,16 @@ export function codeSearch({
 }: {
   projectPath: string
   pattern: string
+  /**
+   * ripgrep flags, filtered through `parseSafeRipgrepFlags` (context flags
+   * -A/-B/-C and `-l`/`--files-with-matches` are additionally allowed here).
+   *
+   * `-l`/`--files-with-matches` selects the FILES-ONLY OUTPUT MODE described on
+   * `codeSearch`: the result is a bare newline-separated list of matching
+   * paths, NOT the `filename:line:content` envelope. Flags outside the
+   * allowlist fail with an `{ errorMessage }` result rather than being
+   * silently dropped.
+   */
   flags?: string | string[]
   cwd?: string
   /** Optional file and/or directory paths to search (relative to project root or absolute). */
@@ -169,12 +197,13 @@ export function codeSearch({
     }
     const flagsArray = parsedFlags.flags
     // True when the caller explicitly requested files-only output.
-    const filesOnlyMode = flagsArray.includes('-l') || flagsArray.includes('--files-with-matches')
+    const filesOnlyMode =
+      flagsArray.includes('-l') || flagsArray.includes('--files-with-matches')
     // In files-only mode, remove -l/--files-with-matches from flagsArray — we
     // control the output shape ourselves so we don't pass the flag through;
     // ripgrep's bare-path output is what we stream and format below.
     const filteredFlags = filesOnlyMode
-      ? flagsArray.filter(f => f !== '-l' && f !== '--files-with-matches')
+      ? flagsArray.filter((f) => f !== '-l' && f !== '--files-with-matches')
       : flagsArray
 
     // Use JSON output for robust parsing and early stopping
@@ -415,7 +444,8 @@ export function codeSearch({
 
       childProcess.stdout?.on('data', (chunk: Buffer | string) => {
         if (isResolved) return
-        const chunkStr = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+        const chunkStr =
+          typeof chunk === 'string' ? chunk : chunk.toString('utf8')
         fileLineBuf += chunkStr
         const lines = fileLineBuf.split('\n')
         fileLineBuf = lines.pop() ?? ''
@@ -441,7 +471,10 @@ export function codeSearch({
       childProcess.once('close', (code) => {
         if (isResolved) return
         // Flush any trailing partial line
-        if (fileLineBuf.trim() && !isReadPathBlocked(fileLineBuf.trim(), fileFilter)) {
+        if (
+          fileLineBuf.trim() &&
+          !isReadPathBlocked(fileLineBuf.trim(), fileFilter)
+        ) {
           matchedFiles.push(fileLineBuf.trim())
         }
         const exitMessage =
@@ -450,6 +483,13 @@ export function codeSearch({
             : ''
         settle({
           stdout: matchedFiles.join('\n'),
+          ...(stderrBuf && {
+            stderr: truncateOutput(
+              stderrBuf,
+              Math.floor(maxOutputStringLength / 5),
+            ),
+          }),
+          ...(code !== null && { exitCode: code }),
           message: exitMessage,
         })
       })
@@ -674,6 +714,7 @@ export function codeSearch({
         settle({
           stdout: truncatedStdout,
           ...(truncatedStderr && { stderr: truncatedStderr }),
+          ...(code !== null && { exitCode: code }),
           message: cwdWasFile
             ? `${exitMessage}${exitMessage ? ' ' : ''}(cwd was a file; searched that file only)`
             : exitMessage,

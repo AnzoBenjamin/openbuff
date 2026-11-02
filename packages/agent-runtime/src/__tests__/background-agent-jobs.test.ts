@@ -910,6 +910,15 @@ describe('check_background_agent join semantics', () => {
       timeoutMs: DEFAULT_CHECK_BACKGROUND_AGENT_FOLLOW_TIMEOUT_MS,
     })
     expect(
+      resolveCheckBackgroundAgentWaitBounds({
+        waitFor: 'milestone',
+        timeoutSeconds: 0,
+      }),
+    ).toEqual({
+      follow: false,
+      timeoutMs: DEFAULT_CHECK_BACKGROUND_AGENT_FOLLOW_TIMEOUT_MS,
+    })
+    expect(
       resolveCheckBackgroundAgentWaitBounds({ timeoutSeconds: 5 }),
     ).toEqual({ follow: true, timeoutMs: 5_000 })
     // A non-finite or negative value is treated as omitted rather than as
@@ -932,6 +941,21 @@ describe('check_background_agent join semantics', () => {
       timeoutMs: MAX_CHECK_BACKGROUND_AGENT_FOLLOW_TIMEOUT_MS,
     })
   })
+
+  test('explicit zero timeout polls immediately even with a wait_for predicate', async () => {
+    const job = allocateBackgroundAgentJob({
+      agentType: 'basher',
+      agentName: 'Basher',
+      owner: POLL_OWNER,
+    })
+    const result = await startCheckBackgroundAgent({
+      jobId: job.jobId,
+      wait_for: 'not-seen',
+      timeout_seconds: 0,
+    })
+    expect(result.matched).toBe(false)
+    expect(result.timedOut).toBeUndefined()
+  }, 1000)
 
   test('a follow-mode wait without an explicit timeout still returns a bounded result', async () => {
     const job = allocateBackgroundAgentJob({
@@ -1819,9 +1843,8 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
   test('pinnedRunId skips startAgentRun and journals under the pinned runId', async () => {
     const journal = makeJournal()
     try {
-      const { mainAgentState: parentState } = getInitialSessionState(
-        mockFileContext,
-      )
+      const { mainAgentState: parentState } =
+        getInitialSessionState(mockFileContext)
       const thinker = createMockAgent('thinker')
       const childState = createAgentState('thinker', thinker, parentState, {})
       let startAgentRunCalls = 0
@@ -1847,9 +1870,7 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
       expect(childState.runId).toBe('pinned-resume-child-1')
       expect(result.agentState.runId).toBe('pinned-resume-child-1')
       const childEventTypes = new Set(
-        journal
-          .events('pinned-resume-child-1')
-          .map((event) => event.eventType),
+        journal.events('pinned-resume-child-1').map((event) => event.eventType),
       )
       for (const eventType of [
         'llm_request',
@@ -1881,9 +1902,8 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
     try {
       seedCrashedBackgroundJob(journal, parentRunId, childRunId, jobId)
 
-      const { mainAgentState: parentState } = getInitialSessionState(
-        mockFileContext,
-      )
+      const { mainAgentState: parentState } =
+        getInitialSessionState(mockFileContext)
       parentState.runId = parentRunId
       parentState.backgroundAgentJobs = [
         { jobId, agentType: 'thinker', status: 'interrupted', startedAt: 1 },
@@ -1911,9 +1931,7 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
       ) {
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
-      expect(classifyChildRun(journal, childRunId).kind).toBe(
-        'child_completed',
-      )
+      expect(classifyChildRun(journal, childRunId).kind).toBe('child_completed')
       // The re-drive journaled BEYOND the seeded llm_request under the SAME
       // runId — a re-minted run would have started a fresh, empty stream.
       const childEventTypes = new Set(
@@ -1969,9 +1987,8 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
     try {
       seedCrashedBackgroundJob(journal, parentRunId, childRunId, jobId)
 
-      const { mainAgentState: parentState } = getInitialSessionState(
-        mockFileContext,
-      )
+      const { mainAgentState: parentState } =
+        getInitialSessionState(mockFileContext)
       parentState.runId = parentRunId
       parentState.backgroundAgentJobs = [
         { jobId, agentType: 'thinker', status: 'interrupted', startedAt: 1 },
@@ -2047,9 +2064,7 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
       expect(intent?.status).toBe('completed')
-      expect(classifyChildRun(journal, childRunId).kind).toBe(
-        'child_completed',
-      )
+      expect(classifyChildRun(journal, childRunId).kind).toBe('child_completed')
     } finally {
       releaseThinkerStream?.()
       await journal.close()

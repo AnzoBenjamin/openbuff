@@ -151,6 +151,35 @@ const QUERY_INDEX_INPUT_SCHEMA = {
   additionalProperties: false,
 }
 
+/**
+ * The ripgrep flags the MCP `code_search` tool accepts. Mirrors the allowlist
+ * `codeSearch()` itself enforces (`parseSafeRipgrepFlags` plus the -A/-B/-C
+ * context flags and `-l`/`--files-with-matches`), so the advertised schema and
+ * the implementation agree: an MCP client can select the documented files-only
+ * mode without a validation error, and anything outside this set is rejected
+ * by `codeSearch()` with its own error message.
+ */
+const CODE_SEARCH_ALLOWED_FLAGS = [
+  '-i',
+  '--ignore-case',
+  '-w',
+  '--word-regexp',
+  '-F',
+  '--fixed-strings',
+  '-v',
+  '--invert-match',
+  '-U',
+  '--multiline',
+  '-l',
+  '--files-with-matches',
+  '-A',
+  '-B',
+  '-C',
+  '--after-context',
+  '--before-context',
+  '--context',
+] as const
+
 const CODE_SEARCH_INPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -173,6 +202,13 @@ const CODE_SEARCH_INPUT_SCHEMA = {
       minimum: 1,
       maximum: MAX_SEARCH_TIMEOUT_SECONDS,
       description: `Search timeout in seconds (default ${DEFAULT_SEARCH_TIMEOUT_SECONDS}, capped at ${MAX_SEARCH_TIMEOUT_SECONDS}).`,
+    },
+    flags: {
+      type: 'array',
+      maxItems: MAX_STRINGS,
+      items: { type: 'string', enum: [...CODE_SEARCH_ALLOWED_FLAGS] },
+      description:
+        'Optional ripgrep flags from a safe allowlist (case/word/regex-mode, -A/-B/-C context, -l/--files-with-matches). -l switches the result to a bare newline-separated list of matching paths; anything else streams filename:line:content.',
     },
   },
   required: ['pattern'],
@@ -317,7 +353,7 @@ const MCP_TOOLS: Tool[] = [
   {
     name: 'code_search',
     description:
-      'Regex search over the project via the bundled ripgrep (cap-guarded: blocked/sensitive paths are filtered; flags pass through a safe allowlist).',
+      'Regex search over the project via the bundled ripgrep (cap-guarded: blocked/sensitive paths are filtered; the `flags` array passes through a safe allowlist). Results are `filename:line:content` lines, except with -l/--files-with-matches, which returns a bare newline-separated list of matching paths.',
     inputSchema: CODE_SEARCH_INPUT_SCHEMA,
     annotations: { title: 'Code search', ...READ_ONLY_ANNOTATIONS },
   },
@@ -755,6 +791,18 @@ async function callCodeSearch(
     DEFAULT_SEARCH_TIMEOUT_SECONDS,
   )
   if (!timeoutSeconds.ok) return invalid(timeoutSeconds.message)
+  const flags = optionalStringList(args.flags, 'flags', MAX_STRINGS, 32)
+  if (!flags.ok) return invalid(flags.message)
+  if (
+    flags.value?.some(
+      (flag) =>
+        !(CODE_SEARCH_ALLOWED_FLAGS as readonly string[]).includes(flag),
+    )
+  ) {
+    return invalid(
+      `flags entries must be one of: ${CODE_SEARCH_ALLOWED_FLAGS.join(', ')}.`,
+    )
+  }
   const output = await codeSearch({
     projectPath: sessionData.projectRoot,
     pattern: pattern.value,
@@ -762,16 +810,38 @@ async function callCodeSearch(
     globalMaxResults: MAX_SEARCH_RESULTS,
     timeoutSeconds: timeoutSeconds.value ?? DEFAULT_SEARCH_TIMEOUT_SECONDS,
     ...(paths.value ? { paths: paths.value } : {}),
+    ...(flags.value ? { flags: flags.value } : {}),
     ...(client.logger ? { logger: client.logger } : {}),
     ...(client.fileFilter ? { fileFilter: client.fileFilter } : {}),
   })
   const jsonPart = output.find((part) => part.type === 'json')
-  const value: { errorMessage?: string; stdout?: string } =
+  const value: {
+    errorMessage?: string
+    stdout?: string
+    stderr?: string
+    exitCode?: number
+    message?: string
+  } =
     jsonPart && jsonPart.type === 'json' && isRecord(jsonPart.value)
-      ? (jsonPart.value as { errorMessage?: string; stdout?: string })
+      ? (jsonPart.value as {
+          errorMessage?: string
+          stdout?: string
+          stderr?: string
+          exitCode?: number
+          message?: string
+        })
       : {}
   if (typeof value.errorMessage === 'string') {
     return errorResult(value.errorMessage)
+  }
+  // ripgrep uses exit code 1 for no matches and >=2 for actual errors such
+  // as an invalid regular expression. Never report the latter as "no match".
+  if (typeof value.exitCode === 'number' && value.exitCode > 1) {
+    return errorResult(
+      value.stderr?.trim() ||
+        value.message ||
+        `Search failed with exit code ${value.exitCode}.`,
+    )
   }
   const stdout = typeof value.stdout === 'string' ? value.stdout : ''
   return textResult(

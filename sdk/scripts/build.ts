@@ -3,12 +3,14 @@
 
 import { mkdir, cp, readFile, writeFile, rm } from 'fs/promises'
 import { createHash } from 'crypto'
+import { spawnSync } from 'child_process'
 import Module from 'module'
 import { delimiter, join, resolve } from 'path'
 
 import { generateDtsBundle } from 'dts-bundle-generator'
 import { resolveGrammarWasmSource } from '../../packages/code-map/src/grammar-wasm-repair'
 import { LANGUAGE_WASM_FILES } from '../../packages/code-map/src/wasm-files'
+import { repairEsmExportRenames } from './esm-export-fixup'
 
 const workspaceNodeModules = join(import.meta.dir, '..', 'node_modules')
 const existingNodePath = process.env.NODE_PATH ?? ''
@@ -63,14 +65,16 @@ async function build() {
     target: 'node',
     format: 'esm',
     minify: false,
-    treeShaking: false,
     sourcemap: 'linked',
-    external,
+    // lodash is CommonJS and Node cannot reliably import its named exports
+    // from an ESM bundle. Bundle it in the ESM artifact so the SDK's named
+    // lodash imports work in Node; the CJS artifact keeps it external.
+    external: external.filter((dependency) => dependency !== 'lodash'),
     naming: '[dir]/index.mjs',
     // Disable env inlining so the published bundle uses runtime `process.env.X`
     // lookups with source-code defaults, not build-time values that could leak
     // local dev config (e.g. support email) into the npm package.
-    env: false,
+    env: 'disable',
     loader: {
       '.scm': 'text',
     },
@@ -84,7 +88,6 @@ async function build() {
     target: 'node',
     format: 'cjs',
     minify: false,
-    treeShaking: false,
     sourcemap: 'linked',
     external,
     naming: '[dir]/index.cjs',
@@ -95,7 +98,7 @@ async function build() {
     // Disable env inlining so the published bundle uses runtime `process.env.X`
     // lookups with source-code defaults, not build-time values that could leak
     // local dev config (e.g. support email) into the npm package.
-    env: false,
+    env: 'disable',
     loader: {
       '.scm': 'text',
     },
@@ -134,7 +137,10 @@ async function build() {
     await fixDuplicateImports()
     console.log('  ✓ Created bundled type definitions')
   } catch (error) {
-    console.error('❌ TypeScript declaration bundling failed:', error.message)
+    console.error(
+      '❌ TypeScript declaration bundling failed:',
+      error instanceof Error ? error.message : String(error),
+    )
     process.exit(1)
   }
 
@@ -158,11 +164,34 @@ async function build() {
 
   // Work around Bun bundler tree-shaking: the `ToolHelpers` aggregation object
   // (from `sdk/src/tools/index.ts`) is only re-exported, never used internally,
-  // so even with `treeShaking: false` the bundler strips its definition. The
+  // so the bundler can strip its definition. The
   // individual tool functions ARE bundled (they're used by `sdk/src/run.ts`).
   // This step reconstructs `ToolHelpers` from those already-bundled functions
   // and adds it to the export block.
   await fixToolHelpers()
+
+  // The repair steps above must not turn missing public exports into a
+  // successful build. Exercise both published entry points in Node, including
+  // symbols that Bun can emit as later bindings in a multi-variable statement.
+  const requiredExports = [
+    'CodebuffClient',
+    'run',
+    'createMcpServer',
+    'getCustomToolDefinition',
+    'supportsStreamDirectory',
+    'isMemoryArtifactPersistenceAllowed',
+    'ToolHelpers',
+  ]
+  for (const [format, expression] of [
+    ['ESM', "import('./dist/index.mjs')"],
+    ['CJS', "Promise.resolve(require('./dist/index.cjs'))"],
+  ]) {
+    const script = `${expression}.then(m => { const missing = ${JSON.stringify(requiredExports)}.filter(name => m[name] == null); if (missing.length) { console.error('Missing SDK exports: ' + missing.join(', ')); process.exitCode = 1 } }).catch(error => { console.error(error); process.exitCode = 1 })`
+    const result = spawnSync('node', ['-e', script], { encoding: 'utf8', timeout: 30_000 })
+    if (result.error || result.status !== 0) {
+      throw new Error(`${format} SDK bundle verification failed: ${result.error?.message ?? result.stderr ?? `exit ${result.status}`}`)
+    }
+  }
 
   console.log('✅ Build complete!')
   console.log('  📄 dist/index.mjs (ESM)')
@@ -193,7 +222,10 @@ async function fixDuplicateImports() {
     await writeFile('dist/index.d.ts', content)
     console.log('  ✓ Fixed duplicate imports in bundled types')
   } catch (error) {
-    console.warn('  ⚠ Warning: Could not fix duplicate imports:', error.message)
+    console.warn(
+      '  ⚠ Warning: Could not fix duplicate imports:',
+      error instanceof Error ? error.message : String(error),
+    )
   }
 }
 
@@ -355,126 +387,12 @@ async function fixCjsImportVars() {
  *    suffixed variant is defined). Fix: remove the export entry from the
  *    export block to prevent `Export is not defined` errors.
  */
+
 async function fixEsmExportRenames() {
   const esmPath = 'dist/index.mjs'
-  let content = await readFile(esmPath, 'utf-8')
-
-  // Step 1: Find all declared variables/functions/classes in the bundle.
-  const declared = new Set<string>()
-  const declRegex =
-    /^(?:var|let|const)\s+(\w+)|^(?:async\s+)?function\*?\s+(\w+)|^class\s+(\w+)/gm
-  let match: RegExpExecArray | null
-  while ((match = declRegex.exec(content)) !== null) {
-    const name = match[1] || match[2] || match[3]
-    if (name) declared.add(name)
-  }
-
-  // Step 2: Find the final `export { ... }` block at the end of the file.
-  const exportBlockRegex = /export\s*\{([\s\S]*?)\}/g
-  let lastExportBlock = ''
-  while ((match = exportBlockRegex.exec(content)) !== null) {
-    lastExportBlock = match[1]
-  }
-
-  if (!lastExportBlock) {
-    console.log('  ✓ ESM export renames fixup: no export block found')
-    return
-  }
-
-  // Step 3: Parse each export entry and classify.
-  // Entries can be:
-  //   - `symbolName` (bare)
-  //   - `X2 as symbolName` (dedup rename)
-  //   - `X as Y` (legitimate rename, e.g. OpenbuffClient as CodebuffClient)
-  const entryRegex = /(\w+)(\d+)?\s+as\s+(\w+)|(\w+)(?=\s*[,\n}])/g
-  const renames: { from: string; to: string }[] = []
-  const removals: string[] = []
-
-  while ((match = entryRegex.exec(lastExportBlock)) !== null) {
-    let localName: string
-    let exportedName: string
-    let hasRename = false
-
-    if (match[3]) {
-      // Pattern: `X2 as Y` or `X as Y`
-      localName = match[1] + (match[2] || '') // e.g. MAX_RETRIES_PER_MESSAGE2
-      exportedName = match[3] // e.g. MAX_RETRIES_PER_MESSAGE
-      hasRename = true
-    } else {
-      // Pattern: `symbolName` (bare)
-      localName = match[4]
-      exportedName = localName
-    }
-
-    // If the local variable exists, this export is fine.
-    if (declared.has(localName)) continue
-
-    if (hasRename) {
-      // `X2 as X` where X2 is not declared
-      if (declared.has(exportedName)) {
-        // Dedup rename: X is defined, X2 is not. Fix: replace with X.
-        renames.push({
-          from: `${localName} as ${exportedName}`,
-          to: exportedName,
-        })
-      } else {
-        // Neither X2 nor X is defined — tree-shaken. Remove the entry.
-        removals.push(`${localName} as ${exportedName}`)
-      }
-    } else {
-      // Bare export `X` where X is not declared — tree-shaken. Remove it.
-      removals.push(localName)
-    }
-  }
-
-  if (renames.length === 0 && removals.length === 0) {
-    console.log('  ✓ ESM export renames fixup: no broken exports found')
-    return
-  }
-
-  // Step 4: Apply dedup rename fixes.
-  let fixCount = 0
-  for (const { from, to } of renames) {
-    if (content.includes(from)) {
-      content = content.replace(from, to)
-      fixCount++
-    }
-  }
-
-  // Step 5: Rebuild the export block to remove tree-shaken entries.
-  // Parse the export block into lines, filter out removed entries, and
-  // reconstruct a clean export statement.
-  const exportLines = lastExportBlock
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && l !== ',' && l !== '}')
-
-  const removalSet = new Set(removals)
-  const renameMap = new Map(renames.map((r) => [r.from, r.to]))
-  const keptEntries: string[] = []
-  let removalCount = 0
-
-  for (const line of exportLines) {
-    const clean = line.replace(/,$/, '').trim()
-    if (!clean) continue
-    if (removalSet.has(clean)) {
-      removalCount++
-      continue
-    }
-    const renamed = renameMap.get(clean)
-    if (renamed !== undefined) {
-      keptEntries.push(renamed)
-      continue // already counted as fixCount above
-    }
-    keptEntries.push(clean)
-  }
-
-  // Rebuild the export block and replace the last `export { ... }`.
-  const newExportBlock = keptEntries.map((e) => `  ${e},`).join('\n')
-  const newExportStatement = `export {\n${newExportBlock}\n}`
-  const lastExportRegex = /export\s*\{[\s\S]*?\}([\s\S]*)$/
-  content = content.replace(lastExportRegex, `${newExportStatement}$1`)
-
+  const { content, fixCount, removalCount } = repairEsmExportRenames(
+    await readFile(esmPath, 'utf-8'),
+  )
   await writeFile(esmPath, content)
   const rMsg = fixCount > 0 ? `replaced ${fixCount} dedup renames` : ''
   const dMsg =
@@ -488,7 +406,7 @@ async function fixEsmExportRenames() {
  *
  * `ToolHelpers` is defined in `sdk/src/tools/index.ts` as an object literal
  * aggregating individual tool functions. It is only re-exported from the SDK
- * entry point, never used internally, so even with `treeShaking: false` the
+ * entry point, never used internally, so the
  * bundler strips its definition entirely. The individual tool functions ARE
  * bundled (they're used by `sdk/src/run.ts`), so we reconstruct `ToolHelpers`
  * from those already-bundled functions and add it to the export block.

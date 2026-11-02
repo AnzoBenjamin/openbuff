@@ -243,6 +243,8 @@ export async function processStrReplace(params: {
   atomic?: boolean
   /** Use transaction-specific recovery wording when partial apply is impossible. */
   transactionContext?: boolean
+  /** Original transaction snapshot, which may precede other staged edits. */
+  recoverySnapshot?: string
   /** Require every supplied basedOnRead capability to match current content. */
   requireFreshReadCapability?: boolean
   /** Expected project/path/run scope for authenticated cap.v3 tokens. */
@@ -293,6 +295,7 @@ export async function processStrReplace(params: {
     replacements,
     atomic = false,
     transactionContext = false,
+    recoverySnapshot,
     requireFreshReadCapability = false,
     readCapabilityScope,
     initialContentPromise,
@@ -332,6 +335,9 @@ export async function processStrReplace(params: {
   // Callers that never want scoping should simply omit the capability.
   const enforceReadCapability = isLargeFile || requireFreshReadCapability
   const normalizedInitialContent = normalizeLineEndings(initialContent)
+  const normalizedRecoveryContent = recoverySnapshot === undefined
+    ? normalizedInitialContent
+    : normalizeLineEndings(recoverySnapshot)
   const validatedReadRanges = new Map<string, ValidatedReadRange>()
   const readCapabilityWarnings: string[] = []
   const preflightErrors: string[] = []
@@ -773,10 +779,21 @@ export async function processStrReplace(params: {
             .join('\n'),
         )
       } else {
+        const exactCount = normalizedCurrentContent.split(normalizedOldStr).length - 1
+        const diagnostics = exactCount === 0 && !isLargeOldString(normalizedOldStr)
+          ? formatClosestMatchDiagnostics(
+              path,
+              findClosestMatches({ initialContent: normalizedRecoveryContent, oldStr: normalizedOldStr }),
+              normalizedOldStr,
+            )
+          : ''
         const largeFileBlockedMessage = [
           `Large-file edit blocked for ${path}: this file has ${initialContentLineCount.toLocaleString()} lines and ${initialContent.length.toLocaleString()} characters.`,
-          'No basedOnRead anchor was supplied and oldString was not uniquely identifiable, so the deterministic fallback could not pick a single safe target.',
+          exactCount === 0
+            ? 'oldString has no exact match in the current candidate.'
+            : `oldString was not uniquely identifiable: it has ${exactCount} exact matches in the current candidate, so the deterministic fallback cannot select one safely.`,
           'First read the exact target window with read_files.ranges, then retry with a more specific oldString (or basedOnRead set to the readCapability token from that fresh read header).',
+          diagnostics ? `Closest ranges in the unchanged transaction snapshot:\n${diagnostics}` : '',
           readCapabilityWarnings.length > 0
             ? `basedOnRead detail:\n${readCapabilityWarnings.join('\n')}`
             : '',
@@ -838,16 +855,16 @@ export async function processStrReplace(params: {
       normalizedCurrentContent.includes(normalizedOldStr)
     ) {
       const outsideRanges = getOccurrenceLineRanges({
-        initialContent: normalizedCurrentContent,
+        initialContent: useAtomicBatch ? normalizedRecoveryContent : normalizedCurrentContent,
         oldStr: normalizedOldStr,
         limit: 3,
       })
       const scopeFailure = [
-        `Anchored str_replace scope mismatch for ${path}: the supplied basedOnRead covers lines ${validatedReadRange.startLine}-${validatedReadRange.endLine}, and oldString does not occur inside that window, but it DOES occur in the current file, so the text was NOT changed or removed.`,
-        `oldString currently occurs at line(s): ${outsideRanges
-          .map((range) => `${range.startLine}-${range.endLine}`)
-          .join(', ')}.`,
-        'Recovery: re-read the range that CONTAINS those lines with read_files and pass THAT capability as basedOnRead (or use replace_range with it); or, when oldString is unique in the file, omit basedOnRead entirely. Do not re-read the same window and resend the identical oldString.',
+        `Anchored str_replace scope mismatch for ${path}: the supplied basedOnRead covers lines ${validatedReadRange.startLine}-${validatedReadRange.endLine}, and oldString occurs outside that window in the transaction candidate.`,
+        outsideRanges.length
+          ? `oldString currently occurs at line(s): ${outsideRanges.map((range) => `${range.startLine}-${range.endLine}`).join(', ')} in the unchanged snapshot. Re-read a range containing those lines and use its capability.`
+          : 'oldString exists only in the temporary candidate, not in the unchanged snapshot. Rebuild the dependent edits against the original source.',
+        'Do not re-read the same window and resend the identical oldString.',
       ].join('\n')
       // Classification travels as a structured failureKind, never as a token in
       // this prose: any text (e.g. a copied oldString) could otherwise forge it.
@@ -862,6 +879,9 @@ export async function processStrReplace(params: {
       newStr: normalizedNewStr,
       allowMultiple,
       logger,
+      ...(useAtomicBatch && normalizedCurrentContent !== normalizedRecoveryContent && {
+        recoveryContent: normalizedRecoveryContent,
+      }),
       ...(validatedReadRange && {
         anchoredRange: {
           startLine: validatedReadRange.startLine,
@@ -1442,6 +1462,10 @@ function findClosestMatches(params: {
 }[] {
   const { initialContent, oldStr, limit = 3 } = params
   if (!oldStr || !initialContent) return []
+  // Levenshtein is quadratic in the two strings. Oversized anchors must use
+  // an authenticated range or smaller exact anchor rather than monopolizing a
+  // worker while constructing a recovery hint.
+  if (oldStr.length > 4_000) return []
 
   const fileLines = initialContent.split('\n')
   const oldLines = oldStr.split('\n')
@@ -1535,6 +1559,7 @@ function findClosestMatches(params: {
 
     const candidateLines = fileLines.slice(cand.startLine, cand.endLine + 1)
     const candidateText = candidateLines.join('\n')
+    if (candidateText.length > 8_000 || candidateText.length * oldStr.length > 1_000_000) continue
 
     const dist = levenshteinDistance(candidateText, oldStr)
     const maxLen = Math.max(candidateText.length, oldStr.length)
@@ -1635,7 +1660,12 @@ function formatClosestMatchDiagnostics(
       .join('\n')
   }
 
-  const candidateBlock = usefulMatches
+  const distinctMatches = usefulMatches.filter((match, index) =>
+    !usefulMatches.slice(0, index).some((earlier) =>
+      match.startLine <= earlier.endLine && match.endLine >= earlier.startLine,
+    ),
+  )
+  const candidateBlock = distinctMatches
     .map((match, index) => {
       const startLine = match.startLine + lineOffset
       const endLine = match.endLine + lineOffset
@@ -2250,6 +2280,8 @@ const tryMatchOldStr = async (params: {
   newStr: string
   allowMultiple: boolean
   logger: Logger
+  /** Unchanged on-disk snapshot used only for recovery diagnostics. */
+  recoveryContent?: string
   /**
    * Absolute bounds of the anchored basedOnRead window when initialContent is a
    * window-scoped slice. Present only for anchored edits, so unanchored
@@ -2278,6 +2310,7 @@ const tryMatchOldStr = async (params: {
     newStr,
     allowMultiple,
     logger,
+    recoveryContent,
     anchoredRange,
     fullContent,
   } = params
@@ -2285,7 +2318,7 @@ const tryMatchOldStr = async (params: {
   const count = initialContent.split(oldStr).length - 1
   if (count > 1 && oldStr.trim().length < TINY_ANCHOR_MULTI_MATCH_MIN_LENGTH) {
     const occurrences = getOccurrenceLineRanges({
-      initialContent,
+      initialContent: recoveryContent ?? initialContent,
       oldStr,
       limit: count,
     })
@@ -2297,7 +2330,7 @@ const tryMatchOldStr = async (params: {
         (allowMultiple
           ? ' Even allowMultiple=true cannot override this tiny-anchor safety guard.'
           : '') +
-        occurrenceDiagnostics,
+        (recoveryContent ? '\nOccurrence locations below refer to the unchanged snapshot.\n' : '') + occurrenceDiagnostics,
     }
   }
   if (count === 1) {
@@ -2308,7 +2341,7 @@ const tryMatchOldStr = async (params: {
     // one-shot: the model can either re-read one exact range, or disambiguate
     // directly by passing occurrenceIndex (1-indexed) without any re-read.
     const occurrences = getOccurrenceLineRanges({
-      initialContent,
+      initialContent: recoveryContent ?? initialContent,
       oldStr,
       limit: count,
     })
@@ -2316,7 +2349,8 @@ const tryMatchOldStr = async (params: {
     return {
       success: false,
       error:
-        `Found ${count} occurrences of ${JSON.stringify(oldStr)} in the file. Please try again with a longer (more specified) old string, set allowMultiple to true to replace all of them, or pass occurrenceIndex (1-indexed) to target exactly one.` +
+        `Found ${count} occurrences of ${JSON.stringify(oldStr)} in the ${recoveryContent ? 'temporary candidate' : 'file'}. Please try again with a longer (more specified) old string, set allowMultiple to true to replace all of them, or pass occurrenceIndex (1-indexed) to target exactly one.` +
+        (recoveryContent ? '\nOccurrence locations below refer to the unchanged snapshot.\n' : '') +
         occurrenceDiagnostics,
     }
   }
@@ -2408,19 +2442,25 @@ const tryMatchOldStr = async (params: {
     }
   }
 
-  const closestMatches = findClosestMatches({ initialContent, oldStr })
+  const diagnosticContent = recoveryContent ?? initialContent
+  const closestMatches = findClosestMatches({ initialContent: diagnosticContent, oldStr })
   // Candidate lines are relative to initialContent, which is the anchored window
   // slice for scoped edits. Shift them once at render time so reported lines are
   // absolute file lines instead of silently window-relative.
-  const lineOffset = anchoredRange ? anchoredRange.startLine - 1 : 0
+  const lineOffset = recoveryContent ? 0 : anchoredRange ? anchoredRange.startLine - 1 : 0
   let errorMsg = [
-    `The old string ${JSON.stringify(oldStr)} is not an exact contiguous match of ${
-      anchoredRange
+    `The old string ${JSON.stringify(oldStr.length > 2000 ? `${oldStr.slice(0, 2000)}… [${oldStr.length} characters total]` : oldStr)} is not an exact contiguous match of ${
+      recoveryContent
+        ? 'the temporary candidate content'
+        : anchoredRange
         ? `the anchored range lines ${anchoredRange.startLine}-${anchoredRange.endLine} of the current file`
         : 'the current file'
     }, so it was not applied.`,
     'It may be incomplete, may omit punctuation from the middle of a line, or may refer to content that changed or was removed.',
   ].join(' ')
+  if (recoveryContent) {
+    errorMsg += '\nEarlier replacements were evaluated only in a temporary candidate and were discarded. Recovery ranges below refer to the unchanged file snapshot.'
+  }
   const diagnostics = formatClosestMatchDiagnostics(
     path,
     closestMatches,

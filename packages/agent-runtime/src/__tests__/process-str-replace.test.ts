@@ -392,6 +392,43 @@ describe('processStrReplace', () => {
     }
   })
 
+  it('reports recovery ranges against the unchanged snapshot after an earlier insertion', async () => {
+    const initialContent = 'const header = 1;\nconst targetValue = 123;\nconst tail = 3;\n'
+    const result = await processStrReplace({
+      path: 'test.ts',
+      replacements: [
+        { oldString: 'const header = 1;', newString: 'const header = 1;\nconst inserted = true;', allowMultiple: false },
+        { oldString: 'const targetValue = 999;', newString: 'const targetValue = 456;', allowMultiple: false },
+      ],
+      atomic: true,
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('unchanged file snapshot')
+      expect(result.error).toContain('startLine: 2, endLine: 2')
+      expect(result.error).not.toContain('const inserted = true;')
+    }
+  })
+
+  it('distinguishes missing anchors in unanchored large files', async () => {
+    const initialContent = Array.from({ length: 1001 }, (_, index) =>
+      index === 500 ? 'export const distinctiveTargetValue = makeValue(123);' : `const filler${index} = ${index};`,
+    ).join('\n')
+    const result = await processStrReplace({
+      path: 'large.ts',
+      replacements: [{ oldString: 'export const distinctiveTargetValue = makeValue(999);', newString: 'export const distinctiveTargetValue = makeValue(456);', allowMultiple: false }],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('no exact match')
+      expect(result.error).toContain('startLine: 501, endLine: 501')
+    }
+  })
+
   // New comprehensive tests for allowMultiple functionality
   describe('allowMultiple functionality', () => {
     it('should error when multiple occurrences exist and allowMultiple is false', async () => {

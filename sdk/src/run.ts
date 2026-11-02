@@ -2392,13 +2392,40 @@ export async function handleToolCall({
         `Custom tool handler not found for user input ID ${action.userInputId}`,
       )
     }
+    // The runtime validates the JSON Schema advertised to the provider, but
+    // serialization cannot preserve Zod defaults, transforms, or async
+    // refinements. Apply the original SDK schema at the execution boundary so
+    // the handler receives the Args its TypeScript contract promises.
+    // Older hosts may supply JSON-Schema-only definitions; those have already
+    // been validated by the runtime and retain their existing behavior.
+    let customInput = input
+    if (typeof customToolHandler.inputSchema?.safeParseAsync === 'function') {
+      const validation = customToolHandler.inputSchema.safeParseAsync(input)
+      const parsed = signal
+        ? await raceAgainstAbort(validation, signal)
+        : await validation
+      if (!parsed.success) {
+        const details = parsed.error.issues
+          .map((issue) => {
+            const path = issue.path.map(String).join('.') || 'input'
+            return `${path}: ${issue.message}`
+          })
+          .join('; ')
+        return {
+          output: [{ type: 'json', value: {
+            errorMessage: `Invalid parameters for ${toolName}: ${details}`,
+          } }],
+        }
+      }
+      customInput = parsed.data
+    }
     return {
       output: signal
         ? await raceAgainstAbort(
-            customToolHandler.execute(input, { signal }),
+            customToolHandler.execute(customInput, { signal }),
             signal,
           )
-        : await customToolHandler.execute(input, { signal }),
+        : await customToolHandler.execute(customInput, { signal }),
     }
   }
 
