@@ -288,6 +288,38 @@ describe('sdk-event-handlers', () => {
     expect(calls.some((call) => call.level === 'debug')).toBe(false)
   })
 
+  test('registers a batch of spawned agents in one streaming state update', () => {
+    const { ctx, getMessages } = createTestContext()
+    let streaming = new Set(['existing'])
+    let updates = 0
+    ctx.streaming.setStreamingAgents = (updater) => {
+      updates++
+      streaming = updater(streaming)
+    }
+    dispatchValidEvent(createEventHandler(ctx), {
+      type: 'tool_call',
+      toolCallId: 'spawn-batch',
+      toolName: 'spawn_agents',
+      input: {
+        agents: [
+          { agent_type: 'editor', prompt: 'edit' },
+          { agent_type: 'file-picker', prompt: 'find' },
+          { agent_type: 'debugger', prompt: 'debug' },
+        ],
+      },
+    })
+    expect(updates).toBe(1)
+    expect([...streaming]).toEqual([
+      'existing',
+      'spawn-batch-0',
+      'spawn-batch-1',
+      'spawn-batch-2',
+    ])
+    expect(
+      getMessages()[0].blocks?.filter((block) => block.type === 'agent'),
+    ).toHaveLength(3)
+  })
+
   test('background agent cards remain running until polling reports settlement', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)

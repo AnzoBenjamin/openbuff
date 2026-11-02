@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test'
 
 import {
   computeAnchorDelta,
+  computeInitialWindow,
   computeTopSpacer,
   computeWindow,
   createMeasurementCapture,
@@ -151,6 +152,18 @@ describe('computeWindow', () => {
     (_, i) => HEADER + i * HEIGHT,
   )
   const totalHeight = HEADER + COUNT * HEIGHT
+
+  test('starts a long restored history at its newest messages before measurement', () => {
+    const window = computeInitialWindow({
+      offsets, heights, totalHeight, viewportHeight: 100, overscanPx: 20,
+      fixedTopHeight: HEADER,
+    })
+    expect(window.scrollTop).toBe(totalHeight - 100)
+    expect(window.endIndex).toBe(COUNT - 1)
+    expect(window.startIndex).toBeGreaterThan(COUNT / 2)
+    expect(window.topSpacerHeight).toBeGreaterThan(0)
+    expect(window.bottomSpacerHeight).toBe(0)
+  })
 
   test('windows only the intersecting subset for a mid-scroll viewport', () => {
     const { startIndex, endIndex } = computeWindow({

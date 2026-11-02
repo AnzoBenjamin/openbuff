@@ -898,12 +898,14 @@ describe('Schema handling error recovery', () => {
         '1-indexed window number',
       )
 
-      expect(JSON.stringify(globJsonSchema)).toContain(
+      // glob is the contrast case: it is read-only and not the deliberate
+      // read_files exception, so its field annotations are compacted away.
+      expect(JSON.stringify(globJsonSchema)).not.toContain(
         'Glob pattern to match files',
       )
     })
 
-    test('compactToolInputSchemaForProvider preserves descriptions by default', () => {
+    test('compactToolInputSchemaForProvider only preserves descriptions when asked', () => {
       const schema = (toolParams.edit_transaction.providerInputSchema ??
         toolParams.edit_transaction.inputSchema) as z.ZodType
 
@@ -925,14 +927,16 @@ describe('Schema handling error recovery', () => {
       const preserved = compactToolInputSchemaForProvider(schema, {
         preserveDescriptions: true,
       })
-      const stripped = compactToolInputSchemaForProvider(schema)
-      const strippedOmitted = compactToolInputSchemaForProvider(schema, {
+      // Preservation is OPT-IN: omitting the option — the default a caller that
+      // forgets it gets — must compact rather than ship the field docs.
+      const omitted = compactToolInputSchemaForProvider(schema)
+      const stripped = compactToolInputSchemaForProvider(schema, {
         preserveDescriptions: false,
       })
 
       expect(containsDescriptionKey(schemaJson(preserved))).toBe(true)
-      expect(containsDescriptionKey(schemaJson(stripped))).toBe(true)
-      expect(containsDescriptionKey(schemaJson(strippedOmitted))).toBe(false)
+      expect(containsDescriptionKey(schemaJson(omitted))).toBe(false)
+      expect(containsDescriptionKey(schemaJson(stripped))).toBe(false)
     })
 
     test('builtin descriptions advertise canonical transaction range anchors', () => {

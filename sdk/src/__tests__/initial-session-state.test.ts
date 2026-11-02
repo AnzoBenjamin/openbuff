@@ -795,6 +795,11 @@ describe('Initial Session State', () => {
         return {
           tokenScores: {},
           tokenCallers: {},
+          // The coverage/diagnostics pair is read together by
+          // computeProjectIndex while deciding cacheability, so the mock must
+          // be shape-complete: an absent `diagnostics` throws there and skips
+          // everything after it, including the truncation debug emit.
+          diagnostics: [],
           coverage: {
             truncated: false,
             fileBudgetExceeded: false,
@@ -840,6 +845,10 @@ describe('Initial Session State', () => {
       getFileTokenScores: async () => ({
         tokenScores: {},
         tokenCallers: {},
+        // `diagnostics` must accompany `coverage`: computeProjectIndex reads
+        // both while deciding whether the result is cacheable, and a missing
+        // array threw before the truncation debug emit below could run.
+        diagnostics: [],
         coverage: {
           truncated: true,
           fileBudgetExceeded: false,

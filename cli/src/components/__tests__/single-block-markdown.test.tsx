@@ -6,6 +6,7 @@ import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 import { BlocksRenderer } from '../blocks/blocks-renderer'
 
 import type { ContentBlock } from '../../types/chat'
+import type { Renderable } from '@opentui/core'
 
 initializeThemeStore()
 
@@ -118,6 +119,34 @@ const renderTranscript = (
 )
 
 describe('SingleBlock text blocks render markdown at box level', () => {
+  renderTest('markdown uses the width of its containing message', async () => {
+    const { testRender } = await import('@opentui/react/test-utils')
+    let setup!: Awaited<ReturnType<typeof testRender>>
+    await act(async () => {
+      setup = await testRender(
+        <box style={{ flexDirection: 'column', width: 100 }}>
+          {renderTranscript([{
+            type: 'text',
+            content: 'Validation is green after the third security repair: 53/53 across `token-counter` and runtime typecheck.',
+          }])}
+        </box>,
+        { width: 100, height: 20 },
+      )
+    })
+    try {
+      await act(async () => { await setup.renderOnce() })
+      const visit = (node: Renderable): Renderable[] => [
+        node,
+        ...node.getChildren().flatMap(visit),
+      ]
+      const markdown = visit(setup.renderer.root).find(
+        (node) => node.constructor.name === 'MarkdownRenderable',
+      )
+      expect(markdown?.width).toBe(100)
+    } finally {
+      setup.renderer.destroy()
+    }
+  })
   renderTest(
     'markdown content does not hit the error boundary fallback',
     async () => {

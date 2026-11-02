@@ -553,6 +553,29 @@ export const computeWindow = (params: {
   return { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight }
 }
 
+export const computeInitialWindow = (params: {
+  offsets: number[]
+  heights: number[]
+  totalHeight: number
+  viewportHeight: number
+  overscanPx: number
+  fixedTopHeight: number
+}) => {
+  const {
+    offsets, heights, totalHeight, viewportHeight, overscanPx, fixedTopHeight,
+  } = params
+  const scrollTop = Math.max(0, totalHeight - viewportHeight)
+  return {
+    ...computeWindow({
+      offsets, heights, totalHeight, scrollTop, viewportHeight, overscanPx,
+    }),
+    topSpacerHeight: computeTopSpacer(
+      offsets, heights, scrollTop, viewportHeight, overscanPx, fixedTopHeight,
+    ),
+    scrollTop,
+  }
+}
+
 /**
  * Viewport-windowed virtualization over the chat message list.
  *
@@ -662,9 +685,8 @@ export const useViewportWindow = ({
   const viewportHeight =
     viewportHeightOverride ?? scrollState.viewportHeight
   const scrollTop = scrollTopOverride ?? scrollState.scrollTop
-  // Windowing only engages once the scrollbox has reported a real measurement.
-  // Before that (and in environments with no live scrollbox, e.g. unit tests),
-  // the full list renders exactly as it did pre-virtualization.
+  // Before real geometry arrives, render the newest estimated viewport. This
+  // avoids mounting an entire restored history just to measure the scrollbox.
   const measured =
     viewportHeightOverride !== undefined ||
     scrollTopOverride !== undefined ||
@@ -1028,15 +1050,17 @@ export const useViewportWindow = ({
   )
 
   if (!measured) {
-    // Not yet measured: render the entire list (no spacers) so behavior matches
-    // the non-virtualized baseline until the scrollbox reports real geometry.
-    return {
-      startIndex: 0,
-      endIndex: messages.length - 1,
-      topSpacerHeight: 0,
-      bottomSpacerHeight: 0,
+    const initialWindow = computeInitialWindow({
+      offsets,
+      heights,
+      totalHeight,
       viewportHeight,
-      scrollTop,
+      overscanPx,
+      fixedTopHeight,
+    })
+    return {
+      ...initialWindow,
+      viewportHeight,
       registerMeasurement,
     }
   }

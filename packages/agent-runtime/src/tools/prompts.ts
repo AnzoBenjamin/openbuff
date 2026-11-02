@@ -119,6 +119,25 @@ function compactJsonSchemaValue(
   return compacted
 }
 
+/**
+ * Which built-in tools keep per-field `description` annotations in the
+ * provider-facing schema. Description preservation is OPT-IN per tool:
+ *  - mutation tools: the model must understand each field of a bare
+ *    discriminated union (edit_transaction) or it emits shape-invalid edits;
+ *  - `read_files`: read-only, but its selector fields are the empirically
+ *    highest shape-failure surface (literal `match` anchors, the 1-indexed
+ *    `window`/`occurrence` numbering), so its field docs earn their tokens.
+ * Every other tool is compacted: field docs are the cheapest tokens to drop
+ * and the tool's own description already carries the contract.
+ */
+export function shouldPreserveProviderSchemaDescriptions(
+  toolName: string,
+): boolean {
+  return (
+    toolName === 'read_files' || getToolMetadata(toolName).kind === 'mutation'
+  )
+}
+
 export function compactToolInputSchemaForProvider(
   schema: z.ZodType,
   options?: {
@@ -126,7 +145,10 @@ export function compactToolInputSchemaForProvider(
     toolName?: string
   },
 ): ReturnType<typeof jsonSchema> {
-  const preserveDescriptions = options?.preserveDescriptions !== false
+  // Opt-in: a caller that forgets the option gets the compacted schema, not
+  // the un-compacted one. Default-on previously meant every built-in tool
+  // silently shipped all of its field documentation to the provider.
+  const preserveDescriptions = options?.preserveDescriptions === true
   const safeSchema = ensureJsonSchemaCompatible(schema)
   const compactedSchema = compactJsonSchemaValue(
     toJsonSchemaSafe(safeSchema),
@@ -537,6 +559,7 @@ export async function getToolSet(params: {
       }
       toolSet[toolName] = compactToolDefinitionForProvider(resolvedToolDef, {
         toolName,
+        preserveDescriptions: shouldPreserveProviderSchemaDescriptions(toolName),
       })
     }
   }
@@ -553,8 +576,13 @@ export async function getToolSet(params: {
     // Zod and back can discard constraints, annotations, or references.
     let inputSchema: ReturnType<typeof jsonSchema>
     try {
+      // Custom/MCP tools own their schema: keep whatever annotations it
+      // already carries instead of newly stripping description guidance the
+      // tool author wrote deliberately.
       inputSchema = isZod
-        ? compactToolInputSchemaForProvider(input as z.ZodType)
+        ? compactToolInputSchemaForProvider(input as z.ZodType, {
+            preserveDescriptions: true,
+          })
         : jsonSchema(cloneDeep(input) as JSONSchema7)
     } catch (error) {
       throw new Error(
@@ -570,7 +598,12 @@ export async function getToolSet(params: {
 
   // Add agent tools (agents as direct tool calls)
   for (const [toolName, toolDefinition] of Object.entries(agentTools)) {
-    toolSet[toolName] = compactToolDefinitionForProvider(toolDefinition)
+    // Same per-tool description rule as the built-in branch so every branch
+    // of getToolSet compacts consistently.
+    toolSet[toolName] = compactToolDefinitionForProvider(toolDefinition, {
+      toolName,
+      preserveDescriptions: shouldPreserveProviderSchemaDescriptions(toolName),
+    })
   }
 
   return toolSet

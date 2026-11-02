@@ -49,6 +49,7 @@ const renderNativeMarkdown = (
     // visible, matching the removed legacy renderer's output style.
     return (
       <markdown
+        width="100%"
         content={content}
         syntaxStyle={syntaxStyle}
         treeSitterClient={treeSitterClient ?? undefined}

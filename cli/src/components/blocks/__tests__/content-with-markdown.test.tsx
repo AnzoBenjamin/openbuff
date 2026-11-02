@@ -128,6 +128,7 @@ describe('ContentWithMarkdown', () => {
     // The native renderable is selected with our syntax style and shared
     // tree-sitter client wired in.
     expect(markup).toContain('<markdown')
+    expect(markup).toContain('width="100%"')
     expect(markup).toContain('Hello *world*')
     expect(markup).toContain('__stub-syntax-style__')
     expect(markup).toContain('__stub-tree-sitter-client__')

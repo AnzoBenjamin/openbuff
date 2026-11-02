@@ -1,5 +1,6 @@
-import * as fs from 'fs'
+import { promises as fs } from 'fs'
 import * as path from 'path'
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
@@ -33,8 +34,12 @@ function getTodoSummary(todos: TodoItem[]): {
   }
 }
 
-// Simple Levenshtein distance for fuzzy matching tasks
-function getSimilarity(s1: string, s2: string): number {
+// Only scores at or above the merge threshold matter. Calculate their edit
+// distance in a band, with two rows instead of a full quadratic matrix.
+export async function getTodoSimilarity(
+  s1: string,
+  s2: string,
+): Promise<number> {
   const a = s1.toLowerCase().trim()
   const b = s2.toLowerCase().trim()
   if (a === b) return 1.0
@@ -42,27 +47,49 @@ function getSimilarity(s1: string, s2: string): number {
 
   const m = a.length
   const n = b.length
-  const d: number[][] = Array.from({ length: m + 1 }, () =>
-    Array(n + 1).fill(0),
-  )
-
-  for (let i = 0; i <= m; i++) d[i][0] = i
-  for (let j = 0; j <= n; j++) d[0][j] = j
+  const maxLen = Math.max(m, n)
+  // ceil avoids excluding a threshold match due to floating-point rounding;
+  // the final score still decides whether the merge threshold was met.
+  const limit = Math.ceil(maxLen * 0.15)
+  if (Math.abs(m - n) > limit) return 0
+  const unreachable = maxLen + 1
+  let previous = new Float64Array(n + 1).fill(unreachable)
+  let current = new Float64Array(n + 1).fill(unreachable)
+  let cellsSinceYield = 0
+  for (let j = 0; j <= Math.min(n, limit); j++) previous[j] = j
 
   for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
+    const start = Math.max(1, i - limit)
+    const end = Math.min(n, i + limit)
+    current[0] = i <= limit ? i : unreachable
+    if (start > 1) current[start - 1] = unreachable
+    let rowMin = current[0]
+    for (let j = start; j <= end; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1
-      d[i][j] = Math.min(
-        d[i - 1][j] + 1,
-        d[i][j - 1] + 1,
-        d[i - 1][j - 1] + cost,
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost,
       )
+      rowMin = Math.min(rowMin, current[j])
+      if (++cellsSinceYield >= 16_384) {
+        cellsSinceYield = 0
+        await yieldToEventLoop()
+      }
+    }
+    if (end < n) current[end + 1] = unreachable
+    if (rowMin > limit) return 0
+    ;[previous, current] = [current, previous]
+    if (i % 64 === 0) {
+      cellsSinceYield = 0
+      await yieldToEventLoop()
     }
   }
 
-  const maxLen = Math.max(a.length, b.length)
-  return 1.0 - d[m][n] / maxLen
+  return 1.0 - previous[n] / maxLen
 }
+
+let pendingTodoWrite: Promise<void> = Promise.resolve()
 
 export const handleWriteTodos = (async (params: {
   previousToolCallFinished: Promise<void>
@@ -71,7 +98,19 @@ export const handleWriteTodos = (async (params: {
   const { previousToolCallFinished, toolCall } = params
 
   await previousToolCallFinished
+  // Async reads and writes must not interleave between concurrent runs in this
+  // process; each merge must observe the previous completed write.
+  const operation = pendingTodoWrite.then(() => writeTodos(toolCall))
+  pendingTodoWrite = operation.then(
+    () => {},
+    () => {},
+  )
+  return operation
+}) satisfies CodebuffToolHandlerFunction<ToolName>
 
+async function writeTodos(toolCall: CodebuffToolCall<ToolName>): Promise<{
+  output: CodebuffToolOutput<ToolName>
+}> {
   const incomingTodos = (toolCall.input.todos as TodoItem[]) || []
   const stateDir = path.join(process.cwd(), '.omx/state')
   const stateFilePath = path.join(stateDir, 'todos-session.json')
@@ -80,9 +119,7 @@ export const handleWriteTodos = (async (params: {
 
   // Ensure state directory exists
   try {
-    if (!fs.existsSync(stateDir)) {
-      fs.mkdirSync(stateDir, { recursive: true })
-    }
+    await fs.mkdir(stateDir, { recursive: true })
   } catch (err) {
     // Folder creation may fail on read-only mounts / permissions; the read/write
     // paths below handle a missing dir, so don't abort — but surface it.
@@ -95,17 +132,16 @@ export const handleWriteTodos = (async (params: {
 
   // Load existing master list
   try {
-    if (fs.existsSync(stateFilePath)) {
-      const content = fs.readFileSync(stateFilePath, 'utf8')
-      masterTodos = JSON.parse(content) as TodoItem[]
-    }
+    const content = await fs.readFile(stateFilePath, 'utf8')
+    masterTodos = JSON.parse(content) as TodoItem[]
   } catch (err) {
     // If invalid JSON or read error, start fresh rather than blocking the user.
-    console.debug(
-      `[write-todos] failed to read ${stateFilePath}, starting fresh: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    )
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+      console.debug(
+        `[write-todos] failed to read ${stateFilePath}, starting fresh: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
     masterTodos = []
   }
 
@@ -117,11 +153,13 @@ export const handleWriteTodos = (async (params: {
     let bestScore = 0.0
 
     for (let i = 0; i < mergedTodos.length; i++) {
-      const score = getSimilarity(incoming.task, mergedTodos[i].task)
+      const score = await getTodoSimilarity(incoming.task, mergedTodos[i].task)
       if (score > bestScore) {
         bestScore = score
         bestMatchIndex = i
+        if (score === 1) break
       }
+      if (i % 64 === 63) await yieldToEventLoop()
     }
 
     if (bestScore >= 0.85 && bestMatchIndex !== -1) {
@@ -142,7 +180,7 @@ export const handleWriteTodos = (async (params: {
 
   // Save the new merged master list
   try {
-    fs.writeFileSync(
+    await fs.writeFile(
       stateFilePath,
       JSON.stringify(mergedTodos, null, 2),
       'utf8',
@@ -183,4 +221,4 @@ export const handleWriteTodos = (async (params: {
       masterTodosOmittedForLength: true,
     }),
   }
-}) satisfies CodebuffToolHandlerFunction<ToolName>
+}

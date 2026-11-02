@@ -1058,7 +1058,7 @@ export const useChatScrollbox = (
    * settled maxScroll with the follow intent armed instead of letting a
    * short final tick silently disable auto-follow.
    */
-  const scrollToLatest = useCallback((): void => {
+  const scrollToLatest = useCallback((options?: { immediate?: boolean }): void => {
     const scrollbox = scrollRef.current
     if (!scrollbox) return
 
@@ -1066,13 +1066,35 @@ export const useChatScrollbox = (
       0,
       scrollbox.scrollHeight - scrollbox.viewport.height,
     )
+    if (options?.immediate) {
+      cancelAnimation()
+      cancelAnchorVerify()
+      const before = scrollbox.verticalScrollBar.scrollPosition
+      autoScrollEnabledRef.current = true
+      applyProgrammaticWrite(scrollbox, maxScroll, true)
+      scheduleAnchorVerify(
+        scrollbox,
+        VERIFY_SETTLED_BOTTOM,
+        maxScroll,
+        before,
+        true,
+      )
+      return
+    }
     animateScrollTo(
       maxScroll,
       DEFAULT_SCROLL_ANIMATION_DURATION_MS,
       true,
       true,
     )
-  }, [scrollRef, animateScrollTo])
+  }, [
+    scrollRef,
+    animateScrollTo,
+    cancelAnimation,
+    cancelAnchorVerify,
+    applyProgrammaticWrite,
+    scheduleAnchorVerify,
+  ])
 
   // Viewport-windowing scroll anchoring: shift scrollTop by `delta` so the
   // viewport keeps showing the same content when a message above it changes

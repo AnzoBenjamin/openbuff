@@ -381,6 +381,7 @@ const renderAgentNativeMarkdown = (
     return (
       <markdown
         key={key}
+        width="100%"
         content={content}
         syntaxStyle={createMarkdownSyntaxStyle(palette ?? {})}
         treeSitterClient={getSharedTreeSitterClient() ?? undefined}

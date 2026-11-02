@@ -27,7 +27,7 @@ export interface UseChatUIOptions {
 export interface UseChatUIReturn {
   // Scroll management
   scrollRef: React.RefObject<ScrollBoxRenderable | null>
-  scrollToLatest: () => void
+  scrollToLatest: (options?: { immediate?: boolean }) => void
   scrollUp: () => void
   scrollDown: () => void
   adjustScrollTop: (delta: number, opts?: { follow?: boolean }) => void

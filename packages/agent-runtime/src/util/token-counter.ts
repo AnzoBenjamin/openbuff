@@ -69,6 +69,17 @@ const BPE_SAMPLE_CHARS = 20_000
 const BPE_SPECIAL_TOKEN_ESCAPE = /<\|/g
 
 /**
+ * SEC-TC-EXACT-INPUT-1: the single canonical special-token escape. Model-
+ * controlled tool-result text reaches a tokenizer through exactly this
+ * transformation, whether the pricing happens locally (BPE) or in a
+ * registered third-party provider (countTokensExactly) — no tokenizer ever
+ * sees a raw `<|` sequence authored by the model.
+ */
+function escapeSpecialTokensForTokenizer(text: string): string {
+  return text.replace(BPE_SPECIAL_TOKEN_ESCAPE, '< |')
+}
+
+/**
  * M3-T2: per-model-family fudge factors. countTokens encodes with the gpt-4o
  * tokenizer (single dependency, no per-provider tokenizer call is in scope for
  * this wave), so the multiplier corrects for how much that BPE diverges from
@@ -88,27 +99,24 @@ const BPE_SPECIAL_TOKEN_ESCAPE = /<\|/g
  *   - Anything else (unknown model string): 1.0 — the unadjusted gpt-4o BPE
  *     estimate, the honest neutral default.
  */
-import { observedCalibrationFactor } from './token-calibration'
+import {
+  TOKEN_CALIBRATION_BAND_MAX,
+  TOKEN_CALIBRATION_BAND_MIN,
+  observedCalibrationFactor,
+} from './token-calibration'
 
 const ANTHROPIC_TOKEN_FUDGE_FACTOR = 1.35
 const OPENAI_TOKEN_FUDGE_FACTOR = 1.0
 const GEMINI_TOKEN_FUDGE_FACTOR = 1.1
 
 /**
- * Selects the per-model-family fudge factor from the model string. OpenAI
- * family keys off the gpt- prefix (the tokenizer this module actually uses).
+ * Selects the STATIC per-model-family fudge factor from the model string.
+ * OpenAI family keys off the gpt- prefix (the tokenizer this module actually
+ * uses).
  */
-function fudgeFactorForModel(model: string | undefined): number {
+function staticFudgeFactorForModel(model: string | undefined): number {
   if (typeof model !== 'string' || model.length === 0) {
     return 1.0
-  }
-  // P3-T10 calibration loop: once enough estimator-vs-actual observations
-  // exist for this model's family, the empirically converged factor REPLACES
-  // the static table. Until then (and whenever the store is absent) the
-  // static factors below remain the estimate — the loop only ever refines.
-  const calibrated = observedCalibrationFactor(model)
-  if (calibrated !== undefined) {
-    return calibrated
   }
   const normalized = model.toLowerCase()
   if (normalized.includes('claude') || normalized.includes('anthropic')) {
@@ -124,6 +132,35 @@ function fudgeFactorForModel(model: string | undefined): number {
 }
 
 /**
+ * The fudge factor applied to every count: the STATIC family factor, optionally
+ * refined by the P3-T10 calibration loop.
+ *
+ * SEC-TC-CALIBRATION-BAND-1: the empirical factor is a CORRECTION bounded to
+ * [0.8x, 1.25x] of the static family factor — never a free-running replacement
+ * for it. Observation pairs are derived from provider-reported usage over
+ * model-authored transcript content, so they are untrusted; an unbounded
+ * converged factor could persistently shrink this harness' own context budget
+ * (compaction and tool-result eviction would trim at a fraction of the real
+ * budget) for every agent on the family and across runs. observedCalibrationFactor
+ * already applies the band; the clamp here is the cheap belt-and-braces guard
+ * on the hot path.
+ */
+function fudgeFactorForModel(model: string | undefined): number {
+  if (typeof model !== 'string' || model.length === 0) {
+    return 1.0
+  }
+  const staticFactor = staticFudgeFactorForModel(model)
+  const calibrated = observedCalibrationFactor(model)
+  if (calibrated === undefined || !Number.isFinite(calibrated)) {
+    return staticFactor
+  }
+  return Math.min(
+    staticFactor * TOKEN_CALIBRATION_BAND_MAX,
+    Math.max(staticFactor * TOKEN_CALIBRATION_BAND_MIN, calibrated),
+  )
+}
+
+/**
  * P3-T10: seam for EXACT per-provider tokenizers. Concrete providers
  * (tiktoken/HuggingFace) land behind this interface in a later slice — a new
  * tokenizer dependency needs separate approval — so this change adds only
@@ -134,6 +171,16 @@ function fudgeFactorForModel(model: string | undefined): number {
  */
 export interface ExactTokenCounter {
   readonly family: string
+  /**
+   * SEC-TC-EXACT-INPUT-1: provider-side counting contract. Implementations
+   * MUST be pure, non-throwing and constant-bounded per call: the argument is
+   * derived from model-controlled transcript text, so a native/gRPC provider
+   * that blocks, throws, or echoes the offending sequence turns local pricing
+   * into a hot-path DoS/log-amplification vector. The caller already escapes
+   * `<|` (escapeSpecialTokensForTokenizer) and caps the input size
+   * (MAX_EXACT_ENCODE_CHARS / EXACT_SAMPLE_CHARS), so an implementation may
+   * assume the text carries no tokenizer special tokens and is bounded.
+   */
   count(text: string): number
 }
 
@@ -155,6 +202,25 @@ interface RegisteredExactTokenCounter {
 }
 
 const EXACT_TOKEN_COUNTERS: RegisteredExactTokenCounter[] = []
+
+/**
+ * SEC-TC-EXACT-REGISTRY-1: registrations are process-global, so the registry
+ * is bounded like every other collection in this module — an embedder (or a
+ * future dynamic registration path) looping on registerExactTokenCounter must
+ * not grow this array without limit. Overflow registrations are dropped
+ * silently: dispatch is first-match-wins, so the earliest registrations are
+ * the ones to keep.
+ */
+const MAX_EXACT_TOKEN_COUNTERS = 16
+
+/**
+ * SEC-TC-EXACT-INPUT-1: models whose exact-provider failure has already been
+ * reported. A provider rejecting a model-authored string used to log on every
+ * call from the run-loop hot path; the diagnostic is now once per model, and
+ * the model set itself is a bounded LRU (same 1000-entry discipline as
+ * TOKEN_COUNT_CACHE) so cycling unique model names cannot grow it.
+ */
+const EXACT_FAILURE_REPORTED = new LRUCache<string, true>(1000)
 
 /**
  * P3-T10: bounded model-string -> family cache. Model strings are short and
@@ -226,6 +292,9 @@ export function registerExactTokenCounter(
   matcher: (model: string) => boolean,
   counter: ExactTokenCounter,
 ): void {
+  if (EXACT_TOKEN_COUNTERS.length >= MAX_EXACT_TOKEN_COUNTERS) {
+    return
+  }
   EXACT_TOKEN_COUNTERS.push({
     matcher,
     counter,
@@ -236,6 +305,12 @@ export function registerExactTokenCounter(
 /** P3-T10: drops every registration (and its cache) between tests. */
 export function clearExactTokenCountersForTest(): void {
   EXACT_TOKEN_COUNTERS.length = 0
+  EXACT_FAILURE_REPORTED.clear()
+}
+
+/** SEC-TC-EXACT-REGISTRY-1: exported-for-test view of the registry bound. */
+export function exactTokenCounterRegistrySizeForTest(): number {
+  return EXACT_TOKEN_COUNTERS.length
 }
 
 /**
@@ -276,17 +351,53 @@ function exactTokenCountingEnabled(): boolean {
  * factor), so a pathological multi-MB input can never trigger an unbounded
  * exact encode.
  */
+/**
+ * P3-T10: exact path bounds (see MAX_EXACT_ENCODE_CHARS).
+ */
 const MAX_EXACT_ENCODE_CHARS = 1_000_000
 const EXACT_SAMPLE_CHARS = 100_000
 
 /**
+ * SEC-TC-MEMO-BOUND-1: live-entry bound for IncrementalTokenCounter's
+ * per-message memo, matching the 1000-entry LRU discipline used by
+ * TOKEN_COUNT_CACHE / LONG_TOKEN_COUNT_CACHE / TOKENIZER_FAMILY_CACHE.
+ */
+const MAX_INCREMENTAL_MEMO_ENTRIES = 1000
+
+/**
+ * SEC-TC-EXACT-FINITE-1: a provider count is only usable if it can price a
+ * budget. `NaN` would make every compaction comparison false
+ * (`runningTokens > maxMessageTokens` is never true for NaN) and silently
+ * disable pruning for the step, while `Infinity`/a negative value would saturate
+ * or invert the same comparisons. Throwing here is deliberate: the surrounding
+ * catch degrades to the estimator (and emits the once-per-model diagnostic),
+ * so a broken provider narrows to the old estimator instead of corrupting
+ * compaction decisions.
+ */
+function assertFiniteExactCount(count: number): number {
+  if (!Number.isFinite(count) || count < 0) {
+    throw new TypeError('TC_EXACT_NONFINITE')
+  }
+  return count
+}
+
+/**
  * P3-T10: exact counting for one serialized input. No fudge factor (the
- * provider IS the routed model's tokenizer, so its raw count is final) and
- * no special-token escape (that escape is a gpt-tokenizer workaround; an
- * exact provider owns its special-token policy). Cacheable-band inputs are
- * memoized per (provider, text); a throwing provider degrades to the
- * estimator with a type-only TC_EXACT_ENCODE_FAIL diagnostic (the
- * SEC-TC-LOG-1 convention) instead of aborting the agent step.
+ * provider IS the routed model's tokenizer, so its raw count is final).
+ * Cacheable-band inputs are memoized per (provider, text); a throwing
+ * provider degrades to the estimator instead of aborting the agent step.
+ *
+ * SEC-TC-EXACT-INPUT-1: the text handed to the provider is sanitized with the
+ * SAME escape the BPE estimator uses, so model-authored tool-result text can
+ * never reach a third-party tokenizer carrying a `<|...|>` special-token
+ * sequence (a native/gRPC provider may throw, block, or echo it back). The
+ * input is also bounded: full counts stop at MAX_EXACT_ENCODE_CHARS and the
+ * oversized path samples at most EXACT_SAMPLE_CHARS, so the escape's worst
+ * case growth (2 chars -> 3 chars per `<|`) still caps the provider argument
+ * at 1.5x those limits. The failure diagnostic is once per model
+ * (EXACT_FAILURE_REPORTED) so a rejecting provider cannot flood the run-loop
+ * hot path, and it stays type-only (SEC-TC-LOG-1 / SEC-TC-LOG-ECHO-1: the
+ * error object can echo model-controlled text).
  */
 function countTokensExactly(
   serialized: string,
@@ -300,14 +411,20 @@ function countTokensExactly(
       // MAX_EXACT_ENCODE_CHARS). Never cached, same as the BPE oversized
       // path.
       const sampleLength = Math.min(EXACT_SAMPLE_CHARS, serialized.length)
-      const sampleTokens = counter.count(serialized.slice(0, sampleLength))
+      const sampleTokens = assertFiniteExactCount(
+        counter.count(
+          escapeSpecialTokensForTokenizer(serialized.slice(0, sampleLength)),
+        ),
+      )
       return Math.floor((sampleTokens / sampleLength) * serialized.length)
     }
     const cached = cache.get(serialized)
     if (cached !== undefined) {
       return cached
     }
-    const count = counter.count(serialized)
+    const count = assertFiniteExactCount(
+      counter.count(escapeSpecialTokensForTokenizer(serialized)),
+    )
     if (
       serialized.length > 100 &&
       serialized.length <= MAX_CACHEABLE_INPUT_CHARS
@@ -316,12 +433,17 @@ function countTokensExactly(
     }
     return count
   } catch (e) {
-    // SEC-TC-LOG-1 / SEC-TC-LOG-ECHO-1 convention: type-only diagnostic with
-    // a stable error code — provider errors can echo model-controlled text.
-    console.error(
-      'Error counting tokens with exact provider:',
-      e instanceof Error ? `${e.name} (TC_EXACT_ENCODE_FAIL)` : typeof e,
-    )
+    // SEC-TC-EXACT-INPUT-1: once per model, never per call — this runs on the
+    // run-loop hot path over content the model controls. SEC-TC-LOG-1 /
+    // SEC-TC-LOG-ECHO-1 convention: type-only diagnostic with a stable error
+    // code, since provider errors can echo model-controlled text.
+    if (EXACT_FAILURE_REPORTED.get(model) === undefined) {
+      EXACT_FAILURE_REPORTED.set(model, true)
+      console.error(
+        'Error counting tokens with exact provider:',
+        e instanceof Error ? `${e.name} (TC_EXACT_ENCODE_FAIL)` : typeof e,
+      )
+    }
     // Honest neutral default: a failing exact provider falls back to the
     // same estimator the gate-off path would have used.
     return estimateTokensForSerialized(serialized, model)
@@ -346,6 +468,17 @@ function omitMediaPayloadsForTokenCount(
   }
 
   return value
+}
+
+/**
+ * M3-T2: exported-for-test reset. The LRU is module-global and 1000-entry
+ * capped, so a size-delta assertion needs a known starting point: once the
+ * cap is reached an insert evicts the oldest entry instead of growing (the
+ * intended bounded-memory contract), which would otherwise make "this input
+ * is cacheable" indistinguishable from "the cache was already full".
+ */
+export function clearTokenCountCacheForTest(): void {
+  TOKEN_COUNT_CACHE.clear()
 }
 
 /**
@@ -381,9 +514,7 @@ function estimateTokensForSerialized(
       const sampleLength = Math.min(BPE_SAMPLE_CHARS, serialized.length)
       // Escape special tokens in the sample too (see BPE_SPECIAL_TOKEN_ESCAPE).
       const sampleTokens = encode(
-        serialized
-          .slice(0, sampleLength)
-          .replace(BPE_SPECIAL_TOKEN_ESCAPE, '< |'),
+        escapeSpecialTokensForTokenizer(serialized.slice(0, sampleLength)),
         { allowedSpecial: 'all' },
       ).length
       return Math.floor(
@@ -406,10 +537,9 @@ function estimateTokensForSerialized(
       // model-independent.
       return Math.floor(cached * fudgeFactorForModel(model))
     }
-    const rawCount = encode(
-      serialized.replace(BPE_SPECIAL_TOKEN_ESCAPE, '< |'),
-      { allowedSpecial: 'all' },
-    ).length
+    const rawCount = encode(escapeSpecialTokensForTokenizer(serialized), {
+      allowedSpecial: 'all',
+    }).length
     if (longKey !== undefined) {
       LONG_TOKEN_COUNT_CACHE.set(longKey, rawCount)
     } else if (
@@ -546,6 +676,16 @@ export function countTokensJson(text: string | object, model?: string): number {
   }
 }
 
+/**
+ * Per-file token counts keyed by the caller's file path.
+ *
+ * SEC-TC-KEY-1: the returned record has a NULL PROTOTYPE on purpose — a file
+ * path such as '__proto__' is then an ordinary own data property and can never
+ * reach the prototype setter. Consumers must keep that contract: read entries
+ * with `Object.entries`/`Object.prototype.hasOwnProperty.call`, and do NOT
+ * spread the result (or `Object.assign` it) into a plain object literal, which
+ * would copy a '__proto__' own key back onto a real prototype.
+ */
 export function countTokensForFiles(
   files: Record<string, string | null>,
 ): Record<string, number> {
@@ -576,9 +716,22 @@ export function countTokensForFiles(
  * `JSON.stringify(array)` and the per-element serializations. We therefore
  * store the serialized string of each message for the combined count when a
  * full recount is requested; the cache below serves the incremental case.
+ *
+ * SEC-TC-MEMO-BOUND-1: the memo is BOUNDED — live-entry accounting against
+ * MAX_INCREMENTAL_MEMO_ENTRIES, reset past the limit — so it obeys the same
+ * discipline as TOKEN_COUNT_CACHE. A WeakMap alone only makes entries
+ * collectable at GC; on a long streaming turn each per-token rewrite creates a
+ * fresh message object that would be memoized with a full count and retained
+ * until a collection, so retentive memory scaled with the number of
+ * intermediate rewrites rather than with message count. Past the bound the
+ * memo is dropped wholesale (counts are recomputed once and re-memoized), so
+ * the survive-window stays bounded without any per-entry key serialization on
+ * the hot path.
  */
 export class IncrementalTokenCounter {
   private countsByMessage = new WeakMap<object, number>()
+  /** SEC-TC-MEMO-BOUND-1: live entries in countsByMessage (see the class doc). */
+  private memoEntries = 0
   private systemAndToolsTokens = 0
   /**
    * Audit MEDIUM (token fudge factors dead on the hot path): the routed model
@@ -626,7 +779,15 @@ export class IncrementalTokenCounter {
     const cached = this.countsByMessage.get(message)
     if (cached !== undefined) return cached
     const count = countTokensJson(message, this.model)
+    if (this.memoEntries >= MAX_INCREMENTAL_MEMO_ENTRIES) {
+      // SEC-TC-MEMO-BOUND-1: bounded like every other cache in this module —
+      // drop the whole memo rather than grow without limit (see the class
+      // doc).
+      this.countsByMessage = new WeakMap()
+      this.memoEntries = 0
+    }
     this.countsByMessage.set(message, count)
+    this.memoEntries++
     return count
   }
 
@@ -657,9 +818,19 @@ export class IncrementalTokenCounter {
     return this.messagesTokens(messages) + this.systemAndToolsTokens
   }
 
+  /**
+   * SEC-TC-MEMO-BOUND-1: exported-for-test view of the live memo entry count
+   * so tests can assert the memo stays within MAX_INCREMENTAL_MEMO_ENTRIES
+   * under message-reference churn.
+   */
+  memoSizeForTest(): number {
+    return this.memoEntries
+  }
+
   /** Drop memoized counts (full recount after a history-rewriting event). */
   reset(): void {
     this.countsByMessage = new WeakMap()
+    this.memoEntries = 0
     this.systemAndToolsTokens = 0
   }
 }

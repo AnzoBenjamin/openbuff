@@ -19,7 +19,10 @@ import {
   resetExternalReadRootsForTesting,
 } from '@codebuff/common/util/project-path-containment'
 
-import { handleWriteTodos } from '../tools/handlers/tool/write-todos'
+import {
+  getTodoSimilarity,
+  handleWriteTodos,
+} from '../tools/handlers/tool/write-todos'
 import {
   canonicalScopedToolPath,
   getFilesystemToolPaths,
@@ -168,6 +171,96 @@ type WriteTodosOutput = {
 }
 
 describe('write_todos tool', () => {
+  it('preserves fuzzy threshold decisions and yields during long comparisons', async () => {
+    const base = 'a'.repeat(200)
+    let yielded = false
+    setImmediate(() => {
+      yielded = true
+    })
+    expect(
+      await getTodoSimilarity(base, `${'a'.repeat(170)}${'b'.repeat(30)}`),
+    ).toBe(0.85)
+    expect(yielded).toBe(true)
+    expect(
+      await getTodoSimilarity(base, `${'a'.repeat(169)}${'b'.repeat(31)}`),
+    ).toBeLessThan(0.85)
+    expect(await getTodoSimilarity('same task', ' SAME TASK ')).toBe(1)
+    expect(await getTodoSimilarity('short', 'much longer task')).toBeLessThan(
+      0.85,
+    )
+  })
+
+  it('matches the original edit-distance decisions for substitutions and insertions', async () => {
+    const reference = (left: string, right: string) => {
+      const rows = Array.from({ length: left.length + 1 }, () =>
+        Array<number>(right.length + 1).fill(0),
+      )
+      for (let i = 0; i <= left.length; i++) rows[i][0] = i
+      for (let j = 0; j <= right.length; j++) rows[0][j] = j
+      for (let i = 1; i <= left.length; i++) {
+        for (let j = 1; j <= right.length; j++) {
+          rows[i][j] = Math.min(
+            rows[i - 1][j] + 1,
+            rows[i][j - 1] + 1,
+            rows[i - 1][j - 1] + (left[i - 1] === right[j - 1] ? 0 : 1),
+          )
+        }
+      }
+      return (
+        1 -
+        rows[left.length][right.length] / Math.max(left.length, right.length)
+      )
+    }
+    const original = 'implement the carefully scoped change'
+    for (let index = 0; index < original.length; index++) {
+      for (const candidate of [
+        `${original.slice(0, index)}X${original.slice(index + 1)}`,
+        `${original.slice(0, index)}X${original.slice(index)}`,
+        original.slice(0, index),
+      ]) {
+        const expected = reference(original, candidate)
+        const actual = await getTodoSimilarity(original, candidate)
+        expect(actual >= 0.85).toBe(expected >= 0.85)
+        if (expected >= 0.85) expect(actual).toBe(expected)
+      }
+    }
+  })
+
+  it('serializes overlapping checklist updates without losing either', async () => {
+    const previousCwd = process.cwd()
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'write-todos-concurrent-'),
+    )
+    try {
+      process.chdir(tempDir)
+      const call = (task: string) =>
+        handleWriteTodos({
+          previousToolCallFinished: Promise.resolve(),
+          toolCall: {
+            toolName: 'write_todos',
+            input: { todos: [{ task, completed: false }] },
+          } as CodebuffToolCall<'write_todos'>,
+        })
+      await Promise.all([
+        call('First unique task'),
+        call('Second unrelated operation'),
+      ])
+      const saved = JSON.parse(
+        fs.readFileSync(
+          path.join(tempDir, '.omx/state/todos-session.json'),
+          'utf8',
+        ),
+      )
+      expect(saved.map((item: { task: string }) => item.task)).toEqual([
+        'First unique task',
+        'Second unrelated operation',
+      ])
+    } finally {
+      process.chdir(previousCwd)
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   it('returns current incoming todos as the visible active summary', async () => {
     const previousCwd = process.cwd()
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'write-todos-test-'))

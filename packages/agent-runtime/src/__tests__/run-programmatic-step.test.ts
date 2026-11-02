@@ -2120,6 +2120,27 @@ describe('runProgrammaticStep', () => {
       )
     })
 
+    it('persists actionable guidance for nameless STEP_TEXT tool calls', async () => {
+      const mockGenerator = (function* () {
+        yield {
+          type: 'STEP_TEXT',
+          text: '<codebuff_tool_call>\n{"status":"completed","messages":["Done"]}\n</codebuff_tool_call>',
+        }
+        yield { toolName: 'end_turn', input: {} }
+      })() as StepGenerator
+      mockTemplate.handleSteps = () => mockGenerator
+      const result = await runProgrammaticStep(mockParams)
+      const message = result.agentState.messageHistory.find(
+        (entry) => entry.role === 'user' && entry.tags?.includes('TOOL_CALL_ERROR'),
+      )
+      const text = message?.content.map((part) => ('text' in part ? part.text : '')).join('')
+      expect(text).toContain('"cb_tool_name"')
+      expect(text).toContain('plain text')
+      expect(executeToolCallSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ input: expect.objectContaining({ status: 'completed' }) }),
+      )
+    })
+
     it('should repair separators in STEP_TEXT tool calls before execution', async () => {
       const mockGenerator = (function* () {
         yield {

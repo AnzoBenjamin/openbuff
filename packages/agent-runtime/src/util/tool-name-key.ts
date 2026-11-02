@@ -31,6 +31,9 @@ export const TOOL_NAME_KEYS = [
 export const MISSING_TOOL_NAME_REASON =
   'no tool-name key was present as a non-empty string.'
 
+export const MISSING_TOOL_NAME_GUIDANCE =
+  'To call a tool, retry with a non-empty "cb_tool_name" containing an available tool name in the same JSON object as its arguments. If you intended to finish rather than call a tool, respond with plain text outside the tool-call tags.'
+
 export type ResolvedToolName = { toolName: string; key: string }
 
 /**

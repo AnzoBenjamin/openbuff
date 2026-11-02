@@ -508,9 +508,15 @@ const handleSpawnAgentsToolCall = (
     return [...blocks, ...newAgentBlocks]
   })
 
-  agents.forEach((_: unknown, index: number) => {
-    updateStreamingAgents(state, { add: `${event.toolCallId}-${index}` })
-  })
+  if (agents.length > 0) {
+    state.streaming.setStreamingAgents((prev) => {
+      const next = new Set(prev)
+      for (let index = 0; index < agents.length; index++) {
+        next.add(`${event.toolCallId}-${index}`)
+      }
+      return next
+    })
+  }
 }
 
 const handleRegularToolCall = (

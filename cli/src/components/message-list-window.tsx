@@ -36,8 +36,7 @@ interface MessageListWindowProps {
  * re-renders are confined to this subtree (whose children are memoized and
  * bail out when their message object is unchanged) instead of re-rendering the
  * whole chat screen on every scroll frame. Before the scrollbox reports real
- * geometry (or in environments without one) it renders the full list, exactly
- * like the non-virtualized baseline.
+ * geometry it starts with an estimated window at the newest messages.
  */
 export const MessageListWindow = memo(
   ({
@@ -128,7 +127,7 @@ export const MessageListWindow = memo(
             // wrapper at its natural height inside the column scrollbox.
             <box
               key={message.id}
-              style={{ flexShrink: 0 }}
+              style={{ flexShrink: 0, width: '100%' }}
               ref={getMeasurementRef(message.id)}
             >
               <MessageWithAgents

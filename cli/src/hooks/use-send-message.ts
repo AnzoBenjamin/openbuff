@@ -75,7 +75,7 @@ interface UseSendMessageOptions {
   /** Optional callback fired with the per-turn cost in cents (USD * 100). */
   onTotalCost?: (costCents: number) => void
   mainAgentTimer: ElapsedTimeTracker
-  scrollToLatest: () => void
+  scrollToLatest: (options?: { immediate?: boolean }) => void
   onTimerEvent?: (event: SendMessageTimerEvent) => void
   isQueuePausedRef?: React.MutableRefObject<boolean>
   isProcessingQueueRef?: React.MutableRefObject<boolean>
@@ -207,7 +207,9 @@ export const useSendMessage = ({
       // making it a dependency of this effect. scrollToLatest also verifies
       // against the settled layout.
       scrollTimer = setTimeout(() => {
-        if (!cancelled) scrollToLatestRef.current()
+        if (!cancelled && !controller.signal.aborted) {
+          scrollToLatestRef.current({ immediate: true })
+        }
       }, 0)
       // Cross-session context-archive hydration (SEAM: this restore effect —
       // the place where loadMostRecentChatState's result is applied to the

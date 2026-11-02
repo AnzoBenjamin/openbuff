@@ -1051,6 +1051,33 @@ function hasProviderOptions(
   return Object.keys(providerOptions ?? {}).length > 0
 }
 
+/**
+ * Token cost of the TOOL surface only (names, descriptions, input schemas) —
+ * {@link countRequestOverheadTokens} minus its system component, exposed so a
+ * caller that prices `system` itself can still charge the same tool bytes the
+ * provider does.
+ *
+ * sec-tc-calibration-denominator-bypass: the runtime's calibration loop records
+ * provider `inputTokens` against a pre-request estimate. That estimate used to
+ * be `countTokensJson({system, messages})` only, while an OpenAI-routed request
+ * also charges the serialized function definitions. A workspace-controlled
+ * tool config (large read-only schemas with verbose descriptions) could then
+ * inflate the ESTIMATE — the ratio's denominator — until every observation sat
+ * inside the calibration credibility band and drove the persisted family factor
+ * to its floor, shrinking the agent's context budget across runs. Counting the
+ * tool surface through the same projection the provider charges removes that
+ * free knob. `includeTools` is false when the provider-compatibility layer
+ * strips tools from the request; the result is then 0 and callers must not
+ * charge anything.
+ */
+export function countToolSurfaceTokensForCalibration(
+  tools: unknown,
+  includeTools: boolean,
+): number {
+  if (!includeTools) return 0
+  return countToolSurfaceTokens(tools)
+}
+
 export function classifyChatGptOAuthStreamError(params: {
   isChatGptOAuth: boolean
   skipChatGptOAuth?: boolean

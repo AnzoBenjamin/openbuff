@@ -927,6 +927,28 @@ describe('processStreamWithTags', () => {
     }
   })
 
+  it('reports a nameless completion receipt with retry guidance without executing it', async () => {
+    const responseChunks: any[] = []
+    const executed: unknown[] = []
+    const stream = createMockStream([
+      textChunk('<codebuff_tool_call>{"status":"completed","messages":["Done"],"changedFiles":["file.ts"]}</codebuff_tool_call>'),
+    ])
+    for await (const _ of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream,
+      processors: {},
+      defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
+      onResponseChunk: (chunk: any) => responseChunks.push(chunk),
+      executeXmlToolCall: async (call) => { executed.push(call) },
+    })) { /* consume stream */ }
+
+    expect(executed).toEqual([])
+    expect(responseChunks).toHaveLength(1)
+    expect(responseChunks[0].message).toContain('"cb_tool_name"')
+    expect(responseChunks[0].message).toContain('plain text')
+    expect(responseChunks[0].message).toContain('"status":"completed"')
+  })
+
   it('reports an unterminated tool call at end of stream without executing or leaking it', async () => {
     // End-of-stream gap closure
     // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md):
@@ -1374,9 +1396,13 @@ describe('streamParserErrorGuidance', () => {
     )
   })
 
+  it('explains how to correct a missing tool name', () => {
+    expect(streamParserErrorGuidance('missing_tool_name')).toContain('"cb_tool_name"')
+    expect(streamParserErrorGuidance('missing_tool_name')).toContain('plain text')
+  })
+
   it('returns undefined for codes without next-step guidance', () => {
     expect(streamParserErrorGuidance('invalid_tool_call_json')).toBeUndefined()
-    expect(streamParserErrorGuidance('missing_tool_name')).toBeUndefined()
   })
 })
 

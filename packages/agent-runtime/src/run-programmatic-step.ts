@@ -8,6 +8,10 @@ import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 
 import { executeToolCall } from './tools/tool-executor'
 import { parseTextWithToolCalls } from './util/parse-tool-calls-from-text'
+import {
+  MISSING_TOOL_NAME_GUIDANCE,
+  MISSING_TOOL_NAME_REASON,
+} from './util/tool-name-key'
 import { getEffectiveAgentToolNames } from './util/agent-tool-names'
 import {
   getModelContextMessageLimit,
@@ -1194,10 +1198,16 @@ async function executeSegmentsArray(
       // self-correct the malformed JSON on the next turn. Follows this file's
       // readonly messageHistory convention (recreate the array, then push).
       // .agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md
-      const message =
+      let message =
         segment.rawExcerpt !== undefined
           ? `${segment.message}\n\nOriginal tool call input (excerpt): ${segment.rawExcerpt}`
           : segment.message
+      if (
+        segment.message ===
+        `Ignored codebuff_tool_call content because ${MISSING_TOOL_NAME_REASON}`
+      ) {
+        message += `\n\n${MISSING_TOOL_NAME_GUIDANCE}`
+      }
       onResponseChunk({ type: 'error', message })
       agentState.messageHistory = [...agentState.messageHistory]
       agentState.messageHistory.push(

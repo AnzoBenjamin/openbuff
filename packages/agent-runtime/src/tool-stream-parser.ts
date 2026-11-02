@@ -7,6 +7,7 @@ import {
   finalizeStreamParserState,
   parseStreamChunk,
 } from './util/stream-xml-parser'
+import { MISSING_TOOL_NAME_GUIDANCE } from './util/tool-name-key'
 
 import type {
   StreamParserError,
@@ -85,6 +86,8 @@ export function streamParserErrorGuidance(
   code: StreamParserError['code'],
 ): string | undefined {
   switch (code) {
+    case 'missing_tool_name':
+      return MISSING_TOOL_NAME_GUIDANCE
     case 'tool_call_buffer_exceeded':
       return 'This tool call exceeded the streaming buffer limit. Split large payloads across multiple smaller tool calls (for example, write files in smaller chunks) instead of inlining the entire payload.'
     case 'tool_call_unterminated_eof':

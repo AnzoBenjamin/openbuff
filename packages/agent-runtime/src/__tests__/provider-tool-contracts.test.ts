@@ -18,6 +18,10 @@ describe('provider tool input contracts', () => {
       agentTools: {},
       skills: {},
     })
+    // `description` is an ANNOTATION, not a constraint: getToolSet keeps it
+    // only for mutation tools and read_files (see
+    // shouldPreserveProviderSchemaDescriptions in prompts.ts), so parity here
+    // is asserted over the data-bearing constraints both sides must share.
     const clean = (value: unknown): unknown => {
       if (Array.isArray(value)) return value.map(clean)
       if (!value || typeof value !== 'object') return value
@@ -25,7 +29,12 @@ describe('provider tool input contracts', () => {
         Object.entries(value)
           .filter(
             ([key]) =>
-              !['$schema', 'errorMessage', 'markdownDescription'].includes(key),
+              ![
+                '$schema',
+                'description',
+                'errorMessage',
+                'markdownDescription',
+              ].includes(key),
           )
           .map(([key, entry]) => [key, clean(entry)]),
       )
@@ -142,8 +151,13 @@ describe('provider tool input contracts', () => {
         errorMessage: z.string(),
       }),
     })
-    const schema = compactToolInputSchemaForProvider(input)
-      .jsonSchema as Record<string, unknown>
+    // preserveDescriptions is opt-in now, so request it explicitly: this case
+    // is about NAME-MAP safety (a field literally named `title`/`description`
+    // must survive as data), which is only observable while annotations are
+    // being preserved.
+    const schema = compactToolInputSchemaForProvider(input, {
+      preserveDescriptions: true,
+    }).jsonSchema as Record<string, unknown>
     const validator = convertJsonSchemaToZod(schema)
     const payload = {
       title: 'a finding',
