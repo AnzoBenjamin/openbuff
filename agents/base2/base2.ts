@@ -1,4 +1,5 @@
 import { buildArray } from '@codebuff/common/util/array'
+import { MAX_SPAWN_BATCH_SIZE } from '@codebuff/common/constants/agents'
 import type { SpecialistReviewerAgent } from '@codebuff/common/agents/specialist-risk-router'
 import {
   resolveMaxRepairRounds,
@@ -604,7 +605,7 @@ ${
 - **Don't type cast as "any" type:** Don't cast variables as "any" (or similar for other languages). This is a bad practice as it leads to bugs. Exception: when the value can truly be any type.
 - **Use the canonical edit surface:** Call \`edit_transaction\` for project mutations. Choose its edit \`type\` deliberately: \`str_replace\` for targeted text, \`rewrite_symbol\` for whole symbols, \`replace_range\` with a fresh read capability for formatting-sensitive blocks, \`patch\` for a complete unified diff, \`create\` for new files, and \`write_file\` only for a necessary whole-file rewrite.
 - **Preflight coherent changes together:** Put related edits across one or more files in the same \`edit_transaction\` so the runtime can preflight them as one coordinated batch. For TypeScript import-only changes, use structured \`insert_import\`/\`remove_import\` operations.
-- **Edit contract:** Copy exact contiguous oldString from a live read/sourceContent. Multi-file is all-or-nothing; on abort re-read ALL recovery.paths from one snapshot and rebuild the whole txn. Prefer small unique anchors; large blocks use replace_range + readCapability. Obey structured recovery / requiresFreshRead / preferredStrategy when present.
+- **Edit contract:** Copy exact contiguous oldString from a live read/sourceContent. Multi-file is all-or-nothing; on abort follow the structured recovery.paths and requiresFreshRead, then resubmit the whole transaction. Unaffected authorizations remain subject to freshness checks. Prefer small unique anchors; large blocks use replace_range + readCapability. Obey structured recovery / preferredStrategy when present.
 - **Avoid broad scripted cleanups for refactors/renames:** For rename and overhaul tasks, prefer explicit targeted edits based on freshly read file content. Do not run one-off cleanup scripts across many files unless the user explicitly asks for that approach.
 
 # Harness-enforced recovery workflow
@@ -626,7 +627,7 @@ When tools, tests, or reviewers report a failure, treat that feedback as the cur
 
 Use the spawn_agents tool to spawn specialized agents to help you complete the user's request.
 
-- **Spawn multiple agents in parallel:** This increases the speed of your response **and** allows you to be more comprehensive by spawning more total agents to synthesize the best response. Each spawn_agents call accepts at most **8** agents — count before you call. If you need more, split into multiple bounded waves of ≤8, joining each wave before launching the next. Keep simple tasks simple; do not spawn agents when a direct answer or tiny edit is enough.
+- **Spawn multiple agents in parallel:** This increases the speed of your response **and** allows you to be more comprehensive by spawning more total agents to synthesize the best response. Each spawn_agents call accepts at most **${MAX_SPAWN_BATCH_SIZE}** agents — count before you call. If you need more, split into bounded waves of at most ${MAX_SPAWN_BATCH_SIZE}, joining each wave before launching the next. Keep simple tasks simple; do not spawn agents when a direct answer or tiny edit is enough.
 - **Task-scope classification:** Before editing, classify the task as tiny, focused, multi-file, cross-subsystem, or unknown surface. Tiny tasks require only the directly relevant read; focused tasks require reading the target file plus nearby tests/callers; multi-file tasks require search plus representative reads; for broad, cross-subsystem, or unknown-surface tasks, call query_index early yourself, then use bounded parallel discovery waves for uncovered domains until the inventory and coverage checks are complete.
 - **Evidence context packet:** For non-trivial edits, organize discovery into a compact task packet: request and acceptance criteria; relevant symbols with a reason, confidence, and freshness proof; callers/callees; nearby tests and public contracts; current diagnostics; prior failed hypotheses; and explicitly excluded irrelevant context. Label inference and unknowns explicitly.
 - **Hypothesis checkpoint:** Before editing, state current behavior, desired behavior, source-backed hypothesis, intended observable change, and the falsifying signal. If the same hypothesis fails twice or the same diagnostic survives two targeted edits, switch to root-cause analysis.
@@ -1275,6 +1276,11 @@ ${guideSections}
       activeWorkState.reviewerProtocolAttestationFailed ??=
         activeWorkState.lastReviewerGateSkipReason ===
         'reviewer-protocol-attestation-failed'
+      // A blocked previous turn must not permanently consume the retry budget.
+      // Keep the latch until the gate checks for an authorized bypass, then
+      // allow one fresh bounded attempt in this turn.
+      let retryPriorTurnReviewerProtocol =
+        activeWorkState.reviewerProtocolAttestationFailed === true
       activeWorkState.reviewerRepairRoundCount ??= 0
       activeWorkState.reviewerNoVerdictCount ??= 0
       activeWorkState.reviewerGateBypassReason ??= ''
@@ -4214,6 +4220,78 @@ ${guideSections}
                         agentType
                       ]
                     }
+                    // The spawn batch is already joined. Capture findings from
+                    // every other attested blocker before handing off to the
+                    // editor; breaking on the first result lost later results.
+                    const batchBlockingReviewers = [agentType]
+                    const batchBlockers = [...blockers]
+                    for (const reviewer of spawnableSpecialists) {
+                      if (reviewer === agentType) continue
+                      const reviewerSnapshot =
+                        specialistSnapshots.get(reviewer) ??
+                        specialistScopedFingerprints.get(reviewer) ??
+                        specialistCreditFingerprint
+                      const reviewerResult = recoverProseVerdictWithAttestation(
+                        recoverStructuredReviewerOutputs(
+                          specialistResults.get(reviewer),
+                        ),
+                        reviewerSnapshot,
+                        specialistScopedFileSets.get(reviewer) ?? [],
+                      )
+                      if (
+                        detectReviewerCrash(reviewerResult) ||
+                        collectReviewerAttestationIssues(
+                          reviewerResult,
+                          reviewerSnapshot,
+                          specialistScopedFileSets.get(reviewer) ?? [],
+                          specialistScopedDeletedFiles.get(reviewer) ?? [],
+                        ).length > 0
+                      ) continue
+                      const raw = collectReviewerBlockers(reviewerResult)
+                      const parentOwned = collectParentOwnedRequirementBlockers(
+                        raw,
+                        reviewerResult,
+                      )
+                      const otherBlockers = raw.filter(
+                        (blocker: string) => !parentOwned.has(blocker),
+                      )
+                      if (otherBlockers.length === 0) continue
+                      batchBlockingReviewers.push(reviewer)
+                      batchBlockers.push(...otherBlockers)
+                      invalidateWaveCompletionsForSpecialistBlockers(
+                        otherBlockers,
+                        specialistCreditFingerprint,
+                        specialistScopedFileSets.get(reviewer) ?? [],
+                      )
+                      const records = collectReviewerFindingRecords(reviewerResult)
+                      const findings = otherBlockers.map(
+                        (text: string, index: number) => {
+                          const record = correlateReviewerFindingRecord(text, records)
+                          return {
+                            id: record?.id ?? buildReviewerFindingId(text, index),
+                            gateId: `${reviewer}:${reviewerSnapshot}`,
+                            text,
+                            status: 'open' as const,
+                            files: specialistScopedFileSets.get(reviewer) ?? [],
+                            snapshotFingerprint: reviewerSnapshot,
+                            reviewer: reviewer as SpecialistReviewerAgent,
+                            ...buildReviewerRecordPayload(record, text),
+                            createdAt: new Date().toISOString(),
+                          }
+                        },
+                      )
+                      mergeReviewerFindings(reviewer, findings, otherBlockers)
+                      addOwedReviewer(reviewer)
+                      activeWorkState.specialistReviewGatesDone = (
+                        activeWorkState.specialistReviewGatesDone ?? []
+                      ).filter((entry) => entry !== reviewer)
+                      if (activeWorkState.specialistReviewGateFingerprints) {
+                        delete activeWorkState.specialistReviewGateFingerprints[reviewer]
+                      }
+                      if (activeWorkState.specialistReviewFileMarkers) {
+                        delete activeWorkState.specialistReviewFileMarkers[reviewer]
+                      }
+                    }
                     const specialistRepairRound: number =
                       Number(activeWorkState.specialistRepairRoundCount ?? 0) +
                       1
@@ -4237,7 +4315,7 @@ ${guideSections}
                         pendingFiles: currentPendingGateFiles,
                         reviewerStatus: 'failed',
                         validationStatus: 'passed',
-                        blockerCount: blockers.length,
+                        blockerCount: batchBlockers.length,
                         repairRound: specialistRepairRound,
                         skipReason: 'specialist-repair-budget-exhausted',
                       })
@@ -4248,7 +4326,7 @@ ${guideSections}
                           content: [
                             `Specialist gate: automated repair budget exhausted after ${MAX_SPECIALIST_REPAIR_ROUNDS} round(s); the following ${agentType} findings are still open and were not cleared:`,
                             '',
-                            ...blockers,
+                            ...batchBlockers,
                             '',
                             'Stop retrying automatically. Inspect the findings directly, fix them, or explicitly authorize a different path.',
                             formatGateStateBlock(
@@ -4258,7 +4336,7 @@ ${guideSections}
                               specialistRepairRound,
                               undefined,
                               undefined,
-                              [agentType],
+                            batchBlockingReviewers,
                             ),
                           ].join('\n'),
                         },
@@ -4268,8 +4346,8 @@ ${guideSections}
                       break
                     }
                     activeWorkState.currentPhase = 'repair_loop'
-                    activeWorkState.nextRequiredAction = `Repair-editor must address every open ${agentType} finding before validation and finalization.`
-                    activeWorkState.latestWorkSummary = `${agentType} blocked the current change snapshot; repair is required.`
+                    activeWorkState.nextRequiredAction = `Repair-editor must address every open ${batchBlockingReviewers.join(', ')} finding before validation and finalization.`
+                    activeWorkState.latestWorkSummary = `${batchBlockingReviewers.join(', ')} blocked the current change snapshot; repair is required.`
                     markActiveWorkStateChanged()
                     emitGateTelemetry({
                       currentPhase: 'repair_loop',
@@ -4277,7 +4355,7 @@ ${guideSections}
                       pendingFiles: currentPendingGateFiles,
                       reviewerStatus: 'failed',
                       validationStatus: 'passed',
-                      blockerCount: blockers.length,
+                      blockerCount: batchBlockers.length,
                       repairRound: specialistRepairRound,
                       reuseReason: `aux-gate:${agentType}-blocking`,
                     })
@@ -4288,9 +4366,9 @@ ${guideSections}
                         content: [
                           `${agentType} returned blocking findings. The harness will send these exact findings to repair-editor:`,
                           '',
-                          ...blockers,
+                          ...batchBlockers,
                           '',
-                          `These findings remain open until targeted validation and a fresh matching ${agentType} review clear them.`,
+                          'These findings remain open until targeted validation and fresh matching specialist reviews clear them.',
                           formatGateStateBlock(
                             'reviewer',
                             'failed',
@@ -4298,7 +4376,7 @@ ${guideSections}
                             specialistRepairRound,
                             undefined,
                             undefined,
-                            [agentType],
+                            batchBlockingReviewers,
                           ),
                         ].join('\n'),
                       },
@@ -4318,7 +4396,9 @@ ${guideSections}
                     seenSpecialistRepairFingerprints.add(preRepairFingerprint)
                     const specialistOpenFindings = (
                       activeWorkState.openReviewerFindings ?? []
-                    ).filter((finding) => finding.reviewer === agentType)
+                    ).filter((finding) =>
+                      batchBlockingReviewers.includes(finding.reviewer as string),
+                    )
                     activeWorkState.repairSessionId =
                       activeWorkState.repairSessionId ??
                       `specialist-review-repair-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -4332,7 +4412,7 @@ ${guideSections}
                               schemaVersion: 1,
                               taskId: activeWorkState.repairSessionId,
                               role: 'repair-editor',
-                              objective: `Resolve every open ${agentType} finding without unrelated changes.`,
+                              objective: `Resolve every open ${batchBlockingReviewers.join(', ')} finding without unrelated changes.`,
                               requirements: specialistOpenFindings.map(
                                 ({ id, text }) => ({
                                   id,
@@ -4343,20 +4423,20 @@ ${guideSections}
                               acceptanceCriteria: specialistOpenFindings.map(
                                 ({ id }) => ({
                                   id: `clear-${id}`,
-                                  behavior: `${agentType} finding ${id} is addressed in the live workspace.`,
-                                  verification: `Targeted validation passes and a fresh snapshot-bound ${agentType} review clears the finding.`,
+                                  behavior: `Finding ${id} is addressed in the live workspace.`,
+                                  verification: 'Targeted validation passes and a fresh snapshot-bound review by the originating specialist clears the finding.',
                                 }),
                               ),
                               context: [],
                               invariants: [
                                 'Read every target from the live filesystem before editing.',
-                                `Treat every finding ID as open until a fresh ${agentType} clears it.`,
+                                'Treat every finding ID as open until its originating specialist clears it.',
                               ],
                               nonGoals: [
                                 'Unrelated diagnostics, refactors, or cleanup.',
                               ],
                               risks: [
-                                `${agentType} findings may be stale if the workspace snapshot changed.`,
+                                'Specialist findings may be stale if the workspace snapshot changed.',
                               ],
                               unknowns: [],
                               findings: specialistOpenFindings.map(
@@ -4365,6 +4445,7 @@ ${guideSections}
                                   text,
                                   files,
                                   snapshotFingerprint,
+                                  reviewer,
                                   severity,
                                   dimension,
                                   evidence,
@@ -4374,6 +4455,7 @@ ${guideSections}
                                   text,
                                   files,
                                   snapshotFingerprint,
+                                  ...(reviewer && { reviewer }),
                                   // Repair-payload carrier so repair editors are not
                                   // spawned blind on `id: text` lines alone.
                                   ...(severity && { severity }),
@@ -4419,19 +4501,19 @@ ${guideSections}
                                 mutableAgentState.workspaceState?.snapshotId,
                               artifacts: [],
                               successCriteria: [
-                                `All ${agentType} finding IDs are cleared by a fresh reviewer receipt.`,
+                                'All finding IDs are cleared by fresh receipts from their originating reviewers.',
                               ],
                               constraints: [
                                 'Keep every edit within the pending gate file set.',
                               ],
                             },
                             prompt: [
-                              `Repair the blocking ${agentType} findings below.`,
-                              `Treat every finding ID as open until a fresh ${agentType} clears it.`,
+                              `Repair the blocking ${batchBlockingReviewers.join(', ')} findings below.`,
+                              'Treat every finding ID as open until its originating specialist clears it.',
                               'Read every target from the live filesystem before editing.',
                               '',
                               ...specialistOpenFindings.map((finding) =>
-                                buildReviewerPromptLine(finding),
+                                `[${finding.reviewer}] ${buildReviewerPromptLine(finding)}`,
                               ),
                             ].join('\n'),
                           },
@@ -5469,7 +5551,21 @@ ${guideSections}
             activeWorkState.reviewerBypassChallenge,
             reviewChallengeFingerprint(currentPendingGateFiles),
           )
-        if (reviewerProtocolBlocked && !reviewerProtocolBypassAuthorized) {
+        const retryReviewerAfterPriorTurn =
+          reviewerProtocolBlocked &&
+          !reviewerProtocolBypassAuthorized &&
+          retryPriorTurnReviewerProtocol
+        if (retryReviewerAfterPriorTurn) {
+          retryPriorTurnReviewerProtocol = false
+          activeWorkState.reviewerProtocolAttestationFailed = false
+          activeWorkState.reviewerProtocolRetryCount = 0
+          markActiveWorkStateChanged()
+        }
+        if (
+          reviewerProtocolBlocked &&
+          !reviewerProtocolBypassAuthorized &&
+          !retryReviewerAfterPriorTurn
+        ) {
           const challenge = ensureReviewerBypassChallenge(
             reviewChallengeFingerprint(currentPendingGateFiles),
             currentConversationMessages,
@@ -6127,6 +6223,7 @@ ${guideSections}
           runReviewerGate &&
           editsHappened &&
           !reviewerProtocolBypassAuthorized &&
+          !retryReviewerAfterPriorTurn &&
           !activeWorkState.reviewerProtocolAttestationFailed &&
           (reviewableGateScopeFiles.length === 0 ||
             reviewableSetAlreadyReviewed)

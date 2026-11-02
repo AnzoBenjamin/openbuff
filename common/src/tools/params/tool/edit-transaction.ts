@@ -617,7 +617,7 @@ const inputSchema = z
         boundedTransactionEditListSchema,
       )
       .describe(
-        'All edits that must preflight together. Pass an actual array of edit objects; do not JSON.stringify the array or its entries. The runtime defensively decodes complete legacy JSON encodings, and payloads cut in transport are detected and may be recovered at a clean edit boundary when provably complete (otherwise they fail with a structured payload_truncated code rather than a misleading syntax error). An omitted type is inferred only when the payload shape identifies one unambiguous operation, such as replacements implying str_replace. If any edit fails during preflight, no files are changed.',
+        'All edits that must preflight together. Pass an actual array of edit objects; do not JSON.stringify the array or its entries. The runtime defensively decodes complete legacy JSON encodings. A payload cut in transport is rejected without applying a recovered prefix, with a structured payload_truncated code when detected. An omitted type is inferred only when the payload shape identifies one unambiguous operation, such as replacements implying str_replace. If any edit fails during preflight, no files are changed.',
       ),
   })
   .describe(

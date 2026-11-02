@@ -25,18 +25,16 @@ function buildRepresentativeSkills(count: number): SkillsMap {
 }
 
 describe('base2 provider-facing context budget', () => {
-  // P4-T2 re-baseline: extract_symbol joined the surface (35 tools), which budged
-  // the execute-plan surface from just under the old 25k ceiling to ~25.1k.
-  // The ceiling is a REGRESSION guard against runaway growth, not a hard
-  // product contract — measured value + ~6% headroom, mirroring the
-  // 22.5k→23.9k re-baseline in base2-progressive-tool-disclosure.test.ts for
-  // the default surface.
+  // Retaining field descriptions for model-facing tool schemas increases the
+  // measured native surface to about 27.6k (default) / 31.2k (execute-plan).
+  // Bound each separately with roughly 6% headroom to catch future growth.
+  // These counts exclude the agent catalog and are not a total context budget.
   test.each([
-    ['default', {}],
-    ['execute-plan', { executePlan: true }],
+    ['default', {}, 29_500],
+    ['execute-plan', { executePlan: true }, 33_000],
   ] as const)(
-    'keeps the %s root tool surface below 26.5k estimated tokens',
-    async (_name, options) => {
+    'keeps the %s root tool surface within its estimated token budget',
+    async (_name, options, ceiling) => {
       const base2 = createBase2('default', options)
       const tools = await getToolSet({
         toolNames: base2.toolNames ?? [],
@@ -55,7 +53,7 @@ describe('base2 provider-facing context budget', () => {
 
       expect(base2.spawnableAgentToolMode).toBe('generic')
       expect(Object.keys(tools)).toHaveLength(base2.toolNames?.length ?? 0)
-      expect(countTokensJson(tokenShape)).toBeLessThan(26_500)
+      expect(countTokensJson(tokenShape)).toBeLessThan(ceiling)
     },
   )
 })

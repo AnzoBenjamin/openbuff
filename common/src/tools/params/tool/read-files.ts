@@ -477,6 +477,7 @@ Read files from disk. Prefer ranges/windows/around/symbol slices over full reads
 - \`windows\`: contiguous line windows (default size 400); omit \`window\` for manifest + first window.
 - \`around\`: Nth literal \`match\` + contextLines (default 40).
 - \`symbol\` / \`symbols\`: named top-level slices (pair with read_outline). Prefer batch \`symbols\`; use \`symbol\` for a specific occurrence.
+- Batch \`symbols\` returns complete slices up to ${MAX_READ_BLOCK_BYTES} bytes in total. A partial result lists omittedSymbols; request those separately or use smaller windows for an oversized symbol.
 - Block budget: each window/around/symbol payload (decorated content and sourceContent independently) is capped at ${MAX_READ_BLOCK_BYTES} bytes; oversize blocks return \`too_large\` (shrink windowSize/contextLines).
 - Prefer replace_range with readCapability for medium/large blocks; for large-file str_replace copy readCapability into basedOnRead. Range results include sourceContent for exact oldString text.
 `.trim()

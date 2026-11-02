@@ -86,7 +86,7 @@ ${$getNativeToolCallExampleString({
   toolName,
   inputSchema,
   input: {
-    text: 'Use Postgres for session storage',
+    text: 'Use Postgres for session storage because sessions must survive restarts',
     kind: 'decision',
     evidenceSelectors: ['docs/architecture.md'],
     excerpt: 'Sessions require durability across restarts',

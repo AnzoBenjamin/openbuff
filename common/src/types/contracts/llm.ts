@@ -108,6 +108,8 @@ export type StreamChunk =
   | {
       type: 'reasoning'
       text: string
+      replayRequired?: boolean
+      suppressDisplay?: boolean
     }
   | ToolCallStreamChunk
   | { type: 'error'; message: string }

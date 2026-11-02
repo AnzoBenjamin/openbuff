@@ -1,6 +1,7 @@
 import { mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import { spawnAgentsParams } from '@codebuff/common/tools/params/tool/spawn-agents'
 
 import { createBase2 } from '../base2/base2'
 
@@ -2491,6 +2492,7 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     const repairSpawn = gen.next()
     expect(repairSpawn.value).toMatchObject({ toolName: 'spawn_agents' })
     const repairAgent = (repairSpawn.value as any).input.agents[0]
+    expect(spawnAgentsParams.inputSchema.safeParse((repairSpawn.value as any).input).success).toBe(true)
     expect(repairAgent.agent_type).toBe('repair-editor')
     expect(repairAgent.handoff.schemaVersion).toBe(1)
     expect(repairAgent.handoff.role).toBe('repair-editor')
@@ -2819,8 +2821,8 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     // Drive BOTH routed specialists to BLOCK. The batched result must carry an
     // entry for every routed agent, otherwise the missing one fails attestation
     // and the evidence-refresh retry path fires instead of the blocking notice.
-    // reliability-reviewer is processed first (router order), and the per-agent
-    // loop breaks on the first blocking specialist, so its notice is next.
+    // reliability-reviewer is processed first (router order), but both joined
+    // results must reach the same repair handoff.
     const relFinding = {
       id: 'reliability-reviewer:correctness:retry-race',
       summary: 'Fix the retry race in the session refresh path.',
@@ -2871,6 +2873,15 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
     expect((repairSpawn.value as any).input.agents[0].agent_type).toBe(
       'repair-editor',
     )
+    const repairAgent = (repairSpawn.value as any).input.agents[0]
+    expect(repairAgent.handoff.findings.map((finding: any) => finding.id)).toEqual(
+      expect.arrayContaining([relFinding.id, compatFinding.id]),
+    )
+    expect(repairAgent.handoff.requirements.map((item: any) => item.id)).toEqual(
+      expect.arrayContaining([relFinding.id, compatFinding.id]),
+    )
+    expect(repairAgent.prompt).toContain(relFinding.summary)
+    expect(repairAgent.prompt).toContain(compatFinding.summary)
     writeFileSync(SPECIALIST_FILE, 'export const session = "v2-repaired"\n')
     const repairStatus = gen.next(
       repairReceipt(SPECIALIST_FILE, [relFinding.id]),
@@ -2935,6 +2946,52 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
       (agentState as any).base2ActiveWork.specialistReviewGatesDone,
     ).toContain('reliability-reviewer')
   })
+
+  test.each([true, false])(
+    'collects fresh batch findings from each attested specialist (second attested: %s)',
+    (secondAttested) => {
+      mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })
+      writeFileSync(SPECIALIST_FILE, 'export const session = "v1"\n')
+      const agentState = {
+        agentId: 'base2-custom',
+        base2ActiveWork: specialistSeed({
+          openReviewerBlockers: [],
+          openReviewerFindings: [],
+          owedReviewerRevalidations: [
+            'reliability-reviewer',
+            'performance-specialist',
+          ],
+          requiredReviewerRevalidation: 'reliability-reviewer',
+        }),
+      }
+      const gen = createBase2('default').handleSteps!({
+        agentState,
+        prompt: 'Please finish the pending work.',
+        params: {},
+      } as any)
+      gen.next() // git_status
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // context-pruner
+      gen.next() // pinned message
+      expect(gen.next().value).toBe('STEP')
+      gen.next(finishStepWithToolResult({})) // post-step git_status
+      gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // review bundle
+      const spawn = gen.next(feedJson({ snapshotId: 'batch', files: [SPECIALIST_FILE] }))
+      const fingerprint = specialistFingerprintFromSpawn(spawn.value)
+      const rel = { id: 'rel-new', summary: 'Correct the retry race.' }
+      const performance = { id: 'perf-new', summary: 'Remove the repeated index scan.' }
+      const notice = gen.next(feedJson([
+        { agentType: 'reliability-reviewer', value: blockingSpecialistValue(fingerprint, [SPECIALIST_FILE], rel) },
+        { agentType: 'performance-specialist', value: blockingSpecialistValue(fingerprint, secondAttested ? [SPECIALIST_FILE] : [], performance) },
+      ]))
+      expect((notice.value as any).input.content).toContain(rel.summary)
+      const repair = (gen.next().value as any).input.agents[0]
+      expect(repair.handoff.findings.map((finding: any) => finding.id)).toContain(rel.id)
+      expect(repair.prompt.includes(performance.summary)).toBe(secondAttested)
+      expect(repair.handoff.findings.some((finding: any) => finding.id === performance.id)).toBe(secondAttested)
+      const open = (agentState as any).base2ActiveWork.openReviewerFindings
+      expect(open.some((finding: any) => finding.id === performance.id)).toBe(secondAttested)
+    },
+  )
 
   test('snapshot-bound specialist credit skips on a matching fingerprint and re-fires on drift (G4)', () => {
     mkdirSync(`${SPECIALIST_SCRATCH_ROOT}/state`, { recursive: true })

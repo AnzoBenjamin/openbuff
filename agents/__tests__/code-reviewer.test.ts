@@ -42,6 +42,15 @@ describe('code-reviewer prompt isolation', () => {
     expect(reviewer.outputSchema).toBeDefined()
   })
 
+  test('allows receipt corrections and names the actual required fields', () => {
+    const reviewer = createReviewer('anthropic/claude-opus-4.7')
+    expect(reviewer.instructionsPrompt).toContain('Only read_files and set_output are permitted')
+    expect(reviewer.instructionsPrompt).toContain('resubmit without repeating the review')
+    expect(reviewer.instructionsPrompt).toContain('Required fields are schemaVersion, family, verdict, snapshotFingerprint, reviewedFiles, coverage, and dimensions')
+    expect(reviewer.instructionsPrompt).not.toContain('The only tool you may call is read_files')
+    expect(reviewer.instructionsPrompt).not.toContain('All nine top-level fields above are REQUIRED')
+  })
+
   test('does not inherit parent orchestration instructions', () => {
     const reviewer = createReviewer('anthropic/claude-opus-4.7')
 

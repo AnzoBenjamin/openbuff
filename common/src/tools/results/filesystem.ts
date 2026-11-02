@@ -633,6 +633,8 @@ const readFilesSymbolsItemSchema = z
     missingSymbols: z.string().array(),
     slices: readFilesSliceSchema.array().optional(),
     slicesOmittedForLength: z.literal(true).optional(),
+    omittedSymbols: z.string().array().optional(),
+    recovery: z.string().optional(),
   })
   .refine(
     (value) =>

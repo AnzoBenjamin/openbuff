@@ -941,9 +941,9 @@ describe('base2 validation/reviewer coordination prompts', () => {
   test('plan mode allows repeated bounded analysis waves', () => {
     const planBase2 = createBase2('default', { planOnly: true })
 
-    expect(planBase2.systemPrompt).toContain('at most **8** agents')
+    expect(planBase2.systemPrompt).toContain('at most **12** agents')
     expect(planBase2.systemPrompt).toContain(
-      'split into multiple bounded waves',
+      'split into bounded waves',
     )
     expect(planBase2.instructionsPrompt).toContain(
       'as many analysis subagents as the work requires',
@@ -6539,6 +6539,31 @@ describe('base2 verification and reviewer gates', () => {
     )
     expect((agentState as any).canSuggestFollowups).toBe(false)
     expect(gen.next().done).toBe(true)
+
+    // A new user turn gets a fresh bounded review attempt, even when the
+    // pending files and failed attestation are unchanged.
+    const resumed = base2.handleSteps!({
+      agentState,
+      prompt: 'Please continue.',
+      params: {},
+    } as any)
+    let next = resumed.next()
+    let reviewerSpawned = false
+    for (let i = 0; i < 30 && !next.done; i++) {
+      const call = next.value as any
+      if (call?.toolName === 'spawn_agents' &&
+          call.input.agents.some((agent: any) => agent.agent_type === 'code-reviewer')) {
+        reviewerSpawned = true
+        break
+      }
+      const value = call?.toolName === 'git_status' ? { status: ' M src/a.ts' }
+        : call?.toolName === 'run_file_change_hooks' ? [] : {}
+      next = resumed.next(call === 'STEP'
+        ? finishStepWithToolResult({})
+        : { toolResult: [{ type: 'json', value }] } as any)
+    }
+    expect(reviewerSpawned).toBe(true)
+    expect((agentState as any).base2ActiveWork.reviewerProtocolRetryCount).toBe(0)
   })
 
   test('reviewer prompt maps gate test coverage to the changed test file in the same snapshot', () => {

@@ -186,7 +186,7 @@ export interface CheckBackgroundAgentParams {
   cursor?: number
   /** Optional substring to wait for in the new streamed chunks before returning (follow mode). Returns early as soon as it appears in any chunk payload. Useful for waiting until a background agent emits a specific milestone (e.g. a tool_result or a text marker). */
   wait_for?: string
-  /** Max seconds to wait for new chunks / the wait_for pattern. 0 (default) returns immediately with whatever new chunks exist (poll mode); >0 blocks up to this long (follow mode). */
+  /** Max seconds to wait for new chunks / the wait_for pattern. 0 returns immediately, even with wait_for. A positive value enables follow mode. When omitted, wait_for follows for at most 30 seconds; without wait_for the call polls immediately. */
   timeout_seconds?: number
   /** When true, explicitly cancel the running background agent before returning its final status. Defaults to false. */
   cancel?: boolean
@@ -198,7 +198,9 @@ export interface CheckBackgroundAgentParams {
 export interface CheckJobParams {
   /** The jobId returned by run_terminal_command with process_type: BACKGROUND. */
   jobId: string
-  /** Optional substring to wait for in the new output before returning (follow mode). Returns early as soon as it appears (e.g. "Listening on" / "compiled successfully"). */
+  /** Optional event sequence cursor from a previous response. Explicit cursors replay independently and do not advance the stored cursor; omit to consume new events using the job’s stored position. */
+  cursor?: number
+  /** Optional substring to match in new output. With a positive timeout_seconds, follow until it appears; with timeout_seconds 0 or omitted, check only the currently available output. */
   wait_for?: string
   /** Max seconds to wait for new output / the wait_for pattern. 0 (default) returns immediately with whatever new output exists (poll mode); >0 blocks up to this long (follow mode). */
   timeout_seconds?: number
@@ -224,7 +226,7 @@ export interface CodeActionParams {
 export interface CodeSearchParams {
   /** The pattern to search for. */
   pattern: string
-  /** Optional safe ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -A 2" or ["-i", "-g", "*.ts", "-A", "2"]). Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, plus context -A/-B/-C (and long forms). JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic; -n/--line-number are ignored. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected. */
+  /** Optional safe ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -A 2" or ["-i", "-g", "*.ts", "-A", "2"]). Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, context -A/-B/-C (and long forms), and -l/--files-with-matches to list matching paths. JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic; -n/--line-number are ignored. Flags such as -c/--count, --count-matches, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected. */
   flags?: string | string[]
   /** Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs when no paths are given); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to searching the entire project root. */
   cwd?: string
@@ -899,6 +901,7 @@ export interface RunFileChangeHooksParams {
 export interface RunTargetedValidationParams {
   snapshot_id: string
   files: string[]
+  /** Optional labels echoed in the result; hook selection depends on files, not these labels. */
   artifact_kinds?: string[]
 }
 
@@ -1222,7 +1225,7 @@ export interface UpdatePlanStatusParams {
     | 'paused'
     | 'completed'
     | 'archived'
-  /** Optional current-task pointer written as a `<!-- current-task: <task> -->` annotation in PLAN.md. Pass an empty string or omit to clear the pointer. Only takes effect when path targets PLAN.md. */
+  /** Optional current-task pointer written as a `<!-- current-task: <task> -->` annotation in PLAN.md. Pass an empty string to clear the pointer. When omitted, an update that starts a task selects it; otherwise the pointer is preserved. Only takes effect when path targets PLAN.md. */
   currentTask?: string
   /** Optional STATE.json compare-and-swap revision. The update fails without writing when the current revision differs. */
   expectedRevision?: number

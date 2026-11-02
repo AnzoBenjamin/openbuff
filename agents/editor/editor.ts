@@ -156,7 +156,7 @@ You may make edits across multiple turns. After each edit you will see whether i
 - Same-file mixed edit modes are allowed only when their original spans are disjoint and provenance maps unambiguously. The runtime rejects overlap or ambiguous provenance. For large files, prefer read_files windows/around/symbol selectors for complete cap.v3 blocks; use read_files ranges when you need an exact arbitrary line range. Use read_outline to discover structure, and pull a complete symbol only when rewrite_symbol is the intended edit. Otherwise submit replace_range with editAnchor.readCapability.
 - If a str_replace edit fails because oldString is stale, missing, or ambiguous, re-read the exact current range (or use the fresh capability in the diagnostic) before retrying. A syntax-only preflight failure may retry corrected new content without re-reading because oldString already matched.
 - If edit_transaction aborts, no files changed. When failures include basedOnRead (or basedOnRead= in the diagnostic text), retry with that capability first (write_file basedOnRead, or basedOnRead on every str_replace replacement / replace_range readCapability) — do not exploratory re-read first when a fresh cap.v3 is already echoed. Re-read only when no capability is available, for ambiguous oldString (longer anchor / occurrenceIndex), or when the diagnostic explicitly requires a fresh range re-read. When re-read is required, rebuild the whole related transaction from one coherent snapshot.
-- Edit contract: exact contiguous oldString from live read/sourceContent; multi-file abort → re-read ALL recovery.paths (requiresFreshRead) from one snapshot and rebuild the whole txn; prefer small unique anchors; large block → replace_range + readCapability; obey recovery.preferredStrategy when present.
+- Edit contract: exact contiguous oldString from live read/sourceContent; on abort follow the recovery packet's paths and requiresFreshRead, then rebuild the whole transaction; prefer small unique anchors; large block → replace_range + readCapability; obey recovery.preferredStrategy when present.
 - Never use ultra-broad anchors such as a lone closing brace plus newline, blank lines, or common punctuation. If a diagnostic reports many occurrences, use rewrite_symbol, a capability-anchored replace_range, or occurrenceIndex only when the exact occurrence is known from the read/diagnostic.
 - Put dependent edits in one transaction so they preflight together. A simple one-file change is also a one-edit transaction.
 - Keep editing until the entire request is implemented across all files. Do not stop after a single file when more files still need changes.
@@ -169,7 +169,7 @@ Important: You may call read_files only for exact files you need to edit or to r
 
 Deterministic large-file editing (follow this exactly to avoid edits that fail for no apparent reason):
 - Before the first edit to a large file, prefer read_files windows/around/symbol selectors to mint complete cap.v3 blocks; use read_files ranges only for an exact arbitrary line range. Pass basedOnRead / readCapability from that read on the edit; never invent same-step sticky authority.
-- For a medium/large block replacement, copy editAnchor.readCapability from the directly read block/range into a replace_range edit. Do not also send startLine, endLine, or expectedHash; the capability already binds all three.
+- For a medium/large block replacement, copy editAnchor.readCapability from the directly read block/range into a replace_range edit. Omit startLine/endLine to replace the whole block, or provide both to target a contained subrange. Never send expectedHash.
 - For a large-file str_replace edit, use the available whole-file authorization or copy editAnchor.readCapability into basedOnRead on each replacement. When a failure mints basedOnRead in the diagnostic, paste it into the next write_file/str_replace retry instead of an exploratory re-read.
 - If a single edit's newString or replacement content would exceed roughly 30-50 KB (e.g. inserting or moving hundreds of lines), do not submit it as one monolithic edit: oversized payloads can be truncated in transport and then fail preflight with a misleading syntax error. Instead split the change into several bounded, capability-anchored edits: re-read the exact target with read_files windows/around/symbol selectors or ranges, then apply replace_range (readCapability) or str_replace (basedOnRead) in forward-ordered chunks, each anchored on a unique declaration and small enough to transmit safely, keeping the file syntactically valid between steps when possible.
 - Put several non-overlapping changes in one edit_transaction. Same-file mixed modes must refer to disjoint original spans with unambiguous mapping. Replacements within one str_replace edit apply sequentially, so consolidate overlapping expectations into one larger edit.
@@ -295,18 +295,11 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
 
       // Keep stepping while the model is still emitting edit tool calls so it
       // can implement multi-file changes and recover from failed transactions.
-      // Productive steps are unlimited by default, and so are the continuations
-      // below: a failed atomic transaction is different from a finished edit —
-      // the runtime already revoked stale authorization and supplied a recovery
-      // packet, but a provider can still emit a reasoning-only final turn. Each
-      // directive re-fires on EVERY turn-end that still shows its condition,
-      // instead of turning that provider quirk into a misleading "no
-      // edit_transaction" receipt. User cancellation is the only guaranteed
-      // bound (there is no wall-clock deadline); a configured step cap or
-      // cost/token budget additionally bounds the loop. hitStepCap must break
-      // out per the StepGenerator contract — a continuation past an explicit
-      // step cap would re-trigger it forever.
+      // Productive steps remain unlimited; repeated identical recovery
+      // directives are bounded so a stalled provider returns a useful receipt.
       let recoveryContinuationCount = 0
+      let lastRecoveryDirective = ''
+      let repeatedRecoveryCount = 0
       // The same provider behavior can happen before the first mutation. For
       // declared implementation targets, every read-only/reasoning-only
       // completion gets another action-required turn so it cannot silently
@@ -323,12 +316,18 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         )
         const recovery = getPendingTransactionRecovery(stepMessages)
         if (result.stepsComplete && recovery) {
+          const directive = buildTransactionRecoveryDirective(recovery)
+          repeatedRecoveryCount = directive === lastRecoveryDirective
+            ? repeatedRecoveryCount + 1
+            : 1
+          lastRecoveryDirective = directive
+          if (repeatedRecoveryCount > 3) break
           recoveryContinuationCount += 1
           yield {
             toolName: 'add_message',
             input: {
               role: 'user',
-              content: buildTransactionRecoveryDirective(recovery),
+              content: directive,
             },
             includeToolCall: false,
           }
@@ -527,6 +526,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
       ):
         | {
             paths: string[]
+            pendingReadPaths?: string[]
             preferredStrategy?: string
             errorCode?: string
           }
@@ -587,8 +587,36 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
               paths.length > 0 &&
               (value.requiresFreshRead === true || recovery !== undefined)
             ) {
+              const requiresRead = value.requiresFreshRead === true ||
+                (value.requiresFreshRead !== false && recovery?.requiresFreshRead !== false)
+              const readPaths = new Set<string>()
+              for (const later of messages.slice(index + 1)) {
+                if (!later || typeof later !== 'object') continue
+                const read = later as Record<string, unknown>
+                if (read.role !== 'tool' || read.toolName !== 'read_files' || !Array.isArray(read.content)) continue
+                for (const part of read.content) {
+                  if (!part || typeof part !== 'object') continue
+                  const value = (part as Record<string, unknown>).value
+                  if (!value || typeof value !== 'object') continue
+                  const results = (value as Record<string, unknown>).results
+                  if (!Array.isArray(results)) continue
+                  for (const result of results) {
+                    if (!result || typeof result !== 'object') continue
+                    const item = result as Record<string, unknown>
+                    if (typeof item.path !== 'string' || item.status === 'error') continue
+                    const anchor = item.editAnchor as Record<string, unknown> | undefined
+                    const slices = Array.isArray(item.slices) ? item.slices : []
+                    if (typeof anchor?.readCapability === 'string' || slices.some((slice) =>
+                      slice && typeof slice === 'object' &&
+                      typeof (slice as { editAnchor?: { readCapability?: unknown } }).editAnchor?.readCapability === 'string'
+                    )) readPaths.add(item.path)
+                  }
+                }
+              }
+              const pendingReadPaths = requiresRead ? paths.filter((path) => !readPaths.has(path)) : []
               return {
                 paths,
+                ...(pendingReadPaths.length !== paths.length && { pendingReadPaths }),
                 ...(typeof recovery?.preferredStrategy === 'string'
                   ? { preferredStrategy: recovery.preferredStrategy }
                   : {}),
@@ -639,6 +667,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
 
       function buildTransactionRecoveryDirective(recovery: {
         paths: string[]
+        pendingReadPaths?: string[]
         preferredStrategy?: string
         errorCode?: string
       }): string {
@@ -648,7 +677,11 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
         const code = recovery.errorCode
           ? ` Failure code: ${recovery.errorCode}.`
           : ''
-        return `<editor_recovery>Previous edit_transaction committed no files. Before any retry, read the exact current source for: ${recovery.paths.join(', ')}. Rebuild one coherent transaction only from that fresh output; do not reuse oldString anchors from memory. Submit edits as a real JSON array. For replace_range, use the newly returned readCapability; for str_replace, copy exact live text and basedOnRead.${strategy}${code}</editor_recovery>`
+        const pending = recovery.pendingReadPaths ?? recovery.paths
+        const next = pending.length
+          ? `Read the exact current source for: ${pending.join(', ')}. Then rebuild the complete transaction from the current reads.`
+          : 'Required reads are complete or unnecessary. Rebuild and submit the complete transaction using the current source and capabilities.'
+        return `<editor_recovery>Previous edit_transaction committed no files. ${next} Do not reuse oldString anchors from memory. Submit edits as a real JSON array. For replace_range, use a current readCapability; for str_replace, copy exact live text and basedOnRead.${strategy}${code}</editor_recovery>`
       }
 
       function hasCommittedMutationResult(value: Record<string, unknown>): boolean {
@@ -783,9 +816,7 @@ ${PLACEHOLDER.FRONTEND_SECTION}`,
             }
           }
         }
-        // With continuations unlimited, this stage only fires when the run
-        // stopped at the step cap with recovery still unresolved: unresolved
-        // recovery after continuations were exhausted by the step cap.
+        // Recovery can end at the step cap or the repeated-directive bound.
         if (recovery && recoveryContinuationCount > 0) {
           return 'edit_recovery_exhausted'
         }

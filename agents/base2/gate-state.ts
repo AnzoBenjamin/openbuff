@@ -398,7 +398,9 @@ export type Base2ActiveWorkState = Base2GateState & {
    * read by reviewerProtocolBlocked / skipReviewerForReviewableScope / the
    * reviewer-spawn gate. Backward-compatible: pre-split serialized state
    * lacks the field; rehydration derives it one-time from the token (`??=`),
-   * so an in-flight protocol-blocked turn keeps its guard armed.
+   * so an in-flight protocol-blocked turn keeps its guard armed. On a later
+   * turn the gate checks for bypass authorization before resetting the latch
+   * and retry budget for a fresh bounded reviewer attempt.
    */
   reviewerProtocolAttestationFailed?: boolean
   /**

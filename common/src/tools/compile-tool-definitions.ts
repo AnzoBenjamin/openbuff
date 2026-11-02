@@ -2,6 +2,8 @@ import z from 'zod/v4'
 
 import { publishedTools } from './constants'
 import { toolParams } from './list'
+import { applyToolSchemaConstraints } from './provider-schema'
+import type { JSONSchema7 } from 'ai'
 import type { $ToolParams } from './constants'
 
 /**
@@ -25,7 +27,10 @@ export function compileToolJsonSchemas(): Record<string, unknown> {
   const artifacts: Record<string, unknown> = {}
   for (const toolName of publishedTools) {
     const parameterSchema = resolveToolParameterSchema(toolParams[toolName])
-    artifacts[toolName] = z.toJSONSchema(parameterSchema, { io: 'input' })
+    artifacts[toolName] = applyToolSchemaConstraints(
+      z.toJSONSchema(parameterSchema, { io: 'input' }) as JSONSchema7,
+      toolName,
+    )
   }
   return artifacts
 }
@@ -294,8 +299,6 @@ function getTypeFromJsonSchema(prop: any, context: string): string {
  */
 function isEmptyJsonSchema(prop: any): boolean {
   return (
-    prop !== null &&
-    typeof prop === 'object' &&
-    Object.keys(prop).length === 0
+    prop !== null && typeof prop === 'object' && Object.keys(prop).length === 0
   )
 }

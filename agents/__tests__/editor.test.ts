@@ -659,7 +659,7 @@ describe('editor agent', () => {
       )
     })
 
-    test('repeats fresh-read recovery turns until the step cap ends them', () => {
+    test('bounds repeated identical recovery directives and reports exhaustion', () => {
       const generator = editor.handleSteps!({
         agentState: createMockAgentState([]),
         logger: noopLogger as any,
@@ -718,8 +718,7 @@ describe('editor agent', () => {
         }).value,
       ).toBe('STEP')
 
-      // Continuations are unlimited: a SECOND stepsComplete with the same
-      // pending recovery yields ANOTHER recovery directive, not the receipt.
+      // A second directive is allowed for a provider that stopped prematurely.
       const secondRecovery = generator.next({
         agentState: failedState,
         toolResult: undefined,
@@ -738,14 +737,19 @@ describe('editor agent', () => {
         }).value,
       ).toBe('STEP')
 
-      // The receipt is reached only when the run stopped at the explicit step
-      // cap (hitStepCap: true), which the generator must honor by breaking out
-      // of the continuation loop.
+      const thirdRecovery = generator.next({
+        agentState: failedState,
+        toolResult: undefined,
+        stepsComplete: true,
+      })
+      expect((thirdRecovery.value as any).toolName).toBe('add_message')
+      generator.next({ agentState: failedState, toolResult: undefined, stepsComplete: false })
+
+      // The fourth identical continuation stops even without a step cap.
       const finalReceipt = generator.next({
         agentState: failedState,
         toolResult: undefined,
         stepsComplete: true,
-        hitStepCap: true,
       })
       expect((finalReceipt.value as any).input.output.failureStage).toBe(
         'edit_recovery_exhausted',
@@ -754,8 +758,39 @@ describe('editor agent', () => {
         paths: ['src/live.ts', 'src/live.test.ts'],
         preferredStrategy: 'replace_range',
         errorCode: 'no_match',
-        attempts: 2,
+        attempts: 3,
       })
+    })
+
+    test('directs a retry after a successful required recovery read', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]), logger: noopLogger as any, params: {},
+      })
+      generator.next()
+      const state = createMockAgentState([
+        { role: 'tool', toolName: 'edit_transaction', content: [{ type: 'json', value: {
+          requiresFreshRead: true, recovery: { paths: ['src/live.ts'] },
+        } }] },
+        { role: 'tool', toolName: 'read_files', content: [{ type: 'json', value: {
+          results: [{ path: 'src/live.ts', status: 'ok', editAnchor: { readCapability: 'cap.v3.fresh' } }],
+        } }] },
+      ])
+      const result = generator.next({ agentState: state, toolResult: undefined, stepsComplete: true })
+      const directive = (result.value as any).input.content
+      expect(directive).toContain('Required reads are complete or unnecessary')
+      expect(directive).not.toContain('Read the exact current source for:')
+    })
+
+    test('does not require a read when structured recovery says it is unnecessary', () => {
+      const generator = editor.handleSteps!({
+        agentState: createMockAgentState([]), logger: noopLogger as any, params: {},
+      })
+      generator.next()
+      const state = createMockAgentState([{ role: 'tool', toolName: 'edit_transaction', content: [{
+        type: 'json', value: { recovery: { paths: ['src/live.ts'], requiresFreshRead: false } },
+      }] }])
+      const result = generator.next({ agentState: state, toolResult: undefined, stepsComplete: true })
+      expect((result.value as any).input.content).toContain('Required reads are complete or unnecessary')
     })
 
     test('includes Attempted paths from extractAttemptedEditFiles in blockedReason', () => {

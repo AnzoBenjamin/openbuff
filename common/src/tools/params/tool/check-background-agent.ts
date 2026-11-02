@@ -34,10 +34,9 @@ const inputSchema = z
       .int()
       .min(0)
       .max(600)
-      .default(0)
       .optional()
       .describe(
-        'Max seconds to wait for new chunks / the wait_for pattern. 0 (default) returns immediately with whatever new chunks exist (poll mode); >0 blocks up to this long (follow mode).',
+        'Max seconds to wait for new chunks / the wait_for pattern. 0 returns immediately, even with wait_for. A positive value enables follow mode. When omitted, wait_for follows for at most 30 seconds; without wait_for the call polls immediately.',
       ),
     cancel: z
       .boolean()
@@ -55,7 +54,7 @@ const description = `
 Poll or follow a spawn_agents({ background: true }) agent job. Returns agent_chunk \`events\`, \`nextCursor\`, \`state\`, and result/error when finished.
 
 - Poll: immediate chunks since cursor (or last poll if omitted).
-- Follow (wait_for and/or timeout_seconds > 0): block until match or settle; timeout is observational. Set cancel true to abort.
+- Follow (timeout_seconds > 0, or wait_for with timeout omitted): block until match or settle; timeout is observational. Explicit timeout_seconds: 0 always polls. Set cancel true to abort.
 - Thread nextCursor; truncated/dropped mark eviction. In-process only — cannot outlive this CLI session.
 
 Example:

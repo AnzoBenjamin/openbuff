@@ -1658,6 +1658,66 @@ describe('context-pruner handleSteps', () => {
     expect(content).toContain('inspected files: test.ts')
   })
 
+  test('shared operational patterns preserve pins without leaking them into repeated summaries', () => {
+    const operationalLines = [
+      'Reviewer findings from code-reviewer:',
+      'Reviewer findings from SECURITY-REVIEWER:',
+      'BLOCKING: Keep this reviewer feedback intact.',
+      'Open question (block next step):',
+      'Open questions (block next step):',
+      '- Q1 — Keep existing runtime behavior.',
+      '* Q2: Preserve the CLI display.',
+      '- Q3- Continue with validation.',
+      'Workflow todo progress (authoritative resumable state):',
+      'Completed 1/3.',
+      'Next workflow action: Run focused tests.',
+      'Continue from this item; do not restart completed work.',
+    ]
+    const runtimeMessage = createMessage(
+      'user',
+      [
+        'Harness pinned active-work state (controlling state; do not ignore):',
+        'Current phase: awaiting_validation',
+        ...operationalLines,
+        '',
+        'Ordinary request context stays in the summary.',
+      ].join('\n'),
+    )
+    let history: Message[] = [
+      createMessage('user', 'Keep the public behavior unchanged.'),
+      runtimeMessage,
+      runtimeMessage,
+    ]
+
+    for (let round = 0; round < 3; round += 1) {
+      const results = runHandleSteps(history, 250000, 200000)
+      const summary: Message = results[0].input.messages[0]
+      const content: string = results[0].input.messages[0].content[0].text
+      const pinned = content.match(
+        /<pinned_active_work_state>([\s\S]*?)<\/pinned_active_work_state>/,
+      )?.[1]
+      expect(pinned).toBeDefined()
+      const pinnedLines = (pinned ?? '').split('\n')
+      const ordinarySummary = content
+        .replace(
+          /<pinned_active_work_state>[\s\S]*?<\/pinned_active_work_state>/g,
+          '',
+        )
+        .replace(/<knowledge_memory>[\s\S]*?<\/knowledge_memory>/g, '')
+
+      for (const line of operationalLines) {
+        expect(pinnedLines.filter((entry) => entry === line)).toHaveLength(1)
+        expect(ordinarySummary).not.toContain(line)
+      }
+      expect(content.match(/<pinned_active_work_state>/g)).toHaveLength(1)
+      expect(content.match(/<knowledge_memory>/g)).toHaveLength(1)
+      expect(ordinarySummary).toContain(
+        'Ordinary request context stays in the summary.',
+      )
+      history = [summary, runtimeMessage, createMessage('assistant', 'More work.')]
+    }
+  })
+
   test('pins literal reviewer blocker lines under tight budgets and repeated compaction', () => {
     const firstMessages = [
       createMessage('user', 'Implement the feature'),

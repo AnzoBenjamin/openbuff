@@ -279,14 +279,12 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).not.toContain('write_todos')
   })
 
-  test('token budget: always-on full tool surface is under 23.9k', async () => {
-    // The deliberate new default is the full 35-tool surface (measured ~22.7k
-    // tokens after P4-T2 added extract_symbol; ~21.4k before it). This is a
-    // regression ceiling for that decision, not a core-only budget. Kept
-    // tight (~5% headroom) so an accidental surface expansion trips it
-    // instead of growing silently.
+  test('token budget: always-on full tool surface is under 29.5k', async () => {
+    // Field descriptions are retained for tool argument clarity; the measured
+    // full native-tool surface is ~27.6k. This ceiling keeps about 6% growth
+    // headroom and does not include the agent catalog or other prompt text.
     const tools = createBase2('default').toolNames ?? []
-    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(23_900)
+    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(29_500)
   })
 
   test('programmaticToolNames unchanged vs today', () => {

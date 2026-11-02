@@ -243,6 +243,24 @@ const definition: AgentDefinition = {
       'apply_smart_patch',
     ]
     const VALIDATION_TOOLS = ['run_terminal_command', 'basher']
+
+    // Canonical copies of operational-state patterns shared across parsing,
+    // extraction, and sanitization. Keep them here so the serialized handler
+    // remains self-contained. Only block-removal patterns are global; patterns
+    // used with test()/match() stay stateless.
+    const OPERATIONAL_STATE_PATTERNS = {
+      pinnedBlock:
+        /<pinned_active_work_state>[\s\S]*?<\/pinned_active_work_state>\n*/g,
+      knowledgeMemoryBlock: /<knowledge_memory>[\s\S]*?<\/knowledge_memory>\n*/g,
+      reviewerHeader:
+        /^Reviewer findings from (?:code-reviewer|security-reviewer):/i,
+      blockingQuestionsHeader: /^Open questions?\s*\(block/i,
+      questionBullet: /^[-*]\s*Q\d+\b\s*[:\u2014-]/i,
+      workflowHeader: /^Workflow todo progress \(authoritative resumable state\):/i,
+      workflowCompleted: /^Completed \d+\/\d+\./i,
+      workflowContinuation: /^Continue from this item;/i,
+    }
+
     // =============================================================================
     // Helper Functions (must be inside handleSteps since it's serialized to a string)
     // =============================================================================
@@ -808,11 +826,8 @@ const definition: AgentDefinition = {
       if (!summaryText.trim()) return []
 
       const withoutPinnedState = summaryText
-        .replace(
-          /<pinned_active_work_state>[\s\S]*?<\/pinned_active_work_state>\n*/g,
-          '',
-        )
-        .replace(/<knowledge_memory>[\s\S]*?<\/knowledge_memory>\n*/g, '')
+        .replace(OPERATIONAL_STATE_PATTERNS.pinnedBlock, '')
+        .replace(OPERATIONAL_STATE_PATTERNS.knowledgeMemoryBlock, '')
         .trim()
       if (!withoutPinnedState) return []
 
@@ -2383,11 +2398,7 @@ const definition: AgentDefinition = {
           continue
         }
 
-        if (
-          /^Workflow todo progress \(authoritative resumable state\):/i.test(
-            trimmed,
-          )
-        ) {
+        if (OPERATIONAL_STATE_PATTERNS.workflowHeader.test(trimmed)) {
           flushWorkflowTodoLines()
           workflowTodoLines = [trimmed]
           workflowTodoHasNextAction = false
@@ -2395,7 +2406,7 @@ const definition: AgentDefinition = {
         }
 
         if (workflowTodoLines.length > 0) {
-          if (/^Completed \d+\/\d+\./i.test(trimmed)) {
+          if (OPERATIONAL_STATE_PATTERNS.workflowCompleted.test(trimmed)) {
             workflowTodoLines.push(trimmed)
             continue
           }
@@ -2407,7 +2418,7 @@ const definition: AgentDefinition = {
             workflowTodoHasNextAction = nextActionMatch[1].trim().length > 0
             continue
           }
-          if (/^Continue from this item;/i.test(trimmed)) {
+          if (OPERATIONAL_STATE_PATTERNS.workflowContinuation.test(trimmed)) {
             workflowTodoLines.push(trimmed)
             continue
           }
@@ -2439,11 +2450,7 @@ const definition: AgentDefinition = {
 
         if (isInFinalResponseAllowedState) continue
 
-        if (
-          /^Reviewer findings from (?:code-reviewer|security-reviewer):/i.test(
-            trimmed,
-          )
-        ) {
+        if (OPERATIONAL_STATE_PATTERNS.reviewerHeader.test(trimmed)) {
           addUniqueLine(pinned, trimmed)
           continue
         }
@@ -2456,12 +2463,12 @@ const definition: AgentDefinition = {
         // Pin plan-declared blocking open questions (e.g. "Open questions (block Milestone 4)")
         // verbatim, plus their Q\d sub-bullets, so a resuming agent sees the controlling
         // fact without re-reading STATUS.md.
-        if (/^Open questions?\s*\(block/i.test(trimmed)) {
+        if (OPERATIONAL_STATE_PATTERNS.blockingQuestionsHeader.test(trimmed)) {
           addUniqueLine(pinned, trimmed)
           continue
         }
 
-        if (/^[-*]\s*Q\d+\b\s*[:\u2014-]/i.test(trimmed)) {
+        if (OPERATIONAL_STATE_PATTERNS.questionBullet.test(trimmed)) {
           addUniqueLine(pinned, trimmed)
           continue
         }
@@ -2485,11 +2492,8 @@ const definition: AgentDefinition = {
       // neither the skip rules nor the surviving summary lines carry them.
       const withoutUnsafeChars = stripUnsafeTextChars(text)
       const withoutPinnedState = withoutUnsafeChars
-        .replace(
-          /<pinned_active_work_state>[\s\S]*?<\/pinned_active_work_state>\n*/g,
-          '',
-        )
-        .replace(/<knowledge_memory>[\s\S]*?<\/knowledge_memory>\n*/g, '')
+        .replace(OPERATIONAL_STATE_PATTERNS.pinnedBlock, '')
+        .replace(OPERATIONAL_STATE_PATTERNS.knowledgeMemoryBlock, '')
       const withoutSystemReminders = withoutPinnedState.replace(
         /<system_reminder>[\s\S]*?<\/system_reminder>\n*/g,
         '',
@@ -2504,29 +2508,21 @@ const definition: AgentDefinition = {
       for (const line of withoutSystemReminders.split('\n')) {
         const trimmed = line.trim()
         const isWorkflowTodoProgressLine =
-          /^Workflow todo progress \(authoritative resumable state\):/i.test(
-            trimmed,
-          ) ||
-          /^Completed \d+\/\d+\./i.test(trimmed) ||
+          OPERATIONAL_STATE_PATTERNS.workflowHeader.test(trimmed) ||
+          OPERATIONAL_STATE_PATTERNS.workflowCompleted.test(trimmed) ||
           /^Next workflow action:/i.test(trimmed) ||
-          /^Continue from this item;/i.test(trimmed)
+          OPERATIONAL_STATE_PATTERNS.workflowContinuation.test(trimmed)
         const isOperationalLine =
           /^(Harness pinned active-work state|Open reviewer blockers\/feedback|Open reviewer finding records|RF-\d+-[a-f0-9]+\s+\[|Every repair edit must explicitly address|Role: root orchestrator|Current phase:|Pending validation\/reviewer gate files:|Historical changed files:|Historical touched files:|Latest work summary:|Last validation summary:|Next required action:|Todos:|Remaining:)/i.test(
             trimmed,
           ) ||
           isActionableReviewerLine(trimmed) ||
           /^(?:[-*]\s*)?NON_BLOCKING\b/i.test(trimmed) ||
-          /^Reviewer findings from (?:code-reviewer|security-reviewer):/i.test(
-            trimmed,
-          ) ||
-          /^Open questions?\s*\(block/i.test(trimmed) ||
-          /^[-*]\s*Q\d+\b\s*[:\u2014-]/i.test(trimmed)
+          OPERATIONAL_STATE_PATTERNS.reviewerHeader.test(trimmed) ||
+          OPERATIONAL_STATE_PATTERNS.blockingQuestionsHeader.test(trimmed) ||
+          OPERATIONAL_STATE_PATTERNS.questionBullet.test(trimmed)
 
-        if (
-          /^Workflow todo progress \(authoritative resumable state\):/i.test(
-            trimmed,
-          )
-        ) {
+        if (OPERATIONAL_STATE_PATTERNS.workflowHeader.test(trimmed)) {
           skippingTodoList = false
           skippingWorkflowTodoProgress = true
           continue

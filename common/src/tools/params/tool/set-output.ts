@@ -16,16 +16,16 @@ import {
 
 const toolName = 'set_output'
 const endsAgentStep = false
-// Reviewer-only scope: these are the array/object fields of the reviewer
-// receipt schema (agents/reviewer/code-reviewer.ts). Stringified containers
-// under any other field name are intentionally left as strings; a future
-// non-reviewer agent with stringified array/object fields must add its own
-// field names here (or get its own normalization pass).
+// Receipt fields that are containers in reviewer and advisory schemas.
+// Other strings are left untouched, including prose that happens to be JSON.
 const structuredContainerFields = new Set([
   'reviewedFiles',
   'findings',
   'dimensions',
   'requirementCoverage',
+  'advisories',
+  'evidence',
+  'recommendations',
 ])
 
 // Receipt-shape constants (GATE_CRITICAL_KEYS, ATTESTATION_CORE_KEYS,
@@ -76,6 +76,17 @@ export const normalizeStructuredOutputValue = (
         return value
       }
     }
+    // A single advisory is an unambiguous one-element list. Do not wrap text
+    // that resembles an incomplete serialized container: a truncated array
+    // must still be rejected rather than accepted as an advisory string.
+    if (
+      fieldName === 'advisories' &&
+      candidate.length > 0 &&
+      !candidate.startsWith('[') &&
+      !candidate.startsWith('{')
+    ) {
+      return [value]
+    }
     return value
   }
   if (Array.isArray(value)) {
@@ -121,7 +132,7 @@ Use this tool to publish an explicit structured receipt when your instructions r
 Note that the output schema is provided dynamically in a user prompt further down in the conversation. Be sure to follow what the latest output schema is when using this tool.
 
 Please set the output with all the information and analysis you want to pass on. Pass native object fields; never call JSON.stringify or place serialized JSON text inside data. If you just want to send a simple message, use an object with the key "message" and value of the message you want to send. Always pass a real JSON object literal (not a quoted string, not a markdown code block, not JSON.stringify output); if your agent has a declared output schema, include every field that schema marks required.
-The result value {"message": "Output set"} is a CONFIRMATION that your output was stored — never echo it back as a payload. Publish your structured receipt once per run; if your outcome genuinely changed, re-emit the complete receipt object rather than a fragment.
+The result value {"message": "Output set"} is a CONFIRMATION that your output was stored — never echo it back as a payload. If validation rejects the call, correct the reported fields and call set_output again with the complete receipt. Once accepted, publish another receipt only if your outcome genuinely changes; send the complete object rather than a fragment.
 Example:
 ${$getNativeToolCallExampleString({
   toolName,
@@ -143,6 +154,8 @@ export const setOutputParams = {
       type: z.literal('json'),
       value: z.object({
         message: z.string(),
+        errorMessage: z.string().optional(),
+        status: z.literal('ignored').optional(),
       }),
     }),
   ]),
