@@ -3,7 +3,7 @@ import React from 'react'
 import { useTheme } from '../../hooks/use-theme'
 import { defineToolComponent } from './types'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
-import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
+import { getStructuredErrorMessages, getToolOutputRecords } from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig, ToolBlock } from './types'
 import type { ChatTheme } from '../../types/theme-system'
@@ -423,25 +423,40 @@ export const SetOutputComponent = defineToolComponent({
     const width = Math.max(20, options.availableWidth - 4)
     const core = extractReceiptCore(toolBlock.input)
     const errors = getStructuredErrorMessages(toolBlock.outputRaw)
+    const ignored = getToolOutputRecords(toolBlock.outputRaw).find(
+      (record) => record.status === 'ignored',
+    )
     const failed =
       toolBlock.lifecycle === 'failed' ||
       toolBlock.lifecycle === 'cancelled' ||
       errors.length > 0
     const failureMessage =
       errors.join('\n') || (failed ? toolBlock.output : undefined)
+    const outcomeKind = failed ? 'bad' : ignored ? 'warn' : core.outcomeKind
 
     const headerParts = [
-      OUTCOME_GLYPH[failed ? 'bad' : core.outcomeKind],
+      OUTCOME_GLYPH[outcomeKind],
       failed
         ? `output ${toolBlock.lifecycle === 'cancelled' ? 'cancelled' : 'failed'}`
-        : core.outcome
+        : ignored
+          ? 'output ignored'
+          : core.outcome
           ? core.outcome
           : 'output set',
     ]
     const header = headerParts.join(' ')
-    const color = outcomeColor(failed ? 'bad' : core.outcomeKind, liveTheme)
+    const color = outcomeColor(outcomeKind, liveTheme)
 
     const lines: React.ReactNode[] = []
+    if (ignored && typeof ignored.message === 'string') {
+      lines.push(
+        <text key="ignored" style={{ wrapMode: 'word' }}>
+          <span fg={liveTheme.muted}>
+            {wrapTextPreservingNewlines(ignored.message, width)}
+          </span>
+        </text>,
+      )
+    }
     if (failureMessage) {
       lines.push(
         <text key="error" style={{ wrapMode: 'word' }}>
@@ -451,7 +466,7 @@ export const SetOutputComponent = defineToolComponent({
         </text>,
       )
     }
-    if (core.message) {
+    if (core.message && !ignored) {
       lines.push(
         <text key="message" style={{ wrapMode: 'word' }}>
           <span fg={liveTheme.foreground}>

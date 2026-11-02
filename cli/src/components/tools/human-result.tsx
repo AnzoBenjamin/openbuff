@@ -268,10 +268,20 @@ export interface DetailRowProps {
   /** Wrap width for a string value. */
   width: number
   valueColor?: string
+  /**
+   * @deprecated no-op; retained for source compatibility. Detail rows always
+   * render in the default theme font, so this flag has no effect. It stays on
+   * the exported props so existing callers that spread a shared row-options
+   * object containing `monospace` into `<DetailRow {...rowOptions} />` keep
+   * compiling. Drop it in a clearly marked breaking release.
+   */
   monospace?: boolean
 }
 
-/** One dim `label: value` detail row under a header. */
+/**
+ * One dim `label: value` detail row under a header. `monospace` is accepted
+ * but intentionally unused (deprecated no-op kept for source compatibility).
+ */
 export function DetailRow({
   label,
   value,

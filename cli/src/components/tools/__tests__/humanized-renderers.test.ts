@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 import { initializeThemeStore } from '../../../hooks/use-theme'
 import { chatThemes } from '../../../utils/theme-system'
+import { DetailRow } from '../human-result'
 import { getToolComponent, renderToolComponent } from '../registry'
 
 import type { ToolBlock } from '../types'
@@ -51,6 +52,62 @@ function render(
   )
   return renderToStaticMarkup(config?.content as React.ReactElement)
 }
+
+describe('DetailRow rendering', () => {
+  test('preserves string wrapping, explicit newlines, labels, and value colors', () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(DetailRow, {
+        label: 'Path',
+        value: 'abcdefghij\nok',
+        width: 4,
+        valueColor: '#123456',
+      }),
+    )
+
+    expect(markup).toContain('Path: ')
+    expect(markup).toContain('fg="#123456"')
+    expect(markup).toContain('abcd\nefgh\nij\nok')
+  })
+
+  test('preserves React node values without adding a label or wrapping them', () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(DetailRow, {
+        value: React.createElement('span', { id: 'node-value' }, 'node value'),
+        width: 1,
+      }),
+    )
+
+    expect(markup).toContain('<span id="node-value">node value</span>')
+    expect(markup).not.toContain(': ')
+    expect(markup).not.toContain('\n')
+  })
+
+  test('clamps non-positive string widths to one column', () => {
+    for (const width of [0, -2]) {
+      const markup = renderToStaticMarkup(
+        React.createElement(DetailRow, { value: 'ab', width }),
+      )
+
+      expect(markup).toContain('a\nb')
+    }
+  })
+
+  test('accepts the deprecated monospace prop as a source-compatible no-op', () => {
+    // `monospace` stays on the exported DetailRowProps (marked @deprecated) so
+    // callers that spread a shared row-options object keep compiling; the
+    // component ignores it. Both renders must be byte-identical.
+    const rowOptions = { value: 'row value', width: 20, monospace: true }
+    const withDeprecatedProp = renderToStaticMarkup(
+      React.createElement(DetailRow, { label: 'Path', ...rowOptions }),
+    )
+    const withoutDeprecatedProp = renderToStaticMarkup(
+      React.createElement(DetailRow, { label: 'Path', value: 'row value', width: 20 }),
+    )
+
+    expect(withDeprecatedProp).toBe(withoutDeprecatedProp)
+    expect(withDeprecatedProp).toContain('row value')
+  })
+})
 
 describe('humanized renderers replace raw-JSON fallbacks', () => {
   test('recall_context renders archived matches, not the envelope', () => {

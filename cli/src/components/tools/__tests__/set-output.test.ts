@@ -234,7 +234,7 @@ describe('set_output rendering registration', () => {
     const block = {
       type: 'tool', toolName: 'set_output', toolCallId: 'rejected',
       input: { data: { verdict: 'LOOKS_GOOD' } },
-      lifecycle: 'completed',
+      lifecycle: 'succeeded',
       outputRaw: [{ type: 'json', value: {
         message: 'Output validation error: verdict is required',
         errorMessage: 'Output validation error: verdict is required',
@@ -251,6 +251,24 @@ describe('set_output rendering registration', () => {
     expect(markup).toContain('output failed')
     expect(markup).toContain('verdict is required')
     expect(preview).not.toContain('LOOKS_GOOD')
+  })
+
+  test('shows when a redundant receipt was ignored instead of claiming it was set', () => {
+    const block = {
+      type: 'tool', toolName: 'set_output', toolCallId: 'ignored',
+      input: { data: { message: 'Output set' } }, lifecycle: 'succeeded',
+      outputRaw: [{ type: 'json', value: { status: 'ignored', message: 'The previous receipt was kept.' } }],
+    } as const
+    const Render = () => {
+      const config = SetOutputComponent.render(block, chatThemes.dark, {
+        availableWidth: 100, indentationOffset: 0, labelWidth: 0,
+      })
+      return config.content as React.ReactElement
+    }
+    const markup = renderToStaticMarkup(React.createElement(Render))
+    expect(markup).toContain('output ignored')
+    expect(markup).toContain('The previous receipt was kept.')
+    expect(markup).not.toContain('Output set')
   })
 })
 

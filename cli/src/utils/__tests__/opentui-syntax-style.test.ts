@@ -24,6 +24,11 @@ import type { MarkdownPalette } from '../markdown-renderer'
 const realOpenTuiCore = (await import(
   '@opentui/core'
 )) as typeof import('@opentui/core')
+// Bun patches module namespace bindings when mock.module is registered. Keep
+// the original object and SyntaxStyle separately so the disarmed mock cannot
+// recursively call itself when another suite uses the real renderer.
+const realOpenTuiCoreSnapshot = { ...realOpenTuiCore }
+const realSyntaxStyle = realOpenTuiCore.SyntaxStyle
 
 interface StubSyntaxStyle {
   stubId: number
@@ -37,13 +42,13 @@ let coreStubArmed = true
 mock.module('@opentui/core', () => ({
   // Real exports first (registry-wide leak guard); the counting stub below
   // must keep winning while armed.
-  ...realOpenTuiCore,
+  ...realOpenTuiCoreSnapshot,
   SyntaxStyle: {
     fromStyles: (styles: Record<string, unknown>) => {
       if (!coreStubArmed) {
-        return realOpenTuiCore.SyntaxStyle.fromStyles(
+        return realSyntaxStyle.fromStyles(
           styles as Parameters<
-            typeof realOpenTuiCore.SyntaxStyle.fromStyles
+            typeof realSyntaxStyle.fromStyles
           >[0],
         )
       }
@@ -63,6 +68,17 @@ const {
   createCodeSyntaxStyle,
   clearSyntaxStyleCachesForTests,
 } = await import('../opentui-syntax-style')
+
+test('the disarmed SyntaxStyle mock delegates to the captured implementation', () => {
+  coreStubArmed = false
+  try {
+    const style = realOpenTuiCore.SyntaxStyle.fromStyles({})
+    expect(style).toBeInstanceOf(realSyntaxStyle)
+    style.destroy()
+  } finally {
+    coreStubArmed = true
+  }
+})
 
 // Macrotask-yield seams under regression pin (see the 'macrotask-yield
 // regression pins' describe below). The indexer side is imported through the

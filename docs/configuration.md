@@ -230,6 +230,20 @@ Precedence: agent template `maxOutputTokens` > per-model
 `modelCapabilities[modelId].context.outputTokens` >
 `defaultCapabilities.context.outputTokens` > provider default behavior.
 
+For example, set `modelCapabilities["your-model"].context.outputTokens` in
+your provider's `openbuff.d/providers.json` to a value supported by that model.
+This is a requested ceiling, not a way to exceed the provider's actual output
+or context limit. The shipped base and editor agents explicitly request 64,000
+tokens, so their template value takes precedence over provider configuration.
+
+Tool and child-agent output has separate limits. Child outputs that fit the
+256,000-character parent budget retain their complete strings; structural
+limits may still apply. When output is compacted, the receipt reports truncation
+and, when persistence succeeds, an `artifactPath` containing the full result.
+Read that artifact in ranges if it is too large for a single read. The
+provider's `maxOutputBytes` setting controls a transport diagnostic, not the
+model's token ceiling or the size of these parent receipts.
+
 Without any of these, the provider's own default applies (the
 Anthropic-compatible path defaults to a small ~4k cap, which can truncate
 large tool-call payloads such as multi-edit transactions mid-JSON). Caveat:

@@ -138,15 +138,9 @@ const { buildDefaultParsers, getSharedTreeSitterClient, getTreeSitterDataPath, r
   '../tree-sitter-client'
 )
 
-// Real (non-stubbed) client for the highlighted-code fixture below. The
-// registry-wide '@opentui/core' mock above only affects a fresh bare
-// specifier; the '?real' query bypasses that registry entry, so this binds
-// the real TreeSitterClient/addDefaultParsers while the stubbed-suite import
-// above still binds the stubs (same mock-leak-guard pattern as
-// content-with-markdown.test.tsx).
-const realOpenTuiModule = (await import(
-  '@opentui/core?real' as string
-)) as unknown as typeof import('@opentui/core')
+// Preserve the actual constructor before the registry-wide mock is installed.
+// A query-suffixed import can still resolve to the mocked Bun module.
+const realOpenTuiModule = realOpenTuiCoreSnapshot
 
 const snippetFor = (filetype: string): string =>
   filetype === 'typescript' || filetype === 'typescriptreact'
@@ -193,11 +187,8 @@ const highlightWithRealClient = async (
     // "grammars unavailable" and skips the real-token assertion.
     return null
   } finally {
-    // Destroy must run even on an early return so the spawned tree-sitter
-    // worker is reaped rather than leaked across the test process. The real
-    // client tears down via the module-level singleton destroyer (there is
-    // no instance destroy method).
-    await realOpenTuiModule.destroyTreeSitterClient().catch(() => {})
+    // This fixture constructs its own client, not the module singleton.
+    await client?.destroy()
   }
 }
 
@@ -433,16 +424,16 @@ describe('highlighted-code fixture (REAL TreeSitterClient, no stub)', () => {
       initTimeout: 10_000,
     })
     try {
-      // The grammar wasm was never registered (addDefaultParsers not called),
-      // so the worker has no TypeScript parser: the real client surfaces that
+      // This filetype is never registered, even if earlier tests registered
+      // TypeScript globally. The real client surfaces that
       // degradation either as a THROWN error, an error/warning on the result,
       // or empty highlights. Every one of those is the availability signal
       // the real-fixture gate keys on.
       let degraded: boolean
       try {
         const result = await client.highlightOnce(
-          snippetFor('typescript'),
-          'typescript',
+          'const x = 1',
+          'openbuff-unregistered-test-filetype',
         )
         degraded =
           Boolean(result.error) ||
@@ -455,8 +446,7 @@ describe('highlighted-code fixture (REAL TreeSitterClient, no stub)', () => {
       }
       expect(degraded).toBe(true)
     } finally {
-      // Module-level singleton teardown (the client has no instance destroy).
-      await realOpenTuiModule.destroyTreeSitterClient().catch(() => {})
+      await client.destroy()
     }
   })
 })

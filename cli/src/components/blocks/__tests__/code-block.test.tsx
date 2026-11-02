@@ -173,9 +173,8 @@ const buildRealKeywordStyleAndHighlights = async (): Promise<{
   } catch {
     return null
   } finally {
-    // Module-level singleton teardown (the real client has no instance
-    // destroy method).
-    await realOpenTuiModule.destroyTreeSitterClient().catch(() => {})
+    // This fixture constructs its own client, not the module singleton.
+    await client?.destroy()
   }
 }
 

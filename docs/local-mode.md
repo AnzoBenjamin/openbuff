@@ -294,6 +294,7 @@ provider can declare compatibility behavior:
 - `supportsRequiredToolChoice`: set `false` for providers that accept tools but reject `tool_choice: "required"`.
 - `supportsStopSequences`: set `true` only for OpenAI-compatible providers that accept the `stop` request field; otherwise Openbuff enforces stop sequences locally.
 - `stripProviderMetadata`: omits Codebuff/OpenRouter-specific provider metadata.
+- `reasoningReplay`: set to `"required"` for OpenAI-compatible endpoints that require assistant reasoning in conversation history. Openbuff retains the streamed reasoning and sends `reasoning_content` on each assistant message. This is enabled automatically for `api.ifm.ai`; set it to `"none"` to override that default. Reasoning replay increases stored history and input tokens. Earlier sessions whose reasoning was discarded cannot recover the original trace.
 
 ## Model output degeneration
 
