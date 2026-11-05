@@ -32,6 +32,7 @@ const REMOVED_PATCH_REPLACEMENT = 'edit_transaction'
 export type LegacyPatchOperation = {
   path: string | null
   diff: string | null
+  outcome?: string
 }
 
 /**
@@ -47,6 +48,9 @@ type LegacyPatchStatus =
   | 'cancelled'
   | 'unconfirmed'
   | 'not_applied'
+  | 'partial'
+  | 'rolled_back'
+  | 'rollback_incomplete'
 
 const statusLabel: Record<LegacyPatchStatus, string> = {
   queued: 'queued',
@@ -56,11 +60,20 @@ const statusLabel: Record<LegacyPatchStatus, string> = {
   cancelled: 'cancelled',
   unconfirmed: 'unconfirmed',
   not_applied: 'not applied',
+  partial: 'partial',
+  rolled_back: 'rolled back',
+  rollback_incomplete: 'rollback incomplete · disk state uncertain',
 }
 
 /** Every non-applied status is labeled with the literal words `not applied`. */
 function describeStatus(status: LegacyPatchStatus): string {
   if (status === 'applied') return statusLabel.applied
+  if (
+    status === 'partial' ||
+    status === 'rolled_back' ||
+    status === 'rollback_incomplete'
+  )
+    return statusLabel[status]
   if (status === 'not_applied') return statusLabel.not_applied
   return `${statusLabel[status]} (not applied)`
 }
@@ -75,7 +88,13 @@ function getLegacyPatchStatus(
   const mutation = getCanonicalMutationResult(toolBlock.outputRaw)
   if (mutation) {
     const outcome = mutation.outcome
-    if (outcome === 'applied' || outcome === 'partial') return 'applied'
+    if (
+      outcome === 'applied' ||
+      outcome === 'partial' ||
+      outcome === 'rolled_back' ||
+      outcome === 'rollback_incomplete'
+    )
+      return outcome
     if (outcome === 'failed') return 'failed'
     if (outcome === 'unconfirmed') return 'unconfirmed'
     // `not_applied`, `rolled_back` and `rollback_incomplete` all mean the
@@ -85,6 +104,8 @@ function getLegacyPatchStatus(
   if (getStructuredErrorMessages(toolBlock.outputRaw).length > 0) {
     return 'failed'
   }
+  if (toolBlock.lifecycle === 'failed') return 'failed'
+  if (toolBlock.lifecycle === 'running') return 'pending'
   if (toolBlock.lifecycle === 'cancelled') return 'cancelled'
   const hasErrorMessage = getToolOutputRecords(toolBlock.outputRaw).some(
     (record) =>
@@ -96,7 +117,10 @@ function getLegacyPatchStatus(
   const output = typeof toolBlock.output === 'string' ? toolBlock.output : ''
   const hasOutput =
     toolBlock.outputRaw !== undefined || output.trim().length > 0
-  if (!hasOutput) return toolBlock.queued === true ? 'queued' : 'pending'
+  if (!hasOutput)
+    return toolBlock.queued === true || toolBlock.lifecycle === 'queued'
+      ? 'queued'
+      : 'unconfirmed'
   // A non-empty string output is not success evidence by itself: the removed
   // patch tools recorded failure prose the same way. The phrase list is
   // literal and ordered from most specific to least so genuine success prose
@@ -117,7 +141,11 @@ function getLegacyPatchStatus(
   if (notAppliedPhrases.some((phrase) => normalizedOutput.includes(phrase))) {
     return 'not_applied'
   }
-  return 'applied'
+  return /(?:patch applied successfully|file written successfully|updated file|created file successfully)/i.test(
+    output,
+  )
+    ? 'applied'
+    : 'unconfirmed'
 }
 
 function coerceString(value: unknown): string | null {
@@ -138,7 +166,11 @@ function readOperationEntry(entry: unknown): LegacyPatchOperation | null {
     coerceString(record.patch) ??
     coerceString(record.unifiedDiff)
   if (!path && !diff) return null
-  return { path, diff }
+  return {
+    path,
+    diff,
+    ...(typeof record.outcome === 'string' ? { outcome: record.outcome } : {}),
+  }
 }
 
 /** Path/diff recorded on the persisted tool result rather than its input. */
@@ -208,6 +240,7 @@ export function getLegacyPatchOperations(
         {
           path: operations[0]?.path ?? recorded.path,
           diff: operations[0]?.diff ?? recorded.diff,
+          outcome: operations[0]?.outcome,
         },
       ]
     : operations
@@ -267,6 +300,9 @@ const LegacyPatchBody = ({
         >
           <text style={{ wrapMode: 'word' }}>
             {operation.path ?? 'unknown file'}
+            {operation.outcome
+              ? ` · ${operation.outcome.replaceAll('_', ' ')}`
+              : ''}
           </text>
           {operation.diff ? (
             <DiffViewer

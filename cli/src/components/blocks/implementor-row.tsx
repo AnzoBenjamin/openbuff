@@ -1,3 +1,4 @@
+import { getCanonicalMutationResult } from '../../utils/tool-result-normalizer'
 import { TextAttributes } from '@opentui/core'
 import React, { memo, useCallback, useMemo, useState } from 'react'
 
@@ -145,11 +146,25 @@ const ImplementorCard = memo(
       const diffs = new Map<string, string>()
       for (const item of timeline) {
         if (item.type === 'edit' && item.diff) {
-          diffs.set(item.content, item.diff)
+          const previous = diffs.get(item.content)
+          diffs.set(
+            item.content,
+            previous
+              ? `${previous}\n\ndiff --git a/${item.content} b/${item.content}\n${item.diff}`
+              : item.diff,
+          )
         }
       }
       return diffs
     }, [timeline])
+
+    const transactionOutcomes = (agentBlock.blocks ?? []).flatMap((block) => {
+      if (block.type !== 'tool') return []
+      const result = getCanonicalMutationResult(block.outputRaw)
+      return result && result.outcome !== 'applied'
+        ? [String(result.outcome).replaceAll('_', ' ')]
+        : []
+    })
 
     // Get status info from helper
     const {
@@ -216,6 +231,14 @@ const ImplementorCard = memo(
           </text>
         </box>
 
+        {transactionOutcomes.length ? (
+          <text fg={theme.warning}>
+            Captured transaction outcomes:{' '}
+            {transactionOutcomes.slice(-6).join(', ')} · Inspect for per-action
+            evidence
+          </text>
+        ) : null}
+
         {/* Compact strategy preview; never render raw hidden context here. */}
         {promptPreview && (
           <box style={{ marginTop: 1, width: '100%' }}>
@@ -243,7 +266,9 @@ const ImplementorCard = memo(
             attributes={TextAttributes.ITALIC}
             style={{ marginTop: 1 }}
           >
-            {EMPTY_STATE_LABELS[agentBlock.status]}
+            {transactionOutcomes.length
+              ? 'No confirmed edits captured'
+              : EMPTY_STATE_LABELS[agentBlock.status]}
           </text>
         )}
       </box>
@@ -409,6 +434,12 @@ const CompactFileRow = memo(
         {/* Inline diff viewer when selected - aligns with card content (full width) */}
         {isSelected && diff && (
           <box style={{ flexDirection: 'column', marginTop: 1, width: '100%' }}>
+            <text fg={theme.muted} style={{ wrapMode: 'word' }}>
+              {file.previousPath
+                ? `${file.previousPath} → ${file.path}`
+                : file.path}{' '}
+              · Captured patch history · accumulated line changes
+            </text>
             <box
               style={{
                 flexDirection: 'column',

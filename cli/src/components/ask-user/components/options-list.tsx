@@ -6,6 +6,7 @@
 import { TextAttributes } from '@opentui/core'
 import React, { memo } from 'react'
 
+import { useTerminalDimensions } from '../../../hooks/use-terminal-dimensions'
 import { QuestionOption } from './question-option'
 import { useTheme } from '../../../hooks/use-theme'
 import { Button } from '../../button'
@@ -37,6 +38,16 @@ export const OptionsList: React.FC<OptionsListProps> = memo(
     onFocusOption,
   }) => {
     const theme = useTheme()
+    const { terminalHeight } = useTerminalDimensions()
+    const rowCount = Math.max(1, terminalHeight - (answer?.isCustom ? 13 : 11))
+    const focused = focusedOptionIndex ?? answer?.selectedIndex ?? 0
+    const start = Math.max(
+      0,
+      Math.min(
+        focused - Math.floor(rowCount / 2),
+        question.options.length - rowCount,
+      ),
+    )
     const isMultiSelect = question.multiSelect
 
     const isCustomSelected = answer?.isCustom ?? false
@@ -83,25 +94,32 @@ export const OptionsList: React.FC<OptionsListProps> = memo(
           </text>
         )}
 
+        <text fg={theme.muted}>
+          Choice {Math.min(focused + 1, question.options.length + 1)}/
+          {question.options.length + 1} · I reads full labels
+        </text>
         {/* Options */}
-        {question.options.map((option, optionIndex) => {
-          const isSelected = isMultiSelect
-            ? (answer?.selectedIndices?.has(optionIndex) ?? false)
-            : answer?.selectedIndex === optionIndex
+        {question.options
+          .slice(start, start + rowCount)
+          .map((option, visibleIndex) => {
+            const optionIndex = start + visibleIndex
+            const isSelected = isMultiSelect
+              ? (answer?.selectedIndices?.has(optionIndex) ?? false)
+              : answer?.selectedIndex === optionIndex
 
-          return (
-            <QuestionOption
-              key={optionIndex}
-              option={option}
-              indent={optionIndent}
-              isSelected={isSelected}
-              isFocused={focusedOptionIndex === optionIndex}
-              isMultiSelect={isMultiSelect}
-              onSelect={() => handleOptionSelect(optionIndex)}
-              onMouseOver={() => onFocusOption(optionIndex)}
-            />
-          )
-        })}
+            return (
+              <QuestionOption
+                key={optionIndex}
+                option={option}
+                indent={optionIndent}
+                isSelected={isSelected}
+                isFocused={focusedOptionIndex === optionIndex}
+                isMultiSelect={isMultiSelect}
+                onSelect={() => handleOptionSelect(optionIndex)}
+                onMouseOver={() => onFocusOption(optionIndex)}
+              />
+            )
+          })}
 
         {/* Custom option - uses checkbox style for multi-select questions */}
         <Button

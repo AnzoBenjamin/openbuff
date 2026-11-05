@@ -4,10 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import {
-  computeIsNearBottom,
-  useChatScrollbox,
-} from './use-scroll-management'
+import { computeIsNearBottom, useChatScrollbox } from './use-scroll-management'
 import { useTerminalDimensions } from './use-terminal-dimensions'
 import { useTerminalLayout } from './use-terminal-layout'
 import { useTheme } from './use-theme'
@@ -22,6 +19,7 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 export interface UseChatUIOptions {
   messages: ChatMessage[]
   isUserCollapsing: () => boolean
+  readingPaused?: boolean
 }
 
 export interface UseChatUIReturn {
@@ -32,6 +30,8 @@ export interface UseChatUIReturn {
   scrollDown: () => void
   adjustScrollTop: (delta: number, opts?: { follow?: boolean }) => void
   isAtBottomNow: () => boolean
+  scrollIntentRef: React.RefObject<number>
+  pauseFollowing: () => void
   appliedScrollboxProps: Record<string, unknown>
   isAtBottom: boolean
   hasOverflow: boolean
@@ -52,6 +52,7 @@ export interface UseChatUIReturn {
 export function useChatUI({
   messages,
   isUserCollapsing,
+  readingPaused,
 }: UseChatUIOptions): UseChatUIReturn {
   const scrollRef = useRef<ScrollBoxRenderable | null>(null)
   const [hasOverflow, setHasOverflow] = useState(false)
@@ -77,7 +78,10 @@ export function useChatUI({
     adjustScrollTop,
     scrollboxProps,
     isAtBottom,
-  } = useChatScrollbox(scrollRef, messages, isUserCollapsing)
+    scrollIntentRef,
+    isFollowing,
+    pauseFollowing,
+  } = useChatScrollbox(scrollRef, messages, isUserCollapsing, readingPaused)
 
   // Imperative at-bottom probe for the windowing hook: true while the scroll
   // position is pinned to the bottom. Width changes re-derive every offset, so
@@ -96,11 +100,11 @@ export function useChatUI({
     // transiently diverge from the scrollbar position (e.g. right after a
     // programmatic scrollTop write), and a divergent read here would misdrive
     // the width-change re-pin decision.
-    return computeIsNearBottom(
+    return isFollowing() && computeIsNearBottom(
       scrollbox.verticalScrollBar.scrollPosition,
       maxScroll,
     )
-  }, [scrollRef])
+  }, [scrollRef, isFollowing])
 
   // Check if content has overflowed and needs scrolling
   useEffect(() => {
@@ -148,6 +152,8 @@ export function useChatUI({
     scrollDown,
     adjustScrollTop,
     isAtBottomNow,
+    scrollIntentRef,
+    pauseFollowing,
     appliedScrollboxProps,
     isAtBottom,
     hasOverflow,

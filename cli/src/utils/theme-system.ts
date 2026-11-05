@@ -858,10 +858,10 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     primary: '#9EFC62',
     secondary: '#a3aed0',
     success: '#22c55e',
-    error: '#ef4444',
+    error: '#fb7185',
     warning: '#FFA500',
     info: '#9EFC62',
-    link: '#3B82F6',
+    link: '#60a5fa',
     directory: '#9CA3AF',
 
     // Neutral scale
@@ -897,7 +897,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     markdown: {
       // Dark mode: slightly darker gray for less brightness
       codeBackground: '#374151',
-      codeHeaderFg: '#5b647a',
+      codeHeaderFg: '#cbd5e1',
       inlineCodeFg: '#FF8534',
       codeTextFg: '#f1f5f9',
       listBulletFg: '#a3aed0',
@@ -910,26 +910,26 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
   light: {
     name: 'light',
     // Core semantic colors
-    primary: '#65A83E',
-    secondary: '#6b7280',
-    success: '#059669',
-    error: '#ef4444',
-    warning: '#F59E0B',
-    info: '#65A83E',
+    primary: '#33721e',
+    secondary: '#626976',
+    success: '#087448',
+    error: '#c92b35',
+    warning: '#8a5300',
+    info: '#33721e',
     link: '#2563EB',
-    directory: '#6B7280',
+    directory: '#626976',
 
     // Neutral scale
     foreground: '#111827',
     background: 'transparent',
-    muted: '#6b7280',
-    border: '#d1d5db',
+    muted: '#626976',
+    border: '#858e9b',
     surface: '#f3f4f6',
     surfaceHover: '#e5e7eb',
 
     // AI/User context
-    aiLine: '#6b7280',
-    userLine: '#65A83E',
+    aiLine: '#626976',
+    userLine: '#33721e',
 
     // Agent context
     agentToggleHeaderBg: '#ea580c',
@@ -946,16 +946,16 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     modePlanText: '#1e40af',
 
     // Image card
-    imageCardBorder: '#6B7280',
+    imageCardBorder: '#626976',
 
     // Markdown
     markdown: {
       // Light mode: lighter gray background so inline code feels airy
       codeBackground: '#f3f4f6',
-      codeHeaderFg: '#6b7280',
+      codeHeaderFg: '#626976',
       inlineCodeFg: '#C45A00',
       codeTextFg: '#111827',
-      listBulletFg: '#6b7280',
+      listBulletFg: '#626976',
       blockquoteBorderFg: '#d1d5db',
       blockquoteTextFg: '#374151',
       dividerFg: '#e5e7eb',

@@ -30,7 +30,7 @@ export function isReasoningTextBlock(
  * Each handler receives the block(s) and relevant indices, and returns a ReactNode.
  */
 export interface BlockProcessorHandlers {
-  /** Handle a group of consecutive reasoning text blocks */
+  /** Handle consecutive fragments of the same reasoning identity/lifecycle. */
   onReasoningGroup: (
     blocks: TextContentBlock[],
     startIndex: number,
@@ -131,6 +131,16 @@ export function processBlocks(
       while (i < blocks.length) {
         const currentBlock = blocks[i]
         if (!isReasoningTextBlock(currentBlock)) break
+        // ThinkingBlock takes its identity, state and duration from the first
+        // fragment. Never let that metadata describe a different thought.
+        if (
+          currentBlock.thinkingId !== block.thinkingId ||
+          currentBlock.thinkingOpen !== block.thinkingOpen ||
+          currentBlock.thinkingCollapseState !== block.thinkingCollapseState ||
+          currentBlock.thinkingStartedAt !== block.thinkingStartedAt ||
+          currentBlock.thinkingEndedAt !== block.thinkingEndedAt
+        )
+          break
         reasoningBlocks.push(currentBlock)
         i++
       }

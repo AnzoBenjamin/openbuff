@@ -1,4 +1,4 @@
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { mkdirSync, readdirSync, realpathSync, statSync } from 'fs'
 import path from 'path'
 
@@ -32,7 +32,7 @@ export function getProjectRoot() {
 
 export function getCurrentChatId() {
   if (!currentChatId) {
-    currentChatId = new Date().toISOString().replace(/:/g, '-')
+    currentChatId = createChatId()
   }
   return currentChatId
 }
@@ -43,8 +43,12 @@ export function setCurrentChatId(chatId: string) {
 }
 
 export function startNewChat() {
-  currentChatId = new Date().toISOString().replace(/:/g, '-')
+  currentChatId = createChatId()
   return currentChatId
+}
+
+function createChatId(): string {
+  return `${new Date().toISOString().replace(/:/g, '-')}-${randomUUID()}`
 }
 
 export function getProjectStorageKey(root: string): string {

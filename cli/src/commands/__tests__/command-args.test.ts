@@ -93,7 +93,9 @@ afterAll(() => {
   // Restore the real codebuff-client module registry-wide: without this the
   // attach-seam mock registration leaks into every other test file sharing
   // this worker (bun does not isolate mock.module across test files).
-  mock.module('../../utils/codebuff-client', () => ({ ...realCodebuffClientModule }))
+  mock.module('../../utils/codebuff-client', () => ({
+    ...realCodebuffClientModule,
+  }))
 })
 
 /**
@@ -443,8 +445,11 @@ describe('command factory pattern', () => {
       setMessagesCalls: unknown,
     ): { content: string; blocks?: ContentBlock[] } => {
       const calls = setMessagesCalls as Array<[MessagesUpdater]>
-      expect(calls.length).toBe(1)
-      const next = calls[calls.length - 1][0]([])
+      expect(calls.length).toBeGreaterThan(0)
+      const next = calls.reduce(
+        (messages, [update]) => update(messages),
+        [] as ReturnType<MessagesUpdater>,
+      )
       return next[next.length - 1]
     }
 
@@ -570,6 +575,8 @@ describe('command factory pattern', () => {
 
       expect(addToQueue).toHaveBeenCalledWith(
         expect.stringContaining('.agents/sessions/auth-refresh'),
+        [],
+        'EXECUTE_PLAN',
       )
       expect(sendMessage).not.toHaveBeenCalled()
       expect(setInputFocused).toHaveBeenCalledWith(true)
@@ -594,6 +601,8 @@ describe('command factory pattern', () => {
 
       expect(addToQueue).toHaveBeenCalledWith(
         expect.stringContaining('.agents/sessions/auth-refresh'),
+        [],
+        'EXECUTE_PLAN',
       )
       expect(sendMessage).not.toHaveBeenCalled()
       expect(setInputFocused).toHaveBeenCalledWith(true)
@@ -755,7 +764,7 @@ describe('command factory pattern', () => {
       }
     })
 
-    test('plans emits a plan-status-list block without sending to the agent', () => {
+    test('plans emits a plan-status-list block without sending to the agent', async () => {
       writeArtifact(
         'alpha',
         'PLAN.md',
@@ -776,7 +785,7 @@ describe('command factory pattern', () => {
         setMessages,
       })
 
-      plansCmd!.handler(params, '')
+      await plansCmd!.handler(params, '')
 
       // /plans is a local inspector: it must never reach the agent.
       expect(sendMessage).not.toHaveBeenCalled()
@@ -822,7 +831,7 @@ describe('command factory pattern', () => {
       expect('kind' in block).toBe(false)
     })
 
-    test('plans carries the stale-pointer note as a rendered text block', () => {
+    test('plans carries the stale-pointer note as a rendered text block', async () => {
       writeArtifact('alpha', 'PLAN.md', 'plan body')
       writeSessionState('alpha', 'active')
       // 'ghost' has no known artifacts, so listPlanSessions filters it out and
@@ -836,7 +845,7 @@ describe('command factory pattern', () => {
       const setMessages = mock(() => {})
       const params = createMockParams({ inputValue: '/plans', setMessages })
 
-      plansCmd!.handler(params, '')
+      await plansCmd!.handler(params, '')
 
       const staleNote = staleNoteFor('ghost')
       const message = lastSystemMessage(setMessages.mock.calls)
@@ -852,7 +861,7 @@ describe('command factory pattern', () => {
       expect(message.content).toBe(block.reportText)
     })
 
-    test('plans carries the stale-pointer note only in reportText when no sessions are listed', () => {
+    test('plans carries the stale-pointer note only in reportText when no sessions are listed', async () => {
       // Only the pointer file exists, so listPlanSessions finds no rows and
       // PlanStatusBox falls back to rendering reportText — which
       // formatPlanListReport already ends with the note. A second text block
@@ -864,7 +873,7 @@ describe('command factory pattern', () => {
       const setMessages = mock(() => {})
       const params = createMockParams({ inputValue: '/plans', setMessages })
 
-      plansCmd!.handler(params, '')
+      await plansCmd!.handler(params, '')
 
       const staleNote = staleNoteFor('ghost')
       const message = lastSystemMessage(setMessages.mock.calls)
@@ -1272,13 +1281,25 @@ describe('command factory pattern', () => {
         // real clearQueue contract returns the first `count` entries and
         // keeps the rest, which a splicing mock mirrors.
         const remaining = [
-          { content: 'queued one', attachments: [] },
-          { content: 'queued two', attachments: [] },
+          {
+            content: 'queued one',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
+          {
+            content: 'queued two',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
         ]
         const clearQueue = mock((count?: number) => remaining.splice(0, count))
         const saveToHistory = mock(() => {})
         const stopStreaming = mock(() => {})
-        const params = createMockParams({ clearQueue, saveToHistory, stopStreaming })
+        const params = createMockParams({
+          clearQueue,
+          saveToHistory,
+          stopStreaming,
+        })
 
         exitCmd!.handler(params, '')
         await new Promise((resolve) => setTimeout(resolve, 10))
@@ -1309,8 +1330,16 @@ describe('command factory pattern', () => {
         // Same one-at-a-time splicing mock as the happy-path drain test: the
         // synchronous loop terminates only on an empty return.
         const remaining = [
-          { content: 'queued one', attachments: [] },
-          { content: 'queued two', attachments: [] },
+          {
+            content: 'queued one',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
+          {
+            content: 'queued two',
+            attachments: [],
+            agentMode: 'DEFAULT' as const,
+          },
         ]
         const clearQueue = mock((count?: number) => remaining.splice(0, count))
         // formatQueuedMessageForHistory returns the queued content verbatim
@@ -1358,7 +1387,14 @@ describe('command factory pattern', () => {
 
       const stubs = stubProcessExitAndKill()
       try {
-        const clearQueue = mock(() => [] as Array<{ content: string; attachments: never[] }>)
+        const clearQueue = mock(
+          () =>
+            [] as Array<{
+              content: string
+              attachments: never[]
+              agentMode: 'DEFAULT'
+            }>,
+        )
         const saveToHistory = mock(() => {})
         const params = createMockParams({ clearQueue, saveToHistory })
 
@@ -1480,7 +1516,7 @@ describe('command factory pattern', () => {
   })
 
   describe('feedback command arg handling', () => {
-    test('pre-populates feedback text when args are provided', () => {
+    test('disabled feedback preserves the submitted draft and keeps the remote form closed', () => {
       const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
       expect(feedbackCmd).toBeDefined()
 
@@ -1492,11 +1528,12 @@ describe('command factory pattern', () => {
 
       // Check that feedback text was pre-populated
       const state = useFeedbackStore.getState()
-      expect(state.feedbackText).toBe('my bug report')
-      expect(state.feedbackCursor).toBe('my bug report'.length)
+      expect(state.feedbackText).toBe('')
+      expect(params.setInputValue).not.toHaveBeenCalled()
+      expect(params.setMessages).toHaveBeenCalled()
     })
 
-    test('opens feedback mode without pre-populating when no args', () => {
+    test('disabled feedback reports local capability without opening a form', () => {
       const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
       expect(feedbackCmd).toBeDefined()
 
@@ -1507,14 +1544,14 @@ describe('command factory pattern', () => {
       const result = feedbackCmd!.handler(params, '')
 
       // Should return openFeedbackMode
-      expect(result).toEqual({ openFeedbackMode: true })
+      expect(result).toBeUndefined()
 
       // Feedback text should remain empty
       const state = useFeedbackStore.getState()
       expect(state.feedbackText).toBe('')
     })
 
-    test('returns openFeedbackMode even with args', () => {
+    test('disabled feedback stays closed with args', () => {
       const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
       expect(feedbackCmd).toBeDefined()
 
@@ -1525,7 +1562,7 @@ describe('command factory pattern', () => {
       const result = feedbackCmd!.handler(params, 'test')
 
       // Should still return openFeedbackMode
-      expect(result).toEqual({ openFeedbackMode: true })
+      expect(result).toBeUndefined()
     })
   })
 

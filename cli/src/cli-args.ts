@@ -52,7 +52,15 @@ export type ParsedArgs = {
    * human-readable replay trace). The process exit code reflects the replay
    * outcome.
    */
-  replay?: { runId: string; fromStep?: number; model?: string; json: boolean }
+  replay?: {
+    runId: string
+    fromStep?: number
+    toStep?: number
+    event?: string
+    find?: string
+    model?: string
+    json: boolean
+  }
   /**
    * Populated ONLY when the `dash` subcommand ran (undefined otherwise).
    * P2-T7: localhost+token HTTP dashboard over the run journals, receipts,
@@ -276,9 +284,14 @@ export function parseCliArgs(
     let timeoutSeconds: number | undefined
     if (typeof runOpts.timeout === 'string') {
       const rawTimeout = runOpts.timeout.trim()
-      if (!/^\d+$/.test(rawTimeout) || Number(rawTimeout) < 1) {
+      if (
+        !/^\d+$/.test(rawTimeout) ||
+        !Number.isSafeInteger(Number(rawTimeout)) ||
+        Number(rawTimeout) < 1 ||
+        Number(rawTimeout) > 2147483
+      ) {
         runProgram.error(
-          `--timeout must be a positive integer (seconds), got ${JSON.stringify(runOpts.timeout)}`,
+          `--timeout must be a positive integer in [1, 2147483] seconds, got ${JSON.stringify(runOpts.timeout)}`,
         )
       }
       timeoutSeconds = Number(rawTimeout)
@@ -308,11 +321,23 @@ export function parseCliArgs(
     replayProgram
       .name('openbuff replay')
       .description(
-        'Replay a journaled run deterministically (optionally from a step boundary / with a model override)',
+        'Inspect recorded journal evidence without running inference or tools',
       )
       .argument('<runId>', 'Run id to replay')
       .option('--from-step <n>', 'Replay from a step boundary')
-      .option('--model <id>', 'Override the model for the replayed run')
+      .option('--to-step <n>', 'Inspect through this recorded step (inclusive)')
+      .option(
+        '--event <kind>',
+        'Filter recorded event kind, for example tool_result',
+      )
+      .option(
+        '--find <text>',
+        'Find literal text in retained recorded evidence',
+      )
+      .option(
+        '--model <id>',
+        'Annotate recorded replay metadata; does not run inference',
+      )
       .option(
         '--json',
         'Emit machine-readable events (one JSON object per line) on stdout',
@@ -336,15 +361,30 @@ export function parseCliArgs(
     let fromStep: number | undefined
     if (typeof replayOpts.fromStep === 'string') {
       const rawFromStep = replayOpts.fromStep.trim()
-      if (!/^\d+$/.test(rawFromStep)) {
+      if (
+        !/^\d+$/.test(rawFromStep) ||
+        !Number.isSafeInteger(Number(rawFromStep))
+      ) {
         replayProgram.error(
-          `--from-step must be a non-negative integer, got ${JSON.stringify(replayOpts.fromStep)}`,
+          `--from-step must be a non-negative integer in [0, ${Number.MAX_SAFE_INTEGER}], got ${JSON.stringify(replayOpts.fromStep)}`,
         )
       }
       fromStep = Number(rawFromStep)
     }
     const replayModel =
       typeof replayOpts.model === 'string' ? replayOpts.model : undefined
+    let toStep: number | undefined
+    if (typeof replayOpts.toStep === 'string') {
+      const raw = replayOpts.toStep.trim()
+      if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+        replayProgram.error(
+          `--to-step must be a non-negative integer in [0, ${Number.MAX_SAFE_INTEGER}]`,
+        )
+      }
+      toStep = Number(raw)
+      if (toStep < (fromStep ?? 0))
+        replayProgram.error('--to-step must be at least --from-step')
+    }
     return {
       initialPrompt: null,
       clearLogs: false,
@@ -354,6 +394,13 @@ export function parseCliArgs(
       replay: {
         runId,
         ...(fromStep !== undefined ? { fromStep } : {}),
+        ...(toStep !== undefined ? { toStep } : {}),
+        ...(typeof replayOpts.event === 'string'
+          ? { event: replayOpts.event }
+          : {}),
+        ...(typeof replayOpts.find === 'string'
+          ? { find: replayOpts.find }
+          : {}),
         ...(replayModel ? { model: replayModel } : {}),
         json: replayOpts.json === true,
       },
@@ -496,7 +543,7 @@ export function parseCliArgs(
     )
     .addHelpText(
       'after',
-      '\nCommands:\n  init                           Create local project context',
+      '\nCommands:\n  init                 Create local project context: openbuff init\n  run                  Headless agent: openbuff run --timeout 60 "check changes"\n  replay               Read recorded evidence: openbuff replay <run-id> --from-step 2\n  dash                 Browse local journals: openbuff dash [--export <directory>]\n  serve                Serve a local agent session: openbuff serve --help\n  mcp                  Serve local tools over MCP: openbuff mcp --help\n\nUse openbuff <command> --help for options.\nWrapper actions: openbuff --check-update checks registry freshness; openbuff --update installs a verified update.\nIn chat: /help opens the slash command directory; /provider configures BYOK routing.',
     )
     .helpOption('-h, --help', 'Show this help message')
     .argument('[prompt...]', 'Initial prompt to send to the agent')

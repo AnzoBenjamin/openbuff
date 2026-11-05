@@ -1,3 +1,5 @@
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test } from 'bun:test'
 
 import { getToolMetadata } from '@codebuff/common/tools/metadata'
@@ -111,6 +113,7 @@ describe('restored blocks with removed tool names', () => {
       type: 'tool',
       toolName: 'apply_patch',
       toolCallId: 'pending-apply-patch',
+      lifecycle: 'running',
       input: { operation: { path: 'src/p.ts', diff: '@@ -1 +1 @@\n-a\n+b' } },
     }
 
@@ -157,7 +160,7 @@ describe('restored blocks with removed tool names', () => {
   })
 
   test.each(['rolled_back', 'rollback_incomplete', 'not_applied'] as const)(
-    'a canonical %s result is labeled not applied',
+    'a canonical %s result retains its explicit outcome',
     (outcome) => {
       const config = renderToolComponent(
         {
@@ -188,7 +191,7 @@ describe('restored blocks with removed tool names', () => {
         { availableWidth: 80, indentationOffset: 0, labelWidth: 0 },
       )
       expect(config?.path).toBe('src/r.ts')
-      expect(config?.collapsedPreview).toContain('not applied')
+      expect(config?.collapsedPreview).toContain(outcome.replaceAll('_', ' '))
       expect(config?.collapsedPreview).not.toContain('• applied')
     },
   )
@@ -303,4 +306,42 @@ describe('restored blocks with removed tool names', () => {
       { path: 'src/c.ts', diff: '@@ -1 +1 @@\n-a\n+b' },
     ])
   })
+})
+
+test('a partial legacy canonical result names each retained action outcome', () => {
+  const result = renderToolComponent(
+    {
+      type: 'tool',
+      toolName: 'apply_patch',
+      toolCallId: 'partial-legacy',
+      input: {},
+      outputRaw: [
+        {
+          type: 'json',
+          value: {
+            kind: 'file_mutation_result',
+            outcome: 'partial',
+            actions: [
+              {
+                path: 'a.ts',
+                outcome: 'applied',
+                patch: '@@ -1 +1 @@\n-a\n+b',
+              },
+              {
+                path: 'b.ts',
+                outcome: 'not_applied',
+                patch: '@@ -1 +1 @@\n-c\n+d',
+              },
+            ],
+          },
+        },
+      ],
+    } as PersistedToolBlock,
+    chatThemes.dark,
+    { availableWidth: 60, indentationOffset: 0, labelWidth: 0 },
+  )
+  expect(result?.collapsedPreview).toContain('partial')
+  const markup = renderToStaticMarkup(result?.content as React.ReactElement)
+  expect(markup).toContain('a.ts · applied')
+  expect(markup).toContain('b.ts · not applied')
 })

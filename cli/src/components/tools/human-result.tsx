@@ -91,10 +91,7 @@ export function formatCount(
 
 /** Body column width for a renderer, honoring the surrounding indent. */
 export function bodyWidth(availableWidth: number | undefined): number {
-  return Math.max(
-    MIN_RESULT_WIDTH,
-    (availableWidth ?? 80) - RESULT_BODY_INDENT,
-  )
+  return Math.max(MIN_RESULT_WIDTH, (availableWidth ?? 80) - RESULT_BODY_INDENT)
 }
 
 /** Detail-row width: body width minus the detail indent. */
@@ -109,66 +106,16 @@ export function rowWidth(availableWidth: number | undefined): number {
  * Outcome tone: the one place verdict words map to glyph + color.
  * ------------------------------------------------------------------ */
 
-export type OutcomeTone = 'good' | 'warn' | 'bad' | 'neutral'
-
-const GOOD_OUTCOME_KEYS = new Set([
-  'success',
-  'succeeded',
-  'looks_good',
-  'pass',
-  'passed',
-  'completed',
-  'complete',
-  'ok',
-  'applied',
-  'ready',
-])
-const WARN_OUTCOME_KEYS = new Set([
-  'partial',
-  'warning',
-  'needs_changes',
-  'retry',
-  'skipped',
-  'stale',
-  'unavailable',
-  'unchanged',
-  'empty',
-  'no_matches',
-])
-const BAD_OUTCOME_KEYS = new Set([
-  'failed',
-  'failure',
-  'blocked',
-  'error',
-  'invalid',
-  'cancelled',
-  'unsupported',
-  'rejected',
-  'refused',
-  'not_applied',
-])
-
-/**
- * Canonical key for a verdict/status word: lowercased with runs of spaces and
- * hyphens folded to underscores, so `LOOKS-GOOD`, `Looks good` and
- * `looks_good` all classify identically.
- */
-export function normalizeOutcomeKey(
-  outcome: string | undefined,
-): string | undefined {
-  if (typeof outcome !== 'string') return undefined
-  const normalized = outcome.trim().toLowerCase().replace(/[\s-]+/g, '_')
-  return normalized.length > 0 ? normalized : undefined
-}
-
-export function outcomeTone(outcome: string | undefined): OutcomeTone {
-  const key = normalizeOutcomeKey(outcome)
-  if (!key) return 'neutral'
-  if (GOOD_OUTCOME_KEYS.has(key)) return 'good'
-  if (WARN_OUTCOME_KEYS.has(key)) return 'warn'
-  if (BAD_OUTCOME_KEYS.has(key)) return 'bad'
-  return 'neutral'
-}
+export {
+  classifyOutputOutcome as outcomeTone,
+  normalizeOutcomeKey,
+} from '../../utils/output-outcome'
+import {
+  classifyOutputOutcome as outcomeTone,
+  normalizeOutcomeKey,
+  type OutputOutcomeTone as OutcomeTone,
+} from '../../utils/output-outcome'
+export type { OutputOutcomeTone as OutcomeTone } from '../../utils/output-outcome'
 
 export const OUTCOME_GLYPH: Record<OutcomeTone, string> = {
   good: '✓',
@@ -177,10 +124,7 @@ export const OUTCOME_GLYPH: Record<OutcomeTone, string> = {
   neutral: '•',
 }
 
-export function outcomeColor(
-  tone: OutcomeTone,
-  theme: ChatTheme,
-): string {
+export function outcomeColor(tone: OutcomeTone, theme: ChatTheme): string {
   switch (tone) {
     case 'good':
       return theme.success
@@ -282,12 +226,7 @@ export interface DetailRowProps {
  * One dim `label: value` detail row under a header. `monospace` is accepted
  * but intentionally unused (deprecated no-op kept for source compatibility).
  */
-export function DetailRow({
-  label,
-  value,
-  width,
-  valueColor,
-}: DetailRowProps) {
+export function DetailRow({ label, value, width, valueColor }: DetailRowProps) {
   const theme = useTheme()
   return (
     <text style={{ wrapMode: 'word' }}>
@@ -354,7 +293,13 @@ export function OverflowNote({
 }
 
 /** Error line in the theme's error color, wrapped. */
-export function ErrorRow({ message, width }: { message: string; width: number }) {
+export function ErrorRow({
+  message,
+  width,
+}: {
+  message: string
+  width: number
+}) {
   const theme = useTheme()
   return (
     <text style={{ wrapMode: 'word' }}>
@@ -394,9 +339,6 @@ export function ResultShell({ children }: { children: React.ReactNode }) {
 }
 
 /** Standard collapsed preview: `summary ✓`. */
-export function previewWithGlyph(
-  summary: string,
-  glyph: string,
-): string {
+export function previewWithGlyph(summary: string, glyph: string): string {
   return `${summary} ${glyph}`
 }

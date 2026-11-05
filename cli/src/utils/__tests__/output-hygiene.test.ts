@@ -3,6 +3,30 @@ import { describe, expect, test } from 'bun:test'
 import { collapseHarnessTags } from '../output-hygiene'
 
 describe('collapseHarnessTags', () => {
+  test('preserves fenced and inline source examples while folding matching prose annotations', () => {
+    for (const fence of ['```xml', '~~~~xml']) {
+      const closing = fence.startsWith('`') ? '```' : '~~~~'
+      const source = `${fence}\n<system_warning>literal source</system_warning>\n${closing}\n`
+      expect(
+        collapseHarnessTags(
+          source + '<system_note>annotation</system_note>\nVisible',
+        ),
+      ).toBe(source + 'Visible')
+    }
+    for (const source of [
+      '`<system_note>literal</system_note>`',
+      '``literal ` <system_note>source</system_note>``',
+      '`multiline\n<system_note>source</system_note>\ncode`',
+    ]) {
+      expect(
+        collapseHarnessTags(source + '<system_note>annotation</system_note>'),
+      ).toBe(source)
+    }
+    const mismatched = '<system_note>retained</system_warning>'
+    expect(collapseHarnessTags(mismatched)).toBe(mismatched)
+    const unclosed = '~~~xml\n<system_note>retained source</system_note>'
+    expect(collapseHarnessTags(unclosed)).toBe(unclosed)
+  })
   test('removes a paired system_warning tag and its content', () => {
     const input =
       'Before.\n<system_warning>Memory note: cached hash drifted.</system_warning>\nAfter.'

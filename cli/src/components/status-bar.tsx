@@ -1,5 +1,6 @@
 import { TextAttributes } from '@opentui/core'
 import React, { useEffect, useState } from 'react'
+import stringWidth from 'string-width'
 
 import { Button } from './button'
 import {
@@ -21,21 +22,27 @@ import {
 } from '../utils/status-bar-chips'
 import type { CompactionNotice } from '../types/chat'
 import type { StatusIndicatorState } from '../utils/status-indicator-state'
-import { buildCliCapabilityMapV1, formatSandboxCapabilityChipLabel } from '../utils/capability-tiers'
+import {
+  buildCliCapabilityMapV1,
+  formatSandboxCapabilityChipLabel,
+} from '../utils/capability-tiers'
 
 /** A small status-bar action button with hover-bold styling. */
 const StatusActionButton = ({
   children,
   onClick,
+  id,
 }: {
   children: React.ReactNode
   onClick: () => void
+  id?: string
 }) => {
   const theme = useTheme()
   const [hovered, setHovered] = useState(false)
 
   return (
     <Button
+      id={id}
       style={{ paddingLeft: 1, paddingRight: 1 }}
       onClick={onClick}
       onMouseOver={() => setHovered(true)}
@@ -84,6 +91,9 @@ const chipForeground = (
 }
 
 interface StatusBarProps {
+  unreadUpdates?: number
+  notice?: string | null
+  runActive?: boolean
   timerStartTime: number | null
   isAtBottom: boolean
   scrollToLatest: () => void
@@ -124,19 +134,22 @@ export const StatusBar = ({
   diffStats,
   indexStatus,
   onStop,
+  notice,
+  runActive,
+  unreadUpdates = 0,
 }: StatusBarProps) => {
   const theme = useTheme()
   const { width, terminalWidth } = useTerminalLayout()
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
 
   const kind = statusIndicatorState.kind
-  const isActive = kind === 'waiting' || kind === 'streaming'
+  const isActive = runActive ?? (kind === 'waiting' || kind === 'streaming')
   const showStop = Boolean(onStop && isActive)
 
   // Show timer when actively working (streaming or waiting for response) or paused (ask_user)
   // This uses statusIndicatorState as the single source of truth for "is the LLM working?"
   const shouldShowTimer =
-    kind === 'waiting' || kind === 'streaming' || kind === 'paused'
+    runActive || kind === 'waiting' || kind === 'streaming' || kind === 'paused'
 
   useEffect(() => {
     if (!timerStartTime || !shouldShowTimer) {
@@ -244,8 +257,12 @@ export const StatusBar = ({
   }
 
   const statusIndicatorContent = renderStatusIndicator()
+  const chipWidth =
+    chips.reduce((total, chip) => total + stringWidth(chip.label), 0) +
+    Math.max(0, chips.length - 1) * 3
   const hasContent =
     Boolean(statusIndicatorContent) ||
+    Boolean(notice) ||
     chips.length > 0 ||
     !isAtBottom ||
     showStop
@@ -269,7 +286,23 @@ export const StatusBar = ({
           minWidth: 0,
         }}
       >
-        <text style={{ wrapMode: 'none' }}>{statusIndicatorContent}</text>
+        <text style={{ wrapMode: 'none' }}>
+          {statusIndicatorContent}
+          {!isAtBottom && (
+            <span fg={theme.muted}>
+              {statusIndicatorContent ? ' · ' : ''}
+              {unreadUpdates
+                ? `Reading earlier · ${unreadUpdates} new updates`
+                : 'Following paused'}
+            </span>
+          )}
+          {notice && (
+            <span fg={theme.foreground}>
+              {statusIndicatorContent || !isAtBottom ? ' · ' : ''}
+              {notice}
+            </span>
+          )}
+        </text>
       </box>
 
       {/* Middle: the chip cluster, left-aligned inside the growing region so it
@@ -279,6 +312,7 @@ export const StatusBar = ({
           flexGrow: 1,
           flexShrink: 1,
           flexBasis: 0,
+          minWidth: chipWidth,
           flexDirection: 'row',
           justifyContent: 'flex-start',
           alignItems: 'center',
@@ -314,7 +348,9 @@ export const StatusBar = ({
       >
         {!isAtBottom && <ScrollToBottomButton onClick={scrollToLatest} />}
         {showStop && onStop && (
-          <StatusActionButton onClick={onStop}>■ Esc</StatusActionButton>
+          <StatusActionButton id="chat-stop" onClick={onStop}>
+            ■ Esc
+          </StatusActionButton>
         )}
       </box>
     </box>

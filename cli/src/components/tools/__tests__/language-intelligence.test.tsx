@@ -181,6 +181,16 @@ describe('language intelligence renderers', () => {
     expect(markup).toContain('const foo: string')
   })
 
+  test('long hover previews disclose captured and hidden character counts at the boundary', () => {
+    for (const count of [600, 601, 700]) {
+      const markup = renderMarkup(HoverTypeComponent, createToolBlock('hover_type', [{ type: 'json', value: { hover: { contents: 'x'.repeat(count) } } }]))
+      if (count > 600) {
+        expect(markup).toContain(`showing 600 of ${count} captured type characters`)
+        expect(markup).toContain(`(${count - 600} hidden)`)
+      } else expect(markup).not.toContain('hidden')
+    }
+  })
+
   test('failed results render the error glyph and message', () => {
     const block = createToolBlock('hover_type')
     block.lifecycle = 'failed'

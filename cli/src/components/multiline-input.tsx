@@ -9,6 +9,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react'
@@ -19,10 +20,17 @@ import { useChatStore } from '../state/chat-store'
 import { getKeypadPrintableSequence, isKeypadEnter } from '../utils/keypad-keys'
 import { clamp } from '../utils/math'
 import {
+  previousGrapheme,
+  nextGrapheme,
+  textDisplayOffset,
+  textOffsetAtDisplay,
+} from '../utils/text-boundaries'
+import {
   isLinefeedActingAsEnter,
+  isPlainEnterKey,
   markReturnKeySeenForKey,
 } from '../utils/terminal-enter-detection'
-import { LONG_TEXT_THRESHOLD } from '../utils/strings'
+import { LONG_TEXT_THRESHOLD, type PasteHandler } from '../utils/strings'
 import {
   computeMultilineInputHeight,
   createPlaceholderLineMemo,
@@ -30,7 +38,6 @@ import {
   multilineInputMeasurementKey,
 } from '../utils/text-layout'
 import { supportsTruecolor } from '../utils/theme-system'
-import { calculateNewCursorPosition } from '../utils/word-wrap-utils'
 
 import type { InputValue } from '../types/store'
 import type {
@@ -200,23 +207,6 @@ function getPrintableKeySequence(key: KeyEvent): string | null {
   return null
 }
 
-// Helper to convert render position (in tab-expanded string) to original text position
-function renderPositionToOriginal(text: string, renderPos: number): number {
-  let originalPos = 0
-  let currentRenderPos = 0
-
-  while (originalPos < text.length && currentRenderPos < renderPos) {
-    if (text[originalPos] === '\t') {
-      currentRenderPos += TAB_WIDTH
-    } else {
-      currentRenderPos += 1
-    }
-    originalPos++
-  }
-
-  return Math.min(originalPos, text.length)
-}
-
 type KeyWithPreventDefault =
   | {
       preventDefault?: () => void
@@ -248,9 +238,12 @@ interface FocusableScrollBox {
 interface MultilineInputProps {
   value: string
   onChange: (value: InputValue) => void
-  onSubmit: () => void
+  onSubmit: (value?: InputValue) => void
   onKeyIntercept?: (key: KeyEvent) => boolean
-  onPaste: (fallbackText?: string) => void
+  onPaste: PasteHandler
+  /** Disable paste for an input retained underneath another reading/editing view. */
+  pasteEnabled?: boolean
+  isInputActive?: () => boolean
   placeholder?: string
   focused?: boolean
   shouldBlinkCursor?: boolean
@@ -300,12 +293,15 @@ interface MultilineInputProps {
    */
   measurementKey?: string
   cursorPosition: number
+  historyContext?: string
+  onRestoreHistoryContext?: (context: string) => void
   showScrollbar?: boolean
 }
 
 export type MultilineInputHandle = {
   focus: () => void
   blur: () => void
+  hasFocus?: () => boolean
 }
 
 export const MultilineInput = forwardRef<
@@ -314,9 +310,11 @@ export const MultilineInput = forwardRef<
 >(function MultilineInput(
   {
     value,
-    onChange,
+    onChange: onChangeProp,
     onSubmit,
     onPaste,
+    pasteEnabled = true,
+    isInputActive,
     placeholder = '',
     focused = true,
     shouldBlinkCursor,
@@ -329,6 +327,8 @@ export const MultilineInput = forwardRef<
     measurementKey,
     onKeyIntercept,
     cursorPosition,
+    historyContext,
+    onRestoreHistoryContext,
     showScrollbar = false,
   }: MultilineInputProps,
   forwardedRef,
@@ -359,26 +359,142 @@ export const MultilineInput = forwardRef<
   // updated synchronously to ensure each keystroke builds on the previous one.
   const valueRef = useRef(value)
   const cursorPositionRef = useRef(cursorPosition)
+  type DraftSnapshot = {
+    input: InputValue
+    selection: { start: number; end: number } | null
+    context?: string
+  }
+  const undoRef = useRef<DraftSnapshot[]>([])
+  const redoRef = useRef<DraftSnapshot[]>([])
+  const textRef = useRef<TextRenderable | null>(null)
+  const contextRef = useRef(historyContext)
+  const pendingSelection = useRef<DraftSnapshot['selection']>(null)
+  const restoredSelection = useRef<DraftSnapshot['selection']>(null)
+  const beforeEdit = useRef<DraftSnapshot | null>(null)
+  const submittedDraft = useRef(false)
+  const snapshot = (): DraftSnapshot => {
+    const selected = textRef.current?.getSelection()
+    return {
+      input: {
+        text: valueRef.current,
+        cursorPosition: cursorPositionRef.current,
+        lastEditDueToNav: false,
+      },
+      selection:
+        restoredSelection.current ??
+        (selected
+          ? {
+              start: fromNativeOffset(selected.start),
+              end: fromNativeOffset(selected.end),
+            }
+          : null),
+      context: contextRef.current,
+    }
+  }
+  function cursorAddsCell(text: string, cursor: number): boolean {
+    return (
+      focused &&
+      (cursor >= text.length || text[cursor] === '\t' || text[cursor] === '\n')
+    )
+  }
+  function fromNativeOffset(offset: number): number {
+    const text = valueRef.current
+    const cursor = cursorPositionRef.current
+    const cell = textDisplayOffset(text, cursor)
+    return textOffsetAtDisplay(
+      text,
+      cursorAddsCell(text, cursor) && offset > cell ? offset - 1 : offset,
+    )
+  }
+  function toNativeOffset(offset: number): number {
+    const text = valueRef.current
+    const cursor = cursorPositionRef.current
+    return (
+      textDisplayOffset(text, offset) +
+      (cursorAddsCell(text, cursor) && offset > cursor ? 1 : 0)
+    )
+  }
+  const restoringDraft = useRef(false)
+  if (valueRef.current !== value || contextRef.current !== historyContext) {
+    restoredSelection.current = null
+    pendingSelection.current = null
+    if (!submittedDraft.current) {
+      undoRef.current.push(snapshot())
+      if (undoRef.current.length > 100) undoRef.current.shift()
+    }
+    submittedDraft.current = false
+    redoRef.current = []
+  }
 
   // Keep refs current on every render (synchronous assignment avoids useEffect timing issues)
   valueRef.current = value
   cursorPositionRef.current = cursorPosition
+  contextRef.current = historyContext
+  const onChange = useCallback(
+    (next: InputValue) => {
+      if (next.text !== valueRef.current && !restoringDraft.current) {
+        undoRef.current.push(beforeEdit.current ?? snapshot())
+        if (undoRef.current.length > 100) undoRef.current.shift()
+        redoRef.current = []
+      }
+      valueRef.current = next.text
+      cursorPositionRef.current = next.cursorPosition
+      onChangeProp(next)
+    },
+    [onChangeProp],
+  )
+
+  const handleTextPaste = useCallback(
+    (text?: string) => {
+      if (!pasteEnabled || isInputActive?.() === false) return
+      const node = scrollBoxRef.current
+      if (
+        renderer.root.hasFocusedDescendant &&
+        node &&
+        !node.focused &&
+        !node.hasFocusedDescendant
+      )
+        return
+      const previous = snapshot()
+      const selection = previous.selection
+      const next = onPaste(text, {
+        text: selection
+          ? previous.input.text.slice(0, selection.start) +
+            previous.input.text.slice(selection.end)
+          : valueRef.current,
+        cursorPosition: selection?.start ?? cursorPositionRef.current,
+        lastEditDueToNav: false,
+      })
+      if (next) {
+        restoredSelection.current = null
+        pendingSelection.current = null
+        renderer.clearSelection()
+        if (next.text !== previous.input.text) {
+          undoRef.current.push(previous)
+          if (undoRef.current.length > 100) undoRef.current.shift()
+          redoRef.current = []
+        }
+        valueRef.current = next.text
+        cursorPositionRef.current = next.cursorPosition
+      }
+    },
+    [onPaste, pasteEnabled, isInputActive, renderer],
+  )
 
   // Helper to get or set the sticky column for vertical navigation.
   // When stickyColumnRef.current is set, we return it (preserving column across
   // multiple up/down presses). When null, we calculate from current cursor position.
   const getOrSetStickyColumn = useCallback(
-    (lineStarts: number[], cursorIsChar: boolean): number => {
+    (lineStarts: number[], _cursorIsChar: boolean): number => {
       if (stickyColumnRef.current != null) {
         return stickyColumnRef.current
       }
+      const displayCursor = toNativeOffset(cursorPositionRef.current)
       const lineIndex = lineStarts.findLastIndex(
-        (lineStart) => lineStart <= cursorPosition,
+        (lineStart) => lineStart <= displayCursor,
       )
       const column =
-        lineIndex === -1
-          ? 0
-          : cursorPosition - lineStarts[lineIndex] + (cursorIsChar ? -1 : 0)
+        lineIndex === -1 ? 0 : displayCursor - lineStarts[lineIndex]
       stickyColumnRef.current = Math.max(0, column)
       return stickyColumnRef.current
     },
@@ -390,14 +506,7 @@ export const MultilineInput = forwardRef<
     setLastActivity(Date.now())
   }, [value, cursorPosition])
 
-  const textRef = useRef<TextRenderable | null>(null)
-
-  const lineInfo = textRef.current
-    ? (
-        (textRef.current satisfies TextRenderable as any)
-          .textBufferView as TextBufferView
-      ).lineInfo
-    : null
+  const lineInfo = textRef.current?.lineInfo ?? null
 
   // Focus/blur scrollbox when focused prop changes
   const prevFocusedRef = useRef(false)
@@ -420,6 +529,11 @@ export const MultilineInput = forwardRef<
       blur: () => {
         ;(scrollBoxRef.current as FocusableScrollBox | null)?.blur?.()
       },
+      hasFocus: () =>
+        Boolean(
+          scrollBoxRef.current?.focused ||
+          scrollBoxRef.current?.hasFocusedDescendant,
+        ),
     }),
     [],
   )
@@ -428,7 +542,7 @@ export const MultilineInput = forwardRef<
     ? Math.max(
         0,
         lineInfo.lineStartCols.findLastIndex(
-          (lineStart) => lineStart <= cursorPosition,
+          (lineStart) => lineStart <= toNativeOffset(cursorPosition),
         ),
       )
     : 0
@@ -446,29 +560,65 @@ export const MultilineInput = forwardRef<
     start: number
     end: number
   } | null => {
-    const textBufferView = (textRef.current as any)?.textBufferView
-    if (!textBufferView?.hasSelection?.() || !textBufferView?.getSelection) {
+    if (restoredSelection.current) return restoredSelection.current
+    const textNode = textRef.current
+    if (!textNode?.hasSelection()) {
       return null
     }
-    const selection = textBufferView.getSelection()
+    const selection = textNode.getSelection()
     if (!selection) return null
 
     // Convert from render positions to original text positions
-    const start = renderPositionToOriginal(
-      value,
-      Math.min(selection.start, selection.end),
-    )
-    const end = renderPositionToOriginal(
-      value,
-      Math.max(selection.start, selection.end),
-    )
+    const start = fromNativeOffset(Math.min(selection.start, selection.end))
+    const end = fromNativeOffset(Math.max(selection.start, selection.end))
 
     if (start === end) return null
     return { start, end }
   }, [value])
 
+  useLayoutEffect(() => {
+    const retained = pendingSelection.current
+    const node = textRef.current
+    if (!retained || !node) return
+    const restore = () => {
+      if (pendingSelection.current !== retained || node.isDestroyed) return
+      const info = node.lineInfo
+      const point = (offset: number, inclusiveEnd = false) => {
+        const cell = Math.max(
+          0,
+          toNativeOffset(offset) - (inclusiveEnd ? 1 : 0),
+        )
+        const row = Math.max(
+          0,
+          info.lineStartCols.findLastIndex((start) => start <= cell),
+        )
+        return {
+          x: node.x + cell - (info.lineStartCols[row] ?? 0),
+          y: node.y + row,
+        }
+      }
+      const start = point(retained.start)
+      const end = point(retained.end, true)
+      renderer.startSelection(node, start.x, start.y)
+      renderer.updateSelection(node, end.x, end.y, { finishDragging: true })
+    }
+    restore()
+    // Native text can still hold the edited buffer during React's layout pass.
+    // Keep keyboard selection logical and refresh its highlight after the frame.
+    const afterFrame = () => {
+      restore()
+      if (pendingSelection.current === retained) pendingSelection.current = null
+    }
+    renderer.once('frame', afterFrame)
+    return () => {
+      renderer.off('frame', afterFrame)
+    }
+  }, [value, cursorPosition, historyContext])
+
   // Helper to clear the current selection
   const clearSelection = useCallback(() => {
+    restoredSelection.current = null
+    pendingSelection.current = null
     // Use renderer's clearSelection for proper visual clearing
     ;(renderer as any)?.clearSelection?.()
   }, [renderer])
@@ -521,9 +671,6 @@ export const MultilineInput = forwardRef<
 
         // Update refs synchronously BEFORE calling onChange - critical for IME input
         // where multiple characters may arrive before React processes state updates
-        valueRef.current = newValue
-        cursorPositionRef.current = newCursor
-
         onChange({
           text: newValue,
           cursorPosition: newCursor,
@@ -544,9 +691,6 @@ export const MultilineInput = forwardRef<
 
       // Update refs synchronously BEFORE calling onChange - critical for IME input
       // where multiple characters may arrive before React processes state updates
-      valueRef.current = newValue
-      cursorPositionRef.current = newCursor
-
       onChange({
         text: newValue,
         cursorPosition: newCursor,
@@ -558,6 +702,8 @@ export const MultilineInput = forwardRef<
 
   const moveCursor = useCallback(
     (nextPosition: number) => {
+      const value = valueRef.current
+      const cursorPosition = cursorPositionRef.current
       const clamped = Math.max(0, Math.min(value.length, nextPosition))
       if (clamped === cursorPosition) return
       onChange({
@@ -573,56 +719,38 @@ export const MultilineInput = forwardRef<
   const handleMouseDown = useCallback(
     (event: MouseEvent) => {
       if (!focused) return
+      restoredSelection.current = null
+      pendingSelection.current = null
 
       // Clear sticky column since this is not up/down navigation
       stickyColumnRef.current = null
 
       const scrollBox = scrollBoxRef.current
       if (!scrollBox) return
+      scrollBox.focus()
 
-      const lineStarts = lineInfo?.lineStartCols ?? [0]
-
-      const viewport = (scrollBox as any).viewport
-      const viewportTop = Number(viewport?.y ?? 0)
-      const viewportLeft = Number(viewport?.x ?? 0)
-
-      // Get click position, accounting for scroll
-      const scrollPosition = scrollBox.verticalScrollBar?.scrollPosition ?? 0
-      const clickRowInViewport = Math.floor(event.y - viewportTop)
-      const clickRow = clickRowInViewport + scrollPosition
-
-      // Find which visual line was clicked
-      const lineIndex = Math.min(Math.max(0, clickRow), lineStarts.length - 1)
-
-      // Get the character range for this line
-      const lineStartChar = lineStarts[lineIndex]
-      const lineEndChar = lineStarts[lineIndex + 1] ?? value.length
-
-      // Convert click x to character position, accounting for tabs
-      const clickCol = Math.max(0, Math.floor(event.x - viewportLeft))
-
-      let visualCol = 0
-      let charIndex = lineStartChar
-
-      while (charIndex < lineEndChar && visualCol < clickCol) {
-        const char = value[charIndex]
-        if (char === '\t') {
-          visualCol += TAB_WIDTH
-        } else if (char === '\n') {
-          break
-        } else {
-          visualCol += 1
-        }
-        charIndex++
-      }
-
-      // Clamp to valid range
-      const newCursorPosition = Math.min(charIndex, value.length)
+      const node = textRef.current
+      if (!node) return
+      const info = node.lineInfo
+      const lineIndex = Math.max(
+        0,
+        Math.min(info.lineStartCols.length - 1, Math.floor(event.y - node.y)),
+      )
+      const clickCol = Math.max(
+        0,
+        Math.min(
+          info.lineWidthCols[lineIndex] ?? 0,
+          Math.floor(event.x - node.x),
+        ),
+      )
+      const newCursorPosition = fromNativeOffset(
+        (info.lineStartCols[lineIndex] ?? 0) + clickCol,
+      )
 
       // Update cursor position if changed
       if (newCursorPosition !== cursorPosition) {
         onChange({
-          text: value,
+          text: valueRef.current,
           cursorPosition: newCursorPosition,
           lastEditDueToNav: false,
         })
@@ -658,7 +786,7 @@ export const MultilineInput = forwardRef<
 
     const beforeCursor = displayValueForRendering.slice(0, renderCursorPosition)
     const afterCursor = displayValueForRendering.slice(renderCursorPosition)
-    const activeChar = afterCursor.charAt(0) || ' '
+    const activeChar = afterCursor.slice(0, nextGrapheme(afterCursor, 0)) || ' '
     const shouldHighlight =
       !isPlaceholder &&
       renderCursorPosition < displayValueForRendering.length &&
@@ -678,6 +806,8 @@ export const MultilineInput = forwardRef<
   // Handle enter/newline keys
   const handleEnterKeys = useCallback(
     (key: KeyEvent): boolean => {
+      const value = valueRef.current
+      const cursorPosition = cursorPositionRef.current
       const lowerKeyName = (key.name ?? '').toLowerCase()
       const keypadEnter = isKeypadEnter(key)
       const isReturnOrEnter =
@@ -697,27 +827,14 @@ export const MultilineInput = forwardRef<
       if (!isEnterKey && !isCtrlJ) return false
 
       const isAltLikeModifier = isAltModifier(key)
-      const hasEscapePrefix =
-        typeof key.sequence === 'string' &&
-        key.sequence.length > 0 &&
-        key.sequence.charCodeAt(0) === 0x1b
       const hasBackslashBeforeCursor =
         cursorPosition > 0 && value[cursorPosition - 1] === '\\'
 
-      // Plain Enter: no modifiers, sequence is '\r' (macOS) or '\n' (Linux)
+      // Parsed protocol Enter has the same semantics as a literal Return.
       const isPlainEnter =
-        isEnterKey &&
-        !key.shift &&
-        !key.ctrl &&
-        !key.meta &&
-        !key.option &&
-        !isAltLikeModifier &&
-        (!hasEscapePrefix || keypadEnter) &&
-        (key.sequence === '\r' || key.sequence === '\n' || keypadEnter) &&
-        !hasBackslashBeforeCursor
+        isPlainEnterKey(key) && !isAltLikeModifier && !hasBackslashBeforeCursor
       const isShiftEnter = isEnterKey && Boolean(key.shift)
-      const isOptionEnter =
-        isEnterKey && !keypadEnter && (isAltLikeModifier || hasEscapePrefix)
+      const isOptionEnter = isEnterKey && !keypadEnter && isAltLikeModifier
       const isBackslashEnter = isEnterKey && hasBackslashBeforeCursor
 
       const shouldInsertNewline =
@@ -725,11 +842,24 @@ export const MultilineInput = forwardRef<
 
       if (shouldInsertNewline) {
         preventKeyDefault(key)
+        const selection = getSelectionRange()
+        if (selection) {
+          clearSelection()
+          onChange({
+            text:
+              value.slice(0, selection.start) +
+              '\n' +
+              value.slice(selection.end),
+            cursorPosition: selection.start + 1,
+            lastEditDueToNav: false,
+          })
+          return true
+        }
 
         // For backslash+Enter, remove the backslash and insert newline
         if (isBackslashEnter) {
           const newValue =
-            value.slice(0, cursorPosition - 1) +
+            value.slice(0, previousGrapheme(value, cursorPosition)) +
             '\n' +
             value.slice(cursorPosition)
           onChange({
@@ -753,18 +883,34 @@ export const MultilineInput = forwardRef<
 
       if (isPlainEnter) {
         preventKeyDefault(key)
-        onSubmit()
+        undoRef.current = []
+        redoRef.current = []
+        submittedDraft.current = true
+        onSubmit({
+          text: valueRef.current,
+          cursorPosition: cursorPositionRef.current,
+          lastEditDueToNav: false,
+        })
         return true
       }
 
       return false
     },
-    [value, cursorPosition, onChange, onSubmit],
+    [
+      value,
+      cursorPosition,
+      onChange,
+      onSubmit,
+      getSelectionRange,
+      clearSelection,
+    ],
   )
 
   // Handle deletion keys (backspace, delete, ctrl+h, ctrl+d, word/line deletion)
   const handleDeletionKeys = useCallback(
     (key: KeyEvent): boolean => {
+      const value = valueRef.current
+      const cursorPosition = cursorPositionRef.current
       const lowerKeyName = (key.name ?? '').toLowerCase()
       const isAltLikeModifier = isAltModifier(key)
       const lineStart = findLineStart(value, cursorPosition)
@@ -776,8 +922,9 @@ export const MultilineInput = forwardRef<
       if (key.ctrl && lowerKeyName === 'u' && !key.meta && !key.option) {
         preventKeyDefault(key)
         if (handleSelectionDeletion()) return true
-        const visualLineStart =
-          lineInfo?.lineStartCols?.[cursorRow] ?? lineStart
+        const visualLineStart = lineInfo
+          ? fromNativeOffset(lineInfo.lineStartCols[cursorRow] ?? 0)
+          : lineStart
 
         if (cursorPosition > visualLineStart) {
           const newValue =
@@ -789,10 +936,11 @@ export const MultilineInput = forwardRef<
           })
         } else if (cursorPosition > 0) {
           const newValue =
-            value.slice(0, cursorPosition - 1) + value.slice(cursorPosition)
+            value.slice(0, previousGrapheme(value, cursorPosition)) +
+            value.slice(cursorPosition)
           onChange({
             text: newValue,
-            cursorPosition: cursorPosition - 1,
+            cursorPosition: previousGrapheme(value, cursorPosition),
             lastEditDueToNav: false,
           })
         }
@@ -829,8 +977,9 @@ export const MultilineInput = forwardRef<
             value[cursorPosition - 1] === '\n'
           ) {
             newValue =
-              value.slice(0, cursorPosition - 1) + value.slice(cursorPosition)
-            nextCursor = cursorPosition - 1
+              value.slice(0, previousGrapheme(value, cursorPosition)) +
+              value.slice(cursorPosition)
+            nextCursor = previousGrapheme(value, cursorPosition)
           } else {
             newValue = value.slice(0, lineStart) + value.slice(cursorPosition)
             nextCursor = lineStart
@@ -839,8 +988,9 @@ export const MultilineInput = forwardRef<
 
         if (newValue === originalValue && cursorPosition > 0) {
           newValue =
-            value.slice(0, cursorPosition - 1) + value.slice(cursorPosition)
-          nextCursor = cursorPosition - 1
+            value.slice(0, previousGrapheme(value, cursorPosition)) +
+            value.slice(cursorPosition)
+          nextCursor = previousGrapheme(value, cursorPosition)
         }
 
         if (newValue !== originalValue) {
@@ -881,10 +1031,11 @@ export const MultilineInput = forwardRef<
         if (handleSelectionDeletion()) return true
         if (cursorPosition > 0) {
           const newValue =
-            value.slice(0, cursorPosition - 1) + value.slice(cursorPosition)
+            value.slice(0, previousGrapheme(value, cursorPosition)) +
+            value.slice(cursorPosition)
           onChange({
             text: newValue,
-            cursorPosition: cursorPosition - 1,
+            cursorPosition: previousGrapheme(value, cursorPosition),
             lastEditDueToNav: false,
           })
         }
@@ -897,7 +1048,8 @@ export const MultilineInput = forwardRef<
         if (handleSelectionDeletion()) return true
         if (cursorPosition < value.length) {
           const newValue =
-            value.slice(0, cursorPosition) + value.slice(cursorPosition + 1)
+            value.slice(0, cursorPosition) +
+            value.slice(nextGrapheme(value, cursorPosition))
           onChange({
             text: newValue,
             cursorPosition,
@@ -913,10 +1065,11 @@ export const MultilineInput = forwardRef<
         if (handleSelectionDeletion()) return true
         if (cursorPosition > 0) {
           const newValue =
-            value.slice(0, cursorPosition - 1) + value.slice(cursorPosition)
+            value.slice(0, previousGrapheme(value, cursorPosition)) +
+            value.slice(cursorPosition)
           onChange({
             text: newValue,
-            cursorPosition: cursorPosition - 1,
+            cursorPosition: previousGrapheme(value, cursorPosition),
             lastEditDueToNav: false,
           })
         }
@@ -929,7 +1082,8 @@ export const MultilineInput = forwardRef<
         if (handleSelectionDeletion()) return true
         if (cursorPosition < value.length) {
           const newValue =
-            value.slice(0, cursorPosition) + value.slice(cursorPosition + 1)
+            value.slice(0, cursorPosition) +
+            value.slice(nextGrapheme(value, cursorPosition))
           onChange({
             text: newValue,
             cursorPosition,
@@ -954,6 +1108,8 @@ export const MultilineInput = forwardRef<
   // Handle navigation keys (arrows, home, end, word navigation, emacs bindings)
   const handleNavigationKeys = useCallback(
     (key: KeyEvent): boolean => {
+      const value = valueRef.current
+      const cursorPosition = cursorPositionRef.current
       const lowerKeyName = (key.name ?? '').toLowerCase()
       const isAltLikeModifier = isAltModifier(key)
       const logicalLineStart = findLineStart(value, cursorPosition)
@@ -962,21 +1118,28 @@ export const MultilineInput = forwardRef<
       const wordEnd = findNextWordBoundary(value, cursorPosition)
 
       // Read lineInfo inside the callback to get current value (not stale from closure)
-      const currentLineInfo = textRef.current
-        ? ((textRef.current as any).textBufferView as TextBufferView)?.lineInfo
-        : null
+      const currentLineInfo = textRef.current?.lineInfo ?? null
 
       // Calculate visual line boundaries from lineInfo (accounts for word wrap)
       // Fall back to logical line boundaries if visual info is unavailable
       const lineStarts = currentLineInfo?.lineStartCols ?? []
+      const displayCursor = toNativeOffset(cursorPosition)
       const visualLineIndex = lineStarts.findLastIndex(
-        (start) => start <= cursorPosition,
+        (start) => start <= displayCursor,
       )
       const visualLineStart =
-        visualLineIndex >= 0 ? lineStarts[visualLineIndex] : logicalLineStart
+        visualLineIndex >= 0
+          ? fromNativeOffset(lineStarts[visualLineIndex])
+          : logicalLineStart
       const visualLineEnd =
         lineStarts[visualLineIndex + 1] !== undefined
-          ? lineStarts[visualLineIndex + 1] - 1
+          ? fromNativeOffset(
+              lineStarts[visualLineIndex + 1] -
+                (currentLineInfo?.lineSources[visualLineIndex] !==
+                currentLineInfo?.lineSources[visualLineIndex + 1]
+                  ? 1
+                  : 0),
+            )
           : logicalLineEnd
 
       // Alt+Left/B: Word left
@@ -1060,7 +1223,7 @@ export const MultilineInput = forwardRef<
         preventKeyDefault(key)
         onChange({
           text: value,
-          cursorPosition: Math.max(0, cursorPosition - 1),
+          cursorPosition: previousGrapheme(value, cursorPosition),
           lastEditDueToNav: false,
         })
         return true
@@ -1071,7 +1234,7 @@ export const MultilineInput = forwardRef<
         preventKeyDefault(key)
         onChange({
           text: value,
-          cursorPosition: Math.min(value.length, cursorPosition + 1),
+          cursorPosition: nextGrapheme(value, cursorPosition),
           lastEditDueToNav: false,
         })
         return true
@@ -1080,14 +1243,14 @@ export const MultilineInput = forwardRef<
       // Left arrow (no modifiers)
       if (key.name === 'left' && !key.ctrl && !key.meta && !key.option) {
         preventKeyDefault(key)
-        moveCursor(cursorPosition - 1)
+        moveCursor(previousGrapheme(value, cursorPosition))
         return true
       }
 
       // Right arrow (no modifiers)
       if (key.name === 'right' && !key.ctrl && !key.meta && !key.option) {
         preventKeyDefault(key)
-        moveCursor(cursorPosition + 1)
+        moveCursor(nextGrapheme(value, cursorPosition))
         return true
       }
 
@@ -1097,13 +1260,19 @@ export const MultilineInput = forwardRef<
         const desiredIndex = getOrSetStickyColumn(lineStarts, !shouldHighlight)
         onChange({
           text: value,
-          cursorPosition: calculateNewCursorPosition({
-            cursorPosition,
-            lineStarts,
-            cursorIsChar: !shouldHighlight,
-            direction: 'up',
-            desiredIndex,
-          }),
+          cursorPosition:
+            visualLineIndex <= 0
+              ? 0
+              : fromNativeOffset(
+                  Math.min(
+                    lineStarts[visualLineIndex - 1] + desiredIndex,
+                    lineStarts[visualLineIndex] -
+                      (currentLineInfo?.lineSources[visualLineIndex - 1] !==
+                      currentLineInfo?.lineSources[visualLineIndex]
+                        ? 1
+                        : 0),
+                  ),
+                ),
           lastEditDueToNav: false,
         })
         return true
@@ -1115,13 +1284,21 @@ export const MultilineInput = forwardRef<
         const desiredIndex = getOrSetStickyColumn(lineStarts, !shouldHighlight)
         onChange({
           text: value,
-          cursorPosition: calculateNewCursorPosition({
-            cursorPosition,
-            lineStarts,
-            cursorIsChar: !shouldHighlight,
-            direction: 'down',
-            desiredIndex,
-          }),
+          cursorPosition:
+            visualLineIndex >= lineStarts.length - 1
+              ? value.length
+              : fromNativeOffset(
+                  Math.min(
+                    lineStarts[visualLineIndex + 1] + desiredIndex,
+                    (lineStarts[visualLineIndex + 2] ??
+                      textDisplayOffset(value, value.length)) -
+                      (currentLineInfo?.lineSources[visualLineIndex + 1] !==
+                        currentLineInfo?.lineSources[visualLineIndex + 2] &&
+                      lineStarts[visualLineIndex + 2] !== undefined
+                        ? 1
+                        : 0),
+                  ),
+                ),
           lastEditDueToNav: false,
         })
         return true
@@ -1161,7 +1338,7 @@ export const MultilineInput = forwardRef<
         preventKeyDefault(key)
 
         if (textToInsert.length > LONG_TEXT_THRESHOLD) {
-          onPaste(textToInsert)
+          handleTextPaste(textToInsert)
           return true
         }
 
@@ -1171,7 +1348,7 @@ export const MultilineInput = forwardRef<
 
       return false
     },
-    [insertTextAtCursor, onPaste],
+    [insertTextAtCursor, handleTextPaste],
   )
 
   // Increase StdinParser timeout from default 10ms to 100ms.
@@ -1194,8 +1371,8 @@ export const MultilineInput = forwardRef<
   // at the global level, plus a scrollbox-level backup. Some terminals may not
   // deliver paste events reliably via one mechanism alone, so we use both with
   // dedup to prevent double-handling.
-  const onPasteRef = useRef(onPaste)
-  onPasteRef.current = onPaste
+  const onPasteRef = useRef(handleTextPaste)
+  onPasteRef.current = handleTextPaste
   const pasteHandledRef = useRef(false)
 
   // Always listen for paste events regardless of terminal focus state.
@@ -1226,7 +1403,34 @@ export const MultilineInput = forwardRef<
   useKeyboard(
     useCallback(
       (key: KeyEvent) => {
-        if (!focused) return
+        if (!focused || isInputActive?.() === false) return
+        const node = scrollBoxRef.current
+        if (node && !node.focused && !node.hasFocusedDescendant) return
+        beforeEdit.current = snapshot()
+        const undo = (key.ctrl || key.meta) && key.name === 'z' && !key.shift
+        const redo =
+          ((key.ctrl || key.meta) && key.name === 'z' && key.shift) ||
+          (key.ctrl && key.name === 'y')
+        if (undo || redo) {
+          preventKeyDefault(key)
+          const from = undo ? undoRef.current : redoRef.current
+          const to = undo ? redoRef.current : undoRef.current
+          const restored = from.pop()
+          if (restored) {
+            to.push(snapshot())
+            clearSelection()
+            restoringDraft.current = true
+            pendingSelection.current = restored.selection
+            restoredSelection.current = restored.selection
+            if (restored.context !== undefined) {
+              contextRef.current = restored.context
+              onRestoreHistoryContext?.(restored.context)
+            }
+            onChange(restored.input)
+            restoringDraft.current = false
+          }
+          return
+        }
 
         if (onKeyIntercept) {
           const handled = onKeyIntercept(key)
@@ -1242,11 +1446,16 @@ export const MultilineInput = forwardRef<
         // Delegate to specialized handlers
         if (handleEnterKeys(key)) return
         if (handleDeletionKeys(key)) return
-        if (handleNavigationKeys(key)) return
+        if (handleNavigationKeys(key)) {
+          clearSelection()
+          return
+        }
         if (handleCharacterInput(key)) return
       },
       [
         focused,
+        isInputActive,
+        onRestoreHistoryContext,
         onKeyIntercept,
         handleEnterKeys,
         handleDeletionKeys,
@@ -1390,82 +1599,100 @@ export const MultilineInput = forwardRef<
 
   // Use theme's info color for selection highlight background
   const highlightBg = theme.info
+  const showPosition =
+    layoutMetrics.isScrollable && layoutMetrics.heightLines > 1
+  const contentHeight = Math.max(
+    1,
+    layoutMetrics.heightLines - (showPosition ? 1 : 0),
+  )
+  const logicalLine = value.slice(0, cursorPosition).split('\n').length
+  const logicalColumn =
+    textDisplayOffset(value, cursorPosition) -
+    textDisplayOffset(value, findLineStart(value, cursorPosition)) +
+    1
 
   return (
-    <scrollbox
-      ref={scrollBoxRef}
-      scrollX={false}
-      stickyScroll={false}
-      scrollbarOptions={{ visible: false }}
-      verticalScrollbarOptions={{
-        visible: showScrollbar && layoutMetrics.isScrollable,
-        trackOptions: { width: 1 },
-      }}
-      onPaste={(event) => {
-        // Backup paste handler: fires if the global keyHandler listener
-        // didn't catch this event (dedup prevents double-handling)
-        if (pasteHandledRef.current) return
-        onPasteRef.current(getPasteText(event))
-      }}
-      onMouseDown={handleMouseDown}
-      style={{
-        flexGrow: 0,
-        flexShrink: 0,
-        rootOptions: {
-          width: '100%',
-          height: layoutMetrics.heightLines,
-          backgroundColor: 'transparent',
+    <box style={{ flexDirection: 'column', width: '100%', flexShrink: 0 }}>
+      <scrollbox
+        ref={scrollBoxRef}
+        scrollX={false}
+        stickyScroll={false}
+        scrollbarOptions={{ visible: false }}
+        verticalScrollbarOptions={{
+          visible: showScrollbar && layoutMetrics.isScrollable,
+          trackOptions: { width: 1 },
+        }}
+        onPaste={(event) => {
+          // Backup paste handler: fires if the global keyHandler listener
+          // didn't catch this event (dedup prevents double-handling)
+          if (pasteHandledRef.current) return
+          onPasteRef.current(getPasteText(event))
+        }}
+        onMouseDown={handleMouseDown}
+        style={{
           flexGrow: 0,
           flexShrink: 0,
-        },
-        wrapperOptions: {
-          paddingLeft: 1,
-          paddingRight: 1,
-          border: false,
-        },
-        contentOptions: {
-          justifyContent: 'flex-start',
-        },
-      }}
-    >
-      <text
-        ref={textRef}
-        style={{ bg: 'transparent', fg: inputColor, wrapMode: 'char' }}
+          rootOptions: {
+            width: '100%',
+            height: contentHeight,
+            backgroundColor: 'transparent',
+            flexGrow: 0,
+            flexShrink: 0,
+          },
+          wrapperOptions: {
+            paddingLeft: 1,
+            paddingRight: 1,
+            border: false,
+          },
+          contentOptions: {
+            justifyContent: 'flex-start',
+          },
+        }}
       >
-        {showCursor ? (
-          <>
-            {beforeCursor}
-            {shouldHighlight ? (
-              <span
-                bg={highlightBg}
-                fg={theme.background}
-                attributes={TextAttributes.BOLD}
-              >
-                {activeChar === ' ' ? '\u00a0' : activeChar}
-              </span>
-            ) : (
-              <InputCursor
-                visible={true}
-                focused={focused}
-                shouldBlink={effectiveShouldBlinkCursor}
-                color={supportsTruecolor() ? theme.info : 'lime'}
-                key={lastActivity}
-              />
-            )}
-            {shouldHighlight
-              ? afterCursor.length > 0
-                ? afterCursor.slice(1)
-                : ''
-              : afterCursor}
-            {layoutMetrics.gutterEnabled ? '\n' : ''}
-          </>
-        ) : (
-          <>
-            {displayValueForRendering}
-            {layoutMetrics.gutterEnabled ? '\n' : ''}
-          </>
-        )}
-      </text>
-    </scrollbox>
+        <text
+          ref={textRef}
+          style={{ bg: 'transparent', fg: inputColor, wrapMode: 'char' }}
+        >
+          {showCursor ? (
+            <>
+              {beforeCursor}
+              {shouldHighlight ? (
+                <span
+                  bg={highlightBg}
+                  fg={theme.background}
+                  attributes={TextAttributes.BOLD}
+                >
+                  {activeChar === ' ' ? '\u00a0' : activeChar}
+                </span>
+              ) : (
+                <InputCursor
+                  visible={true}
+                  focused={focused}
+                  shouldBlink={effectiveShouldBlinkCursor}
+                  color={supportsTruecolor() ? theme.info : 'lime'}
+                  key={lastActivity}
+                />
+              )}
+              {shouldHighlight
+                ? afterCursor.length > 0
+                  ? afterCursor.slice(activeChar.length)
+                  : ''
+                : afterCursor}
+              {layoutMetrics.gutterEnabled ? '\n' : ''}
+            </>
+          ) : (
+            <>
+              {displayValueForRendering}
+              {layoutMetrics.gutterEnabled ? '\n' : ''}
+            </>
+          )}
+        </text>
+      </scrollbox>
+      {showPosition && (
+        <text fg={theme.muted} wrapMode="none" style={{ height: 1 }}>
+          {`Line ${logicalLine}/${value.split('\n').length} · column ${logicalColumn} · Ctrl+Z undo`}
+        </text>
+      )}
+    </box>
   )
 })

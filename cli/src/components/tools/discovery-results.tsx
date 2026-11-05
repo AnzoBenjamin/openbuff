@@ -9,6 +9,7 @@ import type { ChatTheme } from '../../types/theme-system'
 export interface SearchMatch {
   line: number
   content: string
+  context?: boolean
 }
 
 export interface SearchGroup {
@@ -34,7 +35,10 @@ export function statusGlyph(
   theme: ChatTheme,
 ): { glyph: string; color: string } {
   if (status === 'failed') return { glyph: '✗', color: theme.error }
+  if (status === 'cancelled') return { glyph: '×', color: theme.warning }
   if (status === 'unavailable') return { glyph: '–', color: theme.muted }
+  if (/^(disabled|stale|degraded|partial|error)/.test(status))
+    return { glyph: '◐', color: theme.warning }
   if (status.startsWith('complete') || status.startsWith('ready')) {
     return { glyph: '✓', color: theme.success }
   }
@@ -57,8 +61,8 @@ export interface HighlightSegment {
 
 /**
  * Split content into matched/unmatched segments for emphasis rendering.
- * Tolerates invalid or pathological patterns: invalid regex falls back to a
- * case-insensitive literal split; oversized patterns skip highlighting.
+ * Use case-insensitive literal emphasis. Search producers own regex matching;
+ * the UI never evaluates an untrusted pattern during layout.
  */
 export function splitPatternSegments(
   text: string,
@@ -67,52 +71,21 @@ export function splitPatternSegments(
   if (!text || !pattern || pattern.length > 200) {
     return [{ text, match: false }]
   }
-  let re: RegExp | null = null
-  try {
-    re = new RegExp(pattern, 'gi')
-  } catch {
-    re = null
-  }
-  if (!re) {
-    const needle = pattern.toLowerCase()
-    const haystack = text.toLowerCase()
-    const segments: HighlightSegment[] = []
-    let from = 0
-    let at = haystack.indexOf(needle)
-    while (at !== -1) {
-      if (at > from) {
-        segments.push({ text: text.slice(from, at), match: false })
-      }
-      segments.push({ text: text.slice(at, at + needle.length), match: true })
-      from = at + needle.length
-      at = haystack.indexOf(needle, from)
-    }
-    if (from < text.length) {
-      segments.push({ text: text.slice(from), match: false })
-    }
-    return segments.length > 0 ? segments : [{ text, match: false }]
-  }
+  const needle = pattern.toLowerCase()
+  const haystack = text.toLowerCase()
+  if (haystack.length !== text.length) return [{ text, match: false }]
   const segments: HighlightSegment[] = []
-  let last = 0
-  re.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > last) {
-      segments.push({ text: text.slice(last, match.index), match: false })
-    }
-    const matched = match[0]
-    if (matched.length === 0) {
-      re.lastIndex += 1
-      continue
-    }
-    segments.push({ text: matched, match: true })
-    last = match.index + matched.length
-    if (segments.length > 1000) break
+  let from = 0
+  let at = haystack.indexOf(needle)
+  while (at !== -1 && segments.length < 1000) {
+    if (at > from) segments.push({ text: text.slice(from, at), match: false })
+    segments.push({ text: text.slice(at, at + needle.length), match: true })
+    from = at + needle.length
+    at = haystack.indexOf(needle, from)
   }
-  if (last < text.length) {
-    segments.push({ text: text.slice(last), match: false })
-  }
-  return segments
+  if (from < text.length)
+    segments.push({ text: text.slice(from), match: false })
+  return segments.length ? segments : [{ text, match: false }]
 }
 
 /**
@@ -175,9 +148,7 @@ export function CollapsibleGroup({
           <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
             {expanded ? '▾ ' : '▸ '}
           </span>
-          <span fg={theme.directory}>
-            {`${label} (${badge ?? count})`}
-          </span>
+          <span fg={theme.directory}>{`${label} (${badge ?? count})`}</span>
         </text>
       </Button>
       {entries.slice(0, visibleCount)}

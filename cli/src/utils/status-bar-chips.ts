@@ -110,7 +110,7 @@ export const STOP_BUTTON_WIDTH = 7
 /**
  * Columns reserved for the scroll-to-bottom button rendered beside the chips.
  * `SCROLL_BUTTON_WIDTH` in components/scroll-to-bottom-button.tsx is the source
- * of truth ('↓ Bottom' plus one column of padding per side); duplicated here so
+ * of truth ('↓ Latest' plus one column of padding per side); duplicated here so
  * this util does not import a component module.
  */
 export const SCROLL_BUTTON_RESERVATION = 10
@@ -119,9 +119,9 @@ export const SCROLL_BUTTON_RESERVATION = 10
  * `SCROLL_BUTTON_COMPACT_WIDTH` in components/scroll-to-bottom-button.tsx is the
  * source of truth (the glyph plus one column of padding per side); duplicated
  * here for the same reason as the expanded reservation, so reserving the wider
- * form at 'xs'/'sm' cannot silently cost the chips seven columns.
+ * form at 'xs'/'sm' cannot silently cost the chips two columns.
  */
-export const SCROLL_BUTTON_COMPACT_RESERVATION = 3
+export const SCROLL_BUTTON_COMPACT_RESERVATION = 8
 /** Columns rendered between two adjacent chips. */
 const CHIP_SEPARATOR_WIDTH = 3
 /** Suffix appended to a truncated status chip label. */

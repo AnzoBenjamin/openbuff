@@ -8,10 +8,12 @@ import { handleContextCommand } from './context'
 import { formatQueuedMessageForHistory } from '../hooks/helpers/send-message'
 import { handleIndexCommandBlocks } from './index-command'
 import { handleHelpCommand } from './help'
-import { handleImageCommand } from './image'
+import { handleImageCommand, parseImageCommandArgs } from './image'
 import { handleInfoCommand } from './info'
 import { buildUpdateStatus, buildUpdateStatusMessage } from './update-command'
 import { handleMemoryCommandBlocks } from './memory-command'
+import { handleSnapshotRestoreCommand } from './snapshot-commands'
+import { runLocalCommandOperation } from './local-operation'
 import { handleInitializationFlowLocally } from './init'
 import { buildSafeGitCommand } from './git-command-args'
 import {
@@ -21,7 +23,8 @@ import {
   getActivePlanSessionSlug,
   hasAnyArtifact,
   hasPlanArtifactInDir,
-  listPlanSessions,
+  listPlanSessionsAsync,
+  readPlanArtifactPage,
   PLAN_ARTIFACT_NAMES,
   PLAN_SESSIONS_DIR_PREFIX,
   readPlanArtifacts,
@@ -46,7 +49,6 @@ import {
   getLoadedMCPServers,
   getProjectAgentTrustStatus,
 } from '../utils/local-agent-registry'
-import { useFeedbackStore } from '../state/feedback-store'
 import { AGENT_MODES } from '../utils/constants'
 import { getSystemMessage, getUserMessage } from '../utils/message-history'
 import {
@@ -66,9 +68,7 @@ import {
   cancelTurnBisection,
   isTurnBisectionRunning,
   listTurnSnapshots,
-  restoreToTurn,
   runTurnBisection,
-  undoLastTurn,
 } from '../utils/turn-snapshots'
 import { getAttachTarget } from '../utils/codebuff-client'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
@@ -85,9 +85,15 @@ import type { MultilineInputHandle } from '../components/multiline-input'
 import type { InputValue, PendingAttachment } from '../types/store'
 import type { QueuedMessage } from '../hooks/use-message-queue'
 import type { ChatMessage, ContentBlock } from '../types/chat'
-import type { SendMessageFn } from '../types/contracts/send-message'
+import type {
+  PostUserMessageFn,
+  SendMessageFn,
+} from '../types/contracts/send-message'
 import type { AgentMode } from '../utils/constants'
-import { buildCliCapabilityMapV1, buildDoctorCapabilityRows } from '../utils/capability-tiers'
+import {
+  buildCliCapabilityMapV1,
+  buildDoctorCapabilityRows,
+} from '../utils/capability-tiers'
 
 export type RouterParams = {
   abortControllerRef: React.MutableRefObject<AbortController | null>
@@ -97,7 +103,15 @@ export type RouterParams = {
   isChainInProgressRef: React.MutableRefObject<boolean>
   isStreaming: boolean
   streamMessageIdRef: React.MutableRefObject<string | null>
-  addToQueue: (message: string, attachments?: PendingAttachment[]) => void
+  addToQueue: (
+    message: string,
+    attachments: PendingAttachment[],
+    agentMode: AgentMode,
+  ) => void
+  /** Submit an action without consuming the composer's draft or attachments. */
+  preserveInputValue?: boolean
+  preservePromptWhitespace?: boolean
+  onPromptAccepted?: () => void
   /**
    * Drains up to `count` prompts (all of them when `count` is omitted) from
    * the guarded-submit queue, returning them with their attachments. The
@@ -189,8 +203,12 @@ export function defineCommand(config: CommandConfig): CommandDefinition {
     name: config.name,
     aliases: config.aliases ?? [],
     acceptsArgs: false,
-    handler: (params) => {
-      // Args are gracefully ignored for commands that don't accept them
+    handler: (params, args) => {
+      if (args.trim())
+        appendLocalMessage(
+          params,
+          `/${config.name} does not accept arguments; executing /${config.name} without ${JSON.stringify(args.trim())}. Use /help for supported forms.`,
+        )
       return config.handler(params)
     },
   }
@@ -212,6 +230,7 @@ export function defineCommandWithArgs(
 }
 
 const clearInput = (params: RouterParams) => {
+  if (params.preserveInputValue) return
   params.setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
 }
 
@@ -255,10 +274,11 @@ const exitWithAnalyticsFlush = (
   })
 }
 
-const sendPromptCommand = (
+export const sendPromptCommand = (
   params: RouterParams,
   prompt: string,
   mode: AgentMode = params.agentMode,
+  postUserMessage?: PostUserMessageFn,
 ) => {
   // Guarded submit: never start a second concurrent turn while a stream or
   // chain is active — queue the prompt instead (same busy-check + queue
@@ -271,18 +291,27 @@ const sendPromptCommand = (
     params.streamMessageIdRef.current ||
     params.isChainInProgressRef.current
   ) {
-    params.addToQueue(prompt)
+    params.addToQueue(
+      prompt,
+      params.preserveInputValue ? [] : capturePendingAttachments(),
+      mode,
+    )
+    params.onPromptAccepted?.()
     params.setInputFocused(true)
     params.inputRef.current?.focus()
-    return
+    return Promise.resolve()
   }
-  params.sendMessage({
+  const sending = params.sendMessage({
     content: prompt,
     agentMode: mode,
+    ...(postUserMessage ? { postUserMessage } : {}),
+    ...(params.preserveInputValue ? { attachments: [] } : {}),
+    ...(params.onPromptAccepted ? { onAccepted: params.onPromptAccepted } : {}),
   })
   setTimeout(() => {
     params.scrollToLatest()
   }, 0)
+  return sending
 }
 
 const appendLocalMessage = (params: RouterParams, body: string) => {
@@ -355,7 +384,9 @@ export const formatPlanStatusReport = (
   } else {
     lines.push('Artifacts found:')
     for (const name of present) {
-      lines.push(`  - ${artifacts.presentPaths[name]}`)
+      lines.push(
+        `  - ${artifacts.presentPaths[name]} · inspect: /plan-artifact ${artifacts.sessionDir} ${name}`,
+      )
     }
   }
   if (artifacts.missing.length > 0) {
@@ -483,18 +514,11 @@ const ALL_COMMANDS: CommandDefinition[] = [
   defineCommandWithArgs({
     name: 'feedback',
     aliases: ['bug', 'report'],
-    handler: (params, args) => {
-      const trimmedArgs = args.trim()
-
-      // If user provided feedback text directly, pre-populate the form
-      if (trimmedArgs) {
-        useFeedbackStore.getState().setFeedbackText(trimmedArgs)
-        useFeedbackStore.getState().setFeedbackCursor(trimmedArgs.length)
-      }
-
-      params.saveToHistory(params.inputValue.trim())
-      clearInput(params)
-      return { openFeedbackMode: true }
+    handler: (params) => {
+      appendLocalMessage(
+        params,
+        'Remote feedback submission is unavailable in this local/BYOK build. Your draft remains available. Report an issue at https://github.com/AnzoBenjamin/openbuff/issues after reviewing any details you share.',
+      )
     },
   }),
   defineCommandWithArgs({
@@ -541,7 +565,9 @@ const ALL_COMMANDS: CommandDefinition[] = [
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
       try {
-        void runBashCommand(buildSafeGitCommand('status', trimmedArgs, ['--short']))
+        void runBashCommand(
+          buildSafeGitCommand('status', trimmedArgs, ['--short']),
+        )
       } catch (error) {
         appendLocalMessage(
           params,
@@ -683,134 +709,18 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'undo-turn',
-    handler: (params) => {
+    handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
-      // Between-turns only: the tracked working tree must never be mutated
-      // mid-stream, so gate on the same busy-check the /detach handler uses.
-      if (
-        params.isStreaming ||
-        params.streamMessageIdRef.current ||
-        params.isChainInProgressRef.current ||
-        isTurnBisectionRunning()
-      ) {
-        appendLocalMessage(
-          params,
-          '/undo-turn: a turn is in progress - wait for it to finish, then run /undo-turn again.',
-        )
-        return
-      }
-      // Fire-and-forget and fail-closed, like /detach: undoLastTurn never
-      // rejects (every failure is a structured outcome).
-      void undoLastTurn().then((outcome) => {
-        switch (outcome.status) {
-          case 'undone':
-            appendLocalMessage(
-              params,
-              `/undo-turn: restored tracked files to the previous turn snapshot (${outcome.toSha.slice(0, 12)}); the real index, HEAD, and untracked files are unchanged.`,
-            )
-            break
-          case 'nothing-to-undo':
-            appendLocalMessage(
-              params,
-              '/undo-turn: no earlier turn snapshot to undo to.',
-            )
-            break
-          case 'unavailable':
-            appendLocalMessage(
-              params,
-              '/undo-turn: turn snapshots are unavailable - this project is not a git repository with commits.',
-            )
-            break
-          case 'error':
-            appendLocalMessage(params, `/undo-turn: ${outcome.message}`)
-            break
-        }
-      })
+      return handleSnapshotRestoreCommand(params, args, true)
     },
   }),
   defineCommandWithArgs({
     name: 'restore',
     handler: (params, args) => {
-      const target = args.trim()
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
-      // Same busy-check as /detach and /undo-turn: never mutate the tracked
-      // working tree mid-stream.
-      if (
-        params.isStreaming ||
-        params.streamMessageIdRef.current ||
-        params.isChainInProgressRef.current ||
-        isTurnBisectionRunning()
-      ) {
-        appendLocalMessage(
-          params,
-          '/restore: a turn is in progress - wait for it to finish, then run /restore again.',
-        )
-        return
-      }
-      if (!target) {
-        appendLocalMessage(
-          params,
-          '/restore: provide a snapshot sha or a 1-based index (run /bisect-turn list to see snapshots).',
-        )
-        return
-      }
-      // Fire-and-forget and fail-closed, like /detach: both helpers never
-      // reject (every failure is a structured outcome).
-      void (async () => {
-        // A bare number resolves as a 1-based index into the newest-first
-        // snapshot list; anything else is treated as a sha.
-        if (/^\d+$/.test(target)) {
-          const snapshots = await listTurnSnapshots()
-          const index = Number.parseInt(target, 10)
-          const entry = snapshots[index - 1]
-          if (!entry) {
-            appendLocalMessage(
-              params,
-              `/restore: no snapshot at index ${target} (${snapshots.length} snapshot${snapshots.length === 1 ? '' : 's'} available).`,
-            )
-            return undefined
-          }
-          return entry.sha
-        }
-        return target
-      })()
-        .then((sha) =>
-          sha === undefined
-            ? undefined
-            : restoreToTurn(sha).then((outcome) => {
-                switch (outcome.status) {
-                  case 'restored':
-                    appendLocalMessage(
-                      params,
-                      `/restore: restored tracked files to turn snapshot ${outcome.sha.slice(0, 12)}; the real index, HEAD, and untracked files are unchanged.`,
-                    )
-                    break
-                  case 'not-found':
-                    appendLocalMessage(
-                      params,
-                      `/restore: no turn snapshot found for ${target}.`,
-                    )
-                    break
-                  case 'unavailable':
-                    appendLocalMessage(
-                      params,
-                      '/restore: turn snapshots are unavailable - this project is not a git repository with commits.',
-                    )
-                    break
-                  case 'error':
-                    appendLocalMessage(params, `/restore: ${outcome.message}`)
-                    break
-                }
-              }),
-        )
-        .catch(() => {
-          appendLocalMessage(
-            params,
-            '/restore: failed to resolve the requested turn snapshot.',
-          )
-        })
+      return handleSnapshotRestoreCommand(params, args)
     },
   }),
   defineCommandWithArgs({
@@ -840,15 +750,13 @@ const ALL_COMMANDS: CommandDefinition[] = [
             )
             return
           }
-          const lines = snapshots
-            .slice(0, 20)
-            .map(
-              (entry, i) =>
-                `${i + 1}. ${entry.sha.slice(0, 12)} ${entry.label || '(unlabeled)'}`,
-            )
+          const lines = snapshots.map(
+            (entry, i) =>
+              `${i + 1}. ${entry.sha.slice(0, 12)} ${entry.label || '(unlabeled)'}`,
+          )
           appendLocalMessage(
             params,
-            `/bisect-turn: ${snapshots.length} snapshots, newest first:\n${lines.join('\n')}`,
+            `/bisect-turn: ${snapshots.length} captured snapshots, newest first (reader retains every listed target; archive walk limited to 100):\n${lines.join('\n')}\nInspect any target: /restore <index or SHA>`,
           )
         })
         return
@@ -893,8 +801,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
         .then((outcome) => {
           switch (outcome.status) {
             case 'found': {
-              const failingName =
-                outcome.failingLabel || '(unlabeled snapshot)'
+              const failingName = outcome.failingLabel || '(unlabeled snapshot)'
               const bestSha12 = outcome.bestSha?.slice(0, 12)
               const tail =
                 outcome.bestSha !== undefined
@@ -973,17 +880,12 @@ const ALL_COMMANDS: CommandDefinition[] = [
       if (trimmedArgs) {
         // Re-enable queue processing so the message can be sent
         params.setCanProcessQueue(true)
-        params.sendMessage({
-          content: trimmedArgs,
-          agentMode: params.agentMode,
-        })
-        setTimeout(() => {
-          params.scrollToLatest()
-        }, 0)
+        return sendPromptCommand(params, trimmedArgs)
       } else {
         // Only disable queue if we're not sending a message
         params.setCanProcessQueue(false)
       }
+      return undefined
     },
   }),
   defineCommand({
@@ -1023,27 +925,12 @@ const ALL_COMMANDS: CommandDefinition[] = [
       params.saveToHistory(trimmed)
       clearInput(params)
 
-      // Check streaming/queue state
-      if (
-        params.isStreaming ||
-        params.streamMessageIdRef.current ||
-        params.isChainInProgressRef.current
-      ) {
-        const pendingAttachments = capturePendingAttachments()
-        params.addToQueue(trimmed, pendingAttachments)
-        params.setInputFocused(true)
-        params.inputRef.current?.focus()
-        return
-      }
-
-      params.sendMessage({
-        content: trimmed,
-        agentMode: params.agentMode,
+      return sendPromptCommand(
+        params,
+        trimmed,
+        params.agentMode,
         postUserMessage,
-      })
-      setTimeout(() => {
-        params.scrollToLatest()
-      }, 0)
+      )
     },
   }),
   defineCommandWithArgs({
@@ -1214,12 +1101,14 @@ const ALL_COMMANDS: CommandDefinition[] = [
         skillsTrusted: getProjectSkillTrustStatus(),
         skillCount: getSkillCount(),
         mcpCount: Object.keys(getLoadedMCPServers()).length,
-        diagnostics: diagnostics.slice(0, 10).map((diagnostic) => ({
+        diagnostics: diagnostics.slice(0, 1000).map((diagnostic) => ({
           filePath: diagnostic.filePath,
           agentId: diagnostic.agentId,
           message: diagnostic.message,
         })),
-        providerStatus,
+        providerStatus:
+          providerStatus +
+          `\nDiagnostics: ${diagnostics.length} total; ${Math.min(diagnostics.length, 1000)} captured${diagnostics.length > 1000 ? `; ${diagnostics.length - 1000} omitted by the command capture limit` : ''}. Inspect captured output for all retained entries.`,
         capabilities: buildDoctorCapabilityRows(buildCliCapabilityMapV1()),
       }
       appendLocalBlocks(params, [block])
@@ -1229,54 +1118,24 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'index',
-    handler: async (params, args) => {
-      const input = params.inputValue.trim() || '/index'
-      try {
-        const result = await handleIndexCommandBlocks(args)
-        if (typeof result === 'string') {
-          params.setMessages((prev) => [
-            ...prev,
-            getUserMessage(input),
-            getSystemMessage(result),
-          ])
-        } else {
-          appendLocalBlocks(params, [result], input)
-        }
-      } catch (error) {
-        const message = `Index command failed: ${error instanceof Error ? error.message : String(error)}`
-        params.setMessages((prev) => [
-          ...prev,
-          getUserMessage(input),
-          getSystemMessage(message),
-        ])
-      }
-      params.saveToHistory(input)
-      clearInput(params)
-    },
+    handler: (params, args) =>
+      runLocalCommandOperation(
+        params,
+        params.inputValue.trim() || '/index',
+        'Index',
+        () => handleIndexCommandBlocks(args),
+      ),
   }),
   defineCommandWithArgs({
     name: 'memory',
     aliases: ['mem'],
-    handler: async (params, args) => {
-      const input = params.inputValue.trim() || '/memory'
-      try {
-        const block = await handleMemoryCommandBlocks(args)
-        params.setMessages((prev) => [
-          ...prev,
-          getUserMessage(input),
-          getSystemMessage([block]),
-        ])
-      } catch (error) {
-        const message = `Memory command failed: ${error instanceof Error ? error.message : String(error)}`
-        params.setMessages((prev) => [
-          ...prev,
-          getUserMessage(input),
-          getSystemMessage(message),
-        ])
-      }
-      params.saveToHistory(input)
-      clearInput(params)
-    },
+    handler: (params, args) =>
+      runLocalCommandOperation(
+        params,
+        params.inputValue.trim() || '/memory',
+        'Memory',
+        () => handleMemoryCommandBlocks(args),
+      ),
   }),
   defineCommandWithArgs({
     name: 'image',
@@ -1286,9 +1145,17 @@ const ALL_COMMANDS: CommandDefinition[] = [
 
       // If user provided a path directly, process it immediately
       if (trimmedArgs) {
-        await handleImageCommand(trimmedArgs)
+        const parsed = parseImageCommandArgs(trimmedArgs)
         params.saveToHistory(params.inputValue.trim())
         clearInput(params)
+        // Put the instruction into the draft before awaiting image validation.
+        if (parsed.message && !params.preserveInputValue)
+          params.setInputValue({
+            text: parsed.message,
+            cursorPosition: parsed.message.length,
+            lastEditDueToNav: false,
+          })
+        await handleImageCommand(trimmedArgs)
         return
       }
 
@@ -1317,33 +1184,19 @@ const ALL_COMMANDS: CommandDefinition[] = [
 
         // If user provided a message, send it in the new mode
         if (trimmedArgs) {
-          params.setCanProcessQueue(true)
-          params.sendMessage({
-            content: trimmedArgs,
-            agentMode: mode,
-          })
-          setTimeout(() => {
-            params.scrollToLatest()
-          }, 0)
+          return sendPromptCommand(params, trimmedArgs, mode)
         }
+        return undefined
       },
     }),
   ),
   defineCommandWithArgs({
     name: 'publish',
-    handler: (params, args) => {
-      const trimmedArgs = args.trim()
-      params.saveToHistory(params.inputValue.trim())
-      clearInput(params)
-
-      // If user provided agent ids directly, skip to confirmation step
-      if (trimmedArgs) {
-        const agentIds = trimmedArgs.split(/\s+/).filter(Boolean)
-        return { openPublishMode: true, preSelectAgents: agentIds }
-      }
-
-      // Otherwise open selection UI
-      return { openPublishMode: true }
+    handler: (params) => {
+      appendLocalMessage(
+        params,
+        'Remote agent publishing is unavailable in this local/BYOK build. Agent templates remain local under .agents/. Your draft remains available.',
+      )
     },
   }),
   defineCommand({
@@ -1400,18 +1253,12 @@ const ALL_COMMANDS: CommandDefinition[] = [
 
       // If user provided text directly, send it immediately
       if (trimmedArgs) {
-        params.sendMessage({
-          content: buildInterviewPrompt(trimmedArgs),
-          agentMode: params.agentMode,
-        })
-        setTimeout(() => {
-          params.scrollToLatest()
-        }, 0)
-        return
+        return sendPromptCommand(params, buildInterviewPrompt(trimmedArgs))
       }
 
       // Otherwise enter interview mode
       useChatStore.getState().setInputMode('interview')
+      return undefined
     },
   }),
   defineCommandWithArgs({
@@ -1439,7 +1286,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
       // Resuming a plan drops the user into execute-plan mode so the persistent
       // toggle matches the turn being sent (mirrors the mode:* commands).
       useChatStore.getState().setAgentMode('EXECUTE_PLAN')
-      sendPromptCommand(
+      return sendPromptCommand(
         params,
         buildResumePlanPrompt({
           target: artifacts!.sessionDir,
@@ -1471,7 +1318,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
         return
       }
       clearInput(params)
-      sendPromptCommand(
+      return sendPromptCommand(
         params,
         buildUpdatePlanPrompt({
           target: artifacts!.sessionDir,
@@ -1512,36 +1359,52 @@ const ALL_COMMANDS: CommandDefinition[] = [
   defineCommand({
     name: 'plans',
     aliases: ['plan-ls'],
-    handler: (params) => {
-      params.saveToHistory(params.inputValue.trim())
-      const sessions = listPlanSessions()
-      // One scan-derived active slug and one pointer read feed both the text
-      // report and the rendered note.
-      const active = planListActiveState(sessions)
-      const reportText = formatPlanListReport(sessions, active)
-      const blocks: ContentBlock[] = [
-        {
-          type: 'plan-status-list',
-          mode: 'list',
-          reportText,
-          sessions,
-          isStatusReport: false,
+    handler: (params) =>
+      runLocalCommandOperation(
+        params,
+        params.inputValue.trim() || '/plans',
+        'Plan sessions',
+        async () => {
+          const sessions = await listPlanSessionsAsync()
+          const active = planListActiveState(sessions)
+          const reportText = formatPlanListReport(sessions, active)
+          const blocks: ContentBlock[] = [
+            {
+              type: 'plan-status-list',
+              mode: 'list',
+              reportText,
+              sessions,
+              isStatusReport: false,
+            },
+          ]
+          if (active.staleNote && sessions.length > 0)
+            blocks.push({ type: 'text', content: active.staleNote })
+          return { blocks, content: reportText }
         },
-      ]
-      // PlanStatusBox renders the block's `sessions` rows and ignores
-      // reportText whenever any session exists, so the stale-pointer note is
-      // carried as its own text block to stay visible in the rendered UI
-      // instead of only in the message content.
-      //
-      // With zero listed sessions the box falls back to rendering reportText,
-      // which formatPlanListReport already ends with the note, so an extra
-      // block would show the same note twice.
-      if (active.staleNote && sessions.length > 0) {
-        blocks.push({ type: 'text', content: active.staleNote })
-      }
-      appendLocalBlocks(params, blocks, undefined, reportText)
-      clearInput(params)
-    },
+      ),
+  }),
+  defineCommandWithArgs({
+    name: 'plan-artifact',
+    handler: (params, args) =>
+      runLocalCommandOperation(
+        params,
+        params.inputValue.trim() || '/plan-artifact',
+        'Plan artifact',
+        async () => {
+          const tokens = args.trim().split(/\s+/).filter(Boolean)
+          if (
+            (tokens.length !== 2 && tokens.length !== 4) ||
+            (tokens.length === 4 &&
+              (tokens[2] !== '--page' || !/^\d+$/.test(tokens[3] ?? '')))
+          )
+            return 'Usage: /plan-artifact <session-slug> <artifact-name> [--page <n>]. Use /plan-status <slug> for available artifacts.'
+          return readPlanArtifactPage(
+            tokens[0]!,
+            tokens[1]!,
+            tokens.length === 4 ? Number(tokens[3]) : 1,
+          )
+        },
+      ),
   }),
   defineCommandWithArgs({
     name: 'plan-use',
@@ -1582,7 +1445,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
         return
       }
       clearInput(params)
-      sendPromptCommand(
+      return sendPromptCommand(
         params,
         buildLessonsPrompt({
           target: artifacts!.sessionDir,
@@ -1603,14 +1466,7 @@ const ALL_COMMANDS: CommandDefinition[] = [
 
       // If user provided review text directly, send it immediately without showing the screen
       if (trimmedArgs) {
-        params.sendMessage({
-          content: buildReviewPromptFromArgs(trimmedArgs),
-          agentMode: params.agentMode,
-        })
-        setTimeout(() => {
-          params.scrollToLatest()
-        }, 0)
-        return
+        return sendPromptCommand(params, buildReviewPromptFromArgs(trimmedArgs))
       }
 
       // Otherwise open the selection UI
@@ -1754,26 +1610,7 @@ ${skill.content}
         `I invoke the following skill:\n\n${skillContext}\n\n` +
         (args.trim() ? `User request: ${args.trim()}` : '')
 
-      // Check streaming/queue state
-      if (
-        params.isStreaming ||
-        params.streamMessageIdRef.current ||
-        params.isChainInProgressRef.current
-      ) {
-        const pendingAttachments = capturePendingAttachments()
-        params.addToQueue(userPrompt, pendingAttachments)
-        params.setInputFocused(true)
-        params.inputRef.current?.focus()
-        return
-      }
-
-      params.sendMessage({
-        content: userPrompt,
-        agentMode: params.agentMode,
-      })
-      setTimeout(() => {
-        params.scrollToLatest()
-      }, 0)
+      return sendPromptCommand(params, userPrompt)
     },
   })
 }

@@ -11,9 +11,7 @@ import type { ChatTheme } from '../../../types/theme-system'
 // The statically narrowed block type the render callback is declared over;
 // existentially resolved from the render signature so the test suite stays
 // compile-locked to the component contract instead of hand-narrowing.
-type NarrowedRenderBlock = Parameters<
-  typeof EditTransactionComponent.render
->[0]
+type NarrowedRenderBlock = Parameters<typeof EditTransactionComponent.render>[0]
 
 const makeToolBlock = (toolCallId: string, outputRaw: unknown): ToolBlock =>
   ({
@@ -46,10 +44,7 @@ describe('EditTransaction render-data memoization', () => {
   })
 
   test('re-render with a DIFFERENT outputRaw invalidates and recomputes', () => {
-    const block = makeToolBlock(
-      'call-invalidate',
-      makePayload('-old\n+new\n'),
-    )
+    const block = makeToolBlock('call-invalidate', makePayload('-old\n+new\n'))
     const first = getTransactionRenderData(block)
     const replaced = makeToolBlock(
       'call-invalidate',
@@ -79,8 +74,12 @@ describe('EditTransaction render-data memoization', () => {
 
   test('no cross-instance leakage: another toolCallId gets its own parse', () => {
     const sharedPayload = makePayload('-old\n+new\n')
-    const first = getTransactionRenderData(makeToolBlock('call-a', sharedPayload))
-    const second = getTransactionRenderData(makeToolBlock('call-b', sharedPayload))
+    const first = getTransactionRenderData(
+      makeToolBlock('call-a', sharedPayload),
+    )
+    const second = getTransactionRenderData(
+      makeToolBlock('call-b', sharedPayload),
+    )
     // Distinct derivation per block even for byte-identical payloads.
     expect(second).not.toBe(first)
     expect(second.diffStats).toEqual(first.diffStats)
@@ -89,11 +88,16 @@ describe('EditTransaction render-data memoization', () => {
   test('render output is unchanged by the memo layer (size suffix collapses to preview)', () => {
     const fakeTheme = {} as unknown as ChatTheme
     const config = EditTransactionComponent.render(
-      makeToolBlock('call-render', makePayload('-old\n+new\n')) as unknown as NarrowedRenderBlock,
+      makeToolBlock(
+        'call-render',
+        makePayload('-old\n+new\n'),
+      ) as unknown as NarrowedRenderBlock,
       fakeTheme,
       RENDER_OPTIONS,
     )
-    expect(config.collapsedPreview).toBe('Edit transaction • 1 file (+1 -1)')
+    expect(config.collapsedPreview).toBe(
+      'Edit transaction • 1 file (+1 -1) · captured · outcome unknown',
+    )
   })
 
   test('render output is unchanged for the error path (redaction intact)', () => {
@@ -105,6 +109,6 @@ describe('EditTransaction render-data memoization', () => {
       fakeTheme,
       RENDER_OPTIONS,
     )
-    expect(config.collapsedPreview).toBe('boom [REDACTED]')
+    expect(config.collapsedPreview).toBe('boom [REDACTED] · failed')
   })
 })

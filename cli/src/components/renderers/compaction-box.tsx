@@ -5,6 +5,9 @@ import { useTheme } from '../../hooks/use-theme'
 import { ProgressBar } from '../progress-bar'
 import { CLI_LIVE_SESSION_ID } from '../../types/chat'
 import { formatStatusTokenCount } from '../../utils/status-bar-chips'
+import { Button } from '../button'
+import { createJsonDocument } from '../../utils/output-document'
+import { useOutputReaderStore } from '../../state/output-reader-store'
 
 import type {
   CompactionCategoryDelta,
@@ -150,6 +153,9 @@ interface CompactionBoxProps {
 
 export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
   const theme = useTheme()
+  const inspect = <Button onClick={() => useOutputReaderStore.getState().open({ document:
+    createJsonDocument(`compaction:${block.beforeTokens}:${block.afterTokens}`, 'Captured compaction details', block),
+  })}><text fg={theme.link}>Inspect compaction</text></Button>
   // A healthy settled pass is a transient progress affordance: it holds at
   // 100% briefly and then collapses to a persistent one-line summary instead of
   // vanishing, so the compaction's end state stays legible for the rest of the
@@ -253,6 +259,7 @@ export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
         <text style={{ wrapMode: 'word', fg: theme.success }}>
           {`✓ ${headline}`}
         </text>
+        {inspect}
       </HarnessBox>
     )
   }
@@ -325,6 +332,7 @@ export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
           {recovery}
         </text>
       ) : null}
+      {inspect}
     </HarnessBox>
   )
 })

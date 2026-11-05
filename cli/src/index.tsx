@@ -27,6 +27,12 @@ import { red } from 'picocolors'
 import React from 'react'
 
 import { App } from './app'
+import { useChatStore } from './state/chat-store'
+import { createLaunchIntent } from './utils/launch-intent'
+import {
+  transitionProject,
+  createProjectTreeRequests,
+} from './utils/project-transition'
 import { applyOscDetectedThemeToStore } from './hooks/use-theme'
 import { initializeApp, switchProjectContext } from './init/init-app'
 import { getRgPath } from './native/ripgrep'
@@ -34,29 +40,28 @@ import { getProjectRoot, startNewChat } from './project-files'
 import {
   awaitRegistriesReady,
   resetDeferredRegistryLoads,
+  reloadProjectRegistries,
   startDeferredRegistryLoads,
 } from './services/deferred-registries'
 import { connectChatGptOAuth } from './utils/chatgpt-oauth'
 import { trackEvent } from './utils/analytics'
-import {
-  resetCodebuffClient,
-  setAttachTarget,
-} from './utils/codebuff-client'
+import { resetCodebuffClient, setAttachTarget } from './utils/codebuff-client'
 import {
   startEarlyInputCapture,
   stopEarlyInputCapture,
 } from './utils/early-input-capture'
 import { getCliEnv } from './utils/env'
-import { initializeAgentRegistry } from './utils/local-agent-registry'
+import { initializeAgentRegistry, getProjectAgentTrustStatus } from './utils/local-agent-registry'
 import { clearLogFile, logger } from './utils/logger'
 import { shouldShowProjectPicker } from './utils/project-picker'
+import { hasGitDirectoryAsync } from './utils/directory-browser'
 import { saveRecentProject } from './utils/recent-projects'
 import {
   installProcessCleanupHandlers,
   TERMINAL_RESET_SEQUENCES,
 } from './utils/renderer-cleanup'
 import { scheduleRunJournalMaintenance } from './utils/run-journal-path'
-import { initializeSkillRegistry } from './utils/skill-registry'
+import { initializeSkillRegistry, getProjectSkillTrustStatus } from './utils/skill-registry'
 import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { detectTerminalImageSupport } from './utils/terminal-images'
 import { setOscDetectedTheme } from './utils/theme-system'
@@ -176,13 +181,11 @@ async function main(): Promise<void> {
   // the request path — either calling convention — so we rebuild argv with
   // the flag stripped: [bun, binary, requestPath] (a rebuilt buffer without
   // the request path degenerates to the existing missing-argv exit-1 path).
-  const { SUPERVISED_SELF_EXEC_FLAG } = await import(
-    '@codebuff/agent-runtime/supervision/self-exec-flag'
-  )
+  const { SUPERVISED_SELF_EXEC_FLAG } =
+    await import('@codebuff/agent-runtime/supervision/self-exec-flag')
   if (process.argv[2] === SUPERVISED_SELF_EXEC_FLAG) {
-    const { runChildEntryMain } = await import(
-      '@codebuff/agent-runtime/supervision/child-entry'
-    )
+    const { runChildEntryMain } =
+      await import('@codebuff/agent-runtime/supervision/child-entry')
     const requestPath = process.argv[3]
     const childArgv = [
       process.argv[0],
@@ -202,6 +205,26 @@ async function main(): Promise<void> {
   // can no longer disable terminal takeover that way. The release smoke test
   // uses this explicit probe for the native FFI boundary and tests full TUI
   // rendering separately where the platform supports it reliably.
+  if (process.argv.includes('--answer-pattern-worker')) {
+    const { runAnswerPatternProcess } = await import('./utils/answer-pattern-process')
+    runAnswerPatternProcess()
+    return
+  }
+  if (process.argv.includes('--smoke-answer-validation')) {
+    try {
+      const { validateOtherText } = await import('./components/ask-user/utils/validation')
+      const valid = await validateOtherText('123', { pattern: '^\\d+$' })
+      if (!valid.isValid) throw new Error(valid.error ?? 'Answer validation worker failed')
+      const bounded = await validateOtherText('a'.repeat(200) + '!', { pattern: '(a|aa)+$' })
+      if (bounded.isValid || !bounded.error?.includes('timed out'))
+        throw new Error('Answer validation worker did not enforce its timeout')
+      console.log('answer validation worker ok')
+      process.exit(0)
+    } catch (err) {
+      console.error('answer validation worker FAIL:', err)
+      process.exit(1)
+    }
+  }
   if (process.argv.includes('--smoke-opentui')) {
     try {
       const { renderer } = await createTestRenderer({
@@ -453,6 +476,38 @@ async function main(): Promise<void> {
     installNonRendererErrorHandlers()
   }
 
+  // If the renderer crashes during init, these ensure the error is visible
+  // by exiting the alternate screen buffer before printing the error.
+  const earlyFatalHandler = (error: unknown) => {
+    if (smokeBootscreenTimer) clearTimeout(smokeBootscreenTimer)
+    stopEarlyInputCapture()
+    try {
+      if (process.stdin.isTTY && process.stdin.setRawMode) {
+        process.stdin.setRawMode(false)
+      }
+    } catch {
+      // stdin may be closed
+    }
+    try {
+      if (process.stdout.isTTY) {
+        process.stdout.write(TERMINAL_RESET_SEQUENCES)
+      }
+    } catch {
+      // stdout may be closed
+    }
+    try {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('Could not start Openbuff:', message.replace(/[\r\n\t]+/g, ' '))
+    } catch {
+      // stderr may be closed
+    }
+    process.exit(1)
+  }
+  if (isRendererCommand(parsedArgs)) {
+    process.on('uncaughtException', earlyFatalHandler)
+    process.on('unhandledRejection', earlyFatalHandler)
+  }
+
   // Boot-window keystroke fix: keystrokes typed in the first moments after
   // launch were silently dropped — until the Chat input mounts, the only
   // stdin 'data' listener is the OSC probe below (which buffers early bytes
@@ -667,26 +722,40 @@ async function main(): Promise<void> {
   const queryClient = createQueryClient()
 
   const AppWithAsyncAuth = () => {
+    const launchIntentRef = React.useRef(
+      createLaunchIntent(initialPrompt, continueChat, continueId ?? undefined),
+    )
+    const fileTreeRequests = React.useRef(createProjectTreeRequests())
+    const switchInFlight = React.useRef(false)
+    const [projectSwitchError, setProjectSwitchError] = React.useState<string>()
+    const [switchingProject, setSwitchingProject] = React.useState(false)
     const [fileTree, setFileTree] = React.useState<FileTreeNode[]>([])
+    const [fileInventoryState, setFileInventoryState] = React.useState<'loading' | 'loaded' | 'unavailable'>('loading')
     const [currentProjectRoot, setCurrentProjectRoot] =
       React.useState(projectRoot)
     const [showProjectPickerScreen, setShowProjectPickerScreen] =
       React.useState(showProjectPicker)
 
     const loadFileTree = React.useCallback(async (root: string) => {
+      const request = fileTreeRequests.current.begin(root)
+      setFileInventoryState('loading')
       try {
         if (root) {
           const tree = await getProjectFileTree({
             projectRoot: root,
             fs: fs.promises,
           })
-          setFileTree(tree)
+          if (fileTreeRequests.current.accepts(request, getProjectRoot())) {
+            setFileTree(tree)
+            setFileInventoryState('loaded')
+          }
         }
       } catch (error) {
         logger.warn(
           { error },
           'Failed to load the initial project file tree for suggestions',
         )
+        if (fileTreeRequests.current.accepts(request, getProjectRoot())) setFileInventoryState('unavailable')
       }
     }, [])
 
@@ -697,26 +766,66 @@ async function main(): Promise<void> {
     // Callback for when user selects a new project from the picker
     const handleProjectChange = React.useCallback(
       async (newProjectPath: string) => {
+        if (switchInFlight.current) return
+        switchInFlight.current = true
+        setSwitchingProject(true)
+        setProjectSwitchError(undefined)
+        fileTreeRequests.current.invalidate()
         const previousProjectRoot = getProjectRoot()
+        const previousAgentTrust = getProjectAgentTrustStatus()
+        const previousSkillTrust = getProjectSkillTrustStatus()
+        const restorePreviousRegistries = () => reloadProjectRegistries({
+          shouldLoadAgents: isPublishCommand || !hasAgentOverride,
+          trustProjectAgents: previousAgentTrust,
+          trustProjectSkills: previousSkillTrust,
+        })
+        resetDeferredRegistryLoads()
 
         try {
-          await switchProjectContext(newProjectPath)
-          // The deferred registry loads (if any) were bound to the PREVIOUS
-          // project's trust decision; drop them so the next
-          // whenRegistriesReady() consumer re-initializes with the CURRENT
-          // project's trust instead of resolving a stale/foreign decision.
-          resetDeferredRegistryLoads()
-          await resetCodebuffClient()
-          if (isPublishCommand || !hasAgentOverride) {
-            await initializeAgentRegistry({ trustProjectAgents })
-          }
-          await initializeSkillRegistry({
-            trustProjectSkills: trustProjectAgents,
+          const transition = await transitionProject({
+            previousRoot: previousProjectRoot,
+            targetRoot: newProjectPath,
+            switchContext: switchProjectContext,
+            prepare: async () => {
+              resetDeferredRegistryLoads()
+              await resetCodebuffClient()
+              if (isPublishCommand || !hasAgentOverride) {
+                await initializeAgentRegistry({ trustProjectAgents })
+              }
+              await initializeSkillRegistry({
+                trustProjectSkills: trustProjectAgents,
+              })
+            },
+            recover: async () => {
+              resetDeferredRegistryLoads()
+              await resetCodebuffClient()
+              await restorePreviousRegistries()
+            },
           })
+          if (transition.status === 'failed') {
+            resetDeferredRegistryLoads()
+            logger.error(
+              {
+                error: transition.error,
+                recoveryError: transition.recoveryError,
+              },
+              'Failed to switch projects',
+            )
+            setProjectSwitchError(
+              transition.recoveryError
+                ? 'Could not open this project or restore the previous folder. Choose an available project to recover.'
+                : 'Could not open this project. Check that the folder is available, then retry or choose another.',
+            )
+            setCurrentProjectRoot(getProjectRoot())
+            setShowProjectPickerScreen(true)
+            setFileTree([])
+            return
+          }
           startNewChat()
+          useChatStore.getState().reset()
 
           // Track directory change (avoid logging full paths for privacy)
-          const isGitRepo = fs.existsSync(path.join(newProjectPath, '.git'))
+          const isGitRepo = await hasGitDirectoryAsync(newProjectPath)
           const pathDepth = newProjectPath
             .split(path.sep)
             .filter(Boolean).length
@@ -728,19 +837,38 @@ async function main(): Promise<void> {
               return h !== '' && newProjectPath === h
             })(),
           })
-          saveRecentProject(newProjectPath)
+          try {
+            saveRecentProject(newProjectPath)
+          } catch (error) {
+            logger.warn({ error }, 'Could not save the recent project')
+          }
           setCurrentProjectRoot(getProjectRoot())
           setFileTree([])
           setShowProjectPickerScreen(false)
         } catch (error) {
-          await switchProjectContext(previousProjectRoot)
+          try {
+            await switchProjectContext(previousProjectRoot)
+            await resetCodebuffClient()
+            await restorePreviousRegistries()
+          } catch (rollbackError) {
+            logger.error(
+              { error: rollbackError },
+              'Failed to restore project context',
+            )
+          }
           // A failed switch may have left the loads bound to the NEW
           // project's context; reset again so the restored project
           // re-initializes on its own terms.
           resetDeferredRegistryLoads()
-          await resetCodebuffClient()
           logger.error({ error }, 'Failed to switch projects')
-          throw error
+          setProjectSwitchError(
+            'Could not open this project. Check that the folder is available, then retry or choose another.',
+          )
+          setShowProjectPickerScreen(true)
+          setFileTree([])
+        } finally {
+          switchInFlight.current = false
+          setSwitchingProject(false)
         }
       },
       [trustProjectAgents, hasAgentOverride, isPublishCommand],
@@ -752,43 +880,20 @@ async function main(): Promise<void> {
         initialPrompt={initialPrompt}
         agentId={agent}
         fileTree={fileTree}
+        fileInventoryState={fileInventoryState}
         continueChat={continueChat}
         continueChatId={continueId ?? undefined}
         initialMode={initialMode}
         showProjectPicker={showProjectPickerScreen}
         onProjectChange={handleProjectChange}
+        launchIntent={launchIntentRef.current}
+        projectSwitchError={projectSwitchError}
+        switchingProject={switchingProject}
       />
     )
   }
 
   // Install early error handlers BEFORE renderer creation.
-  // If the renderer crashes during init, these ensure the error is visible
-  // by exiting the alternate screen buffer before printing the error.
-  const earlyFatalHandler = (error: unknown) => {
-    if (smokeBootscreenTimer) clearTimeout(smokeBootscreenTimer)
-    try {
-      if (process.stdin.isTTY && process.stdin.setRawMode) {
-        process.stdin.setRawMode(false)
-      }
-    } catch {
-      // stdin may be closed
-    }
-    try {
-      if (process.stdout.isTTY) {
-        process.stdout.write(TERMINAL_RESET_SEQUENCES)
-      }
-    } catch {
-      // stdout may be closed
-    }
-    try {
-      console.error('Fatal error during startup:', error)
-    } catch {
-      // stderr may be closed
-    }
-    process.exit(1)
-  }
-  process.on('uncaughtException', earlyFatalHandler)
-  process.on('unhandledRejection', earlyFatalHandler)
 
   // Resolve the (already-started) OSC probe BEFORE creating the renderer: OSC
   // responses arrive on stdin, which OpenTUI is about to take over, so the

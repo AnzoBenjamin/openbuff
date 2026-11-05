@@ -178,13 +178,15 @@ function truncateForApprovalDisplay(
  */
 export function buildHarnessApprovalPrompt(request: HarnessApprovalRequest) {
   const displayTarget = truncateForApprovalDisplay(request.target)
+  const truncated = displayTarget !== request.target
   const isHighRisk = request.risk === 'high'
 
   return {
     header: isHighRisk ? 'High-risk action' : 'Confirm action',
     question: isHighRisk
-      ? `This may destroy data, deploy, or run eval code.\nAllow ${request.action}: ${displayTarget}?`
-      : `Allow ${request.action}?\n${displayTarget}`,
+      ? `This may destroy data, deploy, or run eval code.\nAllow ${request.action}: ${displayTarget}?${truncated ? '\nI: full target' : ''}`
+      : `Allow ${request.action}?\n${displayTarget}${truncated ? '\nI: full target' : ''}`,
+    inspectionText: `Action: ${request.action}\nRisk: ${request.risk}\nReason: ${request.reason}\n\nComplete target (${request.target.length} characters):\n${request.target}\n\nAllow once authorizes this exact target once. Deny or skip blocks execution.`,
     options: [
       {
         label: 'Allow once',
@@ -259,13 +261,18 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
       // run is paused awaiting approval. Never blocks the approval flow.
       notifyTerminal(
         { body: `Approval needed: ${request.target.slice(0, 80)}` },
-        { write: (sequence) => {
+        {
+          write: (sequence) => {
             writeToTty(sequence)
-          } },
+          },
+        },
       )
-      const response = (await AskUserBridge.request('harness-approval', [
-        buildHarnessApprovalPrompt(request),
-      ])) as {
+      const response = (await AskUserBridge.request(
+        'harness-approval',
+        [buildHarnessApprovalPrompt(request)],
+        params.signal,
+        request,
+      )) as {
         answers?: Array<{ selectedOption?: string }>
         skipped?: boolean
       }

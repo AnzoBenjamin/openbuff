@@ -128,7 +128,10 @@ export async function runHeadlessCommand(
   const STDOUT_FLUSH_AT_CHARS = 64 * 1024
   let stdoutBuffer = ''
   let bufferedEvents = 0
+  let stdoutTimer: ReturnType<typeof setTimeout> | undefined
   const flushStdout = (): void => {
+    if (stdoutTimer !== undefined) clearTimeout(stdoutTimer)
+    stdoutTimer = undefined
     if (stdoutBuffer.length === 0) return
     writeStdout(stdoutBuffer)
     stdoutBuffer = ''
@@ -142,6 +145,9 @@ export async function runHeadlessCommand(
       stdoutBuffer.length >= STDOUT_FLUSH_AT_CHARS
     ) {
       flushStdout()
+    } else if (!args.json && stdoutTimer === undefined) {
+      // A short answer must be readable while a slow tool/provider is pending.
+      stdoutTimer = setTimeout(flushStdout, 50)
     }
   }
 
@@ -191,7 +197,8 @@ export async function runHeadlessCommand(
       if (externalSignal.aborted) {
         timeoutController.abort(externalSignal.reason)
       } else {
-        forwardExternalAbort = () => timeoutController?.abort(externalSignal.reason)
+        forwardExternalAbort = () =>
+          timeoutController?.abort(externalSignal.reason)
         externalSignal.addEventListener('abort', forwardExternalAbort, {
           once: true,
         })
@@ -229,6 +236,7 @@ export async function runHeadlessCommand(
     writeStderr(`openbuff run: ${message}`)
     return 1
   } finally {
+    if (stdoutTimer !== undefined) clearTimeout(stdoutTimer)
     if (timeoutTimer !== undefined) {
       clearTimeout(timeoutTimer)
     }
@@ -242,7 +250,9 @@ export async function runHeadlessCommand(
       void journal.close().catch((closeError) => {
         writeStderr(
           `openbuff run: run journal close failed: ${
-            closeError instanceof Error ? closeError.message : String(closeError)
+            closeError instanceof Error
+              ? closeError.message
+              : String(closeError)
           }`,
         )
       })

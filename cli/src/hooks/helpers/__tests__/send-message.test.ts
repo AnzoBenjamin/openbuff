@@ -198,6 +198,7 @@ describe('formatQueuedMessageForHistory', () => {
     expect(
       formatQueuedMessageForHistory({
         content: 'plain prompt',
+        agentMode: 'DEFAULT',
         attachments: [],
       }),
     ).toBe('plain prompt')
@@ -206,6 +207,7 @@ describe('formatQueuedMessageForHistory', () => {
   test('folds text and file attachments into the persisted prompt text', () => {
     const persisted = formatQueuedMessageForHistory({
       content: 'review this',
+      agentMode: 'PLAN',
       attachments: [
         {
           kind: 'text',
@@ -237,6 +239,7 @@ describe('formatQueuedMessageForHistory', () => {
   test('persists a locating note for image attachments instead of dropping them', () => {
     const persisted = formatQueuedMessageForHistory({
       content: 'look at this',
+      agentMode: 'DEFAULT',
       attachments: [
         {
           kind: 'image',

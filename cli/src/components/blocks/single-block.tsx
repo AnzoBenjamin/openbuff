@@ -5,6 +5,7 @@ import { AgentBranchWrapper } from './agent-branch-wrapper'
 import { AgentListBranch } from './agent-list-branch'
 import { AskUserBranch } from './ask-user-branch'
 import { trimNewlines, isReasoningTextBlock } from './block-helpers'
+import { withAnnotationDisclosure } from './annotation-disclosure'
 
 import { collapseHarnessTags } from '../../utils/output-hygiene'
 import { ContentWithMarkdown } from './content-with-markdown'
@@ -26,6 +27,9 @@ import { MemoryBox } from '../renderers/memory-box'
 import { PlanBox } from '../renderers/plan-box'
 import { PlanStatusBox } from '../renderers/plan-status-box'
 import { UpdateBox } from '../renderers/update-box'
+import { Button } from '../button'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import { createJsonDocument } from '../../utils/output-document'
 
 import type { ContentBlock, TextContentBlock } from '../../types/chat'
 
@@ -75,34 +79,44 @@ export const SingleBlock = memo(
         }
         const textBlock = block as TextContentBlock
         const isStreamingText = isLoading || !isComplete
-        // Display-only hygiene: harness-style pseudo-XML the model echoed
-        // (e.g. <system_warning> self-notes) never reaches the screen; the
-        // stored block and persisted transcript keep the raw text.
-        const filteredContent = collapseHarnessTags(
-          isStreamingText
-            ? trimNewlines(textBlock.content)
-            : textBlock.content.trim(),
-        )
+        // Fold model annotations in prose; retain code examples and raw source.
+        const sourceContent = isStreamingText
+          ? trimNewlines(textBlock.content)
+          : textBlock.content.trim()
+        const filteredContent = isUser
+          ? sourceContent
+          : collapseHarnessTags(sourceContent)
+        const disclose = (node: ReactNode) =>
+          sourceContent === filteredContent
+            ? node
+            : withAnnotationDisclosure(
+                node,
+                textBlock.content,
+                filteredContent,
+                `${messageId}:text:${idx}`,
+              )
         if (!filteredContent) {
-          return null
+          return disclose(null)
         }
         const renderKey = `${messageId}-text-${idx}`
         const explicitColor = textBlock.color
         const blockTextColor = explicitColor ?? textColor
 
         if (contentToCopy) {
-          return (
+          return disclose(
             <UserBlockTextWithInlineCopy
               key={renderKey}
               content={filteredContent}
               contentToCopy={contentToCopy}
+              messageId={messageId}
+              blockScope={`text:${idx}`}
               isStreaming={isStreamingText}
               textColor={blockTextColor}
               codeBlockWidth={codeBlockWidth}
               palette={markdownPalette}
               marginTop={0}
               marginBottom={0}
-            />
+            />,
           )
         }
 
@@ -112,7 +126,7 @@ export const SingleBlock = memo(
         // (native wrapMode handles wrapping). Plain content degrades to a
         // plain string and keeps its <text> wrapper for the fg color path.
         if (hasMarkdown(filteredContent)) {
-          return (
+          return disclose(
             <box key={renderKey} style={{ width: '100%' }}>
               <ContentWithMarkdown
                 content={filteredContent}
@@ -120,11 +134,11 @@ export const SingleBlock = memo(
                 codeBlockWidth={codeBlockWidth}
                 palette={markdownPalette}
               />
-            </box>
+            </box>,
           )
         }
 
-        return (
+        return disclose(
           <text
             key={renderKey}
             style={{
@@ -139,7 +153,7 @@ export const SingleBlock = memo(
               codeBlockWidth={codeBlockWidth}
               palette={markdownPalette}
             />
-          </text>
+          </text>,
         )
       }
 
@@ -317,8 +331,31 @@ export const SingleBlock = memo(
         )
       }
 
-      default:
-        return null
+      default: {
+        const retained = block as unknown as Record<string, unknown>
+        const kind =
+          typeof retained.type === 'string' ? retained.type : 'unknown'
+        return (
+          <box style={{ flexDirection: 'column', width: '100%' }}>
+            <text fg={theme.muted}>
+              Captured {kind} block · view unavailable
+            </text>
+            <Button
+              onClick={() =>
+                useOutputReaderStore.getState().open({
+                  document: createJsonDocument(
+                    `${messageId}:block:${idx}`,
+                    `Captured ${kind} block`,
+                    retained,
+                  ),
+                })
+              }
+            >
+              <text fg={theme.link}>Inspect captured block</text>
+            </Button>
+          </box>
+        )
+      }
     }
   },
 )

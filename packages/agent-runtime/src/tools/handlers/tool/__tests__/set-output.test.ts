@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 import z from 'zod/v4'
@@ -1247,7 +1248,7 @@ describe('handleSetOutput', () => {
     const template = plainTemplate('oversized-salvage-agent')
     const agentState = getInitialSessionState(mockFileContext).mainAgentState
     agentState.agentType = template.id
-    const oversized = 'x'.repeat(MAX_SET_OUTPUT_JSON_CHARS + 1)
+    const oversized = 'é'.repeat(MAX_SET_OUTPUT_JSON_CHARS + 1)
     const toolCall = {
       toolName: 'set_output',
       toolCallId: 'oversized-set-output',
@@ -1270,14 +1271,21 @@ describe('handleSetOutput', () => {
     expect(output).toEqual([
       {
         type: 'json',
-        value: { message: OVERSIZED_SALVAGE_ACK, salvaged: true },
+        value: expect.objectContaining({ message: OVERSIZED_SALVAGE_ACK, salvaged: true }),
       },
     ])
     expect(agentState.lastSetOutputError).toBeUndefined()
 
     const salvaged = agentState.output as Record<string, unknown>
     expect(salvaged.truncated).toBe(true)
-    expect(salvaged.artifactBytes).toBe(oversized.length)
+    expect(salvaged.artifactBytes).toBe(Buffer.byteLength(oversized, 'utf8'))
+    const ack = output[0].value
+    expect(ack.artifactPersisted).toBe(true)
+    expect(ack.artifactWrittenByThisCall).toBe(true)
+    expect(ack.artifactPath).toBe(salvaged.artifactPath)
+    expect(ack.artifactBytes).toBe(Buffer.byteLength(oversized, 'utf8'))
+    expect(ack.sha256).toBe(createHash('sha256').update(oversized).digest('hex'))
+    expect(ack.artifactCreatedAt).toBe(salvaged.artifactCreatedAt)
     expect(salvaged.truncation).toEqual({
       reason: 'oversized_payload',
       totalChars: oversized.length,
@@ -1297,6 +1305,12 @@ describe('handleSetOutput', () => {
       expect(existsSync(resolvedArtifactPath)).toBe(true)
       // Lossless: the artifact holds the FULL payload, byte for byte.
       expect(readFileSync(resolvedArtifactPath, 'utf8')).toBe(oversized)
+      const repeated = await handleSetOutput({
+        ...TEST_AGENT_RUNTIME_IMPL,
+        previousToolCallFinished: Promise.resolve(), toolCall, agentState,
+        apiKey: 'test-api-key', localAgentTemplates: { [template.id]: template },
+      } as unknown as Parameters<typeof handleSetOutput>[0])
+      expect(repeated.output[0].value).toMatchObject({ status: 'ignored', artifactPath: resolvedArtifactPath, sha256: ack.sha256, artifactWrittenByThisCall: false })
     } finally {
       rmSync(resolvedArtifactPath, { force: true })
     }
@@ -1336,10 +1350,14 @@ describe('handleSetOutput', () => {
       expect(output).toEqual([
         {
           type: 'json',
-          value: { message: OVERSIZED_SALVAGE_UNPERSISTED_ACK, salvaged: true },
+          value: expect.objectContaining({ message: OVERSIZED_SALVAGE_UNPERSISTED_ACK, salvaged: true }),
         },
       ])
       expect(agentState.lastSetOutputError).toBeUndefined()
+      expect(output[0].value.artifactPersisted).toBe(false)
+      expect(output[0].value.artifactWrittenByThisCall).toBe(false)
+      expect(output[0].value.artifactPath).toBeUndefined()
+      expect(output[0].value.sha256).toBeUndefined()
       const salvaged = agentState.output as Record<string, unknown>
       expect(salvaged.truncated).toBe(true)
       expect(salvaged.artifactWrittenByThisCall).toBe(false)
@@ -1402,7 +1420,7 @@ describe('handleSetOutput', () => {
       expect(output).toEqual([
         {
           type: 'json',
-          value: { message: OVERSIZED_SALVAGE_ACK, salvaged: true },
+          value: expect.objectContaining({ message: OVERSIZED_SALVAGE_ACK, salvaged: true }),
         },
       ])
       const salvaged = agentState.output as Record<string, unknown>
@@ -1453,7 +1471,7 @@ describe('handleSetOutput', () => {
       expect(first.output).toEqual([
         {
           type: 'json',
-          value: { message: OVERSIZED_SALVAGE_ACK, salvaged: true },
+          value: expect.objectContaining({ message: OVERSIZED_SALVAGE_ACK, salvaged: true }),
         },
       ])
       const firstRecord = agentState.output as Record<string, unknown>
@@ -1469,9 +1487,11 @@ describe('handleSetOutput', () => {
         {
           type: 'json',
           value: {
+            ...first.output[0].value,
             message: OVERSIZED_SALVAGE_GUARD_ACK,
             status: 'ignored',
             salvaged: true,
+            artifactWrittenByThisCall: false,
           },
         },
       ])
@@ -1731,7 +1751,7 @@ describe('handleSetOutput', () => {
         expect(output).toEqual([
           {
             type: 'json',
-            value: { message: OVERSIZED_SALVAGE_ACK, salvaged: true },
+            value: expect.objectContaining({ message: OVERSIZED_SALVAGE_ACK, salvaged: true }),
           },
         ])
         const salvaged = agentState.output as Record<string, unknown>
@@ -1887,7 +1907,7 @@ describe('handleSetOutput', () => {
       expect(output).toEqual([
         {
           type: 'json',
-          value: { message: OVERSIZED_SALVAGE_ACK, salvaged: true },
+          value: expect.objectContaining({ message: OVERSIZED_SALVAGE_ACK, salvaged: true }),
         },
       ])
       const salvaged = agentState.output as Record<string, unknown>

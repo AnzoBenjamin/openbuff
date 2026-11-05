@@ -285,6 +285,8 @@ export const estimateMessageHeight = (
 export interface MeasuredHeight {
   width: number
   height: number
+  /** Immutable rendered message identity at measurement time. */
+  revision?: ChatMessage
 }
 
 /**
@@ -331,7 +333,8 @@ export const resolveMessageHeight = (
   measured: MeasuredHeight | undefined,
   availableWidth: number,
 ): number => {
-  if (measured !== undefined && measured.width === availableWidth) {
+  if (measured !== undefined && measured.width === availableWidth &&
+      (measured.revision === undefined || measured.revision === message)) {
     return measured.height
   }
   return estimateMessageHeight(message, availableWidth)
@@ -474,9 +477,12 @@ export interface ViewportWindowOptions {
   adjustScrollTop?: (delta: number, opts?: { follow?: boolean }) => void
   /** Re-pin to the bottom after a width change when the user was at bottom. */
   scrollToLatest?: () => void
+  /** Keep the reading message mounted while its native logical anchor reflows. */
+  retainedAnchor?: { messageId: string; rowWithinMessage: number } | null
 }
 
 export interface ViewportWindow {
+  messageOffsets: ReadonlyMap<string, number>
   startIndex: number
   endIndex: number
   topSpacerHeight: number
@@ -596,6 +602,7 @@ export const useViewportWindow = ({
   isAtBottomNow,
   adjustScrollTop,
   scrollToLatest,
+  retainedAnchor,
 }: ViewportWindowOptions): ViewportWindow => {
   const [scrollState, setScrollState] = useState<{
     scrollTop: number
@@ -698,6 +705,9 @@ export const useViewportWindow = ({
   // the new width instead of the width bound at attach time.
   const availableWidthRef = useRef(availableWidth)
   availableWidthRef.current = availableWidth
+  const messagesById = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages])
+  const messagesByIdRef = useRef(messagesById)
+  messagesByIdRef.current = messagesById
   // Real measured heights for mounted messages, keyed by message id and
   // tagged with the width at measure time. A measurement is NEVER deleted on
   // unmount (deleting caused a measure->unmount->revert oscillation); the
@@ -854,7 +864,7 @@ export const useViewportWindow = ({
       clearZeroHeightRetry: () => clearZeroHeightRetry(id),
       getStored: () => measuredHeightsRef.current.get(id),
       store: (width, height) => {
-        measuredHeightsRef.current.set(id, { width, height })
+        measuredHeightsRef.current.set(id, { width, height, revision: messagesByIdRef.current.get(id) })
         pendingMeasurementsRef.current.add(id)
         flushMeasurementsRef.current()
       },
@@ -1018,6 +1028,11 @@ export const useViewportWindow = ({
     }
     return result
   }, [messages.length, heights, fixedTopHeight])
+  const messageOffsets = useMemo(() => new Map(messageIds.map((id, index) => [id, offsets[index]])), [messageIds, offsets])
+  const retainedIndex = retainedAnchor ? messageIds.indexOf(retainedAnchor.messageId) : -1
+  const windowScrollTop = retainedIndex >= 0
+    ? offsets[retainedIndex] + Math.max(0, Math.min(heights[retainedIndex] - 1, retainedAnchor!.rowWithinMessage))
+    : scrollTop
 
   const overscanPx = useMemo(() => {
     if (messages.length === 0) return 0
@@ -1033,11 +1048,11 @@ export const useViewportWindow = ({
         offsets,
         heights,
         totalHeight,
-        scrollTop,
+        scrollTop: windowScrollTop,
         viewportHeight,
         overscanPx,
       }),
-    [offsets, heights, totalHeight, scrollTop, viewportHeight, overscanPx],
+    [offsets, heights, totalHeight, windowScrollTop, viewportHeight, overscanPx],
   )
 
   // Top spacer relative to the message content area (fixed header excluded),
@@ -1045,7 +1060,7 @@ export const useViewportWindow = ({
   const topSpacer = computeTopSpacer(
     offsets,
     heights,
-    scrollTop,
+    windowScrollTop,
     viewportHeight,
     overscanPx,
     fixedTopHeight,
@@ -1062,12 +1077,14 @@ export const useViewportWindow = ({
     })
     return {
       ...initialWindow,
+      messageOffsets,
       viewportHeight,
       registerMeasurement,
     }
   }
 
   return {
+    messageOffsets,
     startIndex,
     endIndex,
     topSpacerHeight: topSpacer,

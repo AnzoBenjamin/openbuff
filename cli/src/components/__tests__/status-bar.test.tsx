@@ -17,8 +17,9 @@ import type { StatusIndicatorState } from '../../utils/status-indicator-state'
  * the REAL module's exports so whatever leaked is restored before rendering.
  */
 const requireReal = createRequire(import.meta.url)
-const requiredLayoutModule = requireReal('../../hooks/use-terminal-layout') as
-  typeof import('../../hooks/use-terminal-layout')
+const requiredLayoutModule = requireReal(
+  '../../hooks/use-terminal-layout',
+) as typeof import('../../hooks/use-terminal-layout')
 
 /**
  * require() may itself resolve to the leaked mock (bun's mock registry covers
@@ -72,13 +73,16 @@ const act: (callback: () => Promise<void>) => Promise<void> =
 // render, so set it once at module scope.
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-const renderFrame = async (node: React.ReactNode): Promise<string> => {
+const renderFrame = async (
+  node: React.ReactNode,
+  width = 152,
+): Promise<string> => {
   const { testRender } = await import('@opentui/react/test-utils')
   let setup!: Awaited<ReturnType<typeof testRender>>
   await act(async () => {
     setup = await testRender(
-      <box style={{ flexDirection: 'column', width: 152 }}>{node}</box>,
-      { width: 152, height: 40 },
+      <box style={{ flexDirection: 'column', width }}>{node}</box>,
+      { width, height: 40 },
     )
   })
   await act(async () => {
@@ -143,6 +147,37 @@ const baseProps = {
 const COST_LABEL = '$0.25'
 
 describe('StatusBar through the real OpenTUI reconciler', () => {
+  renderTest(
+    'running notices and paused following keep one status row with Stop and timing at 60/80 columns',
+    async () => {
+      for (const width of [60, 80]) {
+        for (const statusIndicatorState of [
+          { kind: 'clipboard', message: 'Copied' },
+          { kind: 'reconnected' },
+          { kind: 'retrying' },
+        ] as StatusIndicatorState[]) {
+          const frame = await renderFrame(
+            <StatusBar
+              timerStartTime={Date.now() - 12000}
+              runActive
+              onStop={() => {}}
+              scrollToLatest={() => {}}
+              statusIndicatorState={statusIndicatorState}
+              isAtBottom={false}
+              unreadUpdates={3}
+              notice="Local notice"
+            />,
+            width,
+          )
+          const rows = frame.split('\n').filter((line) => line.trim())
+          expect(rows).toHaveLength(1)
+          expect(rows[0]).toContain('■ Esc')
+          expect(rows[0]).toContain('Latest')
+          expect(rows[0]).toMatch(/12s|0:12/)
+        }
+      }
+    },
+  )
   renderTest(
     'renders the status label, the chip cluster and the scroll control together',
     async () => {

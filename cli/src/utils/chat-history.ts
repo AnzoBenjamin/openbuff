@@ -11,6 +11,8 @@ export interface ChatHistoryEntry {
   lastPrompt: string
   timestamp: Date
   messageCount: number
+  messageCountKnown?: boolean
+  captureUnavailable?: boolean
 }
 
 function getChatsDir(): string {
@@ -22,7 +24,7 @@ function getChatsDir(): string {
  */
 function getFirstUserPrompt(messages: ChatMessage[]): string {
   for (const msg of messages) {
-    if (msg?.variant === 'user' && msg.content) {
+    if (msg?.variant === 'user' && typeof msg.content === 'string' && msg.content) {
       // Truncate long prompts
       const content = msg.content.trim()
       if (content.length > 100) {
@@ -144,8 +146,13 @@ export async function getAllChatsAsync(
   signal?: AbortSignal,
   onInitial?: (entries: ChatHistoryEntry[]) => void,
   initialCount = 25,
+  onState?: (state: {
+    state: 'loaded' | 'partial' | 'unavailable'
+    omitted?: number
+  }) => void,
 ): Promise<ChatHistoryEntry[]> {
   const chatsDir = getChatsDir()
+  let omitted = 0
   try {
     const chatIds = await fs.promises.readdir(chatsDir)
     const infos = (
@@ -165,6 +172,7 @@ export async function getAllChatsAsync(
                 }
               : null
           } catch {
+            omitted++
             return null
           }
         },
@@ -187,6 +195,7 @@ export async function getAllChatsAsync(
                 signal,
               }),
             ) as ChatMessage[]
+            if (!Array.isArray(messages)) throw new Error('Saved transcript is not a message array')
             if (messages.length === 0) return null
             return {
               chatId: info.chatId,
@@ -195,7 +204,16 @@ export async function getAllChatsAsync(
               messageCount: messages.length,
             }
           } catch {
-            return null
+            if (signal?.aborted) return null
+            omitted++
+            return {
+              chatId: info.chatId,
+              lastPrompt: '(saved capture unavailable · Inspect for recovery)',
+              timestamp: info.mtime,
+              messageCount: 0,
+              messageCountKnown: false,
+              captureUnavailable: true,
+            }
           }
         },
         signal,
@@ -208,8 +226,11 @@ export async function getAllChatsAsync(
     const remaining = await loadEntries(
       onInitial ? infos.slice(initialCount) : infos,
     )
+    if (!signal?.aborted)
+      onState?.({ state: omitted ? 'partial' : 'loaded', omitted })
     return [...initial, ...remaining].filter(valid)
   } catch {
+    if (!signal?.aborted) onState?.({ state: 'unavailable' })
     return []
   }
 }

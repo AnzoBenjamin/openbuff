@@ -1,6 +1,7 @@
 import type { ToolContentBlock } from '../types/chat'
 
 export type ToolResultRecord = Record<string, unknown>
+export const TOOL_RESULT_METADATA_LIMIT = 4096
 
 export const TERMINAL_TOOL_LIFECYCLES = new Set([
   'succeeded',
@@ -9,21 +10,49 @@ export const TERMINAL_TOOL_LIFECYCLES = new Set([
 ] as const)
 
 export function getToolOutputValues(outputRaw: unknown): unknown[] {
+  if (Array.isArray(outputRaw) && outputRaw.length > TOOL_RESULT_METADATA_LIMIT)
+    return [outputRaw]
+  // Bare array payloads are already retained; do not clone a large collection
+  // merely to inspect its envelope. Actual transport tuples are tiny.
+  if (
+    Array.isArray(outputRaw) &&
+    !outputRaw
+      .slice(0, 32)
+      .some(
+        (part) =>
+          part &&
+          typeof part === 'object' &&
+          part.type === 'json' &&
+          'value' in part,
+      )
+  )
+    return outputRaw
   const parts = Array.isArray(outputRaw) ? outputRaw : [outputRaw]
   return parts
     .filter((part) => part !== undefined)
     .map((part) =>
-      part && typeof part === 'object' && 'value' in part
+      part &&
+      typeof part === 'object' &&
+      (part as { type?: unknown }).type === 'json' &&
+      'value' in part
         ? (part as { value: unknown }).value
         : part,
     )
 }
 
 export function getToolOutputRecords(outputRaw: unknown): ToolResultRecord[] {
-  return getToolOutputValues(outputRaw).filter(
-    (value): value is ToolResultRecord =>
-      value !== null && typeof value === 'object' && !Array.isArray(value),
-  )
+  const values = getToolOutputValues(outputRaw)
+  const records: ToolResultRecord[] = []
+  for (
+    let index = 0;
+    index < Math.min(values.length, TOOL_RESULT_METADATA_LIMIT);
+    index++
+  ) {
+    const value = values[index]
+    if (value !== null && typeof value === 'object' && !Array.isArray(value))
+      records.push(value as ToolResultRecord)
+  }
+  return records
 }
 
 export function findToolResultByKind(
@@ -51,7 +80,17 @@ export function getStructuredErrorMessages(outputRaw: unknown): string[] {
     if (value === null || value === undefined) return
     if (typeof value === 'string') return
     if (Array.isArray(value)) {
-      value.forEach((entry) => visit(entry))
+      // Only one producer array level is an envelope collection. Arbitrary
+      // nested/circular arrays remain payload data.
+      for (
+        let index = 0;
+        index < Math.min(value.length, TOOL_RESULT_METADATA_LIMIT);
+        index++
+      ) {
+        const entry = value[index]
+        if (entry && typeof entry === 'object' && !Array.isArray(entry))
+          visit(entry)
+      }
       return
     }
     if (typeof value !== 'object') return
@@ -69,7 +108,13 @@ export function getStructuredErrorMessages(outputRaw: unknown): string[] {
     const direct = asMessage(record.errorMessage)
     if (direct) messages.push(direct)
   }
-  getToolOutputValues(outputRaw).forEach((value) => visit(value))
+  const values = getToolOutputValues(outputRaw)
+  for (
+    let index = 0;
+    index < Math.min(values.length, TOOL_RESULT_METADATA_LIMIT);
+    index++
+  )
+    visit(values[index])
   return [...new Set(messages.filter(Boolean))]
 }
 

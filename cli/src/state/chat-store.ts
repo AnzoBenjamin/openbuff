@@ -4,6 +4,8 @@ import { immer } from 'zustand/middleware/immer'
 
 import { AGENT_MODES } from '../utils/constants'
 import { clamp } from '../utils/math'
+import { RunStateSnapshot } from '../utils/conversation-fork'
+import { useOutputReaderStore } from './output-reader-store'
 import { loadModePreference, saveModePreference } from '../utils/settings'
 
 import type { ChatMessage, ContentBlock } from '../types/chat'
@@ -56,6 +58,7 @@ export type ChatStoreState = {
   streamingAgents: Set<string>
   focusedAgentId: string | null
   inputValue: string
+  inputRevision: number
   cursorPosition: number
   lastEditDueToNav: boolean
   inputFocused: boolean
@@ -84,6 +87,8 @@ export type ChatStoreState = {
   pastMessageSnapshots: ChatMessage[][]
   /** Snapshots captured by undoing, available for /redo */
   futureMessageSnapshots: ChatMessage[][]
+  pastRunStates: RunStateSnapshot[]
+  futureRunStates: RunStateSnapshot[]
 }
 
 const findLatestFollowupInBlocks = (
@@ -239,6 +244,7 @@ const initialState: ChatStoreState = {
   streamingAgents: new Set<string>(),
   focusedAgentId: null,
   inputValue: '',
+  inputRevision: 0,
   cursorPosition: 0,
   lastEditDueToNav: false,
   inputFocused: true, // Cursor visible by default
@@ -262,6 +268,8 @@ const initialState: ChatStoreState = {
   clickedFollowupsMap: new Map<string, Set<number>>(),
   pastMessageSnapshots: [],
   futureMessageSnapshots: [],
+  pastRunStates: [],
+  futureRunStates: [],
 }
 
 export const useChatStore = create<ChatStore>()(
@@ -275,8 +283,10 @@ export const useChatStore = create<ChatStore>()(
       }),
 
     pushMessageSnapshot: () => {
-      const { messages, pastMessageSnapshots } = useChatStore.getState()
+      const { messages, pastMessageSnapshots, runState } =
+        useChatStore.getState()
       const snapshot = cloneMessageSnapshot(messages)
+      const continuation = new RunStateSnapshot(runState)
       set((state) => {
         const next = [...pastMessageSnapshots, snapshot]
         // Drop-oldest bound: only the newest MAX_PAST_MESSAGE_SNAPSHOTS
@@ -285,6 +295,10 @@ export const useChatStore = create<ChatStore>()(
           next.slice(-MAX_PAST_MESSAGE_SNAPSHOTS),
         )
         state.futureMessageSnapshots = []
+        state.pastRunStates = [...state.pastRunStates, continuation].slice(
+          -MAX_PAST_MESSAGE_SNAPSHOTS,
+        )
+        state.futureRunStates = []
       })
     },
 
@@ -293,6 +307,9 @@ export const useChatStore = create<ChatStore>()(
         useChatStore.getState()
       if (pastMessageSnapshots.length === 0) return
       const futureSnapshot = cloneMessageSnapshot(messages)
+      const continuation = new RunStateSnapshot(
+        useChatStore.getState().runState,
+      )
       const restored = cloneMessageSnapshot(
         pastMessageSnapshots[pastMessageSnapshots.length - 1],
       )
@@ -305,6 +322,11 @@ export const useChatStore = create<ChatStore>()(
           pastMessageSnapshots.slice(0, -1),
         )
         state.messages = castDraft(restored)
+        state.futureRunStates = [...state.futureRunStates, continuation]
+        state.runState = castDraft(
+          state.pastRunStates.at(-1)?.getState() ?? null,
+        )
+        state.pastRunStates = state.pastRunStates.slice(0, -1)
       })
     },
 
@@ -313,6 +335,9 @@ export const useChatStore = create<ChatStore>()(
         useChatStore.getState()
       if (futureMessageSnapshots.length === 0) return
       const pastSnapshot = cloneMessageSnapshot(messages)
+      const continuation = new RunStateSnapshot(
+        useChatStore.getState().runState,
+      )
       const restored = cloneMessageSnapshot(
         futureMessageSnapshots[futureMessageSnapshots.length - 1],
       )
@@ -325,6 +350,13 @@ export const useChatStore = create<ChatStore>()(
           futureMessageSnapshots.slice(0, -1),
         )
         state.messages = castDraft(restored)
+        state.pastRunStates = [...state.pastRunStates, continuation].slice(
+          -MAX_PAST_MESSAGE_SNAPSHOTS,
+        )
+        state.runState = castDraft(
+          state.futureRunStates.at(-1)?.getState() ?? null,
+        )
+        state.futureRunStates = state.futureRunStates.slice(0, -1)
       })
     },
 
@@ -350,8 +382,15 @@ export const useChatStore = create<ChatStore>()(
                 lastEditDueToNav: state.lastEditDueToNav,
               })
             : value
+        const cursor = clamp(cursorPosition, 0, text.length)
+        if (
+          state.inputValue !== text ||
+          state.cursorPosition !== cursor ||
+          state.lastEditDueToNav !== lastEditDueToNav
+        )
+          state.inputRevision++
         state.inputValue = text
-        state.cursorPosition = clamp(cursorPosition, 0, text.length)
+        state.cursorPosition = cursor
         state.lastEditDueToNav = lastEditDueToNav
       }),
 
@@ -639,13 +678,15 @@ export const useChatStore = create<ChatStore>()(
         }
       }),
 
-    reset: () =>
+    reset: () => {
+      useOutputReaderStore.getState().close()
       set((state) => {
         state.chatSessionId = generateSessionId()
         state.messages = initialState.messages.slice()
         state.streamingAgents = new Set(initialState.streamingAgents)
         state.focusedAgentId = initialState.focusedAgentId
         state.inputValue = initialState.inputValue
+        state.inputRevision++
         state.cursorPosition = initialState.cursorPosition
         state.lastEditDueToNav = initialState.lastEditDueToNav
         state.inputFocused = initialState.inputFocused
@@ -671,6 +712,9 @@ export const useChatStore = create<ChatStore>()(
         state.clickedFollowupsMap = new Map<string, Set<number>>()
         state.pastMessageSnapshots = []
         state.futureMessageSnapshots = []
-      }),
+        state.pastRunStates = []
+        state.futureRunStates = []
+      })
+    },
   })),
 )

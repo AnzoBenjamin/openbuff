@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { MessageWithAgents } from './message-with-agents'
 import { useViewportWindow } from '../hooks/use-viewport-window'
+import { captureNativeReadingAnchor, nativeReadingAnchorDelta, type NativeReadingAnchor } from '../utils/native-reading-anchor'
 
 import type { ChatMessage } from '../types/chat'
 import type { BoxRenderable, ScrollBoxRenderable } from '@opentui/core'
@@ -15,6 +16,10 @@ interface MessageListWindowProps {
   availableWidth: number
   /** Whether the LoadPreviousButton row is rendered above the list. */
   hasLoadPrevious: boolean
+  /** Measured chrome including the previous-message control. */
+  headerRef?: React.RefObject<BoxRenderable | null>
+  scrollTarget?: { messageId: string; token: number } | null
+  scrollIntentRef?: React.RefObject<number>
   /** Compensating scroll writer for above-viewport height changes. */
   adjustScrollTop: (delta: number, opts?: { follow?: boolean }) => void
   /** Imperative at-bottom probe (drives width-change re-pinning). */
@@ -44,26 +49,89 @@ export const MessageListWindow = memo(
     scrollRef,
     availableWidth,
     hasLoadPrevious,
+    headerRef,
+    scrollTarget,
+    scrollIntentRef,
     adjustScrollTop,
     isAtBottomNow,
     scrollToLatest,
   }: MessageListWindowProps) => {
+    const previousWidth = useRef(availableWidth)
+    const lastAnchor = useRef<NativeReadingAnchor | null>(null)
+    const resizeAnchor = useRef<{ anchor: NativeReadingAnchor; intent: number } | null>(null)
+    const [, refreshAnchor] = useState(0)
+    if (previousWidth.current !== availableWidth) {
+      previousWidth.current = availableWidth
+      if (!isAtBottomNow()) {
+        const box = scrollRef.current
+        const anchor = lastAnchor.current ?? (box ? captureNativeReadingAnchor(box.content, box.viewport.y, box.viewport.height) : null)
+        if (anchor) resizeAnchor.current = { anchor, intent: scrollIntentRef?.current ?? 0 }
+      }
+    }
+    const [headerHeight, setHeaderHeight] = useState(0)
+    useLayoutEffect(() => {
+      const node = headerRef?.current
+      if (!node) return
+      const capture = () => setHeaderHeight(node.height)
+      capture()
+      node.onSizeChange = capture
+      return () => {
+        if (node.onSizeChange === capture) node.onSizeChange = undefined
+      }
+    }, [headerRef])
     const {
       startIndex,
       endIndex,
       topSpacerHeight,
       bottomSpacerHeight,
       registerMeasurement,
+      messageOffsets,
     } = useViewportWindow({
       scrollRef,
       messages,
       availableWidth,
-      headerHeight: 1,
-      hasLoadPrevious,
+      headerHeight: headerRef ? headerHeight : 1,
+      hasLoadPrevious: headerRef ? false : hasLoadPrevious,
       adjustScrollTop,
       isAtBottomNow,
       scrollToLatest,
+      retainedAnchor: resizeAnchor.current?.anchor,
     })
+    useLayoutEffect(() => {
+      const box = scrollRef.current
+      if (!box) return
+      const capture = () => {
+        if (resizeAnchor.current) return
+        lastAnchor.current = captureNativeReadingAnchor(box.content, box.viewport.y, box.viewport.height)
+      }
+      const timer = setTimeout(capture, 0)
+      box.verticalScrollBar.on('change', capture)
+      return () => { clearTimeout(timer); box.verticalScrollBar.off('change', capture) }
+    })
+    useLayoutEffect(() => {
+      const saved = resizeAnchor.current
+      const box = scrollRef.current
+      if (!saved || !box) return
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let passes = 0
+      const restore = () => {
+        if (scrollRef.current !== box || resizeAnchor.current !== saved) return
+        if ((scrollIntentRef?.current ?? 0) !== saved.intent) {
+          resizeAnchor.current = null
+          refreshAnchor((value) => value + 1)
+          return
+        }
+        const delta = nativeReadingAnchorDelta(saved.anchor, box.viewport.y)
+        if (delta !== null && Math.abs(delta) > 0.5) adjustScrollTop(delta, { follow: false })
+        if (++passes < 3) timer = setTimeout(restore, 32)
+        else {
+          resizeAnchor.current = null
+          refreshAnchor((value) => value + 1)
+        }
+      }
+      timer = setTimeout(restore, 16)
+      return () => { if (timer) clearTimeout(timer) }
+    }, [availableWidth, scrollRef, adjustScrollTop, scrollIntentRef])
 
     // Stable per-message ref callbacks for the measurement wrappers. An
     // inline arrow inside the map gets a new identity on every render, so
@@ -84,11 +152,14 @@ export const MessageListWindow = memo(
     const measurementRefsRef = useRef(
       new Map<string, (node: BoxRenderable | null) => void>(),
     )
+    const mountedMessagesRef = useRef(new Map<string, BoxRenderable>())
     const getMeasurementRef = useCallback(
       (id: string): ((node: BoxRenderable | null) => void) => {
         let refCallback = measurementRefsRef.current.get(id)
         if (!refCallback) {
           refCallback = (node: BoxRenderable | null) => {
+            if (node) mountedMessagesRef.current.set(id, node)
+            else mountedMessagesRef.current.delete(id)
             registerMeasurementRef.current(id, node)
           }
           measurementRefsRef.current.set(id, refCallback)
@@ -103,6 +174,33 @@ export const MessageListWindow = memo(
         if (!liveIds.has(id)) measurementRefsRef.current.delete(id)
       }
     }, [messages])
+    const messageOffsetsRef = useRef(messageOffsets)
+    messageOffsetsRef.current = messageOffsets
+    useLayoutEffect(() => {
+      if (!scrollTarget) return
+      resizeAnchor.current = null
+      const scrollbox = scrollRef.current
+      if (!scrollbox) return
+      let expectedPosition = scrollbox.verticalScrollBar.scrollPosition
+      let pass = 0
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const jump = () => {
+        if (scrollRef.current !== scrollbox) return
+        const current = scrollbox.verticalScrollBar.scrollPosition
+        // A new scroll intent supersedes a deferred navigation correction.
+        if (pass > 0 && Math.abs(current - expectedPosition) > 1) return
+        const node = mountedMessagesRef.current.get(scrollTarget.messageId)
+        const destination = node
+          ? node.y - scrollbox.content.y
+          : messageOffsetsRef.current.get(scrollTarget.messageId)
+        if (destination === undefined) return
+        adjustScrollTop(destination - current, { follow: false })
+        expectedPosition = scrollbox.verticalScrollBar.scrollPosition
+        if (++pass < 3) timer = setTimeout(jump, 32)
+      }
+      jump()
+      return () => { if (timer) clearTimeout(timer) }
+    }, [scrollTarget, scrollRef, adjustScrollTop])
 
     const windowedMessages = useMemo(
       () => messages.slice(startIndex, endIndex + 1),
@@ -127,6 +225,7 @@ export const MessageListWindow = memo(
             // wrapper at its natural height inside the column scrollbox.
             <box
               key={message.id}
+          id={`transcript-message-${message.id}`}
               style={{ flexShrink: 0, width: '100%' }}
               ref={getMeasurementRef(message.id)}
             >

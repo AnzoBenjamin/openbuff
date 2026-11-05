@@ -538,17 +538,29 @@ describe('run-state-storage', () => {
       const text = 'large message '.repeat(10_000)
       const envelope = {
         version: 1,
-        runState: { output: { type: 'error', message: 'saved' }, accessToken: 'secret' },
-        messages: [{ id: 'large', variant: 'user', timestamp: '', content: text }],
+        runState: {
+          output: { type: 'error', message: 'saved' },
+          accessToken: 'secret',
+        },
+        messages: [
+          { id: 'large', variant: 'user', timestamp: '', content: text },
+        ],
       }
-      fs.writeFileSync(path.join(mockCurrentChatDir, 'chat-state.json'), JSON.stringify(envelope))
+      fs.writeFileSync(
+        path.join(mockCurrentChatDir, 'chat-state.json'),
+        JSON.stringify(envelope),
+      )
       const restored = await loadChatStateFromDirectoryAsync(mockCurrentChatDir)
       expect(restored?.messages[0].content).toBe(text)
-      expect((restored?.runState as unknown as { accessToken: string }).accessToken).toBe('[REDACTED]')
+      expect(
+        (restored?.runState as unknown as { accessToken: string }).accessToken,
+      ).toBe('[REDACTED]')
     })
 
     test('async restore loads valid envelopes and recovers corrupt ones', async () => {
-      const runState = { output: { type: 'error', message: 'recover' } } as RunState
+      const runState = {
+        output: { type: 'error', message: 'recover' },
+      } as RunState
       const messages: ChatMessage[] = [
         { id: 'm', variant: 'user', timestamp: '', content: 'hello' },
       ]
@@ -1079,11 +1091,18 @@ describe('run-state-storage', () => {
     })
 
     test('queued worker saves the call-time snapshot despite later mutation', async () => {
-      const runState = { output: { type: 'error', message: 'before' } } as RunState
-      const messages: ChatMessage[] = [{
-        id: 'snapshot', variant: 'user', timestamp: new Date().toISOString(),
-        content: 'before', blocks: [],
-      }]
+      const runState = {
+        output: { type: 'error', message: 'before' },
+      } as RunState
+      const messages: ChatMessage[] = [
+        {
+          id: 'snapshot',
+          variant: 'user',
+          timestamp: new Date().toISOString(),
+          content: 'before',
+          blocks: [],
+        },
+      ]
       saveChatState(runState, messages)
       ;(runState.output as { message: string }).message = 'after'
       messages[0].content = 'after'
@@ -1091,6 +1110,39 @@ describe('run-state-storage', () => {
       const saved = JSON.parse(fs.readFileSync(getChatStatePath(), 'utf8'))
       expect(saved.runState.output.message).toBe('before')
       expect(saved.messages[0].content).toBe('before')
+    })
+
+    test('a queued save keeps every destination in the original chat after switching projects', async () => {
+      const destinations = [
+        getChatStatePath(),
+        getRunStatePath(),
+        getChatMessagesPath(),
+      ]
+      const messages: ChatMessage[] = [
+        {
+          id: 'owned-by-a',
+          variant: 'user',
+          timestamp: '',
+          content: 'Only belongs to A',
+        },
+      ]
+      saveChatState(
+        { output: { type: 'error', message: 'A' } } as RunState,
+        messages,
+      )
+      setProjectRoot(path.join(tmpConfigDir, 'other-project'))
+      setCurrentChatId('other-chat')
+      const otherDestinations = [
+        getChatStatePath(),
+        getRunStatePath(),
+        getChatMessagesPath(),
+      ]
+      await drainPersistenceQueue()
+      expect(destinations.every((file) => fs.existsSync(file))).toBe(true)
+      expect(otherDestinations.some((file) => fs.existsSync(file))).toBe(false)
+      expect(JSON.parse(fs.readFileSync(destinations[2], 'utf8'))).toEqual(
+        messages,
+      )
     })
 
     test('omits redundant historical run states while preserving message metadata', async () => {

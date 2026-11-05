@@ -227,6 +227,7 @@ export const prepareUserMessage = async (params: {
   agentMode: AgentMode
   postUserMessage?: (prev: ChatMessage[]) => ChatMessage[]
   attachments?: PendingAttachment[]
+  isCurrent?: () => boolean
   deps: PrepareUserMessageDeps
 }): Promise<{
   userMessageId: string
@@ -235,6 +236,11 @@ export const prepareUserMessage = async (params: {
   finalContent: string
 }> => {
   const { content, agentMode, postUserMessage, attachments, deps } = params
+  const assertCurrent = () => {
+    if (params.isCurrent?.() === false)
+      throw new DOMException('Conversation changed', 'AbortError')
+  }
+  assertCurrent()
   const { setMessages, lastMessageMode, setLastMessageMode, scrollToLatest } =
     deps
 
@@ -243,8 +249,7 @@ export const prepareUserMessage = async (params: {
   // item (interruption between read and clear) nor drop one (two readers, one
   // clearing first) (reliability finding
   // pending-attachments-and-bash-messages-non-atomic-drain).
-  const pendingBashMessages =
-    useChatStore.getState().drainPendingBashMessages()
+  const pendingBashMessages = useChatStore.getState().drainPendingBashMessages()
   const { bashMessages, bashContextForPrompt } =
     processBashContext(pendingBashMessages)
 
@@ -298,6 +303,7 @@ export const prepareUserMessage = async (params: {
       pendingImages,
       projectRoot: getProjectRoot(),
     })
+  assertCurrent()
 
   const shouldInsertDivider =
     lastMessageMode === null || lastMessageMode !== agentMode
@@ -349,7 +355,9 @@ export const prepareUserMessage = async (params: {
 
   setLastMessageMode(agentMode)
   await yieldToEventLoop()
-  setTimeout(() => scrollToLatest(), 0)
+  setTimeout(() => {
+    if (params.isCurrent?.() !== false) scrollToLatest()
+  }, 0)
 
   return {
     userMessageId,

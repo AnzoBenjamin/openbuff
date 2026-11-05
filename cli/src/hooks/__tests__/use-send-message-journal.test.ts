@@ -98,34 +98,34 @@ describe('useSendMessage journal lazy-open ordering', () => {
   beforeEach(() => {
     originalDispatcher = reactInternals.H
     reactInternals.H = {
-      useRef: <T,>(value: T) => ({ current: value }),
-      useCallback: <T,>(callback: T) => callback,
+      useRef: <T>(value: T) => ({ current: value }),
+      useCallback: <T>(callback: T) => callback,
       useEffect: () => {},
     }
 
-    spyOn(runJournalPathModule, 'openRunJournalForRun').mockImplementation(
-      ((params: unknown) => {
-        openRunJournalCalls.push(params)
-        return {
-          append: () => {},
-          events: () => [],
-          lastEvent: () => undefined,
-          toolResultFor: () => undefined,
-          toolResultForInput: () => undefined,
-          runIds: () => [],
-          runSummaries: () => [],
-          flush: () => Promise.resolve(),
-          pruneRuns: () => {},
-          maintain: () => ({ prunedRunCount: 0, vacuumed: false }),
-          close: () => Promise.resolve(),
-          // CreatedRunJournal hardening members (slice 4): no-op stubs so the
-          // fake satisfies the full structural shape the opener returns.
-          forceFlush: () => Promise.resolve(),
-          recentEvents: () => [],
-          eventsOfType: () => [],
-        }
-      }) as typeof runJournalPathModule.openRunJournalForRun,
-    )
+    spyOn(runJournalPathModule, 'openRunJournalForRun').mockImplementation(((
+      params: unknown,
+    ) => {
+      openRunJournalCalls.push(params)
+      return {
+        append: () => {},
+        events: () => [],
+        lastEvent: () => undefined,
+        toolResultFor: () => undefined,
+        toolResultForInput: () => undefined,
+        runIds: () => [],
+        runSummaries: () => [],
+        flush: () => Promise.resolve(),
+        pruneRuns: () => {},
+        maintain: () => ({ prunedRunCount: 0, vacuumed: false }),
+        close: () => Promise.resolve(),
+        // CreatedRunJournal hardening members (slice 4): no-op stubs so the
+        // fake satisfies the full structural shape the opener returns.
+        forceFlush: () => Promise.resolve(),
+        recentEvents: () => [],
+        eventsOfType: () => [],
+      }
+    }) as typeof runJournalPathModule.openRunJournalForRun)
     spyOn(runJournalPathModule, 'resolveRunJournalPath').mockImplementation(
       (() =>
         path.join(
@@ -157,11 +157,9 @@ describe('useSendMessage journal lazy-open ordering', () => {
       (() =>
         Promise.resolve()) as typeof deferredRegistriesModule.whenRegistriesReady,
     )
-    spyOn(createRunConfigModule, 'createRunConfig').mockImplementation(
-      (() => {
-        throw new Error('createRunConfig must not be reached in this test')
-      }) as typeof createRunConfigModule.createRunConfig,
-    )
+    spyOn(createRunConfigModule, 'createRunConfig').mockImplementation((() => {
+      throw new Error('createRunConfig must not be reached in this test')
+    }) as typeof createRunConfigModule.createRunConfig)
 
     openRunJournalCalls.length = 0
     setProjectRoot(tmpdir())
@@ -185,6 +183,33 @@ describe('useSendMessage journal lazy-open ordering', () => {
     // The journal opener is the only thing that creates the journal db file:
     // it must not have run for a send that never started a run.
     expect(openRunJournalCalls).toHaveLength(0)
+  })
+
+  it('clearing a chat revokes a prompt waiting for restore before it can append or validate', async () => {
+    const { useChatStore } = await import('../../state/chat-store')
+    const store = useChatStore.getState()
+    store.reset()
+    let validations = 0
+    const options = {
+      ...buildHookOptions(),
+      onBeforeMessageSend: async () => {
+        validations++
+        return { success: false, errors: [] }
+      },
+    }
+    const hook = useSendMessage(options)
+    const pending = hook.sendMessage({
+      content: 'Old pending prompt',
+      agentMode: 'DEFAULT' as never,
+    })
+    hook.clearMessages()
+    store.setMessages([])
+    await pending
+    expect(useChatStore.getState().messages).toEqual([])
+    expect(validations).toBe(0)
+    expect(options.isChainInProgressRef.current).toBe(false)
+    expect(openRunJournalCalls).toHaveLength(0)
+    store.reset()
   })
 
   it('opens the run journal only after the readiness gate passes (control)', async () => {

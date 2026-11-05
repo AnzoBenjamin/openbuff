@@ -12,11 +12,13 @@ import { useEvent } from '../hooks/use-event'
 import { useChatStore } from '../state/chat-store'
 import { shouldInterceptChatInputKey } from '../utils/chat-input-key-intercept'
 import { getInputModeConfig } from '../utils/input-modes'
+import { sliceTextCells } from '../utils/text-boundaries'
 import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { useTheme } from '../hooks/use-theme'
 import type { InputValue } from '../types/store'
 import type { AgentMode } from '../utils/constants'
+import type { PasteHandler } from '../utils/strings'
 import type { FileTreeNode } from '@codebuff/common/util/file'
 
 type Theme = ReturnType<typeof useTheme>
@@ -37,6 +39,7 @@ interface ChatInputBarProps {
   agentMode: AgentMode
   toggleAgentMode: () => void
   setAgentMode: (mode: AgentMode) => void
+  onAgentModeMenuOpenChange?: (open: boolean) => void
 
   // Suggestion menus
   hasSlashSuggestions: boolean
@@ -115,8 +118,11 @@ interface ChatInputBarProps {
   fileTree?: FileTreeNode[]
 
   // Handlers
-  handleSubmit: () => Promise<void>
-  onPaste: (fallbackText?: string) => void
+  handleSubmit: (value?: InputValue) => Promise<void>
+  onPaste: PasteHandler
+  pasteEnabled?: boolean
+  isInputActive?: () => boolean
+  onManageAttachments?: () => void
   onInterruptStream: () => void
 }
 
@@ -131,6 +137,7 @@ export const ChatInputBar = ({
   agentMode,
   toggleAgentMode,
   setAgentMode,
+  onAgentModeMenuOpenChange,
   hasSlashSuggestions,
   hasMentionSuggestions,
   hasSuggestionMenu,
@@ -164,6 +171,9 @@ export const ChatInputBar = ({
   handlePublish,
   handleSubmit,
   onPaste,
+  pasteEnabled,
+  isInputActive,
+  onManageAttachments,
   onInterruptStream,
   fileTree,
 }: ChatInputBarProps) => {
@@ -244,71 +254,16 @@ export const ChatInputBar = ({
   }
 
   const handleFormSubmit = (
-    answers: { question: string; answer: string }[],
+    answers: import('./ask-user/utils/structured-answer').StructuredFormAnswer[],
   ) => {
     if (!askUserState) return
 
-    // Convert accordion-style answers to the format expected by submitAnswers
-    const formattedAnswers = askUserState.questions.map((q, idx) => {
-      const answerObj = answers[idx]
-      if (!answerObj || answerObj.answer === 'Skipped') {
-        return { questionIndex: idx }
-      }
-
-      // For multi-select questions, always use selectedOptions array format
-      if (q.multiSelect) {
-        // Split by ', ' to get individual options (even if just one)
-        const selectedOptions = answerObj.answer.split(', ').filter(Boolean)
-
-        // Check if all selected options match known options (not "other" text)
-        const allMatchKnownOptions = selectedOptions.every((selected) =>
-          q.options.some((opt) => {
-            const label = typeof opt === 'string' ? opt : opt.label
-            return label === selected
-          }),
-        )
-
-        if (allMatchKnownOptions && selectedOptions.length > 0) {
-          return {
-            questionIndex: idx,
-            selectedOptions,
-          }
-        }
-
-        // Otherwise it's an "other" text answer for multi-select
-        return {
-          questionIndex: idx,
-          otherText: answerObj.answer,
-        }
-      }
-
-      // For single-select questions, check if the answer matches one of the options
-      const matchingOptionIndex = q.options.findIndex((opt) => {
-        const label = typeof opt === 'string' ? opt : opt.label
-        return label === answerObj.answer
-      })
-
-      if (matchingOptionIndex >= 0) {
-        return {
-          questionIndex: idx,
-          selectedOption: answerObj.answer,
-        }
-      }
-
-      // Otherwise it's an "other" text answer
-      return {
-        questionIndex: idx,
-        otherText: answerObj.answer,
-      }
-    })
-
-    submitAnswers(formattedAnswers)
+    submitAnswers(answers)
   }
 
   const handleFormSkip = () => {
     if (!askUserState) return
     skip()
-    onInterruptStream()
   }
 
   const effectivePlaceholder =
@@ -328,9 +283,14 @@ export const ChatInputBar = ({
         }}
       >
         <MultipleChoiceForm
+          key={askUserState.toolCallId}
           questions={askUserState.questions}
           onSubmit={handleFormSubmit}
           onSkip={handleFormSkip}
+          onStop={() => {
+            onInterruptStream()
+            skip()
+          }}
         />
       </box>
     )
@@ -341,6 +301,11 @@ export const ChatInputBar = ({
     const compactMaxHeight = Math.floor(terminalHeight / 2)
     return (
       <>
+        {inputBoxTitle?.trim() ? (
+          <text height={1} style={{ paddingLeft: 1, fg: theme.muted }}>
+            {sliceTextCells(inputBoxTitle.trim(), 0, Math.max(1, separatorWidth - 2))}
+          </text>
+        ) : null}
         {hasSlashSuggestions ? (
           <SuggestionMenu
             items={slashSuggestionItems}
@@ -396,9 +361,13 @@ export const ChatInputBar = ({
           )}
           <MultilineInput
             value={inputValue}
+            historyContext={inputMode}
+            onRestoreHistoryContext={(mode) => useChatStore.getState().setInputMode(mode as typeof inputMode)}
             onChange={handleInputChange}
             onSubmit={handleSubmit}
             onPaste={onPaste}
+            pasteEnabled={pasteEnabled}
+            isInputActive={isInputActive}
             onKeyIntercept={handleKeyIntercept}
             placeholder={effectivePlaceholder}
             focused={inputFocused && !feedbackMode}
@@ -499,9 +468,13 @@ export const ChatInputBar = ({
             <box style={{ flexGrow: 1, minWidth: 0 }}>
               <MultilineInput
                 value={inputValue}
+            historyContext={inputMode}
+            onRestoreHistoryContext={(mode) => useChatStore.getState().setInputMode(mode as typeof inputMode)}
                 onChange={handleInputChange}
                 onSubmit={handleSubmit}
                 onPaste={onPaste}
+                pasteEnabled={pasteEnabled}
+                isInputActive={isInputActive}
                 onKeyIntercept={handleKeyIntercept}
                 placeholder={effectivePlaceholder}
                 focused={inputFocused && !feedbackMode}
@@ -527,13 +500,14 @@ export const ChatInputBar = ({
                   mode={agentMode}
                   onToggle={toggleAgentMode}
                   onSelectMode={setAgentMode}
+                  onOpenChange={onAgentModeMenuOpenChange}
                 />
               </box>
             )}
           </box>
         </box>
       </box>
-      <InputModeBanner fileTree={fileTree} />
+      <InputModeBanner fileTree={fileTree} onManageAttachments={onManageAttachments} />
     </>
   )
 }

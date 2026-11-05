@@ -3,7 +3,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import { extractReceiptCore, SetOutputComponent } from '../set-output'
-import { summarizeSpawnResult } from '../spawn-agents'
+import { summarizeSpawnResult, SpawnAgentsComponent } from '../spawn-agents'
 import { CheckBackgroundAgentComponent } from '../check-background-agent'
 import { getToolRendererDisposition } from '../registry'
 import { chatThemes } from '../../../utils/theme-system'
@@ -160,6 +160,57 @@ describe('extractReceiptCore', () => {
 })
 
 describe('summarizeSpawnResult', () => {
+  test('uses producer value and preserves structured child errors', () => {
+    expect(
+      summarizeSpawnResult({
+        agentType: 'reviewer',
+        value: { verdict: 'BLOCKED', summary: 'missing test' },
+      }).detail,
+    ).toBe('missing test')
+    expect(
+      summarizeSpawnResult({
+        agentType: 'editor',
+        value: { errorMessage: 'cannot spawn' },
+      }).color,
+    ).toBe('error')
+    expect(
+      summarizeSpawnResult({
+        agentType: 'custom',
+        value: { path: 'result.md' },
+      }).detail,
+    ).toContain('result.md')
+  })
+  test('renders producer JSON envelope children without unfolding branches', () => {
+    const Render = () =>
+      SpawnAgentsComponent.render(
+        {
+          type: 'tool',
+          toolName: 'spawn_agents',
+          toolCallId: 's1',
+          input: { agents: [{ agent_type: 'reviewer' }] },
+          lifecycle: 'succeeded',
+          outputRaw: [
+            {
+              type: 'json',
+              value: [
+                {
+                  agentType: 'reviewer',
+                  value: {
+                    verdict: 'BLOCKED',
+                    summary: 'retained child failure',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        chatThemes.dark,
+        { availableWidth: 80, indentationOffset: 0, labelWidth: 0 },
+      ).content as React.ReactElement
+    expect(renderToStaticMarkup(React.createElement(Render))).toContain(
+      'retained child failure',
+    )
+  })
   test('good verdict with summary detail', () => {
     const summary = summarizeSpawnResult({
       agentType: 'reviewer-family/dependency-reviewer@2',
@@ -191,6 +242,39 @@ describe('summarizeSpawnResult', () => {
 })
 
 describe('set_output rendering registration', () => {
+  test('pending verdict and salvaged acknowledgment cannot look like accepted success', () => {
+    const render = (outputRaw?: unknown) => {
+      const Render = () =>
+        SetOutputComponent.render(
+          {
+            type: 'tool',
+            toolName: 'set_output',
+            toolCallId: 'o1',
+            input: { data: { verdict: 'LOOKS_GOOD' } },
+            lifecycle: outputRaw ? 'succeeded' : 'running',
+            outputRaw,
+          },
+          chatThemes.dark,
+          { availableWidth: 80, indentationOffset: 0, labelWidth: 0 },
+        ).content as React.ReactElement
+      return renderToStaticMarkup(React.createElement(Render))
+    }
+    expect(render()).toContain('output pending')
+    expect(render()).not.toContain('LOOKS_GOOD')
+    const salvage = render([
+      {
+        type: 'json',
+        value: {
+          salvaged: true,
+          message:
+            'Only the head and tail are inline; full payload in result.json.',
+        },
+      },
+    ])
+    expect(salvage).toContain('output retained with limits')
+    expect(salvage).toContain('result.json')
+    expect(salvage).not.toContain('LOOKS_GOOD')
+  })
   test('set_output has a bespoke renderer (no raw-JSON fallback)', () => {
     // The audit finding: receipts fell through to the generic fallback, which
     // stringifies the whole envelope. A registered renderer closes that path.
@@ -232,17 +316,26 @@ describe('set_output rendering registration', () => {
   test('shows a structured rejection as failed even when the tool lifecycle completed', () => {
     let preview = ''
     const block = {
-      type: 'tool', toolName: 'set_output', toolCallId: 'rejected',
+      type: 'tool',
+      toolName: 'set_output',
+      toolCallId: 'rejected',
       input: { data: { verdict: 'LOOKS_GOOD' } },
       lifecycle: 'succeeded',
-      outputRaw: [{ type: 'json', value: {
-        message: 'Output validation error: verdict is required',
-        errorMessage: 'Output validation error: verdict is required',
-      } }],
+      outputRaw: [
+        {
+          type: 'json',
+          value: {
+            message: 'Output validation error: verdict is required',
+            errorMessage: 'Output validation error: verdict is required',
+          },
+        },
+      ],
     } as const
     const Render = () => {
       const config = SetOutputComponent.render(block, chatThemes.dark, {
-        availableWidth: 100, indentationOffset: 0, labelWidth: 0,
+        availableWidth: 100,
+        indentationOffset: 0,
+        labelWidth: 0,
       })
       preview = config.collapsedPreview ?? ''
       return config.content as React.ReactElement
@@ -255,13 +348,26 @@ describe('set_output rendering registration', () => {
 
   test('shows when a redundant receipt was ignored instead of claiming it was set', () => {
     const block = {
-      type: 'tool', toolName: 'set_output', toolCallId: 'ignored',
-      input: { data: { message: 'Output set' } }, lifecycle: 'succeeded',
-      outputRaw: [{ type: 'json', value: { status: 'ignored', message: 'The previous receipt was kept.' } }],
+      type: 'tool',
+      toolName: 'set_output',
+      toolCallId: 'ignored',
+      input: { data: { message: 'Output set' } },
+      lifecycle: 'succeeded',
+      outputRaw: [
+        {
+          type: 'json',
+          value: {
+            status: 'ignored',
+            message: 'The previous receipt was kept.',
+          },
+        },
+      ],
     } as const
     const Render = () => {
       const config = SetOutputComponent.render(block, chatThemes.dark, {
-        availableWidth: 100, indentationOffset: 0, labelWidth: 0,
+        availableWidth: 100,
+        indentationOffset: 0,
+        labelWidth: 0,
       })
       return config.content as React.ReactElement
     }

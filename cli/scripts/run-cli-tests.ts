@@ -24,7 +24,8 @@
 
 import { spawnSync } from 'node:child_process'
 import { readdirSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /**
  * Directories never descended into, mirroring CI's `find` prunes. Kept as an
@@ -120,7 +121,14 @@ export function buildBunTestArgs(
   files: readonly string[],
   extraArgs: readonly string[] = [],
 ): string[] {
-  return ['test', '--isolate', ...files, ...extraArgs]
+  return [
+    'test',
+    '--preload',
+    './scripts/preload-opentui.ts',
+    '--isolate',
+    ...files,
+    ...extraArgs,
+  ]
 }
 
 function main(): void {
@@ -140,14 +148,26 @@ function main(): void {
     {
       cwd: cliRoot,
       stdio: 'inherit',
-      env: { ...process.env, NODE_ENV: 'production' },
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        // Seed the parent environment too: isolated workers restore their
+        // initial environment, not mutations performed inside preload.
+        OTUI_ASSET_ROOT:
+          process.env.OTUI_ASSET_ROOT ||
+          resolve(
+            dirname(fileURLToPath(import.meta.resolve('@opentui/core'))),
+            '../..',
+          ),
+      },
     },
   )
 
   if (result.error) {
-    throw new Error(
-      `Could not run bun test: ${result.error.message}`,
-    )
+    throw new Error(`Could not run bun test: ${result.error.message}`)
+  }
+  if (result.signal) {
+    console.error(`CLI test process terminated by ${result.signal}`)
   }
   process.exit(result.status ?? 1)
 }

@@ -66,7 +66,7 @@ describe('useChatInput', () => {
     baseOptions.onSubmitPrompt.mockClear()
   })
 
-  test('handleBuildFast sets EXECUTE_PLAN mode and fills "Build it!"', () => {
+  test('Execute Plan submits an action without writing to the draft', () => {
     const { result } = renderHook(useChatInput, {
       ...baseOptions,
       agentMode: 'DEFAULT' as AgentMode,
@@ -75,39 +75,33 @@ describe('useChatInput', () => {
     result.current.handleBuildFast()
 
     expect(baseOptions.setAgentMode).toHaveBeenCalledWith('EXECUTE_PLAN')
-    const setCalls = baseOptions.setInputValue.mock.calls as Array<[InputValue]>
-    // The first call sets the "Build it!" text
-    expect(setCalls[0][0]).toMatchObject({
-      text: 'Build it!',
-      cursorPosition: 9,
-      lastEditDueToNav: true,
-    })
-  })
-
-  test('handleBuildFast submits the prompt and clears input asynchronously', async () => {
-    const { result } = renderHook(useChatInput, {
-      ...baseOptions,
-      agentMode: 'DEFAULT' as AgentMode,
-    })
-
-    result.current.handleBuildFast()
-
-    // Wait for the setTimeout(0) to fire
-    await new Promise((resolve) => setTimeout(resolve, 10))
-
     expect(baseOptions.onSubmitPrompt).toHaveBeenCalledWith(
       'Build it!',
       'EXECUTE_PLAN',
+      { preserveInputValue: true },
     )
+    expect(baseOptions.setInputValue).not.toHaveBeenCalled()
+  })
 
-    const setCalls = baseOptions.setInputValue.mock.calls as Array<[InputValue]>
-    // The last call clears the input
-    const lastCall = setCalls[setCalls.length - 1][0]
-    expect(lastCall).toMatchObject({
-      text: '',
-      cursorPosition: 0,
-      lastEditDueToNav: false,
+  test('Execute Plan cannot clear newer input after an asynchronous send', async () => {
+    let resolveSend!: () => void
+    const pendingSend = new Promise<void>((resolve) => {
+      resolveSend = resolve
     })
+    const submit = mock(() => pendingSend)
+    const { result } = renderHook(useChatInput, {
+      ...baseOptions,
+      agentMode: 'DEFAULT' as AgentMode,
+      onSubmitPrompt: submit,
+    })
+
+    const completion = result.current.handleBuildFast()
+    resolveSend()
+    await completion
+    expect(submit).toHaveBeenCalledWith('Build it!', 'EXECUTE_PLAN', {
+      preserveInputValue: true,
+    })
+    expect(baseOptions.setInputValue).not.toHaveBeenCalled()
   })
 
   test('computes non-zero toggle width in default mode on normal width', () => {
@@ -193,14 +187,18 @@ describe('estimatedAgentModeToggleWidth', () => {
   })
 
   test('a mode without the toggle estimates zero (bash)', () => {
-    expect(
-      estimatedAgentModeToggleWidth('bash', 'DEFAULT', false, false),
-    ).toBe(0)
+    expect(estimatedAgentModeToggleWidth('bash', 'DEFAULT', false, false)).toBe(
+      0,
+    )
   })
 
   test('compact height and narrow width estimate zero in every mode', () => {
-    expect(estimatedAgentModeToggleWidth('default', 'DEFAULT', true, false)).toBe(0)
-    expect(estimatedAgentModeToggleWidth('default', 'DEFAULT', false, true)).toBe(0)
+    expect(
+      estimatedAgentModeToggleWidth('default', 'DEFAULT', true, false),
+    ).toBe(0)
+    expect(
+      estimatedAgentModeToggleWidth('default', 'DEFAULT', false, true),
+    ).toBe(0)
   })
 })
 

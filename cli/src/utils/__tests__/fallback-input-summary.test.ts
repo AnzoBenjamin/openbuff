@@ -123,6 +123,22 @@ describe('bounded fallback bodies', () => {
   test('survives an unserializable value', () => {
     const cyclic: Record<string, unknown> = {}
     cyclic.self = cyclic
-    expect(boundedFallbackJson(cyclic)).toBe('[object Object]')
+    expect(boundedFallbackJson(cyclic)).toContain(
+      '[shared or circular reference]',
+    )
   })
+})
+
+test('nested fallback projection is bounded without invoking accessors or serializing the full collection', () => {
+  const input = {
+    scalar: 'visible',
+    nested: new Array(1_000_000),
+    get accessor() {
+      throw new Error('accessor evaluated')
+    },
+  }
+  expect(summarizeFallbackInput(input)).toContain('scalar: visible')
+  expect(boundedFallbackJson(input).length).toBeLessThanOrEqual(
+    MAX_FALLBACK_INPUT_JSON_CHARS,
+  )
 })

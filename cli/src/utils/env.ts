@@ -64,6 +64,7 @@ export const getCliEnv = (): CliEnv => ({
 
   // Theme preferences
   OPEN_TUI_THEME: process.env.OPEN_TUI_THEME,
+  OPENBUFF_REDUCED_MOTION: process.env.OPENBUFF_REDUCED_MOTION,
   OPENTUI_THEME: process.env.OPENTUI_THEME,
 
   // Binary build configuration

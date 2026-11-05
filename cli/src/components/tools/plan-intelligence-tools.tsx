@@ -21,6 +21,7 @@ import {
   truncateText,
 } from './human-result'
 import { defineToolComponent } from './types'
+import { outcomeForTool } from '../../utils/output-outcome'
 
 import type { ToolRenderConfig, ToolRenderOptions } from './types'
 
@@ -55,9 +56,16 @@ export const CreatePlanComponent = defineToolComponent({
     const width = rowWidth(options.availableWidth)
     const message = readString(record?.message)
     const writtenPath =
-      readString(record?.path) ?? readString(record?.artifactPath)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
-    const summary = error ?? message ?? 'Plan artifact written.'
+      readString(record?.path) ??
+      readString(record?.artifactPath) ??
+      readString(record?.file)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
+    const summary =
+      error ??
+      `${outcomeForTool(toolBlock).label} · ${message ?? 'Plan artifact result'}`
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -98,10 +106,12 @@ export const UpdatePlanStatusComponent = defineToolComponent({
     const updates = readRecordArray(record?.updates)
     const unmatched = readStringArray(record?.unmatchedTasks)
     const statuses = statusGlyphFor(
-      error ? 'failed' : updates.length > 0 ? 'ready' : 'partial',
+      error ? 'failed' : outcomeForTool(toolBlock).label,
       theme,
     )
-    const summary = error ?? message ?? 'Plan status updated.'
+    const summary =
+      error ??
+      `${outcomeForTool(toolBlock).label} · ${message ?? 'Plan status result; update count not captured'}`
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -165,7 +175,10 @@ export const RecordDecisionComponent = defineToolComponent({
     const message = readString(record?.message)
     const kind = readString(record?.kind)
     const evidenceCount = readNumber(record?.evidenceCount) ?? 0
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error ?? message ?? 'Decision recorded.'
 
     return {
@@ -207,7 +220,10 @@ export const WriteAuditFindingsComponent = defineToolComponent({
     const message = readString(record?.message)
     const writtenPaths = readStringArray(record?.writtenPaths)
     const artifactPaths = readStringArray(record?.artifactPaths)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error ?? message ?? 'Audit findings written.'
     const paths = writtenPaths.length > 0 ? writtenPaths : artifactPaths
 
@@ -297,13 +313,28 @@ export const ReadOutlineComponent = defineToolComponent({
     const error = errorOf(toolBlock)
     const width = rowWidth(options.availableWidth)
     const outline = readString(record?.outline) ?? ''
-    const symbolCount = outline
+    const outlineFailure =
+      /(?:does not exist|outside|not found|error reading)/i.test(outline)
+    const emptyMarker =
+      /(?:^|\n)\[No (?:structural components|(?:Markdown )?headings|components|symbols)/i.test(
+        outline,
+      )
+    const symbolRows = outline
       .split('\n')
-      .filter((line) => line.trim().length > 0).length
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+      .filter(
+        (line) =>
+          line.trim() &&
+          !line.trim().startsWith('[') &&
+          !/^(?:Line\s+\d+:\s*)?import\s/.test(line.trim()),
+      )
+    const symbolCount = outlineFailure || emptyMarker ? 0 : symbolRows.length
+    const statuses = statusGlyphFor(
+      error || outlineFailure ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Outline failed'
-      : `Outline · ${formatCount(symbolCount, 'symbol')}`
+      : `Outline · ${outlineFailure ? 'unavailable' : !record ? (toolBlock.lifecycle ?? 'output unavailable') : formatCount(symbolCount, 'symbol')} · ${readString(record?.path) ?? readString((toolBlock.input as Record<string, unknown>)?.path) ?? 'source unknown'}${outline.includes('[heuristic outline:') ? ' · heuristic source' : ''}${outline.includes('[Outline truncated') ? ' · capture truncated; more may exist' : ''}`
     const shown = outline
       .split('\n')
       .filter((line) => line.trim().length > 0)
@@ -347,8 +378,13 @@ export const WebSearchComponent = defineToolComponent({
     const error = errorOf(toolBlock)
     const width = rowWidth(options.availableWidth)
     const links = readRecordArray(record?.links)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
-    const summary = error ? 'Web search failed' : 'Web search result'
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
+    const summary = error
+      ? 'Web search failed'
+      : `Web search · ${record ? 'captured result' : (toolBlock.lifecycle ?? 'output unavailable')}`
     const shown = links.slice(0, MAX_ROWS)
 
     return {
@@ -363,6 +399,27 @@ export const WebSearchComponent = defineToolComponent({
           />
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
+            {(readString(record?.text) ??
+            readString(record?.content) ??
+            readString(record?.description)) ? (
+              <DetailRow
+                value={(
+                  readString(record?.text) ??
+                  readString(record?.content) ??
+                  readString(record?.description) ??
+                  ''
+                ).slice(0, 600)}
+                width={width}
+              />
+            ) : null}
+            {(readString(record?.text) ??
+            readString(record?.content) ??
+            readString(record?.description)) ? (
+              <DetailRow
+                value="Captured text preview · Inspect for full retained body"
+                width={width}
+              />
+            ) : null}
             {shown.map((link, index) => {
               const href = readString(link.href) ?? ''
               const text = readString(link.text) ?? href
@@ -394,10 +451,13 @@ export const InspectCodebaseStructureComponent = defineToolComponent({
     const error = errorOf(toolBlock)
     const width = rowWidth(options.availableWidth)
     const subsystems = readRecordArray(record?.subsystems)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Structure inspection failed'
-      : `Structure · ${formatCount(subsystems.length, 'subsystem')}`
+      : `Structure · ${formatCount(readNumber(record?.subsystems) ?? readNumber(record?.subsystemCount) ?? subsystems.length, 'subsystem')}`
     const shown = subsystems.slice(0, MAX_ROWS)
 
     return {
@@ -414,7 +474,9 @@ export const InspectCodebaseStructureComponent = defineToolComponent({
             {error ? <ErrorRow message={error} width={width} /> : null}
             {shown.map((subsystem, index) => {
               const name =
-                readString(subsystem.name) ?? readString(subsystem.id) ?? 'subsystem'
+                readString(subsystem.name) ??
+                readString(subsystem.id) ??
+                'subsystem'
               const files = readStringArray(subsystem.files)
               return (
                 <DetailRow
@@ -443,11 +505,21 @@ export const InspectFeatureCompletenessComponent = defineToolComponent({
     const record = firstRecord(toolBlock.outputRaw)
     const error = errorOf(toolBlock)
     const width = rowWidth(options.availableWidth)
-    const evidence = isRecord(record?.evidence) ? record?.evidence : undefined
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const receipt = isRecord(record?.coverageReceipt)
+      ? record.coverageReceipt
+      : undefined
+    const evidence = isRecord(record?.evidence)
+      ? record.evidence
+      : isRecord(receipt?.evidence)
+        ? receipt.evidence
+        : undefined
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Feature inspection failed'
-      : `Feature · ${readString(record?.feature) ?? 'unknown'}`
+      : `Feature · ${readString(record?.feature) ?? 'unknown'} · ${readString(record?.evidenceKind) ?? readString(record?.evidence_kind) ?? readString(receipt?.evidence_kind) ?? 'assurance unknown'} evidence · ${readString(record?.status) ?? 'status unknown'}`
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -462,21 +534,32 @@ export const InspectFeatureCompletenessComponent = defineToolComponent({
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
             {evidence
-              ? (['entrypoints', 'implementation', 'consumers', 'tests', 'docs', 'failure_states'] as const).map(
-                  (key) => {
-                    const count = readStringArray(evidence[key]).length
-                    if (count === 0) return null
-                    return (
-                      <DetailRow
-                        key={key}
-                        label={key.replace(/_/g, ' ')}
-                        value={formatCount(count, 'path')}
-                        width={width}
-                        valueColor={theme.muted}
-                      />
-                    )
-                  },
-                )
+              ? (
+                  [
+                    'entrypoints',
+                    'implementation',
+                    'consumers',
+                    'tests',
+                    'docs',
+                    'failure_states',
+                  ] as const
+                ).map((key) => {
+                  const count = readStringArray(
+                    key === 'failure_states'
+                      ? (evidence.failure_states ?? evidence.failureStates)
+                      : evidence[key],
+                  ).length
+                  if (count === 0) return null
+                  return (
+                    <DetailRow
+                      key={key}
+                      label={key.replace(/_/g, ' ')}
+                      value={formatCount(count, 'path')}
+                      width={width}
+                      valueColor={theme.muted}
+                    />
+                  )
+                })
               : null}
           </ResultBody>
         </ResultShell>
@@ -492,10 +575,13 @@ export const EvaluateAuditCoverageComponent = defineToolComponent({
     const error = errorOf(toolBlock)
     const width = rowWidth(options.availableWidth)
     const shards = readRecordArray(record?.shards)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Coverage check failed'
-      : `Coverage · ${formatCount(shards.length, 'shard')}`
+      : `Coverage · ${formatCount(shards.length, 'shard')} · ${record?.complete === false || record?.coverageComplete === false || record?.status === 'partial' ? 'incomplete' : (readString(record?.status) ?? 'completeness unknown')}`
     const shown = shards.slice(0, MAX_ROWS)
 
     return {
@@ -511,7 +597,8 @@ export const EvaluateAuditCoverageComponent = defineToolComponent({
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
             {shown.map((shard, index) => {
-              const id = readString(shard.shard_id) ?? readString(shard.id) ?? 'shard'
+              const id =
+                readString(shard.shard_id) ?? readString(shard.id) ?? 'shard'
               const files = readStringArray(shard.files)
               return (
                 <DetailRow
@@ -588,7 +675,11 @@ export const RunTargetedValidationComponent = defineToolComponent({
             {shown.map((failure, index) => {
               const message = readString(failure.errorMessage) ?? 'failed'
               return (
-                <ErrorRow key={`${message}-${index}`} message={message} width={width} />
+                <ErrorRow
+                  key={`${message}-${index}`}
+                  message={message}
+                  width={width}
+                />
               )
             })}
             <OverflowNote

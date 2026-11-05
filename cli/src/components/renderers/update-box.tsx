@@ -14,14 +14,23 @@ export const UpdateBox = memo(({ block }: UpdateBoxProps) => {
 
   if (block.updateStatus === 'staged') {
     return (
-      <HarnessBox tone="info" title="Update available" gap={0} paddingBottom={1}>
+      <HarnessBox
+        tone="info"
+        title="Update available"
+        gap={0}
+        paddingBottom={1}
+      >
         <text style={{ wrapMode: 'word', fg: theme.foreground }}>
           <span style={{ fg: theme.secondary }}>Current:</span>
-          <span style={{ fg: theme.foreground }}>{` ${block.current ?? 'unknown'}`}</span>
+          <span
+            style={{ fg: theme.foreground }}
+          >{` ${block.current ?? 'unknown'}`}</span>
         </text>
         <text style={{ wrapMode: 'word', fg: theme.foreground }}>
           <span style={{ fg: theme.secondary }}>Available:</span>
-          <span style={{ fg: theme.success }}>{` ${block.pending ?? 'unknown'}`}</span>
+          <span
+            style={{ fg: theme.success }}
+          >{` ${block.pending ?? 'unknown'}`}</span>
         </text>
         {block.lines.map((line, idx) => (
           <text
@@ -37,10 +46,17 @@ export const UpdateBox = memo(({ block }: UpdateBoxProps) => {
 
   if (block.updateStatus === 'current') {
     return (
-      <HarnessBox tone="success" title="Up to date" gap={0} paddingBottom={1}>
+      <HarnessBox
+        tone="secondary"
+        title="Last checked version"
+        gap={0}
+        paddingBottom={1}
+      >
         <text style={{ wrapMode: 'word', fg: theme.foreground }}>
           <span style={{ fg: theme.secondary }}>Version:</span>
-          <span style={{ fg: theme.foreground }}>{` ${block.current ?? 'unknown'}`}</span>
+          <span
+            style={{ fg: theme.foreground }}
+          >{` ${block.current ?? 'unknown'}`}</span>
         </text>
         {block.lines.map((line, idx) => (
           <text

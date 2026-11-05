@@ -6,7 +6,9 @@ import {
   getCurrentChatDir,
   getMostRecentChatDir,
   getProjectDataDir,
+  getProjectRoot,
 } from '../project-files'
+import { getMemoryAuthoritySelection } from './env'
 import {
   atomicWriteJsonFile,
   cancelAndDrainPendingWriteFor,
@@ -68,8 +70,186 @@ type PersistedChatState = {
 // only need the fields the restore path reads — so older-but-valid sessions
 // keep loading unchanged; anything that fails is treated as a corrupt session
 // and the caller starts fresh instead of rendering broken messages.
-const validatePersistedMessages = (messages: unknown): ChatMessage[] | null => {
+export const validatePersistedMessages = (
+  messages: unknown,
+): ChatMessage[] | null => {
   if (!Array.isArray(messages)) return null
+  const validBlocks = (blocks: unknown, depth = 0): boolean => {
+    if (!Array.isArray(blocks) || depth > 64) return false
+    return blocks.every((block) => {
+      if (
+        !block ||
+        typeof block !== 'object' ||
+        Array.isArray(block) ||
+        typeof block.type !== 'string'
+      )
+        return false
+      if (block.blocks !== undefined && !validBlocks(block.blocks, depth + 1))
+        return false
+      if (block.content !== undefined && typeof block.content !== 'string')
+        return false
+      if (block.output !== undefined && typeof block.output !== 'string')
+        return false
+      if (block.type === 'text') return typeof block.content === 'string'
+      if (block.type === 'tool')
+        return (
+          typeof block.toolName === 'string' &&
+          typeof block.toolCallId === 'string'
+        )
+      if (block.type === 'agent')
+        return (
+          typeof block.agentId === 'string' &&
+          typeof block.agentName === 'string' &&
+          typeof block.agentType === 'string' &&
+          typeof block.content === 'string'
+        )
+      if (block.type === 'image')
+        return (
+          typeof block.image === 'string' && typeof block.mediaType === 'string'
+        )
+      const strings = (value: unknown) =>
+        Array.isArray(value) && value.every((item) => typeof item === 'string')
+      const object = (value: unknown): value is Record<string, unknown> =>
+        value !== null && typeof value === 'object' && !Array.isArray(value)
+      const optionalStrings = (value: unknown) =>
+        value === undefined || strings(value)
+      if (block.type === 'doctor')
+        return (
+          typeof block.projectRoot === 'string' &&
+          typeof block.providerStatus === 'string' &&
+          Array.isArray(block.diagnostics) &&
+          block.diagnostics.every(
+            (item: unknown) => object(item) && typeof item.message === 'string',
+          ) &&
+          (block.capabilities === undefined ||
+            (Array.isArray(block.capabilities) &&
+              block.capabilities.every(
+                (item: unknown) =>
+                  object(item) &&
+                  typeof item.label === 'string' &&
+                  typeof item.value === 'string' &&
+                  optionalStrings(item.rows),
+              )))
+        )
+      if (block.type === 'update') return strings(block.lines)
+      if (block.type === 'index-status')
+        return (
+          strings(block.lines) &&
+          optionalStrings(block.diagnosticsLines) &&
+          [
+            'statusLine',
+            'messageLine',
+            'corpusLine',
+            'ageLine',
+            'vectorLine',
+            'hintLine',
+          ].every((key) => typeof block[key] === 'string')
+        )
+      if (block.type === 'plan-status' || block.type === 'plan-status-list')
+        return typeof block.reportText === 'string'
+      if (block.type === 'plan') return typeof block.content === 'string'
+      if (block.type === 'context')
+        return (
+          (block.ledgerText === null || typeof block.ledgerText === 'string') &&
+          typeof block.gateBudgetsText === 'string'
+        )
+      if (block.type === 'info')
+        return (
+          typeof block.version === 'string' &&
+          typeof block.workspace === 'string'
+        )
+      if (block.type === 'agent-list')
+        return (
+          Array.isArray(block.agents) &&
+          block.agents.every(
+            (item: unknown) =>
+              object(item) &&
+              typeof item.id === 'string' &&
+              typeof item.displayName === 'string',
+          )
+        )
+      if (block.type === 'completion-summary')
+        return (
+          object(block.summary) &&
+          (block.summary.reviewHistory === undefined ||
+            (Array.isArray(block.summary.reviewHistory) &&
+              block.summary.reviewHistory.every(
+                (item: unknown) =>
+                  object(item) && typeof item.verdict === 'string',
+              )))
+        )
+      if (block.type === 'compaction')
+        return (
+          block.categoryDeltas === undefined ||
+          (Array.isArray(block.categoryDeltas) &&
+            block.categoryDeltas.every(
+              (item: unknown) =>
+                object(item) && typeof item.category === 'string',
+            ))
+        )
+      if (block.type === 'gate-state')
+        return (
+          typeof block.gate === 'string' &&
+          ['pending', 'passed', 'failed', 'skipped'].includes(
+            block.gateStatus,
+          ) &&
+          optionalStrings(block.advisories) &&
+          optionalStrings(block.reviewers) &&
+          (block.origin === undefined || typeof block.origin === 'string')
+        )
+      if (block.type === 'ask-user')
+        return (
+          typeof block.toolCallId === 'string' &&
+          Array.isArray(block.questions) &&
+          block.questions.every(
+            (item: unknown) =>
+              object(item) &&
+              typeof item.question === 'string' &&
+              Array.isArray(item.options) &&
+              item.options.every(
+                (option: unknown) =>
+                  object(option) && typeof option.label === 'string',
+              ),
+          )
+        )
+      if (block.type === 'memory') {
+        if (!optionalStrings(block.v2Lines)) return false
+        if (block.state === 'status')
+          return (
+            object(block.counts) &&
+            object(block.evidence) &&
+            typeof block.goalPreview === 'string' &&
+            strings(block.stalePaths)
+          )
+        if (block.state === 'report' || block.state === 'reuse')
+          return (
+            strings(block.lines) &&
+            (block.insertCommands === undefined ||
+              (Array.isArray(block.insertCommands) &&
+                block.insertCommands.every(
+                  (item: unknown) =>
+                    object(item) &&
+                    typeof item.label === 'string' &&
+                    typeof item.command === 'string',
+                )))
+          )
+        return (
+          [
+            'empty',
+            'pruned',
+            'nothing-to-prune',
+            'no-record',
+            'failed',
+            'error',
+          ].includes(block.state) &&
+          (block.message === undefined || typeof block.message === 'string')
+        )
+      }
+      // Executable React content cannot be reconstructed from a saved JSON file.
+      if (block.type === 'html') return false
+      return true
+    })
+  }
   for (const message of messages) {
     if (
       message === null ||
@@ -77,11 +257,41 @@ const validatePersistedMessages = (messages: unknown): ChatMessage[] | null => {
       Array.isArray(message) ||
       typeof message.id !== 'string' ||
       typeof message.variant !== 'string' ||
-      typeof message.timestamp !== 'string'
+      !['ai', 'user', 'agent', 'error'].includes(message.variant) ||
+      typeof message.timestamp !== 'string' ||
+      typeof message.content !== 'string' ||
+      (message.blocks !== undefined && !validBlocks(message.blocks))
     ) {
       return null
     }
   }
+  // Old sessions used process-local thinking-N counters. Give each retained
+  // group its own identity, preserving contiguous fragments of the same group.
+  const scopeThinking = (blocks: import('../types/chat').ContentBlock[]) => {
+    let previous: import('../types/chat').TextContentBlock | undefined
+    let scopedId: string | undefined
+    for (const block of blocks) {
+      if (block.type === 'agent' && block.blocks) scopeThinking(block.blocks)
+      if (block.type !== 'text' || !block.thinkingId) {
+        previous = undefined
+        continue
+      }
+      const originalId = block.thinkingId
+      if (
+        !previous ||
+        previous.thinkingId !== originalId ||
+        previous.thinkingOpen !== block.thinkingOpen ||
+        previous.thinkingCollapseState !== block.thinkingCollapseState ||
+        previous.thinkingStartedAt !== block.thinkingStartedAt ||
+        previous.thinkingEndedAt !== block.thinkingEndedAt
+      )
+        scopedId = `restored-thinking-${crypto.randomUUID()}`
+      previous = { ...block, thinkingId: originalId }
+      block.thinkingId = scopedId
+    }
+  }
+  for (const message of messages as ChatMessage[])
+    if (message.blocks) scopeThinking(message.blocks)
   return messages as ChatMessage[]
 }
 
@@ -267,7 +477,10 @@ export function loadChatStateFromDirectory(
 
 const CODEC_WORKER_MIN_CHARS = 64 * 1024
 
-async function parsePersistedAsync<T>(text: string, signal?: AbortSignal): Promise<T> {
+async function parsePersistedAsync<T>(
+  text: string,
+  signal?: AbortSignal,
+): Promise<T> {
   if (text.length >= CODEC_WORKER_MIN_CHARS) {
     try {
       return await runPersistenceCodec<T>('parse', text, signal)
@@ -508,6 +721,14 @@ export function saveChatState(
   runState: RunState,
   messages: ChatMessage[],
 ): void {
+  const chatDir = getCurrentChatDir()
+  const chatStatePath = path.join(chatDir, CHAT_STATE_FILENAME)
+  const runStatePath = path.join(chatDir, RUN_STATE_FILENAME)
+  const messagesPath = path.join(chatDir, CHAT_MESSAGES_FILENAME)
+  const archiveOwner = runState.sessionState?.mainAgentState?.compactionArchive
+    ?.length
+    ? { root: getProjectRoot(), authority: getMemoryAuthoritySelection() }
+    : undefined
   // Capture at call time before the queued worker runs. The clone also gives
   // the fallback the same immutable snapshot if the worker cannot start.
   let snapshot: { runState: RunState; messages: ChatMessage[] }
@@ -525,23 +746,29 @@ export function saveChatState(
     saveChatStateSynchronously(runState, messages)
     return
   }
-  const chatStatePath = getChatStatePath()
   schedulePersistenceWrite({
     targetKey: chatStatePath,
     label: chatStatePath,
-    onError: (error) => logger.error(
-      { error: error instanceof Error ? error.message : String(error) },
-      'Failed to save chat state',
-    ),
+    onError: (error) =>
+      logger.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        'Failed to save chat state',
+      ),
     run: async () => {
-      let serialized: { runState: string; messages: string; archive: RunState | null }
+      let serialized: {
+        runState: string
+        messages: string
+        archive: RunState | null
+      }
       try {
         serialized = await runPersistenceCodec('serialize', snapshot)
       } catch {
         const cleanRunState = sanitizeForChatPersistence(snapshot.runState)
         serialized = {
           runState: JSON.stringify(cleanRunState),
-          messages: JSON.stringify(sanitizeForChatPersistence(snapshot.messages)),
+          messages: JSON.stringify(
+            sanitizeForChatPersistence(snapshot.messages),
+          ),
           archive: cleanRunState,
         }
       }
@@ -590,11 +817,17 @@ export function saveChatState(
       // cleared-state-resurrection-async-save). These synchronous enqueues
       // join the pump's current loop, so the sidecars still land right after
       // the envelope, in the same relative order as before.
-      scheduleChatStateWrite(getRunStatePath(), serialized.runState)
-      scheduleChatStateWrite(getChatMessagesPath(), serialized.messages)
+      scheduleChatStateWrite(runStatePath, serialized.runState)
+      scheduleChatStateWrite(messagesPath, serialized.messages)
       if (serialized.archive) {
-        void flushContextArchiveSnapshots(serialized.archive).catch((error) => {
-          logger.warn({ error: error instanceof Error ? error.message : String(error) }, 'Context archive flush failed (non-fatal)')
+        void flushContextArchiveSnapshots(
+          serialized.archive,
+          archiveOwner,
+        ).catch((error) => {
+          logger.warn(
+            { error: error instanceof Error ? error.message : String(error) },
+            'Context archive flush failed (non-fatal)',
+          )
         })
       }
     },

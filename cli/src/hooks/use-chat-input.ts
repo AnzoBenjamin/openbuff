@@ -5,16 +5,19 @@ import { useChatStore } from '../state/chat-store'
 import type { InputMode } from '../utils/input-modes'
 import { getInputModeConfig } from '../utils/input-modes'
 
-import type { InputValue } from '../types/store'
 import type { AgentMode } from '../utils/constants'
 
 interface UseChatInputOptions {
-  setInputValue: (value: InputValue) => void
   agentMode: AgentMode
   setAgentMode: (mode: AgentMode) => void
   separatorWidth: number
   initialPrompt: string | null
-  onSubmitPrompt: (content: string, mode: AgentMode) => void | Promise<unknown>
+  claimInitialPrompt?: (prompt: string) => boolean
+  onSubmitPrompt: (
+    content: string,
+    mode: AgentMode,
+    options?: { preserveInputValue?: boolean },
+  ) => void | Promise<unknown>
   isCompactHeight: boolean
   isNarrowWidth: boolean
   /**
@@ -53,11 +56,11 @@ export function estimatedAgentModeToggleWidth(
 }
 
 export const useChatInput = ({
-  setInputValue,
   agentMode,
   setAgentMode,
   separatorWidth,
   initialPrompt,
+  claimInitialPrompt,
   onSubmitPrompt,
   isCompactHeight,
   isNarrowWidth,
@@ -85,27 +88,22 @@ export const useChatInput = ({
 
   const handleBuildFast = useCallback(() => {
     setAgentMode('EXECUTE_PLAN')
-    setInputValue({
-      text: BUILD_IT_TEXT,
-      cursorPosition: BUILD_IT_TEXT.length,
-      lastEditDueToNav: true,
+    return onSubmitPrompt(BUILD_IT_TEXT, 'EXECUTE_PLAN', {
+      preserveInputValue: true,
     })
-    setTimeout(() => {
-      onSubmitPrompt(BUILD_IT_TEXT, 'EXECUTE_PLAN')
-      setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-    }, 0)
-  }, [setAgentMode, setInputValue, onSubmitPrompt])
+  }, [setAgentMode, onSubmitPrompt])
 
   useEffect(() => {
     if (initialPrompt && !hasAutoSubmittedRef.current) {
-      hasAutoSubmittedRef.current = true
-
-      setTimeout(() => {
-        onSubmitPrompt(initialPrompt, agentMode)
+      const timer = setTimeout(() => {
+        if (claimInitialPrompt && !claimInitialPrompt(initialPrompt)) return
+        hasAutoSubmittedRef.current = true
+        void onSubmitPrompt(initialPrompt, agentMode)
       }, 100)
+      return () => clearTimeout(timer)
     }
     return undefined
-  }, [initialPrompt, agentMode, onSubmitPrompt])
+  }, [initialPrompt, agentMode, onSubmitPrompt, claimInitialPrompt])
 
   return {
     inputWidth,

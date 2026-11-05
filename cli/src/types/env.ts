@@ -72,6 +72,7 @@ export type CliEnv = BaseEnv & {
 
   // Theme preferences
   OPEN_TUI_THEME?: string
+  OPENBUFF_REDUCED_MOTION?: string
   OPENTUI_THEME?: string
 
   // Codebuff CLI-specific (set during binary build)

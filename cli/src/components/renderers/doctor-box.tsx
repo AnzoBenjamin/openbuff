@@ -73,9 +73,7 @@ export const DoctorBox = memo(({ block }: DoctorBoxProps) => {
               style={{ flexDirection: 'column', gap: 0 }}
             >
               <text style={{ wrapMode: 'word', fg: theme.foreground }}>
-                <span
-                  style={{ fg: theme.secondary }}
-                >{`  ${row.label}:`}</span>
+                <span style={{ fg: theme.secondary }}>{`  ${row.label}:`}</span>
                 <span
                   style={{ fg: capabilityToneFg[row.tone] }}
                 >{` ${row.value}`}</span>
@@ -96,7 +94,7 @@ export const DoctorBox = memo(({ block }: DoctorBoxProps) => {
         <span style={{ fg: theme.secondary }}>Agent diagnostics:</span>
         <span
           style={{ fg: theme.foreground }}
-        >{` ${block.diagnostics.length}`}</span>
+        >{` showing ${diagnostics.length} of ${block.diagnostics.length} captured · Inspect captured output for retained entries`}</span>
       </text>
       {diagnostics.length > 0 ? (
         <box style={{ flexDirection: 'column', gap: 0 }}>

@@ -132,8 +132,12 @@ function makeLanguageIntelligenceComponent(
       const symbols = extractSymbols(output)
       const hoverText = formatHover(output)
       const error =
-        getStructuredErrorMessages(toolBlock.outputRaw ?? toolBlock.output)[0] ??
-        (typeof output?.errorMessage === 'string' ? output.errorMessage : undefined)
+        getStructuredErrorMessages(
+          toolBlock.outputRaw ?? toolBlock.output,
+        )[0] ??
+        (typeof output?.errorMessage === 'string'
+          ? output.errorMessage
+          : undefined)
       const unavailableReason =
         isRecord(output?.unavailable) &&
         typeof output.unavailable.reason === 'string'
@@ -164,8 +168,11 @@ function makeLanguageIntelligenceComponent(
 
       let status: string
       if (error) status = 'failed'
+      else if (toolBlock.lifecycle === 'cancelled') status = 'cancelled'
+      else if (toolBlock.lifecycle === 'failed') status = 'failed'
       else if (toolBlock.lifecycle === 'queued') status = 'queued'
-      else if (toolBlock.lifecycle === 'running' || !output) status = 'running'
+      else if (toolBlock.lifecycle === 'running') status = 'running'
+      else if (!output) status = 'unavailable'
       else if (unavailableReason) status = 'unavailable'
       else status = 'ready'
       const { glyph, color } = statusGlyph(status, theme)
@@ -185,6 +192,7 @@ function makeLanguageIntelligenceComponent(
               : readyButEmpty
                 ? `${target} — no results`
                 : `${target} — ${resultCount} ${toolName === 'workspace_symbol' ? 'symbol' : 'location'}${resultCount === 1 ? '' : 's'}`
+      const captureNotice = `${status === 'cancelled' || status === 'failed' ? `${status} · ` : ''}${resultCount > 30 ? `showing 30 of ${resultCount} captured rows · Inspect for all rows` : ''}${hoverText.length > 600 ? ` · showing 600 of ${hoverText.length} captured type characters (${hoverText.length - 600} hidden) · Inspect for full retained type` : ''}`
 
       const Content = () => {
         const theme = useTheme()
@@ -208,6 +216,9 @@ function makeLanguageIntelligenceComponent(
                 width: '100%',
               }}
             >
+              {captureNotice ? (
+                <text fg={theme.warning}>{captureNotice}</text>
+              ) : null}
               {unavailableReason ? (
                 <text style={{ wrapMode: 'word' }}>
                   <span fg={theme.muted}>
@@ -228,7 +239,10 @@ function makeLanguageIntelligenceComponent(
               {hoverText ? (
                 <text style={{ wrapMode: 'word' }}>
                   <span fg={theme.muted}>
-                    {wrapTextPreservingNewlines(truncate(hoverText, 600), colWidth)}
+                    {wrapTextPreservingNewlines(
+                      truncate(hoverText, 600),
+                      colWidth,
+                    )}
                   </span>
                 </text>
               ) : null}
@@ -260,7 +274,10 @@ function makeLanguageIntelligenceComponent(
                 return (
                   <text key={`sym-${index}`} style={{ wrapMode: 'word' }}>
                     <span fg={theme.foreground}>
-                      {wrapTextPreservingNewlines(`${name}${container}${loc}`, colWidth)}
+                      {wrapTextPreservingNewlines(
+                        `${name}${container}${loc}`,
+                        colWidth,
+                      )}
                     </span>
                   </text>
                 )
@@ -271,7 +288,7 @@ function makeLanguageIntelligenceComponent(
       }
 
       return {
-        collapsedPreview: `${summary} ${glyph}`,
+        collapsedPreview: `${summary} ${glyph}${captureNotice ? ` · ${captureNotice}` : ''}`,
         content: <Content />,
       }
     },
@@ -282,6 +299,7 @@ export const GoToDefinitionComponent =
   makeLanguageIntelligenceComponent('go_to_definition')
 export const FindReferencesComponent =
   makeLanguageIntelligenceComponent('find_references')
-export const HoverTypeComponent = makeLanguageIntelligenceComponent('hover_type')
+export const HoverTypeComponent =
+  makeLanguageIntelligenceComponent('hover_type')
 export const WorkspaceSymbolComponent =
   makeLanguageIntelligenceComponent('workspace_symbol')

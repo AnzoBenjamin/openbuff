@@ -497,6 +497,8 @@ export type AgentState = {
    * `packages/agent-runtime/src/util/context-archive.ts`).
    */
   compactionArchive?: Array<ContextArchiveSnapshot>
+  /** Edited conversation branches must not hydrate later project-wide transcripts. */
+  contextArchiveHydration?: 'project' | 'in-memory-only'
   /**
    * Capped list of background LLM consolidations of archived snapshots (the
    * canary-gated prototype leg of the compaction fidelity pipeline). Written

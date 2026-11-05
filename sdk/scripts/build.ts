@@ -524,6 +524,9 @@ async function copyWasmFiles() {
         : [
             `../node_modules/tree-sitter-wasms/out/${sourceName}`,
             `../node_modules/@vscode/tree-sitter-wasm/wasm/${wasmFile}`,
+            // Reuse a previously built local grammar only after the shared
+            // resolver verifies it against the same immutable SHA-256 pin.
+            `../cli/bin/${wasmFile}`,
           ]
     const source =
       wasmFile === 'tree-sitter.wasm'

@@ -5,11 +5,13 @@ import {
   hasMarkdown,
   type MarkdownPalette,
 } from '../../utils/markdown-renderer'
-import { BORDER_CHARS } from '../../utils/ui-constants'
 import { ContentWithMarkdown } from '../blocks/content-with-markdown'
 import { Button } from '../button'
 import { BuildModeButtons } from '../build-mode-buttons'
 import { HarnessBox } from './harness-box'
+import { sliceTextCells } from '../../utils/text-boundaries'
+import { createJsonDocument } from '../../utils/output-document'
+import { useOutputReaderStore } from '../../state/output-reader-store'
 
 import type { PlanArtifactMetadata } from '../../types/chat'
 
@@ -94,25 +96,23 @@ export const PlanBox = memo(
         {hasMetadata && (
           <box style={{ flexDirection: 'column', gap: 0 }}>
             <text style={{ fg: theme.secondary }}>Artifacts</text>
-            {artifactRows.map((row, index) => (
+            {artifactRows.slice(0, 2).map((row, index) => (
               <text
                 key={`${row}-${index}`}
                 style={{ wrapMode: 'word', fg: theme.secondary }}
               >
-                {row}
+                {sliceTextCells(row, 0, Math.max(10, availableWidth - 6))}
               </text>
             ))}
-            {commandRows.map((command, index) => (
+            {commandRows.slice(0, 1).map((command, index) => (
               <Button
                 key={`${command}-${index}`}
                 style={{
                   flexDirection: 'row',
+                  height: 1,
+                  flexShrink: 0,
                   paddingLeft: 1,
                   paddingRight: 1,
-                  borderStyle: 'single',
-                  borderColor:
-                    hoveredIndex === index ? theme.foreground : theme.secondary,
-                  customBorderChars: BORDER_CHARS,
                 }}
                 onClick={() => onInsertCommand(command)}
                 onMouseOver={() => setHoveredIndex(index)}
@@ -122,11 +122,39 @@ export const PlanBox = memo(
                   )
                 }
               >
-                <text wrapMode="none" style={{ fg: theme.secondary }}>
-                  {command}
+                <text
+                  wrapMode="none"
+                  style={{
+                    fg:
+                      hoveredIndex === index
+                        ? theme.foreground
+                        : theme.secondary,
+                  }}
+                >
+                  {sliceTextCells(
+                    command,
+                    0,
+                    Math.max(10, availableWidth - 10),
+                  )}
                 </text>
               </Button>
             ))}
+            <text
+              fg={theme.muted}
+            >{`Showing ${Math.min(2, artifactRows.length)} of ${artifactRows.length} artifacts · ${Math.min(1, commandRows.length)} of ${commandRows.length} commands`}</text>
+            <Button
+              onClick={() =>
+                useOutputReaderStore.getState().open({
+                  document: createJsonDocument(
+                    'plan-artifact-details',
+                    'Captured plan artifacts and commands',
+                    metadata,
+                  ),
+                })
+              }
+            >
+              <text fg={theme.link}>Inspect plan artifacts and commands</text>
+            </Button>
           </box>
         )}
         <BuildModeButtons theme={theme} onBuildFast={onBuildFast} />

@@ -68,6 +68,15 @@ export type DashRunEvent = {
    */
   createdAt?: string
   payloadSummary: string
+  /** Bounded retained detail, when supplied; summaries alone may omit fields. */
+  payloadDetail?: string
+  payloadTruncated?: boolean
+}
+
+export type DashSourceStatus = {
+  state: 'available' | 'absent' | 'unavailable'
+  message?: string
+  checkedAt?: string
 }
 
 /**
@@ -79,6 +88,7 @@ export type DashDataProvider = {
   getRunEvents(runId: string): Promise<DashRunEvent[]>
   getReceipts(): Promise<unknown[]>
   getGateState(): Promise<unknown | null>
+  getSourceStatus?(): Promise<DashSourceStatus>
 }
 
 /** Snapshot of everything the dashboard renders (inlined by the static export). */
@@ -87,6 +97,8 @@ export type DashSnapshot = {
   events: Record<string, DashRunEvent[]>
   receipts: unknown[]
   gate: unknown | null
+  capturedAt?: string
+  source?: DashSourceStatus
 }
 
 export type StartDashServerParams = {
@@ -195,6 +207,7 @@ const DASH_PAGE_HTML = `<!doctype html>
   h1 { margin: 0; font-size: 18px; color: #e6edf3; }
   .sub { margin: 0; color: #8b949e; font-size: 12px; }
   main { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 20px; padding: 20px 24px; align-items: start; }
+  main > div { min-width: 0; }
   @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: #8b949e; margin: 0 0 8px; }
   section { margin-bottom: 24px; min-width: 0; }
@@ -205,44 +218,69 @@ const DASH_PAGE_HTML = `<!doctype html>
   .run-list button[aria-current="true"] { border-color: #58a6ff; background: #1c2128; }
   .run-id { display: block; color: #e6edf3; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
   .run-meta { display: block; color: #8b949e; font-size: 12px; }
-  table { border-collapse: collapse; width: 100%; }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; }
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
   th { color: #8b949e; font-weight: 600; font-size: 12px; }
   td.seq, td.at { font-family: ui-monospace, monospace; white-space: nowrap; color: #8b949e; }
   td.event { font-family: ui-monospace, monospace; color: #e6edf3; white-space: nowrap; }
-  td.payload { font-family: ui-monospace, monospace; overflow-wrap: anywhere; color: #a5d6ff; }
+  td.payload { min-width: 280px; font-family: ui-monospace, monospace; overflow-wrap: anywhere; color: #a5d6ff; }
   .json { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; max-height: 320px; overflow: auto; font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .json:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
   .status { color: #8b949e; margin: 8px 0 0; }
   .status.error { color: #f85149; }
   .muted { color: #8b949e; }
+  button { font: inherit; background: #161b22; color: #e6edf3; border: 1px solid #8b949e; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+  button:focus-visible, input:focus-visible, summary:focus-visible, .timeline-viewport:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+  input { font: inherit; background: #0d1117; color: #e6edf3; border: 1px solid #8b949e; border-radius: 4px; padding: 6px; max-width: 100%; }
+  label { display: block; margin: 8px 0; }
+  .timeline-viewport { overflow: auto; max-height: 65vh; max-width: 100%; border: 1px solid #30363d; }
+  details { margin: 8px 0; overflow-wrap: anywhere; }
+  summary { cursor: pointer; color: #e6edf3; }
+  td { max-width: 360px; }
+  @media (max-width: 420px) { main { padding: 12px; gap: 12px; } header { padding: 12px; } }
 </style>
 </head>
 <body>
 <header>
   <h1>openbuff dash</h1>
   <p class="sub">run journals &middot; receipts &middot; gate timelines</p>
+  <button id="refresh-all" type="button">Refresh all</button>
+  <p id="freshness" class="sub" role="status"></p>
 </header>
 <main>
   <section aria-labelledby="runs-heading">
     <h2 id="runs-heading">Runs</h2>
+    <p id="source-status" class="status" role="status"></p>
+    <p id="runs-status" class="status" role="status"></p>
     <ul id="run-list" class="run-list"></ul>
   </section>
   <div>
     <section aria-labelledby="timeline-heading">
       <h2 id="timeline-heading">Event timeline</h2>
+      <p id="selected-run" class="status"></p>
+      <button id="refresh-timeline" type="button">Refresh selected run</button>
+      <label>Find captured events <input id="event-find" type="search" placeholder="Event kind or retained text"></label>
+      <div id="timeline-viewport" class="timeline-viewport" tabindex="0" role="region" aria-label="Recorded event fields; scroll horizontally for all columns">
       <table>
         <thead><tr><th>seq</th><th>event</th><th>at</th><th>payload</th></tr></thead>
         <tbody id="event-rows"></tbody>
       </table>
-      <p id="timeline-status" class="status"></p>
+      </div>
+      <p id="timeline-status" class="status" role="status"></p>
     </section>
     <section aria-labelledby="receipts-heading">
       <h2 id="receipts-heading">Receipts</h2>
-      <pre id="receipts" class="json"></pre>
+      <button id="refresh-receipts" type="button">Refresh receipts</button>
+      <p id="receipts-status" class="status" role="status"></p>
+      <label>Find receipt fields <input id="receipts-find" type="search"></label>
+      <div id="receipts"></div>
     </section>
     <section aria-labelledby="gate-heading">
       <h2 id="gate-heading">Gate</h2>
-      <pre id="gate" class="json"></pre>
+      <button id="refresh-gate" type="button">Refresh gate</button>
+      <p id="gate-status" class="status" role="status"></p>
+      <label>Find gate fields <input id="gate-find" type="search"></label>
+      <div id="gate"></div>
     </section>
   </div>
 </main>
@@ -257,6 +295,23 @@ const DASH_PAGE_HTML = `<!doctype html>
   // template never references the export-only symbol directly.
   var dashDataKey = '__DASH_' + 'DATA__'
   var snapshot = window[dashDataKey] || null
+  var selectionVersion = 0
+  var refreshVersion = 0
+  var selectedRun = null
+  var runs = []
+  var runsCapturedAt = null
+  var currentEvents = []
+  var panelData = { receipts: [], gate: null }
+  var panelVersions = { receipts: 0, gate: 0 }
+  var source = snapshot && snapshot.source
+  var lastEventsAt = null
+  var timelineNotice = { message: '', error: false }
+  function timelineStatus(message, error) {
+    timelineNotice = { message: message, error: error }
+    var query = (byId('event-find').value || '').toLowerCase()
+    var matches = currentEvents.filter(function (event) { return !query || (event.eventType + ' ' + (event.payloadDetail || event.payloadSummary)).toLowerCase().indexOf(query) !== -1 }).length
+    setStatus('timeline-status', message + (query ? ' · Find: ' + matches + ' matches in captured events.' : ''), error)
+  }
 
   function getJson(path) {
     var sep = path.indexOf('?') === -1 ? '?' : '&'
@@ -264,7 +319,7 @@ const DASH_PAGE_HTML = `<!doctype html>
     var init = { headers: { Accept: 'application/json' } }
     if (token) { init.headers.Authorization = 'Bearer ' + token }
     return fetch(url, init).then(function (res) {
-      if (!res.ok) { throw new Error('HTTP ' + res.status) }
+      if (!res.ok) { throw new Error(res.status === 401 ? 'Authorization expired. Reopen the dashboard URL with its token.' : 'HTTP ' + res.status + '. Retry this panel.') }
       return res.json()
     })
   }
@@ -275,17 +330,17 @@ const DASH_PAGE_HTML = `<!doctype html>
     node.className = isError ? 'status error' : 'status'
     node.textContent = message
   }
-  function renderRuns(runs) {
+  function renderRuns(loadedRuns) {
     var list = byId('run-list')
     list.textContent = ''
-    if (!runs.length) {
+    if (!loadedRuns.length) {
       var empty = document.createElement('li')
       empty.className = 'muted'
-      empty.textContent = 'No journaled runs.'
+      empty.textContent = source && source.state === 'unavailable' ? 'Journal unavailable. Fix access and restart the dashboard.' : 'No journaled runs.'
       list.appendChild(empty)
       return
     }
-    runs.forEach(function (run, index) {
+    loadedRuns.forEach(function (run) {
       var item = document.createElement('li')
       var button = document.createElement('button')
       button.type = 'button'
@@ -299,7 +354,7 @@ const DASH_PAGE_HTML = `<!doctype html>
       button.appendChild(id)
       button.appendChild(meta)
       button.addEventListener('click', function () { selectRun(run.runId) })
-      button.setAttribute('aria-current', index === 0 ? 'true' : 'false')
+      button.setAttribute('aria-current', run.runId === selectedRun ? 'true' : 'false')
       item.appendChild(button)
       list.appendChild(item)
     })
@@ -307,7 +362,9 @@ const DASH_PAGE_HTML = `<!doctype html>
   function renderEvents(events) {
     var tbody = byId('event-rows')
     tbody.textContent = ''
-    events.forEach(function (event) {
+    var query = (byId('event-find').value || '').toLowerCase()
+    var visible = events.filter(function (event) { return !query || (event.eventType + ' ' + (event.payloadDetail || event.payloadSummary)).toLowerCase().indexOf(query) !== -1 })
+    visible.forEach(function (event) {
       var row = document.createElement('tr')
       var seq = document.createElement('td')
       seq.className = 'seq'
@@ -321,49 +378,173 @@ const DASH_PAGE_HTML = `<!doctype html>
       var payload = document.createElement('td')
       payload.className = 'payload'
       payload.textContent = event.payloadSummary
+      var detail = document.createElement('details')
+      var summary = document.createElement('summary')
+      summary.textContent = 'Inspect captured event ' + event.seq
+      var content = document.createElement('pre')
+      content.className = 'json'
+      content.tabIndex = 0
+      content.setAttribute('role', 'region')
+      content.setAttribute('aria-label', 'Captured event ' + event.seq + ' details')
+      content.textContent = (event.payloadDetail || event.payloadSummary) + (event.payloadTruncated ? '\\n[Only bounded payload detail was captured by this dashboard; use recorded replay for retained journal fields.]' : '')
+      detail.appendChild(summary)
+      detail.appendChild(content)
+      payload.appendChild(detail)
       row.appendChild(seq)
       row.appendChild(kind)
       row.appendChild(at)
       row.appendChild(payload)
       tbody.appendChild(row)
     })
+    if (timelineNotice.message) timelineStatus(timelineNotice.message, timelineNotice.error)
   }
-  function selectRun(runId) {
+  function selectRun(runId, preservePlace) {
+    selectedRun = runId
+    var requestVersion = ++selectionVersion
+    var viewport = byId('timeline-viewport')
+    var position = preservePlace ? viewport.scrollTop : 0
     var buttons = byId('run-list').querySelectorAll('button')
     Array.prototype.forEach.call(buttons, function (button) {
       button.setAttribute('aria-current', button.dataset.runId === runId ? 'true' : 'false')
     })
-    setStatus('timeline-status', 'Loading events for ' + runId + '...', false)
+    timelineStatus('Loading events for ' + runId + '...', false)
+    setText('selected-run', 'Selected run: ' + runId)
+    if (!preservePlace) { currentEvents = []; renderEvents([]) }
     var loaded = snapshot
       ? Promise.resolve(snapshot.events[runId] || [])
       : getJson('/api/runs/' + encodeURIComponent(runId) + '/events')
     loaded.then(function (events) {
-      setStatus('timeline-status', events.length + ' events', false)
+      if (requestVersion !== selectionVersion) { return }
+      currentEvents = events
+      lastEventsAt = snapshot ? snapshot.capturedAt : new Date().toISOString()
       renderEvents(events)
+      viewport.scrollTop = position
+      var run = runs.filter(function (candidate) { return candidate.runId === runId })[0]
+      var total = run ? Math.max(run.eventCount, events.length) : events.length
+      var range = events.length ? ' · sequence ' + events[0].seq + '–' + events[events.length - 1].seq : ''
+      var countLabel = run && run.eventCount < events.length ? events.length + ' latest captured events · previous run-list count ' + run.eventCount : events.length + ' latest captured events of ' + total
+      var older = total > events.length ? ' · Older events are not included in this view;' : events.length >= 2000 ? ' · This view is capped at 2000 latest events; earlier source events may be available;' : ''
+      timelineStatus(countLabel + range + (older ? older + ' use openbuff replay ' + runId + ' --from-step <n>.' : '') + (lastEventsAt ? ' · Captured ' + lastEventsAt : ' · Capture time unknown') + (runsCapturedAt ? ' · Total last checked ' + runsCapturedAt + '; Refresh all updates the run count.' : ''), false)
     }).catch(function (error) {
-      setStatus('timeline-status', 'Failed to load events: ' + error.message, true)
+      if (requestVersion !== selectionVersion) { return }
+      timelineStatus('Failed to refresh events for ' + runId + ': ' + error.message + (currentEvents.length ? ' Previous capture remains visible · ' + (lastEventsAt || 'time unknown') + '.' : ''), true)
+    })
+  }
+  function outcome(value) {
+    if (!value || typeof value !== 'object') return 'Captured value'
+    if (typeof value.status === 'string') return value.status
+    if (typeof value.outcome === 'string') return value.outcome
+    if (value.passed === true) return 'Passed'
+    if (value.passed === false) return 'Failed'
+    if (value.ok === true) return 'Succeeded'
+    if (value.ok === false) return 'Failed'
+    return 'Outcome not supplied'
+  }
+  function renderPanel(name) {
+    var target = byId(name)
+    target.textContent = ''
+    var data = panelData[name]
+    if (data === null || data === undefined || (Array.isArray(data) && !data.length)) {
+      target.textContent = name === 'gate' ? 'No gate state captured.' : 'No receipts captured.'
+      return
+    }
+    var heading = document.createElement('p')
+    heading.textContent = name === 'receipts' && Array.isArray(data) ? data.length + ' captured receipts' : 'Gate: ' + outcome(data)
+    target.appendChild(heading)
+    var query = (byId(name + '-find').value || '').toLowerCase()
+    var fields = 0
+    var matches = 0
+    var fieldLimited = false
+    function field(value, path, depth) {
+      if (++fields > 3000 || depth > 12) { fieldLimited = true; return }
+      var scalar = value === null || typeof value !== 'object'
+      var label = path + ': ' + (scalar ? String(value) : outcome(value))
+      if (!query || label.toLowerCase().indexOf(query) !== -1) {
+        var detail = document.createElement('details')
+        var summary = document.createElement('summary')
+        summary.textContent = label.slice(0, 300)
+        var content = document.createElement('pre')
+        content.className = 'json'
+        var text = scalar ? String(value) : 'Use the field paths below to inspect this captured structure.'
+        content.textContent = text.slice(0, 32000) + (text.length > 32000 ? '\\n[Field display limited to 32000 characters.]' : '')
+        detail.appendChild(summary)
+        detail.appendChild(content)
+        target.appendChild(detail)
+        matches++
+      }
+      if (!scalar) {
+        for (var key in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue
+          if (fields >= 3000) { fieldLimited = true; break }
+          field(value[key], path + (Array.isArray(value) ? '[' + key + ']' : '.' + key), depth + 1)
+        }
+      }
+    }
+    if (Array.isArray(data)) {
+      for (var index = 0; index < data.length && fields < 3000; index++) field(data[index], 'Receipt[' + index + ']', 0)
+      if (index < data.length) fieldLimited = true
+    }
+    else field(data, 'Gate', 0)
+    var coverage = document.createElement('p')
+    coverage.className = 'status'
+    coverage.textContent = matches + ' matching field paths' + (fieldLimited || fields >= 3000 ? ' · Field navigation bounded to 3000 paths and 12 levels; endpoint JSON retains the captured structure.' : '')
+    target.appendChild(coverage)
+  }
+  function loadPanel(name) {
+    var generation = ++panelVersions[name]
+    setStatus(name + '-status', 'Loading ' + name + '...', false)
+    var loaded = snapshot ? Promise.resolve(snapshot[name]) : getJson('/api/' + name)
+    loaded.then(function (data) {
+      if (generation !== panelVersions[name]) return
+      panelData[name] = data
+      renderPanel(name)
+      setStatus(name + '-status', 'Captured ' + ((snapshot && snapshot.capturedAt) || (snapshot ? 'at an unknown time · offline export' : new Date().toISOString())), false)
+    }).catch(function (error) {
+      if (generation !== panelVersions[name]) return
+      setStatus(name + '-status', 'Refresh failed: ' + error.message + ' Any visible fields are from the previous capture.', true)
+    })
+  }
+  function refreshRuns() {
+    var generation = ++refreshVersion
+    setStatus('runs-status', 'Loading runs...', false)
+    var loaded = snapshot ? Promise.resolve([snapshot.runs, snapshot.source]) : Promise.all([getJson('/api/runs'), getJson('/api/source')])
+    loaded.then(function (values) {
+      if (generation !== refreshVersion) return
+      runs = values[0]
+      runsCapturedAt = snapshot ? snapshot.capturedAt : new Date().toISOString()
+      source = values[1]
+      setStatus('source-status', source && source.state === 'unavailable' ? 'Journal unavailable. ' + (source.message || 'Fix journal access and restart the dashboard.') : source && source.state === 'absent' ? 'No journal file yet. Start a journaled run, then restart this dashboard.' : 'Local journal source available.', !!source && source.state === 'unavailable')
+      renderRuns(runs)
+      setStatus('runs-status', runs.length + ' runs shown · the journal provider lists at most 64 recent runs.', false)
+      setText('freshness', snapshot ? 'Offline export · captured ' + (snapshot.capturedAt || 'at an unknown time') : 'Live local source · refreshed ' + new Date().toISOString())
+      if (runs.length) {
+        var next = runs.some(function (run) { return run.runId === selectedRun }) ? selectedRun : runs[0].runId
+        selectRun(next, next === selectedRun)
+      } else if (selectedRun) {
+        selectionVersion++
+        selectedRun = null
+        currentEvents = []
+        renderEvents([])
+        setText('selected-run', 'No selected run')
+        timelineStatus(source && source.state === 'unavailable' ? 'Timeline unavailable because the journal could not be opened.' : 'No recorded events to select.', !!source && source.state === 'unavailable')
+      }
+    }).catch(function (error) {
+      if (generation !== refreshVersion) return
+      setStatus('runs-status', 'Run refresh failed: ' + error.message + ' Previous run list remains visible.', true)
     })
   }
   function boot() {
-    var runsLoaded = snapshot ? Promise.resolve(snapshot.runs) : getJson('/api/runs')
-    var receiptsLoaded = snapshot ? Promise.resolve(snapshot.receipts) : getJson('/api/receipts')
-    var gateLoaded = snapshot ? Promise.resolve(snapshot.gate) : getJson('/api/gate')
-    runsLoaded.then(function (runs) {
-      renderRuns(runs)
-      if (runs.length) { selectRun(runs[0].runId) }
-    }).catch(function (error) {
-      setStatus('timeline-status', 'Failed to load runs: ' + error.message, true)
-    })
-    receiptsLoaded.then(function (receipts) {
-      setText('receipts', JSON.stringify(receipts, null, 2))
-    }).catch(function (error) {
-      setText('receipts', 'Failed to load receipts: ' + error.message)
-    })
-    gateLoaded.then(function (gate) {
-      setText('gate', JSON.stringify(gate, null, 2))
-    }).catch(function (error) {
-      setText('gate', 'Failed to load gate: ' + error.message)
-    })
+    byId('refresh-all').addEventListener('click', function () { refreshRuns(); loadPanel('receipts'); loadPanel('gate') })
+    byId('refresh-timeline').addEventListener('click', function () { if (selectedRun) selectRun(selectedRun, true) })
+    byId('refresh-receipts').addEventListener('click', function () { loadPanel('receipts') })
+    byId('refresh-gate').addEventListener('click', function () { loadPanel('gate') })
+    byId('event-find').addEventListener('input', function () { renderEvents(currentEvents) })
+    byId('receipts-find').addEventListener('input', function () { renderPanel('receipts') })
+    byId('gate-find').addEventListener('input', function () { renderPanel('gate') })
+    if (snapshot) ['refresh-all', 'refresh-timeline', 'refresh-receipts', 'refresh-gate'].forEach(function (id) { byId(id).disabled = true; byId(id).title = 'Offline export; capture a new export to refresh.' })
+    refreshRuns()
+    loadPanel('receipts')
+    loadPanel('gate')
   }
   boot()
 })()
@@ -397,7 +578,9 @@ export async function startDashServer(
 ): Promise<DashServerHandle> {
   const port = params.port ?? 0
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error(`openbuff dash: port must be an integer in [0, 65535], got ${port}`)
+    throw new Error(
+      `openbuff dash: port must be an integer in [0, 65535], got ${port}`,
+    )
   }
   const { token, data, logger } = params
 
@@ -440,6 +623,14 @@ export async function startDashServer(
     }
     if (pathname === '/api/runs') {
       return jsonResponse(await data.listRuns(), 200)
+    }
+    if (pathname === '/api/source') {
+      return jsonResponse(
+        data.getSourceStatus
+          ? await data.getSourceStatus()
+          : { state: 'available', checkedAt: new Date().toISOString() },
+        200,
+      )
     }
     if (pathname === '/api/receipts') {
       return jsonResponse(await data.getReceipts(), 200)

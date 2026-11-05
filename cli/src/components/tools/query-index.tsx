@@ -137,9 +137,7 @@ export const QueryIndexComponent = defineToolComponent({
             name="Index"
             description={
               <>
-                {description}
-                {' '}
-                <span fg={contentColor}>{contentGlyph}</span>
+                {description} <span fg={contentColor}>{contentGlyph}</span>
               </>
             }
           />
@@ -340,6 +338,11 @@ export const QueryIndexComponent = defineToolComponent({
               </span>
             </text>
           ))}
+          {diagnostics.length > 5 ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              {`Showing 5 of ${diagnostics.length} captured diagnostics · Inspect for all`}
+            </text>
+          ) : null}
         </box>
       )
     }
@@ -351,7 +354,7 @@ export const QueryIndexComponent = defineToolComponent({
         from,
         to,
         results,
-      })} ${glyph}`,
+      })} ${glyph}${status === 'ready' ? '' : ` · ${status}`}`,
       content: <QueryIndexContent />,
     }
   },
@@ -403,13 +406,15 @@ function getIndexStatus(input: {
   resultCount: number
 }): string {
   if (input.error) return 'failed'
-  if (input.lifecycle === 'queued') return 'queued'
-  if (input.lifecycle === 'running' || !input.output) return 'building'
   if (input.lifecycle === 'cancelled') return 'cancelled'
+  if (input.lifecycle === 'failed') return 'failed'
+  if (input.lifecycle === 'queued') return 'queued'
+  if (input.lifecycle === 'running') return 'building'
+  if (!input.output) return 'unavailable'
 
   const structured = extractStructuredStatus(input.output.status)
   if (structured) {
-    return `${structured.state}${structured.refreshing ? ' · refreshing' : ''}`
+    return `${structured.state}${structured.stale ? ' · stale evidence' : ''}${structured.coverage?.truncated || structured.coverage?.parser?.truncated ? ' · partial coverage' : ''}${structured.refreshing ? ' · refreshing' : ''}`
   }
 
   const message =
@@ -561,7 +566,9 @@ function formatSnippets(result: QueryIndexResult): string {
   const first = result.matchedSnippets.find((item) => typeof item === 'string')
   if (typeof first !== 'string') return ''
   const snippet = truncate(first, 80)
-  return /^snippet\s*:/i.test(snippet) ? snippet : `snippet: ${snippet}`
+  const shown = /^snippet\s*:/i.test(snippet) ? snippet : `snippet: ${snippet}`
+  const count = result.matchedSnippets.filter(item => typeof item === 'string').length
+  return `${shown}${count > 1 ? ` · 1 of ${count} captured snippets; Inspect for all` : ''}`
 }
 
 function formatRelated(result: QueryIndexResult): string {
@@ -571,7 +578,8 @@ function formatRelated(result: QueryIndexResult): string {
   const first = result.relatedFiles.find(isRecord)
   if (!first || typeof first.path !== 'string') return ''
   const reason = typeof first.reason === 'string' ? `: ${first.reason}` : ''
-  return truncate(`related to ${first.path}${reason}`, 120)
+  const count = result.relatedFiles.filter(item => isRecord(item) && typeof item.path === 'string').length
+  return `${truncate(`related to ${first.path}${reason}`, 120)}${count > 1 ? ` · 1 of ${count} captured related files; Inspect for all` : ''}`
 }
 
 function truncate(text: string, maxLength: number): string {

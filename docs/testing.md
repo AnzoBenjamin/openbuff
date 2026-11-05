@@ -22,13 +22,13 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
 
 - **Pinned bun for OpenTUI tsx render tests.** Local bun >= 1.3.14 cannot initialize
   the OpenTUI FFI renderer (`Failed to initialize OpenTUI render library: Cannot
-  access 'default' before initialization`). bun 1.3.14 is Bun's Rust-rewrite release
+access 'default' before initialization`). bun 1.3.14 is Bun's Rust-rewrite release
   (1.3.13 is the last Zig build) with confirmed FFI/TDZ regressions
   (oven-sh/bun#30651, oven-sh/bun#30717 — the latter confirmed for `@opentui/core`
   and fixed only in 1.4.x). Run tsx suites under the pinned version:
 
   ```bash
-  cd cli && bunx --bun bun@1.3.5 test --isolate $(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f -name '*.test.tsx' -print)
+  cd cli && bunx --bun bun@1.3.5 test --preload ./scripts/preload-opentui.ts --isolate <test-files>
   ```
 
   CI runs tests under bun 1.3.5 (the `setup-bun` pin in `.github/workflows/ci.yml`).
@@ -41,11 +41,13 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
   and invocation locally first:
 
   ```bash
-  cd cli && TEST_FILES=$(find . \( -path ./node_modules -o -path ./.git -o -path ./dist \) -prune -o -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) ! -name '*.integration.test.ts' -print 2>/dev/null | sort | tr '\n' ' ') && bunx --bun bun@1.3.5 test --isolate $TEST_FILES
+  cd cli && bunx --bun bun@1.3.5 run test
   ```
 
-  Or run `cd cli && bunx --bun bun@1.3.5 run test`, which is the same discovery
-  plus the empty-list guard described below.
+  The runner applies the empty-list guard and binds the installed OpenTUI
+  native asset before module mocks load. It also seeds `OTUI_ASSET_ROOT` in the
+  parent environment so Bun's reused isolated workers avoid the asynchronous
+  native-package default-export initialization race. No dependency files are patched.
 
   This matches the test discovery command in `.github/workflows/ci.yml` exactly
   (it collects both `*.test.ts` and `*.test.tsx`, excluding
@@ -63,7 +65,6 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
   test entry point must not require an undeclared POSIX userland that nothing
   pins or locks. It walks the tree with `node:fs` and fails loudly instead of
   silently degrading:
-
   - an empty discovery throws `No test files found in cli ...` and exits 1,
     matching CI's empty-glob policy, instead of expanding to nothing and
     degenerating into bare `bun test` (the stalled invocation described below);
@@ -84,13 +85,13 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
   exclusion is independent of the stall. Measured on a 12-core box, stopping at
   a hard kill and recording where each run died:
 
-  | invocation | result |
-  | --- | --- |
-  | bare `bun test` | stalled, killed at 300s (no summary) |
-  | all suites, integration excluded, no `--isolate` | stalled, killed at 200s |
-  | all 39 `*.test.tsx` suites alone, no `--isolate` | **pass**, 477 tests, 2.8s |
-  | one `.tsx` suite alone (`single-block-markdown`) | **pass**, 3 tests, 1.3s |
-  | all suites + integration, `--isolate` | completes, 100s (18 integration failures) |
+  | invocation                                       | result                                    |
+  | ------------------------------------------------ | ----------------------------------------- |
+  | bare `bun test`                                  | stalled, killed at 300s (no summary)      |
+  | all suites, integration excluded, no `--isolate` | stalled, killed at 200s                   |
+  | all 39 `*.test.tsx` suites alone, no `--isolate` | **pass**, 477 tests, 2.8s                 |
+  | one `.tsx` suite alone (`single-block-markdown`) | **pass**, 3 tests, 1.3s                   |
+  | all suites + integration, `--isolate`            | completes, 100s (18 integration failures) |
 
   Each stalled run died inside the same `src/components/__tests__/*.test.tsx`
   section, and every `.tsx` file passes alone and as a group. So the deadlock
@@ -98,7 +99,6 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
   have already populated with module mocks — the OpenTUI FFI renderer cannot
   then initialise and its progress bar keeps the process alive forever without
   ever printing a summary. Consequences worth keeping in mind:
-
   - Do not "fix" a stall by deleting or excluding tsx suites: they are all
     green in isolation. Add `--isolate` instead.
   - A stall is an **absence** of output, not a failure message, so it is easy
@@ -116,7 +116,6 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
 
 - **`mock.module` hygiene.** Prefer `spyOn(ns, 'fn')` + `mock.restore()` over
   `mock.module`. If `mock.module` is required:
-
   - Capture the real module BEFORE registering, as a plain-object snapshot:
     `const real = { ...(await import('spec')) }` — the module namespace is a live
     binding that `mock.module` patches in place, so a static namespace import is
@@ -150,7 +149,7 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
   Before pushing, run `bun --cwd=scripts run guard:mock-module` (wired into
   check:ci-local Step F); it flags lazy live-binding delegation and first-party
   full-replacement factories (exempt with a `mock-module-guard: intentional
-  full replacement` comment).
+full replacement` comment).
 
 - **OAuth callback tests use per-test ports.** `setChatGptOAuthRedirectUriForTests()`
   (`cli/src/utils/chatgpt-oauth.ts`) redirects the callback server to a unique

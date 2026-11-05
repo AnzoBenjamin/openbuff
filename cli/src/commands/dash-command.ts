@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import path from 'node:path'
 
 import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
@@ -76,6 +76,8 @@ export type RunDashDeps = {
   openJournal?: DashJournalOpener
   /** Journal db location; defaults to the shared resolveRunJournalPath(). */
   journalPath?: string
+  /** Existence probe that preserves local access errors instead of hiding them. */
+  statJournal?: typeof statSync
 }
 
 /**
@@ -138,6 +140,8 @@ export async function runDashCommand(
 
   const journalPath = deps.journalPath ?? resolveRunJournalPath()
   const openJournal = deps.openJournal ?? defaultOpenJournal
+  const statJournal = deps.statJournal ?? statSync
+  let sourceStatus: { state: 'available' | 'absent' | 'unavailable'; message?: string } = { state: 'available' }
 
   /**
    * Open the live run journal for reading, fail-closed to undefined:
@@ -152,7 +156,21 @@ export async function runDashCommand(
   const openJournalIfPresent = ():
     | { reader: JournalReader; close?: () => void }
     | undefined => {
-    if (!existsSync(journalPath)) {
+    try {
+      statJournal(journalPath)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        sourceStatus = {
+          state: 'unavailable',
+          message: 'The journal path could not be accessed. Check local file and directory permissions, then restart openbuff dash.',
+        }
+        writeStderr(
+          'openbuff dash: run journal unavailable (local file access failed). Check local file and directory permissions, then restart openbuff dash.',
+        )
+        return undefined
+      }
+      sourceStatus = { state: 'absent' }
       // Fail-closed: an ABSENT journal means no runs have been journaled yet,
       // so empty data is the honest answer — and the dash NEVER creates the
       // db (that would race a live WAL writer and fabricate state).
@@ -164,6 +182,7 @@ export async function runDashCommand(
     try {
       return openJournal(journalPath)
     } catch (error) {
+      sourceStatus = { state: 'unavailable', message: 'The existing journal could not be opened. Check local file access, then restart openbuff dash.' }
       writeStderr(
         `openbuff dash: run journal unavailable, serving empty run data (${
           error instanceof Error ? error.message : String(error)
@@ -180,6 +199,7 @@ export async function runDashCommand(
   const journal = deps.journalReader ? undefined : openJournalIfPresent()
 
   const data = createDashProviderFromJournal({
+    sourceStatus,
     journalReader: deps.journalReader ?? journal?.reader,
     receipts: deps.receipts,
     gateState: deps.gateState,

@@ -10,7 +10,7 @@
  */
 
 import { TextAttributes } from '@opentui/core'
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 
 import { MultilineInput } from './multiline-input'
 import { SelectableList } from './selectable-list'
@@ -20,10 +20,8 @@ import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
 import { BORDER_CHARS } from '../utils/ui-constants'
 import { fuzzyMatch } from '../utils/fuzzy-match'
-import {
-  getRecentCommandIds,
-  recordCommandUse,
-} from '../utils/command-mru'
+import { getRecentCommandIds, recordCommandUse } from '../utils/command-mru'
+import stringWidth from 'string-width'
 
 import { getAllPathsWithDirectories } from '@codebuff/common/project-file-tree'
 
@@ -32,11 +30,10 @@ import type { SlashCommand } from '../data/slash-commands'
 import type { FileTreeNode } from '@codebuff/common/util/file'
 
 const LAYOUT = {
-  CONTENT_PADDING: 4,
+  CONTENT_PADDING: 1,
   MAX_CONTENT_WIDTH: 100,
   PREFERRED_CONTENT_WIDTH: 80,
   INPUT_HEIGHT: 1,
-  HEADER_HEIGHT: 1,
   MAX_LIST_HEIGHT: 20,
   /** Cap on files shown when the query is empty (commands are always all shown). */
   MAX_EMPTY_FILE_ITEMS: 50,
@@ -47,9 +44,11 @@ const LAYOUT = {
 /** Discriminated palette entry: a slash command or a file path. */
 export type PaletteEntry =
   | { kind: 'command'; command: SlashCommand }
+  | { kind: 'action'; action: PaletteAction }
   | { kind: 'file'; filePath: string; isDirectory: boolean }
 
 interface CommandPaletteScreenProps {
+  actions?: PaletteAction[]
   /** Slash commands (already merged with skills by the caller). */
   slashCommands: SlashCommand[]
   /** Project file tree (may be empty if not yet loaded). */
@@ -58,8 +57,17 @@ interface CommandPaletteScreenProps {
   onClose: () => void
   /** Called when the user selects a slash command; receives `/<id>`. */
   onExecuteCommand: (commandString: string) => void
+  /** Replaces the draft deliberately; insertText commands never execute. */
+  onInsertText?: (text: string) => void
+  fileInventoryState?: 'loading' | 'loaded' | 'unavailable'
   /** Called when the user selects a file path. */
   onSelectFile: (filePath: string, isDirectory: boolean) => void
+}
+export interface PaletteAction {
+  id: string
+  label: string
+  description: string
+  onSelect: () => void
 }
 
 /**
@@ -94,6 +102,11 @@ export function buildEntries(
 export function scoreEntry(entry: PaletteEntry, query: string): number | null {
   if (!query) return 0
   const normalized = query.toLowerCase()
+  if (entry.kind === 'action') {
+    if (entry.action.label.toLowerCase().includes(normalized)) return -990
+    if (entry.action.description.toLowerCase().includes(normalized)) return -700
+    return fuzzyMatch(entry.action.label, normalized)?.score ?? null
+  }
 
   if (entry.kind === 'command') {
     const idLower = entry.command.id.toLowerCase()
@@ -140,6 +153,13 @@ export function scoreEntry(entry: PaletteEntry, query: string): number | null {
  * Convert a palette entry to a SelectableListItem for rendering.
  */
 export function entryToListItem(entry: PaletteEntry): SelectableListItem {
+  if (entry.kind === 'action')
+    return {
+      id: `action:${entry.action.id}`,
+      label: entry.action.label,
+      secondary: entry.action.description,
+      accent: true,
+    }
   if (entry.kind === 'command') {
     return {
       id: `cmd:${entry.command.id}`,
@@ -162,7 +182,10 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
   fileTree,
   onClose,
   onExecuteCommand,
+  onInsertText,
+  fileInventoryState = 'loaded',
   onSelectFile,
+  actions = [],
 }) => {
   const theme = useTheme()
   const { terminalWidth, terminalHeight } = useTerminalLayout()
@@ -170,45 +193,108 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
   const [searchQuery, setSearchQuery] = useState('')
   const [searchCursor, setSearchCursor] = useState(0)
   const [focusedIndex, setFocusedIndex] = useState(0)
+  const [focusedId, setFocusedId] = useState<string>()
+  const queryRef = useRef('')
+  const focusRef = useRef<{ index: number; id?: string }>({ index: 0 })
+  const activatedRef = useRef(false)
+  const pendingMatchesRef = useRef<{
+    source: PaletteEntry[]
+    query: string
+    entries: PaletteEntry[]
+  } | null>(null)
 
   // Keep the complete searchable corpus. Only the empty-query presentation is
   // capped; otherwise files after the first 50 could never be discovered.
   const allEntries = useMemo(
-    () => buildEntries(slashCommands, fileTree, Number.MAX_SAFE_INTEGER),
-    [slashCommands, fileTree],
+    () => [
+      ...actions.map((action): PaletteEntry => ({ kind: 'action', action })),
+      ...buildEntries(slashCommands, fileTree, Number.MAX_SAFE_INTEGER),
+    ],
+    [slashCommands, fileTree, actions],
   )
 
   // Filter + sort entries by fuzzy score
-  const filteredEntries = useMemo(() => {
-    const trimmed = searchQuery.trim()
-    if (!trimmed) {
-      // fzf-style history merge: recently-used commands float to the top of
-      // the empty-query view, so repeat workflows are one Enter away. MRU
-      // order is read once per keystroke-batch (tiny fail-open JSON).
-      const recent = new Set(getRecentCommandIds())
-      const commandEntries = allEntries.filter(
-        (entry) => entry.kind === 'command',
-      )
-      const ranked = [
-        ...commandEntries.filter((entry) => recent.has(entry.command.id)),
-        ...commandEntries.filter((entry) => !recent.has(entry.command.id)),
-      ]
-      const fileEntries = allEntries
-        .filter((entry) => entry.kind === 'file')
-        .slice(0, LAYOUT.MAX_EMPTY_FILE_ITEMS)
-      return [...ranked, ...fileEntries]
-    }
-
-    const scored: { entry: PaletteEntry; score: number }[] = []
-    for (const entry of allEntries) {
-      const score = scoreEntry(entry, trimmed)
-      if (score !== null) {
-        scored.push({ entry, score })
+  const matchEntries = useCallback(
+    (query: string) => {
+      const trimmed = query.trim()
+      if (!trimmed) {
+        // fzf-style history merge: recently-used commands float to the top of
+        // the empty-query view, so repeat workflows are one Enter away. MRU
+        // order is read once per keystroke-batch (tiny fail-open JSON).
+        const recent = new Set(getRecentCommandIds())
+        const commandEntries = allEntries.filter(
+          (entry) => entry.kind === 'command',
+        )
+        const ranked = [
+          ...commandEntries.filter((entry) => recent.has(entry.command.id)),
+          ...commandEntries.filter((entry) => !recent.has(entry.command.id)),
+        ]
+        const fileEntries = allEntries
+          .filter((entry) => entry.kind === 'file')
+          .slice(0, LAYOUT.MAX_EMPTY_FILE_ITEMS)
+        return [
+          ...allEntries.filter((entry) => entry.kind === 'action'),
+          ...ranked,
+          ...fileEntries,
+        ]
       }
+
+      const scored: { entry: PaletteEntry; score: number }[] = []
+      for (const entry of allEntries) {
+        const score = scoreEntry(entry, trimmed)
+        if (score !== null) {
+          scored.push({ entry, score })
+        }
+      }
+      scored.sort((a, b) => a.score - b.score)
+      return scored.map((s) => s.entry)
+    },
+    [allEntries],
+  )
+  const matchedEntries = useMemo(
+    () => matchEntries(searchQuery),
+    [matchEntries, searchQuery],
+  )
+  const filteredEntries = useMemo(
+    () => matchedEntries.slice(0, LAYOUT.MAX_RENDERED_ITEMS),
+    [matchedEntries],
+  )
+  // Input events can arrive before React renders the new query or selection.
+  const currentEntries = useCallback(() => {
+    const query = queryRef.current
+    if (query === searchQuery) return filteredEntries
+    const cached = pendingMatchesRef.current
+    if (cached?.source === allEntries && cached.query === query)
+      return cached.entries
+    const entries = matchEntries(query).slice(0, LAYOUT.MAX_RENDERED_ITEMS)
+    pendingMatchesRef.current = { source: allEntries, query, entries }
+    return entries
+  }, [allEntries, searchQuery, filteredEntries, matchEntries])
+  const currentFocus = useCallback((entries: PaletteEntry[]) => {
+    const { index, id } = focusRef.current
+    const anchored =
+      id === undefined
+        ? -1
+        : entries.findIndex((entry) => entryToListItem(entry).id === id)
+    return {
+      index:
+        anchored >= 0
+          ? anchored
+          : Math.max(0, Math.min(index, entries.length - 1)),
+      removed: id !== undefined && anchored === -1,
     }
-    scored.sort((a, b) => a.score - b.score)
-    return scored.slice(0, LAYOUT.MAX_RENDERED_ITEMS).map((s) => s.entry)
-  }, [allEntries, searchQuery])
+  }, [])
+  const handleQueryChange = useCallback(
+    ({ text, cursorPosition }: { text: string; cursorPosition: number }) => {
+      queryRef.current = text
+      focusRef.current = { index: 0 }
+      setSearchQuery(text)
+      setSearchCursor(cursorPosition)
+      setFocusedIndex(0)
+      setFocusedId(undefined)
+    },
+    [],
+  )
 
   const items = useMemo(() => {
     const trimmed = searchQuery.trim()
@@ -220,7 +306,11 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
     return listItems.map((item, index) => {
       const entry = filteredEntries[index]
       const text =
-        entry?.kind === 'command' ? entry.command.label : entry?.filePath
+        entry?.kind === 'command'
+          ? entry.command.label
+          : entry?.kind === 'action'
+            ? entry.action.label
+            : entry?.filePath
       if (!text) return item
       const fuzzy = fuzzyMatch(text, trimmed)
       if (!fuzzy) return item
@@ -237,26 +327,70 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
   }, [filteredEntries, searchQuery])
 
   // Clamp focused index when the filtered list shrinks
-  const clampedFocusedIndex = Math.min(
-    focusedIndex,
-    Math.max(0, items.length - 1),
+  const anchoredIndex = focusedId
+    ? items.findIndex((item) => item.id === focusedId)
+    : -1
+  const selectionRemoved = focusedId !== undefined && anchoredIndex === -1
+  const clampedFocusedIndex =
+    anchoredIndex >= 0
+      ? anchoredIndex
+      : Math.max(0, Math.min(focusedIndex, Math.max(0, items.length - 1)))
+  const selectIndex = useCallback(
+    (index: number) => {
+      const entries = currentEntries()
+      const clamped = Math.max(
+        0,
+        Math.min(index, Math.max(0, entries.length - 1)),
+      )
+      const id = entries[clamped]
+        ? entryToListItem(entries[clamped]).id
+        : undefined
+      focusRef.current = { index: clamped, id }
+      setFocusedIndex(clamped)
+      setFocusedId(id)
+    },
+    [currentEntries],
   )
 
-  const handleSelect = useCallback(
-    (item: SelectableListItem) => {
-      const idx = items.findIndex((i) => i.id === item.id)
-      if (idx === -1) return
-      const entry = filteredEntries[idx]
-      if (!entry) return
+  const activateEntry = useCallback(
+    (entry: PaletteEntry | undefined) => {
+      if (!entry || activatedRef.current) return
       if (entry.kind === 'command') {
+        if (entry.command.insertText !== undefined) {
+          if (onInsertText) {
+            activatedRef.current = true
+            recordCommandUse(entry.command.id)
+            onClose()
+            onInsertText(entry.command.insertText)
+          }
+          return
+        }
+        activatedRef.current = true
         recordCommandUse(entry.command.id)
         onExecuteCommand(`/${entry.command.id}`)
+      } else if (entry.kind === 'action') {
+        activatedRef.current = true
+        entry.action.onSelect()
       } else {
+        activatedRef.current = true
         onSelectFile(entry.filePath, entry.isDirectory)
       }
     },
-    [items, filteredEntries, onExecuteCommand, onSelectFile],
+    [onExecuteCommand, onSelectFile, onInsertText, onClose],
   )
+  const handleSelect = useCallback(
+    (item: SelectableListItem) => {
+      activateEntry(
+        currentEntries().find((entry) => entryToListItem(entry).id === item.id),
+      )
+    },
+    [activateEntry, currentEntries],
+  )
+  const handleSubmit = useCallback(() => {
+    const entries = currentEntries()
+    const focused = currentFocus(entries)
+    if (!focused.removed) activateEntry(entries[focused.index])
+  }, [activateEntry, currentEntries, currentFocus])
 
   const handleKeyIntercept = useCallback(
     (key: {
@@ -272,19 +406,15 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
         return true
       }
       if (key.name === 'up') {
-        setFocusedIndex((prev) => Math.max(0, prev - 1))
+        selectIndex(currentFocus(currentEntries()).index - 1)
         return true
       }
       if (key.name === 'down') {
-        setFocusedIndex((prev) => Math.min(items.length - 1, prev + 1))
+        selectIndex(currentFocus(currentEntries()).index + 1)
         return true
       }
       if (isPlainEnterKey(key)) {
-        const focused = items[clampedFocusedIndex]
-        if (focused) {
-          handleSelect(focused)
-        }
-        return true
+        return false
       }
       if (key.name === 'c' && key.ctrl) {
         onClose()
@@ -293,17 +423,52 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
       // Let printable keys through to the input
       return false
     },
-    [items, clampedFocusedIndex, handleSelect, onClose],
+    [onClose, selectIndex, currentFocus, currentEntries],
   )
 
   const contentMaxWidth = Math.min(
-    terminalWidth - LAYOUT.CONTENT_PADDING,
+    Math.max(1, terminalWidth),
     LAYOUT.MAX_CONTENT_WIDTH,
   )
   const contentWidth = Math.min(LAYOUT.PREFERRED_CONTENT_WIDTH, contentMaxWidth)
+  const innerWidth = Math.max(1, contentWidth - LAYOUT.CONTENT_PADDING * 2)
+  const selectedEntry = filteredEntries[clampedFocusedIndex]
+  const insertionSelected =
+    selectedEntry?.kind === 'command' &&
+    selectedEntry.command.insertText !== undefined
+  const actionHint = insertionSelected
+    ? onInsertText
+      ? 'Enter: Insert draft · Esc close'
+      : 'Insertion unavailable · Esc close'
+    : 'Enter: Run / open · Esc close'
+  const fileCount = allEntries.filter((entry) => entry.kind === 'file').length
+  const shownFiles = filteredEntries.filter(
+    (entry) => entry.kind === 'file',
+  ).length
+  const resultHint = searchQuery.trim()
+    ? `${filteredEntries.length} of ${matchedEntries.length} matches${innerWidth < 60 ? '' : ' shown'}${matchedEntries.length > filteredEntries.length ? ' · Refine search' : ''}`
+    : `First ${shownFiles} of ${fileCount} files · ${innerWidth < 60 ? 'Search all' : 'Type to search all'}${matchedEntries.length > filteredEntries.length ? ' · More commands/actions; refine search' : ''}`
+  const inventoryHint =
+    fileInventoryState === 'loaded'
+      ? 'File inventory loaded'
+      : fileInventoryState === 'loading'
+        ? 'Files loading · Retained paths only'
+        : 'Files unavailable · Retained paths only'
+  const selectionHint = 'Selection unavailable · Use arrows'
+  const headerHeight = [
+    'Command Palette',
+    actionHint,
+    resultHint,
+    inventoryHint,
+    ...(selectionRemoved ? [selectionHint] : []),
+  ].reduce(
+    (rows, text) =>
+      rows + Math.max(1, Math.ceil(stringWidth(text) / innerWidth)),
+    0,
+  )
   const availableListHeight = Math.max(
-    3,
-    terminalHeight - LAYOUT.HEADER_HEIGHT - LAYOUT.INPUT_HEIGHT - 2,
+    1,
+    terminalHeight - headerHeight - LAYOUT.INPUT_HEIGHT - 4,
   )
   const listHeight = Math.min(
     LAYOUT.MAX_LIST_HEIGHT,
@@ -334,7 +499,7 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
         }}
       >
         {/* Header */}
-        <box style={{ height: LAYOUT.HEADER_HEIGHT, flexShrink: 0 }}>
+        <box style={{ flexDirection: 'column', flexShrink: 0 }}>
           <text
             style={{
               fg: theme.primary,
@@ -343,30 +508,36 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
           >
             Command Palette
           </text>
-          <text style={{ fg: theme.muted }}>
-            {'  '}Type to search · ↑↓ select · Enter run · Esc to
-            close
-          </text>
+          <text style={{ fg: theme.muted }}>{actionHint}</text>
         </box>
+        <text style={{ fg: theme.muted, flexShrink: 0 }}>{resultHint}</text>
+        <text
+          style={{
+            fg:
+              fileInventoryState === 'unavailable'
+                ? theme.warning
+                : theme.muted,
+            flexShrink: 0,
+          }}
+        >
+          {inventoryHint}
+        </text>
+        {selectionRemoved && (
+          <text style={{ fg: theme.warning, flexShrink: 0 }}>
+            {selectionHint}
+          </text>
+        )}
 
         {/* Search input */}
         <box style={{ flexShrink: 0, marginBottom: 0, marginTop: 0 }}>
           <MultilineInput
             value={searchQuery}
-            onChange={({ text, cursorPosition }) => {
-              setSearchQuery(text)
-              setSearchCursor(cursorPosition)
-              setFocusedIndex(0)
-            }}
-            onSubmit={() => {}}
+            onChange={handleQueryChange}
+            onSubmit={handleSubmit}
             onPaste={createTextPasteHandler(
               searchQuery,
               Math.min(searchCursor, searchQuery.length),
-              ({ text, cursorPosition }) => {
-                setSearchQuery(text)
-                setSearchCursor(cursorPosition)
-                setFocusedIndex(0)
-              },
+              handleQueryChange,
             )}
             onKeyIntercept={handleKeyIntercept}
             placeholder="Search commands or files..."
@@ -381,7 +552,7 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
         <box
           style={{
             flexDirection: 'column',
-            width: contentWidth,
+            width: '100%',
             borderStyle: 'single',
             borderColor: theme.muted,
             customBorderChars: BORDER_CHARS,
@@ -394,7 +565,7 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
           <SelectableList
             items={items}
             focusedIndex={clampedFocusedIndex}
-            onFocusChange={setFocusedIndex}
+            onFocusChange={selectIndex}
             onSelect={handleSelect}
             maxHeight={listHeight}
             emptyMessage={

@@ -516,7 +516,9 @@ async function startCallbackServer(
     }
 
     flow.timeout = setTimeout(() => {
-      settleFlow({ error: new Error('Timeout waiting for ChatGPT authorization') })
+      settleFlow({
+        error: new Error('Timeout waiting for ChatGPT authorization'),
+      })
     }, CALLBACK_SERVER_TIMEOUT_MS)
 
     const server = http.createServer(async (req, res) => {
@@ -644,6 +646,7 @@ async function startCallbackServer(
 export function connectChatGptOAuth(): {
   authUrl: string
   credentials: Promise<ChatGptOAuthCredentials>
+  browserOpened: Promise<boolean>
 } {
   // beginOAuthFlow supersedes any previous flow: the superseded flow's
   // credentials promise is rejected immediately and its server/timer are
@@ -651,9 +654,9 @@ export function connectChatGptOAuth(): {
   const { flow, authUrl } = beginOAuthFlow()
   const credentials = startCallbackServer(flow)
 
-  void safeOpen(authUrl)
+  const browserOpened = safeOpen(authUrl)
 
-  return { authUrl, credentials }
+  return { authUrl, credentials, browserOpened }
 }
 
 function parseAuthCodeInput(input: string): {

@@ -60,6 +60,29 @@ let userAgentFilePaths: Map<string, string> = new Map()
 let mcpServersCache: Record<string, MCPConfig> = {}
 let agentRegistryDiagnostics: AgentValidationError[] = []
 let projectAgentsTrusted = false
+let agentRegistryRoot: string | null = null
+let agentLoadGeneration = 0
+
+interface AgentRegistryLoadDeps {
+  getRoot: () => string
+  getCwd: () => string
+  loadAgents: (options: {
+    includeProjectAgents: boolean
+    verbose: false
+    validate: true
+  }) => Promise<{
+    agents: Record<string, AgentDefinition>
+    validationErrors: AgentValidationError[]
+  }>
+  loadMcpConfig: typeof loadMCPConfigSync
+}
+
+const defaultLoadDeps: AgentRegistryLoadDeps = {
+  getRoot: () => getProjectRoot() || process.cwd(),
+  getCwd: () => process.cwd(),
+  loadAgents: (options) => sdkLoadLocalAgents(options),
+  loadMcpConfig: loadMCPConfigSync,
+}
 
 // ============================================================================
 // Registry epoch (cache-invalidation key for registry-derived caches)
@@ -87,6 +110,14 @@ const bumpAgentRegistryEpoch = (): void => {
  */
 export const getAgentRegistryEpoch = (): number => agentRegistryEpoch
 
+/** Invalidate outstanding work before changing project or restarting a load. */
+export function invalidateAgentRegistryLoads(): void {
+  agentLoadGeneration++
+  bumpAgentRegistryEpoch()
+  cachedAgentsByMode.clear()
+  cachedAgentsDir = null
+}
+
 /**
  * Initialize the agent registry by loading user agents via the SDK.
  * This must be called at CLI startup before any sync agent loading functions.
@@ -98,9 +129,33 @@ export const getAgentRegistryEpoch = (): number => agentRegistryEpoch
  *
  * Later directories take precedence, so project agents override global ones.
  */
-export async function initializeAgentRegistry(options?: {
-  trustProjectAgents?: boolean
-}): Promise<void> {
+export async function initializeAgentRegistry(
+  options?: {
+    trustProjectAgents?: boolean
+  },
+  injectedDeps: Partial<AgentRegistryLoadDeps> = {},
+): Promise<void> {
+  const deps = { ...defaultLoadDeps, ...injectedDeps }
+  const root = deps.getRoot()
+  const cwd = deps.getCwd()
+  const generation = ++agentLoadGeneration
+  const trustProjectAgents = options?.trustProjectAgents ?? false
+  const ownsLoad = () =>
+    generation === agentLoadGeneration &&
+    root === deps.getRoot() &&
+    cwd === deps.getCwd()
+  // A last-known-good cache is useful only within the same project/trust scope.
+  if (
+    agentRegistryRoot !== root ||
+    projectAgentsTrusted !== trustProjectAgents
+  ) {
+    userAgentsCache = {}
+    userAgentFilePaths = new Map()
+    mcpServersCache = {}
+    agentRegistryDiagnostics = []
+  }
+  agentRegistryRoot = root
+  projectAgentsTrusted = trustProjectAgents
   // Derived listings must never outlive the definitions they were built from.
   // The epoch bump comes FIRST: any cache keyed on getAgentRegistryEpoch()
   // invalidates before this reload's (possibly different) content becomes
@@ -109,22 +164,22 @@ export async function initializeAgentRegistry(options?: {
   cachedAgentsByMode.clear()
   cachedAgentsDir = null
   try {
-    const trustProjectAgents = options?.trustProjectAgents ?? false
-    projectAgentsTrusted = trustProjectAgents
-    const loaded = await sdkLoadLocalAgents({
+    const loaded = await deps.loadAgents({
       includeProjectAgents: trustProjectAgents,
       verbose: false,
       validate: true,
     })
+    if (!ownsLoad()) return
     userAgentsCache = loaded.agents
     userAgentFilePaths = new Map(
       Object.values(loaded.agents).map((agent) => [
         agent.id,
-        agent._sourceFilePath,
+        (agent as AgentDefinition & { _sourceFilePath?: string })._sourceFilePath ?? '',
       ]),
     )
     agentRegistryDiagnostics = loaded.validationErrors
   } catch (error) {
+    if (!ownsLoad()) return
     // Keep the last known-good definitions on catastrophic refresh failure.
     activeLogger().warn(
       { error },
@@ -149,8 +204,8 @@ export async function initializeAgentRegistry(options?: {
   // OLD mcp.json, caching a stale verdict that no later bump invalidates
   // until the next reload.
   try {
-    const mcpConfig = loadMCPConfigSync({
-      includeProjectConfig: options?.trustProjectAgents ?? false,
+    const mcpConfig = deps.loadMcpConfig({
+      includeProjectConfig: trustProjectAgents,
       verbose: false,
     })
     mcpServersCache = mcpConfig.mcpServers
@@ -164,7 +219,10 @@ export async function initializeAgentRegistry(options?: {
       )
     }
   } catch (error) {
-    activeLogger().warn({ error }, 'Failed to load MCP config from .agents directories')
+    activeLogger().warn(
+      { error },
+      'Failed to load MCP config from .agents directories',
+    )
   }
 
   // Landing bump: the load-start bump above already invalidated pre-reload
@@ -509,6 +567,8 @@ export const __resetLocalAgentRegistryForTests = (): void => {
   // Same invalidation contract as initializeAgentRegistry: a reset replaces
   // registry-derived content, so epoch-keyed caches must miss afterwards.
   bumpAgentRegistryEpoch()
+  agentLoadGeneration++
+  agentRegistryRoot = null
   cachedAgentsByMode.clear()
   cachedAgentsDir = null
   userAgentsCache = {}

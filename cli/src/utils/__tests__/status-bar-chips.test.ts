@@ -1519,9 +1519,9 @@ describe('selectStatusBarChips', () => {
         scrollButtonCompact,
       }).chips.map((chip) => chip.id)
 
-    // At 'xs'/'sm' the button renders three columns, so the seven columns the
-    // expanded reservation would have taken keep the git chip instead.
-    expect(idsFor(true)).toEqual(['context', 'git', 'timer'])
+    // The readable compact Latest label saves two columns. Both forms retain
+    // the high-priority context/timer chips at this width.
+    expect(idsFor(true)).toEqual(['context', 'timer'])
     expect(idsFor(false)).toEqual(['context', 'timer'])
 
     // Omitting the flag keeps the expanded reservation, so existing call sites
@@ -1650,7 +1650,7 @@ describe('statusBarChipBudget', () => {
   test('reserves the compact width when the narrow button form is rendered', () => {
     // Strictly cheaper than the expanded reservation, so the narrow form can
     // never reserve more columns than it renders.
-    expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBe(3)
+    expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBe(8)
     expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBeLessThan(
       SCROLL_BUTTON_RESERVATION,
     )
@@ -1662,7 +1662,7 @@ describe('statusBarChipBudget', () => {
       const compact = statusBarChipBudget(200, showStop, true, true)
       const expanded = statusBarChipBudget(200, showStop, true)
 
-      expect(compact).toBe(withoutScroll - 3)
+      expect(compact).toBe(withoutScroll - 8)
       expect(compact).toBe(withoutScroll - SCROLL_BUTTON_COMPACT_RESERVATION)
       expect(compact).toBeGreaterThan(expanded)
       expect(compact - expanded).toBe(

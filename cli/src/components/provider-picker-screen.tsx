@@ -1,13 +1,25 @@
-import { TextAttributes } from '@opentui/core'
 import { useKeyboard } from '@opentui/react'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+import { loadProviderConfigSync } from '@openbuff/sdk'
+import { OutputReaderScreen } from './output-reader-screen'
+import { createTextDocument } from '../utils/output-document'
+import { Button } from './button'
+import { sliceTextCells } from '../utils/text-boundaries'
+import {
+  testProviderConnection,
+  validateCustomOpenbuffProvider,
+} from '../utils/openbuff-provider'
+import {
+  runProviderDiagnostics,
+  type ProviderDiagnostic,
+} from '../utils/provider-diagnostics'
 
 import { MultilineInput } from './multiline-input'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
-import { getSystemProcessEnv, isEnvVarSet } from '../utils/env'
+import { getSystemProcessEnv } from '../utils/env'
 import { createTextPasteHandler } from '../utils/strings'
-import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { KeyEvent } from '@opentui/core'
 
@@ -169,7 +181,11 @@ type DisplayRow =
 
 type Props = {
   presets?: ProviderPickerPreset[]
-  onSelect: (selection: ProviderPickerSelection) => void
+  onSelect: (selection: ProviderPickerSelection) => void | Promise<void>
+  diagnosticsDependencies?: {
+    providers: () => string[]
+    check: typeof testProviderConnection
+  }
 }
 
 const FIELD_LABELS: Record<EditableCustomField, string> = {
@@ -260,16 +276,116 @@ function canSubmitCustomProvider(provider: CustomProviderDraft): boolean {
   )
 }
 
-export function ProviderPickerScreen({ presets, onSelect }: Props) {
+export function ProviderPickerScreen({
+  presets,
+  onSelect,
+  diagnosticsDependencies = {
+    providers: () => Object.keys(loadProviderConfigSync().config.providers),
+    check: testProviderConnection,
+  },
+}: Props) {
   const theme = useTheme()
   const { terminalWidth, terminalHeight } = useTerminalLayout()
-  const contentWidth = Math.max(40, terminalWidth - 4)
-  const maxRenderedRows = Math.max(6, terminalHeight - 12)
+  const contentWidth = Math.max(1, terminalWidth - 4)
+  const maxRenderedRows = Math.max(1, terminalHeight - 9)
 
   const allPresets = presets?.length ? presets : DEFAULT_PRESETS
   const visiblePresets = allPresets.filter(
     (preset) => preset.available !== false,
   )
+
+  const [inspectedText, setInspectedText] = useState<string | null>(null)
+  const [diagnosticIndex, setDiagnosticIndex] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [diagnostics, setDiagnostics] = useState<ProviderDiagnostic[] | null>(
+    null,
+  )
+  const [diagnosticsRunning, setDiagnosticsRunning] = useState(false)
+  const diagnosticsController = useRef<AbortController | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      diagnosticsController.current?.abort()
+    }
+  }, [])
+  const saveSelection = useCallback(
+    async (selection: ProviderPickerSelection) => {
+      if (saving) return
+      setSaving(true)
+      setError(null)
+      try {
+        await onSelect(selection)
+      } catch (cause) {
+        if (mounted.current)
+          setError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        if (mounted.current) setSaving(false)
+      }
+    },
+    [onSelect, saving],
+  )
+  const startDiagnostics = useCallback(
+    async (onlyId?: string) => {
+      diagnosticsController.current?.abort()
+      const controller = new AbortController()
+      diagnosticsController.current = controller
+      setError(null)
+      try {
+        const ids = onlyId ? [onlyId] : diagnosticsDependencies.providers()
+        setDiagnostics((rows) =>
+          onlyId
+            ? (rows ?? []).map((row) =>
+                row.id === onlyId
+                  ? { ...row, state: 'running', message: `Checking ${row.id}…` }
+                  : row,
+              )
+            : ids.map((id) => ({
+                id,
+                state: 'running',
+                message: `Waiting to check ${id}…`,
+              })),
+        )
+        setDiagnosticsRunning(true)
+        await runProviderDiagnostics({
+          ids,
+          signal: controller.signal,
+          check: diagnosticsDependencies.check,
+          onResult: (result) => {
+            if (mounted.current && !controller.signal.aborted)
+              setDiagnostics((rows) =>
+                (rows ?? []).map((row) =>
+                  row.id === result.id ? result : row,
+                ),
+              )
+          },
+        })
+      } catch (cause) {
+        if (mounted.current && !controller.signal.aborted) {
+          setDiagnostics([])
+          setError(cause instanceof Error ? cause.message : String(cause))
+        }
+      } finally {
+        if (mounted.current && diagnosticsController.current === controller)
+          setDiagnosticsRunning(false)
+      }
+    },
+    [diagnosticsDependencies],
+  )
+  const cancelDiagnostics = () => {
+    diagnosticsController.current?.abort()
+    setDiagnosticsRunning(false)
+    setDiagnostics(
+      (rows) =>
+        rows?.map((row) =>
+          row.state === 'running'
+            ? { ...row, state: 'cancelled', message: `${row.id}: Cancelled` }
+            : row,
+        ) ?? null,
+    )
+  }
 
   const [query, setQuery] = useState('')
   const [queryCursor, setQueryCursor] = useState(0)
@@ -347,32 +463,100 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
     setSelectedIndex((index) => Math.min(index, Math.max(0, maxSelectable)))
   }, [maxSelectable])
 
-  const selectCurrentItem = useCallback(() => {
-    const selectedRow = displayRows.find(
-      (row) => row.type === 'item' && row.selectableIndex === selectedIndex,
-    )
-    if (!selectedRow || selectedRow.type !== 'item') return
+  const selectCurrentItem = useCallback(
+    (submittedQuery?: string) => {
+      const selectedRow =
+        submittedQuery !== undefined && submittedQuery !== query
+          ? displayRows.find(
+              (row) =>
+                row.type === 'item' &&
+                providerMatches(row.item, submittedQuery.trim()),
+            )
+          : displayRows.find(
+              (row) =>
+                row.type === 'item' && row.selectableIndex === selectedIndex,
+            )
+      if (!selectedRow || selectedRow.type !== 'item') return
 
-    const item = selectedRow.item
-    if (item.kind === 'test') {
-      onSelect({ type: 'test-connections' })
-      return
-    }
-    if (item.kind === 'custom') {
-      setMode('custom')
-      setCustomField('id')
-      setCustomCursor(customProvider.id.length)
-      return
-    }
-    if (item.id === 'codex') {
-      onSelect({ type: 'connect-codex' })
-      return
-    }
-    onSelect({ type: 'preset', preset: item.id })
-  }, [customProvider.id.length, displayRows, onSelect, selectedIndex])
+      const item = selectedRow.item
+      if (item.kind === 'test') {
+        void startDiagnostics()
+        return
+      }
+      if (item.kind === 'custom') {
+        setMode('custom')
+        setCustomField('id')
+        setCustomCursor(customProvider.id.length)
+        return
+      }
+      if (item.id === 'codex') {
+        void saveSelection({ type: 'connect-codex' })
+        return
+      }
+      void saveSelection({ type: 'preset', preset: item.id })
+    },
+    [
+      customProvider.id.length,
+      displayRows,
+      saveSelection,
+      selectedIndex,
+      startDiagnostics,
+      query,
+    ],
+  )
 
   const handlePickerKey = useCallback(
     (key: KeyEvent): boolean => {
+      if (inspectedText !== null) return false
+      if (key.ctrl && key.name === 'o' && diagnostics === null) {
+        const row = displayRows.find(
+          (row) => row.type === 'item' && row.selectableIndex === selectedIndex,
+        )
+        if (row?.type === 'item')
+          setInspectedText(
+            `${row.item.label}\n${row.item.category}\n\n${row.item.description}\n${row.item.env ?? ''}`,
+          )
+        return true
+      }
+      if (diagnostics !== null) {
+        if (key.name === 'escape') {
+          cancelDiagnostics()
+          setDiagnostics(null)
+          return true
+        }
+        if (key.name === 'c') {
+          cancelDiagnostics()
+          return true
+        }
+        if (key.name === 'up') {
+          setDiagnosticIndex((index) => Math.max(0, index - 1))
+          return true
+        }
+        if (key.name === 'down') {
+          setDiagnosticIndex((index) =>
+            Math.min(Math.max(0, diagnostics.length - 1), index + 1),
+          )
+          return true
+        }
+        if (key.ctrl && key.name === 'o') {
+          const row = diagnostics[diagnosticIndex]
+          if (row || error) setInspectedText(row?.message ?? error ?? '')
+          return true
+        }
+        if (
+          (key.name === 'return' || key.name === 'enter') &&
+          !diagnosticsRunning
+        ) {
+          const row = diagnostics[diagnosticIndex]
+          if (row) void startDiagnostics(row.id)
+          return true
+        }
+        if (key.name === 'r' && !diagnosticsRunning) {
+          void startDiagnostics()
+          return true
+        }
+        return false
+      }
       if (mode !== 'picker') return false
 
       if (key.name === 'escape') {
@@ -403,17 +587,52 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
       }
       return false
     },
-    [maxSelectable, mode, onSelect, query.length],
+    [
+      maxSelectable,
+      mode,
+      onSelect,
+      query.length,
+      diagnostics,
+      diagnosticsRunning,
+      diagnosticIndex,
+      selectedIndex,
+      displayRows,
+      inspectedText,
+      error,
+      startDiagnostics,
+    ],
   )
 
-  const submitCustomValue = useCallback(() => {
-    if (!isEditableCustomField(customField)) return
-    const nextField = getNextCustomField(customField)
-    setCustomField(nextField)
-    setCustomCursor(
-      nextField === 'review' ? 0 : customProvider[nextField].length,
-    )
-  }, [customField, customProvider])
+  const submitCustomValue = useCallback(
+    (input?: { text: string }) => {
+      if (!isEditableCustomField(customField)) return
+      const draft = input
+        ? { ...customProvider, [customField]: input.text }
+        : customProvider
+      setCustomProvider(draft)
+      const providerType = normalizeCustomProviderType(draft.providerType)
+      const validation = validateCustomOpenbuffProvider({
+        id: draft.id,
+        type: providerType ?? 'openai-compatible',
+        baseURL: draft.baseURL,
+        apiKeyEnv: draft.apiKeyEnv,
+        models: normalizeModels(draft.models),
+      })
+      if (customField === 'providerType' && !providerType) {
+        setError('Choose openai-compatible or anthropic-compatible.')
+        return
+      }
+      if (validation?.field === customField) {
+        setError(validation.message)
+        return
+      }
+      setError(null)
+      const nextField = getNextCustomField(customField)
+      setCustomField(nextField)
+      setCustomCursor(nextField === 'review' ? 0 : draft[nextField].length)
+    },
+    [customField, customProvider],
+  )
 
   const handleCustomKey = useCallback(
     (key: KeyEvent): boolean => {
@@ -423,13 +642,7 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
         key.preventDefault()
         if (customField === 'id') {
           setMode('picker')
-          setCustomProvider({
-            id: '',
-            providerType: 'openai-compatible',
-            baseURL: '',
-            apiKeyEnv: '',
-            models: '',
-          })
+          setError(null)
           setCustomCursor(0)
           return true
         }
@@ -451,7 +664,20 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
         )
         if (!providerType || !canSubmitCustomProvider(customProvider))
           return true
-        onSelect({
+        const validation = validateCustomOpenbuffProvider({
+          id: customProvider.id,
+          type: providerType,
+          baseURL: customProvider.baseURL,
+          apiKeyEnv: customProvider.apiKeyEnv,
+          models,
+        })
+        if (validation) {
+          setError(validation.message)
+          setCustomField(validation.field)
+          setCustomCursor(customProvider[validation.field].length)
+          return true
+        }
+        void saveSelection({
           type: 'custom',
           provider: {
             id: customProvider.id.trim(),
@@ -471,19 +697,124 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
       }
       return false
     },
-    [customField, customProvider, mode, onSelect],
+    [customField, customProvider, mode, saveSelection],
   )
 
   useKeyboard(
     useCallback(
       (key: KeyEvent) => {
+        if (inspectedText !== null) return
+        if (diagnostics !== null) {
+          handlePickerKey(key)
+          return
+        }
         if (mode === 'custom' && customField === 'review') {
           handleCustomKey(key)
         }
       },
-      [customField, handleCustomKey, mode],
+      [
+        customField,
+        handleCustomKey,
+        mode,
+        diagnostics,
+        diagnosticsRunning,
+        inspectedText,
+        handlePickerKey,
+      ],
     ),
   )
+
+  if (inspectedText !== null)
+    return (
+      <OutputReaderScreen
+        messages={[]}
+        initialDocument={createTextDocument({
+          id: 'provider-details',
+          title: 'Provider details',
+          text: inspectedText,
+        })}
+        onClose={() => setInspectedText(null)}
+      />
+    )
+
+  if (diagnostics !== null)
+    return (
+      <box
+        style={{
+          width: '100%',
+          height: '100%',
+          flexDirection: 'column',
+          padding: 1,
+          backgroundColor: theme.surface,
+        }}
+      >
+        <text fg={theme.foreground} style={{ flexShrink: 0 }}>
+          Provider connections · {diagnosticsRunning ? 'Checking' : 'Finished'}
+        </text>
+        <scrollbox style={{ flexGrow: 1, flexShrink: 1 }} scrollX={false}>
+          {diagnostics
+            .slice(
+              Math.max(0, diagnosticIndex - 1),
+              Math.max(0, diagnosticIndex - 1) +
+                Math.max(1, terminalHeight - 8),
+            )
+            .map((row) => (
+              <box key={row.id} style={{ flexDirection: 'column' }}>
+                <text
+                  wrapMode="none"
+                  fg={
+                    row.id === diagnostics[diagnosticIndex]?.id
+                      ? theme.primary
+                      : row.state === 'failed'
+                        ? theme.error
+                        : row.state === 'succeeded'
+                          ? theme.success
+                          : theme.muted
+                  }
+                >
+                  {sliceTextCells(
+                    `${row.id === diagnostics[diagnosticIndex]?.id ? '›' : ' '} ${row.message}`,
+                    0,
+                    contentWidth,
+                  )}
+                </text>
+              </box>
+            ))}
+          {diagnostics.length === 0 && !error && (
+            <text fg={theme.muted}>
+              No configured providers. Add one first.
+            </text>
+          )}
+        </scrollbox>
+        {error && (
+          <text fg={theme.error} style={{ flexShrink: 0 }} wrapMode="none">
+            {sliceTextCells(error, 0, contentWidth)}
+          </text>
+        )}
+        <text fg={theme.muted} style={{ flexShrink: 0 }} wrapMode="none">
+          ↑↓ · Enter retry · Ctrl+O details
+        </text>
+        <Button
+          style={{ flexShrink: 0 }}
+          onClick={() => {
+            cancelDiagnostics()
+            setDiagnostics(null)
+          }}
+        >
+          <text fg={theme.primary}>Back (Esc)</text>
+        </Button>
+        <Button
+          style={{ flexShrink: 0 }}
+          onClick={() =>
+            diagnosticsRunning ? cancelDiagnostics() : void startDiagnostics()
+          }
+        >
+          <text fg={theme.primary}>
+            {diagnosticsRunning ? 'Cancel checks (C)' : 'Retry all (R)'}
+          </text>
+        </Button>
+      </box>
+    )
 
   if (mode === 'custom') {
     const currentField = isEditableCustomField(customField) ? customField : null
@@ -498,35 +829,18 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
           backgroundColor: theme.surface,
           paddingLeft: 2,
           paddingRight: 2,
-          paddingTop: 1,
           flexDirection: 'column',
         }}
       >
-        <text style={{ fg: theme.foreground, attributes: TextAttributes.BOLD }}>
-          Add custom OpenAI/Anthropic-compatible provider
+        <text fg={theme.foreground} style={{ flexShrink: 0 }} wrapMode="none">
+          Custom provider · Step{' '}
+          {customField === 'review' ? 6 : FIELD_ORDER.indexOf(customField) + 1}
+          /6
         </text>
-        <text style={{ fg: theme.muted }}>Esc goes back one step.</text>
-        <box style={{ height: 1 }} />
-        <text style={{ fg: theme.foreground }}>
-          ID: {customProvider.id || '—'}
-        </text>
-        <text style={{ fg: theme.foreground }}>
-          Type: {customProvider.providerType}
-        </text>
-        <text style={{ fg: theme.foreground }}>
-          Base URL: {customProvider.baseURL || '—'}
-        </text>
-        <text style={{ fg: theme.foreground }}>
-          API key env: {customProvider.apiKeyEnv || 'none'}
-        </text>
-        <text style={{ fg: theme.foreground }}>
-          Models: {customProvider.models || '—'}
-        </text>
-        <box style={{ height: 1 }} />
         {currentField ? (
-          <box style={{ width: contentWidth, flexDirection: 'column' }}>
-            <text style={{ fg: theme.success }}>
-              {FIELD_LABELS[currentField]}:
+          <box style={{ flexDirection: 'column', flexGrow: 1 }}>
+            <text fg={theme.primary} style={{ flexShrink: 0 }}>
+              {FIELD_LABELS[currentField]}
             </text>
             <MultilineInput
               value={currentValue}
@@ -551,32 +865,65 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
               )}
               onKeyIntercept={handleCustomKey}
               placeholder={FIELD_LABELS[currentField]}
-              focused={true}
-              maxHeight={1}
+              focused
+              maxHeight={2}
               minHeight={1}
               cursorPosition={customCursor}
             />
           </box>
         ) : (
-          <box style={{ flexDirection: 'column' }}>
-            <text style={{ fg: canSubmit ? theme.success : theme.error }}>
-              {canSubmit
-                ? 'Press Enter or y to save this provider.'
-                : 'Provider id, provider type, base URL, and at least one model are required.'}
+          <scrollbox style={{ flexGrow: 1 }} scrollX={false}>
+            <text fg={theme.foreground}>ID: {customProvider.id}</text>
+            <text fg={theme.foreground}>
+              Type: {customProvider.providerType}
             </text>
-            <text style={{ fg: theme.muted }}>
-              Press n to edit, Esc to go back.
+            <text fg={theme.foreground}>
+              Base URL: {customProvider.baseURL}
             </text>
-          </box>
+            <text fg={theme.foreground}>
+              API key env: {customProvider.apiKeyEnv || 'none'}
+            </text>
+            <text fg={theme.foreground}>Models: {customProvider.models}</text>
+          </scrollbox>
         )}
-        <box style={{ marginTop: 1 }}>
-          <text style={{ fg: theme.muted }}>Esc back · Enter submit</text>
-        </box>
+        {error && (
+          <text fg={theme.error} style={{ flexShrink: 0 }}>
+            {error}
+          </text>
+        )}
+        {saving && (
+          <text fg={theme.muted} style={{ flexShrink: 0 }}>
+            Saving provider…
+          </text>
+        )}
+        <text
+          fg={canSubmit ? theme.muted : theme.error}
+          style={{ flexShrink: 0 }}
+          wrapMode="none"
+        >
+          {currentField
+            ? 'Enter next · Esc back'
+            : 'Enter save · N edit · Esc back'}
+        </text>
       </box>
     )
   }
 
-  const renderedRows = displayRows.slice(0, maxRenderedRows)
+  const itemRows = displayRows.filter(
+    (row): row is Extract<DisplayRow, { type: 'item' }> => row.type === 'item',
+  )
+  const windowStart = Math.max(
+    0,
+    Math.min(
+      selectedIndex - Math.floor(maxRenderedRows / 2),
+      itemRows.length - maxRenderedRows,
+    ),
+  )
+  const renderedRows: DisplayRow[] = itemRows.slice(
+    windowStart,
+    windowStart + maxRenderedRows,
+  )
+  const selectedItem = itemRows[selectedIndex]?.item
 
   return (
     <box
@@ -586,108 +933,93 @@ export function ProviderPickerScreen({ presets, onSelect }: Props) {
         backgroundColor: theme.surface,
         paddingLeft: 2,
         paddingRight: 2,
-        paddingTop: 1,
         flexDirection: 'column',
       }}
     >
-      <text style={{ fg: theme.foreground, attributes: TextAttributes.BOLD }}>
-        Add Provider
+      <text fg={theme.foreground}>
+        Add provider · {itemRows.length ? selectedIndex + 1 : 0}/
+        {itemRows.length}
       </text>
-      <text style={{ fg: theme.muted }}>
-        Search providers, use ↑/↓, Enter to select, Esc to cancel.
-      </text>
-      <box style={{ height: 1 }} />
-      <box style={{ width: contentWidth }}>
-        <MultilineInput
-          value={query}
-          onChange={({ text, cursorPosition }) => {
+      <MultilineInput
+        value={query}
+        onChange={({ text, cursorPosition }) => {
+          setQuery(text)
+          setQueryCursor(cursorPosition)
+          setSelectedIndex(0)
+        }}
+        onSubmit={(input) => selectCurrentItem(input?.text)}
+        onPaste={createTextPasteHandler(
+          query,
+          queryCursor,
+          ({ text, cursorPosition }) => {
             setQuery(text)
             setQueryCursor(cursorPosition)
             setSelectedIndex(0)
-          }}
-          onSubmit={selectCurrentItem}
-          onPaste={createTextPasteHandler(
-            query,
-            queryCursor,
-            ({ text, cursorPosition }) => {
-              setQuery(text)
-              setQueryCursor(cursorPosition)
-              setSelectedIndex(0)
-            },
-          )}
-          onKeyIntercept={handlePickerKey}
-          placeholder="Search providers..."
-          focused={true}
-          maxHeight={1}
-          minHeight={1}
-          cursorPosition={queryCursor}
-        />
-      </box>
-      <box style={{ height: 1 }} />
-      <box
-        style={{
-          width: contentWidth,
-          borderStyle: 'single',
-          borderColor: theme.muted,
-          customBorderChars: BORDER_CHARS,
-          flexDirection: 'column',
-          flexGrow: 1,
-          overflow: 'hidden',
-        }}
-        border={['top', 'bottom', 'left', 'right']}
-      >
-        {renderedRows.length === 0 ? (
-          <text style={{ fg: theme.muted }}>No providers match “{query}”.</text>
-        ) : (
-          renderedRows.map((row, index) => {
-            if (row.type === 'header') {
-              return (
+          },
+        )}
+        onKeyIntercept={handlePickerKey}
+        placeholder="Search providers…"
+        focused
+        maxHeight={1}
+        minHeight={1}
+        cursorPosition={queryCursor}
+      />
+      <box style={{ flexGrow: 1, overflow: 'hidden', flexDirection: 'column' }}>
+        {renderedRows.map(
+          (row) =>
+            row.type === 'item' && (
+              <Button
+                key={`${row.item.id}-${row.selectableIndex}`}
+                onClick={() => {
+                  setSelectedIndex(row.selectableIndex)
+                  const item = row.item
+                  if (item.kind === 'custom') {
+                    setMode('custom')
+                    setCustomField('id')
+                  } else if (item.kind === 'test') void startDiagnostics()
+                  else
+                    void saveSelection(
+                      item.id === 'codex'
+                        ? { type: 'connect-codex' }
+                        : { type: 'preset', preset: item.id },
+                    )
+                }}
+              >
                 <text
-                  key={`header-${row.label}-${index}`}
-                  style={{
-                    fg: theme.foreground,
-                    attributes: TextAttributes.BOLD,
-                  }}
+                  fg={
+                    row.selectableIndex === selectedIndex
+                      ? theme.primary
+                      : theme.foreground
+                  }
+                  wrapMode="none"
                 >
-                  {row.label}
+                  {sliceTextCells(
+                    `${row.selectableIndex === selectedIndex ? '›' : ' '} ${row.item.label}`,
+                    0,
+                    contentWidth,
+                  )}
                 </text>
-              )
-            }
-
-            const selected = row.selectableIndex === selectedIndex
-            const item = row.item
-            const status = envStatus(item.env)
-            const envSuffix = item.env ? `  env: ${item.env} ${status}` : ''
-            return (
-              <box key={item.id} style={{ flexDirection: 'column' }}>
-                <text
-                  style={{
-                    fg: selected ? theme.primary : theme.foreground,
-                    attributes: selected ? TextAttributes.BOLD : undefined,
-                  }}
-                >
-                  {selected ? '› ' : '  '}
-                  {item.label}
-                  <span style={{ fg: theme.muted }}>{envSuffix}</span>
-                </text>
-                <text style={{ fg: theme.muted }}>
-                {' '}
-                {item.kind === 'preset' && item.env
-                  ? isEnvVarSet(item.env)
-                    ? `${item.description} · key set (${item.env})`
-                    : `${item.description} · set ${item.env}`
-                  : item.description}
-              </text>
-              </box>
-            )
-          })
+              </Button>
+            ),
+        )}
+        {!itemRows.length && (
+          <text fg={theme.muted}>No matching providers.</text>
         )}
       </box>
-      <box style={{ marginTop: 1 }}>
-        <text style={{ fg: theme.muted }}>
-          ↑↓ navigate · Enter select · Esc cancel
+      {selectedItem && (
+        <text fg={theme.muted} wrapMode="none">
+          {sliceTextCells(
+            `${selectedItem.category} · ${selectedItem.env ? `${selectedItem.env} ${envStatus(selectedItem.env)}` : selectedItem.description}`,
+            0,
+            contentWidth,
+          )}
         </text>
-      </box>
+      )}
+      {error && <text fg={theme.error}>{error}</text>}
+      {saving && <text fg={theme.muted}>Saving provider…</text>}
+      <text fg={theme.muted}>
+        ↑↓ choose · Enter select · Ctrl+O details · Esc back
+      </text>
     </box>
   )
 }

@@ -3,6 +3,7 @@ import { createRunJournal } from '@codebuff/agent-runtime/util/run-journal'
 // `resolveRunJournalPath` is shared with the live-run and dash wiring; its
 // single canonical location is cli/src/utils/run-journal-path.ts.
 import { resolveRunJournalPath } from '../utils/run-journal-path'
+import { formatBoundedEvidence } from '../utils/bounded-evidence'
 
 import type {
   JournalEvent,
@@ -20,6 +21,9 @@ import type { PrintModeEvent } from '@openbuff/sdk'
 export type ReplayCommandArgs = {
   runId: string
   fromStep?: number
+  toStep?: number
+  event?: string
+  find?: string
   model?: string
   json: boolean
 }
@@ -105,16 +109,30 @@ function formatHumanTrace(
 ): string {
   const lines: string[] = []
   lines.push(
-    `replay run ${args.runId}` +
+    `Recorded replay · run ${args.runId}` +
       (args.fromStep !== undefined ? ` from step ${args.fromStep}` : '') +
-      (args.model ? ` (model ${args.model})` : ''),
+      (args.model ? ` (metadata model ${args.model}; no inference)` : ''),
   )
   for (const event of events) {
     lines.push(
       `[step ${event.stepNumber} seq ${event.seq}] ${event.eventType}` +
         (event.correlation ? ` (${event.correlation})` : ''),
     )
+    const payload = asRecord(event.payload)
+    const evidence =
+      event.eventType === 'llm_response'
+        ? (payload.text ?? payload.message ?? event.payload)
+        : event.payload
+    lines.push(formatBoundedEvidence(evidence), '')
   }
+  lines.push(
+    'Inspect a step: openbuff replay ' +
+      args.runId +
+      ' --from-step <n> --to-step <n>',
+  )
+  lines.push(
+    'Find retained evidence: --event tool_result --find "failed" · --json exports recorded events',
+  )
   return lines.join('\n') + '\n'
 }
 
@@ -155,9 +173,9 @@ export async function runReplayCommand(
     ((journalFile: string) => createRunJournal({ path: journalFile }))
 
   writeStderr(
-    `openbuff replay: replaying run ${args.runId}` +
+    `openbuff replay: reading recorded run ${args.runId}` +
       (args.fromStep !== undefined ? ` from step ${args.fromStep}` : '') +
-      (args.model ? ` with model ${args.model}` : '') +
+      (args.model ? ` (metadata model ${args.model}; no inference)` : '') +
       ` (journal ${journalPath})`,
   )
 
@@ -188,10 +206,29 @@ export async function runReplayCommand(
       return 1
     }
     const fromStep = args.fromStep ?? 0
-    const filtered =
-      fromStep > 0
-        ? events.filter((event) => event.stepNumber >= fromStep)
-        : events
+    const filtered = events.filter(
+      (event) =>
+        event.stepNumber >= fromStep &&
+        (args.toStep === undefined || event.stepNumber <= args.toStep) &&
+        (!args.event || event.eventType === args.event) &&
+        (!args.find ||
+          formatBoundedEvidence(event.payload)
+            .toLowerCase()
+            .includes(args.find.toLowerCase())),
+    )
+    let firstStep = Infinity
+    let lastStep = -Infinity
+    for (const event of events) {
+      firstStep = Math.min(firstStep, event.stepNumber)
+      lastStep = Math.max(lastStep, event.stepNumber)
+    }
+    writeStderr(
+      `openbuff replay: ${filtered.length} matching recorded events; available steps ${firstStep}–${lastStep}.`,
+    )
+    if (filtered.length === 0)
+      writeStderr(
+        'openbuff replay: no recorded events match this range/filter; adjust --from-step, --to-step, --event or --find.',
+      )
 
     if (args.json) {
       for (const event of filtered) {

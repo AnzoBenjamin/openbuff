@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from './button'
 import { useTheme } from '../hooks/use-theme'
+import { safeOpen } from '../utils/open-url'
 
 type FormatLinesFn = (text: string, maxWidth?: number) => string[]
 
@@ -41,6 +42,23 @@ export const TerminalLink: React.FC<TerminalLinkProps> = ({
   const linkColor = color ?? theme.link
   const linkActiveColor = activeColor ?? theme.success
   const [isHovered, setIsHovered] = useState(false)
+  const [openState, setOpenState] = useState<
+    'idle' | 'opening' | 'opened' | 'completed' | 'failed'
+  >('idle')
+  const pending = useRef<{ id: symbol; target: string } | null>(null)
+  const currentTarget = useRef(text)
+  currentTarget.current = text
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    setOpenState('idle')
+  }, [text])
 
   const displayLines = useMemo(() => {
     let displayText = text.trim()
@@ -60,11 +78,36 @@ export const TerminalLink: React.FC<TerminalLinkProps> = ({
   const displayColor = isActive ? linkActiveColor : linkColor
   const shouldUnderline = underlineOnHover && isHovered
 
-  const handleActivate = useCallback(() => {
-    if (onActivate) {
-      onActivate()
+  const handleActivate = useCallback(async () => {
+    if (pending.current?.target === text) return
+    const owner = Symbol('link-open')
+    pending.current = { id: owner, target: text }
+    setOpenState('opening')
+    try {
+      const result = await (onActivate ? onActivate() : safeOpen(text))
+      if (
+        mounted.current &&
+        pending.current?.id === owner &&
+        currentTarget.current === text
+      )
+        setOpenState(
+          result === false
+            ? 'failed'
+            : result === true
+              ? 'opened'
+              : 'completed',
+        )
+    } catch {
+      if (
+        mounted.current &&
+        pending.current?.id === owner &&
+        currentTarget.current === text
+      )
+        setOpenState('failed')
+    } finally {
+      if (pending.current?.id === owner) pending.current = null
     }
-  }, [onActivate])
+  }, [onActivate, text])
 
   // For inline mode, render without hover/click support (spans don't support mouse events)
   if (inline) {
@@ -92,6 +135,20 @@ export const TerminalLink: React.FC<TerminalLinkProps> = ({
           </text>
         )
       })}
+      {openState !== 'idle' && (
+        <text
+          fg={openState === 'failed' ? theme.error : theme.muted}
+          style={{ wrapMode: 'word' }}
+        >
+          {openState === 'failed'
+            ? `Could not open ${text}. Open or copy this destination manually; activate again to retry.`
+            : openState === 'opening'
+              ? 'Opening…'
+              : openState === 'opened'
+                ? 'Opened in browser'
+                : 'Link action completed'}
+        </text>
+      )}
     </Button>
   )
 }

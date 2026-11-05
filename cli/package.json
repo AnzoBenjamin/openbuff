@@ -20,6 +20,7 @@
     "build:binary": "bun ./scripts/build-binary.ts openbuff $npm_package_version",
     "release": "bun run scripts/release.ts",
     "test": "bun run scripts/run-cli-tests.ts",
+    "test:native-ui": "bun run scripts/test-native-ui.ts",
     "test:tmux-poc": "bun run src/__tests__/tmux-poc.ts",
     "smoke:opentui-05": "bun run src/index-05.tsx",
     "typecheck": "tsc --noEmit -p ."

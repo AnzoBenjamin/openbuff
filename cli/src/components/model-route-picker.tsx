@@ -1,14 +1,22 @@
-import { TextAttributes } from '@opentui/core'
+import {
+  providerConfigFileSchema,
+  resolveConfiguredAgentModelConfig,
+} from '@openbuff/sdk'
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { Button } from './button'
+import { loadAgentDefinitions } from '../utils/local-agent-registry'
+
+import { sliceTextCells } from '../utils/text-boundaries'
+import { OutputReaderScreen } from './output-reader-screen'
+import { createTextDocument } from '../utils/output-document'
 import { MultilineInput } from './multiline-input'
 import { SelectableList } from './selectable-list'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
 import { createTextPasteHandler } from '../utils/strings'
-import { BORDER_CHARS } from '../utils/ui-constants'
 import {
+  clearAgentRouteOverride,
   getEditableConfig,
   getFailoverModels,
   setFailoverModels,
@@ -27,13 +35,6 @@ import type {
   OpenbuffReasoningEffort,
   ProviderConfigFileInput,
 } from '@openbuff/sdk'
-
-const LAYOUT = {
-  CONTENT_PADDING: 4,
-  COMPACT_MODE_THRESHOLD: 20,
-  MAIN_CONTENT_PADDING: 2,
-  MAX_RENDERED_ITEMS: 100,
-} as const
 
 type RoutableModelValue =
   | string
@@ -121,11 +122,18 @@ interface RouteItem {
   currentModel: string | undefined
   currentReasoningEffort: OpenbuffReasoningEffort | undefined
   isHeader?: boolean
+  inherited?: boolean
 }
 
 interface ModelRoutePickerProps {
   onClose: () => void
   onConfigUpdated?: () => void
+  dependencies?: {
+    readConfig: typeof getEditableConfig
+    models: typeof getKnownModelOptions
+    agents: typeof loadAgentDefinitions
+    writeConfig: typeof writeMergedConfig
+  }
 }
 
 type PickerPane = 'left' | 'right'
@@ -186,13 +194,18 @@ const nextSelectableIndex = (
 export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
   onClose,
   onConfigUpdated,
+  dependencies = {
+    readConfig: getEditableConfig,
+    models: getKnownModelOptions,
+    agents: loadAgentDefinitions,
+    writeConfig: writeMergedConfig,
+  },
 }) => {
   const theme = useTheme()
   const { terminalWidth, terminalHeight } = useTerminalLayout()
 
-  const isCompactMode = terminalHeight < LAYOUT.COMPACT_MODE_THRESHOLD
-
   // Master State: Dual-Pane split screen Dashboard
+  const [inspectedText, setInspectedText] = useState<string | null>(null)
   const [activePane, setActivePane] = useState<PickerPane>('left')
   const [leftSearchQuery, setLeftSearchQuery] = useState('')
   // Track the input cursor so paste inserts at the cursor (not always the end).
@@ -216,10 +229,18 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
   const [failoverAppendMode, setFailoverAppendMode] = useState(false)
 
   // Load current config
-  const config = useMemo(() => {
+  const loaded = useMemo(() => {
     void configKey
-    return getEditableConfig()
-  }, [configKey])
+    try {
+      return { config: dependencies.readConfig(), error: null }
+    } catch (error) {
+      return {
+        config: {} as ProviderConfigFileInput,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }, [configKey, dependencies.readConfig])
+  const config = loaded.config
 
   // Build route items from config
   const routeItems: RouteItem[] = useMemo(() => {
@@ -287,11 +308,39 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
     })
 
     // Agent overrides
-    for (const [agentId, model] of Object.entries(config.agents ?? {})) {
+    const definitions = dependencies.agents()
+    const normalizedConfig = providerConfigFileSchema.parse(config)
+    const agentIds = new Set([
+      ...definitions.map((agent) => agent.id),
+      ...Object.keys(config.agents ?? {}),
+    ])
+    for (const agentId of agentIds) {
+      const model = config.agents?.[agentId]
+      const withoutOverride = {
+        ...normalizedConfig,
+        agents: { ...normalizedConfig.agents },
+        agentReasoningEfforts: { ...normalizedConfig.agentReasoningEfforts },
+      }
+      delete withoutOverride.agents[agentId]
+      delete withoutOverride.agentReasoningEfforts[agentId]
+      let inheritedModel: string | undefined
+      try {
+        inheritedModel = resolveConfiguredAgentModelConfig({
+          agentId,
+          model: definitions.find((agent) => agent.id === agentId)?.model,
+          loadedConfig: { config: withoutOverride, sourceFilePaths: [] },
+        }).model
+      } catch {
+        inheritedModel = undefined
+      }
+      const inherited = model === undefined
       items.push({
         id: `route-agent-${agentId}`,
         label: `agent:${agentId}`,
-        secondary: displayModel(model) ?? '(not set)',
+        secondary: inherited
+          ? `inherited: ${inheritedModel ?? '(not set)'}`
+          : (displayModel(model) ?? '(not set)'),
+        inherited,
         target: { type: 'agent', agentId },
         currentModel: displayModel(model) ?? undefined,
         currentReasoningEffort: getRouteReasoningEffort(config, {
@@ -312,7 +361,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
 
     // Failover chain: models tried, in order, after the primary fails. This
     // previously existed only as a hand-edited openbuff.json key.
-    const failoverModels = getFailoverModels()
+    const failoverModels = config.failoverModels ?? []
     failoverModels.forEach((model, index) => {
       items.push({
         id: `failover-${index}`,
@@ -377,8 +426,9 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
   // Right Pane Model Options
   const availableModels = useMemo(() => {
     void configKey
-    return getKnownModelOptions()
-  }, [configKey])
+    if (loaded.error) return []
+    return dependencies.models()
+  }, [configKey, loaded.error])
 
   const selectableModelItems: SelectableListItem[] = useMemo(
     () =>
@@ -427,7 +477,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
 
   // Right Pane Items & Empty Messages
   const failoverEditItems = useMemo<SelectableListItem[]>(() => {
-    const chain = getFailoverModels()
+    const chain = config.failoverModels ?? []
     const index = failoverEditIndex
     const model = index !== null ? chain[index] : undefined
     return [
@@ -441,16 +491,36 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
         label: `Move down${index !== null && index === chain.length - 1 ? ' (already last)' : ''}`,
         secondary: model ?? '',
       },
-      { id: 'failover-op-remove', label: 'Remove from chain', secondary: model ?? '' },
+      {
+        id: 'failover-op-remove',
+        label: 'Remove from chain',
+        secondary: model ?? '',
+      },
     ]
-  }, [failoverEditIndex, configKey])
+  }, [failoverEditIndex, config])
 
   const rightItems = useMemo(() => {
     if (rightView === 'failover-edit') return failoverEditItems
     return rightView === 'model-select'
-      ? filteredModels
+      ? highlightedRoute?.target?.type === 'agent' && !failoverAppendMode
+        ? [
+            {
+              id: 'use-inherited',
+              label: 'Use inherited route',
+              secondary: 'Clear this agent’s model and reasoning override',
+            },
+            ...filteredModels,
+          ]
+        : filteredModels
       : filteredReasoningOptions
-  }, [rightView, filteredModels, filteredReasoningOptions, failoverEditItems])
+  }, [
+    rightView,
+    filteredModels,
+    filteredReasoningOptions,
+    failoverEditItems,
+    highlightedRoute,
+    failoverAppendMode,
+  ])
 
   const rightEmptyMessage = useMemo(() => {
     if (rightView === 'model-select') {
@@ -482,14 +552,34 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
 
   // Core Keyboard Dashboard Navigation Interceptor
   const handleKeyIntercept = useCallback(
-    (key: { name?: string; shift?: boolean; ctrl?: boolean }) => {
+    (
+      key: { name?: string; shift?: boolean; ctrl?: boolean },
+      selection?: { pane: PickerPane; index: number },
+    ) => {
+      if (key.ctrl && key.name === 'r') {
+        setConfigKey((k) => k + 1)
+        return true
+      }
+      if (key.ctrl && key.name === 'o') {
+        setInspectedText(
+          activePane === 'left'
+            ? `${highlightedRoute?.label ?? 'Route'}\nModel: ${highlightedRoute?.secondary ?? 'unavailable'}\nReasoning: ${formatReasoning(highlightedRoute?.currentReasoningEffort)}`
+            : `${highlightedRoute?.label ?? 'Route'}\nCurrent model: ${highlightedRoute?.secondary ?? 'unavailable'}\nPending model: ${selectedModelId ?? rightItems[rightFocusedIndex]?.id ?? 'unavailable'}\nReasoning: ${rightView === 'reasoning-select' ? rightItems[rightFocusedIndex]?.id : formatReasoning(highlightedRoute?.currentReasoningEffort)}`,
+        )
+        return true
+      }
+      const pane = selection?.pane ?? activePane
+      const leftIndex =
+        selection?.pane === 'left' ? selection.index : leftFocusedIndex
+      const rightIndex =
+        selection?.pane === 'right' ? selection.index : rightFocusedIndex
       // Global exit key
       if (key.name === 'c' && key.ctrl) {
         onClose()
         return true
       }
 
-      if (activePane === 'left') {
+      if (pane === 'left') {
         if (key.name === 'escape') {
           if (leftSearchQuery.length > 0) {
             setLeftSearchQuery('')
@@ -516,7 +606,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
           key.name === 'right' ||
           key.name === 'tab'
         ) {
-          const focused = filteredRoutes[leftFocusedIndex]
+          const focused = filteredRoutes[leftIndex]
           if (focused && !isHeaderItem(focused)) {
             setActivePane('right')
             setRightSearchQuery('')
@@ -534,7 +624,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
           }
           return true
         }
-      } else if (activePane === 'right') {
+      } else if (pane === 'right') {
         if (key.name === 'escape' || key.name === 'left') {
           if (rightSearchQuery.length > 0) {
             setRightSearchQuery('')
@@ -558,7 +648,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
           return true
         }
         if (key.name === 'return' || key.name === 'enter') {
-          const focusedItem = rightItems[rightFocusedIndex]
+          const focusedItem = rightItems[rightIndex]
           if (!focusedItem) return true
 
           if (rightView === 'failover-edit') {
@@ -603,6 +693,27 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
           }
 
           if (rightView === 'model-select') {
+            if (
+              focusedItem.id === 'use-inherited' &&
+              highlightedRoute?.target?.type === 'agent'
+            ) {
+              try {
+                const next = dependencies.readConfig()
+                clearAgentRouteOverride(next, highlightedRoute.target.agentId)
+                dependencies.writeConfig(next)
+                setConfigKey((k) => k + 1)
+                setStatusMessage(
+                  `✓ ${highlightedRoute.label} now uses inherited routing`,
+                )
+                setActivePane('left')
+                onConfigUpdated?.()
+              } catch (error) {
+                setStatusMessage(
+                  `✗ ${error instanceof Error ? error.message : String(error)}`,
+                )
+              }
+              return true
+            }
             if (failoverAppendMode) {
               // Append the chosen model to the failover chain; no reasoning
               // step (failover inherits the route's reasoning config).
@@ -612,7 +723,10 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
                 )
                 if (modelOption?.discovered) {
                   const slashIndex = focusedItem.id.indexOf('/')
-                  if (slashIndex > 0 && slashIndex < focusedItem.id.length - 1) {
+                  if (
+                    slashIndex > 0 &&
+                    slashIndex < focusedItem.id.length - 1
+                  ) {
                     persistModelToProviderConfig(
                       focusedItem.id.slice(0, slashIndex),
                       focusedItem.id.slice(slashIndex + 1),
@@ -627,7 +741,9 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
                 } else {
                   setFailoverModels([...chain, focusedItem.id])
                   setConfigKey((k) => k + 1)
-                  setStatusMessage(`✓ Added ${focusedItem.id} to failover chain`)
+                  setStatusMessage(
+                    `✓ Added ${focusedItem.id} to failover chain`,
+                  )
                   onConfigUpdated?.()
                 }
                 setActivePane('left')
@@ -647,7 +763,16 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
             setSelectedModelDiscovered(modelOption?.discovered ?? false)
             setRightView('reasoning-select')
             setRightSearchQuery('')
-            setRightFocusedIndex(0)
+            setRightFocusedIndex(
+              Math.max(
+                0,
+                REASONING_OPTIONS.findIndex(
+                  (option) =>
+                    option.value ===
+                    (highlightedRoute?.currentReasoningEffort ?? 'default'),
+                ),
+              ),
+            )
           } else {
             // Reasoning Selected! Commit config to disk
             if (!highlightedRoute?.target || !selectedModelId) return true
@@ -663,14 +788,14 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
                 }
               }
 
-              const editableConfig = getEditableConfig()
+              const editableConfig = dependencies.readConfig()
               setRouteModel(
                 editableConfig,
                 highlightedRoute.target,
                 selectedModelId,
                 reasoningChoice,
               )
-              writeMergedConfig(editableConfig)
+              dependencies.writeConfig(editableConfig)
 
               const reasoningDisplay =
                 reasoningChoice === 'default' ? 'default' : reasoningChoice
@@ -720,292 +845,142 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
     ],
   )
 
-  const activeRouteLabel = highlightedRoute ? highlightedRoute.label : 'None'
-  const activeModelDisplay = highlightedRoute
-    ? highlightedRoute.currentModel || '(not set)'
-    : '—'
-  const activeReasoningDisplay = highlightedRoute
-    ? formatReasoning(highlightedRoute.currentReasoningEffort)
-    : 'default'
+  if (inspectedText !== null)
+    return (
+      <OutputReaderScreen
+        messages={[]}
+        initialDocument={createTextDocument({
+          id: 'route-details',
+          title: 'Model route details',
+          text: inspectedText,
+        })}
+        onClose={() => setInspectedText(null)}
+      />
+    )
 
-  const helpText =
-    activePane === 'left'
-      ? '↑↓ Navigate routes · Tab/Enter Edit selected · Esc Close'
-      : activePane === 'right'
-        ? `Right Panel editing: ${rightView === 'model-select' ? 'Choose Model' : rightView === 'failover-edit' ? 'Edit Failover Entry' : 'Choose Reasoning'} · Tab/Esc back`
-        : '↑↓ Navigate · Enter select'
-
-  return (
-    <box
-      style={{
-        width: '100%',
-        height: '100%',
-        backgroundColor: theme.surface,
-        padding: 0,
-        flexDirection: 'column',
-      }}
-    >
-      {/* Header bar */}
-      {!isCompactMode && (
-        <box
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingLeft: 2,
-            paddingRight: 2,
-            marginTop: 1,
-            marginBottom: 1,
-            flexShrink: 0,
-          }}
-        >
-          <text
-            style={{ fg: theme.foreground, attributes: TextAttributes.BOLD }}
-          >
-            Model Route & Agent Configuration Dashboard
-          </text>
-          {statusMessage && (
-            <text
-              style={{ fg: theme.success, attributes: TextAttributes.BOLD }}
-            >
-              {statusMessage}
-            </text>
-          )}
-        </box>
-      )}
-
-      {/* Main Dual-Pane Dashboard Area */}
+  {
+    const items = activePane === 'left' ? filteredRoutes : rightItems
+    const focus = activePane === 'left' ? leftFocusedIndex : rightFocusedIndex
+    const size = Math.max(
+      1,
+      terminalHeight - (statusMessage || loaded.error ? 7 : 6),
+    )
+    const start = Math.max(
+      0,
+      Math.min(focus - Math.floor(size / 2), items.length - size),
+    )
+    const search = activePane === 'left' ? leftSearchQuery : rightSearchQuery
+    const cursor = activePane === 'left' ? leftSearchCursor : rightSearchCursor
+    const updateSearch = ({
+      text,
+      cursorPosition,
+    }: {
+      text: string
+      cursorPosition: number
+    }) => {
+      if (activePane === 'left') {
+        setLeftSearchQuery(text)
+        setLeftSearchCursor(cursorPosition)
+      } else {
+        setRightSearchQuery(text)
+        setRightSearchCursor(cursorPosition)
+      }
+    }
+    return (
       <box
         style={{
-          flexDirection: 'row',
-          flexGrow: 1,
-          flexShrink: 1,
           width: '100%',
-          paddingLeft: 2,
-          paddingRight: 2,
-          gap: 1,
-        }}
-      >
-        {/* LEFT PANEL: Routes list */}
-        <box
-          style={{
-            flexDirection: 'column',
-            width: '45%',
-            flexGrow: 1,
-            flexShrink: 1,
-          }}
-        >
-          <text
-            style={{
-              fg: activePane === 'left' ? theme.primary : theme.muted,
-              attributes: TextAttributes.BOLD,
-              marginBottom: 0,
-            }}
-          >
-            {activePane === 'left' ? '▶ Route Targets' : '  Route Targets'}
-          </text>
-
-          <box style={{ flexShrink: 0, marginBottom: 0 }}>
-            <MultilineInput
-              value={leftSearchQuery}
-              onChange={({ text, cursorPosition }) => {
-                setLeftSearchQuery(text)
-                setLeftSearchCursor(cursorPosition)
-              }}
-              onSubmit={() => {}}
-              onPaste={createTextPasteHandler(
-                leftSearchQuery,
-                Math.min(leftSearchCursor, leftSearchQuery.length),
-                ({ text, cursorPosition }) => {
-                  setLeftSearchQuery(text)
-                  setLeftSearchCursor(cursorPosition)
-                },
-              )}
-              onKeyIntercept={handleKeyIntercept}
-              placeholder="Search routes..."
-              focused={activePane === 'left'}
-              maxHeight={1}
-              minHeight={1}
-              cursorPosition={Math.min(
-                leftSearchCursor,
-                leftSearchQuery.length,
-              )}
-            />
-          </box>
-
-          <box
-            style={{
-              flexDirection: 'column',
-              borderStyle: 'single',
-              borderColor: activePane === 'left' ? theme.primary : theme.border,
-              customBorderChars: BORDER_CHARS,
-              flexGrow: 1,
-              flexShrink: 1,
-              overflow: 'hidden',
-            }}
-            border={['top', 'bottom', 'left', 'right']}
-          >
-            <SelectableList
-              items={filteredRoutes.slice(0, LAYOUT.MAX_RENDERED_ITEMS)}
-              focusedIndex={leftFocusedIndex}
-              onSelect={() => {}}
-              onFocusChange={() => {}}
-              emptyMessage="No matching routes"
-            />
-          </box>
-        </box>
-
-        {/* RIGHT PANEL: Dynamic Config & Selection Panel */}
-        <box
-          style={{
-            flexDirection: 'column',
-            width: '55%',
-            flexGrow: 1,
-            flexShrink: 1,
-          }}
-        >
-          <text
-            style={{
-              fg: activePane === 'right' ? theme.primary : theme.muted,
-              attributes: TextAttributes.BOLD,
-              marginBottom: 0,
-            }}
-          >
-            {activePane === 'right'
-              ? '▶ Configuration Detail'
-              : '  Configuration Detail'}
-          </text>
-
-          {/* Active Route Status Card */}
-          <box
-            style={{
-              flexDirection: 'column',
-              backgroundColor: theme.surface,
-              paddingLeft: 1,
-              paddingRight: 1,
-              borderStyle: 'single',
-              borderColor: theme.border,
-              customBorderChars: BORDER_CHARS,
-              flexShrink: 0,
-              marginBottom: 1,
-            }}
-            border={['top', 'bottom', 'left', 'right']}
-          >
-            <text
-              style={{ fg: theme.success, attributes: TextAttributes.BOLD }}
-            >
-              Active Target: {activeRouteLabel}
-            </text>
-            <text style={{ fg: theme.foreground }}>
-              Model:{' '}
-              <span style={{ fg: theme.primary }}>{activeModelDisplay}</span>
-            </text>
-            <text style={{ fg: theme.foreground }}>
-              Reasoning:{' '}
-              <span style={{ fg: theme.primary }}>
-                {activeReasoningDisplay}
-              </span>
-            </text>
-          </box>
-
-          {/* Right Panel searchable list */}
-          {activePane === 'right' && (
-            <box style={{ flexShrink: 0, marginBottom: 0 }}>
-              <MultilineInput
-                value={rightSearchQuery}
-                onChange={({ text, cursorPosition }) => {
-                  setRightSearchQuery(text)
-                  setRightSearchCursor(cursorPosition)
-                }}
-                onSubmit={() => {}}
-                onPaste={createTextPasteHandler(
-                  rightSearchQuery,
-                  Math.min(rightSearchCursor, rightSearchQuery.length),
-                  ({ text, cursorPosition }) => {
-                    setRightSearchQuery(text)
-                    setRightSearchCursor(cursorPosition)
-                  },
-                )}
-                onKeyIntercept={handleKeyIntercept}
-                placeholder={
-                  rightView === 'model-select'
-                    ? 'Search models...'
-                    : 'Search reasoning...'
-                }
-                focused={activePane === 'right'}
-                maxHeight={1}
-                minHeight={1}
-                cursorPosition={Math.min(
-                  rightSearchCursor,
-                  rightSearchQuery.length,
-                )}
-              />
-            </box>
-          )}
-
-          <box
-            style={{
-              flexDirection: 'column',
-              borderStyle: 'single',
-              borderColor:
-                activePane === 'right' ? theme.primary : theme.border,
-              customBorderChars: BORDER_CHARS,
-              flexGrow: 1,
-              flexShrink: 1,
-              overflow: 'hidden',
-            }}
-            border={['top', 'bottom', 'left', 'right']}
-          >
-            <SelectableList
-              items={rightItems.slice(0, LAYOUT.MAX_RENDERED_ITEMS)}
-              focusedIndex={rightFocusedIndex}
-              onSelect={() => {}}
-              onFocusChange={() => {}}
-              emptyMessage={rightEmptyMessage}
-            />
-          </box>
-        </box>
-      </box>
-
-      {/* Footer bar */}
-      <box
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: '100%',
-          borderStyle: 'single',
-          borderColor: theme.border,
-          flexShrink: 0,
+          height: '100%',
+          flexDirection: 'column',
+          paddingLeft: 1,
+          paddingRight: 1,
           backgroundColor: theme.surface,
-          marginTop: 1,
         }}
-        border={['top']}
       >
-        <box
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            width: terminalWidth - LAYOUT.CONTENT_PADDING,
-          }}
-        >
-          <text style={{ fg: theme.muted }}>{helpText}</text>
-          <Button
-            onClick={onClose}
-            style={{
-              paddingLeft: 2,
-              paddingRight: 2,
-              borderStyle: 'single',
-              borderColor: theme.muted,
-              customBorderChars: BORDER_CHARS,
+        <text fg={theme.foreground} wrapMode="none" style={{ flexShrink: 0 }}>
+          {sliceTextCells(
+            `${activePane === 'left' ? 'Routes' : (highlightedRoute?.label ?? 'Models')} · ${focus + 1}/${items.length}`,
+            0,
+            terminalWidth - 2,
+          )}
+        </text>
+        <MultilineInput
+          value={search}
+          onChange={updateSearch}
+          onSubmit={() => {}}
+          onPaste={createTextPasteHandler(search, cursor, updateSearch)}
+          onKeyIntercept={handleKeyIntercept}
+          placeholder={
+            activePane === 'left'
+              ? 'Search routes…'
+              : rightView === 'model-select'
+                ? 'Search models…'
+                : 'Search choices…'
+          }
+          focused
+          cursorPosition={cursor}
+          minHeight={1}
+          maxHeight={1}
+        />
+        <box style={{ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}>
+          <SelectableList
+            items={items.slice(start, start + size)}
+            focusedIndex={focus - start}
+            onSelect={(item) => {
+              const index = items.findIndex((row) => row.id === item.id)
+              if (isHeaderItem(item)) return
+              if (activePane === 'left') setLeftFocusedIndex(index)
+              else setRightFocusedIndex(index)
+              handleKeyIntercept({ name: 'enter' }, { pane: activePane, index })
             }}
-            border={['top', 'bottom', 'left', 'right']}
-          >
-            <text style={{ fg: theme.muted }}>Close</text>
-          </Button>
+            onFocusChange={(index) => {
+              const global = index + start
+              if (isHeaderItem(items[global])) return
+              if (activePane === 'left') setLeftFocusedIndex(global)
+              else setRightFocusedIndex(global)
+            }}
+            emptyMessage={
+              loaded.error
+                ? 'Config unavailable'
+                : activePane === 'right'
+                  ? rightEmptyMessage
+                  : 'No matching routes'
+            }
+          />
         </box>
+        <text fg={theme.muted} wrapMode="none" style={{ flexShrink: 0 }}>
+          {sliceTextCells(
+            rightView === 'reasoning-select' && selectedModelId
+              ? `Pending: ${selectedModelId}`
+              : `Model: ${highlightedRoute?.secondary ?? 'unavailable'}`,
+            0,
+            terminalWidth - 2,
+          )}
+        </text>
+        {rightView === 'reasoning-select' && (
+          <text fg={theme.muted} wrapMode="none" style={{ flexShrink: 0 }}>
+            Reasoning: {rightItems[rightFocusedIndex]?.id ?? 'default'}
+          </text>
+        )}
+        {(statusMessage || loaded.error) && (
+          <text
+            fg={
+              loaded.error || statusMessage?.startsWith('✗')
+                ? theme.error
+                : statusMessage?.startsWith('✓')
+                  ? theme.success
+                  : theme.warning
+            }
+            style={{ flexShrink: 0 }}
+          >
+            {statusMessage ??
+              `Config unavailable: ${loaded.error} · Ctrl+R retry`}
+          </text>
+        )}
+        <text fg={theme.muted} wrapMode="none" style={{ flexShrink: 0 }}>
+          Enter select · Ctrl+O details · Esc back
+        </text>
       </box>
-    </box>
-  )
+    )
+  }
 }

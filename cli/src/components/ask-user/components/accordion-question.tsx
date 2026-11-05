@@ -7,7 +7,10 @@ import React, { useCallback } from 'react'
 import { CustomAnswerInput } from './custom-answer-input'
 import { OptionsList } from './options-list'
 import { QuestionHeader } from './question-header'
-import { getOptionLabel } from '../constants'
+import {
+  answerDisplayLines,
+  formatStructuredAnswer,
+} from '../utils/structured-answer'
 
 import type { AskUserQuestion } from '../../../types/store'
 
@@ -67,31 +70,17 @@ export const AccordionQuestion: React.FC<AccordionQuestionProps> = ({
 
   const getAnswerDisplay = (): string => {
     if (!answer) return '(click to answer)'
-
-    if (answer.isCustom && answer.customText) {
-      const hadNewlines = /\r?\n/.test(answer.customText)
-      const flattenedText = answer.customText
-        .replace(/\r?\n/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-      return `Custom: ${flattenedText}${hadNewlines ? '…' : ''}`
-    }
-
-    if (isMultiSelect && answer.selectedIndices) {
-      const selectedLabels = Array.from(answer.selectedIndices)
-        .map((idx) => getOptionLabel(question.options[idx]))
-        .filter(Boolean)
-      return selectedLabels.length > 0
-        ? selectedLabels.join(', ')
-        : '(click to answer)'
-    }
-
-    if (answer.selectedIndex !== undefined) {
-      const label = getOptionLabel(question.options[answer.selectedIndex])
-      return label || '(click to answer)'
-    }
-
-    return '(click to answer)'
+    const structured = formatStructuredAnswer(question, answer, questionIndex)
+    const count =
+      (structured.selectedOptions?.length ??
+        (structured.selectedOption === undefined ? 0 : 1)) +
+      (structured.otherText === undefined ? 0 : 1)
+    if (!count) return '(click to answer)'
+    const parts = answerDisplayLines({
+      ...structured,
+      selectedOptions: structured.selectedOptions?.slice(0, 2),
+    }).map((part) => part.replace(/\s+/g, ' ').trim())
+    return `${count} choice${count === 1 ? '' : 's'} · ${parts.join(' · ')}${parts.length < count ? ' …' : ''}`
   }
 
   const isCustomSelected = answer?.isCustom ?? false

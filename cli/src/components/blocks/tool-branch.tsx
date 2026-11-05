@@ -12,6 +12,9 @@ import {
 } from '../../utils/fallback-input-summary'
 import { renderToolComponent } from '../tools/registry'
 import { ToolCallItem } from '../tools/tool-call-item'
+import { Button } from '../button'
+import { documentForTool } from '../../utils/output-catalog'
+import { useOutputReaderStore } from '../../state/output-reader-store'
 
 import type { ContentBlock } from '../../types/chat'
 import {
@@ -216,6 +219,19 @@ export const ToolBranch = memo(
           titleSuffix={undefined}
           availableWidth={availableWidth}
         />
+        {!isCollapsed &&
+          (toolBlock.outputRaw !== undefined ||
+            toolBlock.output !== undefined) && (
+            <Button
+              onClick={() =>
+                useOutputReaderStore
+                  .getState()
+                  .open({ document: documentForTool(toolBlock) })
+              }
+            >
+              <text fg={theme.primary}>Inspect captured output</text>
+            </Button>
+          )}
       </box>
     )
   },

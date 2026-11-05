@@ -5,6 +5,7 @@ import { runTerminalCommand } from '@openbuff/sdk'
 import {
   findCommand,
   findCommandSuggestions,
+  sendPromptCommand,
   type RouterParams,
   type CommandResult,
 } from './command-registry'
@@ -13,6 +14,7 @@ import { handleChatGptAuthCode } from '../components/chatgpt-connect-banner'
 import { buildInterviewPrompt, buildReviewPrompt } from './prompt-builders'
 import { getProjectRoot } from '../project-files'
 import { useChatStore } from '../state/chat-store'
+import { createRevisionBoundInputWriter } from '../utils/draft-writer'
 import { trackEvent } from '../utils/analytics'
 import {
   buildBashHistoryMessages,
@@ -21,10 +23,8 @@ import {
 import { showClipboardMessage } from '../utils/clipboard'
 import { getSystemProcessEnv } from '../utils/env'
 import { getSystemMessage, getUserMessage } from '../utils/message-history'
+import {} from '../utils/openbuff-provider'
 import {
-} from '../utils/openbuff-provider'
-import {
-  capturePendingAttachments,
   hasProcessingFiles,
   hasProcessingImages,
   validateAndAddImage,
@@ -290,25 +290,34 @@ export function addBashMessageToHistory(params: {
 export async function routeUserPrompt(
   params: RouterParams,
 ): Promise<CommandResult> {
+  if (params.preserveInputValue) {
+    params = { ...params, setInputValue: () => {} }
+  } else {
+    params = {
+      ...params,
+      setInputValue: createRevisionBoundInputWriter(
+        params.setInputValue,
+        () => useChatStore.getState().inputRevision,
+      ),
+    }
+  }
   const {
     agentMode,
     inputRef,
     inputValue,
-    isChainInProgressRef,
-    isStreaming,
-    streamMessageIdRef,
-    addToQueue,
     saveToHistory,
-    scrollToLatest,
-    sendMessage,
     setInputFocused,
     setInputValue,
     setMessages,
   } = params
 
-  const inputMode = useChatStore.getState().inputMode
+  const inputMode = params.preserveInputValue
+    ? 'default'
+    : useChatStore.getState().inputMode
   const setInputMode = useChatStore.getState().setInputMode
-  const pendingAttachments = useChatStore.getState().pendingAttachments
+  const pendingAttachments = params.preserveInputValue
+    ? []
+    : useChatStore.getState().pendingAttachments
   const pendingImages = pendingAttachments.filter((a) => a.kind === 'image')
   const pendingTextAttachments = pendingAttachments.filter(
     (a) => a.kind === 'text',
@@ -387,11 +396,7 @@ export async function routeUserPrompt(
     setInputFocused(true)
     inputRef.current?.focus()
 
-    sendMessage({ content: buildInterviewPrompt(trimmed), agentMode })
-    setTimeout(() => {
-      scrollToLatest()
-    }, 0)
-    return
+    return sendPromptCommand(params, buildInterviewPrompt(trimmed))
   }
 
   // Handle review mode input
@@ -403,11 +408,7 @@ export async function routeUserPrompt(
     setInputFocused(true)
     inputRef.current?.focus()
 
-    sendMessage({ content: buildReviewPrompt('custom', trimmed), agentMode })
-    setTimeout(() => {
-      scrollToLatest()
-    }, 0)
-    return
+    return sendPromptCommand(params, buildReviewPrompt('custom', trimmed))
   }
 
   // Handle bash commands from queue (starts with '!')
@@ -451,14 +452,16 @@ export async function routeUserPrompt(
     const code = trimmed
     if (code) {
       const result = await handleChatGptAuthCode(code)
+      // Authorization input and upstream errors may carry credentials.
+      // Persist only the connection outcome in this legacy dispatch path.
       setMessages((prev) => [
         ...prev,
-        getUserMessage(trimmed),
-        getSystemMessage(result.message),
+        getSystemMessage(result.success
+          ? 'ChatGPT connection completed. Open Providers & models to review routing.'
+          : 'ChatGPT connection failed. Start the connection again from Providers & models.'),
       ])
     }
 
-    saveToHistory(trimmed)
     setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setInputMode('default')
     return
@@ -486,48 +489,7 @@ export async function routeUserPrompt(
     }
   }
 
-  // Regular message or unknown slash command - send to agent
-
-  // Block sending if attachments are still processing
-  if (hasProcessingImages() || hasProcessingFiles()) {
-    showClipboardMessage('processing attachments...', {
-      durationMs: 2000,
-    })
-    return
-  }
-
-  // A running bisection is rewriting the tracked working tree; starting an
-  // agent turn now would clobber its probes (and the bisection's final
-  // restore would clobber the agent's edits). Fail closed instead.
-  if (turnSnapshots.isTurnBisectionRunning()) {
-    setMessages((prev) => [
-      ...prev,
-      getUserMessage(trimmed),
-      getSystemMessage(
-        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before sending a new message.',
-      ),
-    ])
-    return
-  }
-
-  saveToHistory(trimmed)
-  setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
-
-  if (
-    isStreaming ||
-    streamMessageIdRef.current ||
-    isChainInProgressRef.current
-  ) {
-    const pendingAttachmentsForQueue = capturePendingAttachments()
-    // Pass a copy of pending attachments to the queue
-    addToQueue(trimmed, pendingAttachmentsForQueue)
-
-    setInputFocused(true)
-    inputRef.current?.focus()
-    return
-  }
-
-  // Unknown slash command - show error
+  // Unknown commands are input errors, even while an agent is running.
   if (isSlashCommand(trimmed)) {
     // Track invalid/unknown command (only log command name, not full input for privacy)
     const attemptedCmd = trimmed.slice(1).split(/\s+/)[0]?.toLowerCase() || ''
@@ -541,6 +503,8 @@ export async function routeUserPrompt(
     const suggestionText =
       suggestions.length > 0 ? ` Did you mean: ${suggestions.join(', ')}?` : ''
 
+    saveToHistory(trimmed)
+    setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
     setMessages((prev) => [
       ...prev,
       getUserMessage(trimmed),
@@ -551,11 +515,27 @@ export async function routeUserPrompt(
     return
   }
 
-  sendMessage({ content: trimmed, agentMode })
+  if (
+    !params.preserveInputValue &&
+    (hasProcessingImages() || hasProcessingFiles())
+  ) {
+    showClipboardMessage('processing attachments...', { durationMs: 2000 })
+    return
+  }
 
-  setTimeout(() => {
-    scrollToLatest()
-  }, 0)
+  if (turnSnapshots.isTurnBisectionRunning()) {
+    setMessages((prev) => [
+      ...prev,
+      getUserMessage(trimmed),
+      getSystemMessage(
+        '/bisect-turn: a bisection is rewriting the tracked working tree - wait for it to finish or run /bisect-turn stop before sending a new message.',
+      ),
+    ])
+    return
+  }
 
-  return
+  const prompt = params.preservePromptWhitespace ? inputValue : trimmed
+  saveToHistory(prompt)
+  setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
+  return sendPromptCommand(params, prompt)
 }

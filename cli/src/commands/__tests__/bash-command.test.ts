@@ -937,9 +937,11 @@ describe('openbuff dash live journal wiring (P2-T7)', () => {
     expect(stderr).toContain('run journal unavailable')
     expect(stderr.match(/run journal unavailable/g)).toHaveLength(1)
     const provider = servedData as {
+      getSourceStatus(): Promise<{ state: string }>
       listRuns(): Promise<unknown[]>
       getRunEvents(runId: string): Promise<unknown[]>
     }
+    expect(await provider.getSourceStatus()).toMatchObject({ state: 'absent' })
     expect(await provider.listRuns()).toEqual([])
     expect(await provider.getRunEvents('anything')).toEqual([])
   })
@@ -958,12 +960,49 @@ describe('openbuff dash live journal wiring (P2-T7)', () => {
       expect(stderr).toContain('run journal unavailable')
       expect(stderr).toContain('sqlite unavailable')
       expect(
+        await (servedData as {
+          getSourceStatus(): Promise<{ state: string }>
+        }).getSourceStatus(),
+      ).toMatchObject({ state: 'unavailable' })
+      expect(
         await (servedData as { listRuns(): Promise<unknown[]> }).listRuns(),
       ).toEqual([])
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
   })
+
+  test.each(['EACCES', 'EPERM'])(
+    'a denied journal path (%s) stays unavailable rather than claiming an absent journal',
+    async (code) => {
+      let openCalled = 0
+      const { servedData, stderr } = await serveWithStub({
+        journalPath: '/injected/denied/run-journal.db',
+        statJournal: () => {
+          throw Object.assign(new Error('denied journal ancestor'), { code })
+        },
+        openJournal: () => {
+          openCalled++
+          throw new Error('a denied journal path must not be opened')
+        },
+      })
+      const provider = servedData as {
+        getSourceStatus(): Promise<{ state: string; message?: string }>
+        listRuns(): Promise<unknown[]>
+        getRunEvents(runId: string): Promise<unknown[]>
+      }
+      expect(openCalled).toBe(0)
+      expect(await provider.getSourceStatus()).toMatchObject({
+        state: 'unavailable',
+        message: expect.stringContaining('file and directory permissions'),
+      })
+      expect(await provider.listRuns()).toEqual([])
+      expect(await provider.getRunEvents('anything')).toEqual([])
+      expect(stderr).toContain('local file access failed')
+      expect(stderr).not.toContain('no journal file yet')
+      expect(stderr.match(/run journal unavailable/g)).toHaveLength(1)
+    },
+  )
 
   test('the journal is closed exactly once on shutdown, never written from the dash side', async () => {
     const { parent, journalPath } = await makeExistingJournalFile()

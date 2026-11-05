@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { setCurrentChatId } from '../project-files'
 import { createStreamController } from './stream-state'
 import { useChatStore } from '../state/chat-store'
+import { stampRunPromptBoundary } from '../utils/conversation-fork'
 import { getCodebuffClient } from '../utils/codebuff-client'
 import { AGENT_MODE_TO_COST_MODE, AGENT_MODE_TO_ID } from '../utils/constants'
 import { createEventHandlerState } from '../utils/create-event-handler-state'
@@ -137,7 +138,7 @@ export const useSendMessage = ({
   continueChatId,
 }: UseSendMessageOptions): {
   sendMessage: SendMessageFn
-  clearMessages: () => void
+  clearMessages: (runState?: RunState | null) => void
 } => {
   // Read store setters fresh on each callback invocation via useChatStore.getState()
   // rather than capturing them once at component scope. If the zustand store is ever
@@ -163,6 +164,7 @@ export const useSendMessage = ({
   }
   const streamRefs = streamRefsRef.current
   const activeRunOwnerRef = useRef<symbol | null>(null)
+  const sdkExecutionRef = useRef<symbol | null>(null)
   const restorePromiseRef = useRef<Promise<void> | null>(null)
   const restoreAbortRef = useRef<AbortController | null>(null)
 
@@ -243,6 +245,11 @@ export const useSendMessage = ({
       } else {
         void hydrateContextArchiveSnapshots(
           restoredMainAgentState.compactionArchive,
+          {
+            includeProjectArchive:
+              restoredMainAgentState.contextArchiveHydration !==
+              'in-memory-only',
+          },
         )
           .then((mergedArchive) => {
             const { runState: latestRunState, setRunState: setLatestRunState } =
@@ -373,10 +380,17 @@ export const useSendMessage = ({
     [updateActiveSubagents],
   )
 
-  function clearMessages() {
+  function clearMessages(runState: RunState | null = null) {
+    activeRunOwnerRef.current = null
+    abortControllerRef.current?.abort()
+    const stillCancelling = sdkExecutionRef.current !== null
+    updateChainInProgress(stillCancelling)
+    setStreamStatus('idle')
+    setCanProcessQueue(!stillCancelling && !isQueuePausedRef?.current)
     restoreAbortRef.current?.abort()
-    previousRunStateRef.current = null
-    useChatStore.getState().setRunState(null)
+    previousRunStateRef.current = runState
+    resumableCheckpointRef.current = null
+    useChatStore.getState().setRunState(runState)
   }
 
   const prepareUserMessage = useCallback(
@@ -385,6 +399,7 @@ export const useSendMessage = ({
       agentMode: AgentMode
       postUserMessage?: (prev: ChatMessage[]) => ChatMessage[]
       attachments?: PendingAttachment[]
+      isCurrent?: () => boolean
     }) => {
       // Access store fresh each call so setters bind to the live store instance.
       const {
@@ -408,7 +423,13 @@ export const useSendMessage = ({
   )
 
   const sendMessage = useCallback<SendMessageFn>(
-    async ({ content, agentMode, postUserMessage, attachments }) => {
+    async ({
+      content,
+      agentMode,
+      postUserMessage,
+      attachments,
+      onAccepted,
+    }) => {
       // Read setters fresh from the live store on each invocation so they always
       // bind to the current store instance (see note above about store recreation).
       const {
@@ -455,17 +476,21 @@ export const useSendMessage = ({
         // A prompt submitted during restore must fork from the restored state
         // and append after its messages, rather than being overwritten by it.
         await restorePromiseRef.current
+        if (!isCurrentRunOwner()) return
         const prepared = await prepareUserMessage({
           content,
           agentMode,
           postUserMessage,
           attachments,
+          isCurrent: isCurrentRunOwner,
         })
+        if (!isCurrentRunOwner()) return
         userMessageId = prepared.userMessageId
         messageContent = prepared.messageContent
         bashContextForPrompt = prepared.bashContextForPrompt
         finalContent = prepared.finalContent
       } catch (error) {
+        if (!isCurrentRunOwner()) return
         logger.error(
           { error },
           '[send-message] prepareUserMessage failed with exception',
@@ -494,7 +519,9 @@ export const useSendMessage = ({
         // validation observes an empty/partial registry. This is the same
         // gate the run below uses for its own loadAgentDefinitions read.
         await whenRegistriesReady()
+        if (!isCurrentRunOwner()) return
         const validationResult = await onBeforeMessageSend()
+        if (!isCurrentRunOwner()) return
 
         if (!validationResult.success) {
           logger.warn(
@@ -534,6 +561,7 @@ export const useSendMessage = ({
           return
         }
       } catch (error) {
+        if (!isCurrentRunOwner()) return
         logger.error(
           { error },
           '[send-message] Validation before message send failed with exception',
@@ -546,7 +574,10 @@ export const useSendMessage = ({
           ),
         ])
         await yieldToEventLoop()
-        setTimeout(() => scrollToLatest(), 0)
+        if (!isCurrentRunOwner()) return
+        setTimeout(() => {
+          if (isCurrentRunOwner()) scrollToLatest()
+        }, 0)
 
         resetEarlyReturnState({
           setCanProcessQueue,
@@ -565,6 +596,7 @@ export const useSendMessage = ({
 
       // Get SDK client
       const client = await getCodebuffClient()
+      if (!isCurrentRunOwner()) return
 
       if (!client) {
         logger.error(
@@ -579,7 +611,10 @@ export const useSendMessage = ({
           ),
         ])
         await yieldToEventLoop()
-        setTimeout(() => scrollToLatest(), 0)
+        if (!isCurrentRunOwner()) return
+        setTimeout(() => {
+          if (isCurrentRunOwner()) scrollToLatest()
+        }, 0)
         resetEarlyReturnState({
           setCanProcessQueue,
           updateChainInProgress,
@@ -630,6 +665,7 @@ export const useSendMessage = ({
       // Fail-open: an unopenable journal warns once and the turn proceeds
       // WITHOUT journaling — a journaling outage can never break a user turn.
       let runJournal: ReturnType<typeof openRunJournalForRun> = undefined
+      let executionToken: symbol | undefined
 
       // Execute SDK run with streaming handlers
       try {
@@ -637,6 +673,7 @@ export const useSendMessage = ({
         // here so the first send never reads a not-yet-loaded registry. This
         // resolves immediately once ready (or when no deferred load ran).
         await whenRegistriesReady()
+        if (!isCurrentRunOwner()) return
         const agentDefinitions = loadAgentDefinitions()
         const resolvedAgent = resolveAgent(agentMode, agentId, agentDefinitions)
         const providerReadiness = getOpenbuffProviderReadiness({
@@ -657,6 +694,9 @@ export const useSendMessage = ({
           })
           return
         }
+
+        onAccepted?.()
+        if (!isCurrentRunOwner()) return
 
         // P2-T7: open the run journal ONLY now that the run is actually
         // starting (never at TUI startup, never on a validation failure, and
@@ -683,7 +723,7 @@ export const useSendMessage = ({
         // checkpoint state.
         const checkpoint = resumableCheckpointRef.current
         let resumeInterruptedTurn = false
-        let previousRunState = previousRunStateRef.current
+        let previousRunState = useChatStore.getState().runState
         if (checkpoint && previousRunState?.sessionState) {
           const lastUserMessage = [...checkpoint.mainAgentState.messageHistory]
             .reverse()
@@ -711,6 +751,7 @@ export const useSendMessage = ({
             // Serialize the clear with any in-flight queued checkpoint write
             // BEFORE the next save can enqueue (see clearCheckpoint).
             await clearCheckpoint()
+            if (!isCurrentRunOwner()) return
           }
         }
 
@@ -761,7 +802,9 @@ export const useSendMessage = ({
           describeRunConfigForLog(runConfig),
           '[send-message] Sending message with sdk run config',
         )
-        const runState = await client.run({
+        executionToken = Symbol('sdk-execution')
+        sdkExecutionRef.current = executionToken
+        let runState = await client.run({
           ...runConfig,
           // P2-T7: thread the live run journal into the SDK run so tool
           // calls/results, spawns, and step boundaries are journaled for
@@ -787,6 +830,7 @@ export const useSendMessage = ({
           return
         }
 
+        runState = stampRunPromptBoundary(runState, userMessageId)
         previousRunStateRef.current = runState
         setRunState(runState)
         setIsRetrying(false)
@@ -799,6 +843,7 @@ export const useSendMessage = ({
         // Awaited so the checkpoint clear (cancel + drain + unlink) is fully
         // serialized before anything else enqueues for this target.
         await clearCheckpoint()
+        if (!isCurrentRunOwner()) return
         resumableCheckpointRef.current = null
         handleRunCompletion({
           runState,
@@ -817,7 +862,7 @@ export const useSendMessage = ({
           isQueuePausedRef,
         })
       } catch (error) {
-        if (!abortController.signal.aborted) {
+        if (isCurrentRunOwner() && !abortController.signal.aborted) {
           handleRunError({
             error,
             timerController,
@@ -843,6 +888,7 @@ export const useSendMessage = ({
           }
         }
       } finally {
+        const abandoned = !isCurrentRunOwner()
         if (isCurrentRunOwner()) {
           if (isChainInProgressRef.current) {
             logger.warn(
@@ -861,6 +907,15 @@ export const useSendMessage = ({
         }
         releaseRunOwner()
         updater.dispose()
+        if (executionToken && sdkExecutionRef.current === executionToken) {
+          sdkExecutionRef.current = null
+          if (abandoned && activeRunOwnerRef.current === null) {
+            updateChainInProgress(false)
+            setStreamStatus('idle')
+            setCanProcessQueue(!isQueuePausedRef?.current)
+            if (isProcessingQueueRef) isProcessingQueueRef.current = false
+          }
+        }
         if (runJournal) {
           // P2-T7: the run's promise-chain end is the journal's cleanup seam.
           // Best-effort (the turn's outcome is already decided): a close

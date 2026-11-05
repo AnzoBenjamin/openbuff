@@ -1,14 +1,18 @@
 import { TextAttributes } from '@opentui/core'
-import { memo, useMemo, useRef, useState } from 'react'
+import { memo, useMemo, useRef, useState, type ComponentProps } from 'react'
 
 import { CopyButton } from '../copy-button'
 import { Button } from '../button'
 import { useTheme } from '../../hooks/use-theme'
+import { useMessageBlockStore } from '../../state/message-block-store'
 import { MAX_COLLAPSED_LINES, truncateToLines } from '../../utils/strings'
 import { trimNewlines } from './block-helpers'
 import { ContentWithMarkdown } from './content-with-markdown'
 
-import { hasMarkdown, type MarkdownPalette } from '../../utils/markdown-renderer'
+import {
+  hasMarkdown,
+  type MarkdownPalette,
+} from '../../utils/markdown-renderer'
 
 /**
  * Allocation-free newline threshold check, replacing the former
@@ -22,7 +26,10 @@ import { hasMarkdown, type MarkdownPalette } from '../../utils/markdown-renderer
  * regression tests can pin the split-equivalent, allocation-free,
  * early-exit invariant directly.
  */
-export function hasNewlineThreshold(content: string, threshold: number): boolean {
+export function hasNewlineThreshold(
+  content: string,
+  threshold: number,
+): boolean {
   if (threshold <= 1) return true
   const needed = threshold - 1
   let newlines = 0
@@ -175,6 +182,7 @@ interface UserContentWithCopyButtonProps {
   codeBlockWidth: number
   palette: MarkdownPalette
   showCopyButton: boolean
+  copy?: ComponentProps<typeof CopyButton>['copy']
 }
 
 export const UserContentWithCopyButton = memo(
@@ -188,8 +196,9 @@ export const UserContentWithCopyButton = memo(
     codeBlockWidth,
     palette,
     showCopyButton,
+    copy,
   }: UserContentWithCopyButtonProps) => {
-    const isStreamingMessage = isLoading || !isComplete
+    const isStreamingMessage = isLoading || !(isComplete ?? isUser)
     const normalizedContent = isStreamingMessage
       ? trimNewlines(content)
       : content.trim()
@@ -234,6 +243,8 @@ export const UserContentWithCopyButton = memo(
     return (
       <UserTextWithInlineCopy
         content={content}
+        copy={copy}
+        messageId={messageId}
         normalizedContent={normalizedContent}
         isStreamingMessage={isStreamingMessage}
         isCollapsibleUser={isCollapsibleUser}
@@ -272,24 +283,20 @@ const UserTextDisplay = memo(
     palette,
   }: UserTextDisplayProps) => {
     const { displayContent, isExpanded, setIsExpanded, showToggle } =
-      useCollapsibleContent(normalizedContent, isCollapsibleUser)
+      useCollapsibleContent(normalizedContent, isCollapsibleUser, messageId)
 
     const hasMarkdownContent = useContentHasMarkdown(normalizedContent)
 
-    if (hasMarkdownContent) {
-      return (
-        <box style={{ width: '100%' }}>
-          <ContentWithMarkdown
-            content={displayContent}
-            isStreaming={isStreamingMessage}
-            codeBlockWidth={codeBlockWidth}
-            palette={palette}
-          />
-        </box>
-      )
-    }
-
-    const textEl = (
+    const textEl = hasMarkdownContent ? (
+      <box style={{ width: '100%' }}>
+        <ContentWithMarkdown
+          content={displayContent}
+          isStreaming={isStreamingMessage}
+          codeBlockWidth={codeBlockWidth}
+          palette={palette}
+        />
+      </box>
+    ) : (
       <text
         key={`message-content-${messageId}`}
         style={{ wrapMode: 'word', fg: textColor, width: '100%' }}
@@ -319,6 +326,8 @@ const UserTextDisplay = memo(
 
 interface UserTextWithInlineCopyProps {
   content: string
+  messageId: string
+  copy?: ComponentProps<typeof CopyButton>['copy']
   normalizedContent: string
   isStreamingMessage: boolean
   isCollapsibleUser: boolean
@@ -330,6 +339,8 @@ interface UserTextWithInlineCopyProps {
 const UserTextWithInlineCopy = memo(
   ({
     content,
+    copy,
+    messageId,
     normalizedContent,
     isStreamingMessage,
     isCollapsibleUser,
@@ -338,26 +349,30 @@ const UserTextWithInlineCopy = memo(
     palette,
   }: UserTextWithInlineCopyProps) => {
     const { displayContent, isExpanded, setIsExpanded, showToggle } =
-      useCollapsibleContent(normalizedContent, isCollapsibleUser)
+      useCollapsibleContent(normalizedContent, isCollapsibleUser, messageId)
 
     const hasMarkdownContent = useContentHasMarkdown(normalizedContent)
 
-    if (hasMarkdownContent) {
-      return (
-        <box style={{ width: '100%' }}>
-          <ContentWithMarkdown
-            content={displayContent}
-            isStreaming={isStreamingMessage}
-            codeBlockWidth={codeBlockWidth}
-            palette={palette}
-          />
-        </box>
-      )
-    }
-
-    const copyEl = (
+    const copyEl = hasMarkdownContent ? (
+      <box style={{ width: '100%' }}>
+        <ContentWithMarkdown
+          content={displayContent}
+          isStreaming={isStreamingMessage}
+          codeBlockWidth={codeBlockWidth}
+          palette={palette}
+        />
+        <CopyButton
+          textToCopy={content}
+          copy={copy}
+          label="Copy prompt"
+          leadingSpace={false}
+        />
+      </box>
+    ) : (
       <CopyButton
         textToCopy={content}
+        copy={copy}
+        label="Copy prompt"
         style={{ wrapMode: 'word', fg: textColor, width: '100%' }}
       >
         <span attributes={TextAttributes.ITALIC}>
@@ -387,6 +402,9 @@ const UserTextWithInlineCopy = memo(
 interface UserBlockTextWithInlineCopyProps {
   content: string
   contentToCopy: string
+  copy?: ComponentProps<typeof CopyButton>['copy']
+  messageId?: string
+  blockScope?: string
   isStreaming: boolean
   textColor: string
   codeBlockWidth: number
@@ -399,6 +417,9 @@ export const UserBlockTextWithInlineCopy = memo(
   ({
     content,
     contentToCopy,
+    copy,
+    messageId,
+    blockScope,
     isStreaming,
     textColor,
     codeBlockWidth,
@@ -421,26 +442,30 @@ export const UserBlockTextWithInlineCopy = memo(
     }, [isStreaming, content])
 
     const { displayContent, isExpanded, setIsExpanded, showToggle } =
-      useCollapsibleContent(content, isCollapsibleUser)
+      useCollapsibleContent(content, isCollapsibleUser, messageId, blockScope)
 
     const hasMarkdownContent = useContentHasMarkdown(content)
 
-    if (hasMarkdownContent) {
-      return (
-        <box style={{ width: '100%', marginTop, marginBottom }}>
-          <ContentWithMarkdown
-            content={displayContent}
-            isStreaming={isStreaming}
-            codeBlockWidth={codeBlockWidth}
-            palette={palette}
-          />
-        </box>
-      )
-    }
-
-    const copyEl = (
+    const copyEl = hasMarkdownContent ? (
+      <box style={{ width: '100%', marginTop, marginBottom }}>
+        <ContentWithMarkdown
+          content={displayContent}
+          isStreaming={isStreaming}
+          codeBlockWidth={codeBlockWidth}
+          palette={palette}
+        />
+        <CopyButton
+          textToCopy={contentToCopy}
+          copy={copy}
+          label="Copy prompt"
+          leadingSpace={false}
+        />
+      </box>
+    ) : (
       <CopyButton
         textToCopy={contentToCopy}
+        copy={copy}
+        label="Copy prompt"
         style={{
           wrapMode: 'word',
           fg: textColor,
@@ -498,15 +523,29 @@ interface CollapsibleContent {
 function useCollapsibleContent(
   normalizedContent: string,
   isCollapsible: boolean,
+  messageId?: string,
+  scope = 'prompt',
 ): CollapsibleContent {
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const retainedExpanded = useMessageBlockStore((state) =>
+    messageId ? (state.views[messageId]?.[scope] ?? false) : false,
+  )
+  const isExpanded = messageId ? retainedExpanded : localExpanded
+  const setIsExpanded = (value: boolean) => {
+    if (messageId)
+      useMessageBlockStore.getState().setView(messageId, scope, value)
+    else setLocalExpanded(value)
+  }
 
   // The toggle stays visible in both collapsed and expanded states so that
   // users can always re-collapse ("Show less") after expanding.
   const showToggle = isCollapsible
   const displayContent = useMemo(() => {
     if (!isCollapsible || isExpanded) return normalizedContent
-    return truncateToLines(normalizedContent, MAX_COLLAPSED_LINES) ?? normalizedContent
+    return (
+      truncateToLines(normalizedContent, MAX_COLLAPSED_LINES) ??
+      normalizedContent
+    )
   }, [normalizedContent, isCollapsible, isExpanded])
 
   return {

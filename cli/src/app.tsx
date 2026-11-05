@@ -9,13 +9,16 @@ import { useLogo } from './hooks/use-logo'
 import { useTerminalDimensions } from './hooks/use-terminal-dimensions'
 import { useTerminalFocus } from './hooks/use-terminal-focus'
 import { useTheme } from './hooks/use-theme'
-import { getProjectRoot } from './project-files'
+import { getProjectRoot, startNewChat } from './project-files'
+import { useOutputReaderStore } from './state/output-reader-store'
 import { useChatHistoryStore } from './state/chat-history-store'
 import { useChatStore } from './state/chat-store'
 import type { TopBannerType } from './types/store'
 import { findGitRoot } from './utils/git'
+import { createLaunchIntent, type LaunchIntent } from './utils/launch-intent'
 import { openFileAtPath } from './utils/open-file'
 import { formatCwd } from './utils/path-helpers'
+import { consumeCapturedEarlyInput } from './utils/early-input-capture'
 import { getLogoBlockColor, getLogoAccentColor } from './utils/theme-system'
 
 import type { MultilineInputHandle } from './components/multiline-input'
@@ -27,23 +30,47 @@ interface AppProps {
   initialPrompt: string | null
   agentId?: string
   fileTree: FileTreeNode[]
+  fileInventoryState?: 'loading' | 'loaded' | 'unavailable'
   continueChat: boolean
   continueChatId?: string
   initialMode?: AgentMode
   showProjectPicker: boolean
-  onProjectChange: (projectPath: string) => void
+  onProjectChange: (projectPath: string) => void | Promise<void>
+  launchIntent?: LaunchIntent
+  projectSwitchError?: string
+  switchingProject?: boolean
 }
 
 export const App = ({
   initialPrompt,
   agentId,
   fileTree,
+  fileInventoryState,
   continueChat,
   continueChatId,
   initialMode,
   showProjectPicker,
   onProjectChange,
+  launchIntent,
+  projectSwitchError,
+  switchingProject,
 }: AppProps) => {
+  const [projectLaunchQuery, setProjectLaunchQuery] = useState(() => showProjectPicker ? consumeCapturedEarlyInput() ?? '' : '')
+  useEffect(() => {
+    if (!showProjectPicker && projectLaunchQuery) setProjectLaunchQuery('')
+  }, [showProjectPicker, projectLaunchQuery])
+  const fallbackIntent = useRef<LaunchIntent | null>(null)
+  if (!fallbackIntent.current)
+    fallbackIntent.current = createLaunchIntent(
+      initialPrompt,
+      continueChat,
+      continueChatId,
+    )
+  const intent = launchIntent ?? fallbackIntent.current
+  const [continuation, setContinuation] = useState(intent.peekContinuation)
+  useEffect(() => {
+    if (!showProjectPicker) intent.consumeContinuation()
+  }, [intent, showProjectPicker])
   const { contentMaxWidth } = useTerminalDimensions()
   const theme = useTheme()
 
@@ -144,23 +171,29 @@ export const App = ({
 
   const handleResumeChat = useCallback(
     (chatId: string) => {
+      intent.discard()
+      setContinuation({ enabled: false, id: undefined })
       closeChatHistory()
       // Reset chat store to clear previous messages before loading the selected chat
       resetChatStore()
       setResumeChatId(chatId)
     },
-    [closeChatHistory, resetChatStore],
+    [closeChatHistory, resetChatStore, intent],
   )
 
   const handleNewChat = useCallback(() => {
+    intent.discard()
+    setContinuation({ enabled: false, id: undefined })
     closeChatHistory()
+    startNewChat()
+    useOutputReaderStore.getState().close()
     resetChatStore()
     setResumeChatId(null)
-  }, [closeChatHistory, resetChatStore])
+  }, [closeChatHistory, resetChatStore, intent])
 
   // Determine effective continueChat values
-  const effectiveContinueChat = continueChat || resumeChatId !== null
-  const effectiveContinueChatId = resumeChatId ?? continueChatId
+  const effectiveContinueChat = continuation.enabled || resumeChatId !== null
+  const effectiveContinueChatId = resumeChatId ?? continuation.id
 
   const headerContent = useMemo(() => {
     const displayPath = formatCwd(projectRoot)
@@ -213,6 +246,9 @@ export const App = ({
       <ProjectPickerScreen
         onSelectProject={onProjectChange}
         initialPath={projectRoot}
+        initialQuery={projectLaunchQuery}
+        error={projectSwitchError}
+        busy={switchingProject}
       />
     )
   }
@@ -224,9 +260,11 @@ export const App = ({
     <AuthedSurface
       chatKey={chatKey}
       headerContent={headerContent}
-      initialPrompt={initialPrompt}
+      initialPrompt={intent.peekPrompt()}
+      claimInitialPrompt={intent.claimPrompt}
       agentId={agentId}
       fileTree={fileTree}
+      fileInventoryState={fileInventoryState}
       inputRef={inputRef}
       continueChat={effectiveContinueChat}
       continueChatId={effectiveContinueChatId}
@@ -246,8 +284,10 @@ interface AuthedSurfaceProps {
   chatKey: string
   headerContent: React.ReactNode
   initialPrompt: string | null
+  claimInitialPrompt?: (prompt: string) => boolean
   agentId?: string
   fileTree: FileTreeNode[]
+  fileInventoryState?: 'loading' | 'loaded' | 'unavailable'
   inputRef: React.MutableRefObject<MultilineInputHandle | null>
   continueChat: boolean
   continueChatId: string | undefined
@@ -265,8 +305,10 @@ const AuthedSurface = ({
   chatKey,
   headerContent,
   initialPrompt,
+  claimInitialPrompt,
   agentId,
   fileTree,
+  fileInventoryState,
   inputRef,
   continueChat,
   continueChatId,
@@ -295,8 +337,10 @@ const AuthedSurface = ({
       key={chatKey}
       headerContent={headerContent}
       initialPrompt={initialPrompt}
+      claimInitialPrompt={claimInitialPrompt}
       agentId={agentId}
       fileTree={fileTree}
+      fileInventoryState={fileInventoryState}
       inputRef={inputRef}
       continueChat={continueChat}
       continueChatId={continueChatId}

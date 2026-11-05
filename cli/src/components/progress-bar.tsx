@@ -3,6 +3,7 @@ import React from 'react'
 import { useTheme } from '../hooks/use-theme'
 
 interface ProgressBarProps {
+  kind?: 'progress' | 'capacity'
   /** Value from 0 to 100 */
   value: number
   /** Width in characters (default: 20) */
@@ -53,6 +54,7 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   width = 20,
   label,
   showPercentage = true,
+  kind = 'progress',
 }) => {
   const theme = useTheme()
   const clampedValue = Math.max(0, Math.min(100, value))
@@ -65,8 +67,12 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   const filled = filledChar.repeat(filledWidth)
   const empty = emptyChar.repeat(emptyWidth)
 
-  const barColor = getBarColor(clampedValue, theme)
-  const textColor = getProgressColor(clampedValue, theme)
+  const barColor =
+    kind === 'capacity' ? getBarColor(clampedValue, theme) : theme.primary
+  const textColor =
+    kind === 'capacity'
+      ? getProgressColor(clampedValue, theme)
+      : theme.foreground
 
   return (
     <box style={{ flexDirection: 'row', alignItems: 'center', gap: 0 }}>

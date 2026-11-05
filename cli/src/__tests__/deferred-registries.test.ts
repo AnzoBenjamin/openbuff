@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { setProjectRoot } from '../project-files'
 
 /**
  * The registry initializers and the logger are mocked so the deferred
@@ -50,14 +51,19 @@ const realLoggerModule = {
 
 mock.module('../utils/local-agent-registry', () => ({
   ...realLocalAgentRegistryModule,
-  initializeAgentRegistry: async (opts: { trustProjectAgents: boolean }) => {
+  initializeAgentRegistry: async (
+    ...args: Parameters<
+      typeof realLocalAgentRegistryModule.initializeAgentRegistry
+    >
+  ) => {
+    const [opts] = args
     // Disarmed (the DEFAULT): delegate to the REAL initializer frozen in the
     // pre-mock snapshot above — reading the live namespace here would recurse
     // into this mock. Sibling suites need the real agent loading to happen.
     if (!registriesArmed) {
-      return realLocalAgentRegistryModule.initializeAgentRegistry(opts)
+      return realLocalAgentRegistryModule.initializeAgentRegistry(...args)
     }
-    agentCalls.push(opts)
+    agentCalls.push({ trustProjectAgents: opts?.trustProjectAgents ?? false })
     if (agentGate.hold) {
       await new Promise<void>((resolve) => {
         agentGate.resolvers.push(resolve)
@@ -71,14 +77,17 @@ mock.module('../utils/local-agent-registry', () => ({
 }))
 mock.module('../utils/skill-registry', () => ({
   ...realSkillRegistryModule,
-  initializeSkillRegistry: async (opts: { trustProjectSkills: boolean }) => {
+  initializeSkillRegistry: async (
+    ...args: Parameters<typeof realSkillRegistryModule.initializeSkillRegistry>
+  ) => {
+    const [opts] = args
     // Disarmed (the DEFAULT): delegate to the REAL initializer frozen in the
     // pre-mock snapshot above (never the live namespace — that would recurse
     // into this mock).
     if (!registriesArmed) {
-      return realSkillRegistryModule.initializeSkillRegistry(opts)
+      return realSkillRegistryModule.initializeSkillRegistry(...args)
     }
-    skillCalls.push(opts)
+    skillCalls.push({ trustProjectSkills: opts?.trustProjectSkills ?? true })
     // Explicit so noImplicitReturns stays satisfied alongside the disarmed
     // path's return.
     return undefined
@@ -128,6 +137,7 @@ const {
 } = await import('../services/deferred-registries')
 
 beforeEach(() => {
+  setProjectRoot(process.cwd())
   // Arm the recording overrides for THIS suite's tests only.
   registriesArmed = true
   resetDeferredRegistryLoads()
@@ -147,7 +157,10 @@ afterEach(() => {
 describe('deferred registries project-switch reset', () => {
   test('a reset makes the next awaitRegistriesReady re-initialize with the CURRENT trust', async () => {
     // First load binds the PREVIOUS project's trust decision.
-    startDeferredRegistryLoads({ shouldLoadAgents: true, effectiveTrust: false })
+    startDeferredRegistryLoads({
+      shouldLoadAgents: true,
+      effectiveTrust: false,
+    })
     await whenRegistriesReady()
     expect(agentCalls).toEqual([{ trustProjectAgents: false }])
 

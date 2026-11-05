@@ -18,7 +18,9 @@ describe('isCliTestFileName', () => {
 
   it('rejects live integration suites so the default run never drives tmux', () => {
     expect(isCliTestFileName('rerender-perf.integration.test.ts')).toBe(false)
-    expect(isCliTestFileName('integration-tmux.integration.test.ts')).toBe(false)
+    expect(isCliTestFileName('integration-tmux.integration.test.ts')).toBe(
+      false,
+    )
   })
 
   it('rejects non-test sources and helper modules', () => {
@@ -108,6 +110,8 @@ describe('buildBunTestArgs', () => {
   it('always isolates and lists the discovered files', () => {
     expect(buildBunTestArgs(['src/a.test.ts', 'src/b.test.tsx'])).toEqual([
       'test',
+      '--preload',
+      './scripts/preload-opentui.ts',
       '--isolate',
       'src/a.test.ts',
       'src/b.test.tsx',
@@ -117,6 +121,8 @@ describe('buildBunTestArgs', () => {
   it('forwards caller-supplied flags after the file list', () => {
     expect(buildBunTestArgs(['src/a.test.ts'], ['--bail=1'])).toEqual([
       'test',
+      '--preload',
+      './scripts/preload-opentui.ts',
       '--isolate',
       'src/a.test.ts',
       '--bail=1',

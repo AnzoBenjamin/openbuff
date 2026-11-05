@@ -4,14 +4,23 @@
  */
 
 import {
-  extractDiff,
   extractFilePath,
   isEditToolBlock,
+  isSuccessfulEditMessage,
 } from './implementor-helpers'
 import {
   getCanonicalMutationResult,
   getConfirmedMutationActions,
+  getToolOutputRecords,
+  getToolOutputValues,
+  getStructuredErrorMessages,
 } from './tool-result-normalizer'
+
+import { acceptedReceiptVerdict, explicitReviewVerdict } from './review-outcome'
+import {
+  classifyValidationResult,
+  classifyOutputOutcome,
+} from './output-outcome'
 
 import type { ContentBlock } from '../types/chat'
 
@@ -26,19 +35,13 @@ export type CompletionSummary = {
   testFailed: number
   hooksPassed: number
   hooksFailed: number
+  hooksUnknown?: number
+  reviewHistory?: Array<{ verdict: string; sourceId: string; stale: boolean }>
   hooksSkipped: number
   auxiliaryCompleted: number
   auxiliaryFailed: number
   errors: number
 }
-
-const REVIEW_VERDICT_PATTERNS = [
-  'BLOCKING',
-  'NON_BLOCKING',
-  'LOOKS_GOOD',
-  'NEEDS_WORK',
-  'APPROVED',
-] as const
 
 /**
  * Walk agent/tool blocks to tally completion stats.
@@ -70,9 +73,23 @@ export function computeCompletionSummary(
     'edited' | 'failed' | 'unconfirmed' | 'rolled_back' | 'rollback_incomplete'
   >()
 
-  function walk(children: ContentBlock[], insideAgent = false): number {
+  let editGeneration = 0
+  const reviews: Array<{
+    verdict: string
+    sourceId: string
+    generation: number
+  }> = []
+  const seen = new WeakSet<object>()
+  function walk(
+    children: ContentBlock[],
+    insideAgent = false,
+    depth = 0,
+  ): number {
+    if (depth > 100) return 0
     let countedErrors = 0
     for (const block of children) {
+      if (seen.has(block)) continue
+      seen.add(block)
       if (block.type === 'tool') {
         const isEdit = isEditToolBlock(block)
         if (isEdit) {
@@ -83,9 +100,17 @@ export function computeCompletionSummary(
                 String(action.destinationPath ?? action.path),
               ),
             )
-            for (const raw of canonical.actions as Array<
-              Record<string, unknown>
-            >) {
+            const actions = Array.isArray(canonical.actions)
+              ? canonical.actions
+              : []
+            if (confirmed.size > 0) editGeneration++
+            for (const raw of actions) {
+              if (
+                !raw ||
+                typeof raw !== 'object' ||
+                typeof raw.path !== 'string'
+              )
+                continue
               const path = String(raw.destinationPath ?? raw.path)
               const outcome = String(raw.outcome)
               fileOutcomes.set(
@@ -101,25 +126,37 @@ export function computeCompletionSummary(
                         : 'failed',
               )
             }
-          } else if (block.lifecycle !== 'cancelled') {
+          } else if (
+            block.lifecycle !== 'cancelled' &&
+            block.lifecycle !== 'queued' &&
+            block.lifecycle !== 'running'
+          ) {
             const file = extractFilePath(block)
-            const diff = extractDiff(block)
-            if (file) fileOutcomes.set(file, diff?.trim() ? 'edited' : 'failed')
-          }
-        }
-
-        // Detect review verdict from set_output tool results
-        if (block.toolName === 'set_output') {
-          const output = getToolOutputString(block)
-          if (output && summary.reviewVerdict === null) {
-            for (const pattern of REVIEW_VERDICT_PATTERNS) {
-              if (output.includes(pattern)) {
-                summary.reviewVerdict = pattern
-                break
-              }
+            if (file) {
+              const records = getToolOutputRecords(block.outputRaw)
+              const accepted =
+                records.some((record) =>
+                  isSuccessfulEditMessage(record.message),
+                ) || isSuccessfulEditMessage(block.output)
+              const failed =
+                block.lifecycle === 'failed' ||
+                getStructuredErrorMessages(block.outputRaw).length > 0
+              fileOutcomes.set(
+                file,
+                accepted ? 'edited' : failed ? 'failed' : 'unconfirmed',
+              )
+              if (accepted) editGeneration++
             }
           }
         }
+
+        const receiptVerdict = acceptedReceiptVerdict(block)
+        if (receiptVerdict)
+          reviews.push({
+            verdict: receiptVerdict,
+            sourceId: block.toolCallId,
+            generation: editGeneration,
+          })
 
         // Detect test results from basher output
         if (block.toolName === 'run_terminal_command') {
@@ -138,17 +175,11 @@ export function computeCompletionSummary(
 
         if (block.toolName === 'run_file_change_hooks') {
           for (const result of getHookResults(block.outputRaw)) {
-            const status = String(result.validationStatus ?? '')
-            const failed =
-              typeof result.errorMessage === 'string' ||
-              (typeof result.exitCode === 'number' && result.exitCode !== 0)
-            if (failed) summary.hooksFailed++
-            else if (
-              status === 'hooks_skipped' ||
-              status === 'no_hooks_configured'
-            ) {
-              summary.hooksSkipped++
-            } else summary.hooksPassed++
+            const state = classifyValidationResult(result)
+            if (state === 'failed') summary.hooksFailed++
+            else if (state === 'skipped') summary.hooksSkipped++
+            else if (state === 'passed') summary.hooksPassed++
+            else summary.hooksUnknown = (summary.hooksUnknown ?? 0) + 1
           }
         }
 
@@ -183,20 +214,21 @@ export function computeCompletionSummary(
           if (block.status === 'failed') summary.auxiliaryFailed++
           else if (block.status === 'complete') summary.auxiliaryCompleted++
         }
-        // Check for code-reviewer agent verdict
+        const descendantErrors = block.blocks
+          ? walk(block.blocks, true, depth + 1)
+          : 0
         if (
           block.agentType?.includes('code-reviewer') &&
           block.status === 'complete'
         ) {
-          const content = block.content || ''
-          for (const pattern of REVIEW_VERDICT_PATTERNS) {
-            if (content.includes(pattern) && summary.reviewVerdict === null) {
-              summary.reviewVerdict = pattern
-              break
-            }
-          }
+          const verdict = explicitReviewVerdict(block.content)
+          if (verdict)
+            reviews.push({
+              verdict,
+              sourceId: block.agentId,
+              generation: editGeneration,
+            })
         }
-        const descendantErrors = block.blocks ? walk(block.blocks, true) : 0
         // Auxiliary failures already have their own explicit count. For other
         // agents, count the failed wrapper only when no nested tool/agent error
         // already explains it.
@@ -215,6 +247,16 @@ export function computeCompletionSummary(
   }
 
   walk(blocks)
+  if (reviews.length) {
+    summary.reviewHistory = reviews.map((review) => ({
+      verdict: review.verdict,
+      sourceId: review.sourceId,
+      stale: review.generation !== editGeneration,
+    }))
+    summary.reviewVerdict =
+      reviews.filter((review) => review.generation === editGeneration).at(-1)
+        ?.verdict ?? null
+  }
 
   for (const outcome of fileOutcomes.values()) {
     if (outcome === 'edited') summary.filesEdited++
@@ -236,6 +278,8 @@ export function computeCompletionSummary(
     summary.hooksPassed === 0 &&
     summary.hooksFailed === 0 &&
     summary.hooksSkipped === 0 &&
+    !summary.hooksUnknown &&
+    !summary.reviewHistory?.length &&
     summary.auxiliaryCompleted === 0 &&
     summary.auxiliaryFailed === 0 &&
     summary.errors === 0
@@ -247,53 +291,37 @@ export function computeCompletionSummary(
 }
 
 function getHookResults(outputRaw: unknown): Array<Record<string, unknown>> {
-  const first = Array.isArray(outputRaw) ? outputRaw[0] : outputRaw
-  const value =
-    first && typeof first === 'object' && 'value' in first
-      ? (first as { value: unknown }).value
-      : first
-  return Array.isArray(value)
-    ? value.filter(
-        (entry): entry is Record<string, unknown> =>
-          entry !== null && typeof entry === 'object' && !Array.isArray(entry),
-      )
-    : []
+  return getToolOutputValues(outputRaw)
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .filter(
+      (entry): entry is Record<string, unknown> =>
+        entry !== null && typeof entry === 'object' && !Array.isArray(entry),
+    )
 }
 
 function getToolOutputString(block: {
   output?: string
   outputRaw?: unknown
 }): string {
-  if (typeof block.output === 'string' && block.output.trim()) {
+  if (typeof block.output === 'string' && block.output.trim())
     return block.output
-  }
-  if (Array.isArray(block.outputRaw) && block.outputRaw.length > 0) {
-    const first = block.outputRaw[0]
-    if (first && typeof first === 'object' && 'value' in first) {
-      return typeof first.value === 'string'
-        ? first.value
-        : JSON.stringify(first.value)
-    }
-  }
-  if (block.outputRaw && typeof block.outputRaw === 'object') {
-    return JSON.stringify(block.outputRaw)
-  }
-  return ''
+  const record = getToolOutputRecords(block.outputRaw)[0]
+  if (record)
+    return [record.stdout, record.stderr]
+      .filter((value) => typeof value === 'string')
+      .join('\n')
+  return getToolOutputValues(block.outputRaw)
+    .filter((value): value is string => typeof value === 'string')
+    .join('\n')
 }
 
 function isErrorOutput(block: { outputRaw?: unknown }): boolean {
-  if (Array.isArray(block.outputRaw) && block.outputRaw.length > 0) {
-    const first = block.outputRaw[0]
-    if (first && typeof first === 'object' && 'value' in first) {
-      const v = first.value as Record<string, unknown>
-      return Boolean(
-        v.error ||
-        v.errorMessage ||
-        (Array.isArray(v.errors) && v.errors.length > 0),
-      )
-    }
-  }
-  return false
+  return (
+    getStructuredErrorMessages(block.outputRaw).length > 0 ||
+    getToolOutputRecords(block.outputRaw).some(
+      (record) => Array.isArray(record.errors) && record.errors.length > 0,
+    )
+  )
 }
 
 /**
@@ -346,11 +374,17 @@ export function formatCompletionSummary(summary: CompletionSummary): string {
     }
   }
 
-  if (summary.hooksPassed || summary.hooksFailed || summary.hooksSkipped) {
+  if (
+    summary.hooksPassed ||
+    summary.hooksFailed ||
+    summary.hooksSkipped ||
+    summary.hooksUnknown
+  ) {
     const hookParts = [
       summary.hooksPassed ? `${summary.hooksPassed} passed` : '',
       summary.hooksFailed ? `${summary.hooksFailed} failed` : '',
       summary.hooksSkipped ? `${summary.hooksSkipped} skipped` : '',
+      summary.hooksUnknown ? `${summary.hooksUnknown} outcome unknown` : '',
     ].filter(Boolean)
     parts.push(
       `${summary.hooksFailed ? '❌' : '✅'} Hooks: ${hookParts.join(', ')}`,
@@ -359,14 +393,20 @@ export function formatCompletionSummary(summary: CompletionSummary): string {
 
   if (summary.reviewVerdict) {
     const verd = summary.reviewVerdict
+    const tone = classifyOutputOutcome(verd)
     const icon =
-      verd === 'BLOCKING' || verd === 'NEEDS_WORK'
+      tone === 'bad'
         ? '🔴'
-        : verd === 'NON_BLOCKING'
+        : tone === 'warn'
           ? '🟡'
-          : '🟢'
+          : tone === 'good'
+            ? '🟢'
+            : '⚪'
     parts.push(`Reviewed: ${icon} ${verd}`)
   }
+
+  if (!summary.reviewVerdict && summary.reviewHistory?.length)
+    parts.push('Review evidence predates the latest captured edit')
 
   if (summary.testPassed > 0 || summary.testFailed > 0) {
     let testPart = 'Tests: '

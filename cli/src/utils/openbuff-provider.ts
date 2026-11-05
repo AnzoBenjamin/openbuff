@@ -18,6 +18,7 @@ import {
   resolveConfiguredProviderModel,
   resolveModelCapabilities,
   writeProviderConfigFile,
+  providerConfigFileSchema,
 } from '@openbuff/sdk'
 
 import type { ModelDiscoveryFetch } from '@openbuff/sdk'
@@ -282,10 +283,7 @@ export function formatOpenbuffModelStatus(): string {
     'Openbuff model routing',
     '',
     ...(failover.length > 0
-      ? [
-          `Failover chain: ${failover.join(' → ')}`,
-          '',
-        ]
+      ? [`Failover chain: ${failover.join(' → ')}`, '']
       : []),
   ]
 
@@ -465,7 +463,10 @@ export function setFailoverModels(models: string[]): string {
  * request proves the endpoint AND the API key work before the user relies on
  * them mid-session.
  */
-export async function testProviderConnection(providerId: string): Promise<{
+export async function testProviderConnection(
+  providerId: string,
+  signal?: AbortSignal,
+): Promise<{
   ok: boolean
   message: string
 }> {
@@ -486,6 +487,7 @@ export async function testProviderConnection(providerId: string): Promise<{
       providerId,
       loadedConfig,
       fetch: globalThis.fetch as ModelDiscoveryFetch,
+      signal,
     })
     const count = Array.isArray(result.models) ? result.models.length : 0
     return {
@@ -700,6 +702,63 @@ export function setupOpenbuffProviderFromArgs(args: string): string {
 
 type CustomOpenbuffProviderType = 'openai-compatible' | 'anthropic-compatible'
 
+export function validateCustomOpenbuffProvider(provider: {
+  id: string
+  type: CustomOpenbuffProviderType
+  baseURL: string
+  apiKeyEnv?: string
+  models: string[]
+}): {
+  field: 'id' | 'baseURL' | 'apiKeyEnv' | 'models' | 'providerType'
+  message: string
+} | null {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(provider.id.trim())) {
+    return {
+      field: 'id',
+      message: 'Provider id must use letters, numbers, dashes, or underscores.',
+    }
+  }
+  try {
+    new URL(provider.baseURL.trim())
+  } catch {
+    return { field: 'baseURL', message: 'Enter a valid provider base URL.' }
+  }
+  const parsed = providerConfigFileSchema.safeParse({
+    providers: {
+      [provider.id.trim()]: {
+        type: provider.type,
+        baseURL: provider.baseURL.trim(),
+        ...(provider.apiKeyEnv?.trim()
+          ? { apiKeyEnv: provider.apiKeyEnv.trim() }
+          : {}),
+        models: provider.models.map((model) => model.trim()).filter(Boolean),
+      },
+    },
+  })
+  if (parsed.success) return null
+  const issue = parsed.error.issues[0]
+  const pathField = issue.path[2]
+  return {
+    field:
+      pathField === 'apiKeyEnv'
+        ? 'apiKeyEnv'
+        : pathField === 'models'
+          ? 'models'
+          : pathField === 'type'
+            ? 'providerType'
+            : 'baseURL',
+    message: issue.message,
+  }
+}
+
+export function clearAgentRouteOverride(
+  config: ProviderConfigFileInput,
+  agentId: string,
+): void {
+  delete config.agents?.[agentId]
+  delete config.agentReasoningEfforts?.[agentId]
+}
+
 function parseCustomOpenbuffProviderType(
   value: string,
 ): CustomOpenbuffProviderType | null {
@@ -735,17 +794,14 @@ export function addCustomOpenbuffProvider(provider: {
   const apiKeyEnv = provider.apiKeyEnv?.trim()
   const models = provider.models.map((model) => model.trim()).filter(Boolean)
 
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(id)) {
-    throw new Error(
-      'Provider id must use letters, numbers, dashes, or underscores.',
-    )
-  }
-  if (!baseURL) {
-    throw new Error('Provider base URL is required.')
-  }
-  if (models.length === 0) {
-    throw new Error('Enter at least one model id.')
-  }
+  const validation = validateCustomOpenbuffProvider({
+    ...provider,
+    id,
+    baseURL,
+    apiKeyEnv,
+    models,
+  })
+  if (validation) throw new Error(validation.message)
 
   const config: ProviderConfigFileInput = {
     providers: {

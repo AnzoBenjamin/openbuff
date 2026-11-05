@@ -183,14 +183,25 @@ describe('clipboard', () => {
       unsubscribe()
     })
 
-    test('returns early for whitespace-only string', async () => {
+    test('copies whitespace-only captured content exactly without a misleading preview', async () => {
       const messages: (string | null)[] = []
       const unsubscribe = subscribeClipboardMessages((msg) =>
         messages.push(msg),
       )
       messages.length = 0 // Clear initial null
 
-      await copyTextToClipboard('   \n\t  ')
+      const originalConnection = process.env.SSH_CONNECTION
+      process.env.SSH_CONNECTION = 'fixture'
+      const copied: string[] = []
+      registerClipboardRenderer({ copyToClipboardOSC52: (text: string) => { copied.push(text); return true } })
+      try {
+        await copyTextToClipboard('   \n\t  ')
+        expect(copied).toEqual(['   \n\t  '])
+      } finally {
+        unregisterClipboardRenderer()
+        if (originalConnection === undefined) delete process.env.SSH_CONNECTION
+        else process.env.SSH_CONNECTION = originalConnection
+      }
 
       // Should not show any success or error message
       expect(messages.filter((m) => m !== null)).toHaveLength(0)

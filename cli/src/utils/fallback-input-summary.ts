@@ -1,3 +1,5 @@
+import { createJsonDocument } from './output-document'
+
 /**
  * Human-shaped rendering of a tool input and result for the
  * unregistered-tool fallback path.
@@ -50,7 +52,17 @@ export function summarizeFallbackInput(input: unknown): string {
   const rows: string[] = []
   let skippedKeys = 0
 
-  for (const [key, value] of Object.entries(input)) {
+  let inspected = 0
+  let inspectionLimited = false
+  for (const key in input) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) continue
+    if (++inspected > 4096) {
+      inspectionLimited = true
+      break
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, key)
+    const value =
+      descriptor && 'value' in descriptor ? descriptor.value : undefined
     if (rows.length >= MAX_FALLBACK_INPUT_ROWS) {
       skippedKeys += 1
       continue
@@ -75,10 +87,20 @@ export function summarizeFallbackInput(input: unknown): string {
       continue
     }
     if (Array.isArray(value)) {
-      const items = value.filter(
-        (item): item is string =>
-          typeof item === 'string' && item.trim().length > 0,
-      )
+      const items: string[] = []
+      let length = 0
+      for (
+        let index = 0;
+        index < Math.min(value.length, 32) &&
+        length < MAX_FALLBACK_INPUT_VALUE_CHARS + 1;
+        index++
+      ) {
+        const item = value[index]
+        if (typeof item === 'string' && item.trim()) {
+          items.push(item)
+          length += item.length
+        }
+      }
       if (items.length === 0) {
         skippedKeys += 1
         continue
@@ -97,6 +119,10 @@ export function summarizeFallbackInput(input: unknown): string {
       `… ${skippedKeys} more field${skippedKeys === 1 ? '' : 's'} omitted`,
     )
   }
+  if (inspectionLimited)
+    rows.push(
+      'Additional input fields not inspected in preview · Inspect for retained values',
+    )
   return rows.join('\n')
 }
 
@@ -106,19 +132,26 @@ export function summarizeFallbackInput(input: unknown): string {
  */
 export function hasFallbackInputValue(input: unknown): boolean {
   if (input === undefined || input === null) return false
-  if (isRecordValue(input)) return Object.keys(input).length > 0
+  if (isRecordValue(input)) {
+    for (const key in input)
+      if (Object.prototype.hasOwnProperty.call(input, key)) return true
+    return false
+  }
   return true
 }
 
 /** Bounded pretty JSON for an input with no human-shaped rows. */
 export function boundedFallbackJson(input: unknown): string {
-  let serialized: string
-  try {
-    serialized = JSON.stringify(input, null, 2) ?? String(input)
-  } catch {
-    serialized = String(input)
-  }
-  return truncateText(serialized, MAX_FALLBACK_INPUT_JSON_CHARS)
+  const document = createJsonDocument('input-preview', 'Input preview', input, {
+    maxLines: 32,
+    maxCharacters: MAX_FALLBACK_INPUT_JSON_CHARS,
+    maxDepth: 8,
+  })
+  const text =
+    document.availability === 'limited'
+      ? `${document.text}\nPreview limited · Inspect for full retained input`
+      : document.text
+  return truncateText(text, MAX_FALLBACK_INPUT_JSON_CHARS)
 }
 
 /** Bounded plain-text body for a fallback result. */
@@ -141,7 +174,15 @@ export function formatFallbackOutput(output: string): string {
   if (!parsed || typeof parsed !== 'object')
     return boundedFallbackOutput(output)
 
+  return formatFallbackValue(parsed)
+}
+
+/** Human rows from an already captured value, with bounded traversal. */
+export function formatFallbackValue(parsed: unknown): string {
+  if (parsed === null || typeof parsed !== 'object')
+    return boundedFallbackOutput(String(parsed))
   const rows: string[] = []
+  const seen = new WeakSet<object>()
   let omitted = 0
   const visit = (value: unknown, label: string, depth: number): void => {
     if (rows.length >= 30) {
@@ -149,35 +190,62 @@ export function formatFallbackOutput(output: string): string {
       return
     }
     if (value !== null && typeof value === 'object') {
+      if (seen.has(value)) {
+        rows.push(`${label}: [shared or circular reference]`)
+        return
+      }
+      seen.add(value)
       if (depth >= 4) {
         rows.push(`${label}: [nested details omitted]`)
         return
       }
-      const entries = Array.isArray(value) ? value : Object.entries(value)
-      if (entries.length === 0) {
-        rows.push(
-          `${label || 'result'}: ${Array.isArray(value) ? 'none' : 'empty'}`,
+      let count = 0
+      const child = (key: string, item: unknown) => {
+        const readableKey = key
+          .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+          .replace(/_/g, ' ')
+          .toLowerCase()
+        visit(
+          item,
+          label ? `${label} · ${readableKey}` : readableKey,
+          depth + 1,
         )
-      } else {
-        for (let index = 0; index < entries.length; index++) {
+        count++
+      }
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index++) {
           if (rows.length >= 30) {
-            omitted += entries.length - index
+            omitted += value.length - index
             break
           }
-          const [key, item] = Array.isArray(value)
-            ? [String(index + 1), entries[index]]
-            : (entries[index] as [string, unknown])
-          const readableKey = key
-            .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-            .replace(/_/g, ' ')
-            .toLowerCase()
-          visit(
-            item,
-            label ? `${label} · ${readableKey}` : readableKey,
-            depth + 1,
+          const descriptor = Object.getOwnPropertyDescriptor(value, index)
+          child(
+            String(index + 1),
+            descriptor && 'value' in descriptor
+              ? descriptor.value
+              : '[accessor not evaluated]',
+          )
+        }
+      } else {
+        for (const key in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue
+          if (rows.length >= 30) {
+            omitted++
+            break
+          }
+          const descriptor = Object.getOwnPropertyDescriptor(value, key)
+          child(
+            key,
+            descriptor && 'value' in descriptor
+              ? descriptor.value
+              : '[accessor not evaluated]',
           )
         }
       }
+      if (!count)
+        rows.push(
+          `${label || 'result'}: ${Array.isArray(value) ? 'none' : 'empty'}`,
+        )
       return
     }
     const rendered = typeof value === 'string' ? value : String(value)

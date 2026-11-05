@@ -139,6 +139,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['ps'],
   },
   {
+    id: 'plan-artifact',
+    label: 'plan-artifact',
+    description:
+      'Read local artifact pages: <slug> <PLAN.md|STATUS.md|SPEC.md|LESSONS.md> [--page <n>]',
+  },
+  {
     id: 'lessons',
     label: 'lessons',
     description: 'Create or update LESSONS.md for a durable plan session',
@@ -177,7 +183,8 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'feedback',
     label: 'feedback',
-    description: 'Share general feedback',
+    description:
+      'Feedback help (remote submission unavailable in local/BYOK build)',
   },
   {
     id: 'bash',
@@ -232,14 +239,13 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'undo-turn',
     label: 'undo-turn',
-    description:
-      'Restore tracked files to the previous turn snapshot (git-based)',
+    description: 'Preview tracked-file restore to the previous turn snapshot',
   },
   {
     id: 'restore',
     label: 'restore',
     description:
-      'Restore tracked files to a specific turn snapshot (git-based)',
+      'Preview a turn snapshot; restore requires its exact displayed apply action',
   },
   {
     id: 'bisect-turn',

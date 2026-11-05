@@ -21,6 +21,13 @@ import type { FeedbackCategory } from '@codebuff/common/constants/feedback'
 import { hasMarkdown, type MarkdownPalette } from '../utils/markdown-renderer'
 import { createMarkdownSyntaxStyle } from '../utils/opentui-syntax-style'
 import { getSharedTreeSitterClient } from '../utils/tree-sitter-client'
+import {
+  legacyAgentDescendantDocument,
+  legacyAgentStateLabel,
+} from '../utils/legacy-agent-document'
+import { createJsonDocument } from '../utils/output-document'
+import { clipEvidenceLine } from '../utils/bounded-evidence'
+import { useOutputReaderStore } from '../state/output-reader-store'
 
 interface AgentChildrenGridProps {
   agentChildren: ChatMessage[]
@@ -62,11 +69,25 @@ const AgentChildrenGrid = memo(
         )
       }
       return (
-        <text fg={theme?.muted} attributes={TextAttributes.ITALIC}>
-          {`${agentChildren.length} nested agent${
-            agentChildren.length > 1 ? 's' : ''
-          } not shown (depth limit)`}
-        </text>
+        <box style={{ flexDirection: 'column', width: '100%' }}>
+          <text fg={theme?.muted} attributes={TextAttributes.ITALIC}>
+            {`${agentChildren.length} nested agent${agentChildren.length > 1 ? 's' : ''} not shown (depth limit)`}
+          </text>
+          <Button
+            onClick={() =>
+              useOutputReaderStore
+                .getState()
+                .open({
+                  document: legacyAgentDescendantDocument(
+                    agentChildren,
+                    useMessageBlockStore.getState().context.messageTree,
+                  ),
+                })
+            }
+          >
+            <text fg={theme?.link}>Inspect captured descendants</text>
+          </Button>
+        </box>
       )
     }
 
@@ -175,6 +196,19 @@ export const MessageWithAgents = memo(
     const isAi = message.variant === 'ai'
     const isUser = message.variant === 'user'
     const isError = message.variant === 'error'
+    const isComplete = message.isComplete ?? isUser
+    const content = useMemo(
+      () =>
+        message.content ||
+        (isUser
+          ? (message.blocks ?? [])
+              .flatMap((block) =>
+                block.type === 'text' ? [block.content] : [],
+              )
+              .join('\n\n')
+          : ''),
+      [message.content, message.blocks, isUser],
+    )
 
     const lineColor = isError
       ? (theme?.error ?? 'red')
@@ -280,12 +314,12 @@ export const MessageWithAgents = memo(
                 <MessageBlock
                   messageId={message.id}
                   blocks={message.blocks}
-                  content={message.content}
+                  content={content}
                   isUser={isUser}
                   isAi={isAi}
                   isLoading={isLoading}
                   timestamp={message.timestamp}
-                  isComplete={message.isComplete}
+                  isComplete={isComplete}
                   completionTime={message.completionTime}
                   credits={message.credits}
                   cacheHitRate={message.cacheHitRate}
@@ -317,12 +351,12 @@ export const MessageWithAgents = memo(
               <MessageBlock
                 messageId={message.id}
                 blocks={message.blocks}
-                content={message.content}
+                content={content}
                 isUser={isUser}
                 isAi={isAi}
                 isLoading={isLoading}
                 timestamp={message.timestamp}
-                isComplete={message.isComplete}
+                isComplete={isComplete}
                 completionTime={message.completionTime}
                 credits={message.credits}
                 cacheHitRate={message.cacheHitRate}
@@ -434,6 +468,9 @@ const AgentMessage = memo(
       state.streamingAgents.has(message.id),
     )
     const setFocusedAgentId = useChatStore((state) => state.setFocusedAgentId)
+    const isFocused = useChatStore(
+      (state) => state.focusedAgentId === message.id,
+    )
 
     // Guard against missing agent info (should not happen for agent variant messages)
     if (!message.agent) {
@@ -452,10 +489,18 @@ const AgentMessage = memo(
     const fullPrefix = bulletChar
     const agentContentWidth = Math.max(10, availableWidth - fullPrefix.length)
 
-    const lines = message.content.split('\n').filter((line) => line.trim())
+    const lines = message.content
+      .split('\n')
+      .filter((line) => line.trim() && !/^\s*(?:`{3,}|~{3,})/.test(line))
     const firstLine = lines[0] || ''
     const lastLine = lines[lines.length - 1] || firstLine
     const rawDisplayContent = isCollapsed ? lastLine : message.content
+    const stateLabel = legacyAgentStateLabel(message, isStreaming)
+    const capturedError = typeof message.userError === 'string' ? message.userError : undefined
+    const stateColor =
+      capturedError || ['Failed', 'Cancelled'].includes(stateLabel)
+        ? theme?.error
+        : theme?.muted
 
     const streamingPreview = isStreaming
       ? wrapTextPreservingNewlines(
@@ -467,7 +512,8 @@ const AgentMessage = memo(
     const finishedPreview =
       !isStreaming && isCollapsed
         ? wrapTextPreservingNewlines(
-            lastLine.replace(/[#*_`~\[\]()]/g, '').trim(),
+            lastLine.replace(/[#*_`~\[\]()]/g, '').trim() ||
+              'No captured output',
             agentContentWidth,
           )
         : ''
@@ -519,7 +565,7 @@ const AgentMessage = memo(
           }}
         >
           <text style={{ wrapMode: 'none' }}>
-            <span fg={theme?.success}>{fullPrefix}</span>
+            <span fg={stateColor}>{fullPrefix}</span>
           </text>
           <box
             style={{
@@ -531,21 +577,55 @@ const AgentMessage = memo(
             }}
           >
             <Button
+              id={`agent-title-control-${message.id}`}
               style={{
                 flexDirection: 'row',
                 alignSelf: 'flex-start',
-                backgroundColor: isCollapsed ? theme?.muted : theme?.success,
+                backgroundColor: isFocused
+                  ? theme?.surfaceHover
+                  : theme?.surface,
                 paddingLeft: 1,
                 paddingRight: 1,
               }}
               onClick={handleTitleClick}
             >
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme?.foreground}>{isCollapsed ? '▸ ' : '▾ '}</span>
-                <span fg={theme?.foreground} attributes={TextAttributes.BOLD}>
+              <text
+                id={`agent-title-${message.id}`}
+                fg={theme?.foreground}
+                style={{ wrapMode: 'word' }}
+              >
+                <span>{isCollapsed ? '▸ ' : '▾ '}</span>
+                <span attributes={TextAttributes.BOLD}>
                   {agentInfo.agentName}
                 </span>
               </text>
+            </Button>
+            <text fg={stateColor}>
+              {stateLabel}
+              {capturedError
+                ? ` · ${clipEvidenceLine(capturedError, Math.max(24, agentContentWidth - 18))}`
+                : ''}
+            </text>
+            <Button
+              onClick={() =>
+                useOutputReaderStore
+                  .getState()
+                  .open({
+                    document: createJsonDocument(
+                      `legacy-agent:${message.id}`,
+                      `Captured ${agentInfo.agentName}`,
+                      {
+                        agent: agentInfo,
+                        content: message.content,
+                        error: message.userError,
+                        availability:
+                          'Captured legacy fields; absent lifecycle remains unknown',
+                      },
+                    ),
+                  })
+              }
+            >
+              <text fg={theme?.link}>Inspect captured agent</text>
             </Button>
             <Button
               style={{ flexShrink: 1, paddingBottom: isCollapsed ? 1 : 0 }}

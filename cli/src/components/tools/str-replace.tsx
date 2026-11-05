@@ -1,3 +1,5 @@
+import { countCapturedDiffChanges } from '../../utils/diff-summary'
+import { isSuccessfulEditMessage } from '../../utils/implementor-helpers'
 import { TextAttributes } from '@opentui/core'
 
 import { DiffViewer } from './diff-viewer'
@@ -30,6 +32,10 @@ type EditStatus =
   | 'failed'
   | 'cancelled'
   | 'unconfirmed'
+  | 'partial'
+  | 'rolled_back'
+  | 'rollback_incomplete'
+  | 'not_applied'
 
 type DiffStats = {
   added: number
@@ -43,6 +49,10 @@ const statusLabel: Record<EditStatus, string> = {
   failed: 'failed',
   cancelled: 'cancelled',
   unconfirmed: 'unconfirmed',
+  partial: 'partial',
+  rolled_back: 'rolled back',
+  rollback_incomplete: 'rollback incomplete',
+  not_applied: 'not applied',
 }
 
 const EditHeader = ({ name, filePath, status, stats }: EditHeaderProps) => {
@@ -200,8 +210,35 @@ function getEditStatus(toolBlock: Parameters<typeof extractDiff>[0]): {
       }
     }
     return {
-      status: 'failed',
-      message: `Mutation ${String(mutation.outcome)}.`,
+      status: [
+        'partial',
+        'rolled_back',
+        'rollback_incomplete',
+        'not_applied',
+      ].includes(String(mutation.outcome))
+        ? (mutation.outcome as EditStatus)
+        : 'failed',
+      message: [
+        `Mutation ${String(mutation.outcome)}.`,
+        ...(Array.isArray(mutation.errors)
+          ? mutation.errors
+              .filter((value) => value && typeof value.message === 'string')
+              .map((value) => value.message)
+          : []),
+        ...(Array.isArray(mutation.actions)
+          ? mutation.actions
+              .filter((value) => value && value.error)
+              .map((value) =>
+                typeof value.error === 'string'
+                  ? value.error
+                  : value.error.message,
+              )
+              .filter(Boolean)
+          : []),
+        typeof mutation.recovery === 'string' ? mutation.recovery : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
     }
   }
   const structuredErrors = getStructuredErrorMessages(toolBlock.outputRaw)
@@ -211,6 +248,13 @@ function getEditStatus(toolBlock: Parameters<typeof extractDiff>[0]): {
       message: failurePreview(structuredErrors.join('\n')),
     }
   }
+  if (toolBlock.lifecycle === 'failed')
+    return { status: 'failed', message: 'Failure details were not captured.' }
+  if (toolBlock.lifecycle === 'running' || toolBlock.lifecycle === 'queued')
+    return {
+      status: toolBlock.lifecycle === 'queued' ? 'queued' : 'pending',
+      message: null,
+    }
   if (toolBlock.lifecycle === 'cancelled') {
     return {
       status: 'cancelled',
@@ -243,21 +287,21 @@ function getEditStatus(toolBlock: Parameters<typeof extractDiff>[0]): {
   if (!hasOutput && toolBlock.queued === true) {
     return { status: 'queued', message: null }
   }
-  if (!hasOutput) return { status: 'pending', message: null }
-  return { status: 'applied', message }
+  if (!hasOutput)
+    return {
+      status: 'unconfirmed',
+      message: 'No authoritative disk result was captured.',
+    }
+  return {
+    status: isSuccessfulEditMessage(message) ? 'applied' : 'unconfirmed',
+    message,
+  }
 }
 
 function countDiffStats(diffText: string | null): DiffStats {
   if (!diffText) return { added: 0, removed: 0 }
 
-  return diffText.split('\n').reduce(
-    (stats, line) => {
-      if (line.startsWith('+') && !line.startsWith('+++')) stats.added += 1
-      if (line.startsWith('-') && !line.startsWith('---')) stats.removed += 1
-      return stats
-    },
-    { added: 0, removed: 0 },
-  )
+  return countCapturedDiffChanges(diffText)
 }
 
 export const StrReplaceComponent = defineToolComponent({

@@ -20,6 +20,7 @@ import React, {
 
 import { Button } from './button'
 import { useTheme } from '../hooks/use-theme'
+import { useTerminalDimensions } from '../hooks/use-terminal-dimensions'
 
 import type { ScrollBoxRenderable } from '@opentui/core'
 
@@ -74,6 +75,7 @@ export const SelectableList = forwardRef<
     ref,
   ) => {
     const theme = useTheme()
+    const { terminalHeight } = useTerminalDimensions()
     const scrollRef = useRef<ScrollBoxRenderable | null>(null)
     const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
@@ -97,6 +99,31 @@ export const SelectableList = forwardRef<
       },
       [items.length],
     )
+    const focusedIndexRef = useRef(focusedIndex)
+    const scrollToIndexRef = useRef(scrollToIndex)
+    focusedIndexRef.current = focusedIndex
+    scrollToIndexRef.current = scrollToIndex
+    const resizeCleanupRef = useRef<(() => void) | null>(null)
+    const attachScrollbox = useCallback((node: ScrollBoxRenderable | null) => {
+      resizeCleanupRef.current?.()
+      resizeCleanupRef.current = null
+      scrollRef.current = node
+      if (node) {
+        // React effects can run before OpenTUI computes the new viewport.
+        // Restore visibility when its actual dimensions have changed.
+        const viewport = node.viewport
+        const original = viewport.onSizeChange
+        const resized = () => {
+          original?.call(viewport)
+          scrollToIndexRef.current(focusedIndexRef.current)
+        }
+        viewport.onSizeChange = resized
+        resizeCleanupRef.current = () => {
+          if (viewport.onSizeChange === resized)
+            viewport.onSizeChange = original
+        }
+      }
+    }, [])
 
     // Expose scroll method to parent
     useImperativeHandle(
@@ -114,7 +141,7 @@ export const SelectableList = forwardRef<
       scrollToIndex(focusedIndex)
       // Clear hover state when keyboard navigation happens
       setHoveredIndex(null)
-    }, [focusedIndex, scrollToIndex])
+    }, [focusedIndex, scrollToIndex, maxHeight, terminalHeight])
 
     if (items.length === 0) {
       return (
@@ -126,7 +153,7 @@ export const SelectableList = forwardRef<
 
     return (
       <scrollbox
-        ref={scrollRef}
+        ref={attachScrollbox}
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
@@ -261,10 +288,7 @@ export const SelectableList = forwardRef<
                     >
                       {segments.map((segment, index) =>
                         segment.matched ? (
-                          <span
-                            key={index}
-                            attributes={TextAttributes.BOLD}
-                          >
+                          <span key={index} attributes={TextAttributes.BOLD}>
                             {segment.text}
                           </span>
                         ) : (

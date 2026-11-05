@@ -161,6 +161,14 @@ export const setOutputParams = {
         // artifactPath), not as the child's payload. Without it a caller can
         // only tell the two apart by parsing the ACK prose.
         salvaged: z.boolean().optional(),
+        // Optional explicit recovery provenance. Older acknowledgments remain
+        // valid; consumers must not reconstruct paths from ACK prose.
+        artifactPersisted: z.boolean().optional(),
+        artifactPath: z.string().optional(),
+        artifactCreatedAt: z.string().optional(),
+        artifactWrittenByThisCall: z.boolean().optional(),
+        artifactBytes: z.number().int().nonnegative().optional(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       }),
     }),
   ]),

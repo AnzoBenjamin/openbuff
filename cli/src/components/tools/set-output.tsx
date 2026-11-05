@@ -1,9 +1,16 @@
 import React from 'react'
+import { classifyOutputOutcome } from '../../utils/output-outcome'
 
 import { useTheme } from '../../hooks/use-theme'
 import { defineToolComponent } from './types'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
-import { getStructuredErrorMessages, getToolOutputRecords } from '../../utils/tool-result-normalizer'
+import { capturedArtifacts } from '../../utils/output-artifact'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import { Button } from '../button'
+import {
+  getStructuredErrorMessages,
+  getToolOutputRecords,
+} from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig, ToolBlock } from './types'
 import type { ChatTheme } from '../../types/theme-system'
@@ -35,47 +42,6 @@ type ReceiptCore = {
    * glyph and dropped the content the caller returned.
    */
   fields: Array<{ label: string; value: string }>
-}
-
-const GOOD_OUTCOMES = new Set([
-  'success',
-  'succeeded',
-  'looks_good',
-  'pass',
-  'passed',
-  'completed',
-  'ok',
-])
-const WARN_OUTCOMES = new Set([
-  'partial',
-  'warning',
-  'needs_changes',
-  'retry',
-  'non_blocking',
-])
-const BAD_OUTCOMES = new Set([
-  'failed',
-  'failure',
-  'blocked',
-  'blocking',
-  'error',
-  'invalid',
-  'cancelled',
-  'unsupported',
-])
-
-function classifyOutcome(
-  outcome: string | undefined,
-): ReceiptCore['outcomeKind'] {
-  if (!outcome) return 'neutral'
-  const normalized = outcome
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, '_')
-  if (GOOD_OUTCOMES.has(normalized)) return 'good'
-  if (WARN_OUTCOMES.has(normalized)) return 'warn'
-  if (BAD_OUTCOMES.has(normalized)) return 'bad'
-  return 'neutral'
 }
 
 function firstString(...values: unknown[]): string | undefined {
@@ -277,7 +243,7 @@ export function extractReceiptCore(input: unknown): ReceiptCore {
 
   return {
     outcome,
-    outcomeKind: classifyOutcome(outcome),
+    outcomeKind: classifyOutputOutcome(outcome),
     message,
     findings,
     advisories: advisoryLines(record.advisories),
@@ -426,13 +392,26 @@ export const SetOutputComponent = defineToolComponent({
     const ignored = getToolOutputRecords(toolBlock.outputRaw).find(
       (record) => record.status === 'ignored',
     )
+    const salvage = getToolOutputRecords(toolBlock.outputRaw).find(
+      (record) => record.salvaged === true,
+    )
+    const pending =
+      toolBlock.lifecycle === 'queued' ||
+      toolBlock.lifecycle === 'running' ||
+      toolBlock.outputRaw === undefined
     const failed =
       toolBlock.lifecycle === 'failed' ||
       toolBlock.lifecycle === 'cancelled' ||
       errors.length > 0
     const failureMessage =
       errors.join('\n') || (failed ? toolBlock.output : undefined)
-    const outcomeKind = failed ? 'bad' : ignored ? 'warn' : core.outcomeKind
+    const outcomeKind = failed
+      ? 'bad'
+      : ignored || salvage
+        ? 'warn'
+        : pending
+          ? 'neutral'
+          : core.outcomeKind
 
     const headerParts = [
       OUTCOME_GLYPH[outcomeKind],
@@ -440,14 +419,38 @@ export const SetOutputComponent = defineToolComponent({
         ? `output ${toolBlock.lifecycle === 'cancelled' ? 'cancelled' : 'failed'}`
         : ignored
           ? 'output ignored'
-          : core.outcome
-          ? core.outcome
-          : 'output set',
+          : salvage
+            ? 'output retained with limits'
+            : pending
+              ? 'output pending'
+              : core.outcome
+                ? core.outcome
+                : 'output set',
     ]
     const header = headerParts.join(' ')
     const color = outcomeColor(outcomeKind, liveTheme)
 
     const lines: React.ReactNode[] = []
+    if (salvage && typeof salvage.message === 'string' && !ignored) {
+      lines.push(
+        <text key="salvage" fg={liveTheme.warning} style={{ wrapMode: 'word' }}>
+          {wrapTextPreservingNewlines(salvage.message, width)}
+        </text>,
+      )
+    }
+    if (salvage) {
+      const artifacts = capturedArtifacts(toolBlock.outputRaw)
+      artifacts.forEach((artifact, index) => {
+        lines.push(
+          <text key={`salvage-path-${index}`} fg={liveTheme.muted} style={{ wrapMode: 'word' }}>
+            {`Recovery artifact: ${artifact.path}`}
+          </text>,
+          <Button id={`salvage-recovery-${toolBlock.toolCallId}-${index}`} key={`salvage-open-${index}`} onClick={() => useOutputReaderStore.getState().open({ documentId: `tool:${toolBlock.toolCallId}:artifact:${index}` })}>
+            <text fg={liveTheme.primary}>Open recovery artifact</text>
+          </Button>,
+        )
+      })
+    }
     if (ignored && typeof ignored.message === 'string') {
       lines.push(
         <text key="ignored" style={{ wrapMode: 'word' }}>

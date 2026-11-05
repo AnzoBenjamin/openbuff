@@ -5,6 +5,7 @@
 - Public client env: `NEXT_PUBLIC_*` only, validated in `common/src/env-schema.ts` (used via `@codebuff/common/env`).
 - LLM provider keys: validated in `packages/internal/src/env-schema.ts` (used via `@codebuff/internal/env`). The hosted-backend DB/auth/email server secrets have been removed from this repo.
 - Runtime/OS env: pass typed snapshots instead of reading `process.env` throughout the codebase.
+- `OPENBUFF_REDUCED_MOTION=true` (or `1`) keeps the CLI cursor and activity labels static. Run status and Stop remain available.
 - `IPINFO_TOKEN` is only relevant to legacy/upstream hosted flows. Openbuff local/BYOK CLI usage does not require it.
 - `CODEBUFF_FULL_TELEMETRY=true` or `CODEBUFF_FULL_TELEMETRY_IDS=user-id,email@example.com`
   disables client analytics sampling for targeted debugging. Use sparingly because it can send full CLI log payloads.

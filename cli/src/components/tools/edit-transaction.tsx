@@ -1,3 +1,4 @@
+import { countCapturedDiffChanges } from '../../utils/diff-summary'
 import { TextAttributes } from '@opentui/core'
 
 import { LRUCache } from '@codebuff/common/util/lru-cache'
@@ -5,6 +6,7 @@ import { LRUCache } from '@codebuff/common/util/lru-cache'
 import { DiffViewer } from './diff-viewer'
 import { defineToolComponent } from './types'
 import { useTheme } from '../../hooks/use-theme'
+import { outcomeForTool } from '../../utils/output-outcome'
 import {
   getCanonicalMutationResult,
   getStructuredErrorMessages,
@@ -22,10 +24,10 @@ type TransactionFile = {
 /**
  * Fully derived render inputs for one transaction payload body. Memoized per
  * `toolCallId` (the render "instance") in `transactionCache` and keyed on the
- * serialized payload string: when the same instance re-renders with an
+ * bounded snapshot of captured fields: when the same instance re-renders with an
  * unchanged payload the cached object is reused without re-walking the
  * payload, and any change to the payload (a replaced `outputRaw` or an
- * in-place mutation) serializes to a different key, discarding that
+ * in-place mutation) produces a different snapshot key, discarding that
  * instance's cache entry. Consumers receive a stable per-instance view of
  * this data (see `createConsumerView`) so cache hits keep object identity
  * while staying isolated from render-path mutations. Exported for the test
@@ -45,15 +47,69 @@ const transactionCache = new LRUCache<string, TransactionRenderData>(
   TRANSACTION_CACHE_MAX_SIZE,
 )
 
+const payloadSnapshots = new WeakMap<
+  object,
+  { values: unknown[]; key: string }
+>()
+const stringPayloadKeys = new LRUCache<string, string>(64)
+let nextPayloadRevision = 0
 function getPayloadKey(outputRaw: unknown): string | null {
-  if (typeof outputRaw === 'string') return `string:${outputRaw}`
-  try {
-    return `json:${JSON.stringify(outputRaw) ?? 'undefined'}`
-  } catch {
-    // Unserializable payloads (e.g. cyclic references) cannot yield a stable
-    // key; returning null forces a recompute instead of stale reuse.
-    return null
+  if (typeof outputRaw === 'string') {
+    const cached = stringPayloadKeys.get(outputRaw)
+    if (cached) return cached
+    const key = `text:${++nextPayloadRevision}`
+    stringPayloadKeys.set(outputRaw, key)
+    return key
   }
+  if (!outputRaw || typeof outputRaw !== 'object') return String(outputRaw)
+  const values: unknown[] = []
+  const seen = new WeakSet<object>()
+  function* fields(value: object): Generator<unknown> {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index)
+        yield descriptor && 'value' in descriptor
+          ? descriptor.value
+          : descriptor?.get
+      }
+    } else {
+      for (const key in value)
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+          values.push(key)
+          const descriptor = Object.getOwnPropertyDescriptor(value, key)
+          yield descriptor && 'value' in descriptor
+            ? descriptor.value
+            : descriptor?.get
+        }
+    }
+  }
+  const stack: Generator<unknown>[] = [fields(outputRaw)]
+  values.push(outputRaw)
+  seen.add(outputRaw)
+  while (stack.length && values.length < 20_000) {
+    const next = stack[stack.length - 1].next()
+    if (next.done) {
+      stack.pop()
+      continue
+    }
+    values.push(next.value)
+    if (next.value && typeof next.value === 'object' && !seen.has(next.value)) {
+      seen.add(next.value)
+      stack.push(fields(next.value))
+    }
+  }
+  // Limited signatures never cache an uninspected descendant as unchanged.
+  if (stack.length) return null
+  const previous = payloadSnapshots.get(outputRaw)
+  if (
+    previous &&
+    previous.values.length === values.length &&
+    values.every((value, index) => Object.is(value, previous.values[index]))
+  )
+    return previous.key
+  const key = `capture:${++nextPayloadRevision}`
+  payloadSnapshots.set(outputRaw, { values, key })
+  return key
 }
 
 /**
@@ -66,18 +122,17 @@ function getPayloadKey(outputRaw: unknown): string | null {
  * excluded with the same predicates the shared parser applies, so a fully
  * headered diff's totals match the hunk-scoped counting DiffViewer renders.
  */
-function computeTransactionDiffStats(
-  files: TransactionFile[],
-): { added: number; removed: number } {
+function computeTransactionDiffStats(files: TransactionFile[]): {
+  added: number
+  removed: number
+} {
   let added = 0
   let removed = 0
   for (const file of files) {
     if (typeof file.diff !== 'string') continue
-    for (const line of file.diff.split('\n')) {
-      if (/^---\s+a\//.test(line) || /^\+\+\+\s+b\//.test(line)) continue
-      if (line.startsWith('+')) added += 1
-      else if (line.startsWith('-')) removed += 1
-    }
+    const stats = countCapturedDiffChanges(file.diff)
+    added += stats.added
+    removed += stats.removed
   }
   return { added, removed }
 }
@@ -112,7 +167,7 @@ function computeTransactionRenderData(
  * outputRaw), and the payload contract supports an in-place payload
  * mutation — freezing it would break that live-update path. Cache safety for
  * it comes from the payload-key invalidation instead (an in-place mutation
- * serializes to a different key, so the stale entry is discarded, exactly
+ * produces a different snapshot key, so the stale entry is discarded, exactly
  * like the replaced-outputRaw path).
  */
 function freezeCachedRenderData(data: TransactionRenderData): void {
@@ -195,9 +250,7 @@ export function getTransactionRenderData(
 ): TransactionRenderData {
   const payloadKey = getPayloadKey(toolBlock.outputRaw)
   const cached =
-    payloadKey === null
-      ? undefined
-      : transactionCache.get(toolBlock.toolCallId)
+    payloadKey === null ? undefined : transactionCache.get(toolBlock.toolCallId)
   if (cached && cached.payloadKey === payloadKey) {
     // The cached view serves the payloadKey of the frozen derivation it
     // wraps, so this check validates the entry against the payload it was
@@ -471,20 +524,22 @@ export const EditTransactionComponent = defineToolComponent({
       diffStats.added + diffStats.removed > 0
         ? ` (+${diffStats.added} -${diffStats.removed})`
         : ''
-    const collapsedPreview = error
+    const outcome = outcomeForTool(toolBlock)
+    const preview = error
       ? error.split('\n')[0]
       : files.length > 0
         ? `${title} • ${files.length} file${files.length === 1 ? '' : 's'}${sizeSuffix}`
         : queued
           ? `${title} queued...`
-          : `${title} pending...`
+          : title
+    const collapsedPreview = `${preview} · ${outcome.label}${toolBlock.interrupted && mutation ? ' · run interrupted' : ''}`
 
     return {
       collapsedPreview,
       content: (
         <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
           <TransactionHeader
-            name={`${title}${toolBlock.lifecycle === 'cancelled' ? ' cancelled' : mutation ? ` ${String(mutation.outcome)}` : ''}`}
+            name={`${title} ${outcome.label}`}
             queued={queued}
           />
           {error ? (
@@ -495,7 +550,17 @@ export const EditTransactionComponent = defineToolComponent({
           {rows.map((row, index) => (
             <text
               key={`${index}-${row}`}
-              fg={_theme.muted}
+              fg={(() => {
+                const action = Array.isArray(mutation?.actions)
+                  ? (mutation.actions[index] as Record<string, unknown>)
+                  : undefined
+                const rollback = action?.rollback as
+                  | Record<string, unknown>
+                  | undefined
+                return action?.error || rollback?.succeeded === false
+                  ? _theme.error
+                  : _theme.muted
+              })()}
               style={{ wrapMode: 'word' }}
             >
               {row}

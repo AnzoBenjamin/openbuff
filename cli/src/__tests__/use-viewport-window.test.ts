@@ -1914,6 +1914,14 @@ describe('animation entry points read the canonical scroll position', () => {
     expect(computePageScrollTarget(100, 100, 600, 'down')).toBe(180)
   })
 
+  test('one-row viewports page by one row while boundaries and no overflow remain stable', () => {
+    expect(computePageScrollTarget(5, 1, 10, 'up')).toBe(4)
+    expect(computePageScrollTarget(5, 1, 10, 'down')).toBe(6)
+    expect(computePageScrollTarget(0, 1, 10, 'up')).toBe(0)
+    expect(computePageScrollTarget(10, 1, 10, 'down')).toBe(10)
+    expect(computePageScrollTarget(0, 1, 0, 'down')).toBe(0)
+  })
+
   test('a page-up target clamps to 0 near the top', () => {
     expect(computePageScrollTarget(20, 100, 600, 'up')).toBe(0)
   })

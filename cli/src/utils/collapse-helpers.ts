@@ -52,7 +52,7 @@ function isBlockExpanded(block: CollapsibleBlock): boolean {
   if (isThinkingTextBlock(block)) {
     return block.thinkingCollapseState === 'expanded'
   }
-  return block.isCollapsed === false
+  return !getBlockCollapsedState(block)
 }
 
 /**
@@ -63,7 +63,7 @@ function getBlockCollapsedState(block: CollapsibleBlock): boolean {
   if (isThinkingTextBlock(block)) {
     return block.thinkingCollapseState !== 'expanded'
   }
-  return block.isCollapsed ?? true
+  return block.isCollapsed ?? (block.type === 'agent' ? false : true)
 }
 
 /**
@@ -129,7 +129,7 @@ export function hasAnyExpandedBlocks(messages: ChatMessage[]): boolean {
   for (const message of messages) {
     // Handle agent variant messages
     if (message.variant === 'agent') {
-      if (message.metadata?.isCollapsed === false) {
+      if (!(message.metadata?.isCollapsed ?? false)) {
         return true
       }
     }
@@ -230,8 +230,7 @@ export function setAllBlocksCollapsedState(
 
     // Handle agent variant messages (message-level isCollapsed)
     if (message.variant === 'agent') {
-      // Treat undefined as collapsed (true) to match hasAnyExpandedBlocks semantics
-      const currentCollapsed = message.metadata?.isCollapsed ?? true
+      const currentCollapsed = message.metadata?.isCollapsed ?? false
       if (currentCollapsed !== collapsed) {
         messageChanged = true
         updatedMessage = {

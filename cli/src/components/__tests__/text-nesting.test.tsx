@@ -106,6 +106,9 @@ const findBlockElementsInsideText = (
 }
 
 describe('no block elements nested inside <text>', () => {
+  // This guard parses the entire growing TSX tree. In the full reused-worker
+  // schedule it competes with compiler/SQLite suites; retain complete coverage
+  // with a bounded repository-scan budget rather than the 5s per-unit default.
   test('every cli/src component tree keeps <text> children inline', async () => {
     const srcRoot = path.resolve(import.meta.dir, '../..')
     const glob = new Glob('**/*.tsx')
@@ -118,7 +121,7 @@ describe('no block elements nested inside <text>', () => {
     }
 
     expect(violations).toEqual([])
-  })
+  }, 30_000)
 })
 
 /**

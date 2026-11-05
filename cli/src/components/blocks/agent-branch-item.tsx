@@ -56,13 +56,17 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
   const truncatedPreview = truncateToLines(preview, MAX_COLLAPSED_LINES) ?? ''
   const wrappedPreview =
     truncatedPreview.length > 0
-      ? wrapTextPreservingNewlines(truncatedPreview, innerColWidth)
+      ? (truncateToLines(
+          wrapTextPreservingNewlines(truncatedPreview, innerColWidth),
+          MAX_COLLAPSED_LINES,
+        ) ?? '')
       : ''
   // Prompt sits next to a 1-col vertical line plus 1 col of padding inside
   // the expanded card body, so it gets a slightly tighter budget.
-  const wrappedPrompt = prompt
-    ? wrapTextPreservingNewlines(prompt, Math.max(10, innerColWidth - 2))
-    : ''
+  const wrappedPrompt =
+    !isCollapsed && prompt
+      ? wrapTextPreservingNewlines(prompt, Math.max(10, innerColWidth - 2))
+      : ''
   useWhyDidYouUpdateById('AgentBranchItem', agentId ?? '', props, {
     logLevel: 'debug',
     enabled: getCliEnv().CODEBUFF_PERF_TEST === 'true',

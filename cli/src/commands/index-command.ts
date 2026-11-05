@@ -121,9 +121,9 @@ export function buildIndexStatusContentBlock(
   const diagnosticsLines =
     status.diagnostics.length > 0
       ? [
-          `Diagnostics: ${status.diagnostics.length} parser issue${status.diagnostics.length === 1 ? '' : 's'}.`,
+          `Diagnostics: ${status.diagnostics.length} parser issue${status.diagnostics.length === 1 ? '' : 's'}; ${Math.min(status.diagnostics.length, 1000)} captured${status.diagnostics.length > 1000 ? `; ${status.diagnostics.length - 1000} details omitted by capture limit` : ''}. Inspect captured output for retained file/stage details.`,
           ...status.diagnostics
-            .slice(0, 5)
+            .slice(0, 1000)
             .map(
               (diagnostic) =>
                 `- ${diagnostic.filePath} (${diagnostic.stage}): ${diagnostic.message}`,

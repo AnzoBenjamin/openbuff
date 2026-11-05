@@ -1,3 +1,4 @@
+import { outcomeForTool } from '../../utils/output-outcome'
 import {
   getStructuredErrorMessages,
   getToolOutputRecords,
@@ -57,7 +58,9 @@ function firstRecord(outputRaw: unknown): Record<string, unknown> | undefined {
 /** Count non-empty lines in a git status blob. */
 function countStatusLines(status: string | undefined): number {
   if (!status) return 0
-  return status.split('\n').filter((line) => line.trim().length > 0).length
+  return status
+    .split('\n')
+    .filter((line) => line.trim().length > 0 && !line.startsWith('##')).length
 }
 
 export const InspectWorkspaceComponent = defineToolComponent({
@@ -70,21 +73,34 @@ export const InspectWorkspaceComponent = defineToolComponent({
     const dirtyCount = countStatusLines(readString(record?.status))
     const summary = error
       ? 'Workspace lookup failed'
-      : `Workspace ${branch ? `on ${branch} ` : ''}${dirtyCount > 0 ? `· ${dirtyCount} uncommitted` : '· clean'}`
+      : `Workspace ${branch ? `on ${branch} ` : ''}${dirtyCount > 0 ? `· ${dirtyCount} uncommitted` : record?.status !== undefined && toolBlock.lifecycle !== 'running' && toolBlock.lifecycle !== 'queued' && toolBlock.lifecycle !== 'failed' && toolBlock.lifecycle !== 'cancelled' ? '· clean captured tree' : `· ${toolBlock.lifecycle ?? 'status unavailable'}`}`
     const shortHead = readString(record?.headCommit)?.slice(0, 12)
 
     return {
       collapsedPreview: previewWithGlyph(
         summary,
-        statusGlyphFor(error ? 'failed' : 'ready', theme).glyph,
+        statusGlyphFor(
+          error ? 'failed' : outcomeForTool(toolBlock).label,
+          theme,
+        ).glyph,
       ),
       content: (
         <ResultShell>
           <ResultHeader
             name="Workspace"
             summary={truncateText(summary, 60)}
-            glyph={statusGlyphFor(error ? 'failed' : 'ready', theme).glyph}
-            glyphColor={statusGlyphFor(error ? 'failed' : 'ready', theme).color}
+            glyph={
+              statusGlyphFor(
+                error ? 'failed' : outcomeForTool(toolBlock).label,
+                theme,
+              ).glyph
+            }
+            glyphColor={
+              statusGlyphFor(
+                error ? 'failed' : outcomeForTool(toolBlock).label,
+                theme,
+              ).color
+            }
           />
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
@@ -126,7 +142,7 @@ export const InspectWorkspaceComponent = defineToolComponent({
             {record?.isLinkedWorktree === true ? (
               <DetailRow
                 label="Worktree"
-                value={"linked worktree"}
+                value={'linked worktree'}
                 width={width}
                 valueColor={theme.warning}
               />
@@ -153,7 +169,10 @@ export const GetChangeReviewBundleComponent = defineToolComponent({
     const error = errorOf(toolBlock)
     const width = rowWidth(options.availableWidth)
     const files = readStringArray(record?.files)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Change bundle failed'
       : `Change bundle · ${formatCount(files.length, 'file')} changed`
@@ -176,16 +195,14 @@ export const GetChangeReviewBundleComponent = defineToolComponent({
             {error ? <ErrorRow message={error} width={width} /> : null}
             <DetailRow
               label="Snapshot"
-              value={(readString(record?.snapshotId) ?? '').slice(0, 16) || 'unknown'}
+              value={
+                (readString(record?.snapshotId) ?? '').slice(0, 16) || 'unknown'
+              }
               width={width}
               valueColor={theme.muted}
             />
             {shown.map((file, index) => (
-              <DetailRow
-                key={`${file}-${index}`}
-                value={file}
-                width={width}
-              />
+              <DetailRow key={`${file}-${index}`} value={file} width={width} />
             ))}
             <OverflowNote hiddenCount={hidden} noun="file" />
             {findings.length > 0 ? (
@@ -220,7 +237,10 @@ export const GetTaskComponent = defineToolComponent({
     const state = isRecord(record?.state) ? record?.state : undefined
     const artifacts = readStringArray(record?.artifacts)
     const revision = readNumber(state?.revision)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Task lookup failed'
       : `Task · ${readString(record?.session) ?? 'session'}`
@@ -284,7 +304,10 @@ export const InspectEnvironmentComponent = defineToolComponent({
     const manifests = readStringArray(record?.manifests)
     const lockfiles = readStringArray(record?.lockfiles)
     const toolsRaw = isRecord(record?.tools) ? record?.tools : undefined
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Environment inspection failed'
       : `Environment · ${readString(record?.packageManager) ?? 'package manager unknown'}`
@@ -365,14 +388,19 @@ export const GetAffectedTestsComponent = defineToolComponent({
     const width = rowWidth(options.availableWidth)
     const impact = readRecordArray(record?.impact)
     const targets = readRecordArray(record?.targets)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Affected-test analysis failed'
-      : `Affected tests · ${formatCount(impact.length, 'changed file')} mapped`
-    const shown = impact.slice(0, MAX_ENTRIES)
-    const hidden = impact.length - shown.length
-    const candidateTotal = impact.reduce(
-      (total, entry) => total + readRecordArray(entry.candidates).length,
+      : `Affected tests · ${formatCount(impact.length || targets.length, 'changed file')} mapped · recommendations; tests not run${impact.some((entry) => typeof entry.graphNote === 'string') ? ' · graph tier unavailable' : ''}`
+    const captured = impact.length ? impact : targets
+    const shown = captured.slice(0, MAX_ENTRIES)
+    const hidden = captured.length - shown.length
+    const candidateTotal = captured.reduce(
+      (total, entry) =>
+        total + (Array.isArray(entry.candidates) ? entry.candidates.length : 0),
       0,
     )
 
@@ -397,11 +425,21 @@ export const GetAffectedTestsComponent = defineToolComponent({
             ) : null}
             {shown.map((entry, index) => {
               const source = readString(entry.source) ?? 'changed file'
-              const candidates = readStringArray(
-                readRecordArray(entry.candidates).map((candidate) =>
-                  readString(candidate.path),
-                ),
-              )
+              const candidates = Array.isArray(entry.candidates)
+                ? entry.candidates
+                    .slice(0, MAX_ENTRIES)
+                    .flatMap((candidate) =>
+                      typeof candidate === 'string'
+                        ? [candidate]
+                        : candidate &&
+                            typeof candidate === 'object' &&
+                            typeof candidate.path === 'string'
+                          ? [
+                              `${candidate.path}${candidate.confidence !== undefined ? ` · confidence ${String(candidate.confidence)}` : ''}${typeof candidate.tier === 'string' ? ` · ${candidate.tier}` : ''}`,
+                            ]
+                          : [],
+                    )
+                : []
               return (
                 <box
                   key={`${source}-${index}`}
@@ -418,6 +456,20 @@ export const GetAffectedTestsComponent = defineToolComponent({
                       valueColor={theme.muted}
                     />
                   ))}
+                  {typeof entry.graphNote === 'string' ? (
+                    <DetailRow
+                      value={entry.graphNote}
+                      width={width}
+                      valueColor={theme.warning}
+                    />
+                  ) : null}
+                  {Array.isArray(entry.candidates) &&
+                  entry.candidates.length > candidates.length ? (
+                    <OverflowNote
+                      hiddenCount={entry.candidates.length - candidates.length}
+                      noun="candidate · Inspect for retained details"
+                    />
+                  ) : null}
                 </box>
               )
             })}
@@ -444,7 +496,10 @@ export const GetBuildTargetsComponent = defineToolComponent({
     const error = errorOf(toolBlock)
     const width = rowWidth(options.availableWidth)
     const targets = readRecordArray(record?.targets)
-    const statuses = statusGlyphFor(error ? 'failed' : 'ready', theme)
+    const statuses = statusGlyphFor(
+      error ? 'failed' : outcomeForTool(toolBlock).label,
+      theme,
+    )
     const summary = error
       ? 'Build-target analysis failed'
       : `Build targets · ${formatCount(targets.length, 'package')}`
@@ -473,7 +528,9 @@ export const GetBuildTargetsComponent = defineToolComponent({
                 >
                   <text style={{ wrapMode: 'word' }}>
                     <span fg={theme.foreground}>{root}</span>
-                    <span fg={theme.muted}>{` · ${readString(target.manager) ?? 'unknown'}`}</span>
+                    <span
+                      fg={theme.muted}
+                    >{` · ${readString(target.manager) ?? 'unknown'}`}</span>
                   </text>
                   {commands.map((command, commandIndex) => (
                     <DetailRow

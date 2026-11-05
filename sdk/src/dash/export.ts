@@ -112,7 +112,10 @@ export async function exportDashStatic(
       // mkdtemp into outDir keeps every write under it even for a shared root.
       dir = await mkdtemp(path.join(path.resolve(outDir), 'dash-'))
     } catch (error) {
-      return { ok: false, error: `openbuff dash export: ${boundedMessage(error)}` }
+      return {
+        ok: false,
+        error: `openbuff dash export: ${boundedMessage(error)}`,
+      }
     }
 
     // Gather the snapshot FIRST: runs, then each run's events (bounded to the
@@ -126,7 +129,17 @@ export async function exportDashStatic(
     const receipts = await data.getReceipts()
     const gate = await data.getGateState()
 
-    const snapshot: DashSnapshot = { runs, events, receipts, gate }
+    const source = data.getSourceStatus
+      ? await data.getSourceStatus()
+      : { state: 'available' as const }
+    const snapshot: DashSnapshot = {
+      runs,
+      events,
+      receipts,
+      gate,
+      source,
+      capturedAt: new Date().toISOString(),
+    }
 
     const files: string[] = []
     for (const name of EXPORT_FILES) {
@@ -154,6 +167,9 @@ export async function exportDashStatic(
 
     return { ok: true, files }
   } catch (error) {
-    return { ok: false, error: `openbuff dash export: ${boundedMessage(error)}` }
+    return {
+      ok: false,
+      error: `openbuff dash export: ${boundedMessage(error)}`,
+    }
   }
 }

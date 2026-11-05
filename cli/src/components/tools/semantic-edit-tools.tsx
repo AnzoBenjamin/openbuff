@@ -2,6 +2,7 @@ import { useTheme } from '../../hooks/use-theme'
 import {
   getStructuredErrorMessages,
   getToolOutputRecords,
+  getCanonicalMutationResult,
 } from '../../utils/tool-result-normalizer'
 import {
   DetailRow,
@@ -22,6 +23,7 @@ import {
   truncateText,
 } from './human-result'
 import { defineToolComponent } from './types'
+import { StrReplaceComponent } from './str-replace'
 
 import type { ToolRenderConfig, ToolRenderOptions } from './types'
 
@@ -71,8 +73,7 @@ function readSemanticEditResult(outputRaw: unknown): SemanticEditResult {
     // Service failures surface under either `error` (the shared tool-result
     // normalizer field) or `errorMessage` (the per-file field), so accept
     // both rather than showing an empty body for a real failure.
-    errorMessage:
-      readString(record.errorMessage) ?? readString(record.error),
+    errorMessage: readString(record.errorMessage) ?? readString(record.error),
     unavailable: readString(record.unavailable),
   }
 }
@@ -85,13 +86,27 @@ function readSemanticEditResult(outputRaw: unknown): SemanticEditResult {
 function semanticEditStatus(
   result: SemanticEditResult,
   error: string | undefined,
+  lifecycle?: string,
 ): string {
+  if (result.files.some((file) => file.applied))
+    return result.applied === false ||
+      result.files.some((file) => !file.applied) ||
+      error
+      ? 'partial'
+      : 'applied'
+  if (
+    lifecycle === 'queued' ||
+    lifecycle === 'running' ||
+    lifecycle === 'cancelled' ||
+    lifecycle === 'failed'
+  )
+    return lifecycle
   if (error || result.unavailable || result.errorMessage) return 'failed'
   if (result.applied === false) return 'not_applied'
   if (result.applied === true) {
     return result.files.some((file) => !file.applied) ? 'partial' : 'applied'
   }
-  return result.files.length === 0 ? 'no_matches' : 'applied'
+  return 'outcome unknown'
 }
 
 /** `position.line` (1-based) plus a 1-based column from the raw LSP offset. */
@@ -176,24 +191,28 @@ export const RenameSymbolComponent = defineToolComponent({
     const error = getStructuredErrorMessages(
       toolBlock.outputRaw ?? toolBlock.output,
     )[0]
-    const status = semanticEditStatus(result, error)
+    const status = semanticEditStatus(result, error, toolBlock.lifecycle)
     const { glyph, color } = statusGlyphFor(status, theme)
     const summary = `Rename to ${readString(input?.new_name) ?? 'a new name'} in ${formatCount(result.files.length, 'file')}`
     const path = readString(input?.path) ?? 'unknown file'
     const position = positionLabel(input)
 
     return {
-      collapsedPreview: previewWithGlyph(summary, glyph),
+      collapsedPreview: previewWithGlyph(`${summary} · ${status}`, glyph),
       content: (
         <ResultShell>
           <ResultHeader
             name="Rename"
-            summary={truncateText(summary, 60)}
+            summary={truncateText(`${status} · ${summary}`, 60)}
             glyph={glyph}
             glyphColor={color}
           />
           <ResultBody>
-            <DetailRow label="File" value={path} width={rowWidth(options.availableWidth)} />
+            <DetailRow
+              label="File"
+              value={path}
+              width={rowWidth(options.availableWidth)}
+            />
             {position ? (
               <DetailRow
                 label="At"
@@ -218,7 +237,7 @@ export const CodeActionComponent = defineToolComponent({
     const error = getStructuredErrorMessages(
       toolBlock.outputRaw ?? toolBlock.output,
     )[0]
-    const status = semanticEditStatus(result, error)
+    const status = semanticEditStatus(result, error, toolBlock.lifecycle)
     const { glyph, color } = statusGlyphFor(status, theme)
     const kind = humanizeCodeActionKind(readString(input?.kind) ?? 'quick fix')
     const summary = `Code action: ${kind} in ${formatCount(result.files.length, 'file')}`
@@ -226,17 +245,21 @@ export const CodeActionComponent = defineToolComponent({
     const position = positionLabel(input)
 
     return {
-      collapsedPreview: previewWithGlyph(summary, glyph),
+      collapsedPreview: previewWithGlyph(`${summary} · ${status}`, glyph),
       content: (
         <ResultShell>
           <ResultHeader
             name="Code action"
-            summary={truncateText(summary, 60)}
+            summary={truncateText(`${status} · ${summary}`, 60)}
             glyph={glyph}
             glyphColor={color}
           />
           <ResultBody>
-            <DetailRow label="File" value={path} width={rowWidth(options.availableWidth)} />
+            <DetailRow
+              label="File"
+              value={path}
+              width={rowWidth(options.availableWidth)}
+            />
             {position ? (
               <DetailRow
                 label="At"
@@ -261,7 +284,7 @@ export const ExtractSymbolComponent = defineToolComponent({
     const error = getStructuredErrorMessages(
       toolBlock.outputRaw ?? toolBlock.output,
     )[0]
-    const status = semanticEditStatus(result, error)
+    const status = semanticEditStatus(result, error, toolBlock.lifecycle)
     const { glyph, color } = statusGlyphFor(status, theme)
     const symbolName = readString(input?.symbol_name) ?? 'symbol'
     const summary = `Extract ${symbolName} to ${readString(input?.destination_path) ?? 'a new file'}`
@@ -269,17 +292,21 @@ export const ExtractSymbolComponent = defineToolComponent({
     const position = positionLabel(input)
 
     return {
-      collapsedPreview: previewWithGlyph(summary, glyph),
+      collapsedPreview: previewWithGlyph(`${summary} · ${status}`, glyph),
       content: (
         <ResultShell>
           <ResultHeader
             name="Extract"
-            summary={truncateText(summary, 60)}
+            summary={truncateText(`${status} · ${summary}`, 60)}
             glyph={glyph}
             glyphColor={color}
           />
           <ResultBody>
-            <DetailRow label="From" value={path} width={rowWidth(options.availableWidth)} />
+            <DetailRow
+              label="From"
+              value={path}
+              width={rowWidth(options.availableWidth)}
+            />
             {position ? (
               <DetailRow
                 label="At"
@@ -305,6 +332,9 @@ export const ExtractSymbolComponent = defineToolComponent({
 export const RewriteSymbolComponent = defineToolComponent({
   toolName: 'rewrite_symbol',
   render(toolBlock, theme, options): ToolRenderConfig {
+    const canonical = getCanonicalMutationResult(toolBlock.outputRaw)
+    if (canonical)
+      return StrReplaceComponent.render(toolBlock as any, theme, options)
     const input = isRecord(toolBlock.input) ? toolBlock.input : undefined
     const records = getToolOutputRecords(toolBlock.outputRaw)
     const record = records[0]
@@ -316,24 +346,29 @@ export const RewriteSymbolComponent = defineToolComponent({
     const changedPaths = readStringArray(record?.changedPaths).length
     const message = readString(record?.message)
     const fileError = readString(record?.errorMessage)
-    const failure = error ?? fileError ?? message
+    const failure =
+      error ??
+      fileError ??
+      (message && /^(?:error|failed|failure)\b/i.test(message)
+        ? message
+        : undefined)
     const fileCount = Math.max(changedFiles, changedPaths)
     const status = failure
       ? 'failed'
       : fileCount > 0
         ? 'applied'
-        : 'no_matches'
+        : 'outcome unknown'
     const { glyph, color } = statusGlyphFor(status, theme)
     const summary = `Rewrite ${readString(input?.symbol) ?? 'symbol'} in ${formatCount(fileCount, 'file')}`
     const occurrence = readNumber(input?.occurrence)
 
     return {
-      collapsedPreview: previewWithGlyph(summary, glyph),
+      collapsedPreview: previewWithGlyph(`${summary} · ${status}`, glyph),
       content: (
         <ResultShell>
           <ResultHeader
             name="Rewrite"
-            summary={truncateText(summary, 60)}
+            summary={truncateText(`${status} · ${summary}`, 60)}
             glyph={glyph}
             glyphColor={color}
           />

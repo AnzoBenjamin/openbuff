@@ -19,7 +19,9 @@ export interface MarkdownPalette {
 }
 
 export function hasMarkdown(content: string): boolean {
-  return /[*_`#>\-\+]|\[[^\]]*\]\([^)]*\)|```/.test(content)
+  return /[*_`#>\-\+]|\[[^\]]*\]\([^)]*\)|^ {0,3}~{3,}|^ {0,3}=+\s*$/m.test(
+    content,
+  )
 }
 
 export function hasIncompleteCodeFence(content: string): boolean {

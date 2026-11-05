@@ -12,7 +12,7 @@ import {
   selectMessageFeedbackCategory,
 } from '../state/feedback-store'
 
-import type { ContentBlock, TextContentBlock } from '../types/chat'
+import type { ContentBlock } from '../types/chat'
 
 interface MessageFooterProps {
   messageId: string
@@ -26,6 +26,9 @@ interface MessageFooterProps {
   timerStartTime: number | null
   onFeedback?: (messageId: string) => void
   onCloseFeedback?: () => void
+  feedbackAvailable?: boolean
+  copy?: React.ComponentProps<typeof CopyButton>['copy']
+  copyScope?: 'answer' | 'text'
 }
 
 export const MessageFooter: React.FC<MessageFooterProps> = ({
@@ -40,6 +43,9 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
   timerStartTime,
   onFeedback,
   onCloseFeedback,
+  feedbackAvailable = false,
+  copy,
+  copyScope = 'answer',
 }) => {
   const theme = useTheme()
 
@@ -65,13 +71,15 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
 
   const shouldShowLoadingTimer = isLoading && !isComplete
   const shouldShowCompletionFooter = isComplete
-  const canRequestFeedback = shouldShowCompletionFooter && !hasSubmittedFeedback
+  const canRequestFeedback =
+    feedbackAvailable && shouldShowCompletionFooter && !hasSubmittedFeedback
   const isGoodOrBadSelection =
     selectedFeedbackCategory === 'good_result' ||
     selectedFeedbackCategory === 'bad_result'
   const shouldShowSubmittedFeedbackState =
     shouldShowCompletionFooter && hasSubmittedFeedback && isGoodOrBadSelection
   const shouldRenderFeedbackButton =
+    feedbackAvailable &&
     Boolean(onFeedback) &&
     (canRequestFeedback || shouldShowSubmittedFeedbackState)
 
@@ -85,51 +93,41 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
     onCloseFeedback?.()
   }, [canRequestFeedback, onCloseFeedback])
 
-  // Build text from content and text blocks for copy button
-  const textToCopy = [
-    content,
-    ...(blocks || [])
-      .filter((b): b is TextContentBlock => b.type === 'text')
-      .map((b) => b.content),
-  ]
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
-
-  // Loading timer
-  if (shouldShowLoadingTimer) {
-    return (
-      <text
-        attributes={TextAttributes.DIM}
-        style={{
-          wrapMode: 'none',
-          marginTop: 0,
-          marginBottom: 0,
-          alignSelf: 'flex-end',
-        }}
-      >
-        <ElapsedTimer
-          startTime={timerStartTime}
-          attributes={TextAttributes.DIM}
-        />
-      </text>
-    )
-  }
-
-  // Completion footer
-  if (!shouldShowCompletionFooter) {
-    return null
-  }
+  // Only metadata is inspected while rendering. Payload bytes are assembled lazily and cached per source revision.
+  const textToCopy = useMemo(() => {
+    let cached: string | undefined
+    return () => {
+      if (cached === undefined) cached = getAnswerCopyText(content, blocks)
+      return cached
+    }
+  }, [content, blocks])
+  const hasTextBlocks =
+    blocks?.some(
+      (block) => block.type === 'text' && block.textType !== 'reasoning',
+    ) ?? false
+  const hasReasoning =
+    blocks?.some(
+      (block) => block.type === 'text' && block.textType === 'reasoning',
+    ) ?? false
+  const hasCopySource = hasTextBlocks || (!hasReasoning && content.length > 0)
 
   const footerItems: { key: string; node: React.ReactNode }[] = []
 
   // Add copy button first if there's content to copy
-  if (textToCopy.length > 0) {
+  if (hasCopySource) {
     footerItems.push({
       key: 'copy',
       node: (
         <CopyButton
           textToCopy={textToCopy}
+          copy={copy}
+          label={
+            copyScope === 'text'
+              ? 'Copy text'
+              : shouldShowLoadingTimer || !isComplete
+                ? 'Copy partial answer'
+                : 'Copy answer'
+          }
           leadingSpace={false}
           style={{ wrapMode: 'none' }}
         />
@@ -137,7 +135,21 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
     })
   }
 
-  if (completionTime) {
+  if (shouldShowLoadingTimer) {
+    footerItems.push({
+      key: 'loading-time',
+      node: (
+        <text attributes={TextAttributes.DIM} wrapMode="none">
+          <ElapsedTimer
+            startTime={timerStartTime}
+            attributes={TextAttributes.DIM}
+          />
+        </text>
+      ),
+    })
+  }
+
+  if (isComplete && completionTime) {
     footerItems.push({
       key: 'time',
       node: (
@@ -155,13 +167,13 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
       ),
     })
   }
-  if (typeof credits === 'number' && credits > 0) {
+  if (isComplete && typeof credits === 'number' && credits > 0) {
     footerItems.push({
       key: 'cost',
       node: <CostIndicator cost={credits} />,
     })
   }
-  if (typeof cacheHitRate === 'number' && cacheHitRate > 0) {
+  if (isComplete && typeof cacheHitRate === 'number' && cacheHitRate > 0) {
     footerItems.push({
       key: 'cache',
       node: <CacheHitRateIndicator rate={cacheHitRate} />,
@@ -194,6 +206,7 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
         alignItems: 'center',
         alignSelf: 'flex-end',
         gap: 1,
+        flexWrap: 'wrap',
       }}
     >
       {footerItems.map((item, idx) => (
@@ -216,6 +229,23 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
       ))}
     </box>
   )
+}
+
+export function getAnswerCopyText(
+  content: string,
+  blocks?: ContentBlock[],
+): string {
+  const text = (blocks ?? [])
+    .filter((block) => block.type === 'text' && block.textType !== 'reasoning')
+    .map((block) => (block.type === 'text' ? block.content : ''))
+  if (text.length) return text.join('\n\n')
+  if (
+    blocks?.some(
+      (block) => block.type === 'text' && block.textType === 'reasoning',
+    )
+  )
+    return ''
+  return content
 }
 
 const CostIndicator: React.FC<{ cost: number }> = ({ cost }) => {

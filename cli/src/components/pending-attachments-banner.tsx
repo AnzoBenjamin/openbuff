@@ -1,125 +1,62 @@
-import { BottomBanner } from './bottom-banner'
-import { FileAttachmentCard } from './file-attachment-card'
-import { ImageCard } from './image-card'
-import { TextAttachmentCard } from './text-attachment-card'
+import { Button } from './button'
+import { useTerminalDimensions } from '../hooks/use-terminal-dimensions'
 import { useTheme } from '../hooks/use-theme'
 import { useChatStore } from '../state/chat-store'
+import { useOutputReaderStore } from '../state/output-reader-store'
+import { createJsonDocument } from '../utils/output-document'
+import { sliceTextCells } from '../utils/text-boundaries'
 
-import type {
-  PendingFileAttachment,
-  PendingImageAttachment,
-  PendingTextAttachment,
-} from '../types/store'
-
-/**
- * Combined banner for both image and text attachments.
- * Displays all attachments in a single horizontal row.
- */
-export const PendingAttachmentsBanner = () => {
+export const PendingAttachmentsBanner = ({
+  onManageAttachments,
+}: { onManageAttachments?: () => void } = {}) => {
   const theme = useTheme()
-  const pendingAttachments = useChatStore((state) => state.pendingAttachments)
-  const removePendingAttachment = useChatStore(
-    (state) => state.removePendingAttachment,
-  )
-
-  // Split and categorize attachments
-  const pendingImages = pendingAttachments.filter(
-    (a): a is PendingImageAttachment => a.kind === 'image',
-  )
-  const pendingTextAttachments = pendingAttachments.filter(
-    (a): a is PendingTextAttachment => a.kind === 'text',
-  )
-  const pendingFileAttachments = pendingAttachments.filter(
-    (a): a is PendingFileAttachment => a.kind === 'file',
-  )
-
-  // Separate error messages from actual images
-  const errorImages: PendingImageAttachment[] = []
-  const validImages: PendingImageAttachment[] = []
-  for (const img of pendingImages) {
-    if (img.status === 'error') {
-      errorImages.push(img)
-    } else {
-      validImages.push(img)
-    }
+  const { terminalWidth } = useTerminalDimensions()
+  const attachments = useChatStore((state) => state.pendingAttachments)
+  if (!attachments.length) return null
+  const reading = attachments.filter(
+    (attachment) =>
+      attachment.kind !== 'text' && attachment.status === 'processing',
+  ).length
+  const failed = attachments.filter(
+    (attachment) => attachment.kind !== 'text' && attachment.status === 'error',
+  ).length
+  const manage = () => {
+    if (onManageAttachments) onManageAttachments()
+    else
+      useOutputReaderStore.getState().open({
+        document: createJsonDocument(
+          'composer-attachment-list',
+          'Composer attachments',
+          attachments.map((attachment) =>
+            attachment.kind === 'text'
+              ? { type: 'Text', content: attachment.content }
+              : {
+                  type: attachment.kind,
+                  filename: attachment.filename,
+                  path: attachment.path,
+                  status: attachment.status,
+                  note: attachment.note,
+                  ...(attachment.kind === 'file'
+                    ? { content: attachment.content }
+                    : {
+                        imageBytesCaptured: Boolean(attachment.processedImage),
+                      }),
+                },
+          ),
+        ),
+      })
   }
-
-  const hasValidImages = validImages.length > 0
-  const hasTextAttachments = pendingTextAttachments.length > 0
-  const hasFileAttachments = pendingFileAttachments.length > 0
-  const hasErrorsOnly =
-    errorImages.length > 0 &&
-    !hasValidImages &&
-    !hasTextAttachments &&
-    !hasFileAttachments
-
-  // Nothing to show
-  if (
-    !hasValidImages &&
-    !hasTextAttachments &&
-    !hasFileAttachments &&
-    errorImages.length === 0
-  ) {
-    return null
-  }
-
-  // If we only have errors (no valid attachments), show just the error messages
-  if (hasErrorsOnly) {
-    return (
-      <BottomBanner borderColorKey="error">
-        {errorImages.map((image, index) => (
-          <text key={`${image.path}-${index}`} style={{ fg: theme.error }}>
-            {image.note} ({image.filename})
-          </text>
-        ))}
-      </BottomBanner>
-    )
-  }
-
   return (
-    <BottomBanner borderColorKey="imageCardBorder">
-      {/* Error messages shown above the attachments */}
-      {errorImages.map((image, index) => (
-        <text key={`error-${image.path}-${index}`} style={{ fg: theme.error }}>
-          {image.note} ({image.filename})
+    <box style={{ flexDirection: 'column', flexShrink: 0 }}>
+      <Button onClick={manage}>
+        <text fg={failed ? theme.error : theme.muted} wrapMode="none">
+          {sliceTextCells(
+            `${attachments.length} attachments${reading ? ` · ${reading} reading` : ''}${failed ? ` · ${failed} failed` : ''} · Manage attachments`,
+            0,
+            terminalWidth - 4,
+          )}
         </text>
-      ))}
-
-      {/* All attachment cards in a horizontal row */}
-      <box
-        style={{
-          flexDirection: 'row',
-          gap: 1,
-          flexWrap: 'wrap',
-        }}
-      >
-        {/* Image cards */}
-        {validImages.map((image, index) => (
-          <ImageCard
-            key={`img-${image.path}-${index}`}
-            image={image}
-            onRemove={() => removePendingAttachment(image.path)}
-          />
-        ))}
-
-        {/* Text attachment cards */}
-        {pendingTextAttachments.map((attachment) => (
-          <TextAttachmentCard
-            key={attachment.id}
-            attachment={attachment}
-            onRemove={() => removePendingAttachment(attachment.id)}
-          />
-        ))}
-
-        {/* File/folder attachment cards */}
-        {pendingFileAttachments.map((attachment) => (
-          <FileAttachmentCard
-            key={attachment.id}
-            attachment={attachment}
-            onRemove={() => removePendingAttachment(attachment.path)}
-          />
-        ))}
-      </box>
-    </BottomBanner>
+      </Button>
+    </box>
   )
 }

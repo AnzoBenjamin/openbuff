@@ -48,6 +48,7 @@ export interface UseChatMessagesReturn {
   handleLoadPreviousMessages: () => void
   /** Handler to toggle all collapsed/expanded state in all AI responses */
   handleToggleAll: () => void
+  revealMessage: (messageId: string) => string | undefined
 }
 
 /**
@@ -249,6 +250,20 @@ export function useChatMessages({
 
   const hiddenMessageCount =
     topLevelMessages.length - visibleTopLevelMessages.length
+  const revealMessage = useCallback((messageId: string) => {
+    let target = messages.find((message) => message.id === messageId)
+    const visited = new Set<string>()
+    while (target?.parentId && !visited.has(target.id)) {
+      visited.add(target.id)
+      const parent = messages.find((message) => message.id === target!.parentId)
+      if (!parent) break
+      target = parent
+    }
+    const index = topLevelMessages.findIndex((message) => message.id === target?.id)
+    if (index < 0) return
+    setVisibleMessageCount((previous) => Math.max(previous, topLevelMessages.length - index))
+    return topLevelMessages[index].id
+  }, [messages, topLevelMessages])
 
   return {
     messageTree,
@@ -258,6 +273,7 @@ export function useChatMessages({
     handleCollapseToggle,
     isUserCollapsing,
     handleLoadPreviousMessages,
+    revealMessage,
     handleToggleAll,
   }
 }

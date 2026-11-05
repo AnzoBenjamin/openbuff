@@ -76,6 +76,137 @@ export type RestoreOutcome =
   | { status: 'unavailable' }
   | { status: 'error'; message: string }
 
+export type RestorePreview = {
+  status: 'ready'
+  sha: string
+  projectRoot: string
+  token: string
+  files: string[]
+  totalFiles: number
+  diff: string
+  detailTruncated: boolean
+}
+
+/** Read-only, snapshot- and working-tree-bound restore evidence. No checkout occurs. */
+export async function previewTurnRestore(
+  sha: string,
+  opts?: { projectRoot?: string },
+  deps?: TurnSnapshotDeps,
+): Promise<RestorePreview | Exclude<RestoreOutcome, { status: 'restored' }>> {
+  const root = resolveProjectRoot(opts)
+  if (!root) return { status: 'unavailable' }
+  const snapshots = await listTurnSnapshots({ projectRoot: root }, deps)
+  const matches = snapshots.filter(
+    (entry) =>
+      /^[0-9a-fA-F]{4,40}$/.test(sha) &&
+      entry.sha.toLowerCase().startsWith(sha.toLowerCase()),
+  )
+  if (matches.length !== 1) return { status: 'not-found' }
+  const target = matches[0]!.sha
+  try {
+    const env = { ...getSystemProcessEnv() }
+    const targetFiles = new Set(
+      (
+        await runGitCommand(
+          deps,
+          ['ls-tree', '-r', '--name-only', '-z', target],
+          root,
+          env,
+        )
+      ).stdout
+        .split('\0')
+        .filter(Boolean),
+    )
+    const untracked = (
+      await runGitCommand(deps, ['ls-files', '--others', '-z'], root, env)
+    ).stdout
+      .split('\0')
+      .filter(Boolean)
+    if (untracked.some((file) => targetFiles.has(file)))
+      return {
+        status: 'error',
+        message:
+          'An untracked file occupies a target snapshot path. Move that file to a safe location, then preview again; restore will not overwrite it.',
+      }
+    const files = (
+      await runGitCommand(
+        deps,
+        [
+          'diff',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--name-only',
+          '-z',
+          target,
+          '--',
+        ],
+        root,
+        env,
+      )
+    ).stdout
+      .split('\0')
+      .filter(Boolean)
+    const diff = (
+      await runGitCommand(
+        deps,
+        [
+          'diff',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--no-color',
+          '--binary',
+          '-R',
+          target,
+          '--',
+        ],
+        root,
+        env,
+      )
+    ).stdout
+    // Include the complete bounded git result in the token, not only the displayed prefix.
+    const token = createHash('sha256')
+      .update(root)
+      .update(target)
+      .update(diff)
+      .digest('hex')
+      .slice(0, 24)
+    return {
+      status: 'ready',
+      sha: target,
+      projectRoot: root,
+      token,
+      files: files.slice(0, 200),
+      totalFiles: files.length,
+      diff: diff.slice(0, 32000),
+      detailTruncated: diff.length > 32000 || files.length > 200,
+    }
+  } catch (error) {
+    return {
+      status: 'error',
+      message: `Restore preview could not be captured: ${toErrorMessage(error)}`,
+    }
+  }
+}
+
+/** Revalidate exactly the displayed target/scope before applying a restore. */
+export async function restorePreviewedTurn(
+  preview: RestorePreview,
+  deps?: TurnSnapshotDeps,
+): Promise<RestoreOutcome> {
+  const current = await previewTurnRestore(
+    preview.sha,
+    { projectRoot: preview.projectRoot },
+    deps,
+  )
+  if (current.status !== 'ready' || current.token !== preview.token)
+    return {
+      status: 'error',
+      message:
+        'The tracked files or snapshot changed after this preview. Run /restore again to inspect the current changes.',
+    }
+  return restoreToTurn(preview.sha, { projectRoot: preview.projectRoot }, deps)
+}
+
 /**
  * Turn snapshots v1 (bounded first slice): git-plumbing snapshots of the
  * TRACKED tree, one per successful turn, chained on the private ref
@@ -165,7 +296,9 @@ export function logTurnSnapshotFailure(
   }
 }
 
-function resolveProjectRoot(opts?: { projectRoot?: string }): string | undefined {
+function resolveProjectRoot(opts?: {
+  projectRoot?: string
+}): string | undefined {
   if (opts?.projectRoot) {
     return opts.projectRoot
   }
@@ -195,7 +328,12 @@ async function revParse(
   env: Record<string, string | undefined>,
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await runGitCommand(deps, ['rev-parse', '--verify', ref], cwd, env)
+    const { stdout } = await runGitCommand(
+      deps,
+      ['rev-parse', '--verify', ref],
+      cwd,
+      env,
+    )
     const sha = stdout.trim()
     return sha.length > 0 ? sha : undefined
   } catch {
@@ -315,7 +453,9 @@ export async function createTurnSnapshot(
     // not captured by the snapshot.
     await runGitCommand(deps, ['read-tree', 'HEAD'], root, indexEnv)
     await runGitCommand(deps, ['add', '-u'], root, indexEnv)
-    const tree = (await runGitCommand(deps, ['write-tree'], root, indexEnv)).stdout.trim()
+    const tree = (
+      await runGitCommand(deps, ['write-tree'], root, indexEnv)
+    ).stdout.trim()
 
     // Parent = current tip of the private ref; absent ref => orphan commit.
     const parent = await revParse(deps, TURN_SNAPSHOT_REF, root, env)
@@ -447,7 +587,12 @@ export async function pruneTurnSnapshots(
     // per-snapshot overhead is a single extra git call in the common case.
     const { stdout } = await runGitCommand(
       deps,
-      ['log', `--max-count=${maxRetained + 1}`, '--format=%H %ct %s', TURN_SNAPSHOT_REF],
+      [
+        'log',
+        `--max-count=${maxRetained + 1}`,
+        '--format=%H %ct %s',
+        TURN_SNAPSHOT_REF,
+      ],
       root,
       env,
     )
@@ -493,7 +638,12 @@ export async function listTurnSnapshots(
     // Reading never touches the user's index, so a plain `git log` is fine.
     const { stdout } = await runGitCommand(
       deps,
-      ['log', `--max-count=${MAX_LISTED_SNAPSHOTS}`, '--format=%H %ct %s', TURN_SNAPSHOT_REF],
+      [
+        'log',
+        `--max-count=${MAX_LISTED_SNAPSHOTS}`,
+        '--format=%H %ct %s',
+        TURN_SNAPSHOT_REF,
+      ],
       root,
       env,
     )
@@ -530,7 +680,12 @@ async function checkoutSnapshotTree(
       ...getSystemProcessEnv(),
       GIT_INDEX_FILE: path.join(tempDir, 'index'),
     }
-    await runGitCommand(deps, ['read-tree', `${commitSha}^{tree}`], root, indexEnv)
+    await runGitCommand(
+      deps,
+      ['read-tree', `${commitSha}^{tree}`],
+      root,
+      indexEnv,
+    )
     await runGitCommand(
       deps,
       ['checkout-index', '-a', '-f', `--prefix=${checkoutPrefix(root)}`],
@@ -958,10 +1113,8 @@ export async function runTurnBisection(
   const command = opts?.command ?? 'bun test'
   const runSuite =
     deps?.runTestSuite ??
-    (async (
-      entry: TurnSnapshotEntry,
-      next: TurnSnapshotEntry | undefined,
-    ) => await defaultRunTestSuite(command, root))
+    (async (entry: TurnSnapshotEntry, next: TurnSnapshotEntry | undefined) =>
+      await defaultRunTestSuite(command, root))
   const safeProgress = (progress: BisectProgress): void => {
     try {
       opts?.onProgress?.(progress)

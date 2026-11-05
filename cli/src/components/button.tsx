@@ -1,9 +1,17 @@
-import { memo, useRef } from 'react'
+import {
+  cloneElement,
+  isValidElement,
+  memo,
+  useCallback,
+  useRef,
+  useState,
+} from 'react'
+import { TextAttributes } from '@opentui/core'
 
 import { makeTextUnselectable } from './clickable'
 
-import type { ReactNode } from 'react'
-import type { KeyEvent } from '@opentui/core'
+import type { ReactElement, ReactNode, Ref } from 'react'
+import type { BoxRenderable, KeyEvent } from '@opentui/core'
 
 interface ButtonProps {
   onClick?: (e?: unknown) => void | Promise<unknown>
@@ -11,6 +19,9 @@ interface ButtonProps {
   onMouseOut?: () => void
   onKeyDown?: (event: KeyEvent) => void
   focusable?: boolean
+  ref?: Ref<BoxRenderable>
+  onFocused?: () => void
+  onBlurred?: () => void
   style?: Record<string, unknown>
   children?: ReactNode
   // pass-through for box host props
@@ -19,6 +30,28 @@ interface ButtonProps {
 
 export const isButtonActivationKey = (event: Pick<KeyEvent, 'name'>) =>
   event.name === 'return' || event.name === 'enter' || event.name === 'space'
+
+/** Attribute-only focus does not change row width or create nested host boxes. */
+function underlineFocusedText(node: ReactNode): ReactNode {
+  if (Array.isArray(node)) return node.map(underlineFocusedText)
+  if (!isValidElement(node)) return node
+  const element = node as ReactElement<{
+    children?: ReactNode
+    attributes?: number
+    style?: Record<string, unknown>
+  }>
+  const text = element.type === 'text' || element.type === 'span'
+  const attributes =
+    (element.props.attributes ?? Number(element.props.style?.attributes ?? 0)) |
+    TextAttributes.UNDERLINE
+  return cloneElement(
+    element,
+    text ? { attributes, style: { ...element.props.style, attributes } } : {},
+    element.props.children === undefined
+      ? undefined
+      : underlineFocusedText(element.props.children),
+  )
+}
 
 /**
  * A button component with proper click detection and non-selectable text.
@@ -38,17 +71,58 @@ export const Button = memo(function Button({
   onMouseOut,
   onKeyDown,
   focusable = onClick != null,
+  ref,
+  onFocused,
+  onBlurred,
   style,
   children,
   ...rest
 }: ButtonProps) {
-  const processedChildren = makeTextUnselectable(children)
+  const [focused, setFocused] = useState(false)
+  const processedChildren = makeTextUnselectable(
+    focused ? underlineFocusedText(children) : children,
+  )
+  const nodeRef = useRef<BoxRenderable | null>(null)
+  const refCleanup = useRef<(() => void) | null>(null)
+  const callbacks = useRef({ onFocused, onBlurred })
+  callbacks.current = { onFocused, onBlurred }
+  const handleFocused = useCallback(() => {
+    setFocused(true)
+    callbacks.current.onFocused?.()
+  }, [])
+  const handleBlurred = useCallback(() => {
+    setFocused(false)
+    callbacks.current.onBlurred?.()
+  }, [])
+  const attachRef = useCallback(
+    (node: BoxRenderable | null) => {
+      const hadCleanup = refCleanup.current !== null
+      refCleanup.current?.()
+      refCleanup.current = null
+      nodeRef.current?.off('focused', handleFocused)
+      nodeRef.current?.off('blurred', handleBlurred)
+      nodeRef.current = node
+      if (node) {
+        node.on('focused', handleFocused)
+        node.on('blurred', handleBlurred)
+        setFocused(node.focused)
+      }
+      if (typeof ref === 'function') {
+        if (node || !hadCleanup) {
+          const cleanup = ref(node)
+          if (typeof cleanup === 'function') refCleanup.current = cleanup
+        }
+      } else if (ref) ref.current = node
+    },
+    [ref, handleFocused, handleBlurred],
+  )
 
   // Track whether mouse down occurred on this element to implement proper click detection
   // This prevents hover from triggering clicks in some terminals
   const mouseDownRef = useRef(false)
 
   const handleMouseDown = () => {
+    if (focusable) nodeRef.current?.focus()
     mouseDownRef.current = true
   }
 
@@ -77,6 +151,7 @@ export const Button = memo(function Button({
   return (
     <box
       {...rest}
+      ref={attachRef}
       focusable={focusable}
       style={style}
       onKeyDown={handleKeyDown}

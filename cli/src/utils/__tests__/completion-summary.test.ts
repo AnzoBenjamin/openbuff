@@ -368,3 +368,138 @@ describe('formatCompletionSummary', () => {
     ).toBe('✅ 1 file edited | ✅ Tests: 3 passed | ❌ 1 error')
   })
 })
+
+describe('review outcome authority and capture freshness', () => {
+  const review = (
+    id: string,
+    verdict: string,
+    lifecycle?: ToolContentBlock['lifecycle'],
+  ): ToolContentBlock => ({
+    type: 'tool',
+    toolName: 'set_output',
+    toolCallId: id,
+    input: { status: verdict } as never,
+    lifecycle,
+    outputRaw: [{ type: 'json', value: { success: true } }],
+  })
+  const edit: ToolContentBlock = {
+    type: 'tool',
+    toolName: 'edit_transaction',
+    toolCallId: 'edit',
+    input: {},
+    outputRaw: [
+      {
+        type: 'json',
+        value: {
+          kind: 'file_mutation_result',
+          outcome: 'applied',
+          actions: [{ path: 'a.ts', outcome: 'applied' }],
+        },
+      },
+    ],
+  }
+  test('NON_BLOCKING is never a substring BLOCKING and unrelated quoted prose sets no verdict', () => {
+    expect(
+      computeCompletionSummary([review('r', 'NON_BLOCKING')])?.reviewVerdict,
+    ).toBe('NON_BLOCKING')
+    expect(
+      computeCompletionSummary([
+        {
+          type: 'agent',
+          agentId: 'a',
+          agentName: 'reviewer',
+          agentType: 'code-reviewer',
+          status: 'complete',
+          content: 'The quoted word BLOCKING is an example, not a verdict.',
+        },
+      ])?.reviewVerdict ?? null,
+    ).toBeNull()
+  })
+  test('latest accepted review after repaired scope wins and earlier verdicts retain source identity', () => {
+    const summary = computeCompletionSummary([
+      review('old', 'BLOCKING'),
+      edit,
+      review('new', 'LOOKS_GOOD'),
+    ])!
+    expect(summary.reviewVerdict).toBe('LOOKS_GOOD')
+    expect(summary.reviewHistory).toEqual([
+      { verdict: 'BLOCKING', sourceId: 'old', stale: true },
+      { verdict: 'LOOKS_GOOD', sourceId: 'new', stale: false },
+    ])
+  })
+  test('an edit after review marks old evidence stale and pending/cancelled reviews never settle', () => {
+    const summary = computeCompletionSummary([
+      review('old', 'LOOKS_GOOD'),
+      edit,
+    ])!
+    expect(summary.reviewVerdict).toBeNull()
+    expect(formatCompletionSummary(summary)).toContain(
+      'predates the latest captured edit',
+    )
+    expect(
+      computeCompletionSummary([review('pending', 'LOOKS_GOOD', 'running')]),
+    ).toBeNull()
+    expect(
+      computeCompletionSummary([
+        review('cancelled', 'LOOKS_GOOD', 'cancelled'),
+      ]),
+    ).toBeNull()
+  })
+  test('rejected preflight and unknown validation results agree with hook cards', () => {
+    const summary = computeCompletionSummary([
+      {
+        type: 'tool',
+        toolName: 'run_file_change_hooks',
+        toolCallId: 'h',
+        input: {},
+        outputRaw: [
+          {
+            type: 'json',
+            value: [
+              { validationStatus: 'diagnostic_delta_rejected' },
+              { hookName: 'unknown' },
+            ],
+          },
+        ],
+      },
+    ])!
+    expect(summary.hooksFailed).toBe(1)
+    expect(summary.hooksPassed).toBe(0)
+    expect(summary.hooksUnknown).toBe(1)
+  })
+})
+
+test('current set_output data receipt and Output set acknowledgment establish the exact verdict', () => {
+  const block: ToolContentBlock = {
+    type: 'tool',
+    toolName: 'set_output',
+    toolCallId: 'current-receipt',
+    input: {
+      data: {
+        verdict: 'NON_BLOCKING',
+        snapshotFingerprint: 'captured-revision',
+        reviewedFiles: ['a.ts'],
+      },
+    } as never,
+    lifecycle: 'succeeded',
+    outputRaw: [{ type: 'json', value: { message: 'Output set' } }],
+  }
+  expect(computeCompletionSummary([block])?.reviewVerdict).toBe('NON_BLOCKING')
+  expect(computeCompletionSummary([{ ...block, outputRaw: [] }])).toBeNull()
+})
+
+test('an input-derived write proposal never increments confirmed edit counts', () => {
+  const proposal: ToolContentBlock = {
+    type: 'tool',
+    toolName: 'write_file',
+    toolCallId: 'proposal',
+    input: { path: 'src/proposed.ts', content: 'proposed source' },
+    lifecycle: 'running',
+  }
+  expect(computeCompletionSummary([proposal])).toBeNull()
+  const history = computeCompletionSummary([
+    { ...proposal, lifecycle: 'succeeded' },
+  ])!
+  expect(history.filesEdited).toBe(0)
+  expect(history.filesUnconfirmed).toBe(1)
+})

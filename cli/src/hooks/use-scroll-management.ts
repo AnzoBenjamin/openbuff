@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ScrollBoxRenderable } from '@opentui/core'
 
 import type { ChatMessage } from '../types/chat'
+import { getCliEnv } from '../utils/env'
 
 // Scroll detection threshold - how close to bottom to consider "at bottom"
 export const SCROLL_NEAR_BOTTOM_THRESHOLD = 1
@@ -102,7 +103,10 @@ export const computePageScrollTarget = (
   maxScroll: number,
   direction: 'up' | 'down',
 ): number => {
-  const scrollAmount = Math.floor(viewportHeight * PAGE_SCROLL_FRACTION)
+  const scrollAmount = Math.max(
+    1,
+    Math.floor(viewportHeight * PAGE_SCROLL_FRACTION),
+  )
   if (direction === 'up') return Math.max(0, position - scrollAmount)
   return Math.min(maxScroll, position + scrollAmount)
 }
@@ -609,8 +613,12 @@ export const useChatScrollbox = (
   scrollRef: React.RefObject<ScrollBoxRenderable | null>,
   messages: ChatMessage[],
   isUserCollapsing: () => boolean,
+  readingPaused = false,
 ) => {
   const autoScrollEnabledRef = useRef<boolean>(true)
+  const scrollIntentRef = useRef(0)
+  const readingPausedRef = useRef(readingPaused)
+  readingPausedRef.current = readingPaused
   // The last scrollbar position the 'change' handler observed, seeded at
   // subscribe time with the live position: a movement-less 'change' event
   // (transient reflow geometry during message-append) must be classifiable
@@ -698,11 +706,7 @@ export const useChatScrollbox = (
   // write actually moved the position, so a no-op or silently-clamped write
   // can never leave the flag armed with no 'change' event to consume it.
   const applyProgrammaticWrite = useCallback(
-    (
-      scrollbox: ScrollBoxRenderable,
-      next: number,
-      follow?: boolean,
-    ): boolean =>
+    (scrollbox: ScrollBoxRenderable, next: number, follow?: boolean): boolean =>
       applyProgrammaticScrollTop(
         scrollbox,
         next,
@@ -808,10 +812,7 @@ export const useChatScrollbox = (
         )
         // Already settled at the re-clamped desired position (or the pass
         // budget is exhausted): stop verifying.
-        if (
-          correction === null ||
-          pending.passes >= ANCHOR_VERIFY_MAX_PASSES
-        ) {
+        if (correction === null || pending.passes >= ANCHOR_VERIFY_MAX_PASSES) {
           anchorVerifyRef.current = null
           return
         }
@@ -891,13 +892,12 @@ export const useChatScrollbox = (
       const carriedDesired = verifySettledBottomOnComplete
         ? null
         : (carryPendingVerifyResidual(
-              anchorVerifyRef.current,
-              mergedTarget,
-              startScroll,
-              ANCHOR_VERIFY_EPSILON,
-              scrollbox,
-            ) ??
-          (supersededCarried !== null ? mergedTarget : null))
+            anchorVerifyRef.current,
+            mergedTarget,
+            startScroll,
+            ANCHOR_VERIFY_EPSILON,
+            scrollbox,
+          ) ?? (supersededCarried !== null ? mergedTarget : null))
       // The carried residual now rides this animation's frames and its
       // completion's deferred verification; the pending chain itself is
       // superseded so it cannot fight the animation's frames.
@@ -930,6 +930,8 @@ export const useChatScrollbox = (
       // The ease start was already read through the canonical scrollbar
       // source above, before the pending chain's residual was captured.
       const startTime = Date.now()
+      const reducedMotion = getCliEnv().OPENBUFF_REDUCED_MOTION
+      if (reducedMotion === 'true' || reducedMotion === '1') duration = 0
       const frameInterval = ANIMATION_FRAME_INTERVAL_MS
 
       const animate = () => {
@@ -950,7 +952,7 @@ export const useChatScrollbox = (
           return
         }
         const elapsed = Date.now() - startTime
-        const progress = Math.min(elapsed / duration, 1)
+        const progress = duration <= 0 ? 1 : Math.min(elapsed / duration, 1)
         const easedProgress = easeOutCubic(progress)
         // Read the target EVERY frame: an anchor compensation landing
         // mid-flight mutates animationTargetRef, so easing toward the current
@@ -966,11 +968,7 @@ export const useChatScrollbox = (
           scrollbox.scrollHeight - scrollbox.viewport.height,
         )
         const newScroll = clampScrollValue(
-          computeAnimationFrameScroll(
-            startScroll,
-            frameTarget,
-            easedProgress,
-          ),
+          computeAnimationFrameScroll(startScroll, frameTarget, easedProgress),
           maxScroll,
         )
 
@@ -1058,43 +1056,48 @@ export const useChatScrollbox = (
    * settled maxScroll with the follow intent armed instead of letting a
    * short final tick silently disable auto-follow.
    */
-  const scrollToLatest = useCallback((options?: { immediate?: boolean }): void => {
-    const scrollbox = scrollRef.current
-    if (!scrollbox) return
+  const scrollToLatest = useCallback(
+    (options?: { immediate?: boolean }): void => {
+      if (readingPausedRef.current) return
+      scrollIntentRef.current++
+      const scrollbox = scrollRef.current
+      if (!scrollbox) return
 
-    const maxScroll = Math.max(
-      0,
-      scrollbox.scrollHeight - scrollbox.viewport.height,
-    )
-    if (options?.immediate) {
-      cancelAnimation()
-      cancelAnchorVerify()
-      const before = scrollbox.verticalScrollBar.scrollPosition
-      autoScrollEnabledRef.current = true
-      applyProgrammaticWrite(scrollbox, maxScroll, true)
-      scheduleAnchorVerify(
-        scrollbox,
-        VERIFY_SETTLED_BOTTOM,
+      const maxScroll = Math.max(
+        0,
+        scrollbox.scrollHeight - scrollbox.viewport.height,
+      )
+      if (options?.immediate) {
+        cancelAnimation()
+        cancelAnchorVerify()
+        const before = scrollbox.verticalScrollBar.scrollPosition
+        autoScrollEnabledRef.current = true
+        applyProgrammaticWrite(scrollbox, maxScroll, true)
+        scheduleAnchorVerify(
+          scrollbox,
+          VERIFY_SETTLED_BOTTOM,
+          maxScroll,
+          before,
+          true,
+        )
+        return
+      }
+      animateScrollTo(
         maxScroll,
-        before,
+        DEFAULT_SCROLL_ANIMATION_DURATION_MS,
+        true,
         true,
       )
-      return
-    }
-    animateScrollTo(
-      maxScroll,
-      DEFAULT_SCROLL_ANIMATION_DURATION_MS,
-      true,
-      true,
-    )
-  }, [
-    scrollRef,
-    animateScrollTo,
-    cancelAnimation,
-    cancelAnchorVerify,
-    applyProgrammaticWrite,
-    scheduleAnchorVerify,
-  ])
+    },
+    [
+      scrollRef,
+      animateScrollTo,
+      cancelAnimation,
+      cancelAnchorVerify,
+      applyProgrammaticWrite,
+      scheduleAnchorVerify,
+    ],
+  )
 
   // Viewport-windowing scroll anchoring: shift scrollTop by `delta` so the
   // viewport keeps showing the same content when a message above it changes
@@ -1201,10 +1204,16 @@ export const useChatScrollbox = (
       // viewport stable under either commit ordering.
       scheduleAnchorVerify(scrollbox, desired, next, current, opts?.follow)
     },
-    [scrollRef, scheduleAnchorVerify, cancelAnchorVerify, applyProgrammaticWrite],
+    [
+      scrollRef,
+      scheduleAnchorVerify,
+      cancelAnchorVerify,
+      applyProgrammaticWrite,
+    ],
   )
 
   const scrollUp = useCallback((): void => {
+    scrollIntentRef.current++
     const scrollbox = scrollRef.current
     if (!scrollbox) return
 
@@ -1225,6 +1234,7 @@ export const useChatScrollbox = (
   }, [scrollRef, animateScrollTo])
 
   const scrollDown = useCallback((): void => {
+    scrollIntentRef.current++
     const scrollbox = scrollRef.current
     if (!scrollbox) return
 
@@ -1343,6 +1353,7 @@ export const useChatScrollbox = (
         // user scrolls.
         cancelAnchorVerify()
         autoScrollEnabledRef.current = isNearBottom
+        scrollIntentRef.current++
         // Re-synchronize the follow intent with the live follow state after
         // a user scroll, so no later reader can observe a leftover intent
         // from an earlier programmatic write.
@@ -1406,7 +1417,7 @@ export const useChatScrollbox = (
         const target = computeAutoScrollTarget(
           scrollbox,
           maxScroll,
-          autoScrollEnabledRef.current,
+          autoScrollEnabledRef.current && !readingPausedRef.current,
           isUserCollapsing(),
         )
         // Skip the write when the position is already within epsilon of
@@ -1463,9 +1474,32 @@ export const useChatScrollbox = (
       cancelAnchorVerify()
     }
   }, [cancelAnimation, cancelAnchorVerify])
+  useEffect(() => {
+    if (!readingPaused) return
+    cancelAnimation()
+    cancelAnchorVerify()
+    autoScrollEnabledRef.current = false
+    programmaticFollowRef.current = false
+    setIsAtBottom(false)
+  }, [readingPaused, cancelAnimation, cancelAnchorVerify])
+  const isFollowing = useCallback(
+    () => autoScrollEnabledRef.current && !readingPausedRef.current,
+    [],
+  )
+  const pauseFollowing = useCallback(() => {
+    cancelAnimation()
+    cancelAnchorVerify()
+    scrollIntentRef.current++
+    autoScrollEnabledRef.current = false
+    programmaticFollowRef.current = false
+    setIsAtBottom(false)
+  }, [cancelAnimation, cancelAnchorVerify])
 
   return {
     scrollToLatest,
+    scrollIntentRef,
+    isFollowing,
+    pauseFollowing,
     scrollUp,
     scrollDown,
     adjustScrollTop,

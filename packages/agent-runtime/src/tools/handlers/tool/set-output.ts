@@ -228,9 +228,11 @@ async function buildOversizedSetOutputSalvage(
   const artifactFields = persisted
     ? {
         artifactPath: persisted.artifactPath,
+        artifactPersisted: true,
         artifactCreatedAt: persisted.createdAt,
         artifactWrittenByThisCall: true,
-        artifactBytes: data.length,
+        artifactBytes: Buffer.byteLength(data, 'utf8'),
+        sha256: contentHash,
         artifact:
           'Full oversized payload persisted verbatim by this call; read it with read_files using artifactPath.',
       }
@@ -288,6 +290,25 @@ function isOversizedSetOutputSalvage(value: unknown): boolean {
     typeof truncation === 'object' &&
     (truncation as Record<string, unknown>).reason === 'oversized_payload'
   )
+}
+
+/** Publish only provenance present on the record actually stored by runtime. */
+function salvageArtifactAcknowledgment(
+  record: Record<string, unknown>,
+  writtenByThisCall: boolean,
+) {
+  const persisted = isOversizedSetOutputSalvage(record) &&
+    typeof record.artifactPath === 'string'
+  return {
+    artifactPersisted: persisted,
+    artifactWrittenByThisCall: persisted && writtenByThisCall,
+    ...(persisted ? {
+      artifactPath: record.artifactPath as string,
+      ...(typeof record.artifactCreatedAt === 'string' ? { artifactCreatedAt: record.artifactCreatedAt } : {}),
+      ...(typeof record.artifactBytes === 'number' ? { artifactBytes: record.artifactBytes } : {}),
+      ...(typeof record.sha256 === 'string' ? { sha256: record.sha256 } : {}),
+    } : {}),
+  }
 }
 
 /**
@@ -519,6 +540,7 @@ function oversizedSetOutputReplay(
         message: OVERSIZED_SALVAGE_GUARD_ACK,
         status: 'ignored',
         salvaged: true,
+        ...salvageArtifactAcknowledgment(agentState.output as Record<string, unknown>, false),
       }),
     }
   }
@@ -853,6 +875,7 @@ export const handleSetOutput = (async (params: {
             ? OVERSIZED_SALVAGE_ACK
             : OVERSIZED_SALVAGE_UNPERSISTED_ACK,
         salvaged: true,
+        ...salvageArtifactAcknowledgment(salvageRecord, true),
       }),
     }
   }

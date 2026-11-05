@@ -106,4 +106,18 @@ describe('chat-history', () => {
     expect(entries).toHaveLength(3)
     expect(readFile).toHaveBeenCalledTimes(3)
   })
+  test('history reports unreadable sessions separately from an empty result', async () => {
+    writeChat('broken', 'old prompt')
+    fs.writeFileSync(
+      path.join(tempDataDir, 'chats', 'broken', 'chat-messages.json'),
+      'invalid JSON',
+    )
+    const states: unknown[] = []
+    const entries = await getAllChatsAsync(500, undefined, undefined, 25, (state) =>
+        states.push(state),
+      )
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ chatId: 'broken', messageCountKnown: false, captureUnavailable: true })
+    expect(states).toEqual([{ state: 'partial', omitted: 1 }])
+  })
 })

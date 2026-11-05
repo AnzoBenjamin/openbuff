@@ -53,7 +53,10 @@ export const RecallContextComponent = defineToolComponent({
     )[0]
     const width = rowWidth(options.availableWidth)
 
-    const matches = readRecordArray(record?.matches)
+    const matches = [
+      ...readRecordArray(record?.matches),
+      ...readRecordArray(record?.consolidations),
+    ]
     const message =
       typeof record?.message === 'string' ? record.message : undefined
     const consolidations = readNumber(record?.consolidations)
@@ -64,7 +67,7 @@ export const RecallContextComponent = defineToolComponent({
     )
     const summary = error
       ? `Recall failed · ${error}`
-      : `Recall · ${formatCount(matches.length, 'match', 'matches')}`
+      : `Recall · ${formatCount(matches.length, 'match', 'matches')} · archived evidence${record?.truncated === true ? ' · capture truncated' : ''}`
     const shown = matches.slice(0, MAX_MATCHES)
     const hiddenCount = matches.length - shown.length
 
@@ -93,14 +96,14 @@ export const RecallContextComponent = defineToolComponent({
               const name =
                 typeof entry.toolName === 'string' && entry.toolName.trim()
                   ? entry.toolName
-                  : 'unknown tool'
-              const snippet = trimSnippet(entry.snippet)
+                  : typeof entry.action === 'string'
+                    ? `Consolidation · ${entry.action}`
+                    : 'unknown tool'
+              const snippet = trimSnippet(entry.snippet ?? entry.summary)
               return (
                 <DetailRow
                   key={`${name}-${index}`}
-                  label={
-                    step === undefined ? name : `step ${step} · ${name}`
-                  }
+                  label={`${step === undefined ? name : `step ${step} · ${name}`}${typeof entry.toolCallId === 'string' ? ` · call ${entry.toolCallId}` : ''}${typeof entry.archivePath === 'string' ? ` · ${entry.archivePath}` : ''}${typeof entry.consolidatedAt === 'number' ? ` · captured ${entry.consolidatedAt}` : ''}`}
                   value={snippet || '(no snippet recorded)'}
                   width={width}
                   valueColor={theme.muted}

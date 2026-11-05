@@ -94,7 +94,7 @@ export async function copyTextToClipboard(
     suppressGlobalMessage = false,
   }: CopyToClipboardOptions = {},
 ) {
-  if (!text || text.trim().length === 0) {
+  if (!text || text.length === 0) {
     return
   }
 
@@ -178,8 +178,7 @@ function tryCopyViaPlatformTool(text: string): boolean {
       // when wl-copy is absent). Every branch stays fail-closed.
       const env = getCliEnv()
       const isWayland =
-        env.WAYLAND_DISPLAY !== undefined ||
-        env.XDG_SESSION_TYPE === 'wayland'
+        env.WAYLAND_DISPLAY !== undefined || env.XDG_SESSION_TYPE === 'wayland'
       if (isWayland) {
         try {
           execSync('wl-copy', opts)

@@ -45,11 +45,11 @@ import type { InputValue } from '../types/store'
 import type { MessageHistoryLoadOutcome } from '../utils/message-history'
 
 const LAYOUT = {
-  CONTENT_PADDING: 4,
+  CONTENT_PADDING: 1,
   MAX_CONTENT_WIDTH: 100,
   PREFERRED_CONTENT_WIDTH: 80,
   INPUT_HEIGHT: 1,
-  HEADER_HEIGHT: 1,
+  HEADER_HEIGHT: 2,
   MAX_LIST_HEIGHT: 20,
   /** Cap on total items rendered for performance. */
   MAX_RENDERED_ITEMS: 200,
@@ -60,6 +60,7 @@ interface PromptHistorySearchScreenProps {
   onClose: () => void
   /** Called when the user selects a prompt; receives the prompt text. */
   onSelectPrompt: (text: string) => void
+  loadHistory?: (displayedPrompts: string[]) => MessageHistoryLoadOutcome
 }
 
 /**
@@ -318,7 +319,11 @@ export function reanchorFocusForReload(params: {
 
 export const PromptHistorySearchScreen: React.FC<
   PromptHistorySearchScreenProps
-> = ({ onClose, onSelectPrompt }) => {
+> = ({
+  onClose,
+  onSelectPrompt,
+  loadHistory = readPromptHistoryForDisplay,
+}) => {
   const theme = useTheme()
   const { terminalWidth, terminalHeight } = useTerminalLayout()
 
@@ -339,6 +344,7 @@ export const PromptHistorySearchScreen: React.FC<
   // reanchorFocusForReload is not idempotent (it follows the focused prompt to
   // its new position), and React may invoke a state updater twice.
   const focusedIndexRef = useRef<number>(0)
+  const activatedRef = useRef(false)
 
   // Every focus change goes through here, so the ref stays the authoritative
   // pre-reload cursor the re-anchoring in applyLoad reads.
@@ -377,9 +383,8 @@ export const PromptHistorySearchScreen: React.FC<
   // retry tick can throw or stall the event loop; every form of unavailability
   // (busy lock, unreadable snapshot, failed journal read) is reported back.
   const readPromptHistory = useCallback(
-    (): MessageHistoryLoadOutcome =>
-      readPromptHistoryForDisplay(promptsRef.current),
-    [],
+    (): MessageHistoryLoadOutcome => loadHistory(promptsRef.current),
+    [loadHistory],
   )
 
   // Load the full prompt history on mount, from an effect instead of the render
@@ -416,10 +421,25 @@ export const PromptHistorySearchScreen: React.FC<
     return () => clearInterval(timer)
   }, [loadState, readPromptHistory, applyLoad])
 
-  const filteredPrompts = useMemo(
-    () =>
-      filterAndScorePrompts(allPrompts, searchQuery, LAYOUT.MAX_RENDERED_ITEMS),
+  const matchedPrompts = useMemo(
+    () => filterAndScorePrompts(allPrompts, searchQuery, allPrompts.length),
     [allPrompts, searchQuery],
+  )
+  const filteredPrompts = useMemo(
+    () => matchedPrompts.slice(0, LAYOUT.MAX_RENDERED_ITEMS),
+    [matchedPrompts],
+  )
+  const currentPrompts = useCallback(
+    () =>
+      promptsRef.current === allPrompts &&
+      searchQueryRef.current === searchQuery
+        ? filteredPrompts
+        : filterAndScorePrompts(
+            promptsRef.current,
+            searchQueryRef.current,
+            LAYOUT.MAX_RENDERED_ITEMS,
+          ),
+    [allPrompts, searchQuery, filteredPrompts],
   )
 
   const items = useMemo<SelectableListItem[]>(() => {
@@ -438,9 +458,9 @@ export const PromptHistorySearchScreen: React.FC<
   }, [filteredPrompts])
 
   // Clamp focused index when the filtered list shrinks
-  const clampedFocusedIndex = Math.min(
-    focusedIndex,
-    Math.max(0, items.length - 1),
+  const clampedFocusedIndex = Math.max(
+    0,
+    Math.min(focusedIndex, Math.max(0, items.length - 1)),
   )
 
   // Publish the query synchronously with its state update so the retry poll's
@@ -455,17 +475,31 @@ export const PromptHistorySearchScreen: React.FC<
     [publishFocusedIndex],
   )
 
-  const handleSelect = useCallback(
-    (item: SelectableListItem, index: number) => {
-      const prompt = filteredPrompts[index]
-      if (!prompt) return
+  const activatePrompt = useCallback(
+    (prompt: string | undefined) => {
+      if (prompt === undefined || activatedRef.current) return
+      activatedRef.current = true
       // Close the overlay BEFORE updating the input so the keyboard hook does
       // not re-interpret the keypress while the overlay is unmounting.
       onClose()
       onSelectPrompt(prompt)
     },
-    [filteredPrompts, onClose, onSelectPrompt],
+    [onClose, onSelectPrompt],
   )
+  const handleSelect = useCallback(
+    (_item: SelectableListItem, index: number) => {
+      activatePrompt(filteredPrompts[index])
+    },
+    [activatePrompt, filteredPrompts],
+  )
+  const handleSubmit = useCallback(() => {
+    const prompts = currentPrompts()
+    const index = Math.max(
+      0,
+      Math.min(focusedIndexRef.current, prompts.length - 1),
+    )
+    activatePrompt(prompts[index])
+  }, [activatePrompt, currentPrompts])
 
   const handleKeyIntercept = useCallback(
     (key: {
@@ -476,28 +510,32 @@ export const PromptHistorySearchScreen: React.FC<
       meta?: boolean
       option?: boolean
     }) => {
-      if (key.name === 'escape') {
+      if (key.name === 'escape' || (key.ctrl && key.name === 'r')) {
         onClose()
         return true
       }
       if (key.name === 'up') {
-        publishFocusedIndex(Math.max(0, focusedIndexRef.current - 1))
+        publishFocusedIndex(
+          Math.max(
+            0,
+            Math.min(currentPrompts().length - 1, focusedIndexRef.current - 1),
+          ),
+        )
         return true
       }
       if (key.name === 'down') {
         // Math.max like the up branch: an empty results list (unavailable or
         // no-match) would otherwise publish an invalid -1 cursor.
         publishFocusedIndex(
-          Math.max(0, Math.min(items.length - 1, focusedIndexRef.current + 1)),
+          Math.max(
+            0,
+            Math.min(currentPrompts().length - 1, focusedIndexRef.current + 1),
+          ),
         )
         return true
       }
       if (isPlainEnterKey(key)) {
-        const focused = items[clampedFocusedIndex]
-        if (focused) {
-          handleSelect(focused, clampedFocusedIndex)
-        }
-        return true
+        return false
       }
       if (key.name === 'c' && key.ctrl) {
         onClose()
@@ -506,17 +544,21 @@ export const PromptHistorySearchScreen: React.FC<
       // Let printable keys through to the input
       return false
     },
-    [items, clampedFocusedIndex, handleSelect, onClose, publishFocusedIndex],
+    [currentPrompts, onClose, publishFocusedIndex],
   )
 
   const contentMaxWidth = Math.min(
-    terminalWidth - LAYOUT.CONTENT_PADDING,
+    Math.max(1, terminalWidth),
     LAYOUT.MAX_CONTENT_WIDTH,
   )
   const contentWidth = Math.min(LAYOUT.PREFERRED_CONTENT_WIDTH, contentMaxWidth)
   const availableListHeight = Math.max(
-    3,
-    terminalHeight - LAYOUT.HEADER_HEIGHT - LAYOUT.INPUT_HEIGHT - 2,
+    1,
+    terminalHeight -
+      LAYOUT.HEADER_HEIGHT -
+      LAYOUT.INPUT_HEIGHT -
+      5 -
+      (loadState === 'loaded' ? 0 : 1),
   )
   const listHeight = Math.min(
     LAYOUT.MAX_LIST_HEIGHT,
@@ -547,18 +589,19 @@ export const PromptHistorySearchScreen: React.FC<
         }}
       >
         {/* Header */}
-        <box style={{ height: LAYOUT.HEADER_HEIGHT, flexShrink: 0 }}>
+        <box style={{ flexDirection: 'column', flexShrink: 0 }}>
           <text
             style={{
               fg: theme.primary,
               attributes: TextAttributes.BOLD,
             }}
           >
-            Prompt History Search
+            Prompt history
           </text>
           <text style={{ fg: theme.muted }}>
-            {'  '}Type to fuzzy-search past prompts · Enter to use · Esc to
-            close · Ctrl+R toggles
+            {terminalWidth < 60
+              ? 'Enter use · Esc / Ctrl+R close'
+              : 'Type to search · Enter use · Esc / Ctrl+R close'}
           </text>
         </box>
 
@@ -567,7 +610,7 @@ export const PromptHistorySearchScreen: React.FC<
           <MultilineInput
             value={searchQuery}
             onChange={handleQueryChange}
-            onSubmit={() => {}}
+            onSubmit={handleSubmit}
             onPaste={createTextPasteHandler(
               searchQuery,
               Math.min(searchCursor, searchQuery.length),
@@ -583,10 +626,23 @@ export const PromptHistorySearchScreen: React.FC<
         </box>
 
         {/* Results list */}
+        <text fg={theme.muted} style={{ flexShrink: 0 }}>
+          {`${filteredPrompts.length} of ${matchedPrompts.length} ${searchQuery.trim() ? 'matches' : 'prompts'}${matchedPrompts.length > filteredPrompts.length ? ' · Refine search' : ''}`}
+        </text>
+        {loadState !== 'loaded' && (
+          <text
+            fg={loadState === 'unavailable' ? theme.warning : theme.muted}
+            style={{ flexShrink: 0 }}
+          >
+            {loadState === 'unavailable'
+              ? 'History incomplete · Retained only'
+              : 'Loading prompt history...'}
+          </text>
+        )}
         <box
           style={{
             flexDirection: 'column',
-            width: contentWidth,
+            width: '100%',
             borderStyle: 'single',
             borderColor: theme.muted,
             flexGrow: 1,

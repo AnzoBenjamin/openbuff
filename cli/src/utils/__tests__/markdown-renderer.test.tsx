@@ -22,6 +22,12 @@ describe('markdown-renderer helpers', () => {
       expect(hasMarkdown('[label](https://example.com)')).toBe(true)
       expect(hasMarkdown('```js\ncode\n```')).toBe(true)
     })
+
+    test('recognizes setext headings and tilde fences without other Markdown markers', () => {
+      for (const content of ['Heading\n===', '~~~ts\nlet value = 1\n~~~']) {
+        expect(hasMarkdown(content)).toBe(true)
+      }
+    })
   })
 
   describe('hasIncompleteCodeFence', () => {
@@ -32,9 +38,7 @@ describe('markdown-renderer helpers', () => {
 
     test('returns false for an even fence count (all fences closed)', () => {
       expect(hasIncompleteCodeFence('```js\ncode\n```')).toBe(false)
-      expect(hasIncompleteCodeFence('```js\na\n```\n```ts\nb\n```')).toBe(
-        false,
-      )
+      expect(hasIncompleteCodeFence('```js\na\n```\n```ts\nb\n```')).toBe(false)
     })
 
     test('returns true for an odd fence count (open fence)', () => {

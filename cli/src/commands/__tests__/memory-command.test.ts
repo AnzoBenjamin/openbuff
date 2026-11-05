@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1533,6 +1542,27 @@ describe('/memory blocks', () => {
     expect(output).toContain('sqlite-v2-opt-in is the default and replacement')
   })
 
+  test('STATUS-03 actual V2 unavailable result remains typed when fresh V1 memory or no V1 record is captured', async () => {
+    for (const memory of [makeMemory(), undefined]) {
+      const { deps } = createDeps({ memory, reconciled: memory })
+      deps.getMemoryV2 = async () => ({
+        status: 'unavailable',
+        requestedAuthority: 'sqlite-v2-opt-in',
+        effectiveAuthority: 'sqlite-v2-opt-in',
+        degradation: 'Storage is offline',
+        retryable: true,
+      })
+      const block = await handleMemoryCommandBlocks('status', deps)
+      expect(block.state).toBe(memory ? 'status' : 'empty')
+      expect(block).toMatchObject({ memoryV2Status: 'unavailable' })
+      if (block.state !== 'status' && block.state !== 'empty')
+        throw new Error('expected captured memory status')
+      expect(
+        block.v2Lines?.some((line) => line.startsWith('Memory V2: ')),
+      ).toBe(true)
+    }
+  })
+
   test('status forwards journal moves so evidence rebinds', async () => {
     const memory = makeMemory({
       evidence: [makeEvidence({ id: 'ev-moved', path: 'old.ts' })],
@@ -1563,6 +1593,120 @@ describe('/memory blocks', () => {
 })
 
 describe('/memory blocks compact-memory', () => {
+  test('a changed source generation expires the offered compaction apply action before writes', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    let sourceCount = 2
+    let applies = 0
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        projectId: 'project-1',
+        repository: {
+          getStoreStats: async () => ({ eventCount: sourceCount, bytes: 512 }),
+          export: async () => ({
+            outcome: 'page',
+            events: [],
+            nextAfterEventId: null,
+          }),
+        },
+        operator: {
+          compact: async (request: { mode: string }) => {
+            if (request.mode === 'apply') applies++
+            return {
+              outcome: 'preview',
+              candidateCount: 2,
+              candidateEventIds: ['event-1', 'event-2'],
+              archiveByteEstimate: 512,
+              warnings: [],
+            }
+          },
+        },
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+    const preview = await handleMemoryCommandBlocks(
+      'compact-memory --older-than-days 60 --max-events 500',
+      deps,
+    )
+    if (preview.state !== 'report') throw new Error('expected preview report')
+    const apply = preview.insertCommands![0]!.command.replace('/memory ', '')
+    expect(apply).toContain('--preview-token')
+    sourceCount++
+    const expired = await handleMemoryCommandBlocks(apply, deps)
+    if (expired.state !== 'report') throw new Error('expected expired report')
+    expect(expired.lines.join('\n')).toContain('preview expired')
+    expect(expired.lines.join('\n')).toContain('No archive was written')
+    expect(applies).toBe(0)
+  })
+  test('canonical inspection reaches event 101 and exposes its retained detail', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    const events = Array.from({ length: 150 }, (_, index) =>
+      makeCompactEnvelope(
+        `event-${index + 1}`,
+        index + 1,
+        `observation-${index + 1}`,
+      ),
+    )
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        projectId: 'project-1',
+        repository: {
+          export: async () => ({
+            outcome: 'page',
+            events,
+            nextAfterEventId: null,
+          }),
+        },
+        operator: {},
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+    const page = await handleMemoryCommandBlocks('inspect --page 2', deps)
+    if (page.state !== 'report') throw new Error('expected report')
+    expect(page.lines.join('\n')).toContain('150 canonical events')
+    expect(page.lines.join('\n')).toContain('#101 event-101')
+    expect(page.lines.join('\n')).not.toContain('#100 event-100')
+    const detail = await handleMemoryCommandBlocks('inspect event-101', deps)
+    if (detail.state !== 'report') throw new Error('expected report')
+    expect(detail.lines.join('\n')).toContain(
+      'Canonical observation detail observation-101',
+    )
+  })
+  test('degraded query warns even with no reread requirements', async () => {
+    const { deps } = createDeps({ memory: makeMemory() })
+    deps.getMemoryV2 = async () =>
+      ({
+        status: 'available',
+        projectId: 'project-1',
+        repository: {
+          query: async () => ({
+            outcome: 'result',
+            result: {
+              matchedTasks: [],
+              verifiedKnowledge: [],
+              reusableDiscovery: [],
+              rereadRequired: [],
+              historicalContext: [],
+              degradation: {
+                state: 'partial',
+                reasons: [{ detail: 'Only a retained subset is available' }],
+              },
+            },
+          }),
+        },
+        operator: {},
+        release: async () => {},
+      }) as unknown as Awaited<
+        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+      >
+    const result = await handleMemoryCommandBlocks('query work', deps)
+    if (result.state !== 'report') throw new Error('expected report')
+    expect(result.tone).toBe('warning')
+    expect(result.lines.join('\n')).toContain('Only a retained subset')
+  })
   function stableJson(value: unknown): string {
     if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
     if (value !== null && typeof value === 'object') {
@@ -1638,60 +1782,80 @@ describe('/memory blocks compact-memory', () => {
       .filter((path) => path.endsWith('.jsonl'))
   }
 
-  test('preview renders candidates estimate warnings without writing archive', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'memory-compact-preview-'))
-    const { deps } = createDeps({ memory: makeMemory() })
-    deps.getRootDir = () => root
-    const compactCalls: Array<Record<string, unknown>> = []
-    deps.getMemoryV2 = async () =>
-      ({
-        status: 'available',
-        requestedAuthority: 'shadow-v2',
-        effectiveAuthority: 'shadow-v2',
-        projectId: 'project-1',
-        operator: {
-          compact: async (request: Record<string, unknown>) => {
-            compactCalls.push(request)
-            return {
-              outcome: 'preview',
-              candidateEventIds: ['observation-event-1', 'observation-event-2'],
-              candidateCount: 2,
-              archiveByteEstimate: 512,
-              warnings: ['preview-warning'],
-            }
+  test.each([
+    ['compact-memory', 30, 1000],
+    ['compact-memory --older-than-days 60 --max-events 500', 60, 500],
+    ['compact-memory --older-than 45 --max-events 7', 45, 7],
+  ] as const)(
+    'preview %s retains its options in the apply shortcut without writes',
+    async (command, olderThanDays, maxEvents) => {
+      const root = mkdtempSync(join(tmpdir(), 'memory-compact-preview-'))
+      const { deps } = createDeps({ memory: makeMemory() })
+      deps.getRootDir = () => root
+      const compactCalls: Array<Record<string, unknown>> = []
+      deps.getMemoryV2 = async () =>
+        ({
+          status: 'available',
+          requestedAuthority: 'shadow-v2',
+          effectiveAuthority: 'shadow-v2',
+          projectId: 'project-1',
+          operator: {
+            compact: async (request: Record<string, unknown>) => {
+              compactCalls.push(request)
+              return {
+                outcome: 'preview',
+                candidateEventIds: [
+                  'observation-event-1',
+                  'observation-event-2',
+                ],
+                candidateCount: 2,
+                archiveByteEstimate: 512,
+                warnings: ['preview-warning'],
+              }
+            },
           },
-        },
-        repository: {
-          export: async () => ({
-            outcome: 'page',
-            events: [],
-            nextAfterEventId: null,
-          }),
-        },
-        release: async () => {},
-      }) as unknown as Awaited<
-        ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
-      >
+          repository: {
+            export: async () => ({
+              outcome: 'page',
+              events: [],
+              nextAfterEventId: null,
+            }),
+          },
+          release: async () => {},
+        }) as unknown as Awaited<
+          ReturnType<NonNullable<MemoryCommandDeps['getMemoryV2']>>
+        >
 
-    const block = await handleMemoryCommandBlocks('compact-memory', deps)
+      const block = await handleMemoryCommandBlocks(command, deps)
 
-    if (block.state !== 'report') throw new Error('expected report')
-    expect(block.tone).toBe('secondary')
-    const text = block.lines.join('\n')
-    expect(text).toContain('Candidates')
-    expect(text).toContain('Archive estimate')
-    expect(text).toContain('Warnings')
-    expect(text).toContain('Preview only')
-    expect(block.insertCommands?.[0]?.command).toContain('--apply')
-    expect(block.insertCommands?.[0]?.command).toContain('--confirm')
-    expect(compactCalls).toHaveLength(1)
-    expect(compactCalls[0]?.['mode']).toBe('preview')
-    if ('olderThanDays' in (compactCalls[0] ?? {}))
-      expect(compactCalls[0]?.['olderThanDays']).toBe(30)
-    if ('maxEvents' in (compactCalls[0] ?? {}))
-      expect(compactCalls[0]?.['maxEvents']).toBe(1000)
-    expect(collectArchiveFiles(root)).toHaveLength(0)
-  })
+      if (block.state !== 'report') throw new Error('expected report')
+      expect(block.tone).toBe('secondary')
+      const text = block.lines.join('\n')
+      expect(text).toContain('Candidates')
+      expect(text).toContain('Archive estimate')
+      expect(text).toContain('Warnings')
+      expect(text).toContain('Preview only')
+      expect(block.insertCommands?.[0]?.command).toContain('--apply')
+      expect(block.insertCommands?.[0]?.command).toContain('--confirm')
+      expect(compactCalls).toHaveLength(1)
+      expect(compactCalls[0]?.['mode']).toBe('preview')
+      expect(compactCalls[0]?.['olderThanDays']).toBe(olderThanDays)
+      expect(compactCalls[0]?.['maxEvents']).toBe(maxEvents)
+      const applyCommand = block.insertCommands![0]!.command
+      // Reparse the offered command as another preview: no mutation is needed
+      // to verify that the chosen age/count survive the UI shortcut boundary.
+      await handleMemoryCommandBlocks(
+        applyCommand
+          .replace('/memory ', '')
+          .replace(' --apply', '')
+          .replace(' --confirm', ''),
+        deps,
+      )
+      expect(compactCalls[1]?.['olderThanDays']).toBe(olderThanDays)
+      expect(compactCalls[1]?.['maxEvents']).toBe(maxEvents)
+      expect(collectArchiveFiles(root)).toHaveLength(0)
+    },
+  )
 
   test('--apply without --confirm returns usage error without calling compact', async () => {
     const { deps } = createDeps({ memory: makeMemory() })
@@ -1776,7 +1940,8 @@ describe('/memory blocks compact-memory', () => {
 
       const block = await handleMemoryCommandBlocks(command, deps)
 
-      if (block.state !== 'report') throw new Error(`expected report for ${command}`)
+      if (block.state !== 'report')
+        throw new Error(`expected report for ${command}`)
       expect(block.tone).toBe('error')
       expect(block.lines.join('\n')).toMatch(/usage/i)
       expect(compacts).toBe(0)
@@ -1787,11 +1952,7 @@ describe('/memory blocks compact-memory', () => {
     const root = mkdtempSync(join(tmpdir(), 'memory-compact-apply-'))
     const { deps } = createDeps({ memory: makeMemory() })
     deps.getRootDir = () => root
-    const first = makeCompactEnvelope(
-      'observation-event-1',
-      1,
-      'observation-1',
-    )
+    const first = makeCompactEnvelope('observation-event-1', 1, 'observation-1')
     const second = makeCompactEnvelope(
       'observation-event-2',
       2,
@@ -1799,15 +1960,17 @@ describe('/memory blocks compact-memory', () => {
     )
     // The apply batch is recomputed from the canonical inventory, so the
     // fixture needs a retracted (forgotten) observation group to be eligible.
-    const forgotten = makeForgottenEnvelope(
-      'forgotten-event-3',
-      3,
-      ['observation-1', 'observation-2'],
-    )
+    const forgotten = makeForgottenEnvelope('forgotten-event-3', 3, [
+      'observation-1',
+      'observation-2',
+    ])
     // Small sorted-keys helper mirroring CLI jsonl serialization.
-    const expectedLines = [first, second, forgotten].map((event) => stableJson(event))
+    const expectedLines = [first, second, forgotten].map((event) =>
+      stableJson(event),
+    )
     const expectedHash =
-      'sha256:' + createHash('sha256').update(stableJson(expectedLines)).digest('hex')
+      'sha256:' +
+      createHash('sha256').update(stableJson(expectedLines)).digest('hex')
     const fileName = 'archive-' + expectedHash.slice(7, 71) + '.jsonl'
     const compactCalls: Array<Record<string, unknown>> = []
     let releases = 0
@@ -1898,21 +2061,16 @@ describe('/memory blocks compact-memory', () => {
     const root = mkdtempSync(join(tmpdir(), 'memory-compact-mismatch-'))
     const { deps } = createDeps({ memory: makeMemory() })
     deps.getRootDir = () => root
-    const first = makeCompactEnvelope(
-      'observation-event-1',
-      1,
-      'observation-1',
-    )
+    const first = makeCompactEnvelope('observation-event-1', 1, 'observation-1')
     const second = makeCompactEnvelope(
       'observation-event-2',
       2,
       'observation-2',
     )
-    const forgotten = makeForgottenEnvelope(
-      'forgotten-event-3',
-      3,
-      ['observation-1', 'observation-2'],
-    )
+    const forgotten = makeForgottenEnvelope('forgotten-event-3', 3, [
+      'observation-1',
+      'observation-2',
+    ])
     const fakeHash =
       'sha256:0000000000000000000000000000000000000000000000000000000000000000'
     const fakePath = join(root, 'mismatch-archive.jsonl')
@@ -2025,7 +2183,9 @@ describe('/memory blocks compact-memory', () => {
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('secondary')
     expect(block.lines.join('\n')).toContain('Outcome: no-op.')
-    expect(block.lines.join('\n')).toContain('No compaction candidates are eligible for archival.')
+    expect(block.lines.join('\n')).toContain(
+      'No compaction candidates are eligible for archival.',
+    )
     expect(compactCalls).toHaveLength(1)
     expect(compactCalls[0]?.['mode']).toBe('preview')
     expect(collectArchiveFiles(root)).toHaveLength(0)
@@ -2050,11 +2210,10 @@ describe('/memory blocks playbooks', () => {
     // The trigger override flows into the row AND its triggerSignature, so
     // a fixture row and the proposal it collides with hash identically —
     // no second fixture shape is needed for the same-signature find().
-    const trigger: PlaybookTrigger =
-      overrides.trigger ?? {
-        tool: 'run_terminal_command',
-        requireEvidence: [],
-      }
+    const trigger: PlaybookTrigger = overrides.trigger ?? {
+      tool: 'run_terminal_command',
+      requireEvidence: [],
+    }
     return MemoryPlaybookSchema.parse({
       schemaVersion: 1,
       playbookId: overrides.playbookId,
@@ -2200,10 +2359,7 @@ describe('/memory blocks playbooks', () => {
     const { repository, statusCalls, upsertCalls } = playbookRepository(rows)
     const deps = playbooksDeps(repository)
 
-    const block = await handleMemoryCommandBlocks(
-      'playbooks --apply',
-      deps,
-    )
+    const block = await handleMemoryCommandBlocks('playbooks --apply', deps)
 
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('success')
@@ -2253,10 +2409,7 @@ describe('/memory blocks playbooks', () => {
     const { repository, statusCalls, upsertCalls } = playbookRepository(rows)
     const deps = playbooksDeps(repository)
 
-    const block = await handleMemoryCommandBlocks(
-      'playbooks --apply',
-      deps,
-    )
+    const block = await handleMemoryCommandBlocks('playbooks --apply', deps)
 
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('success')
@@ -2311,10 +2464,7 @@ describe('/memory blocks playbooks', () => {
     // 1 total + 30 rows + 1 rows-overflow + 1 header + 60 transitions + 1 overflow.
     expect(preview.lines).toHaveLength(94)
 
-    const applied = await handleMemoryCommandBlocks(
-      'playbooks --apply',
-      deps,
-    )
+    const applied = await handleMemoryCommandBlocks('playbooks --apply', deps)
 
     if (applied.state !== 'report') throw new Error('expected report')
     expect(applied.tone).toBe('success')
@@ -2354,10 +2504,7 @@ describe('/memory blocks playbooks', () => {
       listAllPlaybooks: async () => rows,
     })
 
-    const block = await handleMemoryCommandBlocks(
-      'playbooks --apply',
-      deps,
-    )
+    const block = await handleMemoryCommandBlocks('playbooks --apply', deps)
 
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('error')
@@ -2778,9 +2925,7 @@ describe('/memory blocks playbooks', () => {
     if (block.state !== 'report') throw new Error('expected report')
     expect(block.tone).toBe('error')
     const text = block.lines.join('\n')
-    expect(text).toContain(
-      'Proposal requires a project-relative JSON path.',
-    )
+    expect(text).toContain('Proposal requires a project-relative JSON path.')
     expect(text).not.toMatch(/\/tmp|escape/i)
     expect(upsertCalls).toHaveLength(0)
   })
@@ -2816,9 +2961,7 @@ describe('/memory blocks playbooks', () => {
       expect(block.tone).toBe('error')
       const text = block.lines.join('\n')
       expect(text).toContain('Usage: /memory')
-      expect(text).toContain(
-        'playbooks propose <project-relative-json-path>',
-      )
+      expect(text).toContain('playbooks propose <project-relative-json-path>')
     }
     expect(upsertCalls).toHaveLength(0)
   })

@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 
 import { runReplayCommand } from '../commands/replay-command'
 
-import type { ReplayCommandArgs, RunReplayDeps } from '../commands/replay-command'
+import type {
+  ReplayCommandArgs,
+  RunReplayDeps,
+} from '../commands/replay-command'
 import type { JournalEvent } from '@codebuff/common/types/contracts/agent-runtime'
 
 /**
@@ -61,7 +64,10 @@ function makeHarness(options?: {
   }
 }
 
-const toolCall = (seq: number, step: number): JournalEvent & { seq: number } => ({
+const toolCall = (
+  seq: number,
+  step: number,
+): JournalEvent & { seq: number } => ({
   seq,
   stepNumber: step,
   eventType: 'tool_call',
@@ -146,9 +152,55 @@ describe('runReplayCommand', () => {
 
     expect(code).toBe(0)
     const out = h.stdoutChunks.join('')
-    expect(out).toContain('replay run run-1')
+    expect(out).toContain('Recorded replay · run run-1')
     expect(out).toContain('tool_call')
     expect(out).toContain('tool_result')
+  })
+  test('recorded failure evidence is inspectable by exact step and literal find', async () => {
+    const h = makeHarness({
+      events: [
+        toolCall(0, 0),
+        {
+          seq: 1,
+          stepNumber: 3,
+          eventType: 'tool_result',
+          payload: {
+            toolName: 'run_terminal_command',
+            result: [
+              {
+                type: 'json',
+                value: { exitCode: 1, stderr: 'validator failed on file.ts' },
+              },
+            ],
+          },
+        },
+      ],
+      args: {
+        json: false,
+        fromStep: 3,
+        toStep: 3,
+        event: 'tool_result',
+        find: 'validator failed',
+        model: 'metadata-only',
+      },
+    })
+    expect(await runReplayCommand(h.args, h.deps)).toBe(0)
+    expect(h.stdoutChunks.join('')).toContain('validator failed on file.ts')
+    expect(h.stdoutChunks.join('')).toContain(
+      'metadata model metadata-only; no inference',
+    )
+    expect(h.stdoutChunks.join('')).not.toContain('[step 0 seq 0]')
+  })
+  test('empty recorded range gives bounds only on the human channel in json mode', async () => {
+    const h = makeHarness({
+      events: [toolCall(0, 0), toolResult(1, 4)],
+      args: { fromStep: 9, json: true },
+    })
+    expect(await runReplayCommand(h.args, h.deps)).toBe(0)
+    expect(h.stdoutChunks).toEqual([])
+    expect(h.stderrLines.join('\n')).toContain(
+      '0 matching recorded events; available steps 0–4',
+    )
   })
 
   test('unknown run id returns 1 and emits an error ndjson line (json)', async () => {

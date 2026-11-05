@@ -3,6 +3,7 @@ import type { RunState } from '@openbuff/sdk'
 
 import { logger } from '../../utils/logger'
 import { getProjectMemoryV2Provider } from './provider'
+import { getMemoryAuthoritySelection } from '../../utils/env'
 
 /**
  * Cross-session persistence for the compaction-fidelity context archive
@@ -71,11 +72,9 @@ const optionalMethod = <F>(repository: unknown, key: string): F | undefined => {
   if (typeof candidate !== 'function') return undefined
   // Double cast through unknown: a bound function type never sufficiently
   // overlaps a generic type parameter for a direct `as F` conversion.
-  return (
-    (candidate as (this: unknown, ...args: unknown[]) => unknown).bind(
-      repository,
-    ) as unknown
-  ) as F
+  return (candidate as (this: unknown, ...args: unknown[]) => unknown).bind(
+    repository,
+  ) as unknown as F
 }
 
 /**
@@ -154,6 +153,10 @@ export async function loadContextArchiveSnapshotsFromRepository(
  */
 export async function flushContextArchiveSnapshots(
   runState: RunState,
+  owner?: {
+    root: string
+    authority: ReturnType<typeof getMemoryAuthoritySelection>
+  },
 ): Promise<void> {
   const mainAgentState = runState.sessionState?.mainAgentState
   const runId = mainAgentState?.runId
@@ -170,7 +173,10 @@ export async function flushContextArchiveSnapshots(
     return
   }
   try {
-    const providerResult = await getProjectMemoryV2Provider()
+    const providerResult = await getProjectMemoryV2Provider(
+      owner?.root,
+      owner?.authority,
+    )
     if (providerResult.status !== 'available') {
       logger.debug(
         { degradation: providerResult.degradation },
@@ -219,7 +225,10 @@ export async function flushContextArchiveSnapshots(
  */
 export async function hydrateContextArchiveSnapshots(
   inMemory: ContextArchiveSnapshot[] | undefined,
+  options?: { includeProjectArchive?: boolean },
 ): Promise<ContextArchiveSnapshot[]> {
+  if (options?.includeProjectArchive === false)
+    return mergeContextArchives(inMemory, [])
   let durable: ContextArchiveSnapshot[] = []
   let release: (() => Promise<void>) | undefined
   try {

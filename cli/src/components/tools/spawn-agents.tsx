@@ -1,9 +1,14 @@
 import React from 'react'
+import { classifyOutputOutcome } from '../../utils/output-outcome'
 import { TextAttributes } from '@opentui/core'
 
 import { useTheme } from '../../hooks/use-theme'
 import { defineToolComponent } from './types'
 import { extractReceiptCore } from './set-output'
+import {
+  getToolOutputValues,
+  getStructuredErrorMessages,
+} from '../../utils/tool-result-normalizer'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 
 import type { ToolRenderConfig, ToolBlock } from './types'
@@ -47,6 +52,19 @@ export function summarizeSpawnResult(result: unknown): ChildSummary {
       ? shortAgentName(record.agentType)
       : 'agent'
 
+  const childValue =
+    record.value && typeof record.value === 'object' && !Array.isArray(record.value)
+      ? (record.value as Record<string, unknown>)
+      : undefined
+  if (childValue?.background === true) {
+    return {
+      name,
+      glyph: '•',
+      color: 'muted',
+      detail: `launched${typeof childValue.jobId === 'string' ? ` · job ${childValue.jobId}` : ''} · completion available from job status`,
+    }
+  }
+
   const receipt = record.agentReceipt
   const receiptRecord =
     receipt && typeof receipt === 'object' && !Array.isArray(receipt)
@@ -71,7 +89,11 @@ export function summarizeSpawnResult(result: unknown): ChildSummary {
   // for structured-output children; verdict/status/message can sit at either
   // level.
   const core = extractReceiptCore(
-    record.output ?? record.result ?? record.summary ?? undefined,
+    record.value ??
+      record.output ??
+      record.result ??
+      record.summary ??
+      undefined,
   )
   const outcome =
     core.outcome ??
@@ -79,17 +101,25 @@ export function summarizeSpawnResult(result: unknown): ChildSummary {
       ? receiptRecord.status
       : undefined)
 
-  if (receiptErrorMessage) {
+  const errorMessage =
+    receiptErrorMessage ?? getStructuredErrorMessages(record.value)[0]
+  if (errorMessage) {
     return {
       name,
       glyph: '✗',
       color: 'error',
-      detail: receiptErrorMessage,
+      detail: errorMessage,
     }
   }
 
   const kind = extractOutcomeKind(outcome)
-  const message = core.message
+  const message =
+    core.message ??
+    (typeof record.value === 'string'
+      ? record.value
+      : core.fields
+          .map((field) => `${field.label}: ${field.value}`)
+          .join(' · ') || undefined)
   return {
     name,
     glyph: CHILD_GLYPHS[kind],
@@ -101,18 +131,8 @@ export function summarizeSpawnResult(result: unknown): ChildSummary {
 function extractOutcomeKind(
   outcome: string | undefined,
 ): ChildSummary['color'] {
-  if (!outcome) return 'muted'
-  const normalized = outcome.trim().toLowerCase().replace(/[\s-]+/g, '_')
-  if (['success', 'succeeded', 'looks_good', 'pass', 'passed', 'completed', 'ok'].includes(normalized)) {
-    return 'success'
-  }
-  if (['partial', 'warning', 'needs_changes', 'retry'].includes(normalized)) {
-    return 'warning'
-  }
-  if (['failed', 'blocked', 'error', 'invalid', 'cancelled', 'unsupported'].includes(normalized)) {
-    return 'error'
-  }
-  return 'muted'
+  const colors = { good: 'success', warn: 'warning', bad: 'error', neutral: 'muted' } as const
+  return colors[classifyOutputOutcome(outcome)]
 }
 
 /** UI component for any spawn_agents call, regardless of agent role. */
@@ -130,6 +150,14 @@ export const SpawnAgentsComponent = defineToolComponent({
       | undefined
     const agents = Array.isArray(input?.agents) ? input!.agents : []
 
+    const results = getToolOutputValues(toolBlock.outputRaw)
+      .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    const backgroundCount = results.filter((result) => {
+      if (!result || typeof result !== 'object') return false
+      const value = (result as Record<string, unknown>).value
+      return value && typeof value === 'object' &&
+        (value as Record<string, unknown>).background === true
+    }).length
     const count = agents.length
     const header =
       toolBlock.lifecycle === 'failed'
@@ -137,31 +165,16 @@ export const SpawnAgentsComponent = defineToolComponent({
         : toolBlock.lifecycle === 'cancelled'
           ? `Agent spawn cancelled (${count})`
           : toolBlock.lifecycle === 'succeeded'
-            ? `Agents completed (${count})`
+            ? backgroundCount === results.length && backgroundCount > 0
+              ? `Agents launched (${count})`
+              : backgroundCount > 0
+                ? `Agent results (${count}) · ${backgroundCount} launched in background`
+                : `Agents completed (${count})`
             : `Agents running (${count})`
 
     // Per-child verdict lines once results exist: the spawn result is an
     // array of per-agent records (agentType + receipt JSON), so the user can
     // see WHAT each child concluded without expanding every child branch.
-    const results = Array.isArray(toolBlock.outputRaw)
-      ? (toolBlock.outputRaw as unknown[])
-      : []
-    // P2-T2: the runtime's scheduling reasons (capability tier, context fit,
-    // handoff constraints) render as a dim line under the verdicts, so WHY an
-    // agent ran is visible without expanding anything.
-    const schedulingReasons = results.some(
-      (result) =>
-        result &&
-        typeof result === 'object' &&
-        Array.isArray((result as { schedulingReasons?: unknown }).schedulingReasons),
-    )
-      ? (
-          (results[0] as { schedulingReasons?: unknown[] }).schedulingReasons ?? []
-        ).filter(
-          (reason): reason is string =>
-            typeof reason === 'string' && reason.trim().length > 0,
-        )
-      : []
     const summaries = results.map(summarizeSpawnResult)
     const width = Math.max(20, options.availableWidth - 4)
 
@@ -177,19 +190,30 @@ export const SpawnAgentsComponent = defineToolComponent({
             <span fg={theme.foreground}> {label}</span>
           </text>,
         )
+        // Runtime reports retain the original requested-entry order. Keep
+        // holes in that order and bind reasons to this child, including when
+        // the same type was requested more than once.
+        const result = results[index]
+        const reasons = result && typeof result === 'object'
+          ? (result as Record<string, unknown>).schedulingReasons
+          : undefined
+        if (Array.isArray(reasons)) {
+          const schedulingReasons = reasons.filter(
+            (reason): reason is string => typeof reason === 'string' && reason.trim().length > 0,
+          )
+          if (schedulingReasons.length > 0) {
+            const requested = agents[index]?.agent_type
+            const identity = `request ${index + 1} · ${typeof requested === 'string' ? requested : summary.name}`
+            lines.push(
+              <text key={`scheduling-${index}`} style={{ wrapMode: 'word' }}>
+                <span fg={theme.muted}>
+                  {wrapTextPreservingNewlines(`${identity}: ${schedulingReasons.join(' · ')}`, width)}
+                </span>
+              </text>,
+            )
+          }
+        }
       })
-      if (schedulingReasons.length > 0) {
-        lines.push(
-          <text key="scheduling-reasons" style={{ wrapMode: 'word' }}>
-            <span fg={theme.muted}>
-              {wrapTextPreservingNewlines(
-                schedulingReasons.join(' · '),
-                width,
-              )}
-            </span>
-          </text>,
-        )
-      }
     } else {
       const body =
         agents

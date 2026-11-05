@@ -44,7 +44,9 @@ export function setAttachTarget(
   attachTarget = target
 }
 
-export function getAttachTarget(): { socketPath: string; token?: string } | undefined {
+export function getAttachTarget():
+  | { socketPath: string; token?: string }
+  | undefined {
   return attachTarget
 }
 
@@ -218,24 +220,31 @@ export async function getCodebuffClient(): Promise<OpenbuffClient> {
           logger,
           ...(memoryV2 ? { memoryV2 } : {}),
           overrideTools: {
-            ask_user: async (input: ClientToolCall<'ask_user'>['input']) => {
-              const askUserResponse = await AskUserBridge.request(
-                'cli-override',
-                input.questions,
-              )
-              const response = askUserResponse as {
-                answers?: Array<{
-                  questionIndex: number
-                  selectedOption: string
-                }>
-                skipped?: boolean
-              }
-              return [
-                {
-                  type: 'json',
-                  value: removeUndefinedValues(response),
-                },
-              ]
+            ask_user: {
+              version: 'v1',
+              execute: async (
+                input: ClientToolCall<'ask_user'>['input'],
+                context,
+              ) => {
+                const askUserResponse = await AskUserBridge.request(
+                  'cli-override',
+                  input.questions,
+                  context.signal,
+                )
+                const response = askUserResponse as {
+                  answers?: Array<{
+                    questionIndex: number
+                    selectedOption: string
+                  }>
+                  skipped?: boolean
+                }
+                return [
+                  {
+                    type: 'json',
+                    value: removeUndefinedValues(response),
+                  },
+                ]
+              },
             },
             query_index: async (
               input: ClientToolCall<'query_index'>['input'],

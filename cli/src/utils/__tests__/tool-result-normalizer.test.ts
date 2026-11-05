@@ -31,9 +31,9 @@ describe('getStructuredErrorMessages / hasMultipartError', () => {
     expect(
       getStructuredErrorMessages([{ error: { message: 'index is empty' } }]),
     ).toEqual(['index is empty'])
-    expect(getStructuredErrorMessages([{ errorMessage: 'provider timeout' }])).toEqual([
-      'provider timeout',
-    ])
+    expect(
+      getStructuredErrorMessages([{ errorMessage: 'provider timeout' }]),
+    ).toEqual(['provider timeout'])
     expect(hasMultipartError([{ errorMessage: 'provider timeout' }])).toBe(true)
   })
 
@@ -43,7 +43,9 @@ describe('getStructuredErrorMessages / hasMultipartError', () => {
     expect(getStructuredErrorMessages('raw string output')).toEqual([])
     expect(getStructuredErrorMessages(42)).toEqual([])
     expect(getStructuredErrorMessages([undefined, null, 'text'])).toEqual([])
-    expect(getStructuredErrorMessages([{ error: null }, { error: 5 }])).toEqual([])
+    expect(getStructuredErrorMessages([{ error: null }, { error: 5 }])).toEqual(
+      [],
+    )
     expect(getStructuredErrorMessages([{ error: { message: '' } }])).toEqual([])
     expect(hasMultipartError({})).toBe(false)
     expect(hasMultipartError([{ error: { message: 17 } }])).toBe(false)
@@ -71,11 +73,14 @@ describe('getStructuredErrorMessages / hasMultipartError', () => {
 })
 
 describe('getToolOutputValues', () => {
-  test('unwraps `value`-shaped output parts and skips undefined parts', () => {
-    expect(getToolOutputValues([{ value: 'a' }, undefined, 'b'])).toEqual([
-      'a',
-      'b',
-    ])
+  test('unwraps typed JSON parts and skips undefined parts', () => {
+    expect(
+      getToolOutputValues([{ type: 'json', value: 'a' }, undefined, 'b']),
+    ).toEqual(['a', 'b'])
+  })
+  test('retains data records with their own value field', () => {
+    const record = { kind: 'measurement', value: 42, unit: 'ms' }
+    expect(getToolOutputValues(record)).toEqual([record])
   })
 })
 
@@ -116,11 +121,11 @@ describe('isTerminalToolBlock', () => {
   })
 
   test('running / queued blocks are not terminal', () => {
-    expect(isTerminalToolBlock({ type: 'tool', lifecycle: 'running' } as never)).toBe(
-      false,
-    )
-    expect(isTerminalToolBlock({ type: 'tool', lifecycle: 'queued' } as never)).toBe(
-      false,
-    )
+    expect(
+      isTerminalToolBlock({ type: 'tool', lifecycle: 'running' } as never),
+    ).toBe(false)
+    expect(
+      isTerminalToolBlock({ type: 'tool', lifecycle: 'queued' } as never),
+    ).toBe(false)
   })
 })

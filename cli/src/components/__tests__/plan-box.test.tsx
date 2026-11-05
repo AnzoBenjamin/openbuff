@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import React from 'react'
+import { useOutputReaderStore } from '../../state/output-reader-store'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
@@ -240,7 +241,19 @@ describe('PlanBox', () => {
     expect(markup).toContain('Session: .agents/sessions/demo')
     expect(markup).toContain('SPEC.md: .agents/sessions/demo/SPEC.md')
     expect(markup).toContain('/mode:execute_plan Build it!')
-    expect(markup).toContain('/lessons .agents/sessions/demo')
+    expect(markup).toContain('Showing 2 of 5 artifacts')
+    capturedButtons
+      .find((button) => button.text.includes('Inspect plan artifacts'))
+      ?.onClick?.()
+    expect(
+      useOutputReaderStore
+        .getState()
+        .request?.document?.find(
+          '/lessons .agents/sessions/demo',
+          { line: 0, character: 0 },
+          1,
+        ),
+    ).not.toBeNull()
   })
 
   test('renders custom artifacts as readable label: path list', () => {
@@ -288,16 +301,16 @@ describe('PlanBox', () => {
       />,
     )
 
-    // Both custom artifact commands appear in the rendered output
+    // The preview preserves direct activation; the reader retains further commands.
     expect(markup).toContain('/review-design .agents/sessions/demo')
-    expect(markup).toContain('/validate-tests .agents/sessions/demo')
+    expect(markup).toContain('1 of 2 commands')
 
     // The mocked Button captures every rendered button, including the build-mode
     // actions, so select the command buttons by their text.
     const commandButtons = capturedButtons.filter((button) =>
       commands.includes(button.text),
     )
-    expect(commandButtons.length).toBe(2)
+    expect(commandButtons.length).toBe(1)
 
     for (const button of commandButtons) {
       button.onClick?.()
@@ -306,10 +319,19 @@ describe('PlanBox', () => {
     expect(onInsertCommand).toHaveBeenCalledWith(
       '/review-design .agents/sessions/demo',
     )
-    expect(onInsertCommand).toHaveBeenCalledWith(
-      '/validate-tests .agents/sessions/demo',
-    )
-    expect(onInsertCommand).toHaveBeenCalledTimes(2)
+    expect(onInsertCommand).toHaveBeenCalledTimes(1)
+    capturedButtons
+      .find((button) => button.text.includes('Inspect plan artifacts'))
+      ?.onClick?.()
+    expect(
+      useOutputReaderStore
+        .getState()
+        .request?.document?.find(
+          '/validate-tests .agents/sessions/demo',
+          { line: 0, character: 0 },
+          1,
+        ),
+    ).not.toBeNull()
   })
 
   test('renders known artifact paths and commands together with custom artifacts', () => {
@@ -335,10 +357,19 @@ describe('PlanBox', () => {
     expect(markup).toContain('Session: .agents/sessions/demo')
     expect(markup).toContain('PLAN.md: .agents/sessions/demo/PLAN.md')
     // Custom artifact label: path renders as static text
-    expect(markup).toContain('DESIGN.md: .agents/sessions/demo/DESIGN.md')
+    expect(markup).toContain('2 of 3 artifacts')
     // Both known and custom commands render in the output
     expect(markup).toContain('/mode:execute_plan Go!')
-    expect(markup).toContain('/review-design .agents/sessions/demo')
+    capturedButtons
+      .find((button) => button.text.includes('Inspect plan artifacts'))
+      ?.onClick?.()
+    const retained = useOutputReaderStore.getState().request?.document
+    expect(
+      retained?.find('DESIGN.md', { line: 0, character: 0 }, 1),
+    ).not.toBeNull()
+    expect(
+      retained?.find('/review-design', { line: 0, character: 0 }, 1),
+    ).not.toBeNull()
   })
 
   test('works without onInsertCommand prop (defaults to noop)', () => {
@@ -615,14 +646,27 @@ const ok = true
 
     expect(countIn('DUP.md: .agents/sessions/demo/DUP.md')).toBe(2)
     // The known executeCommand plus the identical custom command entry.
-    expect(countIn('/mode:execute_plan Go!')).toBe(2)
-    expect(countIn('/review-design .agents/sessions/demo')).toBe(2)
-    // Both duplicate commands are real, independently clickable buttons.
+    expect(countIn('/mode:execute_plan Go!')).toBe(1)
+    expect(countIn('/review-design .agents/sessions/demo')).toBe(0)
+    // Commands outside the bounded preview remain inspectable in their original order.
     expect(
       capturedButtons.filter(
         (button) => button.text === '/review-design .agents/sessions/demo',
       ).length,
-    ).toBe(2)
+    ).toBe(0)
+    capturedButtons
+      .find((button) => button.text.includes('Inspect plan artifacts'))
+      ?.onClick?.()
+    const retained = useOutputReaderStore.getState().request?.document
+    const first = retained?.find('/review-design', { line: 0, character: 0 }, 1)
+    expect(first).not.toBeNull()
+    expect(
+      retained?.find(
+        '/review-design',
+        { line: first!.line, character: first!.character + 1 },
+        1,
+      ),
+    ).not.toBeNull()
   })
 
   test('drops empty artifact paths and commands while keeping the Artifacts section', () => {

@@ -1,3 +1,4 @@
+import { countCapturedDiffChanges } from '../../utils/diff-summary'
 import { useMemo, useState } from 'react'
 import { TextAttributes } from '@opentui/core'
 
@@ -22,16 +23,17 @@ interface DiffViewerProps {
   initiallyCollapsedHunks?: number[]
 }
 
-const DIFF_LINE_COLORS: Record<ThemeName, { added: string; removed: string }> = {
-  dark: {
-    added: '#7ACC35',
-    removed: '#BF6C69',
-  },
-  light: {
-    added: '#4A9E1C',
-    removed: '#C53030',
-  },
-}
+const DIFF_LINE_COLORS: Record<ThemeName, { added: string; removed: string }> =
+  {
+    dark: {
+      added: '#7ACC35',
+      removed: '#BF6C69',
+    },
+    light: {
+      added: '#4A9E1C',
+      removed: '#C53030',
+    },
+  }
 
 type BodyLineType = 'add' | 'del' | 'context'
 
@@ -55,6 +57,7 @@ interface Hunk {
 interface ParsedDiff {
   fileHeaders: string[]
   hunks: Hunk[]
+  headerGroups?: Array<{ beforeHunkIndex: number; lines: string[] }>
 }
 
 export const DIFF_INITIAL_MAX_LINES = 80
@@ -84,8 +87,8 @@ const isFileHeaderLine = (line: string): boolean =>
   // A bare `--- some text` is a deletion of a line starting with `--`
   // (common in SQL/Lua/Haskell comments), not a header, so it must stay in
   // the hunk body as a deletion.
-  /^---\s+a\//.test(line) ||
-  /^\+\+\+\s+b\//.test(line) ||
+  /^---\s+(?:a\/|\/dev\/null)/.test(line) ||
+  /^\+\+\+\s+(?:b\/|\/dev\/null)/.test(line) ||
   line.startsWith('rename ') ||
   line.startsWith('similarity ')
 // Note: lines starting with `\` ("No newline at end of file") are skipped
@@ -146,6 +149,16 @@ function computeParsedDiffUncached(diffText: string): ParsedDiff {
     : []
   const fileHeaders: string[] = []
   const hunks: Hunk[] = []
+  const headerGroups: Array<{ beforeHunkIndex: number; lines: string[] }> = []
+  const pushHeader = (line: string) => {
+    fileHeaders.push(line)
+    let group = headerGroups.at(-1)
+    if (!group || group.beforeHunkIndex !== hunks.length) {
+      group = { beforeHunkIndex: hunks.length, lines: [] }
+      headerGroups.push(group)
+    }
+    group.lines.push(line)
+  }
   let currentHunk: Hunk | null = null
   let oldLine = 0
   let newLine = 0
@@ -161,7 +174,7 @@ function computeParsedDiffUncached(diffText: string): ParsedDiff {
     // No-newline marker: attach to prior line, never render as a body row.
     if (raw.startsWith('\\')) {
       if (!currentHunk) {
-        fileHeaders.push(raw)
+        pushHeader(raw)
       }
       continue
     }
@@ -185,14 +198,18 @@ function computeParsedDiffUncached(diffText: string): ParsedDiff {
 
     if (!currentHunk) {
       // Leading file-header section before the first hunk.
-      fileHeaders.push(raw)
+      pushHeader(raw)
       continue
     }
 
     // A new file section appearing after a hunk: close the hunk and treat as header.
-    if (isFileHeaderLine(raw)) {
+    if (
+      isFileHeaderLine(raw) &&
+      oldLine >= currentHunk.oldStart + currentHunk.oldLen &&
+      newLine >= currentHunk.newStart + currentHunk.newLen
+    ) {
       pushHunk()
-      fileHeaders.push(raw)
+      pushHeader(raw)
       continue
     }
 
@@ -245,7 +262,7 @@ function computeParsedDiffUncached(diffText: string): ParsedDiff {
   }
 
   pushHunk()
-  return { fileHeaders, hunks }
+  return { fileHeaders, hunks, headerGroups }
 }
 
 /** Right-align a line number into `width` columns; null -> blank gutter. */
@@ -257,16 +274,7 @@ export function computeDiffStats(diffText: string): {
   added: number
   removed: number
 } {
-  const { hunks } = parseDiffIntoHunks(diffText)
-  let added = 0
-  let removed = 0
-  for (const hunk of hunks) {
-    for (const line of hunk.bodyLines) {
-      if (line.type === 'add') added += 1
-      else if (line.type === 'del') removed += 1
-    }
-  }
-  return { added, removed }
+  return countCapturedDiffChanges(diffText)
 }
 
 export function formatLineNumber(num: number | null, width = 4): string {
@@ -319,6 +327,16 @@ export const DiffViewer = ({
   // the cache layer inside parseDiffIntoHunks, while the memo itself also
   // skips the cache lookup on unchanged renders.
   const parsedDiff = useMemo(() => parseDiffIntoHunks(diffText), [diffText])
+  const headersByHunk = useMemo(
+    () =>
+      new Map(
+        parsedDiff.headerGroups?.map((group) => [
+          group.beforeHunkIndex,
+          group.lines,
+        ]),
+      ),
+    [parsedDiff],
+  )
   // Size-suffix totals reuse the same cached parse, never a second full walk.
   const stats = useMemo(() => computeDiffStats(diffText), [diffText])
   const [collapsedHunks, setCollapsedHunks] = useState<Set<number>>(
@@ -332,10 +350,7 @@ export const DiffViewer = ({
   // The native <diff> renderable draws its own line-number gutters
   // (DiffRenderableOptions.showLineNumbers in @opentui/core); keep the
   // width >= 24 gate so cramped terminals stay gutter-free as before.
-  const effectiveShowLineNumbers = showLineNumbersGate(
-    width,
-    showLineNumbers,
-  )
+  const effectiveShowLineNumbers = showLineNumbersGate(width, showLineNumbers)
 
   const toggleHunk = (index: number) => {
     setCollapsedHunks((prev) => {
@@ -381,7 +396,7 @@ export const DiffViewer = ({
   )
 
   const renderHunkHeader = (hunk: Hunk): ReactNode => {
-    const collapsed = collapsedHunks.has(hunk.index)
+    const collapsed = collapsible && collapsedHunks.has(hunk.index)
     const hasBody = hunk.bodyLines.length > 0
     const marker = collapsed ? '▸' : '▾'
     const label =
@@ -433,15 +448,20 @@ export const DiffViewer = ({
           </span>
         </text>
       ) : null}
-      {fileHeaders.map((line, idx) => renderFileHeader(line, idx))}
+      {!parsedDiff.headerGroups
+        ? fileHeaders.map((line, idx) => renderFileHeader(line, idx))
+        : null}
       {hunks.map((hunk) => {
-        const collapsed = collapsedHunks.has(hunk.index)
+        const collapsed = collapsible && collapsedHunks.has(hunk.index)
         const hasBody = hunk.bodyLines.length > 0
         return (
           <box
             key={`hunk-${hunk.index}`}
             style={{ flexDirection: 'column', gap: 0, width: '100%' }}
           >
+            {headersByHunk
+              .get(hunk.index)
+              ?.map((line, index) => renderFileHeader(line, index))}
             {renderHunkHeader(hunk)}
             {!collapsed && hasBody ? (
               // One native <diff> renderable per visible hunk. Prop names map
@@ -464,6 +484,9 @@ export const DiffViewer = ({
           </box>
         )
       })}
+      {headersByHunk
+        .get(hunks.length)
+        ?.map((line, index) => renderFileHeader(line, index))}
     </box>
   )
 }

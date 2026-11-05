@@ -147,7 +147,12 @@ describe('QueryIndexComponent', () => {
     })
     const markup = renderToStaticMarkup(<>{rendered.content}</>)
 
-    expect(markup).toContain('degraded · refreshing')
+    expect(markup).toContain('State: degraded')
+    expect(markup).toContain('stale evidence')
+    expect(markup).toContain('refreshing')
+    expect(rendered.collapsedPreview).toContain('degraded')
+    expect(rendered.collapsedPreview).toContain('stale evidence')
+    expect(rendered.collapsedPreview).toContain('partial coverage')
     expect(markup).toContain('Vector embeddings: failed')
     expect(markup).toContain('Partial coverage')
     expect(markup).toContain('src/bad.ts')

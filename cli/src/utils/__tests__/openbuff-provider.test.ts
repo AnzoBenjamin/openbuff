@@ -192,7 +192,7 @@ describe('openbuff-provider custom setup', () => {
 
     expect(() =>
       addCustomOpenbuffProvider({ ...base, baseURL: 'not-a-url' }),
-    ).toThrow(/cannot be parsed as a URL/)
+    ).toThrow(/valid provider base URL/)
     expect(fs.existsSync(path.join(tempDir!, 'openbuff.json'))).toBe(false)
 
     expect(() =>

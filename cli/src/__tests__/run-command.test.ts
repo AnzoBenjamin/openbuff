@@ -55,6 +55,39 @@ function makeHarness(options?: {
 }
 
 describe('runHeadlessCommand', () => {
+  test('short human text flushes before a deferred run completes', async () => {
+    let finish!: () => void
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const deferred = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const h = makeHarness({
+      args: { json: false },
+      deps: {
+        openRunJournal: () => undefined,
+        getClient: async () =>
+          ({
+            run: async (options: {
+              handleEvent: (event: PrintModeEvent) => void
+            }) => {
+              options.handleEvent({ type: 'text', text: 'first text' })
+              started()
+              await deferred
+            },
+          }) as unknown as OpenbuffClient,
+      },
+    })
+    const running = runHeadlessCommand(h.args, h.deps)
+    await ready
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(h.stdoutChunks.join('')).toBe('first text')
+    finish()
+    expect(await running).toBe(0)
+    expect(h.stdoutChunks.join('')).toBe('first text')
+  })
   test('--json emits one ndjson line per event and returns 0', async () => {
     const events: PrintModeEvent[] = [
       { type: 'text', text: 'hello ' },
@@ -223,9 +256,7 @@ describe('runHeadlessCommand', () => {
       expect(code).toBe(0)
       expect('journalWriter' in h.runCalls[0]).toBe(false)
       expect('journalReader' in h.runCalls[0]).toBe(false)
-      expect(h.stderrLines.join('')).toContain(
-        'continuing without journaling',
-      )
+      expect(h.stderrLines.join('')).toContain('continuing without journaling')
     })
 
     test('an opener that throws is contained: fail-open, never crash the run', async () => {
@@ -356,7 +387,10 @@ describe('runHeadlessCommand', () => {
       const t = makeTimeoutHarness()
       // Fractional deadline (the suite's fast-deadline pattern): a whole-second
       // 30 would outlive bun's 5s test timeout on a hanging client.
-      await runHeadlessCommand({ prompt: 'hi', json: false, timeout: 0.05 }, t.deps)
+      await runHeadlessCommand(
+        { prompt: 'hi', json: false, timeout: 0.05 },
+        t.deps,
+      )
       expect(t.runCalls[0].signal).toBeInstanceOf(AbortSignal)
     })
 

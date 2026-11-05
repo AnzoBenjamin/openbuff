@@ -494,19 +494,19 @@ async function main() {
 
   // Generate bundled agents file before compiling
   log('Generating bundled agents...')
-  runCommand('bun', ['run', 'scripts/prebuild-agents.ts'], {
+  runCommand(process.execPath, ['run', 'scripts/prebuild-agents.ts'], {
     cwd: cliRoot,
     env: process.env,
   })
-  runCommand('bun', ['run', 'scripts/generate-init-type-sources.ts'], {
+  runCommand(process.execPath, ['run', 'scripts/generate-init-type-sources.ts'], {
     cwd: cliRoot,
     env: process.env,
   })
 
   // Ensure SDK assets exist before compiling the CLI
   log('Building SDK dependencies...')
-  runCommand('bun', ['run', '--cwd', '../sdk', 'build'], {
-    cwd: cliRoot,
+  runCommand(process.execPath, ['run', 'scripts/build.ts'], {
+    cwd: join(cliRoot, '../sdk'),
     env: process.env,
   })
 
@@ -543,7 +543,7 @@ async function main() {
 
   const buildArgs = [
     'build',
-    'src/index.tsx',
+    IS_LEGACY_MACOS_BUILD ? 'src/index.tsx' : 'src/binary-entry.ts',
     '--compile',
     `--outfile=${outputFile}`,
     '--sourcemap=none',
@@ -1688,7 +1688,7 @@ async function findGrammarWasmSource(wasmFile: string): Promise<string> {
   ]
   return resolveGrammarWasmSource({
     wasmFile,
-    candidates,
+    candidates: [...candidates, join(repoRoot, 'sdk', 'dist', 'wasm', wasmFile)],
     repairDir: join(repoRoot, 'sdk', 'dist', 'wasm'),
   })
 }

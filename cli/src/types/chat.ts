@@ -605,6 +605,7 @@ export type MemoryContentBlock =
       type: 'memory'
       state: 'empty'
       v2Lines?: string[]
+      memoryV2Status?: 'healthy' | 'degraded' | 'unavailable' | 'unknown'
     }
   | {
       type: 'memory'
@@ -635,6 +636,7 @@ export type MemoryContentBlock =
       stalePaths: string[]
       totalStaleCount: number
       v2Lines?: string[]
+      memoryV2Status?: 'healthy' | 'degraded' | 'unavailable' | 'unknown'
     }
   | {
       type: 'memory'

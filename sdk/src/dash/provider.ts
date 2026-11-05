@@ -11,7 +11,13 @@ import type { JournalRunSummary } from '@codebuff/agent-runtime/util/run-journal
 
 import type { JournalReader } from '@codebuff/common/types/contracts/agent-runtime'
 
-import type { DashDataProvider, DashRunEvent, DashRunSummary } from './server'
+import { DASH_MAX_EVENTS } from './server'
+import type {
+  DashDataProvider,
+  DashRunEvent,
+  DashRunSummary,
+  DashSourceStatus,
+} from './server'
 
 /** payloadSummary is a bounded JSON.stringify of the event payload. */
 export const MAX_PAYLOAD_SUMMARY_LENGTH = 300
@@ -26,14 +32,12 @@ export const MAX_LISTED_RUNS = 64
  * partially-shaped journal row.
  */
 export function summarizePayload(payload: unknown): string {
-  let text: string
-  try {
-    text = JSON.stringify(payload) ?? 'undefined'
-  } catch {
-    return '[unserializable payload]'
-  }
-  if (text.length <= MAX_PAYLOAD_SUMMARY_LENGTH) return text
-  return `${text.slice(0, MAX_PAYLOAD_SUMMARY_LENGTH)}...`
+  const captured = capturePayloadDetail(
+    payload,
+    MAX_PAYLOAD_SUMMARY_LENGTH,
+    false,
+  )
+  return captured.text + (captured.truncated ? '...' : '')
 }
 
 /**
@@ -55,15 +59,79 @@ function mapEvent(event: {
   createdAt?: number
 }): DashRunEvent {
   const createdAt = createdAtIsoFor(event)
+  const detail = capturePayloadDetail(event.payload)
   return {
     seq: event.seq,
     eventType: event.eventType,
     payloadSummary: summarizePayload(event.payload),
+    payloadDetail: detail.text,
+    payloadTruncated: detail.truncated,
     ...(createdAt !== undefined ? { createdAt } : {}),
   }
 }
 
+function capturePayloadDetail(
+  payload: unknown,
+  budget = 16000,
+  pretty = true,
+): {
+  text: string
+  truncated: boolean
+} {
+  let nodes = 1000
+  let chars = budget
+  let truncated = false
+  const seen = new WeakSet<object>()
+  function project(value: unknown, depth: number): unknown {
+    if (--nodes < 0 || chars <= 0 || depth > 10) {
+      truncated = true
+      return '[detail limit]'
+    }
+    if (typeof value === 'string') {
+      const text = value.slice(0, chars)
+      if (text.length < value.length) truncated = true
+      chars -= text.length
+      return text
+    }
+    if (value === null || typeof value !== 'object')
+      return typeof value === 'bigint' ? String(value) : value
+    if (seen.has(value)) return '[repeated reference]'
+    seen.add(value)
+    if (Array.isArray(value)) {
+      if (value.length > 200) truncated = true
+      return value.slice(0, 200).map((item) => project(item, depth + 1))
+    }
+    const result: Record<string, unknown> = {}
+    let count = 0
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue
+      if (++count > 100 || nodes <= 0 || chars <= 0) {
+        truncated = true
+        break
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      result[key] =
+        descriptor && 'value' in descriptor
+          ? project(descriptor.value, depth + 1)
+          : '[accessor]'
+    }
+    return result
+  }
+  try {
+    const text =
+      JSON.stringify(project(payload, 0), null, pretty ? 2 : undefined) ??
+      'undefined'
+    return {
+      text: text.slice(0, budget),
+      truncated: truncated || text.length > budget,
+    }
+  } catch {
+    return { text: '[unserializable payload]', truncated: true }
+  }
+}
+
 export type CreateDashProviderFromJournalParams = {
+  sourceStatus?: DashSourceStatus
   /** P2-T2 run-journal reader; when absent, runs/events are empty arrays. */
   journalReader?: JournalReader
   /**
@@ -113,6 +181,14 @@ export function createDashProviderFromJournal(
   }
 
   return {
+    async getSourceStatus() {
+      return {
+        ...(params.sourceStatus ?? {
+          state: journalReader ? ('available' as const) : ('absent' as const),
+        }),
+        checkedAt: new Date().toISOString(),
+      }
+    },
     async listRuns(): Promise<DashRunSummary[]> {
       if (!journalReader) return []
       // O(runs) path: the optional runSummaries extension (the production
@@ -156,7 +232,10 @@ export function createDashProviderFromJournal(
 
     async getRunEvents(runId: string): Promise<DashRunEvent[]> {
       if (!journalReader) return []
-      return journalReader.events(runId).map((event) => mapEvent(event))
+      return journalReader
+        .events(runId)
+        .slice(-DASH_MAX_EVENTS)
+        .map((event) => mapEvent(event))
     },
 
     async getReceipts(): Promise<unknown[]> {
