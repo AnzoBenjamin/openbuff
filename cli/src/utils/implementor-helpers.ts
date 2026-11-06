@@ -8,6 +8,7 @@ import { getToolMetadata } from '@codebuff/common/tools/metadata'
 import {
   getCanonicalMutationPrimaryAction,
   getCanonicalMutationResult,
+  getConfirmedMutationActionsFromOutput,
 } from './tool-result-normalizer'
 
 export const IMPLEMENTOR_AGENT_IDS = ['editor-implementor'] as const
@@ -28,21 +29,16 @@ function extractTransactionFiles(toolBlock: ToolContentBlock): Array<{
 }> {
   const canonical = getCanonicalMutationResult(toolBlock.outputRaw)
   if (canonical && Array.isArray(canonical.actions))
-    return canonical.actions
-      .filter(
-        (action) =>
-          action &&
-          typeof action === 'object' &&
-          action.outcome === 'applied' &&
-          typeof action.path === 'string',
-      )
-      .map((action) => ({
+    return getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).map(
+      (action) => ({
         path:
           typeof action.destinationPath === 'string'
             ? action.destinationPath
-            : action.path,
+            : String(action.path),
         sourcePath:
-          typeof action.destinationPath === 'string' ? action.path : undefined,
+          typeof action.destinationPath === 'string'
+            ? String(action.path)
+            : undefined,
         diff: typeof action.patch === 'string' ? action.patch : null,
         changeType:
           action.action === 'create'
@@ -52,7 +48,8 @@ function extractTransactionFiles(toolBlock: ToolContentBlock): Array<{
               : action.action === 'move'
                 ? 'R'
                 : 'M',
-      }))
+      }),
+    )
   const outputRaw = toolBlock.outputRaw as unknown
   const value =
     Array.isArray(outputRaw) && outputRaw[0]?.value
@@ -355,7 +352,8 @@ export function extractDiff(toolBlock: ToolContentBlock): string | null {
   const canonicalAction = getCanonicalMutationPrimaryAction(toolBlock.outputRaw)
   if (canonicalMutation) {
     if (typeof canonicalAction?.patch === 'string') return canonicalAction.patch
-    hasSuccessfulOutput = canonicalMutation.outcome === 'applied'
+    hasSuccessfulOutput =
+      getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).length > 0
   }
 
   // First try to get from outputRaw (for executed tool results)
@@ -462,6 +460,11 @@ function hasFailedEditOutput(params: {
 }
 
 function isFailedEditToolBlock(toolBlock: ToolContentBlock): boolean {
+  if (getCanonicalMutationResult(toolBlock.outputRaw)) {
+    return (
+      getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).length === 0
+    )
+  }
   const outputRaw = toolBlock.outputRaw as unknown
   if (Array.isArray(outputRaw) && outputRaw[0]?.value) {
     const value = outputRaw[0].value as Record<string, unknown>

@@ -30,6 +30,14 @@
  */
 
 import { Buffer } from 'node:buffer'
+import {
+  runOutcomeSchema,
+  taskAcceptanceSchema,
+} from '@codebuff/common/types/run-outcome'
+import type {
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 
@@ -145,10 +153,10 @@ export interface RunJournal extends JournalWriter, JournalReader {
    * throws onto the caller; optional so an existing implementor of this
    * interface is never broken by an added required member.
    */
-  maintain?(params?: {
-    keepRuns?: number
-    vacuum?: boolean
-  }): { prunedRunCount: number; vacuumed: boolean }
+  maintain?(params?: { keepRuns?: number; vacuum?: boolean }): {
+    prunedRunCount: number
+    vacuumed: boolean
+  }
   /**
    * Optional (slice-4 hardening): force-drain any hot-path-batched events so
    * everything appended so far is durably committed BEFORE a side-effecting
@@ -205,10 +213,10 @@ export type CreatedRunJournal = RunJournal & {
    * journal. `prunedRunCount` counts RUNS deleted (runs present minus
    * kept), not rows; `vacuumed` is true only when VACUUM completed.
    */
-  maintain(params?: {
-    keepRuns?: number
-    vacuum?: boolean
-  }): { prunedRunCount: number; vacuumed: boolean }
+  maintain(params?: { keepRuns?: number; vacuum?: boolean }): {
+    prunedRunCount: number
+    vacuumed: boolean
+  }
   /** Slice-4 hardening: always provided by the built-in journal. */
   forceFlush(): Promise<void>
   /** Slice-4 hardening bounded read: always provided by the built-in journal. */
@@ -547,7 +555,9 @@ export function createRunJournal(params: {
     ? {
         maxBatchEvents: Math.max(
           1,
-          Math.floor(params.batching.maxBatchEvents ?? DEFAULT_MAX_BATCH_EVENTS),
+          Math.floor(
+            params.batching.maxBatchEvents ?? DEFAULT_MAX_BATCH_EVENTS,
+          ),
         ),
         maxBatchDelayMs: Math.max(
           0,
@@ -583,9 +593,9 @@ export function createRunJournal(params: {
   // unconditional path.
   let schemaInitialized = false
   if (path !== ':memory:') {
-    const marker = db
-      .query('PRAGMA user_version')
-      .get() as { user_version: number } | undefined
+    const marker = db.query('PRAGMA user_version').get() as
+      | { user_version: number }
+      | undefined
     schemaInitialized = (marker?.user_version ?? 0) >= SCHEMA_USER_VERSION
   }
   if (!schemaInitialized) {
@@ -877,16 +887,16 @@ export function createRunJournal(params: {
    * eliminate). The walk stops at the first row whose cumulative sum
    * reaches `excessBytes` (the cut boundary — that row is the LAST
    * DELETED), at the newest row (never deleted), or at the end of the
- * run. Returns the cut seq, the authoritative bytes of the walked
- * prefix (the deleted rows when a cut was found), the exact bytes of
- * EVERY row walked (the surviving run's exact total when the newest
- * row was reached), the NUMBER OF ROWS the walk visited (the base for
- * the count side row's O(1) post-delete re-persist: visited minus the
- * newest row when the walk stopped at it is exactly the rows with
- * seq <= cutSeq), whether the newest row stopped the walk, and the
- * last walked seq below the newest row (the cut for the
- * newest-row-alone-over-cap case). O(rows walked) — bounded by the
- * rows being deleted, never by the retained window.
+   * run. Returns the cut seq, the authoritative bytes of the walked
+   * prefix (the deleted rows when a cut was found), the exact bytes of
+   * EVERY row walked (the surviving run's exact total when the newest
+   * row was reached), the NUMBER OF ROWS the walk visited (the base for
+   * the count side row's O(1) post-delete re-persist: visited minus the
+   * newest row when the walk stopped at it is exactly the rows with
+   * seq <= cutSeq), whether the newest row stopped the walk, and the
+   * last walked seq below the newest row (the cut for the
+   * newest-row-alone-over-cap case). O(rows walked) — bounded by the
+   * rows being deleted, never by the retained window.
    */
   const walkBytePrefix = (
     runId: string,
@@ -1029,10 +1039,9 @@ export function createRunJournal(params: {
             // excess <= exactCount - 1 < exactCount — so a stale inflated
             // count can never over-delete, and the newest row (OFFSET
             // exactCount - 1) is never the boundary.
-            const boundary = selectExcessBoundary?.get(
-              runId,
-              excess - 1,
-            ) as { seq: number } | undefined
+            const boundary = selectExcessBoundary?.get(runId, excess - 1) as
+              | { seq: number }
+              | undefined
             if (boundary) {
               if (maxBytesCap !== undefined) {
                 // Byte accounting for the rows this count-delete is about
@@ -1480,10 +1489,7 @@ export function createRunJournal(params: {
           // side row alongside the byte side row (a no-op when the run never
           // had an event-capped writer).
           runEventCounts.delete(existingRunId)
-          db.run(
-            'DELETE FROM run_event_counts WHERE run_id = ?',
-            existingRunId,
-          )
+          db.run('DELETE FROM run_event_counts WHERE run_id = ?', existingRunId)
         }
       }
       pending = pending.filter((item) => keep.has(item.runId))
@@ -1578,10 +1584,10 @@ export function createRunJournal(params: {
      * — it never throws onto the caller, so a maintenance outage can
      * never break the caller that kicked it.
      */
-    maintain(params?: {
-      keepRuns?: number
-      vacuum?: boolean
-    }): { prunedRunCount: number; vacuumed: boolean } {
+    maintain(params?: { keepRuns?: number; vacuum?: boolean }): {
+      prunedRunCount: number
+      vacuumed: boolean
+    } {
       // Post-close no-op, mirroring flush/forceFlush: the connection is
       // gone and maintenance must never throw on it.
       if (closed) return { prunedRunCount: 0, vacuumed: false }
@@ -1932,7 +1938,12 @@ export function classifyRunResume(
  * own journal (the child's runId = the parent journal's spawn `correlation`).
  */
 export type ChildRunDisposition =
-  | { kind: 'child_completed'; lastEventSeq: number }
+  | {
+      kind: 'child_completed'
+      lastEventSeq: number
+      runOutcome?: RunOutcome
+      taskAcceptance?: TaskAcceptance
+    }
   | { kind: 'child_in_flight_tool'; childRunId: string; toolCallId: string }
   | { kind: 'child_in_flight_llm'; childRunId: string }
   | { kind: 'child_incomplete_tail'; childRunId: string }
@@ -1976,10 +1987,27 @@ export function classifyChildRun(
   // tool_result (or llm_response) tail means the child was killed mid-run —
   // between its last tool_result and the next llm_request — and its final
   // output was never produced.
-  if (last.eventType !== 'step_boundary') {
+  if (
+    last.eventType !== 'step_boundary' ||
+    (last.payload !== null &&
+      typeof last.payload === 'object' &&
+      'terminal' in last.payload &&
+      last.payload.terminal === false)
+  ) {
     return { kind: 'child_incomplete_tail', childRunId }
   }
-  return { kind: 'child_completed', lastEventSeq: last.seq }
+  const payload =
+    last.payload && typeof last.payload === 'object'
+      ? (last.payload as Record<string, unknown>)
+      : {}
+  const outcome = runOutcomeSchema.safeParse(payload.runOutcome)
+  const acceptance = taskAcceptanceSchema.safeParse(payload.taskAcceptance)
+  return {
+    kind: 'child_completed',
+    lastEventSeq: last.seq,
+    ...(outcome.success ? { runOutcome: outcome.data } : {}),
+    ...(acceptance.success ? { taskAcceptance: acceptance.data } : {}),
+  }
 }
 
 /**
@@ -1996,7 +2024,12 @@ export type ResumePlan =
   | {
       kind: 'needs_children'
       inFlight: Array<ChildRunDisposition>
-      awaiting: Array<{ childRunId: string; childLastSeq: number }>
+      awaiting: Array<{
+        childRunId: string
+        childLastSeq: number
+        runOutcome?: RunOutcome
+        taskAcceptance?: TaskAcceptance
+      }>
     }
 
 /**
@@ -2034,7 +2067,8 @@ export function planChildResume(
       : undefined
   const events = targeted ? targeted.spawns : reader.events(parentRunId)
   const inFlight: Array<ChildRunDisposition> = []
-  const awaiting: Array<{ childRunId: string; childLastSeq: number }> = []
+  const awaiting: Extract<ResumePlan, { kind: 'needs_children' }>['awaiting'] =
+    []
 
   for (let i = 0; i < events.length; i++) {
     const event = events[i]
@@ -2053,6 +2087,12 @@ export function planChildResume(
       awaiting.push({
         childRunId,
         childLastSeq: disposition.lastEventSeq,
+        ...(disposition.runOutcome
+          ? { runOutcome: disposition.runOutcome }
+          : {}),
+        ...(disposition.taskAcceptance
+          ? { taskAcceptance: disposition.taskAcceptance }
+          : {}),
       })
     } else {
       inFlight.push(disposition)
@@ -2087,7 +2127,13 @@ function hasTerminalStepBoundaryAfter(
  * P2-T2-DESIGN §4d replay-leg outcome for one child run.
  */
 export type ChildReplayOutcome =
-  | { kind: 'replayed_completed'; childRunId: string; lastSeq: number }
+  | {
+      kind: 'replayed_completed'
+      childRunId: string
+      lastSeq: number
+      runOutcome?: RunOutcome
+      taskAcceptance?: TaskAcceptance
+    }
   | { kind: 'live_execution_required'; childRunId: string }
   | { kind: 'child_unknown'; childRunId: string }
 
@@ -2111,6 +2157,12 @@ export function executeChildReplay(
         kind: 'replayed_completed',
         childRunId,
         lastSeq: disposition.lastEventSeq,
+        ...(disposition.runOutcome
+          ? { runOutcome: disposition.runOutcome }
+          : {}),
+        ...(disposition.taskAcceptance
+          ? { taskAcceptance: disposition.taskAcceptance }
+          : {}),
       }
     case 'child_in_flight_tool':
     case 'child_in_flight_llm':
@@ -2356,6 +2408,8 @@ export type ReplayAction =
         | 'replayed_completed'
         | 'live_execution_required'
         | 'child_unknown'
+      runOutcome?: RunOutcome
+      taskAcceptance?: TaskAcceptance
     }
   | { kind: 'respawn_background'; jobId: string; agentType: string }
   | {
@@ -2407,19 +2461,28 @@ export function planReplayActions(
   const pushChild = (
     childRunId: string,
     verdict: 'replayed_completed' | 'live_execution_required' | 'child_unknown',
+    outcomes?: { runOutcome?: RunOutcome; taskAcceptance?: TaskAcceptance },
   ): boolean => {
     if (childActionCount >= maxReplays) {
       truncated ??= { kind: 'children', firstDroppedChildRunId: childRunId }
       return false
     }
-    actions.push({ kind: 'replay_child', childRunId, verdict })
+    actions.push({
+      kind: 'replay_child',
+      childRunId,
+      verdict,
+      ...(outcomes?.runOutcome ? { runOutcome: outcomes.runOutcome } : {}),
+      ...(outcomes?.taskAcceptance
+        ? { taskAcceptance: outcomes.taskAcceptance }
+        : {}),
+    })
     childActionCount += 1
     return true
   }
 
   if (report.children.kind === 'needs_children') {
     for (const child of report.children.awaiting) {
-      if (!pushChild(child.childRunId, 'replayed_completed')) break
+      if (!pushChild(child.childRunId, 'replayed_completed', child)) break
     }
     for (const disposition of report.children.inFlight) {
       // planChildResume never folds a child_completed disposition into
@@ -2462,7 +2525,11 @@ export type ReplayDeps = {
    * replay-from-journal, or queueing). The driver only invokes the seam with
    * the planner's verdict.
    */
-  replayChild?: (childRunId: string, verdict: string) => Promise<void>
+  replayChild?: (
+    childRunId: string,
+    verdict: string,
+    outcomes?: { runOutcome?: RunOutcome; taskAcceptance?: TaskAcceptance },
+  ) => Promise<void>
   /**
    * How to respawn one background job. Must NOT re-run
    * reconcileInterruptedBackgroundAgentIntents: the caller has already
@@ -2537,7 +2604,12 @@ export async function executeReplayActions(
         }
         result.attempted += 1
         try {
-          await deps.replayChild(action.childRunId, action.verdict)
+          await deps.replayChild(action.childRunId, action.verdict, {
+            ...(action.runOutcome ? { runOutcome: action.runOutcome } : {}),
+            ...(action.taskAcceptance
+              ? { taskAcceptance: action.taskAcceptance }
+              : {}),
+          })
           result.succeeded += 1
         } catch (error) {
           result.failed.push({

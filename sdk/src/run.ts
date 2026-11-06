@@ -51,13 +51,17 @@ import { WorkspaceJournalService } from './services/workspace-journal'
 import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
 import { LocalHarnessStore } from './services/local-harness-store'
 import {
-  captureDiagnostics,
-  supportedDiagnosticFiles,
+  captureDiagnosticObservation,
+  type DiagnosticCapture,
 } from './services/diagnostic-delta'
 import {
   createDiagnosticCommandRunner,
   createDiagnosticDeltaHook,
 } from './services/diagnostic-delta-runner'
+import {
+  diagnosticFileSet,
+  diagnosticPostimageMatches,
+} from './services/diagnostic-baseline'
 import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
 import type { MemoryV2ClientConfig } from './services/memory-v2/types'
 import {
@@ -136,6 +140,8 @@ import type { FilesystemAuthorityPolicy } from './tools/filesystem-authority'
 
 import type { CustomToolDefinition } from './custom-tool'
 import type { RunState } from './run-state'
+import { projectRunOutcomes } from './run-state'
+import type { RunOutcome } from '@codebuff/common/types/run-outcome'
 import type { FileFilter } from './tools/read-files'
 import type { FileLineRange } from '@codebuff/common/types/contracts/client'
 import type { ReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
@@ -162,7 +168,6 @@ import type { JobOwner } from '@codebuff/common/util/job-registry'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { Source } from '@codebuff/common/types/source'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
-import type { LanguageDiagnostic } from './tools/language-diagnostics'
 import { listJobs } from './tools/list-jobs'
 
 import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
@@ -345,6 +350,10 @@ export type OpenbuffClientOptions = {
   /** (Optional) Cap on how many times the agent retries a structured set_output after ending its turn without one. Omit for unlimited retries (bounded by maxAgentSteps). */
   maxMissingOutputRetries?: number
   env?: Record<string, string>
+  /** Whether terminal commands inherit the host process environment. Defaults
+   * to true. False uses only env (then applies the credential scrub). This
+   * controls child commands; it does not isolate SDK/provider execution. */
+  inheritEnv?: boolean
   /** Harness control-plane state root. Defaults to the Openbuff config directory. */
   harnessStateDir?: string
   /** Pre-created, exact-scope approval receipt IDs available to this run.
@@ -728,13 +737,22 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
 
   if (signal?.aborted) {
     const abortError = createAbortError(signal)
-    return {
-      sessionState: options.previousRun?.sessionState,
-      output: {
-        type: 'error',
-        message: abortError.message,
+    return projectRunOutcomes(
+      {
+        sessionState: options.previousRun?.sessionState,
+        output: {
+          type: 'error',
+          message: abortError.message,
+        },
       },
-    }
+      {
+        runOutcome: {
+          termination: 'cancelled',
+          cause: { code: 'run_cancelled', message: abortError.message },
+        },
+        taskAcceptance: { status: 'unknown' },
+      },
+    )
   }
 
   return runOnce(options)
@@ -756,6 +774,7 @@ async function runOnce({
   // the runtime knob's undefined → unlimited contract.
   maxMissingOutputRetries,
   env,
+  inheritEnv = true,
   harnessStateDir,
   approvalReceiptIds = [],
   approvalMode = 'balanced',
@@ -813,9 +832,8 @@ async function runOnce({
     ) {
       exactTokenProvidersRegistrationAttempted = true
       try {
-        const { registerBundledExactTokenProviders } = await import(
-          '@codebuff/agent-runtime/util/exact-token-providers'
-        )
+        const { registerBundledExactTokenProviders } =
+          await import('@codebuff/agent-runtime/util/exact-token-providers')
         registerBundledExactTokenProviders()
       } catch (error) {
         logger?.warn(
@@ -845,8 +863,7 @@ async function runOnce({
     // exactly once per run here, never per path or per tool.
     const loadedProviderConfig = loadProviderConfigSync(env ? { env } : {})
     const loadedReadableRoots = loadedProviderConfig.config.readableRoots
-    const readableRootsSources =
-      loadedProviderConfig.readableRootsSources ?? {}
+    const readableRootsSources = loadedProviderConfig.readableRootsSources ?? {}
     const configDir = getConfigDir(env)
     // ER-1 trust gate. `readableRoots` is the only config key that grants
     // filesystem authority rather than influencing model routing, so a value
@@ -992,7 +1009,59 @@ async function runOnce({
   // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check lives inside runFileChangeHooks,
   // so passing the injector unconditionally keeps flag-off behavior
   // byte-identical.
-  const diagnosticDeltaHook = createDiagnosticDeltaHook({ spawn })
+  // One retained baseline per run, scoped to a confirmed mutation's postimage.
+  let diagnosticBaselineEpoch = 0
+  let pendingDiagnosticBaseline:
+    | {
+        capture: DiagnosticCapture
+        cwd: string
+        files: string[]
+        mutationCallId: string
+        workspaceRevision: number
+        workspaceSnapshotId: string
+        afterHashes: Record<string, string | null>
+        invalidReason?: string
+      }
+    | undefined
+  const diagnosticDeltaHook = createDiagnosticDeltaHook({
+    spawn,
+    getBaseline: async ({ files, cwd: hookCwd, signal: hookSignal }) => {
+      const pending = pendingDiagnosticBaseline
+      if (!pending) return undefined
+      const workspace = sessionState.mainAgentState.workspaceState
+      const requested = diagnosticFileSet(hookCwd, files)
+      if (
+        !pending.invalidReason &&
+        (path.resolve(hookCwd) !== pending.cwd ||
+          workspace?.revision !== pending.workspaceRevision ||
+          workspace?.snapshotId !== pending.workspaceSnapshotId ||
+          requested.length !== pending.files.length ||
+          requested.some((file, index) => file !== pending.files[index]) ||
+          !(await diagnosticPostimageMatches({
+            fs,
+            hashes: pending.afterHashes,
+            signal: hookSignal,
+          })))
+      ) {
+        pending.invalidReason = 'baseline_postimage_or_scope_unverified'
+      }
+      if (pending.invalidReason) {
+        return {
+          ...pending.capture,
+          coverage: {
+            ...pending.capture.coverage,
+            status: 'unknown' as const,
+            unobservedFiles: [...pending.capture.coverage.requestedFiles],
+            reasons: [
+              ...pending.capture.coverage.reasons,
+              pending.invalidReason,
+            ],
+          },
+        }
+      }
+      return pending.capture
+    },
+  })
   // Audit fix (D): the pre-edit baseline capture below runs through the SAME
   // argv-array child-process seam (its own stateless adapter instance — the
   // runner holds no state), bounded exactly like the hook's own captures.
@@ -1061,6 +1130,9 @@ async function runOnce({
       workspaceMoves: persistedWorkspaceMoves,
     })
   }
+  // A continued turn must not inherit the previous turn's terminal verdict.
+  sessionState.mainAgentState.runOutcome = undefined
+  sessionState.mainAgentState.taskAcceptance = { status: 'unknown' }
   // Attach host-supplied MCP servers to the RESOLVED agent template so the run
   // loop's getMCPToolData reads them. This runs AFTER sessionState is fully
   // built (post initialSessionState / applyOverridesToSessionState, both of
@@ -1169,12 +1241,13 @@ async function runOnce({
   let callbackQueue: Promise<void> = Promise.resolve()
   let callbackFailure: unknown
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  let runDeadlineExceeded = false
   let resolveTerminal: (value: RunReturnType) => void = () => {}
   const terminalPromise = new Promise<RunReturnType>((res) => {
     resolveTerminal = (value) => {
       if (terminalRequested) return
       terminalRequested = true
-      res(value)
+      res(projectRunOutcomes(value))
     }
   })
 
@@ -1232,20 +1305,34 @@ async function runOnce({
     })
     return state
   }
-  function getCancelledRunState(message?: string): RunState {
+  function getCancelledRunState(
+    message?: string,
+    termination: RunOutcome['termination'] = runDeadlineExceeded
+      ? 'deadline_exhausted'
+      : 'cancelled',
+  ): RunState {
     message = message ?? 'Run cancelled by user.'
-    return {
-      sessionState: getCancelledSessionState(message),
-      output: {
-        type: 'error',
-        message,
+    return projectRunOutcomes(
+      {
+        sessionState: getCancelledSessionState(message),
+        output: {
+          type: 'error',
+          message,
+        },
       },
-    }
+      {
+        runOutcome: {
+          termination,
+          cause: { code: `run_${termination}`, message },
+        },
+      },
+    )
   }
 
   if (timeoutEnabled) {
     timeoutHandle = setTimeout(() => {
       const message = `Run timed out after ${runTimeoutMs}ms`
+      runDeadlineExceeded = true
       abortRun(new Error(message))
       resolveTerminal(getCancelledRunState(message))
     }, runTimeoutMs)
@@ -1415,18 +1502,21 @@ async function runOnce({
           if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
         }
       }
-      // Audit fix (D): pre-edit baseline capture for the diagnostic-delta
-      // preflight. For tool calls whose receipt can contain file actions (the
-      // same set that reaches the post-commit mutation block), capture the
-      // PRE-EDIT diagnostic state ONCE so the hook can compute a real
-      // before/after delta. Bounded and fail-open: only when the
-      // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag is on, only one diagnostic-command
-      // pass per mutating tool call, and any capture error degrades to no
-      // baseline (today's exact hook behavior). The baseline is captured into
-      // this tool call's closure and consumed by the per-call hook wrapper
-      // below, so it can never leak across tool calls.
+      // Capture before the mutation and retain it only after confirmed effects.
+      // A later validation call must match its scope, revision and raw postimage.
       const isMutatingToolCall = DIAGNOSTIC_BASELINE_TOOL_NAMES.has(toolName)
-      let diagnosticBaseline: LanguageDiagnostic[] | undefined
+      const canHaveUnknownEffects =
+        toolName === 'run_terminal_command' ||
+        Boolean(mcpConfig) ||
+        customToolDefinitions?.some(
+          (definition) => definition.toolName === toolName,
+        )
+      if (isMutatingToolCall || canHaveUnknownEffects) {
+        pendingDiagnosticBaseline = undefined
+        diagnosticBaselineEpoch += 1
+      }
+      const baselineEpochForCall = diagnosticBaselineEpoch
+      let diagnosticBaseline: DiagnosticCapture | undefined
       if (
         isMutatingToolCall &&
         cwd &&
@@ -1434,11 +1524,9 @@ async function runOnce({
         isDiagnosticPreflightEnabled(env)
       ) {
         try {
-          const baselineFiles = supportedDiagnosticFiles(
-            diagnosticBaselineFiles(toolName, input),
-          )
+          const baselineFiles = diagnosticBaselineFiles(toolName, input)
           if (baselineFiles.length > 0) {
-            diagnosticBaseline = await captureDiagnostics({
+            diagnosticBaseline = await captureDiagnosticObservation({
               files: baselineFiles,
               cwd,
               runCommand: diagnosticBaselineRunner,
@@ -1451,17 +1539,6 @@ async function runOnce({
           diagnosticBaseline = undefined
         }
       }
-      // Per-call hook wrapper: only a mutating tool call with a captured
-      // baseline supplies it (and the hook then drops skipSecondCapture so
-      // the after-capture runs for real); every other call reuses the shared
-      // hook unchanged, keeping no-baseline behavior byte-identical.
-      const diagnosticDeltaForCall: DiagnosticDeltaHook = diagnosticBaseline
-        ? (hookParams) =>
-            createDiagnosticDeltaHook({
-              spawn,
-              getBaseline: () => diagnosticBaseline,
-            })(hookParams)
-        : diagnosticDeltaHook
       const trustedCallId = callId ?? crypto.randomUUID()
       const handled = await handleToolCall({
         action: {
@@ -1474,10 +1551,52 @@ async function runOnce({
         },
         overrides: overrideTools ?? {},
         onFilesChanged,
-        onFilesystemMutation,
+        onFilesystemMutation: async (event) => {
+          if (
+            diagnosticBaseline &&
+            cwd &&
+            baselineEpochForCall === diagnosticBaselineEpoch
+          ) {
+            const afterHashes: Record<string, string | null> = {}
+            for (const changed of event.actions) {
+              afterHashes[path.resolve(cwd, changed.path)] =
+                changed.action === 'delete' || changed.action === 'move'
+                  ? null
+                  : changed.afterHash
+              if (changed.destinationPath)
+                afterHashes[path.resolve(cwd, changed.destinationPath)] =
+                  changed.afterHash
+            }
+            const files = diagnosticFileSet(
+              cwd,
+              diagnosticBaseline.coverage.requestedFiles,
+            )
+            const changedFiles = Object.keys(afterHashes).sort()
+            if (
+              files.length > 0 &&
+              files.length <= 32 &&
+              files.length === changedFiles.length &&
+              files.every((file, index) => file === changedFiles[index])
+            ) {
+              pendingDiagnosticBaseline = {
+                capture: diagnosticBaseline,
+                cwd: path.resolve(cwd),
+                files,
+                mutationCallId: trustedCallId,
+                workspaceRevision: event.workspaceRevision,
+                workspaceSnapshotId: event.workspaceSnapshotId,
+                afterHashes,
+              }
+            }
+          } else if (isMutatingToolCall) {
+            pendingDiagnosticBaseline = undefined
+          }
+          if (onFilesystemMutation) await onFilesystemMutation(event)
+          else await onFilesChanged?.()
+        },
         verifyExternalMutation,
         getLanguageIntelligence,
-        diagnosticDelta: diagnosticDeltaForCall,
+        diagnosticDelta: diagnosticDeltaHook,
         customToolDefinitions: customToolDefinitions
           ? Object.fromEntries(
               customToolDefinitions.map((def) => [def.toolName, def]),
@@ -1499,6 +1618,7 @@ async function runOnce({
             }
           : undefined,
         env,
+        inheritEnv,
         harnessStateDir: resolvedHarnessStateDir,
         approvalReceiptIds,
         approvalMode,
@@ -1549,7 +1669,9 @@ async function runOnce({
       const directOverride =
         toolName === 'read_files'
           ? overrideTools?.read_files
-          : overrideTools?.[toolName as Exclude<PublishedToolName, 'read_files'>]
+          : overrideTools?.[
+              toolName as Exclude<PublishedToolName, 'read_files'>
+            ]
       const fallbackWriteOverride =
         (toolName === 'str_replace' || toolName === 'create_plan') &&
         overrideTools?.write_file
@@ -1562,7 +1684,9 @@ async function runOnce({
         workspaceState: sessionState.mainAgentState.workspaceState,
         native:
           toolNames.includes(toolName as ToolName) &&
-          !customToolDefinitions?.some((definition) => definition.toolName === toolName) &&
+          !customToolDefinitions?.some(
+            (definition) => definition.toolName === toolName,
+          ) &&
           !directOverride &&
           !fallbackWriteOverride,
         mcp: Boolean(mcpConfig),
@@ -1742,7 +1866,10 @@ async function runOnce({
   })
   if (!userInfo) {
     if (timeoutHandle) clearTimeout(timeoutHandle)
-    const terminalState = getCancelledRunState('Invalid API key or user not found')
+    const terminalState = getCancelledRunState(
+      'Invalid API key or user not found',
+      'failed',
+    )
     if (memoryV2Coordinator) {
       await raceAgainstAbort(
         memoryV2Coordinator.finishTurn({
@@ -1782,6 +1909,7 @@ async function runOnce({
     return terminalState
   }
 
+  let settledRuntimeState: RunState | undefined
   const promptExecution = callMainPrompt({
     ...agentRuntimeImpl,
     promptId,
@@ -1808,6 +1936,7 @@ async function runOnce({
     maxMissingOutputRetries,
   })
     .then((result) => {
+      settledRuntimeState = result
       resolveTerminal(result)
     })
     .catch((error) => {
@@ -1828,6 +1957,21 @@ async function runOnce({
 
       resolveTerminal({
         sessionState: getCancelledSessionState(errorMessage),
+        runOutcome: {
+          termination: runDeadlineExceeded
+            ? 'deadline_exhausted'
+            : runSignal.aborted
+              ? 'cancelled'
+              : 'failed',
+          cause: {
+            code: runDeadlineExceeded
+              ? 'run_deadline_exhausted'
+              : runSignal.aborted
+                ? 'run_cancelled'
+                : 'runtime_error',
+            message: errorMessage,
+          },
+        },
         output: {
           type: 'error',
           message: errorMessage,
@@ -1840,12 +1984,24 @@ async function runOnce({
       })
     })
 
-  const terminalState = await terminalPromise
+  let terminalState = await terminalPromise
   // A timeout/cancel first aborts the shared signal; cooperative runtime and
   // tools then unwind. Legacy overrides are raced against that signal, so a
   // non-cooperative promise cannot hold the public run open or publish late
   // output. Normal completion also waits for callMainPrompt's cleanup.
   await promptExecution
+  // Cancellation may resolve before the runtime records its last in-flight
+  // action. Preserve that settled evidence after unwinding, without changing
+  // the selected terminal reason or the interruption transcript.
+  const settledActions =
+    settledRuntimeState?.sessionState?.mainAgentState.actionOutcomes ??
+    sessionState.mainAgentState.actionOutcomes
+  if (settledActions) {
+    terminalState = projectRunOutcomes({
+      ...terminalState,
+      actionOutcomes: settledActions,
+    })
+  }
   await callbackQueue
   callbacksEnabled = false
   unsubscribeJobEvents()
@@ -2190,6 +2346,7 @@ export async function handleToolCall({
   capabilityIssuer,
   logger,
   env,
+  inheritEnv = true,
   harnessStateDir,
   approvalReceiptIds,
   approvalMode,
@@ -2221,6 +2378,7 @@ export async function handleToolCall({
   capabilityIssuer?: ReadCapabilityIssuer
   logger?: Logger
   env?: Record<string, string>
+  inheritEnv?: boolean
   harnessStateDir: string
   approvalReceiptIds: string[]
   approvalMode: HarnessApprovalMode
@@ -2417,9 +2575,14 @@ export async function handleToolCall({
           })
           .join('; ')
         return {
-          output: [{ type: 'json', value: {
-            errorMessage: `Invalid parameters for ${toolName}: ${details}`,
-          } }],
+          output: [
+            {
+              type: 'json',
+              value: {
+                errorMessage: `Invalid parameters for ${toolName}: ${details}`,
+              },
+            },
+          ],
         }
       }
       customInput = parsed.data
@@ -2639,22 +2802,34 @@ export async function handleToolCall({
         cwd: path.resolve(projectRoot, terminalInput.cwd ?? '.'),
         projectRoot,
         env,
+        inheritEnv,
         signal,
         authorizeHighImpactAction: async (classified) => {
           let branch: string | undefined
           let defaultBranch: string | undefined
-          if (classified.action === 'push') {
+          const effects = classified.effects?.length
+            ? classified.effects
+            : [classified]
+          if (effects.some((effect) => effect.action === 'push')) {
             const workspace = await inspectWorkspace({
               cwd: projectRoot,
               signal,
             })
             const value = workspace.find((part) => part.type === 'json')
               ?.value as { branch?: string; defaultBranch?: string } | undefined
-            branch = classified.branch ?? value?.branch
+            branch = value?.branch
             defaultBranch = value?.defaultBranch
           }
-          const staticDecision = evaluateHarnessActionPolicy({
+          const effectiveAction = {
             ...classified,
+            effects: effects.map((effect) =>
+              effect.action === 'push'
+                ? { ...effect, branch: effect.branch ?? branch }
+                : effect,
+            ),
+          }
+          const staticDecision = evaluateHarnessActionPolicy({
+            ...effectiveAction,
             branch,
             defaultBranch,
             hasMatchingApproval: false,
@@ -2696,10 +2871,11 @@ export async function handleToolCall({
                 action: classified.action,
                 target: classified.target,
                 commandHash: classified.commandHash,
+                executionContextHash: classified.executionContextHash,
                 snapshotId,
               })
               const approvedDecision = evaluateHarnessActionPolicy({
-                ...classified,
+                ...effectiveAction,
                 branch,
                 defaultBranch,
                 hasMatchingApproval: true,
@@ -2714,17 +2890,31 @@ export async function handleToolCall({
           }
           if (requestApproval) {
             const approved = await requestApproval({
-              ...classified,
+              ...effectiveAction,
               risk:
-                classified.action === 'dependency-install' ||
-                classified.action === 'commit' ||
-                classified.action === 'push' ||
-                classified.action === 'pull-request'
+                effectiveAction.parseStatus === 'complete' &&
+                effectiveAction.effects.every(
+                  (effect) =>
+                    [
+                      'dependency-install',
+                      'commit',
+                      'push',
+                      'pull-request',
+                    ].includes(effect.action) && !effect.pushRisks?.length,
+                )
                   ? 'routine'
                   : 'high',
               reason: staticDecision.reason,
             })
+            if (signal?.aborted) throw createAbortError(signal)
             if (approved) {
+              if (getWorkspaceState()?.snapshotId !== snapshotId)
+                return {
+                  allowed: false as const,
+                  approvalRequired: true,
+                  reason:
+                    'Workspace changed while awaiting approval; a current decision is required.',
+                }
               const grant = approvalService.grant(
                 {
                   ...harnessWorkspaceIdentity,
@@ -2735,6 +2925,7 @@ export async function handleToolCall({
                   action: classified.action,
                   target: classified.target,
                   commandHash: classified.commandHash,
+                  executionContextHash: classified.executionContextHash,
                 },
               )
               const receipt = approvalService.consume({
@@ -2745,9 +2936,10 @@ export async function handleToolCall({
                 action: classified.action,
                 target: classified.target,
                 commandHash: classified.commandHash,
+                executionContextHash: classified.executionContextHash,
               })
               const approvedDecision = evaluateHarnessActionPolicy({
-                ...classified,
+                ...effectiveAction,
                 branch,
                 defaultBranch,
                 hasMatchingApproval: true,

@@ -2,10 +2,13 @@ import { Database } from 'bun:sqlite'
 
 import { checkBackgroundAgentParams } from '@codebuff/common/tools/params/tool/check-background-agent'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/fixtures/agent-runtime'
+import {
+  createTestAgentRuntimeParams,
+  TEST_AGENT_RUNTIME_IMPL,
+} from '@codebuff/common/testing/fixtures/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
-import { promptSuccess } from '@codebuff/common/util/error'
+import { promptAborted, promptSuccess } from '@codebuff/common/util/error'
 import { assistantMessage } from '@codebuff/common/util/messages'
 import {
   afterAll,
@@ -20,6 +23,7 @@ import {
 
 import { createToolCallChunk, mockFileContext } from './test-utils'
 import * as runAgentStep from '../run-agent-step'
+const realLoopAgentSteps = runAgentStep.loopAgentSteps
 import {
   DEFAULT_CHECK_BACKGROUND_AGENT_FOLLOW_TIMEOUT_MS,
   MAX_CHECK_BACKGROUND_AGENT_FOLLOW_TIMEOUT_MS,
@@ -53,7 +57,10 @@ import {
 } from '../util/background-agent-jobs'
 import { classifyChildRun, createRunJournal } from '../util/run-journal'
 import { __clearBackgroundReDriveReservationsForTest } from '../util/background-resume'
-import { createAgentState } from '../tools/handlers/tool/spawn-agent-utils'
+import {
+  buildRuntimeAgentReceipt,
+  createAgentState,
+} from '../tools/handlers/tool/spawn-agent-utils'
 
 import type {
   BackgroundAgentJob,
@@ -129,6 +136,75 @@ describe('background-agent-jobs registry', () => {
 
   afterAll(() => {
     __clearBackgroundAgentJobsForTest()
+  })
+
+  test('B02 fulfilled failed/cancelled receipts settle the job truthfully and retain evidence', async () => {
+    for (const termination of [
+      'failed',
+      'cancelled',
+      'budget_exhausted',
+      'step_exhausted',
+      'completed',
+    ] as const) {
+      const child = getInitialSessionState(mockFileContext).mainAgentState
+      child.runOutcome = {
+        termination,
+        cause: {
+          code: 'fixture-termination',
+          message: `fixture ${termination}`,
+        },
+      }
+      child.output = { summary: 'fixture returned' }
+      const receipt = buildRuntimeAgentReceipt({
+        agentId: child.agentId,
+        agentType: 'fixture',
+        agentState: child,
+        output: child.output,
+      })
+      const result = { agentReceipt: receipt, output: receipt.output }
+      const job = allocateBackgroundAgentJob({
+        agentType: 'fixture',
+        agentName: 'Fixture',
+      })
+      await settleBackgroundAgentJob(job, result)
+      expect(job.status).toBe(
+        termination === 'completed'
+          ? 'completed'
+          : termination === 'cancelled'
+            ? 'cancelled'
+            : 'error',
+      )
+      expect(job.result).toEqual(result)
+      expect(getBackgroundAgentJobCore(job.jobId)?.result).toEqual(result)
+    }
+  })
+
+  test('B02 a completed run with rejected task acceptance remains a completed job', async () => {
+    const child = getInitialSessionState(mockFileContext).mainAgentState
+    child.runOutcome = { termination: 'completed' }
+    child.taskAcceptance = {
+      status: 'rejected',
+      oracle: 'fixture-oracle',
+      scope: 'fixture-task',
+      basis: 'fixture-result',
+    }
+    child.output = { summary: 'fixture task rejected', status: 'failed' }
+    const receipt = buildRuntimeAgentReceipt({
+      agentId: child.agentId,
+      agentType: 'fixture',
+      agentState: child,
+      output: child.output,
+    })
+    const job = allocateBackgroundAgentJob({
+      agentType: 'fixture',
+      agentName: 'Fixture',
+    })
+    await settleBackgroundAgentJob(job, { agentReceipt: receipt })
+    expect(receipt.status).toBe('failed')
+    expect(job.status).toBe('completed')
+    expect((job.result as any).agentReceipt.taskAcceptance.status).toBe(
+      'rejected',
+    )
   })
 
   test('allocateBackgroundAgentJob creates a running job with a unique id', () => {
@@ -1315,6 +1391,69 @@ describe('spawn_agents background intent reconciliation', () => {
 
   afterEach(() => {
     mock.restore()
+  })
+
+  test('B02 real failed/cancelled child runs survive foreground and background fulfilled settlement', async () => {
+    spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(realLoopAgentSteps)
+    for (const background of [false, true]) {
+      for (const termination of ['failed', 'cancelled'] as const) {
+        const parentAgent = createMockAgent('parent', ['file-picker'])
+        const childAgent = createMockAgent('file-picker')
+        childAgent.handleSteps =
+          termination === 'failed'
+            ? function* () {
+                throw new Error('fixture fatal child')
+              }
+            : function* () {
+                yield { type: 'GENERATE_N', n: 2 }
+              }
+        const { mainAgentState } = getInitialSessionState(mockFileContext)
+        const deps = createTestAgentRuntimeParams()
+        const { output } = await handleSpawnAgents({
+          ...baseParams,
+          ...deps,
+          promptAiSdk: async () => promptAborted('fixture child cancellation'),
+          agentState: mainAgentState,
+          agentTemplate: parentAgent,
+          localAgentTemplates: { 'file-picker': childAgent },
+          toolCall: {
+            toolName: 'spawn_agents',
+            toolCallId: `fixture-${background}-${termination}`,
+            input: {
+              agents: [
+                { agent_type: 'file-picker', prompt: 'fixture', background },
+              ],
+            },
+          },
+        })
+        const reports = (output[0] as any).value
+        if (background) {
+          const intent = mainAgentState.backgroundAgentJobs![0]!
+          const job = getBackgroundAgentJob(intent.jobId)!
+          await job.promise
+          await Promise.resolve()
+          expect(intent.status).toBe(
+            termination === 'cancelled' ? 'cancelled' : 'error',
+          )
+          expect(job.status).toBe(
+            termination === 'cancelled' ? 'cancelled' : 'error',
+          )
+          expect(intent.receipt?.runOutcome?.termination).toBe(termination)
+          expect((job.result as any).agentReceipt.runOutcome.termination).toBe(
+            termination,
+          )
+        } else {
+          expect(reports[0].agentReceipt.runOutcome.termination).toBe(
+            termination,
+          )
+          expect(reports[0].agentReceipt.status).toBe(termination)
+        }
+        expect(mainAgentState.discoveryCoverage?.shards).toHaveLength(1)
+        expect(mainAgentState.discoveryCoverage?.shards[0]?.status).toBe(
+          'failed',
+        )
+      }
+    }
   })
 
   test('a background spawn succeeds when the parent still lists running intents whose jobs are gone', async () => {

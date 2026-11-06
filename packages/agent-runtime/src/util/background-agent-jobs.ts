@@ -42,6 +42,12 @@ import {
 } from '@codebuff/common/util/job-registry'
 
 import type { AgentState } from '@codebuff/common/types/session-state'
+import {
+  runOutcomeSchema,
+  runStatusFromOutcome,
+} from '@codebuff/common/types/run-outcome'
+import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+
 import type {
   AssertOwnedResult,
   Job,
@@ -145,7 +151,7 @@ export interface BackgroundAgentJob {
   status: BackgroundAgentJobStatus
   startedAt: number
   completedAt?: number
-  /** Resolved value when status === 'completed'; undefined otherwise. */
+  /** Resolved value and receipt, including fulfilled failed/cancelled runs. */
   result?: unknown
   /** Rejection reason when status === 'error'; undefined otherwise. */
   error?: string
@@ -411,7 +417,12 @@ export function allocateBackgroundAgentJobBatch(params: {
   const owner = resolveBackgroundAgentJobOwner(params.owner)
   assertBackgroundAgentCapacity({ additional: params.agents.length, owner })
   return params.agents.map(({ agentType, agentName }) =>
-    createBackgroundAgentJobRecord({ agentType, agentName, owner, now: params.now }),
+    createBackgroundAgentJobRecord({
+      agentType,
+      agentName,
+      owner,
+      now: params.now,
+    }),
   )
 }
 
@@ -503,10 +514,37 @@ function attachJobCompletionHandlers(job: BackgroundAgentJob): void {
     (result) => {
       if (job.status === 'cancelled') return
       job.result = result
+      // Promise fulfillment only establishes delivery. A returned agent
+      // receipt independently describes whether the child run completed.
+      const receipt =
+        result && typeof result === 'object' && 'agentReceipt' in result
+          ? (result as { agentReceipt?: Partial<AgentReceipt> }).agentReceipt
+          : undefined
+      const parsedOutcome = runOutcomeSchema.safeParse(receipt?.runOutcome)
+      const termination = parsedOutcome.success
+        ? parsedOutcome.data.termination
+        : undefined
+      const runStatus = parsedOutcome.success
+        ? runStatusFromOutcome(parsedOutcome.data)
+        : receipt?.status
+      const state =
+        runStatus === 'cancelled'
+          ? 'cancelled'
+          : runStatus === 'failed'
+            ? 'error'
+            : 'completed'
       registry.emit(job.jobId, {
         type: 'lifecycle',
-        state: 'completed',
+        state,
         result,
+        ...(state === 'error'
+          ? {
+              error: parsedOutcome.success
+                ? (parsedOutcome.data.cause?.message ??
+                  `Child run ${termination}`)
+                : 'Child receipt reported failure',
+            }
+          : {}),
       })
       const coreJob = registry.get(job.jobId)
       if (coreJob) syncViewFromCore(job, coreJob)

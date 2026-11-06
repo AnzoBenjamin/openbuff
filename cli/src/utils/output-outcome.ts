@@ -3,6 +3,7 @@ import {
   getCanonicalMutationResult,
   getStructuredErrorMessages,
   getToolOutputRecords,
+  getMutationOutcome,
 } from './tool-result-normalizer'
 
 export type OutputOutcomeTone = 'good' | 'warn' | 'bad' | 'neutral'
@@ -38,6 +39,10 @@ const warning = new Set([
   'rolled_back',
   'rollback_incomplete',
   'unconfirmed',
+  'uncertain',
+  'diagnostic_delta_unavailable',
+  'diagnostic_delta_incomplete',
+  'diagnostic_delta_unknown',
   'lost',
 ])
 const bad = new Set([
@@ -56,6 +61,8 @@ const bad = new Set([
   'timed_out',
   'timeout',
   'diagnostic_delta_rejected',
+  'diagnostic_delta_failed',
+  'diagnostic_delta_cancelled',
 ])
 
 export function normalizeOutcomeKey(
@@ -80,7 +87,7 @@ export interface OutputOutcome {
 export function outcomeForTool(
   block: Pick<
     ToolContentBlock,
-    'toolName' | 'lifecycle' | 'outputRaw' | 'output'
+    'toolName' | 'lifecycle' | 'outputRaw' | 'output' | 'actionOutcome'
   >,
 ): OutputOutcome {
   const records = getToolOutputRecords(block.outputRaw)
@@ -92,10 +99,11 @@ export function outcomeForTool(
     source: 'producer',
   })
   // A confirmed disk result remains authoritative after interruption.
-  if (mutation && typeof mutation.status === 'string')
-    return producer(mutation.status)
-  if (mutation && typeof mutation.outcome === 'string')
-    return producer(mutation.outcome)
+  if (mutation) {
+    return producer(getMutationOutcome(block.outputRaw) ?? 'unconfirmed')
+  }
+  if (block.actionOutcome && block.actionOutcome.outcome !== 'succeeded')
+    return producer(block.actionOutcome.outcome)
   if (block.lifecycle === 'queued' || block.lifecycle === 'running')
     return { label: block.lifecycle, tone: 'neutral', source: 'lifecycle' }
   if (
@@ -185,6 +193,8 @@ export function classifyValidationResult(
 ): 'passed' | 'failed' | 'skipped' | 'unknown' {
   if (
     result.validationStatus === 'diagnostic_delta_rejected' ||
+    result.validationStatus === 'diagnostic_delta_failed' ||
+    result.validationStatus === 'diagnostic_delta_cancelled' ||
     (typeof result.errorMessage === 'string' &&
       Boolean(result.errorMessage.trim())) ||
     (typeof result.exitCode === 'number' && result.exitCode !== 0)
@@ -195,6 +205,12 @@ export function classifyValidationResult(
     result.validationStatus === 'no_hooks_configured'
   )
     return 'skipped'
+  if (
+    result.validationStatus === 'diagnostic_delta_unavailable' ||
+    result.validationStatus === 'diagnostic_delta_incomplete' ||
+    result.validationStatus === 'diagnostic_delta_unknown'
+  )
+    return 'unknown'
   if (
     result.validationStatus === 'diagnostic_delta_passed' ||
     result.exitCode === 0

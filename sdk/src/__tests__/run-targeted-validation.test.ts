@@ -367,13 +367,48 @@ describe('runTargetedValidation', () => {
     }
   })
 
-  test('rejects evidence for worktree drift entirely past the porcelain spawn cap', async () => {
-    // Regression (correctness: porcelain-total-bytes-not-hashed): the
-    // before/after drift check compares snapshotIds derived from a CAPPED
-    // `git status --porcelain -uall` listing, so drift confined to files
-    // whose porcelain lines fall past MAX_SNAPSHOT_ID_DIFF_BYTES was
-    // invisible — the ids aliased and the evidence was accepted. The
-    // status-length term now moves the id, so the drift arm fails closed.
+  test('rejects passing hook evidence after an equal-length untracked tail edit', async () => {
+    const cwd = createRepository()
+    const file = path.join(cwd, 'tail.txt')
+    const prefix = 'x'.repeat(1024 * 1024 + 128)
+    fs.writeFileSync(file, `${prefix}before\n`)
+    const bundle = (await getChangeReviewBundle({ cwd }))[0]
+    if (bundle?.type !== 'json' || !('snapshotId' in bundle.value)) {
+      throw new Error('Expected complete before snapshot')
+    }
+    const beforeSize = fs.statSync(file).size
+    let hooksRan = false
+    const result = await runTargetedValidation({
+      cwd,
+      snapshotId: bundle.value.snapshotId,
+      files: ['tail.txt'],
+      runHooks: async () => {
+        hooksRan = true
+        fs.writeFileSync(file, `${prefix}after!\n`)
+        return [
+          {
+            type: 'json',
+            value: [{ exitCode: 0, command: 'true', hookName: 'test' }],
+          },
+        ]
+      },
+    })
+    expect(hooksRan).toBe(true)
+    expect(fs.statSync(file).size).toBe(beforeSize)
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: {
+        status: 'failed',
+        assurance: 'none',
+        summary:
+          'Validation evidence rejected because the worktree changed during validation.',
+        results: [{ exitCode: 0, command: 'true', hookName: 'test' }],
+      },
+    })
+  })
+
+  test('refuses validation before hooks when status membership overflows', async () => {
+    // Overflow is unavailable evidence, rather than a partial snapshot ID.
     // POSIX-only: the deep paths below exceed Windows MAX_PATH.
     if (process.platform === 'win32') return
     const cwd = createRepository()
@@ -404,42 +439,27 @@ describe('runTargetedValidation', () => {
     expect(capped.exitCode).toBe(0)
     expect(capped.stdoutTotalBytes).toBeGreaterThan(4 * 1024 * 1024)
 
-    const bundle = await getChangeReviewBundle({ cwd })
-    const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
-    if (!bundleValue || !('snapshotId' in bundleValue)) {
-      throw new Error('Expected a change review bundle')
-    }
-
+    expect((await getChangeReviewBundle({ cwd }))[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorMessage:
+          'Git status exceeds identity membership limit; complete review files are unavailable.',
+      },
+    })
+    let hooksRan = false
     const result = await runTargetedValidation({
       cwd,
-      snapshotId: bundleValue.snapshotId,
+      snapshotId: 'unavailable',
       files: ['README.md'],
       runHooks: async () => {
-        // REAL drift entirely past the 4MB retained prefix: the retained
-        // identity lines, the files list, the diff, and HEAD are
-        // byte-identical, so only the untruncated porcelain byte total can
-        // catch it.
-        fs.rmSync(
-          path.join(
-            cwd,
-            deepDir,
-            `f-${String(fileCount - 1).padStart(4, '0')}.txt`,
-          ),
-          { force: true },
-        )
+        hooksRan = true
         return [{ type: 'json', value: [] }]
       },
     })
-
+    expect(hooksRan).toBe(false)
     expect(result[0]).toMatchObject({
       type: 'json',
       value: { status: 'failed', assurance: 'none' },
     })
-    const value = result[0]?.type === 'json' ? result[0].value : undefined
-    // The failure is attributed to the worktree drift, not to a failed
-    // re-attestation.
-    expect((value as { summary: string }).summary).toContain(
-      'worktree changed during validation',
-    )
   })
 })

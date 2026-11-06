@@ -36,6 +36,8 @@ const SKIP_PATH_PREFIXES = [
   '.agents/sessions/',
   '.kimchi/',
   '.omx/',
+  // Immutable partial copies are evidence, not live repository documentation.
+  'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot/',
   'packages/billing/',
   'packages/bigquery/',
   'evals/test-repos/',
@@ -1345,7 +1347,10 @@ export function checkBrokenLink(
         ) {
           continue
         }
-        const resolved = resolve(dir, target)
+        // Source citations use file.md:line; validate the underlying file.
+        // Other colon suffixes remain literal paths and must still resolve.
+        const targetPath = target.replace(/(\.mdx?):[1-9]\d*$/, '$1')
+        const resolved = resolve(dir, targetPath)
         if (!existsSync(resolved)) {
           findings.push({
             path: projectPath,

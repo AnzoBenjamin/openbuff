@@ -10,11 +10,88 @@
  * window and escalation rows) completes without throwing and returns
  * measured rows.
  */
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
+import {
+  chmodSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import {
   runPerfGuardsBaseline,
+  serialIdentityHash,
+  mapThenJoinIdentityHash,
 } from '../measure-perf-guards-baseline'
+import { hashIdentityFileBytes } from '../../sdk/src/tools/get-change-review-bundle'
+
+describe('CASE 12 independent identity baselines', () => {
+  let fixtureRoot: string
+  const files = ['empty.txt', 'quoted " path.txt', 'tail.txt']
+
+  beforeEach(() => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'perf-identity-contract-'))
+    writeFileSync(join(fixtureRoot, files[0]!), Buffer.alloc(0))
+    writeFileSync(join(fixtureRoot, files[1]!), 'UTF-8 identity: λ\0🧪\n')
+    writeFileSync(join(fixtureRoot, files[2]!), Buffer.alloc(400_001, 0xab))
+  })
+
+  afterEach(() => {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+  })
+
+  async function expectShippedParity(inputFiles = files): Promise<string> {
+    const hash = createHash('sha256')
+    await hashIdentityFileBytes(hash, fixtureRoot, inputFiles)
+    const expected = hash.digest('hex')
+    expect(await serialIdentityHash(fixtureRoot, inputFiles)).toBe(expected)
+    expect(await mapThenJoinIdentityHash(fixtureRoot, inputFiles)).toBe(expected)
+    return expected
+  }
+
+  test('matches the shipped oracle for empty, quoted-path and complete binary content', async () => {
+    await expectShippedParity()
+  })
+
+  test('normalizes unsorted repeated paths to the same unique-file identity', async () => {
+    const original = await expectShippedParity()
+    expect(await expectShippedParity(['tail.txt', ...files, 'empty.txt'])).toBe(original)
+  })
+
+  test('tail edits beyond the former prefix budget change both baseline identities', async () => {
+    const original = await expectShippedParity()
+    const bytes = Buffer.alloc(400_001, 0xab)
+    bytes[400_000] = 0xcd
+    writeFileSync(join(fixtureRoot, 'tail.txt'), bytes)
+    expect(await expectShippedParity()).not.toBe(original)
+  })
+
+  test('mtime-only changes preserve content identity', async () => {
+    const original = await expectShippedParity()
+    utimesSync(join(fixtureRoot, 'tail.txt'), new Date(0), new Date(0))
+    expect(await expectShippedParity()).toBe(original)
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'mode changes alter identity without changing content',
+    async () => {
+      chmodSync(join(fixtureRoot, 'tail.txt'), 0o644)
+      const original = await expectShippedParity()
+      chmodSync(join(fixtureRoot, 'tail.txt'), 0o600)
+      expect(await expectShippedParity()).not.toBe(original)
+    },
+  )
+
+  test('a missing baseline fixture fails rather than silently removing a contribution', async () => {
+    rmSync(join(fixtureRoot, 'tail.txt'))
+    await expect(serialIdentityHash(fixtureRoot, files)).rejects.toThrow()
+    await expect(mapThenJoinIdentityHash(fixtureRoot, files)).rejects.toThrow()
+  })
+})
 
 describe('measure-perf-guards-baseline runner smoke', () => {
   test('completes every case and returns measured rows', async () => {

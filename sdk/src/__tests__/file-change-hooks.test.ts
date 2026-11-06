@@ -1,3 +1,4 @@
+import { preflightDiagnosticDelta } from '../services/diagnostic-delta'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
@@ -911,9 +912,24 @@ describe('inferFileChangeHooksAsync', () => {
       // resolves, so a missing in-flight entry would take one snapshot per
       // caller on the production path.
       await Promise.all([
-        runFileChangeHooks({ files: ['src/a.ts'], cwd: dir, fileSystem, runCommand: run }),
-        runFileChangeHooks({ files: ['src/a.ts'], cwd: dir, fileSystem, runCommand: run }),
-        runFileChangeHooks({ files: ['src/a.ts'], cwd: dir, fileSystem, runCommand: run }),
+        runFileChangeHooks({
+          files: ['src/a.ts'],
+          cwd: dir,
+          fileSystem,
+          runCommand: run,
+        }),
+        runFileChangeHooks({
+          files: ['src/a.ts'],
+          cwd: dir,
+          fileSystem,
+          runCommand: run,
+        }),
+        runFileChangeHooks({
+          files: ['src/a.ts'],
+          cwd: dir,
+          fileSystem,
+          runCommand: run,
+        }),
       ])
 
       expect(__getManifestSnapshotCountForTest() - snapshotsBefore).toBe(1)
@@ -935,7 +951,10 @@ describe('inferFileChangeHooksAsync', () => {
       // A wide tree so the walk's listing and stat passes have plenty to queue.
       for (let index = 0; index < 24; index++) {
         mkdirSync(path.join(dir, `pkg-${index}`))
-        writeFileSync(path.join(dir, `pkg-${index}`, 'Zeta.csproj'), '<Project />\n')
+        writeFileSync(
+          path.join(dir, `pkg-${index}`, 'Zeta.csproj'),
+          '<Project />\n',
+        )
       }
       const { run } = fakeRunner({})
       __resetSnapshotMaxProbesInFlightForTest()
@@ -1008,7 +1027,11 @@ describe('inferFileChangeHooksAsync', () => {
         isDirectory: () => true,
         size: 0,
       }
-      const fileStats = { isFile: () => true, isDirectory: () => false, size: 1 }
+      const fileStats = {
+        isFile: () => true,
+        isDirectory: () => false,
+        size: 1,
+      }
 
       const syntheticFileSystem = {
         // Every manifest probe misses, so the hook list is the dotnet walk's.
@@ -1061,7 +1084,7 @@ describe('inferFileChangeHooksAsync', () => {
     })
   }, 60_000)
 
-  test('a different adapter does not inherit another adapter\'s cached hooks', async () => {
+  test("a different adapter does not inherit another adapter's cached hooks", async () => {
     await withTempDirAsync(async (dir) => {
       writeFileSync(
         path.join(dir, 'package.json'),
@@ -1310,7 +1333,11 @@ describe('inferFileChangeHooksAsync', () => {
       const probeGate = new Promise<void>((resolve) => {
         releaseProbes = resolve
       })
-      const fileStats = { isFile: () => true, isDirectory: () => false, size: 1 }
+      const fileStats = {
+        isFile: () => true,
+        isDirectory: () => false,
+        size: 1,
+      }
       const fileSystem = {
         stat: async (filePath: string) => {
           await probeGate
@@ -1333,7 +1360,9 @@ describe('inferFileChangeHooksAsync', () => {
       const snapshotsBefore = __getManifestSnapshotCountForTest()
 
       const originatorController = new AbortController()
-      const originReason = new Error('originator cancelled between Enter presses')
+      const originReason = new Error(
+        'originator cancelled between Enter presses',
+      )
       const originator = inferFileChangeHooksFromFileSystem(
         dir,
         fileSystem,
@@ -1384,7 +1413,11 @@ describe('inferFileChangeHooksAsync', () => {
         isDirectory: () => true,
         size: 0,
       }
-      const fileStats = { isFile: () => true, isDirectory: () => false, size: 1 }
+      const fileStats = {
+        isFile: () => true,
+        isDirectory: () => false,
+        size: 1,
+      }
       // The walk stats the root, then the `app` directory readdir returns, so
       // both must present as directories for the fresh walk to descend to the
       // .csproj the gated listing hands back.
@@ -1520,18 +1553,17 @@ describe('mergeFileChangeHooks — concat-with-dedup (R3c)', () => {
 describe('run_file_change_hooks outputSchema covers the diagnostic-delta shapes', () => {
   // Schema-faithful runner: real runTerminalCommand output carries `command`,
   // which the terminalCommandOutputSchema arm of the output schema requires.
-  const schemaRunner = (async () =>
-    [
-      {
-        type: 'json' as const,
-        value: {
-          command: 'tsc --noEmit',
-          exitCode: 0,
-          stdout: '',
-          stderr: '',
-        },
+  const schemaRunner = (async () => [
+    {
+      type: 'json' as const,
+      value: {
+        command: 'tsc --noEmit',
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
       },
-    ]) as any
+    },
+  ]) as any
 
   test('a diagnostic_delta_rejected result parses against the declared outputSchema', async () => {
     const out = await runFileChangeHooks({
@@ -1579,9 +1611,7 @@ describe('run_file_change_hooks outputSchema covers the diagnostic-delta shapes'
     })
     // The emitted delta shape must fit the declared outputSchema —
     // schema-parsing consumers previously rejected this arm entirely.
-    expect(() =>
-      runFileChangeHooksParams.outputSchema.parse(out),
-    ).not.toThrow()
+    expect(() => runFileChangeHooksParams.outputSchema.parse(out)).not.toThrow()
   })
 
   test('a diagnostic_delta_passed result parses against the declared outputSchema', async () => {
@@ -1591,7 +1621,13 @@ describe('run_file_change_hooks outputSchema covers the diagnostic-delta shapes'
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
       hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
       runCommand: schemaRunner,
-      diagnosticDelta: async () => ({ rejected: false }),
+      diagnosticDelta: async () =>
+        preflightDiagnosticDelta({
+          files: ['src/a.ts'],
+          cwd: '/repo',
+          runCommand: async () => ({ exitCode: 0 }),
+          applyEdit: () => {},
+        }),
     })
 
     const results = jsonValue(out)
@@ -1601,8 +1637,6 @@ describe('run_file_change_hooks outputSchema covers the diagnostic-delta shapes'
     expect(deltaResult).toMatchObject({
       validationStatus: 'diagnostic_delta_passed',
     })
-    expect(() =>
-      runFileChangeHooksParams.outputSchema.parse(out),
-    ).not.toThrow()
+    expect(() => runFileChangeHooksParams.outputSchema.parse(out)).not.toThrow()
   })
 })

@@ -5,8 +5,14 @@ import { join } from 'node:path'
 
 import { MAX_FILE_CHANGES_PER_TRANSACTION } from '@codebuff/common/actions'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
-import { fileMutationResultV1Schema } from '@codebuff/common/tools/results/filesystem'
-import { getContentHash } from '@codebuff/common/util/content-hash'
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  getContentHash,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
 
 import { changeFile, changeFiles } from '../tools/change-file'
 import { createTransactionIntentLogForWorkspace } from '../tools/transaction-intent-log'
@@ -531,6 +537,7 @@ describe('changeFile', () => {
     })
 
     const value = result[0]?.type === 'json' ? result[0].value : undefined
+    const mutation = fileMutationResultV1Schema.parse(value)
     expect(value).toMatchObject({
       kind: 'file_mutation_result',
       outcome: 'rollback_incomplete',
@@ -549,6 +556,14 @@ describe('changeFile', () => {
       }),
     })
     expect(files['/repo/src/one.ts']).toBe('const one = 2\n')
+    expect(
+      getConfirmedAppliedActionsV1(mutation).map((action) => action.path),
+    ).toEqual(['src/one.ts'])
+    expect(mutation.actions[0]?.forward).toEqual({
+      outcome: 'applied',
+      afterHashes: { 'src/one.ts': getExactContentHash('const one = 2\n') },
+    })
+    expect(mutation.actions[1]?.forward?.outcome).toBe('unconfirmed')
   })
 
   test('does not overwrite an external edit when conditional rollback detects a conflict', async () => {
@@ -586,6 +601,9 @@ describe('changeFile', () => {
       fs,
     })
 
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
       outcome: 'rollback_incomplete',
       actions: [
@@ -598,6 +616,226 @@ describe('changeFile', () => {
       ],
     })
     expect(await fs.readFile('/repo/src/one.ts', 'utf-8')).toBe('external\n')
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'rollback_incomplete',
+      afterHash: getExactContentHash('external\n'),
+      forward: {
+        outcome: 'applied',
+        afterHashes: { 'src/one.ts': getExactContentHash('one-after\n') },
+      },
+    })
+  })
+
+  test('[B03] rejected forward preserves foreign bytes without compensation or confirmed actions', async () => {
+    const before = 'before\n'
+    const foreign = 'foreign\r\n'
+    const fs = createMockFs({ files: { '/repo/file.txt': before } })
+    const adapterReturns: unknown[] = []
+    fs.conditionalCommit = async () => {
+      await fs.writeFile('/repo/file.txt', foreign)
+      const result = {
+        applied: false as const,
+        actualHash: getExactContentHash(foreign),
+      }
+      adapterReturns.push(result)
+      return result
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'file.txt',
+          content: 'after\n',
+          expectedHash: getContentHash(before),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(adapterReturns).toHaveLength(1)
+    expect(
+      adapterReturns.every(
+        (result) => (result as { applied: boolean }).applied === false,
+      ),
+    ).toBe(true)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'not_applied',
+      forward: {
+        outcome: 'not_applied',
+        afterHashes: { 'file.txt': getExactContentHash(foreign) },
+      },
+    })
+    expect(mutation.actions[0]?.rollback).toBeUndefined()
+    expect(mutation.errors.some((error) => error.code === 'stale_state')).toBe(
+      true,
+    )
+    expect(await fs.readFile('/repo/file.txt', 'utf8')).toBe(foreign)
+    expect(mutation.authorityReceipt?.finalHashes['file.txt']).toBe(
+      getExactContentHash(foreign),
+    )
+  })
+
+  test('[B03] rejected forward cannot roll back foreign bytes equal to the intended postimage', async () => {
+    const fs = createMockFs({ files: { '/repo/file.txt': 'before\n' } })
+    const conditionalCommit = fs.conditionalCommit!.bind(fs)
+    let attempts = 0
+    fs.conditionalCommit = async (filePath, data, options) => {
+      attempts++
+      if (attempts === 1) {
+        await fs.writeFile('/repo/file.txt', 'after\n')
+        return { applied: false, actualHash: getExactContentHash('after\n') }
+      }
+      return conditionalCommit(filePath, data, options)
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'file.txt',
+          content: 'after\n',
+          expectedHash: getContentHash('before\n'),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(attempts).toBe(1)
+    expect(mutation.outcome).toBe('not_applied')
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(await fs.readFile('/repo/file.txt', 'utf8')).toBe('after\n')
+  })
+
+  test('[B03] thrown partial forward effect remains uncertain after failed rollback', async () => {
+    const before = 'before\n'
+    const partial = 'partial\n'
+    const fs = createMockFs({ files: { '/repo/file.txt': before } })
+    let attempts = 0
+    fs.conditionalCommit = async () => {
+      attempts++
+      if (attempts === 1) {
+        await fs.writeFile('/repo/file.txt', partial)
+        throw new Error('write stopped after a partial effect')
+      }
+      return { applied: false, actualHash: getExactContentHash(partial) }
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'file.txt',
+          content: 'after\n',
+          expectedHash: getContentHash(before),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(attempts).toBe(2)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'rollback_incomplete',
+      afterHash: getExactContentHash(partial),
+      rollback: { attempted: true, succeeded: false },
+    })
+    expect(mutation.actions[0]?.forward).toEqual({
+      outcome: 'unconfirmed',
+      afterHashes: { 'file.txt': getExactContentHash(partial) },
+    })
+    expect(await fs.readFile('/repo/file.txt', 'utf8')).toBe(partial)
+  })
+
+  test('[B03] refused exclusive create cannot delete an identical foreign destination', async () => {
+    const fs = createMockFs()
+    fs.createFileExclusive = async () => {
+      await fs.writeFile('/repo/created.txt', 'after\n')
+      throw Object.assign(new Error('foreign creator won'), { code: 'EEXIST' })
+    }
+    let deletes = 0
+    const conditionalDelete = fs.conditionalDelete!.bind(fs)
+    fs.conditionalDelete = async (filePath, options) => {
+      deletes++
+      return conditionalDelete(filePath, options)
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'created.txt',
+          content: 'after\n',
+          expectedHash: null,
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(mutation.outcome).toBe('not_applied')
+    expect(mutation.actions[0]?.forward?.outcome).toBe('not_applied')
+    expect(mutation.errors[0]?.code).toBe('already_exists')
+    expect(deletes).toBe(0)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(await fs.readFile('/repo/created.txt', 'utf8')).toBe('after\n')
+  })
+
+  test('[B03] partial move keeps both observed paths without claiming a completed move', async () => {
+    const content = 'move me\n'
+    const fs = createMockFs({ files: { '/repo/source.txt': content } })
+    let attempts = 0
+    fs.conditionalMove = async () => {
+      attempts++
+      if (attempts === 1) {
+        await fs.writeFile('/repo/destination.txt', content)
+        throw new Error('unlink source failed after destination creation')
+      }
+      return {
+        applied: false,
+        actualSourceHash: getExactContentHash(content),
+        actualDestinationHash: getExactContentHash(content),
+      }
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'move',
+          path: 'source.txt',
+          destinationPath: 'destination.txt',
+          expectedHash: getContentHash(content),
+          destinationExpectedHash: null,
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(attempts).toBe(2)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'rollback_incomplete',
+      forward: {
+        outcome: 'unconfirmed',
+        afterHashes: {
+          'source.txt': getExactContentHash(content),
+          'destination.txt': getExactContentHash(content),
+        },
+      },
+    })
+    expect(await fs.readFile('/repo/source.txt', 'utf8')).toBe(content)
+    expect(await fs.readFile('/repo/destination.txt', 'utf8')).toBe(content)
   })
 
   test('[ABI-M08] coordinates create, delete, and move with expected state', async () => {
@@ -838,14 +1076,12 @@ describe('changeFile', () => {
           {
             type: 'patch',
             path: 'src/one.ts',
-            content:
-              '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+            content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
           },
           {
             type: 'patch',
             path: 'src/two.ts',
-            content:
-              '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+            content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
           },
         ],
         cwd: '/repo',
@@ -936,14 +1172,12 @@ describe('changeFile', () => {
           {
             type: 'patch',
             path: 'src/one.ts',
-            content:
-              '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+            content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
           },
           {
             type: 'patch',
             path: 'src/two.ts',
-            content:
-              '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+            content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
           },
         ],
         cwd: '/repo',
@@ -1108,8 +1342,7 @@ describe('changeFile', () => {
         {
           type: 'patch',
           path: 'src/three.ts',
-          content:
-            '@@ -1,1 +1,1 @@\n-const three = 1\n+const three = 2\n',
+          content: '@@ -1,1 +1,1 @@\n-const three = 1\n+const three = 2\n',
         },
       ],
       cwd: '/repo',

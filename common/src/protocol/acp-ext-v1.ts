@@ -21,6 +21,7 @@ import {
   fileMutationOutcomeV1Schema,
   filesystemErrorCodeSchema,
   mutationActionOutcomeV1Schema,
+  mutationForwardEvidenceV1Schema,
   type FileMutationResultV1,
 } from '../tools/results/filesystem'
 
@@ -133,6 +134,7 @@ const wireFileMutationActionV1Schema = z
     outcome: mutationActionOutcomeV1Schema,
     beforeHash: z.string().min(1).nullable(),
     afterHash: z.string().min(1).nullable(),
+    forward: mutationForwardEvidenceV1Schema.optional(),
     error: wireFilesystemErrorV1Schema.optional(),
     rollback: z
       .object({
@@ -410,6 +412,7 @@ export function toWireMutation(
       outcome: action.outcome,
       beforeHash: action.beforeHash,
       afterHash: action.afterHash,
+      ...(action.forward !== undefined ? { forward: action.forward } : {}),
       ...(action.error !== undefined ? { error: action.error } : {}),
       ...(action.rollback !== undefined ? { rollback: action.rollback } : {}),
     })),

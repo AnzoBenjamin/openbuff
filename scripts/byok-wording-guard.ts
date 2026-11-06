@@ -38,6 +38,9 @@ const SKIP_DIRECTORIES = new Set([
 
 const SKIP_PATH_PREFIXES = [
   '.agents/sessions/',
+  '.omx/',
+  // Immutable partial copies are evidence, not live repository documentation.
+  'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot/',
   'evals/test-repos/',
   'packages/billing/',
   'packages/bigquery/',

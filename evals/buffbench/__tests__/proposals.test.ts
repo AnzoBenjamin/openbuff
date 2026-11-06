@@ -133,6 +133,89 @@ describe('proposal promotion policy', () => {
 // ---------------------------------------------------------------------------
 
 describe('proposal promotion policy: significance guard', () => {
+  test('fails closed on nonfinite, invalid and insufficient paired evidence', () => {
+    const comparison = compareRuns(
+      [
+        {
+          agentId: 'test-agent',
+          runs: [],
+          averageScore: 6,
+          averageScoreExcludingFailures: 6,
+          averageCost: 20,
+          averageDuration: 100,
+        },
+      ],
+      [
+        {
+          agentId: 'test-agent',
+          runs: [],
+          averageScore: 7,
+          averageScoreExcludingFailures: 7,
+          averageCost: 20,
+          averageDuration: 100,
+        },
+      ],
+    )
+    const dryRun = applyProposals({
+      proposals: [],
+      agentDefinitions: [],
+      dryRun: true,
+    })
+    for (const value of [NaN, Infinity, 11, -1]) {
+      const decision = decideProposalPromotion({
+        dryRun,
+        comparison,
+        policy: { requireAppliedProposals: false, requireSignificance: true },
+        pairedScores: Array.from({ length: 12 }, () => ({
+          before: 6,
+          after: value,
+        })),
+      })
+      expect(decision.accepted).toBe(false)
+      expect(
+        decision.reasons.some((reason) => reason.includes('invalid')),
+      ).toBe(true)
+    }
+    expect(
+      decideProposalPromotion({
+        dryRun,
+        comparison,
+        policy: { requireAppliedProposals: false, requireSignificance: true },
+        pairedScores: [{ before: 6, after: 7 }],
+      }).accepted,
+    ).toBe(false)
+    expect(
+      decideProposalPromotion({
+        dryRun,
+        comparison: {
+          ...comparison,
+          overall: { ...comparison.overall, totalScoreDelta: NaN },
+        },
+        policy: { requireAppliedProposals: false },
+      }).accepted,
+    ).toBe(false)
+    for (const policy of [
+      { maxPValue: NaN },
+      { bootstrapIterations: 0 },
+      { bootstrapSeed: NaN },
+    ]) {
+      expect(
+        decideProposalPromotion({
+          dryRun,
+          comparison,
+          policy: {
+            requireAppliedProposals: false,
+            requireSignificance: true,
+            ...policy,
+          },
+          pairedScores: Array.from({ length: 12 }, () => ({
+            before: 6,
+            after: 7,
+          })),
+        }).accepted,
+      ).toBe(false)
+    }
+  })
   test('blocks promotion when the Wilcoxon verdict is not applicable (n < 10)', () => {
     const dryRun = applyProposals({
       proposals: [
@@ -172,8 +255,8 @@ describe('proposal promotion policy: significance guard', () => {
     // normal approximation, so the comparison is underpowered and must NOT
     // promote regardless of how large the observed delta is.
     const pairedScores = Array.from({ length: 8 }, (_, i) => ({
-      before: i,
-      after: i + 1,
+      before: i / 2,
+      after: i / 2 + 1,
     }))
 
     const decision = decideProposalPromotion({
@@ -234,8 +317,8 @@ describe('proposal promotion policy: significance guard', () => {
     // positive (maximum W), so p is tiny and the bootstrap CI lower bound
     // equals the constant diff (1 > 0).
     const pairedScores = Array.from({ length: 12 }, (_, i) => ({
-      before: i,
-      after: i + 1,
+      before: i / 2,
+      after: i / 2 + 1,
     }))
 
     const decision = decideProposalPromotion({

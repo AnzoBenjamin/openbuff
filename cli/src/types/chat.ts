@@ -1,5 +1,10 @@
 import type { ChatTheme } from './theme-system'
 import type { ToolName } from '@openbuff/sdk'
+import type {
+  ActionOutcome,
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 import type { ReactNode } from 'react'
 import type { CompletionSummary } from '../utils/completion-summary'
 
@@ -46,6 +51,7 @@ export type ToolContentBlock = {
   input: any
   output?: string
   outputRaw?: unknown
+  actionOutcome?: ActionOutcome
   agentId?: string
   includeToolCall?: boolean
   isCollapsed?: boolean
@@ -87,6 +93,8 @@ export type AgentContentBlock = {
   agentType: string
   content: string
   status: 'running' | 'complete' | 'partial' | 'failed' | 'cancelled'
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
   blocks?: ContentBlock[]
   initialPrompt?: string
   params?: Record<string, any>
@@ -725,6 +733,9 @@ export type ChatMessage = {
   cacheHitRate?: number
   completionTime?: string
   isComplete?: boolean
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
   metadata?: ChatMessageMetadata
   validationErrors?: Array<{ id: string; message: string }>
   /**

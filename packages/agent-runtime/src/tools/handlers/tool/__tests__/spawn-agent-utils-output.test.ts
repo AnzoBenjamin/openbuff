@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import {
   chmodSync,
@@ -33,10 +33,73 @@ import { flushOversizeArtifactSweeps } from '../oversize-artifact'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 
-// `mock.module` is registry-wide across Bun's shared test workers. Snapshot
-// every real export before the test-local override so sibling suites never see
-// a lossy replacement of run-agent-step.
-const realRunAgentStep = { ...(await import('../../../../run-agent-step')) }
+describe('B02 authoritative runtime receipt outcomes', () => {
+  for (const termination of [
+    'failed',
+    'cancelled',
+    'budget_exhausted',
+    'step_exhausted',
+  ] as const) {
+    test(`${termination} cannot be promoted by child-declared completion`, () => {
+      const state = getInitialAgentState()
+      state.runOutcome = {
+        termination,
+        cause: { code: 'fixture-terminal', message: termination },
+      }
+      state.taskAcceptance = { status: 'unknown' }
+      state.output = { summary: 'partial prior work', status: 'completed' }
+      const receipt = buildRuntimeAgentReceipt({
+        agentId: 'fixture-child',
+        agentType: 'test-agent',
+        output: state.output,
+        agentState: state,
+        status: 'completed',
+      })
+      expect(receipt.status).toBe(
+        termination === 'cancelled' ? 'cancelled' : 'failed',
+      )
+      expect(receipt.runOutcome).toEqual(state.runOutcome)
+      expect(receipt.taskAcceptance).toEqual({ status: 'unknown' })
+    })
+  }
+
+  test('a failed action remains failed after a completed run and accepted recovery', () => {
+    const state = getInitialAgentState()
+    state.runOutcome = { termination: 'completed' }
+    state.taskAcceptance = {
+      status: 'accepted',
+      oracle: 'fixture-oracle',
+      scope: 'fixture-task',
+      basis: 'fixture-source',
+    }
+    state.actionOutcomes = [
+      {
+        runId: 'fixture-run',
+        actionId: 'failed-action',
+        attemptId: 'failed-attempt',
+        toolName: 'read_files',
+        basis: { inputHash: 'fixture-hash' },
+        outcome: 'failed',
+        cause: { code: 'fixture-error', message: 'initial attempt failed' },
+        effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] },
+      },
+    ]
+    state.output = { summary: 'recovered and verified' }
+    const receipt = buildRuntimeAgentReceipt({
+      agentId: 'fixture-child',
+      agentType: 'test-agent',
+      output: state.output,
+      agentState: state,
+    })
+    expect(receipt.status).toBe('completed')
+    expect(receipt.runOutcome).toEqual({ termination: 'completed' })
+    expect(receipt.taskAcceptance).toMatchObject({
+      status: 'accepted',
+      oracle: 'fixture-oracle',
+    })
+    expect(receipt.actionOutcomes).toEqual(state.actionOutcomes)
+  })
+})
 
 async function normalizeAndPersist(
   ...args: Parameters<typeof normalizeSpawnedAgentOutput>
@@ -1274,6 +1337,45 @@ describe('buildRuntimeAgentReceipt typed handoff outcome', async () => {
     ])
   })
 
+  test('B02 confirmed prior mutation evidence cannot promote a failed or cancelled run', () => {
+    for (const termination of [
+      'failed',
+      'cancelled',
+      'budget_exhausted',
+      'step_exhausted',
+    ] as const) {
+      const state = getInitialAgentState()
+      state.runOutcome = { termination }
+      state.messageHistory = [
+        {
+          role: 'tool',
+          toolName: 'edit_transaction',
+          toolCallId: 'call-applied',
+          content: [
+            {
+              type: 'json',
+              value: appliedMutationResult('src/edited.ts', 'call-applied'),
+            },
+          ],
+        },
+      ]
+      const receipt = buildRuntimeAgentReceipt({
+        agentType: 'editor',
+        agentId: 'fixture-terminal-editor',
+        agentState: state,
+        output: undefined,
+        status: 'completed',
+      })
+      expect(receipt.changedFiles.map((file) => file.path)).toEqual([
+        'src/edited.ts',
+      ])
+      expect(receipt.status).toBe(
+        termination === 'cancelled' ? 'cancelled' : 'failed',
+      )
+      expect(receipt.runOutcome).toEqual({ termination })
+    }
+  })
+
   test('a child self-declared completed status does not rescue a schema_invalid run', async () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'researcher-web',
@@ -2235,15 +2337,6 @@ describe('executeSubagent cancellation cleanup', async () => {
     const owned = `/tmp/librarian-repo-${Date.now()}1`
     mkdirSync(owned, { recursive: true, mode: 0o700 })
 
-    // Loop mocked so it throws while the parent signal is aborted — exactly
-    // the in-process catch/rethrow branch the finding targets.
-    mock.module('../../../../run-agent-step', () => ({
-      ...realRunAgentStep,
-      loopAgentSteps: async () => {
-        throw new Error('parent aborted during step')
-      },
-    }))
-
     const finishEvents: Array<Record<string, unknown>> = []
     const parentAgentState = {
       ...getInitialAgentState(),
@@ -2272,6 +2365,9 @@ describe('executeSubagent cancellation cleanup', async () => {
       await expect(
         executeSubagent({
           ...createTestAgentRuntimeParams(),
+          startAgentRun: async () => {
+            throw abortError
+          },
           agentTemplate: librarianTemplate,
           parentAgentState,
           agentState: childAgentState,
@@ -2326,7 +2422,6 @@ describe('executeSubagent cancellation cleanup', async () => {
         ),
       ).toBe(true)
     } finally {
-      mock.restore()
       try {
         fs.rmSync(owned, { recursive: true, force: true })
       } catch {

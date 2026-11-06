@@ -30,14 +30,6 @@ const DEFAULT_CACHE_DIR = '.codebuff-index'
 const OWNER_FILE = '.openbuff-index-owner'
 const LOCK_FILE = '.openbuff-index.lock'
 const LOCK_TIMEOUT_MS = 10_000
-const STALE_LOCK_MS = 5 * 60_000
-/**
- * The lock holder touches the lock file's mtime at this interval so a
- * slow-but-live writer (large serialize + fsync) is never age-reclaimed
- * mid-operation. Must be well under STALE_LOCK_MS.
- */
-const LOCK_HEARTBEAT_MS = 30_000
-
 /**
  * P8.6b / M4-S6: whether saveIndex may side-effect-write `.git/info/exclude`.
  * Defaults OFF: mutating a user's git metadata as an unadvertised side effect
@@ -117,6 +109,21 @@ function warnOversizedIndexSkip(indexPath: string, size: number): void {
   )
 }
 
+// A publication token describes the exact bytes observed on disk, including
+// derived graph/query/parse fields. It is distinct from source snapshot identity
+// and survives in-memory rebuilding of optional accelerators after load.
+const publicationTokens = new WeakMap<MetadataIndex, string>()
+
+export function getIndexPublicationToken(
+  index: MetadataIndex,
+): string | undefined {
+  return publicationTokens.get(index)
+}
+
+function publicationToken(content: string | Uint8Array): string {
+  return createHash('sha256').update(content).digest('hex')
+}
+
 export async function loadIndex(
   projectRoot: string,
   cacheDir = '.codebuff-index',
@@ -135,7 +142,8 @@ export async function loadIndex(
       warnOversizedIndexSkip(indexPath, stat.size)
       return null
     }
-    const content = await fs.promises.readFile(indexPath, 'utf8')
+    const bytes = await fs.promises.readFile(indexPath)
+    const content = bytes.toString('utf8')
     let parsed: unknown
     try {
       parsed = JSON.parse(content)
@@ -173,6 +181,7 @@ export async function loadIndex(
     ) {
       parsed.queryData = buildIndexQueryData(parsed.files, parsed.graph)
     }
+    publicationTokens.set(parsed, publicationToken(bytes))
     return parsed
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -186,18 +195,32 @@ export async function saveIndex(
   cacheDir = '.codebuff-index',
   options: {
     expectedBuiltAt?: number | null
+    /** Content identity observed before building; null requires no prior snapshot. */
+    expectedSnapshotId?: string | null
+    /** Exact persisted document observed before building; null requires absence. */
+    expectedPublicationToken?: string | null
     /** Reports whether the complete document was read back byte-for-byte. */
     onVerifiedWrite?: (verified: boolean) => void
   } = {},
 ): Promise<boolean> {
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
-  await ensureGitInfoExcludes(projectRoot, cacheDir)
   await fs.promises.mkdir(dir, { recursive: true })
-  await writeOwnerFile(dir)
   const indexPath = path.join(dir, INDEX_FILE)
   return await withCacheLock(dir, async () => {
-    const current = await readCurrentIndexForCas(indexPath)
+    await writeOwnerFile(dir)
+    await ensureGitInfoExcludes(projectRoot, cacheDir)
+    const { index: current, token: currentPublicationToken } =
+      await readCurrentIndexForCas(indexPath)
+    if (
+      Object.prototype.hasOwnProperty.call(
+        options,
+        'expectedPublicationToken',
+      ) &&
+      (options.expectedPublicationToken === undefined ||
+        currentPublicationToken !== options.expectedPublicationToken)
+    )
+      return false
     const currentBuiltAt =
       isRecord(current) &&
       current.projectRoot === projectRoot &&
@@ -209,6 +232,17 @@ export async function saveIndex(
       currentBuiltAt !== options.expectedBuiltAt
     ) {
       return false
+    }
+    if (Object.prototype.hasOwnProperty.call(options, 'expectedSnapshotId')) {
+      let currentSnapshotId: string | null = null
+      if (current !== null) {
+        try {
+          currentSnapshotId = computeIndexSnapshotId(current as MetadataIndex)
+        } catch {
+          return false
+        }
+      }
+      if (currentSnapshotId !== options.expectedSnapshotId) return false
     }
     if (currentBuiltAt !== null && currentBuiltAt > index.builtAt) {
       // A newer inter-process build won the race. Do not replace it with an
@@ -241,7 +275,12 @@ export async function saveIndex(
         `[index-store] metadata index over write cap; persisting without ${reduced.tiers.join('/')} (${reduced.size} bytes)`,
       )
     }
-    const written = await atomicWriteJson(indexPath, reduced.index, reduced.compact)
+    const written = await atomicWriteJson(
+      indexPath,
+      reduced.index,
+      reduced.compact,
+    )
+    publicationTokens.set(index, publicationToken(written))
     if (options.onVerifiedWrite) {
       let verified = false
       if (!reduced.reduced) {
@@ -270,20 +309,35 @@ export async function saveIndex(
 }
 
 /**
- * CAS read for saveIndex, bounded by MAX_METADATA_INDEX_BYTES: the gate only
- * needs `builtAt`, so an over-cap current artifact is treated as "no prior
- * artifact" (null) instead of JSON.parsing unbounded bytes on EVERY save
- * (a 47MB metadata.json would otherwise be re-parsed per save).
+ * Bounded CAS read. The full byte token includes persisted derived fields.
+ * Unreadable/over-cap state is unknown (undefined token), never equivalent
+ * to the absent (null) preimage required for first publication.
  */
-async function readCurrentIndexForCas(indexPath: string): Promise<unknown> {
+async function readCurrentIndexForCas(indexPath: string): Promise<{
+  index: unknown
+  token: string | null | undefined
+}> {
   try {
     const stat = await fs.promises.stat(indexPath)
-    if (stat.size > MAX_METADATA_INDEX_BYTES) return null
-  } catch {
-    // Missing/unreadable: readJsonFile would also have returned null.
-    return null
+    if (stat.size > MAX_METADATA_INDEX_BYTES)
+      return { index: null, token: undefined }
+    const content = await fs.promises.readFile(indexPath)
+    let index: unknown = null
+    try {
+      index = JSON.parse(content.toString('utf8'))
+    } catch {
+      /* Preserve the exact invalid publication token. */
+    }
+    return { index, token: publicationToken(content) }
+  } catch (error) {
+    // Only ENOENT certifies first publication. Unknown/unreadable must never
+    // compare equal to an absent preimage.
+    return {
+      index: null,
+      token:
+        (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : undefined,
+    }
   }
-  return readJsonFile(indexPath)
 }
 
 /**
@@ -438,12 +492,11 @@ export async function saveSemanticVectors(
 ): Promise<void> {
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
-  await ensureGitInfoExcludes(projectRoot, cacheDir)
   await fs.promises.mkdir(dir, { recursive: true })
-  await writeOwnerFile(dir)
 
   const cachePath = path.join(dir, SEMANTIC_VECTOR_FILE)
   await withCacheLock(dir, async () => {
+    await writeOwnerFile(dir)
     const existing =
       (await readSemanticVectorCache(projectRoot, cacheDir)) ??
       emptySemanticVectorCache(projectRoot)
@@ -532,22 +585,8 @@ async function assertCacheOwnership(dir: string): Promise<void> {
     if (entries.length > 0 && !entries.includes(OWNER_FILE) && !legacyOwned) {
       throw new Error(`Refusing to use non-owned index cache directory: ${dir}`)
     }
-    // Best-effort sweep of our old scratch artifacts (same finding): entries
-    // older than the stale-lock bound cannot belong to a live operation.
-    for (const entry of entries) {
-      if (!entry.startsWith('.release.') && !entry.startsWith('.reclaim.')) {
-        continue
-      }
-      const scratchPath = path.join(dir, entry)
-      try {
-        const stat = await fs.promises.stat(scratchPath)
-        if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
-          await fs.promises.rm(scratchPath, { force: true })
-        }
-      } catch {
-        // Vanished or unreadable: nothing to sweep.
-      }
-    }
+    // Old release/reclaim artifacts may hold displaced ownership evidence.
+    // Age is not proof that an owner is dead; preserve them for recovery.
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
@@ -858,11 +897,10 @@ export async function saveChunkSidecar(
   }
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
-  await ensureGitInfoExcludes(projectRoot, cacheDir)
   await fs.promises.mkdir(dir, { recursive: true })
-  await writeOwnerFile(dir)
   const sidecarPath = path.join(dir, CHUNKS_FILE)
   await withCacheLock(dir, async () => {
+    await writeOwnerFile(dir)
     await atomicWriteJson(sidecarPath, normalized)
   })
   return true
@@ -981,126 +1019,42 @@ function isValidQueryData(
   return true
 }
 
+export class IndexCacheLockRecoveryError extends Error {
+  constructor(lockPath: string) {
+    super(
+      `Index cache lock requires recovery: ${lockPath} (automatic takeover is disabled)`,
+    )
+    this.name = 'IndexCacheLockRecoveryError'
+  }
+}
+
 async function withCacheLock<T>(
   dir: string,
   operation: () => Promise<T>,
 ): Promise<T> {
   const lockPath = path.join(dir, LOCK_FILE)
   const deadline = Date.now() + LOCK_TIMEOUT_MS
-
-  // Release a lock we verifiably own: clear the heartbeat, close the open
-  // handle, and remove the lock file only when the atomically displaced
-  // bytes still hold our token (see releaseOwnedLock below). Shared by
-  // every exit path below — the critical section, a failed owner-token
-  // verification, and an error during lock initialization — so no path can
-  // leak the 30s heartbeat timer or the open file handle, and the
-  // just-created lock file is always released by the path that created it
-  // (reliability finding withcachelock-verify-continue-skips-release).
-  const release = async (
-    heartbeat: ReturnType<typeof setInterval>,
-    handle: fs.promises.FileHandle,
-    ownerToken: string,
-  ): Promise<void> => {
-    clearInterval(heartbeat)
-    await handle.close().catch(() => {})
-    try {
-      await releaseOwnedLock(lockPath, ownerToken)
-    } catch {
-      // A stale-lock recovery may already have removed it.
-    }
-  }
-
+  let handle: fs.promises.FileHandle
   while (true) {
     try {
-      const handle = await fs.promises.open(lockPath, 'wx')
-      const ownerToken = `${process.pid}:${randomUUID()}`
-      // Heartbeat: keep the lock mtime fresh while the operation runs so a
-      // slow-but-live holder is not reclaimed by the STALE_LOCK_MS age
-      // heuristic (see the EEXIST branch below).
-      const heartbeat = setInterval(() => {
-        // Token-verified touch (reliability finding
-        // heartbeat-utimes-touches-displaced-lock): clearInterval in release()
-        // cannot cancel a utimes already in flight, and a tick that races our
-        // release and a competitor's re-acquire would refresh the NEW owner's
-        // lock mtime, extending its apparent freshness and delaying
-        // legitimate age-based reclaim. Verify the lock still holds OUR token
-        // immediately before (and after) touching so an in-flight tick that
-        // lost the lock is a no-op. Non-throwing on ENOENT.
-        void fs.promises
-          .readFile(lockPath, 'utf8')
-          .then((content) => {
-            if (!content.startsWith(`${ownerToken}\n`)) return
-            const now = new Date()
-            return fs.promises.utimes(lockPath, now, now).catch(() => {})
-          })
-          .catch(() => {})
-      }, LOCK_HEARTBEAT_MS)
-      // unref the heartbeat: a wedged operation must not keep the event loop
-      // alive indefinitely via this timer alone (reliability finding
-      // heartbeat-timer-pinned-to-operation).
-      heartbeat.unref?.()
-      // Phase 1: write our token and verify it is verifiably on disk. The
-      // finally releases the heartbeat, the handle, and the just-created
-      // lock file whenever the phase does NOT end acquired — including the
-      // failed-verification path, whose `continue` below can no longer skip
-      // cleanup (reliability finding withcachelock-verify-continue-skips-release).
-      let acquired = false
-      try {
-        await handle.writeFile(`${ownerToken}\n${Date.now()}\n`, 'utf8')
-        // Close the create-vs-owner-write window (reliability finding
-        // withcachelock-lockfile-open-race): a waiter that snapshotted the
-        // previous dead owner's content could reclaim between our 'wx'
-        // create and this token write. Only run the critical section when
-        // OUR token is verifiably on disk.
-        try {
-          acquired = (await fs.promises.readFile(lockPath, 'utf8')).startsWith(
-            `${ownerToken}\n`,
-          )
-        } catch {
-          acquired = false
-        }
-      } finally {
-        if (!acquired) {
-          await release(heartbeat, handle, ownerToken)
-        }
-      }
-      if (!acquired) continue
-      // Phase 2: the verified critical section. The heartbeat timer and the
-      // handle stay live for the operation and are released exactly once,
-      // whether the operation returns or throws.
-      try {
-        return await operation()
-      } finally {
-        await release(heartbeat, handle, ownerToken)
-      }
+      handle = await fs.promises.open(lockPath, 'wx')
+      break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      let status: 'live' | 'dead' | 'unknown'
       try {
-        // Snapshot the lock file once and make every reclaim decision from
-        // that snapshot, so the liveness probe and the age check reason about
-        // the same bytes the reclaim below verifies.
-        const content = await fs.promises.readFile(lockPath, 'utf8')
-        const stat = await fs.promises.stat(lockPath)
-        // Liveness first: reclaim immediately when the process that created
-        // the lock is no longer alive, so a crashed indexer does not block
-        // every build for the full STALE_LOCK_MS window. The age heuristic
-        // below must never preempt this check — stealing a slow-but-live
-        // writer's lock breaks mutual exclusion mid-operation.
-        const deadOwner = isLockOwnerDead(content)
-        // Age fallback for a live or ambiguous owner: a genuine holder keeps
-        // the mtime fresh via the heartbeat, so this only fires for a
-        // genuinely abandoned lock (e.g. one whose pid cannot be probed).
-        const ageStale = Date.now() - stat.mtimeMs > STALE_LOCK_MS
-        if (deadOwner || ageStale) {
-          // Rename-verified reclaim: the lock is moved aside atomically and
-          // only deleted when the displaced bytes still hold the stale
-          // content judged above, so a competing waiter that already
-          // reclaimed and re-acquired never loses its live lock here.
-          if (await reclaimStaleLock(lockPath, content)) continue
-        }
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue
-        throw statError
+        status = lockOwnerStatus(await fs.promises.readFile(lockPath, 'utf8'))
+      } catch (readError) {
+        if ((readError as NodeJS.ErrnoException).code === 'ENOENT') continue
+        status = 'unknown'
+      }
+      // A dead PID is useful recovery evidence, never a right to unlink.
+      // Unknown includes the brief exclusive-create -> token-write window.
+      if (
+        status === 'dead' ||
+        (status === 'unknown' && Date.now() >= deadline)
+      ) {
+        throw new IndexCacheLockRecoveryError(lockPath)
       }
       if (Date.now() >= deadline) {
         throw new Error(`Timed out waiting for index cache lock: ${lockPath}`)
@@ -1108,128 +1062,50 @@ async function withCacheLock<T>(
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
   }
+  const ownerToken = `${process.pid}:${randomUUID()}`
+  let initialized = false
+  try {
+    await handle.writeFile(`${ownerToken}\n${Date.now()}\n`, 'utf8')
+    initialized = true
+    return await operation()
+  } finally {
+    await handle.close()
+    // Failed initialization leaves an unknown owner for explicit recovery.
+    if (initialized) await releaseOwnedLock(lockPath, ownerToken)
+  }
 }
 
-/**
- * Determines whether the process that wrote a lock file is no longer alive.
- * The lock's first line is `${pid}:${uuid}` (see withCacheLock); `content` is
- * the caller's snapshot of the file, so the liveness verdict and the
- * subsequent content-verified reclaim (see {@link reclaimStaleLock}) reason
- * about the same bytes. A dead owner lets a crashed indexer's lock be
- * reclaimed immediately instead of waiting out STALE_LOCK_MS. Conservative:
- * any ambiguity (empty lock, unparseable pid, our own pid, or a live/foreign
- * process) returns false so a genuinely held lock is never stolen.
- */
-function isLockOwnerDead(content: string): boolean {
-  const firstLine = content.split('\n', 1)[0] ?? ''
-  const pidText = firstLine.split(':', 1)[0] ?? ''
-  const pid = Number.parseInt(pidText, 10)
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  // Never reclaim our own lock; that would corrupt an in-progress operation.
-  if (pid === process.pid) return false
+function lockOwnerStatus(content: string): 'live' | 'dead' | 'unknown' {
+  const match = /^(\d+):[^\n]+\n/.exec(content)
+  if (!match) return 'unknown'
+  const pid = Number(match[1])
+  if (!Number.isSafeInteger(pid) || pid <= 0) return 'unknown'
   try {
-    // Signal 0 runs existence/permission checks without delivering a signal.
-    // ESRCH means the process no longer exists (dead owner). EPERM means it
-    // exists but is owned by another user (alive) — do not reclaim.
     process.kill(pid, 0)
-    return false
+    return 'live'
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH'
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ESRCH' ? 'dead' : code === 'EPERM' ? 'live' : 'unknown'
   }
 }
 
 /**
- * Reclaim a stale lock by removing the lock file from its namespace — but
- * only when it still holds the exact `staleContent` that was judged
- * reclaimable. Ownership is verified BEFORE the rename (reliability finding
- * release-owned-lock-displaces-foreign-lock): renaming first would displace
- * a competing waiter's live lock when the stale snapshot was already
- * reclaimed and re-acquired, and a third waiter acquiring during the
- * rename→restore window would leave the displaced live lock destroyed —
- * two processes in the critical section. Lock content is only ever replaced
- * via remove+create (never in place), so a read verified as stale cannot be
- * legitimately replaced between this read and the atomic rename; the rename
- * therefore displaces exactly the stale bytes. A vanished path (ENOENT)
- * means another waiter reclaimed it first. The defensive displaced-bytes
- * check restores unexpected content via link (EEXIST-safe) and never
- * deletes possibly-live lock bytes. Returns true when the caller may
- * proceed to (re)acquire.
+ * Compatibility entry point: automatic stale takeover is disabled. In
+ * particular, even matching bytes or a missing path cannot certify a
+ * transfer. A caller must attempt its own exclusive acquisition instead.
  */
 export async function reclaimStaleLock(
-  lockPath: string,
-  staleContent: string,
+  _lockPath: string,
+  _staleContent: string,
 ): Promise<boolean> {
-  let observed: string
-  try {
-    observed = await fs.promises.readFile(lockPath, 'utf8')
-  } catch {
-    // The lock is gone: another waiter already reclaimed it.
-    return true
-  }
-  if (observed !== staleContent) {
-    // A fresh owner token: the lock was re-acquired after the staleness
-    // snapshot was taken. Never displace a live lock — do not proceed.
-    return false
-  }
-  const displacedPath = `${lockPath}.reclaim.${process.pid}.${randomUUID()}`
-  try {
-    await fs.promises.rename(lockPath, displacedPath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // Another waiter reclaimed the stale lock between our verified read
-      // and this rename.
-      return true
-    }
-    throw error
-  }
-  let displaced: string
-  try {
-    displaced = await fs.promises.readFile(displacedPath, 'utf8')
-  } catch {
-    // The displaced lock vanished before it could be judged; nothing was
-    // deleted and the lock namespace is free either way.
-    return true
-  }
-  if (displaced !== staleContent) {
-    // Defensive: content changed between the verified read and the rename
-    // without a remove+create (no known code path does this). Restore via
-    // link (EEXIST-safe) and never delete possibly-live lock bytes; a
-    // leaked scratch file is the safe failure mode.
-    try {
-      await fs.promises.link(displacedPath, lockPath)
-      try {
-        await fs.promises.rm(displacedPath, { force: true })
-      } catch {
-        // Our scratch name is gone; the lock survives at lockPath.
-      }
-    } catch {
-      // Lock path occupied by a newer waiter; leave the scratch copy.
-    }
-    return false
-  }
-  try {
-    await fs.promises.rm(displacedPath, { force: true })
-  } catch {
-    // Already gone.
-  }
-  return true
+  return false
 }
 
 /**
- * Release a lock we believe we own by deleting the lock file — but only
- * when the bytes at the lock path still hold `ownerToken`. Ownership is
- * verified BEFORE the rename (reliability finding
- * release-owned-lock-displaces-foreign-lock): renaming first would displace
- * a competing waiter's live lock when our lock was already reclaimed and
- * re-acquired, and a third waiter acquiring during the rename→restore
- * window would leave the displaced live lock destroyed. A reclaim that
- * takes our live lock must first prove our owner pid dead
- * (isLockOwnerDead), so a read verified as ours cannot be legitimately
- * replaced between this read and the atomic rename; the rename therefore
- * displaces exactly our own bytes. Lock content is only ever replaced via
- * remove+create (never in place). The defensive displaced-bytes check
- * restores unexpected content via link (EEXIST-safe) and never deletes
- * possibly-live lock bytes.
+ * Only the creator releases ownership. Safety comes from exclusive create
+ * plus the absence of ALL contender-driven removal, not this token check.
+ * No timers or rename/repair windows participate in exclusion. External
+ * deletion and mixed-version writers are outside this cooperative TS tier.
  */
 export async function releaseOwnedLock(
   lockPath: string,
@@ -1238,55 +1114,12 @@ export async function releaseOwnedLock(
   let observed: string
   try {
     observed = await fs.promises.readFile(lockPath, 'utf8')
-  } catch {
-    // A stale-lock recovery already removed our lock from the namespace.
-    return
-  }
-  if (!observed.startsWith(`${ownerToken}\n`)) {
-    // Not ours: someone else's live (or stale) lock occupies the path.
-    // Never displace or delete bytes we do not own.
-    return
-  }
-  const displacedPath = `${lockPath}.release.${process.pid}.${randomUUID()}`
-  try {
-    await fs.promises.rename(lockPath, displacedPath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // Reclaimed between our verified read and the rename.
-      return
-    }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
-  let displaced: string
-  try {
-    displaced = await fs.promises.readFile(displacedPath, 'utf8')
-  } catch {
-    // The displaced lock vanished before it could be judged; nothing was
-    // deleted and the lock namespace is free either way.
-    return
-  }
-  if (!displaced.startsWith(`${ownerToken}\n`)) {
-    // Defensive: content changed between the verified read and the rename
-    // without a remove+create (no known code path does this). Restore via
-    // link (EEXIST-safe) and never delete possibly-live lock bytes; a
-    // leaked scratch file is the safe failure mode.
-    try {
-      await fs.promises.link(displacedPath, lockPath)
-      try {
-        await fs.promises.rm(displacedPath, { force: true })
-      } catch {
-        // Our scratch name is gone; the lock survives at lockPath.
-      }
-    } catch {
-      // Lock path occupied by a newer waiter; leave the scratch copy.
-    }
-    return
-  }
-  try {
-    await fs.promises.rm(displacedPath, { force: true })
-  } catch {
-    // Already gone.
-  }
+  if (!observed.startsWith(`${ownerToken}\n`)) return
+  await fs.promises.unlink(lockPath)
 }
 
 /**

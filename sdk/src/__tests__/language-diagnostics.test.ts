@@ -254,10 +254,42 @@ describe('structured diagnostic parsers', () => {
         {
           file: 'app.py',
           newText: '',
-          range: { start: { line: 1, column: 8 }, end: { line: 1, column: 10 } },
+          range: {
+            start: { line: 1, column: 8 },
+            end: { line: 1, column: 10 },
+          },
         },
       ],
     })
+  })
+
+  test('parses the native pyright generalDiagnostics field', () => {
+    const diagnostics = parseLanguageDiagnostics({
+      command: 'pyright --outputjson',
+      cwd: '/repo',
+      stdout: JSON.stringify({
+        generalDiagnostics: [
+          {
+            file: '/repo/src/a.py',
+            severity: 'error',
+            message: 'pre-existing type error',
+            rule: 'reportArgumentType',
+            range: {
+              start: { line: 2, character: 0 },
+              end: { line: 2, character: 1 },
+            },
+          },
+        ],
+      }),
+    })
+    expect(diagnostics).toMatchObject([
+      {
+        file: 'src/a.py',
+        severity: 'error',
+        code: 'reportArgumentType',
+        range: { start: { line: 3, column: 1 } },
+      },
+    ])
   })
 
   test('parses pyright --outputjson diagnostics', () => {
@@ -543,7 +575,10 @@ describe('structured diagnostic parsers', () => {
         {
           file: 'src/Program.cs',
           newText: 'int y',
-          range: { start: { line: 5, column: 9 }, end: { line: 5, column: 13 } },
+          range: {
+            start: { line: 5, column: 9 },
+            end: { line: 5, column: 13 },
+          },
         },
       ],
       relatedInformation: [
@@ -676,7 +711,8 @@ describe('structured diagnostic parsers', () => {
     const diagnostics = parseLanguageDiagnostics({
       command: 'pyright',
       cwd: '/repo',
-      stdout: '/repo/app.py:3:5 - error: Unknown name (reportUndefinedVariable)',
+      stdout:
+        '/repo/app.py:3:5 - error: Unknown name (reportUndefinedVariable)',
     })
 
     expect(diagnostics).toHaveLength(1)

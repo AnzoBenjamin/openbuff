@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
 import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -164,11 +166,30 @@ test('pending/cancelled/custom outcomes and confirmed mutation remain distinct',
     outcomeForTool(
       tool(
         'edit_transaction',
-        { kind: 'file_mutation_result', outcome: 'applied', actions: [] },
+        committedMutationFixture([
+          { path: 'src/confirmed.ts', content: 'export const value = 1\n' },
+        ]),
         'cancelled',
       ),
     ).label,
   ).toBe('applied')
+  expect(
+    outcomeForTool(
+      tool(
+        'edit_transaction',
+        { kind: 'file_mutation_result', outcome: 'applied', actions: [] },
+        'cancelled',
+      ),
+    ).label,
+  ).toBe('unconfirmed')
+  const mismatched = committedMutationFixture([
+    { path: 'src/confirmed.ts', content: 'export const value = 1\n' },
+  ])
+  mismatched.authorityReceipt!.finalHashes['src/confirmed.ts'] =
+    getExactContentHash('export const value = 2\n')
+  expect(
+    outcomeForTool(tool('edit_transaction', mismatched, 'cancelled')).label,
+  ).toBe('unconfirmed')
   expect(
     outcomeForTool(
       tool('read_files', { payload: { error: 'ordinary data' } }, 'succeeded'),

@@ -167,7 +167,10 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
         for (const event of events) {
           await runOptions.handleEvent?.(event)
         }
-        return { output: { type: 'error', message: 'done' } } as RunState
+        return {
+          output: { type: 'lastMessage', value: [] },
+          runOutcome: { termination: 'completed' },
+        } satisfies RunState
       },
     }
 

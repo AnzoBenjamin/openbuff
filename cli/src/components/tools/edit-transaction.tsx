@@ -9,6 +9,7 @@ import { useTheme } from '../../hooks/use-theme'
 import { outcomeForTool } from '../../utils/output-outcome'
 import {
   getCanonicalMutationResult,
+  getConfirmedMutationActionsFromOutput,
   getStructuredErrorMessages,
 } from '../../utils/tool-result-normalizer'
 
@@ -357,6 +358,12 @@ function getPostEditAnchorLabel(
   action: Record<string, unknown>,
   mutation: Record<string, unknown>,
 ): string {
+  if (
+    !getConfirmedMutationActionsFromOutput(mutation).some(
+      (confirmed) => confirmed.actionId === action.actionId,
+    )
+  )
+    return ''
   const anchor = action.editAnchor
   const receipt = mutation.authorityReceipt
   if (
@@ -461,6 +468,11 @@ function getTransactionRows(toolBlock: ToolBlock): string[] {
   const canonical = getCanonicalMutationResult(toolBlock.outputRaw)
   if (canonical && Array.isArray(canonical.actions)) {
     const mutation = canonical as Record<string, unknown>
+    const confirmed = new Set(
+      getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).map(
+        (action) => action.actionId,
+      ),
+    )
     return canonical.actions.map((raw) => {
       const action = raw as Record<string, unknown>
       const rollback = action.rollback as Record<string, unknown> | undefined
@@ -473,7 +485,11 @@ function getTransactionRows(toolBlock: ToolBlock): string[] {
         typeof action.index === 'number' && action.index >= 0
           ? action.index + 1
           : '?'
-      return `${String(actionNumber)}. ${pathLabel} • ${String(action.action)} • ${String(action.outcome)}${getPostEditAnchorLabel(action, mutation)}${rollback?.attempted ? ` • rollback ${rollback.succeeded ? 'succeeded' : 'failed'}` : ''}${error?.message ? ` • ${redactCapabilityText(String(error.message))}` : ''}`
+      const outcome =
+        action.outcome === 'applied' && !confirmed.has(action.actionId)
+          ? 'unconfirmed'
+          : action.outcome
+      return `${String(actionNumber)}. ${pathLabel} • ${String(action.action)} • ${String(outcome)}${getPostEditAnchorLabel(action, mutation)}${rollback?.attempted ? ` • rollback ${rollback.succeeded ? 'succeeded' : 'failed'}` : ''}${error?.message ? ` • ${redactCapabilityText(String(error.message))}` : ''}`
     })
   }
   const value = getTransactionValue(toolBlock)

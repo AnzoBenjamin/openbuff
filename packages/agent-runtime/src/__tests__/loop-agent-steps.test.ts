@@ -119,6 +119,284 @@ describe('loopAgentSteps', () => {
     expect(routedAgentId).toBe('test-agent')
   })
 
+  it('B02 stops a zero cost budget naturally without output correction or inference', async () => {
+    setup()
+    agentTemplate.maxCostCents = 0
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    const chunks: unknown[] = []
+    const terminalEvents: unknown[] = []
+    const finish = mock(
+      async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
+    )
+    const result = await loopAgentSteps({
+      ...baseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+      finishAgentRun: finish,
+      journalWriter: {
+        append: (_runId: string, event: unknown) => terminalEvents.push(event),
+      } as any,
+    })
+    expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+    expect(
+      chunks.filter(
+        (chunk) =>
+          typeof chunk === 'string' && chunk.includes('cost budget exceeded'),
+      ),
+    ).toHaveLength(1)
+    expect(
+      result.agentState.messageHistory.some((message) =>
+        JSON.stringify(message).includes('You must use the'),
+      ),
+    ).toBe(false)
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(finish.mock.calls[0]?.[0]).toMatchObject({ status: 'failed' })
+    expect(
+      terminalEvents.filter((event: any) => event.payload?.terminal),
+    ).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          status: 'budget_exhausted',
+          terminal: true,
+        }),
+      }),
+    ])
+  })
+
+  it('B02 finalizes a fatal generator as failed once and preserves its partial output', async () => {
+    setup()
+    agentTemplate.handleSteps = function* ({ agentState }) {
+      agentState.output = { summary: 'partial work' }
+      throw new Error('fatal generator fixture')
+    }
+    const finish = mock(
+      async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
+    )
+    const events: any[] = []
+    const result = await loopAgentSteps({
+      ...baseParams,
+      finishAgentRun: finish,
+      journalWriter: {
+        append: (_runId: string, event: unknown) => events.push(event),
+      } as any,
+    })
+    expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+    expect(result.agentState.output?.summary).toBe('partial work')
+    expect(result.output).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining('fatal generator fixture'),
+    })
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(finish.mock.calls[0]?.[0]).toMatchObject({ status: 'failed' })
+    expect(events.filter((event) => event.payload?.terminal)).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ status: 'failed', terminal: true }),
+      }),
+    ])
+  })
+
+  it('B02 stops an exhausted step budget once before any generator tool dispatch', async () => {
+    setup()
+    agentState.stepsRemaining = 0
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    let generatorCalls = 0
+    agentTemplate.handleSteps = function* () {
+      generatorCalls++
+      yield { toolName: 'read_files', input: { paths: ['fixture.ts'] } }
+      yield 'STEP'
+    }
+    const chunks: unknown[] = []
+    const events: any[] = []
+    const finish = mock(
+      async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
+    )
+    const result = await loopAgentSteps({
+      ...baseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+      finishAgentRun: finish,
+      journalWriter: {
+        append: (_runId: string, event: unknown) => events.push(event),
+      } as any,
+    })
+    expect(generatorCalls).toBe(0)
+    expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+    expect(runtimeParams.requestToolCall).not.toHaveBeenCalled()
+    expect(
+      chunks.filter(
+        (chunk) =>
+          typeof chunk === 'string' &&
+          chunk.includes('Agent step limit reached'),
+      ),
+    ).toHaveLength(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'step_exhausted',
+    })
+    expect(result.agentState.taskAcceptance).toEqual({ status: 'unknown' })
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(events.filter((event) => event.payload?.terminal)).toHaveLength(1)
+  })
+
+  it('B02 prevents generator restart and correction after the final permitted provider step', async () => {
+    setup()
+    agentState.stepsRemaining = 1
+    let generatorResumes = 0
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    agentTemplate.handleSteps = function* () {
+      while (true) {
+        yield 'STEP'
+        generatorResumes++
+      }
+    }
+    const result = await loopAgentSteps(baseParams)
+    expect(runtimeParams.promptAiSdkStream).toHaveBeenCalledTimes(1)
+    expect(generatorResumes).toBe(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'step_exhausted',
+    })
+  })
+
+  it('B02 completes successful work on the final permitted provider step', async () => {
+    for (const programmatic of [false, true]) {
+      setup()
+      agentState.stepsRemaining = 1
+      if (programmatic)
+        agentTemplate.handleSteps = function* () {
+          yield 'STEP'
+        }
+      const result = await loopAgentSteps(baseParams)
+      expect(runtimeParams.promptAiSdkStream).toHaveBeenCalledTimes(1)
+      expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+    }
+  })
+
+  it('B02 candidate generation consumes the selected provider-step budget', async () => {
+    setup()
+    agentState.stepsRemaining = 1
+    agentTemplate.handleSteps = function* () {
+      // Finite baseline control: the defect must not hang this test.
+      for (let attempt = 0; attempt < 3; attempt++)
+        yield { type: 'GENERATE_N', n: 2 }
+    }
+    const promptAiSdk = mock(async () => promptSuccess('["fixture candidate"]'))
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdk })
+    expect(promptAiSdk).toHaveBeenCalledTimes(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'step_exhausted',
+    })
+    expect(result.agentState.stepsRemaining).toBe(0)
+  })
+
+  it('B02 candidate generation stops once after an observed token budget exhaustion', async () => {
+    setup()
+    agentTemplate.maxTokensPerTurn = 1
+    agentTemplate.handleSteps = function* () {
+      for (let attempt = 0; attempt < 3; attempt++)
+        yield { type: 'GENERATE_N', n: 2 }
+    }
+    const promptAiSdk = mock(
+      async (params: Parameters<typeof baseParams.promptAiSdk>[0]) => {
+        params.onCacheDebugUsageReceived?.({
+          inputTokens: 2,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+          totalTokens: 2,
+        })
+        return promptSuccess('["fixture candidate"]')
+      },
+    )
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdk })
+    expect(promptAiSdk).toHaveBeenCalledTimes(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'budget_exhausted',
+      cause: { code: 'tokens_budget' },
+    })
+    expect(result.agentState.cacheTotalInputTokens).toBe(2)
+  })
+
+  it('B02 a single candidate request can finish on its final permitted step', async () => {
+    setup()
+    agentState.stepsRemaining = 1
+    agentTemplate.handleSteps = function* () {
+      yield { type: 'GENERATE_N', n: 2 }
+    }
+    const promptAiSdk = mock(async () => promptSuccess('["fixture candidate"]'))
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdk })
+    expect(promptAiSdk).toHaveBeenCalledTimes(1)
+    expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+  })
+
+  it('B02 preserves task rejection independently of a happy generator completion', async () => {
+    setup()
+    agentTemplate.handleSteps = function* ({ agentState }) {
+      const state = agentState as AgentState
+      state.output = { summary: 'generator completed' }
+      state.taskAcceptance = {
+        status: 'rejected',
+        oracle: 'fixture-oracle',
+        scope: 'fixture-task',
+        basis: 'fixture-source',
+      }
+    }
+    const result = await loopAgentSteps(baseParams)
+    expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+    expect(result.agentState.taskAcceptance).toMatchObject({
+      status: 'rejected',
+      oracle: 'fixture-oracle',
+    })
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('B02 retains a failed action after verified tool recovery and accepted task completion', async () => {
+    setup()
+    agentTemplate.toolNames = ['run_terminal_command']
+    agentTemplate.handleSteps = function* ({ agentState }) {
+      const first = yield {
+        toolName: 'run_terminal_command',
+        input: { command: 'fixture operation' },
+      }
+      if (!JSON.stringify(first.toolResult).includes('fixture failed'))
+        throw new Error('fixture did not observe the initial failure')
+      const recovery = yield {
+        toolName: 'run_terminal_command',
+        input: { command: 'fixture recovery' },
+      }
+      if (!JSON.stringify(recovery.toolResult).includes('fixture verified'))
+        throw new Error('fixture recovery oracle rejected')
+      const state = agentState as AgentState
+      state.output = { summary: 'fixture verified' }
+      state.taskAcceptance = {
+        status: 'accepted',
+        oracle: 'fixture-output-oracle',
+        scope: 'fixture-task',
+        basis: 'fixture-output',
+      }
+    }
+    let attempts = 0
+    const requestToolCall = mock(async () => {
+      const value: Record<string, string | number> =
+        ++attempts === 1
+          ? { command: 'fixture operation', errorMessage: 'fixture failed' }
+          : {
+              command: 'fixture recovery',
+              stdout: 'fixture verified',
+              exitCode: 0,
+            }
+      return { output: [{ type: 'json' as const, value }] }
+    })
+    const result = await loopAgentSteps({ ...baseParams, requestToolCall })
+    expect(attempts).toBe(2)
+    expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+    expect(result.agentState.taskAcceptance).toMatchObject({
+      status: 'accepted',
+      oracle: 'fixture-output-oracle',
+    })
+    expect(
+      result.agentState.actionOutcomes?.map((action) => action.outcome),
+    ).toEqual(['failed', 'succeeded'])
+    expect(result.agentState.actionOutcomes?.[0]?.cause?.message).toContain(
+      'fixture failed',
+    )
+  })
+
   it('stops an infinite sequence of identical invalid tool calls', async () => {
     setup()
     agentState.stepsRemaining = -1
@@ -135,7 +413,9 @@ describe('loopAgentSteps', () => {
     expect(attempts).toBe(3)
     expect(result.output.type).toBe('error')
     if (result.output.type !== 'error') throw new Error('Expected an error')
-    expect(result.output.message).toContain('Tool arguments failed validation for: read_files')
+    expect(result.output.message).toContain(
+      'Tool arguments failed validation for: read_files',
+    )
     expect(result.output).toMatchObject({
       type: 'error',
       message: expect.stringContaining(
@@ -186,13 +466,19 @@ describe('loopAgentSteps', () => {
     const stream = mock(async function* () {
       attempts++
       if (attempts <= 3) {
-        yield { type: 'error' as const, message: 'provider temporarily throttled' }
+        yield {
+          type: 'error' as const,
+          message: 'provider temporarily throttled',
+        }
       } else {
         yield createToolCallChunk('end_turn', {})
       }
       return promptSuccess(`attempt-${attempts}`)
     })
-    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream: stream })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
     expect(attempts).toBe(4)
     expect(result.output.type).not.toBe('error')
   })
@@ -209,7 +495,10 @@ describe('loopAgentSteps', () => {
       }
       return promptSuccess(`attempt-${attempts}`)
     })
-    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream: stream })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
     expect(attempts).toBe(4)
     expect(result.output.type).not.toBe('error')
   })
@@ -226,9 +515,17 @@ describe('loopAgentSteps', () => {
       }
       return promptSuccess(`attempt-${attempts}`)
     })
-    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream: stream })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
     expect(attempts).toBe(3)
-    expect(result.output).toMatchObject({ type: 'error', message: expect.stringContaining('three consecutive identical invalid tool calls') })
+    expect(result.output).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining(
+        'three consecutive identical invalid tool calls',
+      ),
+    })
   })
 
   it('calls the LLM once after STEP', async () => {
@@ -2710,32 +3007,57 @@ describe('loopAgentSteps', () => {
     const stream = mock(async function* () {
       calls++
       if (calls === 1) yield { type: 'text' as const, text: 'Review complete.' }
-      else yield createToolCallChunk('set_output', { family: 'reviewer', snapshotFingerprint: 'snapshot', verdict: 'LOOKS_GOOD' })
+      else
+        yield createToolCallChunk('set_output', {
+          family: 'reviewer',
+          snapshotFingerprint: 'snapshot',
+          verdict: 'LOOKS_GOOD',
+        })
       return promptSuccess(`reviewer-attempt-${calls}`)
     })
     const result = await loopAgentSteps({
       ...baseParams,
       agentType: 'code-reviewer',
       agentTemplate,
-      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10, output: { family: 'reviewer', snapshotFingerprint: 'snapshot' } },
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 10,
+        output: { family: 'reviewer', snapshotFingerprint: 'snapshot' },
+      },
       localAgentTemplates: { 'code-reviewer': agentTemplate },
       promptAiSdkStream: stream,
     })
     expect(calls).toBe(2)
     expect(result.agentState.agentId).toBe(agentState.agentId)
-    expect(result.output).toMatchObject({ type: 'structuredOutput', value: { verdict: 'LOOKS_GOOD' } })
-    const receipt = buildRuntimeAgentReceipt({ agentType: 'code-reviewer', agentId: 'same-child', output: result.output, agentState: result.agentState })
+    expect(result.output).toMatchObject({
+      type: 'structuredOutput',
+      value: { verdict: 'LOOKS_GOOD' },
+    })
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'code-reviewer',
+      agentId: 'same-child',
+      output: result.output,
+      agentState: result.agentState,
+    })
     expect(receipt.outcome).toBe('ok')
-    expect(JSON.stringify(result.agentState.messageHistory)).toContain('Keep your completed review and existing file reads')
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain(
+      'Keep your completed review and existing file reads',
+    )
   })
 
   it('bounds repeated invalid reviewer receipts and reports schema_invalid', async () => {
     setup()
     agentTemplate = {
-      ...agentTemplate, id: 'code-reviewer', toolNames: ['set_output'],
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['set_output'],
       outputSchema: z.object({ verdict: z.string() }),
     }
-    const degradedTemplate = { ...agentTemplate, outputSchema: z.looseObject({}) }
+    const degradedTemplate = {
+      ...agentTemplate,
+      outputSchema: z.looseObject({}),
+    }
     let calls = 0
     const stream = mock(async function* () {
       calls++
@@ -2743,62 +3065,116 @@ describe('loopAgentSteps', () => {
       return promptSuccess(`reviewer-invalid-${calls}`)
     })
     const result = await loopAgentSteps({
-      ...baseParams, agentType: 'code-reviewer', agentTemplate,
-      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 20 },
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 20,
+      },
       localAgentTemplates: { 'code-reviewer': degradedTemplate },
       promptAiSdkStream: stream,
     })
     expect(calls).toBe(3)
-    const receipt = buildRuntimeAgentReceipt({ agentType: 'code-reviewer', agentId: 'same-child', output: result.output, agentState: result.agentState })
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'code-reviewer',
+      agentId: 'same-child',
+      output: result.output,
+      agentState: result.agentState,
+    })
     expect(receipt.outcome).toBe('schema_invalid')
   })
 
   it('repairs other reviewer schema errors without repeating the review', async () => {
     setup()
     agentTemplate = {
-      ...agentTemplate, id: 'code-reviewer', toolNames: ['set_output'],
-      outputSchema: z.object({ verdict: z.string(), snapshotFingerprint: z.string() }),
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        verdict: z.string(),
+        snapshotFingerprint: z.string(),
+      }),
     }
-    const degradedTemplate = { ...agentTemplate, outputSchema: z.looseObject({}) }
+    const degradedTemplate = {
+      ...agentTemplate,
+      outputSchema: z.looseObject({}),
+    }
     let calls = 0
     const stream = mock(async function* () {
       calls++
-      yield createToolCallChunk('set_output', calls === 1
-        ? { verdict: 'LOOKS_GOOD' }
-        : { verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' })
+      yield createToolCallChunk(
+        'set_output',
+        calls === 1
+          ? { verdict: 'LOOKS_GOOD' }
+          : { verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' },
+      )
       return promptSuccess(`reviewer-schema-${calls}`)
     })
     const result = await loopAgentSteps({
-      ...baseParams, agentType: 'code-reviewer', agentTemplate,
-      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10 },
-      localAgentTemplates: { 'code-reviewer': degradedTemplate }, promptAiSdkStream: stream,
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 10,
+      },
+      localAgentTemplates: { 'code-reviewer': degradedTemplate },
+      promptAiSdkStream: stream,
     })
     expect(calls).toBe(2)
-    expect(result.output).toMatchObject({ value: { snapshotFingerprint: 'snapshot' } })
-    expect(JSON.stringify(result.agentState.messageHistory)).toContain('snapshotFingerprint')
+    expect(result.output).toMatchObject({
+      value: { snapshotFingerprint: 'snapshot' },
+    })
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain(
+      'snapshotFingerprint',
+    )
   })
 
   it('lets a reviewer correct a rejected replacement after an earlier valid receipt', async () => {
     setup()
     agentTemplate = {
-      ...agentTemplate, id: 'code-reviewer', toolNames: ['set_output'],
-      outputSchema: z.object({ verdict: z.enum(['LOOKS_GOOD', 'BLOCKING']), snapshotFingerprint: z.string() }),
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        verdict: z.enum(['LOOKS_GOOD', 'BLOCKING']),
+        snapshotFingerprint: z.string(),
+      }),
     }
     let calls = 0
     const stream = mock(async function* () {
       calls++
       if (calls === 1) {
-        yield createToolCallChunk('set_output', { verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' })
-        yield createToolCallChunk('set_output', { verdict: 'INVALID', snapshotFingerprint: 'snapshot' })
+        yield createToolCallChunk('set_output', {
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'snapshot',
+        })
+        yield createToolCallChunk('set_output', {
+          verdict: 'INVALID',
+          snapshotFingerprint: 'snapshot',
+        })
       } else {
-        yield createToolCallChunk('set_output', { verdict: 'BLOCKING', snapshotFingerprint: 'snapshot' })
+        yield createToolCallChunk('set_output', {
+          verdict: 'BLOCKING',
+          snapshotFingerprint: 'snapshot',
+        })
       }
       return promptSuccess(`reviewer-correction-${calls}`)
     })
     const result = await loopAgentSteps({
-      ...baseParams, agentType: 'code-reviewer', agentTemplate,
-      agentState: { ...agentState, agentType: 'code-reviewer', stepsRemaining: 10 },
-      localAgentTemplates: { 'code-reviewer': agentTemplate }, promptAiSdkStream: stream,
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 10,
+      },
+      localAgentTemplates: { 'code-reviewer': agentTemplate },
+      promptAiSdkStream: stream,
     })
     expect(calls).toBe(2)
     expect(result.output).toMatchObject({ value: { verdict: 'BLOCKING' } })
@@ -2808,44 +3184,82 @@ describe('loopAgentSteps', () => {
   it('does not require a verdict for a valid advisory specialist receipt', async () => {
     setup()
     agentTemplate = {
-      ...agentTemplate, id: 'product-reviewer', toolNames: ['set_output'],
-      outputSchema: z.object({ family: z.literal('advisory'), recommendations: z.array(z.string()) }),
+      ...agentTemplate,
+      id: 'product-reviewer',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        family: z.literal('advisory'),
+        recommendations: z.array(z.string()),
+      }),
     }
     let calls = 0
     const stream = mock(async function* () {
       calls++
-      yield createToolCallChunk('set_output', { family: 'advisory', recommendations: [] })
+      yield createToolCallChunk('set_output', {
+        family: 'advisory',
+        recommendations: [],
+      })
       return promptSuccess(`advisory-${calls}`)
     })
     const result = await loopAgentSteps({
-      ...baseParams, agentType: 'product-reviewer', agentTemplate,
-      agentState: { ...agentState, agentType: 'product-reviewer', stepsRemaining: 10 },
-      localAgentTemplates: { 'product-reviewer': agentTemplate }, promptAiSdkStream: stream,
+      ...baseParams,
+      agentType: 'product-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'product-reviewer',
+        stepsRemaining: 10,
+      },
+      localAgentTemplates: { 'product-reviewer': agentTemplate },
+      promptAiSdkStream: stream,
     })
     expect(calls).toBe(1)
-    expect(result.output).toMatchObject({ value: { family: 'advisory', recommendations: [] } })
+    expect(result.output).toMatchObject({
+      value: { family: 'advisory', recommendations: [] },
+    })
   })
 
   it('repairs a reviewer-family specialist even when its id and stale output omit reviewer', async () => {
     setup()
     agentTemplate = {
-      ...agentTemplate, id: 'performance-specialist', toolNames: ['set_output'],
-      outputSchema: z.object({ family: z.literal('reviewer'), verdict: z.string(), snapshotFingerprint: z.string() }),
+      ...agentTemplate,
+      id: 'performance-specialist',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        family: z.literal('reviewer'),
+        verdict: z.string(),
+        snapshotFingerprint: z.string(),
+      }),
     }
     let calls = 0
     const stream = mock(async function* () {
       calls++
       if (calls === 1) yield { type: 'text' as const, text: 'Review complete.' }
-      else yield createToolCallChunk('set_output', { family: 'reviewer', verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' })
+      else
+        yield createToolCallChunk('set_output', {
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'snapshot',
+        })
       return promptSuccess(`specialist-${calls}`)
     })
     const result = await loopAgentSteps({
-      ...baseParams, agentType: 'performance-specialist', agentTemplate,
-      agentState: { ...agentState, agentType: 'performance-specialist', stepsRemaining: 10, output: { snapshotFingerprint: 'snapshot' } },
-      localAgentTemplates: { 'performance-specialist': agentTemplate }, promptAiSdkStream: stream,
+      ...baseParams,
+      agentType: 'performance-specialist',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'performance-specialist',
+        stepsRemaining: 10,
+        output: { snapshotFingerprint: 'snapshot' },
+      },
+      localAgentTemplates: { 'performance-specialist': agentTemplate },
+      promptAiSdkStream: stream,
     })
     expect(calls).toBe(2)
-    expect(result.output).toMatchObject({ value: { family: 'reviewer', verdict: 'LOOKS_GOOD' } })
+    expect(result.output).toMatchObject({
+      value: { family: 'reviewer', verdict: 'LOOKS_GOOD' },
+    })
   })
 
   // Regression: when the agent simply never calls set_output (no recorded

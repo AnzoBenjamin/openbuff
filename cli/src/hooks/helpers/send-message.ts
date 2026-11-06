@@ -1,4 +1,6 @@
 import { getErrorObject } from '@codebuff/common/util/error'
+import { runFailureMessage } from '@codebuff/common/types/run-outcome'
+import { projectRunOutcomes } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../../project-files'
 import { useChatStore } from '../../state/chat-store'
@@ -476,7 +478,31 @@ export const handleRunCompletion = (params: {
     isQueuePausedRef,
   } = params
 
+  const projected = projectRunOutcomes(
+    runState,
+    wasAbortedByUser
+      ? {
+          runOutcome:
+            runState.runOutcome?.termination === 'cancelled'
+              ? runState.runOutcome
+              : {
+                  termination: 'cancelled',
+                  cause: {
+                    code: 'run_cancelled',
+                    message: 'Run cancelled by user.',
+                  },
+                },
+        }
+      : undefined,
+  )
+  updater.updateAiMessage((message) => ({
+    ...message,
+    runOutcome: projected.runOutcome,
+    taskAcceptance: projected.taskAcceptance,
+    actionOutcomes: projected.actionOutcomes,
+  }))
   if (wasAbortedByUser) {
+    updater.flush()
     finalizeQueueState({
       setStreamStatus,
       setCanProcessQueue,
@@ -488,7 +514,7 @@ export const handleRunCompletion = (params: {
     return
   }
 
-  const output = runState.output
+  const output = projected.output
   const finalizeAfterError = () => {
     // The caller has already applied the terminal error write (setError) right
     // before this helper runs; the timer stop must also settle BEFORE the
@@ -516,9 +542,9 @@ export const handleRunCompletion = (params: {
     return
   }
 
-  if (output.type === 'error') {
-    // Pass the raw error message to setError (displayed in UserErrorBanner without additional wrapper formatting)
-    updater.setError(output.message ?? DEFAULT_RUN_OUTPUT_ERROR_MESSAGE)
+  const failureMessage = runFailureMessage(projected)
+  if (failureMessage) {
+    updater.setError(failureMessage)
 
     finalizeAfterError()
     return

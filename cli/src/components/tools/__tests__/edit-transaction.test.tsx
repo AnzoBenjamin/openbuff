@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
 
 import { initializeThemeStore } from '../../../hooks/use-theme'
 import { chatThemes } from '../../../utils/theme-system'
@@ -164,65 +165,17 @@ test('move actions render source and destination paths', () => {
 test('renders receipt-correlated post-edit hashes without leaking capabilities or content', () => {
   const readCapability = 'cap.v3.sensitive-full-token'
   const afterContent = 'SENSITIVE_POST_EDIT_BODY'
-  const afterHash =
-    'sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+  const mutation = committedMutationFixture([
+    { path: 'src/anchored.ts', content: afterContent },
+  ])
+  mutation.actions[0]!.editAnchor!.readCapability = readCapability
+  const afterHash = mutation.actions[0]!.afterHash!
   const block = {
     type: 'tool',
     toolName: 'edit_transaction',
     toolCallId: 'tx-anchor',
     input: { edits: [] },
-    outputRaw: [
-      {
-        type: 'json',
-        value: {
-          kind: 'file_mutation_result',
-          version: 1,
-          operationId: 'op-anchor',
-          outcome: 'applied',
-          authorityTier: 'portable_path',
-          receiptId: 'r-anchor',
-          actions: [
-            {
-              actionId: 'anchored',
-              index: 0,
-              action: 'update',
-              path: 'src/anchored.ts',
-              outcome: 'applied',
-              afterHash,
-              editAnchor: {
-                startLine: 1,
-                endLine: 8,
-                contentHash: afterHash,
-                readCapability,
-                afterContent,
-              },
-            },
-          ],
-          errors: [],
-          freshCapabilities: [],
-          authorityReceipt: {
-            kind: 'commit_receipt',
-            version: 1,
-            operationId: 'op-anchor',
-            receiptId: 'r-anchor',
-            callId: 'call-anchor',
-            authorityTier: 'portable_path',
-            status: 'committed',
-            actions: [
-              {
-                actionId: 'anchored',
-                index: 0,
-                action: 'update',
-                path: 'src/anchored.ts',
-                status: 'committed',
-                afterHash,
-              },
-            ],
-            finalHashes: { 'src/anchored.ts': afterHash },
-          },
-        },
-      },
-    ],
+    outputRaw: [{ type: 'json', value: mutation }],
   } as ToolBlock
   const rendered = renderToolComponent(block, chatThemes.dark, {
     availableWidth: 80,
@@ -231,13 +184,11 @@ test('renders receipt-correlated post-edit hashes without leaking capabilities o
   })
   const markup = renderToStaticMarkup(rendered?.content as React.ReactElement)
 
-  expect(markup).toContain('post-edit 1234567890abcdef')
+  expect(markup).toContain(`post-edit ${afterHash.slice(7, 23)}`)
   expect(markup.match(/fresh capability available/g)).toHaveLength(1)
   expect(markup).not.toContain(readCapability)
   expect(markup).not.toContain(afterContent)
-  expect(markup).not.toContain(
-    '1234567890abcdef1234567890abcdef1234567890abcdef',
-  )
+  expect(markup).not.toContain(afterHash.slice(7))
 })
 
 test('malformed receipt envelopes and ambiguous action keys hide post-edit anchors', () => {

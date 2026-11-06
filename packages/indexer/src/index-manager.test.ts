@@ -9,6 +9,8 @@ import {
   MAX_INDEX_AGE_MS,
   computeIndexSnapshotId,
   loadIndex,
+  getIndexPublicationToken,
+  saveIndex,
 } from './index-store'
 import {
   mergeScipEdgesIntoIndex,
@@ -616,6 +618,28 @@ describe('IndexManager.adoptMergedIndex', () => {
       mgr.adoptMergedIndex(base!, 'stale-snapshot-id'),
     ).resolves.toBe(false)
     expect(mgr.getSnapshot()).toBe(base)
+  })
+
+  test('refuses graph-only adoption when another same-source publication won', async () => {
+    const root = makeProject()
+    const manager = IndexManager.getInstance(root, {})
+    await manager.waitUntilReady(10_000)
+    const base = manager.getSnapshot()!
+    const sourceIdentity = computeIndexSnapshotId(base)
+    const beforeToken = getIndexPublicationToken(base)
+    expect(beforeToken).toBeDefined()
+    const winner: MetadataIndex = {
+      ...base,
+      graph: { ...base.graph, edges: [...base.graph.edges, { from: 'file:src/auth.ts', to: 'file:src/auth.ts', type: 'references', weight: 1 }] },
+    }
+    expect(winner.builtAt).toBe(base.builtAt)
+    expect(computeIndexSnapshotId(winner)).toBe(sourceIdentity)
+    expect(await saveIndex(winner, root, '.codebuff-index', { expectedPublicationToken: beforeToken })).toBe(true)
+    const loser = { ...base, graph: { ...base.graph, edges: [] } }
+    expect(await manager.adoptMergedIndex(loser, sourceIdentity)).toBe(false)
+    expect(manager.getSnapshot()!.graph.edges).toEqual(winner.graph.edges)
+    expect((await loadIndex(root))!.graph.edges).toEqual(winner.graph.edges)
+    console.log(JSON.stringify({ b04: 'manager-graph-cas-refusal', sourceIdentity, beforeToken, winnerToken: getIndexPublicationToken(winner), returned: false, graph: manager.getSnapshot()!.graph }))
   })
 
   test('persists the merged snapshot so merged precise edges survive on disk', async () => {

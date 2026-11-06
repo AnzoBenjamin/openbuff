@@ -82,7 +82,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { open, stat } from 'node:fs/promises'
+import { lstat, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 
@@ -127,9 +127,7 @@ import {
   MAX_CAPTURED_STREAM_BYTES,
 } from '../sdk/src/services/diagnostic-delta-runner'
 import { LRUCache } from '../common/src/util/lru-cache'
-import {
-  hashIdentityFileBytes,
-} from '../sdk/src/tools/get-change-review-bundle'
+import { hashIdentityFileBytes } from '../sdk/src/tools/get-change-review-bundle'
 import { mapWithConcurrency } from '../sdk/src/tools/concurrency'
 
 /** Fixed measurement baseline: identical constants for before and after rows. */
@@ -1586,15 +1584,16 @@ function runCase11(): void {
  * sdk/src/tools/get-change-review-bundle.ts — the exact function
  * buildSnapshotIdentity feeds the snapshot hash — never a local mirror
  * (RF-8 / after-rows-measure-mirrors). The before row is the pre-fix shape it
- * replaced: a strictly serial stat + capped-prefix read + hash loop over the
- * sorted changed-file list.
+ * replaced: a strictly serial full-file read + hash loop over the sorted
+ * changed-file list, using the current metadata-aware identity contract.
  *
- * Parity contract: both shapes hash the identical byte stream (per-file
- * headers + byte prefixes joined in the same sorted order), so the digests
- * MUST be byte-identical — asserted outside the timed sections. The fixture
- * is a real temp directory of fixed-size files: the seam is I/O-shaped
- * (stat + open + read), so an in-memory synthetic would not exercise the
- * read fan-out this row evidences. The fixture is removed in a finally block.
+ * Parity contract: both shapes hash identical contributions (JSON-quoted
+ * path, mode, size and complete-content SHA-256 in sorted file order), so
+ * the digests MUST be byte-identical — asserted outside timed sections.
+ * Both verify stable file/descriptor metadata; mtime is compared for races
+ * but does not enter identity. The baseline retains whole-file buffers,
+ * while the shipped path streams bounded chunks. A real temp-file workload
+ * exercises stat/open/read and scheduling; it is removed in a finally block.
  */
 const IDENTITY_FILE_COUNT = 200
 const IDENTITY_FILE_BYTES = 10_000
@@ -1613,37 +1612,56 @@ function makeIdentityFixture(): { cwd: string; files: string[] } {
   return { cwd, files: [...files].sort() }
 }
 
-/** Per-file identity read shared by every CASE 12/12b shape. */
+/** Complete, verified regular-file read for the independent baseline shapes. */
 async function readIdentityContribution(
   cwd: string,
   file: string,
-): Promise<{ header: string; bytes?: Buffer } | null> {
+): Promise<{ header: string; bytes: Buffer }> {
   const absolute = path.join(cwd, file)
-  const info = await stat(absolute).catch(() => null)
-  if (!info?.isFile()) return null
-  const header = `\0${file}\0size:${info.size}\0`
-  if (info.size === 0) return { header }
+  const info = await lstat(absolute, { bigint: true })
+  if (!info.isFile()) throw new Error(`Unsupported identity fixture: ${file}`)
+  const metadata = (value: typeof info) =>
+    [
+      value.dev,
+      value.ino,
+      value.size,
+      value.mode,
+      value.mtimeNs,
+      value.ctimeNs,
+    ].join(':')
+  const checkMetadata = (current: typeof info) => {
+    if (metadata(info) !== metadata(current)) {
+      throw new Error(`Identity fixture changed while reading: ${file}`)
+    }
+  }
+  const header = `${JSON.stringify(file)}:mode:${info.mode}:size:${info.size}\0`
   const handle = await open(absolute, 'r')
   try {
-    const buffer = Buffer.allocUnsafe(info.size)
-    const read = await handle.read(buffer, 0, info.size, 0)
-    return { header, bytes: buffer.subarray(0, read.bytesRead) }
+    checkMetadata(await handle.stat({ bigint: true }))
+    const bytes = await handle.readFile()
+    checkMetadata(await handle.stat({ bigint: true }))
+    checkMetadata(await lstat(absolute, { bigint: true }))
+    if (BigInt(bytes.length) !== info.size) {
+      throw new Error(`Identity fixture size changed while reading: ${file}`)
+    }
+    return { header, bytes }
   } finally {
     await handle.close()
   }
 }
 
-/** Pre-fix CASE 12 shape: strictly serial stat + read + hash per file. */
-async function serialIdentityHash(
+/** Serial schedule under the current full-content identity contract. */
+export async function serialIdentityHash(
   cwd: string,
   files: string[],
 ): Promise<string> {
   const hash = createHash('sha256')
-  for (const file of files) {
+  for (const file of [...new Set(files)].sort()) {
     const contribution = await readIdentityContribution(cwd, file)
-    if (!contribution) continue
     hash.update(contribution.header)
-    if (contribution.bytes) hash.update(contribution.bytes)
+    hash.update(
+      `file:${createHash('sha256').update(contribution.bytes).digest('hex')}\0`,
+    )
   }
   return hash.digest('hex')
 }
@@ -1664,18 +1682,19 @@ async function shippedIdentityHash(
  * memory before the join pass hashes them (the
  * snapshot-identity-contributions-unbounded-retention shape).
  */
-async function mapThenJoinIdentityHash(
+export async function mapThenJoinIdentityHash(
   cwd: string,
   files: string[],
 ): Promise<string> {
   const hash = createHash('sha256')
-  const contributions = await mapWithConcurrency(files, 8, (file) =>
+  const contributions = await mapWithConcurrency([...new Set(files)].sort(), 8, (file) =>
     readIdentityContribution(cwd, file),
   )
   for (const contribution of contributions) {
-    if (!contribution) continue
     hash.update(contribution.header)
-    if (contribution.bytes) hash.update(contribution.bytes)
+    hash.update(
+      `file:${createHash('sha256').update(contribution.bytes).digest('hex')}\0`,
+    )
   }
   return hash.digest('hex')
 }
@@ -1709,7 +1728,7 @@ async function runCase12(): Promise<void> {
       before: serialMs,
       after: windowMs,
       ratioBasis: 'like-for-like',
-      note: `${IDENTITY_FILE_COUNT} × ~${IDENTITY_FILE_BYTES}B temp files: before hashes each file's stat + capped prefix strictly serially, after runs the shipped bounded read window (digest parity asserted)`,
+      note: `${IDENTITY_FILE_COUNT} × ~${IDENTITY_FILE_BYTES}B regular temp files: serial full-file buffers vs shipped bounded streaming/read window; both verify metadata and hash identical path/mode/size/content-digest contributions (parity asserted)`,
     })
     const interimMs = await measureAsync(
       () => mapThenJoinIdentityHash(fixture.cwd, fixture.files),
@@ -1721,7 +1740,7 @@ async function runCase12(): Promise<void> {
       before: interimMs,
       after: windowMs,
       ratioBasis: 'contract',
-      note: `${IDENTITY_FILE_COUNT} changed files: the interim map-then-join shape retained every per-file byte prefix before hashing (changedFileCount × file-size retention), the shipped window hashes each contribution as it settles (retention bounded by the read window) — retention differs BY DESIGN, so no ratio is printed; digest parity is asserted`,
+      note: `${IDENTITY_FILE_COUNT} changed files: the map-then-join baseline retains all complete file buffers before hashing (changedFileCount × file-size retention), the shipped streaming window retains bounded chunks and encoded contributions — retention differs BY DESIGN, so no ratio is printed; digest parity is asserted`,
     })
   } finally {
     rmSync(fixture.cwd, { recursive: true, force: true })
@@ -2035,7 +2054,7 @@ export async function runPerfGuardsBaseline(
     '  CASE 12 (RF snapshot-identity-serial-file-reads): before hashes each changed',
   )
   console.log(
-    "     file's stat + capped byte prefix strictly serially; after runs the shipped",
+    "     file's verified full-content identity strictly serially; after runs the shipped",
   )
   console.log(
     '     hashIdentityFileBytes bounded read window (bounded in-flight reads,',
@@ -2051,7 +2070,7 @@ export async function runPerfGuardsBaseline(
     '  CASE 12b (RF snapshot-identity-contributions-unbounded-retention): contract',
   )
   console.log(
-    '     row — the interim concurrency shape retained every per-file byte prefix',
+    '     row — the map-then-join baseline retains every complete file buffer',
   )
   console.log(
     '     before hashing (changedFileCount × file-size retention); the shipped',

@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 import { createHash } from 'node:crypto'
-import { open, stat } from 'node:fs/promises'
+import { lstat, open, readlink } from 'node:fs/promises'
 import path from 'node:path'
 
 import { LocalHarnessStore } from '../services/local-harness-store'
@@ -21,38 +21,10 @@ const isSessionArtifactPath = (file: string): boolean => {
   return normalized.startsWith('.agents/sessions/')
 }
 
-/**
- * Snapshot-identity I/O bounds (perf: bundle-identity-unbounded-sync-io,
- * snapshot-identity-diff-capture-unbounded, identity-git-spawns-no-deadline).
- * Identity used to consume the complete `git diff --binary HEAD` output and
- * read every changed file's FULL bytes with synchronous fs calls on the hot
- * review path. The diff is now spawned with a bounded RETENTION cap
- * (MAX_SNAPSHOT_ID_DIFF_BYTES): git may still emit more than the cap, but only
- * its first cap bytes are buffered on the identity path — the untruncated byte
- * total is counted and mixed into the hash so a truncation boundary can never
- * alias two distinct worktree states. Each file contributes at most
- * MAX_SNAPSHOT_ID_FILE_BYTES bytes, read asynchronously via fs.promises, and
- * every identity-path git spawn carries a SNAPSHOT_ID_GIT_TIMEOUT_MS
- * wall-clock deadline so a wedged git fails closed instead of hanging.
- * (reliability: bundle-rev-parse-head-unbounded) the deadline covers the
- * bundle's ENTIRE git surface — the prelude (status/diff observation,
- * rev-parse HEAD, workspace identity) and the security-scan baseline
- * resolution all route through runGitBounded or the deadline-threaded
- * helpers — so the fail-closed guarantee holds end-to-end for the bundle
- * the gate invokes every cycle, not only inside
- * buildSnapshotIdentity/computeWorktreeSnapshotIdentity.
- */
+// Retention is bounded independently from content identity. Git stdout is
+// streamed into a full digest; status membership must fit before parsing.
 const MAX_SNAPSHOT_ID_DIFF_BYTES = 4 * 1024 * 1024
-const MAX_SNAPSHOT_ID_FILE_BYTES = 1024 * 1024
-
-/**
- * Bounded fan-out for the per-file identity reads (perf:
- * snapshot-identity-serial-file-reads): the identity path runs on every
- * bundle build and twice per run_targeted_validation call, so the per-file
- * stat + capped-prefix reads run with bounded concurrency instead of strictly
- * serially. Each read's contribution is still joined into the hash in sorted
- * file order, so the snapshotId is byte-identical to the serial loop.
- */
+const SNAPSHOT_ID_FILE_CHUNK_BYTES = 64 * 1024
 const SNAPSHOT_ID_READ_CONCURRENCY = 8
 
 /**
@@ -83,6 +55,12 @@ export { runGitBounded }
 function unquoteGitPath(raw: string): string {
   if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) {
     return raw
+  }
+  try {
+    // Identity status lines use JSON quoting after parsing NUL records.
+    return JSON.parse(raw) as string
+  } catch {
+    // Git presentation diffs may instead contain C-style octal escapes.
   }
   const inner = raw.slice(1, -1)
   // \ooo octal bytes (1-3 digits) are git's encoding for non-ASCII bytes.
@@ -144,21 +122,8 @@ export function committedDiffFiles(diff: string): string[] {
   return [...files]
 }
 
-/**
- * Extracts the path portion of a `git status --porcelain` line. Git only
- * formats a ` -> ` rename/copy arrow for R/C status entries, so the arrow
- * split applies only when the two-character status prefix contains R or C;
- * any other line keeps its whole path even if the filename itself contains
- * a literal ' -> '.
- */
-const extractPorcelainPath = (line: string): string => {
-  const status = line.slice(0, 2)
-  const rest = line.slice(3)
-  if (status.includes('R') || status.includes('C')) {
-    return rest.split(' -> ').at(-1)?.trim() ?? ''
-  }
-  return rest.trim()
-}
+// NUL status parsing canonicalizes paths as JSON, retaining whitespace and arrows.
+const extractPorcelainPath = (line: string): string => line.slice(3)
 
 /**
  * Derives the identity file list and identity status from an uncollapsed
@@ -170,13 +135,15 @@ function deriveIdentityFromPorcelain(
   identityLines: string[],
   fallbackFiles?: string[],
 ): { files: string[]; identityStatus: string } {
-  let files = identityLines.map(extractPorcelainPath).filter(Boolean)
+  let files = identityLines
+    .map((line) => unquoteGitPath(extractPorcelainPath(line)))
+    .filter(Boolean)
   if (files.length === 0 && fallbackFiles) files = fallbackFiles
   // Drop session-artifact lines from the porcelain status used for identity;
   // the caller still returns the real, unfiltered status for display.
   const identityStatus = identityLines
     .filter((line) => {
-      const p = extractPorcelainPath(line)
+      const p = unquoteGitPath(extractPorcelainPath(line))
       return p ? !isSessionArtifactPath(p) : true
     })
     .join('\n')
@@ -184,6 +151,32 @@ function deriveIdentityFromPorcelain(
     files: files.filter((f) => !isSessionArtifactPath(f)),
     identityStatus,
   }
+}
+
+function identityLinesFromPorcelain(stdout: string): string[] {
+  if (stdout && !stdout.endsWith('\0')) {
+    throw new Error(
+      'Incomplete Git status record; review membership unavailable.',
+    )
+  }
+  const entries = stdout.split('\0')
+  const lines: string[] = []
+  for (let index = 0; index < entries.length - 1; index++) {
+    const entry = entries[index]!
+    if (entry.length < 4 || entry[2] !== ' ') {
+      throw new Error(
+        'Invalid Git status record; review membership unavailable.',
+      )
+    }
+    const status = entry.slice(0, 2)
+    const file = entry.slice(3)
+    lines.push(`${status} ${JSON.stringify(file)}`)
+    if (status.includes('R') || status.includes('C')) {
+      // In -z format the destination is first, followed by the source.
+      if (!entries[++index]) throw new Error('Incomplete Git rename record.')
+    }
+  }
+  return lines
 }
 
 // P3-T11 (LI-10): optional Semgrep --baseline-commit security layer. Semgrep
@@ -357,95 +350,131 @@ async function resolveSecurityScan(params: {
  * Empty-tree evidence must not clear specialist review while pending files exist.
  */
 
-/**
- * Bounded per-file byte hashing for snapshot identity (async, capped).
- * Exported for the fixed perf baseline (CASE 12b) and tests.
- */
+/** Hash complete file contents with bounded allocation and verified metadata. */
 export async function hashIdentityFileBytes(
   hash: ReturnType<typeof createHash>,
   cwd: string,
   files: string[],
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
-  const sorted = [...files].sort()
-  // Per-file stat + capped-prefix reads run through a bounded read window
-  // (perf: snapshot-identity-serial-file-reads) — the identity path runs on
-  // every bundle build and twice per run_targeted_validation call, so a
-  // strictly serial loop paid one full read round-trip per changed file. At
-  // most SNAPSHOT_ID_READ_CONCURRENCY reads are in flight, and each settled
-  // read's contribution is hashed in the same sorted order the serial loop
-  // used (so the snapshotId is byte-identical) with its byte buffer released
-  // immediately after (perf:
-  // snapshot-identity-contributions-unbounded-retention): the previous
-  // map-then-join shape retained every per-file capped byte prefix in memory
-  // before hashing — a changedFileCount × 1MiB retention spike — whereas
-  // retention is now bounded by the read window instead of the changed-file
-  // count.
-  const readContribution = async (
-    file: string,
-  ): Promise<{ header: string; bytes?: Buffer } | null> => {
+  const controller = new AbortController()
+  const onAbort = () => controller.abort(options.signal?.reason)
+  if (options.signal?.aborted) onAbort()
+  options.signal?.addEventListener('abort', onAbort, { once: true })
+  const timeoutMs = options.timeoutMs ?? SNAPSHOT_ID_GIT_TIMEOUT_MS
+  const deadline = setTimeout(
+    () =>
+      controller.abort(
+        new Error(`File identity timed out after ${timeoutMs}ms`),
+      ),
+    timeoutMs,
+  )
+  const check = () => controller.signal.throwIfAborted()
+  // Bigint nanosecond metadata is compared, not hashed: touching an unchanged
+  // file must not change identity. Replacement, growth and in-place writes
+  // during a read fail closed instead of publishing a mixed content digest.
+  const metadata = (info: {
+    dev: bigint
+    ino: bigint
+    size: bigint
+    mode: bigint
+    mtimeNs: bigint
+    ctimeNs: bigint
+  }) =>
+    [info.dev, info.ino, info.size, info.mode, info.mtimeNs, info.ctimeNs].join(
+      ':',
+    )
+  const readContribution = async (file: string): Promise<string> => {
+    check()
     const absolute = path.join(cwd, file)
-    const info = await stat(absolute).catch(() => null)
-    if (!info?.isFile()) return null
-    // Tracked content is already represented by the capped diff. Adding a
-    // capped byte prefix per file also binds untracked files and protects
-    // against parsing omissions in porcelain status output; the untruncated
-    // size is mixed in so the cap boundary can never alias two states.
-    const header = `\0${file}\0size:${info.size}\0`
-    if (info.size === 0) return { header }
-    const byteCount = Math.min(info.size, MAX_SNAPSHOT_ID_FILE_BYTES)
+    const before = await lstat(absolute, { bigint: true }).catch((error) => {
+      if (error?.code === 'ENOENT') return undefined
+      throw error
+    })
+    check()
+    if (!before) return `${JSON.stringify(file)}:missing\0`
+    const header = `${JSON.stringify(file)}:mode:${before.mode}:size:${before.size}\0`
+    if (before.isSymbolicLink()) {
+      const target = await readlink(absolute, { encoding: 'buffer' })
+      const after = await lstat(absolute, { bigint: true })
+      check()
+      if (metadata(before) !== metadata(after)) {
+        throw new Error(`File changed while hashing identity: ${file}`)
+      }
+      return `${header}link:${createHash('sha256').update(target).digest('hex')}\0`
+    }
+    if (!before.isFile()) {
+      throw new Error(`Unsupported identity file type: ${file}`)
+    }
     const handle = await open(absolute, 'r')
     try {
-      const buffer = Buffer.allocUnsafe(byteCount)
-      const read = await handle.read(buffer, 0, byteCount, 0)
-      return { header, bytes: buffer.subarray(0, read.bytesRead) }
+      check()
+      if (metadata(before) !== metadata(await handle.stat({ bigint: true }))) {
+        throw new Error(`File changed before hashing identity: ${file}`)
+      }
+      const content = createHash('sha256')
+      const buffer = Buffer.allocUnsafe(SNAPSHOT_ID_FILE_CHUNK_BYTES)
+      let total = 0n
+      while (true) {
+        check()
+        const read = await handle.read(buffer, 0, buffer.length, null)
+        check()
+        if (read.bytesRead === 0) break
+        total += BigInt(read.bytesRead)
+        content.update(buffer.subarray(0, read.bytesRead))
+      }
+      const after = await handle.stat({ bigint: true })
+      const current = await lstat(absolute, { bigint: true })
+      check()
+      if (
+        total !== before.size ||
+        metadata(before) !== metadata(after) ||
+        metadata(before) !== metadata(current)
+      ) {
+        throw new Error(`File changed while hashing identity: ${file}`)
+      }
+      return `${header}file:${content.digest('hex')}\0`
     } finally {
       await handle.close()
     }
   }
-  let nextToStart = 0
-  const inFlight: Promise<{ header: string; bytes?: Buffer } | null>[] = []
-  // The fan-out is total: a no-op rejection observer is attached at
-  // CREATION time — the push-time .catch shape — rather than after the
-  // oldest awaited read rejects. Thread scheduling completes the opens in
-  // any order, so a sibling read can already have rejected by the time a
-  // catch around `await pending` would run, and an unhandledRejection event
-  // that already fired cannot be retracted by a later handler
-  // (allSettled-after-the-fact was too late for exactly that reason). The
-  // observer only marks sibling rejections observed; the original error
-  // still propagates through `await pending` below and the caller fails
-  // closed.
-  const observed = (
-    read: Promise<{ header: string; bytes?: Buffer } | null>,
-  ): Promise<{ header: string; bytes?: Buffer } | null> => {
-    void read.catch(() => null)
-    return read
-  }
-  while (
-    inFlight.length < SNAPSHOT_ID_READ_CONCURRENCY &&
-    nextToStart < sorted.length
-  ) {
-    inFlight.push(observed(readContribution(sorted[nextToStart++]!)))
-  }
-  let settled = 0
-  while (settled < sorted.length) {
-    const pending = inFlight.shift()!
-    // Keep the read window full while the oldest read settles: later files
-    // read concurrently, earlier files hash in sorted order, and each hashed
-    // buffer is released before the next contribution is taken.
-    while (
-      inFlight.length < SNAPSHOT_ID_READ_CONCURRENCY &&
-      nextToStart < sorted.length
+  const task = async () => {
+    const sorted = [...new Set(files)].sort()
+    for (
+      let offset = 0;
+      offset < sorted.length;
+      offset += SNAPSHOT_ID_READ_CONCURRENCY
     ) {
-      inFlight.push(observed(readContribution(sorted[nextToStart++]!)))
+      check()
+      // Promise.all observes every sibling at creation, including failures.
+      // Only compact digests survive a batch; file allocations stay <= 8x64KiB.
+      const contributions = await Promise.all(
+        sorted
+          .slice(offset, offset + SNAPSHOT_ID_READ_CONCURRENCY)
+          .map(readContribution),
+      )
+      for (const contribution of contributions) hash.update(contribution)
     }
-    const contribution = await pending
-    if (contribution === null) {
-      settled++
-      continue
-    }
-    hash.update(contribution.header)
-    if (contribution.bytes !== undefined) hash.update(contribution.bytes)
-    settled++
+    check()
+  }
+  let removeCancel = () => {}
+  const cancelled = new Promise<never>((_, reject) => {
+    const rejectAbort = () =>
+      reject(controller.signal.reason ?? new Error('Aborted'))
+    controller.signal.addEventListener('abort', rejectAbort, { once: true })
+    removeCancel = () =>
+      controller.signal.removeEventListener('abort', rejectAbort)
+    if (controller.signal.aborted) rejectAbort()
+  })
+  try {
+    // Deadline/cancellation returns promptly even while an OS read settles.
+    // The observed task closes its handles when pending I/O returns.
+    await Promise.race([task(), cancelled])
+  } finally {
+    controller.abort(new Error('Identity hashing settled'))
+    clearTimeout(deadline)
+    removeCancel()
+    options.signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -463,19 +492,7 @@ async function buildSnapshotIdentity(params: {
   cwd: string
   headCommit: string
   identityLines: string[]
-  /**
-   * UNtruncated byte total of the `git status --porcelain -uall` spawn that
-   * produced `identityLines` (runGitBounded's stdoutTotalBytes). The spawn
-   * excludes `.agents/sessions/**` at the pathspec — mirroring the diff
-   * spawn — so the total is artifact-clean: session plan artifacts never
-   * reach it and can never move the snapshotId through the status-length
-   * term. The bounded spawn retains only the first
-   * MAX_SNAPSHOT_ID_DIFF_BYTES bytes, so changed/untracked files past the
-   * cap are dropped from the identity lines; the total joins the hash
-   * preimage (the status-length term) so the cap boundary can never alias
-   * two distinct worktree states.
-   */
-  statusTotalBytes: number
+  statusSha256: string
   workspaceState?: WorkspaceStateV1
   signal?: AbortSignal
 }): Promise<{
@@ -484,9 +501,7 @@ async function buildSnapshotIdentity(params: {
   identityStatus: string
   committedDiff?: string
 }> {
-  const hasWorktreeChanges = params.identityLines.some(
-    (line) => (line.slice(3).split(' -> ').at(-1)?.trim() ?? '') !== '',
-  )
+  const hasWorktreeChanges = params.identityLines.length > 0
   let committedDiff: string | undefined
   if (!hasWorktreeChanges) {
     // Fallback: when the worktree is clean (changes already committed),
@@ -520,6 +535,11 @@ async function buildSnapshotIdentity(params: {
         committedDiffResult.exitCode === 0 ||
         committedDiffResult.exitCode === 1
       ) {
+        if (committedDiffResult.stdoutTruncated) {
+          throw new Error(
+            'Committed diff exceeds identity membership limit; complete review files are unavailable.',
+          )
+        }
         committedDiff = committedDiffResult.stdout
       }
     }
@@ -528,14 +548,7 @@ async function buildSnapshotIdentity(params: {
     params.identityLines,
     committedDiff === undefined ? undefined : committedDiffFiles(committedDiff),
   )
-  // Presentation diffs are intentionally bounded. Snapshot identity is
-  // bounded at the SPAWN level (perf:
-  // snapshot-identity-diff-capture-unbounded): runGitBounded retains only the
-  // first MAX_SNAPSHOT_ID_DIFF_BYTES bytes of the binary diff — the complete
-  // output is never buffered on the identity path — and enforces a wall-clock
-  // deadline. Per-file byte prefixes are read asynchronously with true sizes
-  // mixed in so truncation boundaries cannot alias two distinct worktree
-  // states; the untruncated diff byte total joins them in the hash below.
+  // Full raw stdout is hashed incrementally; presentation keeps its cap.
   const fullDiff = await runGitBounded(
     ['diff', '--binary', 'HEAD', '--', '.', ':(exclude).agents/sessions/**'],
     params.cwd,
@@ -568,29 +581,11 @@ async function buildSnapshotIdentity(params: {
   // unchanged.
   const hash = createHash('sha256')
     .update(`${params.headCommit}\0${identityStatus}\0`)
-    // (correctness: porcelain-total-bytes-not-hashed) identityStatus and the
-    // identity file list are built from only the RETAINED porcelain prefix:
-    // runGitBounded keeps the first MAX_SNAPSHOT_ID_DIFF_BYTES bytes of the
-    // `git status --porcelain -uall` output that produced identityLines, so
-    // changed/untracked files past the cap are silently dropped from the
-    // identity lines and `files` — and untracked files never appear in the
-    // tracked diff either, so two worktree states differing only past the
-    // cap used to hash to an identical snapshotId and the
-    // runTargetedValidation before/after drift check failed open. The
-    // spawn's UNtruncated byte total joins the preimage here, mirroring the
-    // diff-length term below, so the cap boundary can never alias two
-    // distinct worktree states. The porcelain spawn excludes
-    // `.agents/sessions/**` at the pathspec (the diff spawn's identical
-    // exclusion), so the total counts only identity-relevant bytes and plan
-    // artifacts cannot move the id through the status-length term.
-    .update(`\0status-length:${params.statusTotalBytes}\0`)
-    // stdout is already retained only up to MAX_SNAPSHOT_ID_DIFF_BYTES by the
-    // bounded spawn, so this hashes exactly the capped prefix; the UNtruncated
-    // byte total (stdoutTotalBytes counts every byte git emitted, retained or
-    // not) is mixed in so states on either side of the cap cannot alias.
-    .update(fullDiff.stdout)
-    .update(`\0diff-length:${fullDiff.stdoutTotalBytes}\0`)
-  await hashIdentityFileBytes(hash, params.cwd, files)
+    .update(`status-sha256:${params.statusSha256}\0`)
+    .update(`diff-sha256:${fullDiff.stdoutSha256}\0`)
+  await hashIdentityFileBytes(hash, params.cwd, files, {
+    signal: params.signal,
+  })
   return {
     snapshotId: hash.digest('hex'),
     files,
@@ -635,15 +630,11 @@ export async function computeWorktreeSnapshotIdentity(params: {
     }
   }
   const porcelain = await runGitBounded(
-    // (correctness: porcelain-total-bytes-not-hashed) the artifact exclusion
-    // lives in the pathspec so the spawn's UNtruncated byte total — the
-    // status-length identity term — is artifact-clean: .agents/sessions
-    // plan artifacts never reach it and can never move the snapshotId,
-    // mirroring the diff spawn's identical `:(exclude)` pathspec. The
-    // line-level isSessionArtifactPath filter stays as defense in depth.
+    // Session artifacts are excluded before both membership and full hashing.
     [
       'status',
       '--porcelain',
+      '-z',
       '-uall',
       '--',
       '.',
@@ -656,22 +647,21 @@ export async function computeWorktreeSnapshotIdentity(params: {
       maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
     },
   )
-  if (porcelain.exitCode !== 0) {
+  if (porcelain.exitCode !== 0 || porcelain.stdoutTruncated) {
     return {
-      errorMessage:
-        porcelain.stderr.trim() ||
-        `git status exited with code ${porcelain.exitCode}.`,
+      errorMessage: porcelain.stdoutTruncated
+        ? 'Git status exceeds identity membership limit; complete review files are unavailable.'
+        : porcelain.stderr.trim() ||
+          `git status exited with code ${porcelain.exitCode}.`,
     }
   }
-  const identityLines = porcelain.stdout
-    .split('\n')
-    .filter((line) => line.trim() !== '')
   try {
+    const identityLines = identityLinesFromPorcelain(porcelain.stdout)
     const identity = await buildSnapshotIdentity({
       cwd: params.cwd,
       headCommit: head.stdout.trim(),
       identityLines,
-      statusTotalBytes: porcelain.stdoutTotalBytes,
+      statusSha256: porcelain.stdoutSha256,
       workspaceState: params.workspaceState,
       signal: params.signal,
     })
@@ -766,23 +756,18 @@ export async function getChangeReviewBundle(params: {
   // that would slip past `isSessionArtifactPath`. `-uall` lists every untracked
   // file individually so session artifacts are matched and filtered reliably,
   // and the `:(exclude).agents/sessions/**` pathspec keeps the spawn's
-  // untruncated byte total (the status-length identity term) artifact-clean —
-  // plan artifacts cannot move the snapshotId through it.
+  // full status digest artifact-clean.
   // A4 advisory (identity-git-spawns-no-deadline parity): this porcelain spawn
   // ran with no wall-clock deadline while the identity-only path bounds the
   // same call. Use the identical bounds so a wedged git fails closed instead of
   // hanging the bundle build; a timeout resolves exitCode -1, which the
   // unchanged error mapping below already reports via the exitCode !== 0 branch.
   const porcelain = await runGitBounded(
-    // (correctness: porcelain-total-bytes-not-hashed) the artifact exclusion
-    // lives in the pathspec so the spawn's UNtruncated byte total — the
-    // status-length identity term — is artifact-clean: .agents/sessions
-    // plan artifacts never reach it and can never move the snapshotId,
-    // mirroring the diff spawn's identical `:(exclude)` pathspec. The
-    // line-level isSessionArtifactPath filter stays as defense in depth.
+    // Session artifacts are excluded before both membership and full hashing.
     [
       'status',
       '--porcelain',
+      '-z',
       '-uall',
       '--',
       '.',
@@ -795,21 +780,19 @@ export async function getChangeReviewBundle(params: {
       maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
     },
   )
-  if (porcelain.exitCode !== 0) {
+  if (porcelain.exitCode !== 0 || porcelain.stdoutTruncated) {
     return [
       {
         type: 'json',
         value: {
-          errorMessage:
-            porcelain.stderr.trim() ||
-            `git status exited with code ${porcelain.exitCode}.`,
+          errorMessage: porcelain.stdoutTruncated
+            ? 'Git status exceeds identity membership limit; complete review files are unavailable.'
+            : porcelain.stderr.trim() ||
+              `git status exited with code ${porcelain.exitCode}.`,
         },
       },
     ]
   }
-  const identityLines = porcelain.stdout
-    .split('\n')
-    .filter((line) => line.trim() !== '')
   // Shared identity derivation (also used by the identity-only snapshot path)
   // so the bundle snapshotId and the targeted-validation drift checks can
   // never drift apart. Session plan artifacts under `.agents/sessions/**` are
@@ -818,11 +801,12 @@ export async function getChangeReviewBundle(params: {
   let snapshotId: string
   let files: string[]
   try {
+    const identityLines = identityLinesFromPorcelain(porcelain.stdout)
     const identity = await buildSnapshotIdentity({
       cwd: params.cwd,
       headCommit,
       identityLines,
-      statusTotalBytes: porcelain.stdoutTotalBytes,
+      statusSha256: porcelain.stdoutSha256,
       workspaceState: params.workspaceState,
       signal: params.signal,
     })
@@ -879,8 +863,21 @@ export async function getChangeReviewBundle(params: {
             : [],
         ),
       )
-    findings = store
-      .list(workspace.repositoryId, 'findings')
+    const findingEvidence = store.listWithDiagnostics(
+      workspace.repositoryId,
+      'findings',
+    )
+    if (findingEvidence.diagnostics.length > 0) {
+      return [
+        {
+          type: 'json',
+          value: {
+            errorMessage: `Finding evidence unavailable: ${findingEvidence.diagnostics.length} corrupt or quarantined finding record(s) require repair.`,
+          },
+        },
+      ]
+    }
+    findings = findingEvidence.records
       .filter(
         (record) =>
           record.status !== 'resolved' && record.status !== 'invalidated',

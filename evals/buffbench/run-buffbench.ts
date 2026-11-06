@@ -1,3 +1,17 @@
+import { withEvaluationEnvironment } from './evaluation-environment'
+import {
+  createIsolatedEvaluationClient,
+  isIsolatedEvaluationClient,
+} from './isolated-sdk-client'
+import { recordEvaluatorModelAttempts } from './evaluation-model-attempts'
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  artifactId,
+  createArtifactSink,
+  createRunArtifactSink,
+  type EvaluationArtifactSink,
+} from './evaluation-artifacts'
+import type { EvalAttemptEvidence } from './types'
 import { execFileSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
@@ -13,7 +27,12 @@ import { formatTaskResults } from './format-output'
 import { judgeCommitResult, type JudgingResult } from './judge'
 import { extractAgentLessons, saveAgentLessons } from './lessons-extractor'
 import { applyProposals, decideProposalPromotion } from './proposals'
-import { standardError } from './statistics'
+import {
+  standardError,
+  isEvaluationExecutionEligible,
+  isMeasuredScoreEligible,
+  sumFiniteCosts,
+} from './statistics'
 import { analyzeAgentTraces, type AgentTraceData } from './trace-analyzer'
 import { logger } from '../logger'
 import { analyzeAllTasks } from './meta-analyzer'
@@ -85,18 +104,8 @@ export function summarizeAgentRuns(agentData: AgentEvalResults): {
   runsExcludingFailures: EvalRun[]
   measuredRuns: EvalRun[]
 } {
-  const validRuns = agentData.runs.filter((run) => !run.error)
-  const isSyntheticZero = (run: EvalRun): boolean =>
-    run.judging.scoringStatus === 'all_judges_failed' ||
-    // Legacy runs (pre-scoringStatus judging bodies) carry only the top-level
-    // mirror field; recognize both shapes so they are never counted as a
-    // measured zero. The optional top-level field may be absent on fresh run
-    // objects, which is why this is a property check rather than a truthy
-    // read — `run.scoringStatus` on a missing key is undefined, not false.
-    (run.scoringStatus ??
-      (Object.prototype.hasOwnProperty.call(run, 'scoringStatus')
-        ? run.scoringStatus
-        : undefined)) === 'all_judges_failed'
+  const validRuns = agentData.runs.filter(isEvaluationExecutionEligible)
+
   return {
     validRuns,
     // Kept as an alias of validRuns to preserve the declared shape. The old
@@ -105,7 +114,7 @@ export function summarizeAgentRuns(agentData: AgentEvalResults): {
     runsExcludingFailures: validRuns,
     // M5-T7-R2: synthetic all-zero runs (scoringStatus 'all_judges_failed' —
     // documented as NOT a measured 0/10) must never enter measured averages.
-    measuredRuns: validRuns.filter((run) => !isSyntheticZero(run)),
+    measuredRuns: validRuns.filter(isMeasuredScoreEligible),
   }
 }
 
@@ -132,7 +141,29 @@ export function mergeIdiomPatternFindings(
   }
 }
 
-export async function runTask(options: {
+export async function runTask(
+  options: Parameters<typeof runTaskWithEnvironment>[0],
+) {
+  if (
+    options.executionScope === 'key_free_environment' &&
+    options.runAgentOnCommitImpl
+  )
+    throw new Error(
+      'Key-free evaluation refuses in-process execution overrides',
+    )
+  if (
+    options.executionScope === 'key_free_environment' &&
+    !isIsolatedEvaluationClient(options.client)
+  )
+    throw new Error('Key-free evaluation requires the isolated SDK adapter')
+  return withEvaluationEnvironment(
+    options.executionScope ?? 'trusted_task',
+    options.env,
+    (env) => runTaskWithEnvironment({ ...options, env }),
+  )
+}
+
+async function runTaskWithEnvironment(options: {
   client: OpenbuffClient
   commit: EvalDataV2['evalCommits'][0]
   agents: string[]
@@ -140,6 +171,11 @@ export async function runTask(options: {
   initCommand?: string
   env?: Record<string, string>
   logsDir: string
+  artifactSink?: EvaluationArtifactSink
+  lessonsDir?: string
+  attempt?: EvalAttemptEvidence
+  providerRoutes?: Record<string, string>
+  executionScope?: EvalAttemptEvidence['executionScope']
   index: number
   totalTasks: number
   analyzerContext: {
@@ -183,15 +219,45 @@ export async function runTask(options: {
 
   // Store trace data for this commit to analyze later
   const commitTraces: AgentTraceData[] = []
+  const sink = options.artifactSink ?? createArtifactSink(logsDir)
+  const taskAttemptId = randomUUID()
+  const taskEvidence: EvalAttemptEvidence = {
+    runId: options.attempt?.runId ?? taskAttemptId,
+    experimentId: options.attempt?.experimentId ?? 'unreported',
+    taskId: commit.id,
+    repeat: options.attempt?.repeat ?? 0,
+    languages: [...(commit.languages ?? [])],
+    executionScope: options.executionScope ?? 'trusted_task',
+    ...options.attempt,
+  }
+  const modelRecorder = recordEvaluatorModelAttempts(
+    client,
+    createArtifactSink(path.join(sink.root, 'sdk-attempts')),
+    agents,
+    taskEvidence,
+    options.providerRoutes,
+  )
+  const evaluationClient = modelRecorder.client
+  const lessonsDir = options.lessonsDir ?? path.join(sink.root, 'lessons')
 
   const agentPromises = agents.map(async (agent) => {
     let agentId = agent
+    const evidence: EvalAttemptEvidence = {
+      ...taskEvidence,
+      attemptId: randomUUID(),
+      providerRoute:
+        options.providerRoutes?.[agent] ??
+        options.attempt?.providerRoute ??
+        'unreported',
+    }
+    let retainedResult: Awaited<ReturnType<typeof runAgentOnCommit>> | undefined
+    const artifactPrefix = `${index + 1}-${artifactId(commit.id)}-${artifactId(agent)}-${artifactId(commit.sha.slice(0, 7))}-${evidence.attemptId}`
     try {
       const { agentId: parsedAgentId, externalAgentType } = parseAgentId(agent)
       agentId = parsedAgentId
 
       const agentResult = await runAgentOnCommitImpl({
-        client,
+        client: evaluationClient,
         agentId,
         commit,
         repoUrl,
@@ -202,15 +268,31 @@ export async function runTask(options: {
         finalCheckCommands,
         cacheRecallEval,
         externalAgentType,
+        artifactSink: sink,
+        executionScope: options.executionScope,
       })
+      retainedResult = agentResult
+      evidence.runOutcome = agentResult.runOutcome
+      evidence.costEvidence = agentResult.costEvidence
+      const executionError =
+        agentResult.error ??
+        (agentResult.runOutcome &&
+        agentResult.runOutcome.termination !== 'completed'
+          ? (agentResult.runOutcome.cause?.message ??
+            `Run ${agentResult.runOutcome.termination}`)
+          : undefined)
 
       const judgeResult = mergeIdiomPatternFindings(
         await judgeCommitResult({
-          client,
+          env,
+          inheritEnv: options.executionScope !== 'key_free_environment',
+          client: evaluationClient,
+          artifactSink: sink,
+          attemptId: evidence.attemptId,
           commit,
           contextFiles: agentResult.contextFiles,
           agentDiff: agentResult.diff,
-          error: agentResult.error,
+          error: executionError,
           finalCheckOutputs: agentResult.finalCheckOutputs
             ? agentResult.finalCheckOutputs
                 .map(
@@ -230,7 +312,9 @@ export async function runTask(options: {
       if (extractLessons) {
         console.log(`[${commit.id}] Extracting lessons for ${agentId}...`)
         const { lessons, proposals } = await extractAgentLessons({
-          client,
+          env,
+          inheritEnv: options.executionScope !== 'key_free_environment',
+          client: evaluationClient,
           localAgentDefinitions,
           prompt: commit.prompt,
           groundTruthFileDiffs: commit.fileDiffs,
@@ -238,7 +322,7 @@ export async function runTask(options: {
           agentDiff: agentResult.diff,
           agentTrace: agentResult.trace,
           judgeResult,
-          error: agentResult.error,
+          error: executionError,
         })
 
         if (proposals.length > 0) {
@@ -318,7 +402,7 @@ export async function runTask(options: {
           prompt: commit.prompt,
           lessons,
           proposalDryRun,
-          lessonsDir: path.join(__dirname, 'agent-lessons'),
+          lessonsDir,
         })
       }
 
@@ -331,6 +415,7 @@ export async function runTask(options: {
       })
 
       const evalRun: EvalRun = {
+        ...evidence,
         commitSha: commit.sha,
         prompt: commit.prompt,
         diff: agentResult.diff,
@@ -340,7 +425,7 @@ export async function runTask(options: {
         scoringStatus: judgeResult.scoringStatus ?? 'scored',
         cost: agentResult.cost,
         durationMs: agentResult.durationMs,
-        error: agentResult.error,
+        error: executionError,
         finalCheckOutputs: agentResult.finalCheckOutputs,
         cacheRecallEval: agentResult.cacheRecallEval,
         retrievalFlow: agentResult.retrievalFlow,
@@ -353,7 +438,7 @@ export async function runTask(options: {
       const safeTaskId = commit.id.replace(/[^a-zA-Z0-9-]/g, '_')
       const safeAgentId = agentId.replace(/[^a-zA-Z0-9-]/g, '_')
       const safeCommitShort = commit.sha.slice(0, 7)
-      const traceFilename = `${index + 1}-${safeTaskId}-${safeAgentId}-${safeCommitShort}.json`
+      const traceFilename = `${artifactPrefix}.json`
       const tracePath = path.join(logsDir, traceFilename)
 
       // Store judging result and trace for combined output later. Bind the
@@ -362,6 +447,7 @@ export async function runTask(options: {
       // await inserted between push and write could serialize ANOTHER agent's
       // trace under this agent's filename.
       const traceEntry: AgentTraceData = {
+        ...evidence,
         agentId,
         commitSha: commit.sha,
         prompt: commit.prompt,
@@ -370,7 +456,7 @@ export async function runTask(options: {
         judgeResult,
         cost: agentResult.cost,
         durationMs: agentResult.durationMs,
-        error: agentResult.error,
+        error: executionError,
         timestamp: new Date().toISOString(),
         finalCheckOutputs: agentResult.finalCheckOutputs,
         cacheRecallEval: agentResult.cacheRecallEval,
@@ -391,15 +477,15 @@ export async function runTask(options: {
         // Save agent trace only (not judge traces)
         const agentTracePath = path.join(
           tracesDir,
-          `${index + 1}-${safeTaskId}-${safeAgentId}-${safeCommitShort}-agent.json`,
+          `${artifactPrefix}-agent.json`,
         )
-        fs.writeFileSync(
-          agentTracePath,
-          JSON.stringify(agentResult.trace, null, 2),
+        createArtifactSink(tracesDir).writeJson(
+          path.basename(agentTracePath),
+          agentResult.trace,
         )
       }
 
-      fs.writeFileSync(tracePath, JSON.stringify(traceEntry, null, 2))
+      sink.writeJson(path.basename(tracePath), traceEntry)
 
       return { agentId, evalRun }
     } catch (error) {
@@ -407,15 +493,17 @@ export async function runTask(options: {
       console.error(`[${commit.id}] Agent ${agentId} failed:`, message)
       const judgeResult = failedJudgingResult(message)
       const evalRun: EvalRun = {
+        ...evidence,
         commitSha: commit.sha,
         prompt: commit.prompt,
-        diff: '',
+        diff: retainedResult?.diff ?? '',
         judging: judgeResult,
         // The agent itself crashed before judging — mirror the synthetic-zero
         // signal so this run is excluded from measured averages.
         scoringStatus: 'all_judges_failed',
-        cost: 0,
-        durationMs: 0,
+        cost: retainedResult?.cost ?? 0,
+        durationMs: retainedResult?.durationMs ?? 0,
+        costEvidence: retainedResult?.costEvidence ?? { status: 'unknown' },
         error: message,
       }
       // M5-T7: crash runs get a trace artifact too — formatTaskResults prints
@@ -424,24 +512,23 @@ export async function runTask(options: {
       const safeTaskId = commit.id.replace(/[^a-zA-Z0-9-]/g, '_')
       const safeAgentId = agentId.replace(/[^a-zA-Z0-9-]/g, '_')
       const safeCommitShort = commit.sha.slice(0, 7)
-      const tracePath = path.join(
-        logsDir,
-        `${index + 1}-${safeTaskId}-${safeAgentId}-${safeCommitShort}.json`,
-      )
+      const tracePath = path.join(logsDir, `${artifactPrefix}.json`)
       const traceEntry: AgentTraceData = {
+        ...evidence,
         agentId,
         commitSha: commit.sha,
         prompt: commit.prompt,
-        trace: [],
-        diff: '',
+        trace: retainedResult?.trace ?? [],
+        diff: retainedResult?.diff ?? '',
         judgeResult,
-        cost: 0,
-        durationMs: 0,
+        cost: retainedResult?.cost ?? 0,
+        durationMs: retainedResult?.durationMs ?? 0,
+        costEvidence: retainedResult?.costEvidence ?? { status: 'unknown' },
         error: message,
         timestamp: new Date().toISOString(),
       }
       commitTraces.push(traceEntry)
-      fs.writeFileSync(tracePath, JSON.stringify(traceEntry, null, 2))
+      sink.writeJson(path.basename(tracePath), traceEntry)
       return { agentId, evalRun }
     }
   })
@@ -452,19 +539,32 @@ export async function runTask(options: {
   const traceAnalysis = disableAnalysis
     ? undefined
     : await analyzeAgentTraces({
-        client,
+        env,
+        inheritEnv: options.executionScope !== 'key_free_environment',
+        client: evaluationClient,
         traces: commitTraces,
         codingAgentPrompt: commit.prompt,
         analyzerContext,
+      }).catch((error) => {
+        sink.writeJson(`${taskAttemptId}-analysis-error.json`, {
+          error: formatUnknownError(error),
+          attempts: commitTraces,
+        })
+        return undefined
       })
 
   const analysisData = {
+    ...taskEvidence,
     commitSha: commit.sha,
     timestamp: new Date().toISOString(),
     ...(traceAnalysis ?? {
-      traceAnalysisStatus: 'analysis_disabled' as const,
+      traceAnalysisStatus: disableAnalysis
+        ? 'analysis_disabled'
+        : 'analysis_failed',
     }),
+    modelAttempts: modelRecorder.attempts,
     results: commitTraces.map((t) => ({
+      ...t,
       agentId: t.agentId,
       ...t.judgeResult,
       cost: t.cost,
@@ -479,10 +579,10 @@ export async function runTask(options: {
 
   // Save analysis to logs directory
   const safeTaskId = commit.id.replace(/[^a-zA-Z0-9-]/g, '_')
-  const analysisCommitShort = commit.sha.slice(0, 7)
-  const analysisFilename = `${index + 1}-${safeTaskId}-ANALYSIS-${analysisCommitShort}.json`
+  const analysisCommitShort = artifactId(commit.sha.slice(0, 7))
+  const analysisFilename = `${index + 1}-${artifactId(commit.id)}-ANALYSIS-${analysisCommitShort}-${taskAttemptId}.json`
   const analysisPath = path.join(logsDir, analysisFilename)
-  fs.writeFileSync(analysisPath, JSON.stringify(analysisData, null, 2))
+  sink.writeJson(path.basename(analysisPath), analysisData)
 
   // Print all agent results with their judging, then trace analysis together
   console.log(
@@ -498,7 +598,7 @@ export async function runTask(options: {
         error: trace.error,
         traceFilePath: path.join(
           logsDir,
-          `${index + 1}-${commit.id.replace(/[^a-zA-Z0-9-]/g, '_')}-${trace.agentId.replace(/[^a-zA-Z0-9-]/g, '_')}-${commit.sha.slice(0, 7)}.json`,
+          `${index + 1}-${artifactId(commit.id)}-${artifactId(trace.agentId)}-${artifactId(commit.sha.slice(0, 7))}-${trace.attemptId}.json`,
         ),
         idiomTraceability: trace.idiomTraceability,
         thinkerHarvest: trace.thinkerHarvest,
@@ -507,7 +607,12 @@ export async function runTask(options: {
     }),
   )
 
-  return { commit, agentResults, commitTraces }
+  return {
+    commit,
+    agentResults,
+    commitTraces,
+    modelAttempts: modelRecorder.attempts,
+  }
 }
 
 export const BinInstallSchema = z.object({
@@ -537,6 +642,7 @@ export const EvalCommitV2Schema = z.looseObject({
   prompt: z.string(),
   supplementalFiles: z.array(z.string()),
   fileDiffs: z.array(FileDiffSchema),
+  languages: z.array(z.string().min(1)).optional(),
 })
 
 export const EvalDataV2Schema = z.looseObject({
@@ -712,9 +818,33 @@ interface CommitWithSource {
   commit: EvalCommitV2
   evalData: EvalDataV2
   evalDataPath: string
+  repeat?: number
 }
 
-export async function runBuffBench(options: {
+export async function runBuffBench(
+  options: Parameters<typeof runBuffBenchWithEnvironment>[0],
+) {
+  if (
+    options.executionScope === 'key_free_environment' &&
+    options.runAgentOnCommitImpl
+  )
+    throw new Error(
+      'Key-free evaluation refuses in-process execution overrides',
+    )
+  if (
+    options.executionScope === 'key_free_environment' &&
+    options.client &&
+    !isIsolatedEvaluationClient(options.client)
+  )
+    throw new Error('Key-free evaluation refuses injected in-process clients')
+  return withEvaluationEnvironment(
+    options.executionScope ?? 'trusted_task',
+    undefined,
+    (env) => runBuffBenchWithEnvironment({ ...options, evaluatorEnv: env }),
+  )
+}
+
+async function runBuffBenchWithEnvironment(options: {
   evalDataPaths: string[]
   agents: string[]
   taskConcurrency?: number
@@ -725,6 +855,14 @@ export async function runBuffBench(options: {
   saveTraces?: boolean
   repeats?: number
   seed?: number
+  evaluatorEnv?: Record<string, string>
+  artifactsRoot?: string
+  lessonsDir?: string
+  now?: () => Date
+  experimentId?: string
+  providerRoutes?: Record<string, string>
+  executionScope?: EvalAttemptEvidence['executionScope']
+  runAgentOnCommitImpl?: typeof runAgentOnCommit
 }) {
   const {
     evalDataPaths,
@@ -740,6 +878,14 @@ export async function runBuffBench(options: {
 
   if (evalDataPaths.length === 0) {
     throw new Error('At least one eval data path is required')
+  }
+  if (
+    !Number.isSafeInteger(repeats) ||
+    repeats < 1 ||
+    repeats > 1000 ||
+    !Number.isSafeInteger(seed)
+  ) {
+    throw new Error('Invalid evaluation repeats or seed')
   }
 
   // Load all eval files and create a mapping of commits to their source eval data
@@ -796,6 +942,14 @@ export async function runBuffBench(options: {
   )
 
   // Install binaries once at the beginning
+  if (
+    options.executionScope === 'key_free_environment' &&
+    uniqueBinInstalls.length > 0
+  ) {
+    throw new Error(
+      'Key-free environment evaluation requires preinstalled tools; trusted binary installers are unsupported',
+    )
+  }
   const { tempDir: binsTempDir, env: binsEnv } =
     installBinaries(uniqueBinInstalls)
 
@@ -830,9 +984,11 @@ export async function runBuffBench(options: {
 
   const client =
     options.client ??
-    new OpenbuffClient({
-      logger,
-    })
+    (options.executionScope === 'key_free_environment'
+      ? createIsolatedEvaluationClient().client
+      : new OpenbuffClient({
+          logger,
+        }))
 
   // Load local agent definitions and type definition file for analyzers
   const agentsPath = path.join(__dirname, '../../agents')
@@ -855,14 +1011,32 @@ export async function runBuffBench(options: {
   const startTime = Date.now()
   const results: Record<string, AgentEvalResults> = {}
 
-  // Create logs directory with current date and time and agent IDs
-  const date = new Date().toISOString().replace(/:/g, '-').slice(0, 16) // YYYY-MM-DDTHH-MM
-  const agentNames = agents
-    .map((id) => id.replace(/[^a-zA-Z0-9-]/g, '_'))
-    .join('_vs_')
-  const logsDir = path.join(__dirname, 'logs', `${date}_${agentNames}`)
-  if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir, { recursive: true })
+  const sink = createRunArtifactSink(
+    options.artifactsRoot ?? path.join(__dirname, 'logs'),
+    options.now?.() ?? new Date(),
+  )
+  const logsDir = sink.root
+  const runId = randomUUID()
+  const hash = (value: unknown) =>
+    createHash('sha256').update(JSON.stringify(value)).digest('hex')
+  const measurement = {
+    workloadHash: hash(
+      commitsToRun.map(({ commit, evalData }) => ({
+        commit,
+        repoUrl: evalData.repoUrl,
+        initCommand: evalData.initCommand,
+        finalCheckCommands: evalData.finalCheckCommands,
+        envHash: hash(evalData.env ?? {}),
+      })),
+    ),
+    measurementConfigHash: hash({
+      repeats,
+      seed,
+      taskConcurrency,
+      providerRoutes: options.providerRoutes ?? {},
+      executionScope: options.executionScope ?? 'trusted_task',
+    }),
+    evaluatorVersion: `buffbench-v2/bun-${Bun.version}/${hash(['run-buffbench.ts', 'agent-runner.ts', 'runners/codebuff.ts', 'judge.ts', 'statistics.ts', 'evaluation-artifacts.ts', 'evaluation-environment.ts', 'evaluation-model-attempts.ts'].map((file) => fs.readFileSync(path.join(__dirname, file), 'utf8')))}`,
   }
 
   for (const agentId of agents) {
@@ -883,12 +1057,13 @@ export async function runBuffBench(options: {
   // does not alter agent execution.
   if (repeats > 1) {
     commitsToRun = commitsToRun.flatMap((c) =>
-      Array.from({ length: repeats }, () => c),
+      Array.from({ length: repeats }, (_, repeat) => ({ ...c, repeat })),
     )
     console.log(`Repeats: ${repeats} (seed ${seed})`)
   }
 
-  const commitPromises = commitsToRun.map(({ commit, evalData }, index) => {
+  const commitPromises = commitsToRun.map((entry, index) => {
+    const { commit, evalData } = entry
     // Merge binaries env with this eval's env
     const mergedEnv = { ...binsEnv, ...evalData.env }
 
@@ -901,6 +1076,17 @@ export async function runBuffBench(options: {
         initCommand: evalData.initCommand,
         env: mergedEnv,
         logsDir,
+        artifactSink: sink,
+        providerRoutes: options.providerRoutes,
+        lessonsDir: options.lessonsDir,
+        attempt: {
+          ...measurement,
+          runId,
+          experimentId: options.experimentId ?? measurement.workloadHash,
+          repeat: entry.repeat ?? 0,
+        },
+        executionScope: options.executionScope,
+        runAgentOnCommitImpl: options.runAgentOnCommitImpl,
         index,
         totalTasks: commitsToRun.length,
         analyzerContext,
@@ -950,9 +1136,9 @@ export async function runBuffBench(options: {
     // Average over valid (non-agent-error) runs. The old ">1.0 score" trim is
     // gone: genuine low measured scores are real data, not failures.
     agentData.averageScoreExcludingFailures =
-      validRuns.length > 0
-        ? validRuns.reduce((sum, r) => sum + r.judging.overallScore, 0) /
-          validRuns.length
+      measuredRuns.length > 0
+        ? measuredRuns.reduce((sum, r) => sum + r.judging.overallScore, 0) /
+          measuredRuns.length
         : 0
 
     const idiomScoredRuns = validRuns.filter(
@@ -967,30 +1153,53 @@ export async function runBuffBench(options: {
           idiomScoredRuns.length
         : undefined
 
+    agentData.totalCost = sumFiniteCosts(agentData.runs.map((run) => run.cost))
+    agentData.costComplete = agentData.runs.every(
+      (run) => run.costEvidence?.status === 'reported',
+    )
+    agentData.attemptCount = agentData.runs.length
     agentData.averageCost =
-      validRuns.length > 0
-        ? validRuns.reduce((sum, r) => sum + r.cost, 0) / validRuns.length
+      agentData.runs.length > 0
+        ? agentData.totalCost / agentData.runs.length
         : 0
 
     agentData.averageDuration =
-      validRuns.length > 0
-        ? validRuns.reduce((sum, r) => sum + r.durationMs, 0) / validRuns.length
+      agentData.runs.length > 0
+        ? agentData.runs.reduce((sum, r) => sum + r.durationMs, 0) /
+          agentData.runs.length
         : 0
 
-    // Score per unit cost, using the same cost unit as averageCost.
+    // An incomplete cost population cannot support an efficiency claim.
     agentData.scorePerDollar =
-      agentData.averageCost > 0
+      agentData.costComplete && agentData.averageCost > 0
         ? agentData.averageScore / agentData.averageCost
-        : 0
+        : undefined
   }
 
+  const metaRecorder = recordEvaluatorModelAttempts(
+    client,
+    createArtifactSink(path.join(sink.root, 'sdk-attempts')),
+    [],
+    {
+      ...measurement,
+      runId,
+      experimentId: options.experimentId ?? measurement.workloadHash,
+    },
+  )
   const metaAnalysis = disableAnalysis
     ? undefined
     : await analyzeAllTasks({
-        client,
+        env: options.evaluatorEnv,
+        inheritEnv: options.executionScope !== 'key_free_environment',
+        client: metaRecorder.client,
         logsDir,
         agents,
         analyzerContext,
+      }).catch((error) => {
+        sink.writeJson('meta-analysis-error.json', {
+          error: formatUnknownError(error),
+        })
+        return undefined
       })
 
   if (metaAnalysis) {
@@ -1024,14 +1233,76 @@ export async function runBuffBench(options: {
   // FINAL_RESULTS.json. The previous snapshot ran before meta-analysis and
   // before FINAL_RESULTS.json itself existed, so metadata.files silently
   // omitted artifacts the run actually produced.
-  const logFiles = [...fs.readdirSync(logsDir), 'FINAL_RESULTS.json']
+  const logFiles = [
+    ...fs
+      .readdirSync(logsDir, { recursive: true, encoding: 'utf8' })
+      .filter((file) => fs.statSync(path.join(logsDir, file)).isFile()),
+    'FINAL_RESULTS.json',
+  ].sort()
 
+  const modelAttempts = [
+    ...commitResults.flatMap((result) =>
+      result.status === 'fulfilled' ? result.value.modelAttempts : [],
+    ),
+    ...metaRecorder.attempts,
+  ]
+  const auxiliaryAttempts = modelAttempts.filter(
+    (attempt) => attempt.role === 'auxiliary',
+  )
+  const spend = {
+    scope: 'agent_attempts_plus_available_auxiliary_sdk_attempts',
+    agentCostUsd: sumFiniteCosts(
+      Object.values(results).map((agent) => agent.totalCost ?? 0),
+    ),
+    availableAuxiliaryCostUsd: sumFiniteCosts(
+      auxiliaryAttempts.map((attempt) => attempt.costUsd ?? 0),
+    ),
+    availableUnsettledTaskCostUsd: sumFiniteCosts(
+      modelAttempts
+        .filter(
+          (attempt) =>
+            attempt.role === 'task_agent' && attempt.phase === 'running',
+        )
+        .map((attempt) => attempt.costUsd ?? 0),
+    ),
+    auxiliaryAttemptCount: auxiliaryAttempts.length,
+    unknownAuxiliaryCostAttempts: auxiliaryAttempts.filter(
+      (attempt) => attempt.costEvidence.status !== 'reported',
+    ).length,
+    incompleteAuxiliaryCostAttempts: auxiliaryAttempts.filter(
+      (attempt) => !attempt.costComplete,
+    ).length,
+    wholeExperimentCostComplete:
+      Object.values(results).every((agent) => agent.costComplete) &&
+      auxiliaryAttempts.every(
+        (attempt) => attempt.costEvidence.status === 'reported',
+      ) &&
+      modelAttempts.every(
+        (attempt) => attempt.phase === 'settled' && attempt.costComplete,
+      ) &&
+      commitResults.every((result) => result.status === 'fulfilled'),
+  }
   const finalResults = {
     metadata: {
+      runId,
+      ...measurement,
+      experimentId: options.experimentId ?? measurement.workloadHash,
+      executionScope: options.executionScope ?? 'trusted_task',
       timestamp: new Date().toISOString(),
       evalDataPaths,
       agentsTested: agents,
       commitsEvaluated: commitsToRun.length,
+      rejectedTasks: commitResults.flatMap((result, index) =>
+        result.status === 'rejected'
+          ? [
+              {
+                index,
+                error: formatUnknownError(result.reason),
+                costEvidence: { status: 'unknown' },
+              },
+            ]
+          : [],
+      ),
       totalCommitsInEval: allCommitsWithSource.length,
       evalFiles: loadedEvalFiles.map((f) => ({
         path: f.path,
@@ -1043,7 +1314,10 @@ export async function runBuffBench(options: {
       files: logFiles,
       repeats,
       seed,
+      costScope: 'agent_attempts',
     },
+    spend,
+    modelAttempts,
     metaAnalysis,
     // M5-T7: agent results are namespaced under `agents` so an agent id of
     // 'metadata' or 'metaAnalysis' can no longer clobber the reserved keys
@@ -1052,7 +1326,7 @@ export async function runBuffBench(options: {
   }
 
   const finalResultsPath = path.join(logsDir, 'FINAL_RESULTS.json')
-  fs.writeFileSync(finalResultsPath, JSON.stringify(finalResults, null, 2))
+  sink.writeJson(path.basename(finalResultsPath), finalResults)
 
   // Cleanup binaries installation
   if (binsTempDir) {

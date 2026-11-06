@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import { createHash } from 'node:crypto'
 
 import { SIGTERM_GRACE_MS } from '../services/semgrep-baseline'
 
@@ -9,30 +10,33 @@ import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 const DEFAULT_MAX_CHARS = 40_000
 
 /**
- * Retains at most `cap` bytes across 'data' chunks while still counting every
- * byte received, so a caller can hash a bounded prefix while mixing the
- * UNtruncated size into its digest. Used by runGitBounded to bound the
- * snapshot-identity path's diff capture
- * (perf: snapshot-identity-diff-capture-unbounded).
+ * Hashes every raw byte while retaining only a bounded presentation prefix.
  */
 class BoundedOutputCollector {
   private chunks: Buffer[] = []
   private retained = 0
   total = 0
+  private hash = createHash('sha256')
 
   constructor(private readonly cap: number) {}
 
   push(chunk: Buffer): void {
     this.total += chunk.length
+    this.hash.update(chunk)
     const remaining = this.cap - this.retained
     if (remaining <= 0) return
     const take = Math.min(remaining, chunk.length)
-    this.chunks.push(chunk.subarray(0, take))
+    // Copy a partial chunk so its unseen tail cannot stay retained by a view.
+    this.chunks.push(Buffer.from(chunk.subarray(0, take)))
     this.retained += take
   }
 
   text(): string {
     return Buffer.concat(this.chunks).toString('utf8')
+  }
+
+  digest(): string {
+    return this.hash.digest('hex')
   }
 }
 
@@ -43,9 +47,9 @@ class BoundedOutputCollector {
  * get-change-review-bundle.ts (reliability: bundle-rev-parse-head-unbounded)
  * so gitStatus can thread an opt-in wall-clock deadline without an import
  * cycle. Unlike runGit, this never buffers more than `maxOutputBytes` bytes
- * per stream — git may emit arbitrarily more, but only the first cap bytes
- * are retained while every byte is still counted (surfaced as
- * stdoutTotalBytes so the hash can mix in the untruncated size) — and a
+ * per stream. Every stdout byte reaches its SHA-256 digest, even after the
+ * presentation cap; stdoutComplete distinguishes a complete stream from
+ * an interrupted observation. A
  * wall-clock deadline kills a wedged git instead of hanging the caller. The
  * AbortSignal path mirrors the semgrep and diagnostic runners' escalation
  * shape (perf: run-git-bounded-abort-no-sigkill-escalation): a bare SIGTERM
@@ -73,6 +77,11 @@ export async function runGitBounded(
   exitCode: number
   /** Total stdout bytes emitted by git, retained or not. */
   stdoutTotalBytes: number
+  /** SHA-256 of every raw stdout byte, including bytes beyond retention. */
+  stdoutSha256: string
+  /** True only after a successful child close; errors/abort retain no attestation. */
+  stdoutComplete: boolean
+  stdoutTruncated: boolean
 }> {
   if (signal?.aborted) {
     const reason = signal.reason
@@ -81,6 +90,9 @@ export async function runGitBounded(
       stderr: reason instanceof Error ? reason.message : 'Aborted',
       exitCode: -1,
       stdoutTotalBytes: 0,
+      stdoutSha256: createHash('sha256').digest('hex'),
+      stdoutComplete: false,
+      stdoutTruncated: false,
     }
   }
   return await new Promise((resolve) => {
@@ -93,6 +105,9 @@ export async function runGitBounded(
         stderr: error instanceof Error ? error.message : String(error),
         exitCode: -1,
         stdoutTotalBytes: 0,
+        stdoutSha256: createHash('sha256').digest('hex'),
+        stdoutComplete: false,
+        stdoutTruncated: false,
       })
       return
     }
@@ -117,6 +132,9 @@ export async function runGitBounded(
         stderr: stderrCollector.text() + stderrNote,
         exitCode: result.exitCode,
         stdoutTotalBytes: stdoutCollector.total,
+        stdoutSha256: stdoutCollector.digest(),
+        stdoutComplete: result.exitCode === 0 || result.exitCode === 1,
+        stdoutTruncated: stdoutCollector.total > options.maxOutputBytes,
       })
     }
 
@@ -201,6 +219,7 @@ export async function runGitBounded(
       removeAbortListener = () => {
         signal.removeEventListener('abort', onAbort)
       }
+      if (signal.aborted) onAbort()
     }
   })
 }
@@ -348,6 +367,17 @@ export async function gitStatus(params: {
           errorMessage:
             status.stderr.trim() ||
             `git status exited with code ${status.exitCode}.`,
+        },
+      },
+    ]
+  }
+  if ('stdoutTruncated' in status && status.stdoutTruncated) {
+    return [
+      {
+        type: 'json',
+        value: {
+          errorMessage:
+            'Git status exceeds output limit; complete path membership is unavailable.',
         },
       },
     ]

@@ -649,7 +649,7 @@ describe('getChangeReviewBundle', () => {
     })
   })
 
-  test('per-file identity byte cap cannot alias distinct worktree states', async () => {
+  test('equal-length untracked tails beyond 1 MiB have distinct full identities', async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-cap-'))
     temporaryRoots.push(cwd)
     const git = (...args: string[]) =>
@@ -662,13 +662,12 @@ describe('getChangeReviewBundle', () => {
     expect(git('commit', '-m', 'initial').status).toBe(0)
     // Both states keep big.txt UNTRACKED, so the git diff contribution is
     // empty both times and identity rests entirely on the per-file bytes.
-    // The hashed per-file byte prefix (1 MiB cap) is byte-identical across
-    // the two states, so mixing the untruncated size into the hash is what
-    // keeps the ids distinct — the cap boundary can never alias two states.
+    // Prefix, path, Git status, Git diff and length are identical. Only the
+    // full file digest can distinguish these equal-length untracked tails.
     const shared = 'a'.repeat(1024 * 1024)
     fs.writeFileSync(path.join(cwd, 'big.txt'), `${shared}tail-one\n`)
     const first = await getChangeReviewBundle({ cwd })
-    fs.writeFileSync(path.join(cwd, 'big.txt'), `${shared}tail-two-longer\n`)
+    fs.writeFileSync(path.join(cwd, 'big.txt'), `${shared}tail-two\n`)
     const second = await getChangeReviewBundle({ cwd })
     const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
     const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
@@ -679,18 +678,153 @@ describe('getChangeReviewBundle', () => {
     )
   })
 
-  test('porcelain status byte total joins the identity so the spawn cap cannot alias states', async () => {
-    // Regression (correctness: porcelain-total-bytes-not-hashed): both
-    // identity call sites cap `git status --porcelain -uall` at
-    // MAX_SNAPSHOT_ID_DIFF_BYTES via runGitBounded, so changed/untracked
-    // files past the cap are silently dropped from identityLines and
-    // `files`. Two worktree states differing ONLY past the cap therefore
-    // produced an identical snapshotId — and, because untracked files never
-    // appear in the tracked diff, the diff hash could not catch the drift
-    // either. The spawn's UNtruncated byte total now joins the preimage (the
-    // status-length term), so deleting a file whose porcelain line falls
-    // entirely past the cap moves the id even though the retained prefix,
-    // the identity files list, the diff, and HEAD are byte-identical.
+  test('full Git diff tails change independently of retained presentation bytes', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-git-tail-'),
+    )
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    const file = path.join(cwd, 'z-tail.txt')
+    fs.writeFileSync(file, 'seed\n')
+    fs.writeFileSync(path.join(cwd, 'a-prefix.txt'), 'seed\n')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    const prefix = 'x'.repeat(5 * 1024 * 1024)
+    fs.writeFileSync(path.join(cwd, 'a-prefix.txt'), `${prefix}\n`)
+    const observe = async (tail: string) => {
+      fs.writeFileSync(file, `${tail}\n`)
+      const raw = await runGitBounded(
+        ['diff', '--binary', 'HEAD'],
+        cwd,
+        undefined,
+        {
+          timeoutMs: 10_000,
+          maxOutputBytes: 4 * 1024 * 1024,
+        },
+      )
+      const reference = spawnSync('git', ['diff', '--binary', 'HEAD'], {
+        cwd,
+        maxBuffer: 8 * 1024 * 1024,
+      })
+      expect(reference.status).toBe(0)
+      expect(raw.stdoutSha256).toBe(
+        createHash('sha256').update(reference.stdout).digest('hex'),
+      )
+      expect(raw.stdoutComplete).toBe(true)
+      expect(raw.stdoutTruncated).toBe(true)
+      return raw
+    }
+    const first = await observe('one')
+    const second = await observe('two')
+    expect(second.stdout).toBe(first.stdout)
+    expect(second.stdoutTotalBytes).toBe(first.stdoutTotalBytes)
+    expect(second.stdoutSha256).not.toBe(first.stdoutSha256)
+  })
+
+  test('canonical status membership retains whitespace, arrows and quoted UTF-8 names', async () => {
+    if (process.platform === 'win32') return
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-paths-'))
+    temporaryRoots.push(cwd)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'seed'), 'seed')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    const files = [
+      ' leading.txt',
+      'trailing.txt ',
+      'left -> right.txt',
+      'café\nfile.txt',
+    ]
+    for (const file of files) fs.writeFileSync(path.join(cwd, file), 'one')
+    const first = (await getChangeReviewBundle({ cwd }))[0]
+    expect(first).toMatchObject({
+      type: 'json',
+      value: { files: [...files].sort() },
+    })
+    fs.writeFileSync(path.join(cwd, 'café\nfile.txt'), 'two')
+    const second = (await getChangeReviewBundle({ cwd }))[0]
+    if (
+      first?.type !== 'json' ||
+      !('snapshotId' in first.value) ||
+      second?.type !== 'json' ||
+      !('snapshotId' in second.value)
+    ) {
+      throw new Error('Expected complete path identities')
+    }
+    expect(second.value.snapshotId).not.toBe(first.value.snapshotId)
+  })
+
+  test('quarantined open finding evidence keeps subsequent bundles unavailable', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-corrupt-'),
+    )
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-store-'),
+    )
+    temporaryRoots.push(cwd, stateDir)
+    const git = (...args: string[]) =>
+      spawnSync('git', args, { cwd, encoding: 'utf8' })
+    expect(git('init').status).toBe(0)
+    expect(git('config', 'user.email', 'test@example.com').status).toBe(0)
+    expect(git('config', 'user.name', 'Openbuff Test').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'seed'), 'seed')
+    expect(git('add', '.').status).toBe(0)
+    expect(git('commit', '-m', 'initial').status).toBe(0)
+    fs.writeFileSync(path.join(cwd, 'seed'), 'changed')
+    const initial = (await getChangeReviewBundle({ cwd, stateDir }))[0]
+    if (initial?.type !== 'json' || !('snapshotId' in initial.value))
+      throw new Error('Expected initial bundle')
+    const record = {
+      schemaVersion: 1 as const,
+      id: 'open',
+      revision: 0,
+      repositoryId: initial.value.repositoryId,
+      workspaceId: initial.value.workspaceId,
+      snapshotId: initial.value.snapshotId,
+      runId: 'test',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: 'open',
+      files: ['seed'],
+    }
+    const store = new LocalHarnessStore(stateDir)
+    store.put('findings', record)
+    const healthy = (await getChangeReviewBundle({ cwd, stateDir }))[0]
+    expect(healthy).toMatchObject({
+      type: 'json',
+      value: { findings: [record] },
+    })
+    fs.writeFileSync(
+      path.join(stateDir, record.repositoryId, 'findings', 'open.json'),
+      '{broken',
+    )
+    expect(
+      store.listWithDiagnostics(record.repositoryId, 'findings').diagnostics,
+    ).toHaveLength(1)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect((await getChangeReviewBundle({ cwd, stateDir }))[0]).toMatchObject(
+        {
+          type: 'json',
+          value: {
+            errorMessage:
+              'Finding evidence unavailable: 1 corrupt or quarantined finding record(s) require repair.',
+          },
+        },
+      )
+    }
+  })
+
+  test('refuses incomplete path membership when porcelain exceeds retention', async () => {
+    // A status digest alone cannot enumerate missing untracked content.
+    // The bundle and identity-only path must refuse an overflowing listing.
     // POSIX-only: the deep paths below exceed Windows MAX_PATH.
     if (process.platform === 'win32') return
     const cwd = fs.mkdtempSync(
@@ -734,50 +868,25 @@ describe('getChangeReviewBundle', () => {
     expect(capped.stdoutTotalBytes).toBeGreaterThan(4 * 1024 * 1024)
 
     const first = await getChangeReviewBundle({ cwd })
-    const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
-    expect(firstValue).not.toHaveProperty('errorMessage')
-    const firstBundle = firstValue as {
-      snapshotId: string
-      files: string[]
-    }
-    const firstIdentity = await computeWorktreeSnapshotIdentity({ cwd })
-    if (!('snapshotId' in firstIdentity)) {
-      throw new Error('Expected a snapshot identity for the capped state')
-    }
-
-    // Delete the alphabetically-last untracked file: its porcelain line
-    // falls entirely past the 4MB retained prefix, so the retained identity
-    // lines, the files list, the (empty: nothing tracked changed) diff, and
-    // HEAD stay byte-identical across the two states.
-    fs.rmSync(
-      path.join(
-        cwd,
-        deepDir,
-        `f-${String(fileCount - 1).padStart(4, '0')}.txt`,
-      ),
-      { force: true },
+    expect(first[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorMessage:
+          'Git status exceeds identity membership limit; complete review files are unavailable.',
+      },
+    })
+    expect(await computeWorktreeSnapshotIdentity({ cwd })).toHaveProperty(
+      'errorMessage',
     )
-
-    const second = await getChangeReviewBundle({ cwd })
-    const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
-    expect(secondValue).not.toHaveProperty('errorMessage')
-    const secondBundle = secondValue as {
-      snapshotId: string
-      files: string[]
-    }
-    // The retained prefix is byte-identical, so the identity file list must
-    // NOT move — proving the id changed through the status-length term
-    // alone.
-    expect(secondBundle.files).toEqual(firstBundle.files)
-    expect(secondBundle.snapshotId).not.toBe(firstBundle.snapshotId)
-
-    // The identity-only path (runTargetedValidation's drift check) derives
-    // the same preimage, so it cannot alias the two states either.
-    const secondIdentity = await computeWorktreeSnapshotIdentity({ cwd })
-    if (!('snapshotId' in secondIdentity)) {
-      throw new Error('Expected a snapshot identity for the drifted state')
-    }
-    expect(secondIdentity.snapshotId).not.toBe(firstIdentity.snapshotId)
+    // Same-length tail content changes cannot make an incomplete state usable.
+    fs.writeFileSync(path.join(cwd, deepDir, `f-${fileCount - 1}.txt`), 'y\n')
+    expect((await getChangeReviewBundle({ cwd }))[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorMessage:
+          'Git status exceeds identity membership limit; complete review files are unavailable.',
+      },
+    })
   })
 
   test('identity reads stay order-stable across a file set larger than the read fan-out', async () => {
@@ -820,7 +929,7 @@ describe('getChangeReviewBundle', () => {
     expect(files).toEqual([...files].sort())
   })
 
-  test('windowed identity reads hash the identical byte stream the serial loop did', async () => {
+  test('windowed identity reads match a serial full-file digest reference', async () => {
     // The per-file reads run through a bounded read window (perf:
     // snapshot-identity-contributions-unbounded-retention); each settled
     // contribution is hashed in sorted order with its buffer released, so
@@ -838,12 +947,66 @@ describe('getChangeReviewBundle', () => {
     const serial = createHash('sha256')
     for (const file of [...files].sort()) {
       const stats = fs.statSync(path.join(cwd, file))
-      serial.update(`\0${file}\0size:${stats.size}\0`)
-      serial.update(fs.readFileSync(path.join(cwd, file)))
+      serial.update(
+        `${JSON.stringify(file)}:mode:${stats.mode}:size:${stats.size}\0file:${createHash(
+          'sha256',
+        )
+          .update(fs.readFileSync(path.join(cwd, file)))
+          .digest('hex')}\0`,
+      )
     }
     const windowed = createHash('sha256')
     await hashIdentityFileBytes(windowed, cwd, files)
     expect(windowed.digest('hex')).toBe(serial.digest('hex'))
+  })
+
+  test('rejects an in-place write during a full file read using stable metadata', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-unstable-'),
+    )
+    temporaryRoots.push(cwd)
+    const file = path.join(cwd, 'moving.bin')
+    const fd = fs.openSync(file, 'w+')
+    const size = 128 * 1024 * 1024
+    fs.ftruncateSync(fd, size)
+    let writes = 0
+    const writer = setInterval(() => {
+      fs.writeSync(fd, Buffer.from([++writes % 256]), 0, 1, size - 1)
+    }, 1)
+    try {
+      await expect(
+        hashIdentityFileBytes(createHash('sha256'), cwd, ['moving.bin']),
+      ).rejects.toThrow('File changed while hashing identity')
+      expect(writes).toBeGreaterThan(0)
+    } finally {
+      clearInterval(writer)
+      fs.closeSync(fd)
+    }
+  })
+
+  test('full file hashing observes cancellation and its own deadline', async () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-cancel-'),
+    )
+    temporaryRoots.push(cwd)
+    const file = path.join(cwd, 'large.bin')
+    const fd = fs.openSync(file, 'w')
+    fs.ftruncateSync(fd, 128 * 1024 * 1024)
+    fs.closeSync(fd)
+    const controller = new AbortController()
+    const cancelled = hashIdentityFileBytes(
+      createHash('sha256'),
+      cwd,
+      ['large.bin'],
+      { signal: controller.signal },
+    )
+    controller.abort(new Error('cancel full identity'))
+    await expect(cancelled).rejects.toThrow('cancel full identity')
+    await expect(
+      hashIdentityFileBytes(createHash('sha256'), cwd, ['large.bin'], {
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow('File identity timed out')
   })
 
   test('drains the identity read window before failing closed so sibling rejections are never unhandled', async () => {
@@ -1248,7 +1411,9 @@ describe('getChangeReviewBundle', () => {
     // realistic multi-file review mid-diff with no way for the caller to tell
     // what was cut. The default is now the schema's own max; a ~150k diff —
     // previously clipped at 80k — must arrive whole and untruncated.
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-budget-'))
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-budget-'),
+    )
     temporaryRoots.push(cwd)
     const git = (...args: string[]) =>
       spawnSync('git', args, { cwd, encoding: 'utf8' })
@@ -1274,7 +1439,9 @@ describe('getChangeReviewBundle', () => {
     // When the diff IS still clipped, the marker must state the resume offset
     // and total so the orchestrator can request the rest, and the truncation
     // must surface on the OUTER bundle shape (never a plain success).
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-review-marker-'))
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-review-marker-'),
+    )
     temporaryRoots.push(cwd)
     const git = (...args: string[]) =>
       spawnSync('git', args, { cwd, encoding: 'utf8' })
@@ -1292,9 +1459,9 @@ describe('getChangeReviewBundle', () => {
       max_chars: 500,
     })
     const statusValue = parts[0]?.type === 'json' ? parts[0].value : undefined
-    expect(statusValue && 'diff' in statusValue ? statusValue.diff : '').toContain(
-      '[...truncated ',
-    )
+    expect(
+      statusValue && 'diff' in statusValue ? statusValue.diff : '',
+    ).toContain('[...truncated ')
     expect(
       statusValue && 'diff' in statusValue ? statusValue.diff : '',
     ).toContain('chars at offset 500 of ')

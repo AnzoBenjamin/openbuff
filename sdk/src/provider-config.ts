@@ -668,6 +668,11 @@ export type ResolvedProviderModel = {
   compatibility: ProviderCompatibility
 }
 
+export type ResolvedProviderModelMetadata = Omit<
+  ResolvedProviderModel,
+  'apiKey'
+>
+
 export type LoadedProviderConfig = {
   config: ProviderConfigFile
   sourceFilePaths: string[]
@@ -1102,9 +1107,7 @@ export function getAncestorProviderConfigPaths(startDir: string): string[] {
 }
 
 function isAncestorTrustEnabled(): boolean {
-  return (
-    (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
-  )
+  return (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
 }
 
 /**
@@ -2008,13 +2011,13 @@ export function resolveConfiguredAgentModel(params: {
   return resolveConfiguredAgentModelConfig(params).model
 }
 
-export function resolveConfiguredProviderModel(params: {
+/** Map a route and its capabilities without reading any provider credential. */
+export function resolveConfiguredProviderModelMetadata(params: {
   model: string
-  env?: NodeJS.ProcessEnv
   loadedConfig?: LoadedProviderConfig
-}): ResolvedProviderModel | undefined {
-  const { model, env = getSystemProcessEnv() } = params
-  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync({ env })
+}): ResolvedProviderModelMetadata | undefined {
+  const { model } = params
+  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync()
 
   for (const [providerId, provider] of Object.entries(
     loadedConfig.config.providers,
@@ -2024,31 +2027,17 @@ export function resolveConfiguredProviderModel(params: {
       continue
     }
 
-    const providerHasApiKeyEnv =
-      provider.type === 'openai-compatible' ||
-      provider.type === 'anthropic-compatible'
-    const apiKey =
-      providerHasApiKeyEnv && provider.apiKeyEnv
-        ? env[provider.apiKeyEnv]
-        : undefined
-    if (providerHasApiKeyEnv && provider.apiKeyEnv && !apiKey) {
-      throw new Error(
-        `Missing environment variable '${provider.apiKeyEnv}' required for configured provider '${providerId}' and model '${model}'.`,
-      )
-    }
-
     return {
       providerId,
       provider,
       requestedModel: model,
       providerModel,
-      apiKey,
       compatibility: {
         ...DEFAULT_PROVIDER_COMPATIBILITY,
         ...(provider.compatibility ?? {}),
         ...(provider.type === 'openai-compatible' &&
-          provider.compatibility.reasoningReplay === undefined &&
-          new URL(provider.baseURL).hostname.toLowerCase() === 'api.ifm.ai'
+        provider.compatibility.reasoningReplay === undefined &&
+        new URL(provider.baseURL).hostname.toLowerCase() === 'api.ifm.ai'
           ? { reasoningReplay: 'required' as const }
           : {}),
       },
@@ -2056,6 +2045,33 @@ export function resolveConfiguredProviderModel(params: {
   }
 
   return undefined
+}
+
+/** Construct only the selected route, preserving the public missing-key error. */
+export function resolveConfiguredProviderModel(params: {
+  model: string
+  env?: NodeJS.ProcessEnv
+  loadedConfig?: LoadedProviderConfig
+}): ResolvedProviderModel | undefined {
+  const env = params.env ?? getSystemProcessEnv()
+  const metadata = resolveConfiguredProviderModelMetadata({
+    model: params.model,
+    loadedConfig: params.loadedConfig ?? loadProviderConfigSync({ env }),
+  })
+  if (!metadata) return undefined
+  const provider = metadata.provider
+  const credentialEnv =
+    provider.type === 'openai-compatible' ||
+    provider.type === 'anthropic-compatible'
+      ? provider.apiKeyEnv
+      : undefined
+  const apiKey = credentialEnv ? env[credentialEnv] : undefined
+  if (credentialEnv && !apiKey) {
+    throw new Error(
+      `Missing environment variable '${credentialEnv}' required for configured provider '${metadata.providerId}' and model '${params.model}'.`,
+    )
+  }
+  return { ...metadata, apiKey }
 }
 
 /**
@@ -2087,7 +2103,7 @@ export function resolveContextWindowTokens(params: {
     model,
     loadedConfig,
   }).model
-  const configuredProviderModel = resolveConfiguredProviderModel({
+  const configuredProviderModel = resolveConfiguredProviderModelMetadata({
     model: effectiveModel,
     loadedConfig,
   })

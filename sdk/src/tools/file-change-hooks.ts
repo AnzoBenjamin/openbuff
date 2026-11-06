@@ -19,9 +19,9 @@ import { runTerminalCommand } from './run-terminal-command'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
-import {
-  supportedDiagnosticFiles,
-  type DiagnosticDeltaPreflightResult,
+import type {
+  DiagnosticCapture,
+  DiagnosticDeltaPreflightResult,
 } from '../services/diagnostic-delta'
 import { getSystemProcessEnv } from '../env'
 
@@ -370,12 +370,13 @@ async function inferFileChangeHooksCached(
  * Both write paths are gated on it so a clear, an eviction, or a newer snapshot
  * that landed mid-flight cannot be overwritten or deleted by this one.
  */
-function ownsHookInferenceSnapshot(
-  key: string,
-  snapshot: object,
-): boolean {
+function ownsHookInferenceSnapshot(key: string, snapshot: object): boolean {
   const current = hookInferenceCache.get(key)
-  return current !== undefined && 'pending' in current && current.snapshot === snapshot
+  return (
+    current !== undefined &&
+    'pending' in current &&
+    current.snapshot === snapshot
+  )
 }
 
 /**
@@ -1370,7 +1371,10 @@ async function findDotnetTargetAsync(
       // Budget spent on an earlier batch: skip the remaining readdirs.
       if (remaining <= 0) return preferDotnetTarget(candidates)
       throwIfAborted(signal)
-      const batch = level.slice(offset, offset + DOTNET_WALK_READDIR_CONCURRENCY)
+      const batch = level.slice(
+        offset,
+        offset + DOTNET_WALK_READDIR_CONCURRENCY,
+      )
       const listings = await Promise.all(
         batch.map(async (directory) => {
           try {
@@ -1501,6 +1505,22 @@ export function isDiagnosticPreflightEnabled(
  * before/after (the mutation-broker path) supplies this. Kept injected so the
  * default hook path stays byte-identical and the broker is never touched here.
  */
+function completeDiagnosticCapture(
+  capture: DiagnosticCapture | undefined,
+): boolean {
+  return Boolean(
+    capture &&
+    capture.coverage.status === 'complete' &&
+    capture.commands.length > 0 &&
+    capture.commands.every(
+      (command) =>
+        command.status === 'completed' &&
+        command.coverageStatus === 'complete' &&
+        !command.outputTruncated,
+    ),
+  )
+}
+
 export type DiagnosticDeltaHook = (params: {
   files: string[]
   cwd: string
@@ -1673,28 +1693,52 @@ export async function runFileChangeHooks(params: {
   // (or none configured) gets NO preflight result — no
   // diagnostic_delta_passed/rejected entry — even when the flag is on.
   if (isDiagnosticPreflightEnabled(env) && params.diagnosticDelta) {
-    const supportedFiles = supportedDiagnosticFiles(files)
-    if (supportedFiles.length > 0) {
-      const preflight = await params.diagnosticDelta({
-        files: supportedFiles,
+    let preflight: DiagnosticDeltaPreflightResult | undefined
+    try {
+      // Keep missing/unsupported languages visible in the capture coverage.
+      preflight = await params.diagnosticDelta({
+        files,
         cwd,
         env,
         signal: params.signal,
       })
-      if (preflight?.rejected) {
-        results.push({
-          hookName: 'diagnostic-delta',
-          validationStatus: 'diagnostic_delta_rejected',
-          newDiagnostics: preflight.newDiagnostics,
-          fixIts: preflight.fixIts,
-        })
-      } else if (preflight) {
-        results.push({
-          hookName: 'diagnostic-delta',
-          validationStatus: 'diagnostic_delta_passed',
-        })
-      }
+    } catch {
+      preflight = undefined
     }
+    let diagnosticStatus =
+      preflight?.diagnosticStatus ??
+      (preflight?.rejected
+        ? 'new_errors'
+        : params.signal?.aborted
+          ? 'cancelled'
+          : 'unknown')
+    if (diagnosticStatus === 'passed') {
+      const observation = preflight?.observations
+      if (
+        !completeDiagnosticCapture(observation?.after) ||
+        (observation?.basis === 'before_after' &&
+          !completeDiagnosticCapture(observation.before)) ||
+        !observation ||
+        observation.basis === 'unknown' ||
+        (observation.basis === 'current_only' &&
+          observation.after!.diagnostics.some(
+            (entry) => entry.severity === 'error',
+          ))
+      )
+        diagnosticStatus = 'unknown'
+    }
+    results.push({
+      hookName: 'diagnostic-delta',
+      validationStatus: `diagnostic_delta_${diagnosticStatus === 'new_errors' ? 'rejected' : diagnosticStatus}`,
+      diagnosticStatus,
+      observations: preflight?.observations ?? {
+        basis: 'unknown',
+        reason: 'missing_observation',
+      },
+      ...(preflight?.rejected
+        ? { newDiagnostics: preflight.newDiagnostics, fixIts: preflight.fixIts }
+        : {}),
+    })
   }
 
   return [

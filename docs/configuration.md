@@ -162,7 +162,11 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
 - **Entry list is model IDs, not provider IDs.** Each entry is routed through
   the same provider-resolution step as the primary, so it must resolve to a
   provider in `providers`.
-- **Primary is always attempted first.** The failover list is deduped against
+- **Primary is attempted first when eligible.** Configured and implicit
+  ChatGPT OAuth routes honor the request's OAuth exclusion and the local
+  rate-limit cache. An excluded OAuth route selects an eligible configured
+  BYOK backup before reading OAuth credentials, or returns an actionable
+  routing error. The failover list is deduped against
   the primary, so a `failoverModels` entry that repeats the primary does not
   cause a redundant same-model attempt (`resolveModelsToTry`).
 - **Duplicate backups are collapsed automatically.** `resolveModelsToTry` also
@@ -179,7 +183,22 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
   risks cascading load across providers.
 - **No-content-yielded gate:** failover fires **only when no content has been
   yielded yet**, so partial output is never duplicated across attempts. If the
-  stream has already produced tokens, the error surfaces instead.
+  stream has already delivered text, reasoning or tool calls, the error
+  surfaces instead. Undelivered tool calls are discarded before retry.
+- **One retry owner:** Openbuff disables the AI SDK's automatic retries for
+  streaming, text and structured requests. Its shared policy defaults to
+  three retries after the initial attempt, with jittered exponential waits
+  capped at eight seconds. A valid integer or HTTP-date `Retry-After` hint is
+  capped at the same limit; malformed hints fall back to exponential waits.
+  Content-policy refusals and aborts do not retry or fail over, even when
+  wrapped around a retryable HTTP status. Context repair and OAuth recovery
+  consume the same finite request attempt ledger. Nonstreaming requests use
+  the shared retry policy on their selected BYOK route.
+- **Dormant credentials:** context-window and vision-capability inspection
+  use route metadata without validating API keys. Credentials are validated
+  only for the selected request route. A missing backup key cannot block a
+  healthy primary; selecting that backup returns an actionable configuration
+  error retaining the primary failure as its cause.
 - **`preferModelParam` bypass:** on each backup attempt the failover loop sets
   `preferModelParam: failoverIndex > 0` when resolving the agent's model. This
   makes the explicit backup model ID win over mode/agent/defaultModel routing

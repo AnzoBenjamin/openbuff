@@ -1,3 +1,9 @@
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+  mutationResultExceedsCheapBoundsV1,
+} from '@codebuff/common/tools/results/filesystem'
+
 import type { ToolContentBlock } from '../types/chat'
 
 export type ToolResultRecord = Record<string, unknown>
@@ -157,12 +163,30 @@ export function isTerminalToolBlock(block: ToolContentBlock): boolean {
 export function getConfirmedMutationActions(
   block: ToolContentBlock,
 ): ToolResultRecord[] {
-  const result = getCanonicalMutationResult(block.outputRaw)
-  if (!result || !Array.isArray(result.actions)) return []
-  return result.actions.filter(
-    (action): action is ToolResultRecord =>
-      Boolean(action) &&
-      typeof action === 'object' &&
-      (action as ToolResultRecord).outcome === 'applied',
-  )
+  return getConfirmedMutationActionsFromOutput(block.outputRaw)
+}
+
+export function getConfirmedMutationActionsFromOutput(
+  outputRaw: unknown,
+): ToolResultRecord[] {
+  const result = getCanonicalMutationResult(outputRaw)
+  if (!result || mutationResultExceedsCheapBoundsV1(result)) return []
+  const parsed = fileMutationResultV1Schema.safeParse(result)
+  return parsed.success ? getConfirmedAppliedActionsV1(parsed.data) : []
+}
+
+/** Reported application without correlated authority remains unconfirmed. */
+export function getMutationOutcome(outputRaw: unknown): string | undefined {
+  const result = getCanonicalMutationResult(outputRaw)
+  if (!result) return undefined
+  if (mutationResultExceedsCheapBoundsV1(result)) return 'unconfirmed'
+  const parsed = fileMutationResultV1Schema.safeParse(result)
+  if (!parsed.success) return 'unconfirmed'
+  if (parsed.data.outcome !== 'applied') return parsed.data.outcome
+  const confirmed = getConfirmedAppliedActionsV1(parsed.data)
+  return confirmed.length === parsed.data.actions.length && confirmed.length > 0
+    ? 'applied'
+    : confirmed.length > 0
+      ? 'partial'
+      : 'unconfirmed'
 }

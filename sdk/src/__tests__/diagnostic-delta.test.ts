@@ -9,6 +9,8 @@ import {
 } from '../services/diagnostic-delta-runner'
 import {
   captureDiagnostics,
+  captureDiagnosticObservation,
+  type DiagnosticCapture,
   computeDiagnosticDelta,
   DELTA_MODE_ENV_FLAG,
   preflightDiagnosticDelta,
@@ -44,6 +46,33 @@ function makeDiagnostic(
     command: 'ruff check .',
     source: 'ruff',
     ...overrides,
+  }
+}
+
+function observedBaseline(
+  diagnostics: LanguageDiagnostic[],
+  files = ['src/a.py'],
+): DiagnosticCapture {
+  const commands = files[0]?.endsWith('.ts')
+    ? ['tsc --noEmit --pretty false', 'eslint --format=json .']
+    : ['ruff check --output-format=json', 'pyright --outputjson']
+  return {
+    diagnostics,
+    commands: commands.map((command) => ({
+      command,
+      status: 'completed',
+      exitCode: 0,
+      outputTruncated: false,
+      diagnosticCount: diagnostics.length,
+      coverageStatus: 'complete',
+    })),
+    coverage: {
+      status: 'complete',
+      requestedFiles: files,
+      observedFiles: files,
+      unobservedFiles: [],
+      reasons: [],
+    },
   }
 }
 
@@ -88,8 +117,16 @@ describe('computeDiagnosticDelta', () => {
   })
 
   test('tolerant mode survives a line shift by matching on (file, code)', () => {
-    const before = [makeDiagnostic({ range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } } })]
-    const after = [makeDiagnostic({ range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } } })]
+    const before = [
+      makeDiagnostic({
+        range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } },
+      }),
+    ]
+    const after = [
+      makeDiagnostic({
+        range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } },
+      }),
+    ]
     expect(computeDiagnosticDelta(before, after, { mode: 'tolerant' })).toEqual(
       [],
     )
@@ -99,14 +136,30 @@ describe('computeDiagnosticDelta', () => {
     // The strict default used to reject valid edits whose PRE-EXISTING
     // errors merely shifted lines; the default is now tolerant, strict is
     // opt-in.
-    const before = [makeDiagnostic({ range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } } })]
-    const after = [makeDiagnostic({ range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } } })]
+    const before = [
+      makeDiagnostic({
+        range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } },
+      }),
+    ]
+    const after = [
+      makeDiagnostic({
+        range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } },
+      }),
+    ]
     expect(computeDiagnosticDelta(before, after)).toEqual([])
   })
 
   test('strict mode flags a line-shifted pre-existing error as new', () => {
-    const before = [makeDiagnostic({ range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } } })]
-    const after = [makeDiagnostic({ range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } } })]
+    const before = [
+      makeDiagnostic({
+        range: { start: { line: 5, column: 1 }, end: { line: 5, column: 1 } },
+      }),
+    ]
+    const after = [
+      makeDiagnostic({
+        range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } },
+      }),
+    ]
     // Strict mode matches on (file, line, column, code, severity); a line shift
     // breaks the key, so the moved diagnostic is reported as new. Strict is
     // opt-in now.
@@ -117,20 +170,41 @@ describe('computeDiagnosticDelta', () => {
 
   test('tolerant mode still flags a genuinely new rule code', () => {
     const before = [makeDiagnostic({ code: 'E501' })]
-    const after = [makeDiagnostic({ code: 'E501' }), makeDiagnostic({ code: 'F401' })]
+    const after = [
+      makeDiagnostic({ code: 'E501' }),
+      makeDiagnostic({ code: 'F401' }),
+    ]
     const delta = computeDiagnosticDelta(before, after, { mode: 'tolerant' })
     expect(delta).toHaveLength(1)
     expect(delta[0].code).toBe('F401')
   })
 
-  test('strict mode distinguishes severity on the same location', () => {
-    const before = [makeDiagnostic({ severity: 'warning' })]
-    const after = [makeDiagnostic({ severity: 'error' })]
-    // Strict is opt-in: the tolerant default matches on (file, code) alone,
-    // which cannot see a severity change on the same location.
-    expect(
-      computeDiagnosticDelta(before, after, { mode: 'strict' }),
-    ).toHaveLength(1)
+  test.each(['strict', 'tolerant'] as const)(
+    '%s mode distinguishes severity on the same location',
+    (mode) => {
+      const before = [makeDiagnostic({ severity: 'warning' })]
+      const after = [makeDiagnostic({ severity: 'error' })]
+      expect(computeDiagnosticDelta(before, after, { mode })).toHaveLength(1)
+    },
+  )
+
+  test('tolerant mode cannot spend a warning baseline to hide a shifted new error', () => {
+    const before = [
+      makeDiagnostic({ severity: 'error' }),
+      makeDiagnostic({ severity: 'warning' }),
+    ]
+    const after = [
+      makeDiagnostic({
+        severity: 'error',
+        range: { start: { line: 4, column: 1 }, end: { line: 4, column: 1 } },
+      }),
+      makeDiagnostic({
+        severity: 'error',
+        range: { start: { line: 8, column: 1 }, end: { line: 8, column: 1 } },
+      }),
+    ]
+    const delta = computeDiagnosticDelta(before, after)
+    expect(delta).toEqual([after[1]])
   })
 
   test('count-aware tolerant matching: a second same-code error in the same file is NEW', () => {
@@ -392,7 +466,12 @@ describe('captureDiagnostics', () => {
 describe('supportedDiagnosticFiles', () => {
   test('keeps files whose language has a diagnostic command', () => {
     expect(
-      supportedDiagnosticFiles(['src/a.ts', 'src/a.py', 'src/a.rs', 'README.md']),
+      supportedDiagnosticFiles([
+        'src/a.ts',
+        'src/a.py',
+        'src/a.rs',
+        'README.md',
+      ]),
     ).toEqual(['src/a.ts', 'src/a.py', 'src/a.rs'])
   })
 })
@@ -412,9 +491,12 @@ describe('preflightDiagnosticDelta', () => {
       if (command === 'ruff check --output-format=json') {
         invocation += 1
         // First ruff invocation = baseline; subsequent = after the edit.
-        return { stdout: invocation === 1 ? beforeJson : afterJson }
+        return {
+          exitCode: 0,
+          stdout: invocation === 1 ? beforeJson : afterJson,
+        }
       }
-      return { stdout: '[]' }
+      return { exitCode: 0, stdout: '{"generalDiagnostics":[]}' }
     }
     return { run, calls }
   }
@@ -445,7 +527,7 @@ describe('preflightDiagnosticDelta', () => {
         rolledBack = true
       },
     })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
     expect(applied).toBe(true)
     expect(rolledBack).toBe(false)
   })
@@ -481,7 +563,7 @@ describe('preflightDiagnosticDelta', () => {
       runCommand: run,
       applyEdit: () => {},
     })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
   })
 
   test('does not reject on a new non-error (warning) diagnostic', async () => {
@@ -496,7 +578,7 @@ describe('preflightDiagnosticDelta', () => {
       runCommand: run,
       applyEdit: () => {},
     })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
   })
 
   test('aggregates fix-its from the new errors on rejection', async () => {
@@ -546,7 +628,7 @@ describe('preflightDiagnosticDelta', () => {
       applyEdit: () => {},
       deltaMode: 'tolerant',
     })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
   })
 
   test('DEFAULT delta mode is tolerant: a shifted pre-existing error is accepted', async () => {
@@ -566,7 +648,7 @@ describe('preflightDiagnosticDelta', () => {
     // The strict default used to reject valid edits whose PRE-EXISTING errors
     // merely shifted lines; the default is now tolerant, so the edit is
     // accepted and never rolled back.
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
     expect(rolledBack).toBe(false)
   })
 
@@ -621,7 +703,12 @@ describe('preflightDiagnosticDelta', () => {
     })
     // The edit is undone and the caller gets a structured rejection (deny by
     // default) instead of an unhandled throw with the edit left applied.
-    expect(result).toEqual({ rejected: true, newDiagnostics: [], fixIts: [] })
+    expect(result).toMatchObject({
+      rejected: true,
+      diagnosticStatus: 'failed',
+      newDiagnostics: [],
+      fixIts: [],
+    })
     expect(rolledBack).toBe(true)
   })
 
@@ -636,7 +723,12 @@ describe('preflightDiagnosticDelta', () => {
         throw new Error('apply exploded')
       },
     })
-    expect(result).toEqual({ rejected: true, newDiagnostics: [], fixIts: [] })
+    expect(result).toMatchObject({
+      rejected: true,
+      diagnosticStatus: 'failed',
+      newDiagnostics: [],
+      fixIts: [],
+    })
   })
 
   test('a throwing rollbackEdit does not discard the rejection result', async () => {
@@ -679,7 +771,7 @@ describe('preflightDiagnosticDelta', () => {
       runCommand: run,
       applyEdit: () => {},
       skipSecondCapture: true,
-      baseline,
+      baseline: observedBaseline(baseline),
     })
     expect(result.rejected).toBe(true)
     if (result.rejected) {
@@ -701,9 +793,9 @@ describe('preflightDiagnosticDelta', () => {
       cwd: '/repo',
       runCommand: run,
       applyEdit: () => {},
-      baseline,
+      baseline: observedBaseline(baseline),
     })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
   })
 
   test('count-aware preflight rejects a second same-code error the edit introduced', async () => {
@@ -726,6 +818,176 @@ describe('preflightDiagnosticDelta', () => {
   })
 })
 
+describe('B36 diagnostic observation truth', () => {
+  test.each([
+    ['timeout', { timedOut: true, errorMessage: 'deadline' }, 'failed'],
+    ['exit127', { exitCode: 127 }, 'unavailable'],
+    ['exit2', { exitCode: 2 }, 'failed'],
+    ['cancelled', { cancelled: true }, 'cancelled'],
+    [
+      'missing',
+      { errorCode: 'ENOENT', errorMessage: 'not found' },
+      'unavailable',
+    ],
+    ['capped', { exitCode: 0, outputTruncated: true }, 'incomplete'],
+    ['partial-json', { exitCode: 0, stdout: '{"reason":' }, 'unknown'],
+    ['unknown', {}, 'unknown'],
+    ['successful-empty', { exitCode: 0 }, 'passed'],
+  ] as const)(
+    '%s retains command status through delta and hooks',
+    async (name, commandResult, diagnosticStatus) => {
+      const delta = await preflightDiagnosticDelta({
+        files: ['src/lib.rs'],
+        cwd: '/repo',
+        runCommand: async () => commandResult,
+        applyEdit: () => {},
+      })
+      expect(delta.diagnosticStatus).toBe(diagnosticStatus)
+      const output = await runFileChangeHooks({
+        files: ['src/lib.rs'],
+        cwd: '/repo',
+        env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
+        hooks: [{ name: 'check', command: 'true' }],
+        runCommand: async () => [
+          { type: 'json', value: { command: 'true', exitCode: 0 } },
+        ],
+        diagnosticDelta: async () => delta,
+      })
+      const projected = jsonValue(output)!.find(
+        (row) => row.hookName === 'diagnostic-delta',
+      )!
+      expect(projected.validationStatus).toBe(
+        `diagnostic_delta_${diagnosticStatus}`,
+      )
+      expect(projected.observations).toEqual(delta.observations)
+      console.log(
+        JSON.stringify({ b36: name, commandResult, delta, projected }),
+      )
+    },
+  )
+
+  test.each([
+    [['src/a.swift'], 'unavailable', 'missing_language_command'],
+    [['src/a.rs', 'src/a.swift'], 'incomplete', 'missing_language_command'],
+    [
+      ['src/a.ts', 'src/a.py', 'src/a.rs', 'src/a.go'],
+      'incomplete',
+      'command_cap',
+    ],
+    [
+      Array.from({ length: 21 }, (_, i) => `src/file${i}.rs`),
+      'incomplete',
+      'file_cap',
+    ],
+  ] as const)(
+    'omitted scope %j reduces coverage',
+    async (files, status, reason) => {
+      const capture = await captureDiagnosticObservation({
+        files: [...files],
+        cwd: '/repo',
+        runCommand: async () => ({ exitCode: 0 }),
+      })
+      expect(capture.coverage.status).toBe(status)
+      expect(capture.coverage.reasons).toContain(reason)
+      expect(capture.coverage.unobservedFiles.length).toBeGreaterThan(0)
+    },
+  )
+
+  test('parser truncation is incomplete even when both bounded diagnostic sets match', async () => {
+    const stdout = Array.from(
+      { length: 201 },
+      (_, i) => `src/a.ts(${i + 1},1): error TS${i}: old error`,
+    ).join('\n')
+    const delta = await preflightDiagnosticDelta({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      runCommand: async ({ command }) =>
+        command.startsWith('tsc ') ? { exitCode: 2, stdout } : { exitCode: 0 },
+      applyEdit: () => {},
+    })
+    expect(delta.diagnosticStatus).toBe('incomplete')
+    expect(delta.observations!.after!.diagnostics).toHaveLength(200)
+    expect(delta.observations!.after!.commands[0]!.outputTruncated).toBe(true)
+  })
+
+  test('a raw legacy baseline cannot certify a passed observation', async () => {
+    const delta = await preflightDiagnosticDelta({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      baseline: [],
+      runCommand: async () => ({ exitCode: 0 }),
+      applyEdit: () => {},
+    })
+    expect(delta).toMatchObject({
+      rejected: false,
+      diagnosticStatus: 'unknown',
+    })
+    expect(delta.observations!.before!.coverage.reasons).toContain(
+      'legacy_baseline_has_no_observation',
+    )
+  })
+
+  test('cancellation before capture neither launches commands nor applies the edit', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    let runs = 0
+    let applies = 0
+    const delta = await preflightDiagnosticDelta({
+      files: ['src/a.rs'],
+      cwd: '/repo',
+      signal: controller.signal,
+      runCommand: async () => {
+        runs++
+        return { exitCode: 0 }
+      },
+      applyEdit: () => {
+        applies++
+      },
+    })
+    expect(delta.diagnosticStatus).toBe('cancelled')
+    expect(runs).toBe(0)
+    expect(applies).toBe(0)
+  })
+
+  test('structured entries the parser cannot observe keep coverage unknown', async () => {
+    const delta = await preflightDiagnosticDelta({
+      files: ['src/a.py'],
+      cwd: '/repo',
+      runCommand: async ({ command }) =>
+        command.startsWith('ruff ')
+          ? {
+              exitCode: 0,
+              stdout: JSON.stringify([
+                {
+                  filename: 'src/a.py',
+                  message: 'lost diagnostic',
+                  location: { row: 1 },
+                },
+              ]),
+            }
+          : { exitCode: 0 },
+      applyEdit: () => {},
+    })
+    expect(delta.diagnosticStatus).not.toBe('passed')
+    expect(delta.observations!.after!.commands[0]!.coverageStatus).toBe(
+      'unknown',
+    )
+  })
+
+  test('unlocated indented text is unknown instead of an empty successful observation', async () => {
+    const delta = await preflightDiagnosticDelta({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      runCommand: async () => ({
+        exitCode: 0,
+        stdout: '  observer returned an unknown format',
+      }),
+      applyEdit: () => {},
+    })
+    expect(delta.diagnosticStatus).toBe('unknown')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // computeDiagnosticDelta fix-it aggregation (pure, via diagnostic objects)
 // ---------------------------------------------------------------------------
@@ -735,7 +997,10 @@ describe('computeDiagnosticDelta fix-it aggregation', () => {
     const before: LanguageDiagnostic[] = []
     const after = [
       makeDiagnostic({ code: 'F401', fixes: [sharedFix] }),
-      makeDiagnostic({ code: 'F402', fixes: [sharedFix, makeFix({ newText: 'y = 2' })] }),
+      makeDiagnostic({
+        code: 'F402',
+        fixes: [sharedFix, makeFix({ newText: 'y = 2' })],
+      }),
     ]
     const delta = computeDiagnosticDelta(before, after)
     const fixIts: LanguageDiagnosticTextEdit[] = []
@@ -758,17 +1023,33 @@ describe('computeDiagnosticDelta fix-it aggregation', () => {
 describe('isDiagnosticPreflightEnabled', () => {
   test('is OFF by default and for unset/empty/falsy values', () => {
     expect(isDiagnosticPreflightEnabled({})).toBe(false)
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: '' })).toBe(false)
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: '0' })).toBe(false)
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'false' })).toBe(false)
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'no' })).toBe(false)
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'off' })).toBe(false)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: '' }),
+    ).toBe(false)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: '0' }),
+    ).toBe(false)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'false' }),
+    ).toBe(false)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'no' }),
+    ).toBe(false)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'off' }),
+    ).toBe(false)
   })
 
   test('is ON for truthy values', () => {
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: '1' })).toBe(true)
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' })).toBe(true)
-    expect(isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'yes' })).toBe(true)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: '1' }),
+    ).toBe(true)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' }),
+    ).toBe(true)
+    expect(
+      isDiagnosticPreflightEnabled({ OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'yes' }),
+    ).toBe(true)
   })
 })
 
@@ -826,7 +1107,9 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
     })
     expect(deltaInvoked).toBe(false)
     const results = jsonValue(out)
-    expect(results).toEqual([{ hookName: 'typecheck', exitCode: 0, stdout: '', stderr: '' }])
+    expect(results).toEqual([
+      { hookName: 'typecheck', exitCode: 0, stdout: '', stderr: '' },
+    ])
   })
 
   test('flag ON surfaces a diagnostic-delta rejection in the hook result', async () => {
@@ -862,7 +1145,13 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
       hooks: baseHooks,
       runCommand: run,
-      diagnosticDelta: async () => ({ rejected: false }),
+      diagnosticDelta: async () =>
+        preflightDiagnosticDelta({
+          files: ['src/a.ts'],
+          cwd: '/repo',
+          runCommand: async () => ({ exitCode: 0 }),
+          applyEdit: () => {},
+        }),
     })
     const results = jsonValue(out)
     const deltaResult = results?.find(
@@ -873,7 +1162,25 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
     })
   })
 
-  test('flag ON but no supported files skips the delta preflight', async () => {
+  test.each([
+    { rejected: false as const },
+    { rejected: false as const, diagnosticStatus: 'passed' as const },
+  ])('legacy or unsupported pass assertions remain unknown', async (result) => {
+    const { run } = fakeRunner({ 'tsc --noEmit': { exitCode: 0 } })
+    const out = await runFileChangeHooks({
+      files: ['src/a.ts'],
+      cwd: '/repo',
+      env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
+      hooks: baseHooks,
+      runCommand: run,
+      diagnosticDelta: async () => result,
+    })
+    expect(
+      jsonValue(out)!.find((row) => row.hookName === 'diagnostic-delta'),
+    ).toMatchObject({ validationStatus: 'diagnostic_delta_unknown' })
+  })
+
+  test('flag ON keeps unsupported files visible to the delta preflight', async () => {
     const { run } = fakeRunner({ 'tsc --noEmit': { exitCode: 0 } })
     let deltaInvoked = false
     await runFileChangeHooks({
@@ -887,7 +1194,7 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
         return { rejected: false }
       },
     })
-    expect(deltaInvoked).toBe(false)
+    expect(deltaInvoked).toBe(true)
   })
 })
 
@@ -935,7 +1242,7 @@ describe('createDiagnosticDeltaHook', () => {
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
     // No tool output -> empty baseline and after-capture -> acceptance; a
     // hook-seam preflight never fabricates a rejection.
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
     // Commands execute as argv arrays over spawn, never through a shell.
     const tscCall = calls.find((call) => call.file === 'tsc')
     expect(tscCall).toBeDefined()
@@ -959,7 +1266,7 @@ describe('createDiagnosticDeltaHook', () => {
     expect(eslintCalls).toHaveLength(1)
   })
 
-  test('is fail-open: a throwing preflight resolves to undefined', async () => {
+  test('is fail-open: a throwing preflight preserves unknown observation', async () => {
     const { spawn } = fakeSpawn({})
     const hook = createDiagnosticDeltaHook({
       spawn,
@@ -969,14 +1276,14 @@ describe('createDiagnosticDeltaHook', () => {
     })
     await expect(
       hook({ files: ['src/a.ts'], cwd: '/repo' }),
-    ).resolves.toBeUndefined()
+    ).resolves.toMatchObject({ rejected: false, diagnosticStatus: 'unknown' })
   })
 
   test('an absent diagnostic tool yields no diagnostics and no rejection', async () => {
     const { spawn } = fakeSpawn({ tsc: 'error' })
     const hook = createDiagnosticDeltaHook({ spawn })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo' })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
   })
 
   test('forwards a captured baseline and drops skipSecondCapture', async () => {
@@ -1017,24 +1324,20 @@ describe('createDiagnosticDeltaHook', () => {
     expect(seen[0].skipSecondCapture).toBe(true)
   })
 
-  test('is fail-open: a throwing baseline provider degrades to no baseline', async () => {
-    const seen: Array<Record<string, unknown>> = []
-    const spyPreflight = (async (params: Record<string, unknown>) => {
-      seen.push(params)
-      return { rejected: false }
-    }) as unknown as typeof preflightDiagnosticDelta
+  test('a throwing baseline provider retains unknown evidence instead of fabricating a new baseline', async () => {
     const hook = createDiagnosticDeltaHook({
       spawn: fakeSpawn({}).spawn,
-      preflight: spyPreflight,
       getBaseline: () => {
-        throw new Error('baseline capture exploded')
+        throw new Error('baseline failed')
       },
     })
-    await expect(
-      hook({ files: ['src/a.ts'], cwd: '/repo', env: {} }),
-    ).resolves.toEqual({ rejected: false })
-    expect(seen[0].baseline).toBeUndefined()
-    expect(seen[0].skipSecondCapture).toBe(true)
+    expect(
+      await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} }),
+    ).toMatchObject({
+      rejected: false,
+      diagnosticStatus: 'unknown',
+      observations: { reason: 'baseline_capture_failed' },
+    })
   })
 
   test('with a baseline, a NEW error in the after-state produces a rejection', async () => {
@@ -1045,7 +1348,7 @@ describe('createDiagnosticDeltaHook', () => {
     })
     const hook = createDiagnosticDeltaHook({
       spawn,
-      getBaseline: () => [],
+      getBaseline: () => observedBaseline([], ['src/a.ts']),
     })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
     expect(result?.rejected).toBe(true)
@@ -1063,13 +1366,17 @@ describe('createDiagnosticDeltaHook', () => {
     })
     const hook = createDiagnosticDeltaHook({
       spawn,
-      getBaseline: () => [
-        makeDiagnostic({ file: 'src/a.ts', code: 'TS1' }),
-        makeDiagnostic({ file: '/repo/src/a.ts', code: 'TS1' }),
-      ],
+      getBaseline: () =>
+        observedBaseline(
+          [
+            makeDiagnostic({ file: 'src/a.ts', code: 'TS1' }),
+            makeDiagnostic({ file: '/repo/src/a.ts', code: 'TS1' }),
+          ],
+          ['src/a.ts'],
+        ),
     })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
   })
 
   test('without a baseline the same new error still never rejects (unchanged)', async () => {
@@ -1081,7 +1388,7 @@ describe('createDiagnosticDeltaHook', () => {
     })
     const hook = createDiagnosticDeltaHook({ spawn })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
-    expect(result).toEqual({ rejected: false })
+    expect(result).toMatchObject({ rejected: false })
   })
 })
 
@@ -1131,7 +1438,9 @@ describe('createDiagnosticCommandRunner stream capture', () => {
     // Multibyte-heavy stream past the byte cap, chunked at 63-byte boundaries
     // so chunks split emojis. The old UTF-16-length cap would have retained
     // MORE than the named byte budget (1 UTF-16 unit per 4-byte emoji).
-    const emojiCount = Math.ceil((MAX_CAPTURED_STREAM_BYTES + 64) / emoji.length)
+    const emojiCount = Math.ceil(
+      (MAX_CAPTURED_STREAM_BYTES + 64) / emoji.length,
+    )
     const payload = Buffer.concat(
       Array.from({ length: emojiCount }, () => emoji),
     )
@@ -1153,6 +1462,7 @@ describe('createDiagnosticCommandRunner stream capture', () => {
       MAX_CAPTURED_STREAM_BYTES,
     )
     expect(result.stdout).toBe('😀'.repeat(MAX_CAPTURED_STREAM_BYTES / 4))
+    expect(result.outputTruncated).toBe(true)
     expect(result.stdout).not.toContain('\uFFFD')
   })
 })
@@ -1184,6 +1494,27 @@ describe('createDiagnosticCommandRunner timeout escalation', () => {
     }) as unknown as CodebuffSpawn
     return { spawn, signals }
   }
+
+  test('a synchronous successful close during timeout kill cannot erase the timeout', async () => {
+    const spawn = (() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: () => {
+          child.emit('close', 0)
+          return true
+        },
+      })
+      return child as unknown as ChildProcess
+    }) as CodebuffSpawn
+    const run = createDiagnosticCommandRunner({ spawn, sigtermGraceMs: 5 })
+    const result = await run({
+      command: 'tsc --noEmit',
+      cwd: '/repo',
+      timeoutSeconds: 0.01,
+    })
+    expect(result.timedOut).toBe(true)
+  })
 
   test('settles at the deadline and reaps a SIGTERM-ignoring child via SIGKILL', async () => {
     const { spawn, signals } = sigtermIgnoringSpawn()

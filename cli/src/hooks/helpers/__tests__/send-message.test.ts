@@ -648,6 +648,98 @@ describe('markPendingCompactionInterrupted', () => {
 })
 
 describe('handleRunCompletion', () => {
+  for (const runOutcome of [
+    { termination: 'completed' },
+    {
+      termination: 'cancelled',
+      cause: {
+        code: 'original_cancel',
+        message: 'Original cancellation cause',
+      },
+    },
+  ] as const)
+    test(`cancellation persists evidence before queue release from ${runOutcome.termination}`, () => {
+      const timerController = createMockTimerController()
+      let messages = createBaseMessages()
+      const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+        messages = fn(messages)
+      })
+      const runState: RunState = {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome,
+        taskAcceptance: { status: 'unknown', basis: 'interrupted-oracle' },
+        actionOutcomes: [
+          {
+            actionId: 'late-action',
+            attemptId: 'attempt',
+            runId: 'run',
+            toolName: 'write_file',
+            basis: { inputHash: 'sha256:fixture' },
+            outcome: 'succeeded',
+            effect: {
+              status: 'confirmed',
+              receiptIds: ['receipt'],
+              confirmedPaths: ['a.ts'],
+            },
+          },
+        ],
+      }
+      let released = false
+      handleRunCompletion({
+        runState,
+        actualCredits: undefined,
+        agentMode: 'DEFAULT' as any,
+        timerController,
+        updater,
+        aiMessageId: 'ai-1',
+        wasAbortedByUser: true,
+        setStreamStatus: () => {},
+        setCanProcessQueue: () => {},
+        updateChainInProgress: () => {},
+        setHasReceivedPlanResponse: () => {},
+        resumeQueue: () => {
+          released = true
+          expect(messages[0].runOutcome?.termination).toBe('cancelled')
+          if (runOutcome.termination === 'cancelled')
+            expect(messages[0].runOutcome).toEqual(runOutcome)
+          expect(messages[0].actionOutcomes).toEqual(runState.actionOutcomes)
+          expect(messages[0].taskAcceptance).toEqual(runState.taskAcceptance)
+        },
+      })
+      expect(released).toBe(true)
+    })
+
+  test('empty typed failure does not issue a successful completion', () => {
+    const timerController = createMockTimerController()
+    let messages = createBaseMessages()
+    const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+      messages = fn(messages)
+    })
+    handleRunCompletion({
+      runState: {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: {
+          termination: 'failed',
+          cause: { code: 'fixture_failure', message: '   ' },
+        },
+      },
+      actualCredits: undefined,
+      agentMode: 'DEFAULT' as any,
+      timerController,
+      updater,
+      aiMessageId: 'ai-1',
+      wasAbortedByUser: false,
+      setStreamStatus: () => {},
+      setCanProcessQueue: () => {},
+      updateChainInProgress: () => {},
+      setHasReceivedPlanResponse: () => {},
+    })
+    updater.flush()
+    expect(timerController.stopCalls).toEqual(['error'])
+    expect(messages[0].runOutcome?.termination).toBe('failed')
+    expect(messages[0].userError?.trim().length).toBeGreaterThan(0)
+  })
+
   describe('abort path', () => {
     test('finalizes queue state after an aborted run settles', () => {
       const timerController = createMockTimerController()

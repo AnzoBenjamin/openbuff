@@ -690,6 +690,7 @@ export const handleSpawnAgents = (async (
             // step throws, so a fault mid-settle can neither leak the
             // workspace path lease nor strand the discovery shard.
             let settleSucceeded = false
+            let childSucceeded = false
             try {
               // The coroutine settled: detach the combined signal's abort
               // listeners from the long-lived parent signal (idempotent, and a
@@ -710,6 +711,9 @@ export const handleSpawnAgents = (async (
                   output: result.output,
                   agentState: result.agentState,
                 }))
+              childSucceeded = receipt.runOutcome
+                ? receipt.runOutcome.termination === 'completed'
+                : receipt.status !== 'failed' && receipt.status !== 'cancelled'
               // Fold the child's in-process playbook-gate evidence into the
               // parent's ledger before reconciling, so delegated work (e.g.
               // CI run inside basher) satisfies the parent's rules. No-op for
@@ -732,26 +736,35 @@ export const handleSpawnAgents = (async (
                 (entry) => entry.jobId === job.jobId,
               )
               if (intent) {
-                intent.status = 'completed'
+                intent.status = (
+                  receipt.runOutcome
+                    ? receipt.runOutcome.termination === 'cancelled'
+                    : receipt.status === 'cancelled'
+                )
+                  ? 'cancelled'
+                  : childSucceeded
+                    ? 'completed'
+                    : 'error'
                 intent.completedAt = (params.clock ?? realClock).now()
                 intent.childRunId = result.agentState.runId
                 intent.receipt = receipt
               }
-              parentAgentState.discoveryCoverage = recordDiscoveryResult({
-                existing: parentAgentState.discoveryCoverage,
-                agentType,
-                question: buildDiscoveryQuestion({
+              if (childSucceeded)
+                parentAgentState.discoveryCoverage = recordDiscoveryResult({
+                  existing: parentAgentState.discoveryCoverage,
                   agentType,
-                  prompt: validated.input.prompt,
-                  objective: validated.handoff?.objective,
-                  spawnParams: validated.runtimeSpawnParams,
-                }),
-                result: result.output,
-                workspaceRevision: parentAgentState.workspaceState?.revision,
-                workspaceSnapshotId:
-                  parentAgentState.workspaceState?.snapshotId,
-                verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
-              })
+                  question: buildDiscoveryQuestion({
+                    agentType,
+                    prompt: validated.input.prompt,
+                    objective: validated.handoff?.objective,
+                    spawnParams: validated.runtimeSpawnParams,
+                  }),
+                  result: result.output,
+                  workspaceRevision: parentAgentState.workspaceState?.revision,
+                  workspaceSnapshotId:
+                    parentAgentState.workspaceState?.snapshotId,
+                  verifiedPaths: getVerifiedMemoryPaths(parentAgentState),
+                })
               // Fold the background child's cost into the parent exactly
               // like the foreground settle path aggregates subagent cost.
               const backgroundCredits = result.agentState.creditsUsed || 0
@@ -776,7 +789,11 @@ export const handleSpawnAgents = (async (
               parentAgentState.discoveryCoverage = completeDiscoveryShard({
                 existing: parentAgentState.discoveryCoverage,
                 shardKey: validated.discoveryShardKey,
-                status: settleSucceeded ? 'completed' : 'interrupted',
+                status: settleSucceeded
+                  ? childSucceeded
+                    ? 'completed'
+                    : 'failed'
+                  : 'interrupted',
                 now: (params.clock ?? realClock).now(),
               })
             }
@@ -1029,6 +1046,7 @@ export const handleSpawnAgents = (async (
       const spawnIndex = validated.spawnIndex
       let receiptReconciled = false
       let settleSucceeded = false
+      let childSucceeded = false
       try {
         if (result.status === 'fulfilled') {
           const { output, agentType, agentName, agentState } = result.value
@@ -1046,6 +1064,9 @@ export const handleSpawnAgents = (async (
               output,
               agentState,
             }))
+          childSucceeded = receipt.runOutcome
+            ? receipt.runOutcome.termination === 'completed'
+            : receipt.status !== 'failed' && receipt.status !== 'cancelled'
           // Fold the child's in-process playbook-gate evidence into the
           // parent's ledger before reconciling, so delegated work (e.g. CI
           // run inside basher) satisfies the parent's rules. No-op for a
@@ -1112,7 +1133,7 @@ export const handleSpawnAgents = (async (
             schedulingReasons: validated.schedulingReasons,
           }
         }
-        if (result.status === 'fulfilled') {
+        if (result.status === 'fulfilled' && childSucceeded) {
           parentAgentState.discoveryCoverage = recordDiscoveryResult({
             existing: parentAgentState.discoveryCoverage,
             agentType: validated.agentType,
@@ -1160,7 +1181,9 @@ export const handleSpawnAgents = (async (
           status:
             result.status === 'fulfilled'
               ? settleSucceeded
-                ? 'completed'
+                ? childSucceeded
+                  ? 'completed'
+                  : 'failed'
                 : 'interrupted'
               : 'failed',
           now: (params.clock ?? realClock).now(),

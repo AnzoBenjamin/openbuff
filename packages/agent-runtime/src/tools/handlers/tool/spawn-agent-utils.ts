@@ -2425,6 +2425,9 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   error?: unknown
 }): AgentReceipt {
   const receiptSources = [params.output, params.agentState?.messageHistory]
+  const runOutcome = params.agentState?.runOutcome
+  const nonCompletedRun =
+    runOutcome !== undefined && runOutcome.termination !== 'completed'
   const isGeneralAgent =
     normalizeAgentIdForLookup(params.agentType) === 'general-agent'
   const sessionSlug = params.spawnParams?.sessionSlug
@@ -2489,6 +2492,15 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     (path) => !actualChangedPaths.has(path),
   )
   const errors = [
+    ...(nonCompletedRun && runOutcome.cause
+      ? [
+          {
+            code: runOutcome.cause.code,
+            message: runOutcome.cause.message,
+            retryable: false,
+          },
+        ]
+      : []),
     ...(params.error
       ? [
           {
@@ -2581,7 +2593,10 @@ function buildRuntimeAgentReceiptOrThrow(params: {
   const hasMutationProgress = mutationAttestations.length > 0
   const foundOutputStatus = findReceiptStatus(params.output)
   const mutationsComplete =
-    mutationAgent && hasMutationProgress && errors.length === 0
+    mutationAgent &&
+    hasMutationProgress &&
+    errors.length === 0 &&
+    !nonCompletedRun
   // D19/PR-T1: derive the typed handoff outcome from runtime evidence.
   // crashed/missing_output/schema_invalid read the RAW params.output (and the
   // set_output rejection recorded on agent state); truncated reads the
@@ -2739,18 +2754,19 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     | 'missing_output'
     | 'schema_invalid'
     | 'truncated'
-    | 'crashed' = params.error
-    ? 'crashed'
-    : (supervisedOutcome ??
-      (crashEnvelopeMessage
-        ? 'crashed'
-        : missingOutputEvidence
-          ? 'missing_output'
-          : lastSetOutputErrorText || reviewerMissingVerdict
-            ? 'schema_invalid'
-            : normalizedOutputTruncated
-              ? 'truncated'
-              : 'ok'))
+    | 'crashed' =
+    runOutcome?.termination === 'failed' || params.error
+      ? 'crashed'
+      : (supervisedOutcome ??
+        (crashEnvelopeMessage
+          ? 'crashed'
+          : missingOutputEvidence
+            ? 'missing_output'
+            : lastSetOutputErrorText || reviewerMissingVerdict
+              ? 'schema_invalid'
+              : normalizedOutputTruncated
+                ? 'truncated'
+                : 'ok'))
   // D24 fail-closed: a runtime-derived non-ok outcome must never yield a
   // completed receipt unless runtime-attested mutations are the completion
   // authority (RF-2). `truncated` stays visible via the outcome field without
@@ -2761,22 +2777,26 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     outcome !== 'truncated' &&
     !mutationsComplete &&
     params.status === undefined
-  const resolvedStatus = completionContractFailed
-    ? 'partial'
-    : errors.length > 0
-      ? 'failed'
-      : mutationsComplete
-        ? 'completed'
-        : envelopeUnderminesCompletion
-          ? 'partial'
-          : (params.status ??
-            foundOutputStatus ??
-            (mutationAgent ? 'blocked' : 'completed'))
+  const resolvedStatus = nonCompletedRun
+    ? runOutcome.termination === 'cancelled'
+      ? 'cancelled'
+      : 'failed'
+    : completionContractFailed
+      ? 'partial'
+      : errors.length > 0
+        ? 'failed'
+        : mutationsComplete
+          ? 'completed'
+          : envelopeUnderminesCompletion
+            ? 'partial'
+            : (params.status ??
+              foundOutputStatus ??
+              (mutationAgent ? 'blocked' : 'completed'))
   if (envelopeUnderminesCompletion) {
     if (outcome === 'crashed') {
       // Dedupe: params.error already contributed an equivalent crash error
       // entry above; only the degrade-envelope crash needs its own diagnostic.
-      if (!params.error) {
+      if (!params.error && runOutcome?.termination !== 'failed') {
         errors.push({
           message: `${params.agentType} receipt outcome 'crashed': ${crashEnvelopeMessage}`,
           retryable: false,
@@ -2864,6 +2884,9 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     agentId: params.agentId,
     status: resolvedStatus,
     outcome,
+    ...(runOutcome ? { runOutcome } : {}),
+    taskAcceptance: params.agentState?.taskAcceptance ?? { status: 'unknown' },
+    actionOutcomes: params.agentState?.actionOutcomes ?? [],
     workspaceRevision:
       latestMutation?.workspaceRevision ??
       params.agentState?.workspaceState?.revision ??
@@ -2951,6 +2974,12 @@ export function buildRuntimeAgentReceipt(params: {
       role: 'specialist',
       agentId,
       status: 'failed',
+      runOutcome: {
+        termination: 'failed',
+        cause: { code: 'receipt_build_failed', message: detail },
+      },
+      taskAcceptance: { status: 'unknown' },
+      actionOutcomes: params.agentState?.actionOutcomes ?? [],
       changedFiles: [],
       requirementsAddressed: [],
       acceptanceCriteriaAddressed: [],
@@ -4028,6 +4057,17 @@ async function runSupervisedSubagent(params: {
   }
 
   if (settled.outcome !== 'ok' && settled.outcome !== 'truncated') {
+    agentState.runOutcome = {
+      termination: 'failed',
+      cause: {
+        code: `supervised_${settled.outcome}`,
+        message:
+          settled.crashReason ??
+          settled.schemaError ??
+          `Supervised child settled as ${settled.outcome}`,
+      },
+    }
+    agentState.taskAcceptance = { status: 'unknown' }
     return {
       agentState,
       output: mapSettledOutcomeToAgentOutput({
@@ -4046,6 +4086,14 @@ async function runSupervisedSubagent(params: {
   // instead).
   const parsedEnvelope = agentReceiptSchema.safeParse(settled.receipt)
   if (!parsedEnvelope.success) {
+    agentState.runOutcome = {
+      termination: 'failed',
+      cause: {
+        code: 'invalid_supervised_receipt',
+        message: 'Supervised child returned an invalid receipt',
+      },
+    }
+    agentState.taskAcceptance = { status: 'unknown' }
     return {
       agentState,
       output: mapSettledOutcomeToAgentOutput({
@@ -4057,6 +4105,9 @@ async function runSupervisedSubagent(params: {
     }
   }
   const receipt = parsedEnvelope.data
+  agentState.runOutcome = receipt.runOutcome
+  agentState.taskAcceptance = receipt.taskAcceptance ?? { status: 'unknown' }
+  agentState.actionOutcomes = receipt.actionOutcomes ?? []
 
   // Acceptance-point evidence fold: the validated supervised receipt carries
   // the child's serialized ledger snapshot (`sessionEvidence`), and folding
@@ -4068,6 +4119,8 @@ async function runSupervisedSubagent(params: {
   mergeSupervisedEvidenceIntoParent({ parentAgentState, receipt })
 
   const childReportsFailure =
+    (receipt.runOutcome !== undefined &&
+      receipt.runOutcome.termination !== 'completed') ||
     receipt.status === 'failed' ||
     receipt.outcome === 'crashed' ||
     receipt.outcome === 'missing_output' ||
@@ -4299,6 +4352,18 @@ export async function executeSubagent(
       failed = true
       const errorMessage =
         error instanceof Error ? error.message : String(error)
+      const parentSignalAborted =
+        (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
+      withDefaults.agentState.runOutcome = {
+        termination: parentSignalAborted ? 'cancelled' : 'failed',
+        cause: {
+          code: parentSignalAborted
+            ? 'parent_cancelled'
+            : 'subagent_execution_error',
+          message: errorMessage,
+        },
+      }
+      withDefaults.agentState.taskAcceptance ??= { status: 'unknown' }
       onResponseChunk({
         type: 'subagent_finish',
         agentId: withDefaults.agentState.agentId,
@@ -4311,9 +4376,9 @@ export async function executeSubagent(
         spawnToolCallId,
         spawnIndex,
         error: errorMessage,
+        runOutcome: withDefaults.agentState.runOutcome,
+        taskAcceptance: withDefaults.agentState.taskAcceptance,
       })
-      const parentSignalAborted =
-        (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
       if (parentSignalAborted) {
         // A prologue throw precedes the guarded seam call inside
         // runSupervisedSubagent, so no child process can have started — no
@@ -4358,6 +4423,18 @@ export async function executeSubagent(
       failed = true
       const errorMessage =
         error instanceof Error ? error.message : String(error)
+      const parentSignalAborted =
+        (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
+      withDefaults.agentState.runOutcome = {
+        termination: parentSignalAborted ? 'cancelled' : 'failed',
+        cause: {
+          code: parentSignalAborted
+            ? 'parent_cancelled'
+            : 'subagent_execution_error',
+          message: errorMessage,
+        },
+      }
+      withDefaults.agentState.taskAcceptance ??= { status: 'unknown' }
       onResponseChunk({
         type: 'subagent_finish',
         agentId: withDefaults.agentState.agentId,
@@ -4370,6 +4447,8 @@ export async function executeSubagent(
         spawnToolCallId,
         spawnIndex,
         error: errorMessage,
+        runOutcome: withDefaults.agentState.runOutcome,
+        taskAcceptance: withDefaults.agentState.taskAcceptance,
       })
       // Only GENUINE parent/user cancellation must keep propagating so the run
       // aborts. Gate this on the PARENT signal actually being aborted — never on
@@ -4386,8 +4465,6 @@ export async function executeSubagent(
       // settle tail is what widened the window. When the parent signal is NOT
       // aborted we degrade to the structured error output below instead of
       // taking down the session.
-      const parentSignalAborted =
-        (withDefaults as { signal?: AbortSignal }).signal?.aborted === true
       if (parentSignalAborted) {
         // reliability-reviewer: cancel-rethrow-skips-librarian-clone-cleanup —
         // A librarian subagent may have already cloned its repo into /tmp when
@@ -4475,6 +4552,8 @@ export async function executeSubagent(
       params: spawnParams,
       spawnToolCallId,
       spawnIndex,
+      runOutcome: result.agentState.runOutcome,
+      taskAcceptance: result.agentState.taskAcceptance,
     })
   }
 

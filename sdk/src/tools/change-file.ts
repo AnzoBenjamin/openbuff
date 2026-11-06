@@ -20,6 +20,7 @@ import {
   fileMutationResultV1Schema,
   type FilesystemError,
   type CommitReceiptV1,
+  type CommitActionReceiptV1,
 } from '@codebuff/common/tools/results/filesystem'
 import { applyPatch } from 'diff'
 
@@ -663,7 +664,11 @@ export async function changeFiles(params: {
       }
     }
 
-    const committed: PreparedTransactionChange[] = []
+    const attempted: PreparedTransactionChange[] = []
+    const forwardEvidence = new Map<
+      number,
+      NonNullable<CommitActionReceiptV1['forward']>
+    >()
     try {
       for (const change of prepared) {
         // Recheck the abort signal before EACH per-change commit: the
@@ -684,13 +689,40 @@ export async function changeFiles(params: {
         // adapter call may have partially mutated state (notably a portable
         // move creates the destination before unlinking the source), so the
         // rollback set must include the current action as well as prior ones.
-        committed.push(change)
+        attempted.push(change)
         // Per-change try/catch: a failing adapter call is attributed to the
         // offending change before it propagates to the shared rollback path
         // below, so the failure log names the change that broke.
         try {
-          await commitPreparedTransactionChange(change, fs, authority)
+          const applied = await commitPreparedTransactionChange(
+            change,
+            fs,
+            authority,
+          )
+          forwardEvidence.set(change.index, {
+            outcome: applied ? 'applied' : 'not_applied',
+            afterHashes: applied
+              ? expectedTransactionChangeHashes(change)
+              : await observeTransactionChangeHashes(change, authority),
+          })
+          if (!applied) {
+            throw new TransactionRejectedError(
+              filesystemError(
+                change.action === 'create' ? 'already_exists' : 'stale_state',
+                `STALE_STATE: ${change.path} changed immediately before ${change.action}.`,
+              ),
+            )
+          }
         } catch (changeError) {
+          if (!forwardEvidence.has(change.index)) {
+            forwardEvidence.set(change.index, {
+              outcome: 'unconfirmed',
+              afterHashes: await observeTransactionChangeHashes(
+                change,
+                authority,
+              ),
+            })
+          }
           logger?.error(
             {
               operationId,
@@ -743,6 +775,7 @@ export async function changeFiles(params: {
             change.beforeContent === null
               ? null
               : hashFileContent(change.beforeContent),
+          forward: forwardEvidence.get(change.index),
         })),
         expectedFinalHashes,
       })
@@ -803,7 +836,8 @@ export async function changeFiles(params: {
       // 'cancelled' FilesystemError so the structured outcome stays honest,
       // while still reusing this rollback path verbatim.
       const commitError =
-        error instanceof TransactionAbortedError
+        error instanceof TransactionAbortedError ||
+        error instanceof TransactionRejectedError
           ? error.filesystemError
           : filesystemError(
               'io_error',
@@ -811,7 +845,11 @@ export async function changeFiles(params: {
             )
       const rollbackFailures = new Map<number, FilesystemError>()
       const rollbackRestored = new Set<number>()
-      for (const change of committed.toReversed()) {
+      for (const change of attempted.toReversed()) {
+        // A refused adapter call did not acquire mutation ownership. Even an
+        // identical foreign postimage must not authorize compensation.
+        if (forwardEvidence.get(change.index)?.outcome === 'not_applied')
+          continue
         try {
           if (await rollbackPreparedTransactionChange(change, fs, authority)) {
             rollbackRestored.add(change.index)
@@ -839,7 +877,7 @@ export async function changeFiles(params: {
       // `cancel` only transitions an 'open' operation, so it is a no-op once
       // the commit lease above finished.
       authority.cancel(operationId)
-      const committedIndexes = new Set(committed.map((change) => change.index))
+      const attemptedIndexes = new Set(attempted.map((change) => change.index))
       const receipt = await authority.issueObservedFailureReceipt({
         operationId,
         callId: callId ?? operationId,
@@ -859,7 +897,7 @@ export async function changeFiles(params: {
           ...(change.destinationPath
             ? { destinationPath: change.destinationPath }
             : {}),
-          status: !committedIndexes.has(change.index)
+          status: !attemptedIndexes.has(change.index)
             ? ('not_started' as const)
             : rollbackFailures.has(change.index)
               ? ('rollback_failed' as const)
@@ -870,6 +908,9 @@ export async function changeFiles(params: {
             change.beforeContent === null
               ? null
               : hashFileContent(change.beforeContent),
+          ...(forwardEvidence.has(change.index)
+            ? { forward: forwardEvidence.get(change.index) }
+            : {}),
           ...(rollbackFailures.has(change.index)
             ? {
                 error: rollbackFailures.get(change.index),
@@ -882,13 +923,12 @@ export async function changeFiles(params: {
       // logging: a missing abort marker at worst causes an extra (idempotent)
       // revert pass at startup.
       if (durableIntentLog && durableTransactionId) {
-        const abortedIntent =
-          await durableIntentLog.abortTransaction(
-            transactionId,
-            error instanceof TransactionAbortedError
-              ? `aborted: ${commitError.message}`
-              : `commit failed: ${commitError.code}`,
-          )
+        const abortedIntent = await durableIntentLog.abortTransaction(
+          transactionId,
+          error instanceof TransactionAbortedError
+            ? `aborted: ${commitError.message}`
+            : `commit failed: ${commitError.code}`,
+        )
         if (!abortedIntent.ok) {
           logger?.warn(
             { operationId, transactionId, error: abortedIntent.error },
@@ -903,7 +943,10 @@ export async function changeFiles(params: {
           status: receipt.status,
           code: commitError.code,
           paths: prepared.map((change) => change.path),
-          committedCount: committed.length,
+          attemptedCount: attempted.length,
+          confirmedForwardCount: [...forwardEvidence.values()].filter(
+            (evidence) => evidence.outcome === 'applied',
+          ).length,
           rollbackFailureCount: rollbackFailures.size,
           rollbackRestoredCount: rollbackRestored.size,
         },
@@ -1111,7 +1154,7 @@ async function commitPreparedTransactionChange(
   change: PreparedTransactionChange,
   fs: CodebuffFileSystem,
   authority: ReturnType<typeof getDefaultFilesystemAuthority>,
-): Promise<void> {
+): Promise<boolean> {
   if (change.action === 'delete') {
     const expectedHash = hashFileContent(change.beforeContent!)
     const deleted = await authority.conditionalDelete(
@@ -1119,13 +1162,8 @@ async function commitPreparedTransactionChange(
       expectedHash,
     )
     if (deleted.supported) {
-      if (!deleted.result.applied) {
-        throw new Error(
-          `STALE_STATE: ${change.path} changed immediately before deletion.`,
-        )
-      }
+      return deleted.result.applied
     } else throw new Error('Conditional delete is unsupported')
-    return
   }
   if (change.action === 'move') {
     await fs.mkdir(path.dirname(change.destination!.operationPath), {
@@ -1137,21 +1175,29 @@ async function commitPreparedTransactionChange(
       hashFileContent(change.beforeContent!),
     )
     if (!moved.supported) throw new Error('Conditional move is unsupported')
-    if (!moved.result.applied) {
-      throw new Error(
-        `STALE_STATE: ${change.path} or ${change.destinationPath} changed immediately before move.`,
-      )
-    }
-    return
+    return moved.result.applied
   }
   await fs.mkdir(path.dirname(change.source.operationPath), { recursive: true })
   if (change.action === 'create') {
-    const created = await authority.createExclusive(
-      change.source,
-      change.afterContent!,
-    )
-    if (!created.supported) throw new Error('Exclusive create is unsupported')
-    return
+    try {
+      const created = await authority.createExclusive(
+        change.source,
+        change.afterContent!,
+      )
+      if (!created.supported) throw new Error('Exclusive create is unsupported')
+      return true
+    } catch (error) {
+      // Exclusive-create adapters report a no-write conflict with EEXIST.
+      // The destination may now contain an identical foreign postimage.
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'EEXIST'
+      )
+        return false
+      throw error
+    }
   }
   const expectedHash = hashFileContent(change.beforeContent!)
   const committed = await authority.conditionalCommit(
@@ -1160,14 +1206,45 @@ async function commitPreparedTransactionChange(
     { state: 'present', hash: expectedHash },
   )
   if (committed.supported) {
-    if (!committed.result.applied) {
-      throw new Error(
-        `STALE_STATE: ${change.path} changed immediately before commit.`,
-      )
-    }
-    return
+    return committed.result.applied
   }
   throw new Error('Conditional commit is unsupported')
+}
+
+function expectedTransactionChangeHashes(
+  change: PreparedTransactionChange,
+): Record<string, string | null> {
+  return change.action === 'move'
+    ? {
+        [change.path]: null,
+        [change.destinationPath!]: hashFileContent(change.afterContent!),
+      }
+    : {
+        [change.path]:
+          change.afterContent === null
+            ? null
+            : hashFileContent(change.afterContent),
+      }
+}
+
+async function observeTransactionChangeHashes(
+  change: PreparedTransactionChange,
+  authority: ReturnType<typeof getDefaultFilesystemAuthority>,
+): Promise<Record<string, string | null>> {
+  const hashes: Record<string, string | null> = {}
+  for (const authorized of [
+    change.source,
+    ...(change.destination ? [change.destination] : []),
+  ]) {
+    try {
+      const snapshot = await authority.snapshot(authorized)
+      hashes[authorized.portablePath] =
+        snapshot.state === 'present' ? snapshot.hash : null
+    } catch {
+      // An unavailable observation is neither an absent file nor owned work.
+    }
+  }
+  return hashes
 }
 
 async function rollbackPreparedTransactionChange(
@@ -1738,5 +1815,12 @@ class TransactionAbortedError extends Error {
   constructor(readonly filesystemError: FilesystemError) {
     super(filesystemError.message)
     this.name = 'TransactionAbortedError'
+  }
+}
+
+class TransactionRejectedError extends Error {
+  constructor(readonly filesystemError: FilesystemError) {
+    super(filesystemError.message)
+    this.name = 'TransactionRejectedError'
   }
 }

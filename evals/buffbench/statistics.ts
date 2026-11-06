@@ -10,11 +10,63 @@
  *
  * @returns the mean, or `0` for an empty array.
  */
+function requireFinite(xs: readonly number[]): void {
+  if (!xs.every(Number.isFinite))
+    throw new RangeError('Statistical evidence must be finite')
+}
+
+function finiteResult(value: number): number {
+  requireFinite([value])
+  return value
+}
+
+export function isEvaluationExecutionEligible(run: {
+  error?: string | null
+  runOutcome?: { termination: string }
+}): boolean {
+  return (
+    (run.error === undefined || run.error === null) &&
+    (!run.runOutcome || run.runOutcome.termination === 'completed')
+  )
+}
+
+/** Shared eligibility for measured scores; zero is a valid measurement. */
+export function isMeasuredScoreEligible(run: {
+  error?: string | null
+  runOutcome?: { termination: string }
+  scoringStatus?: string
+  judging?: { scoringStatus?: string; overallScore: number }
+  overallScore?: number
+}): boolean {
+  const score = run.judging?.overallScore ?? run.overallScore
+  return (
+    isEvaluationExecutionEligible(run) &&
+    run.scoringStatus !== 'all_judges_failed' &&
+    run.judging?.scoringStatus !== 'all_judges_failed' &&
+    typeof score === 'number' &&
+    Number.isFinite(score) &&
+    score >= 0 &&
+    score <= 10
+  )
+}
+
+export function sumFiniteCosts(costs: readonly number[]): number {
+  let total = 0
+  for (const cost of costs) {
+    const next = total + cost
+    if (!Number.isFinite(cost) || !Number.isFinite(next))
+      throw new RangeError('Aggregate monetary cost must be finite')
+    total = next
+  }
+  return total
+}
+
 export function mean(xs: readonly number[]): number {
+  requireFinite(xs)
   if (xs.length === 0) return 0
   let sum = 0
   for (const x of xs) sum += x
-  return sum / xs.length
+  return finiteResult(sum / xs.length)
 }
 
 /**
@@ -23,6 +75,7 @@ export function mean(xs: readonly number[]): number {
  * @returns `0` when fewer than 2 values are provided.
  */
 export function sampleStandardDeviation(xs: readonly number[]): number {
+  requireFinite(xs)
   if (xs.length < 2) return 0
   const m = mean(xs)
   let sumSq = 0
@@ -30,7 +83,7 @@ export function sampleStandardDeviation(xs: readonly number[]): number {
     const d = x - m
     sumSq += d * d
   }
-  return Math.sqrt(sumSq / (xs.length - 1))
+  return finiteResult(Math.sqrt(sumSq / (xs.length - 1)))
 }
 
 /**
@@ -39,6 +92,7 @@ export function sampleStandardDeviation(xs: readonly number[]): number {
  * @returns `0` when fewer than 2 values are provided.
  */
 export function standardError(xs: readonly number[]): number {
+  requireFinite(xs)
   if (xs.length < 2) return 0
   return sampleStandardDeviation(xs) / Math.sqrt(xs.length)
 }
@@ -50,6 +104,8 @@ export function standardError(xs: readonly number[]): number {
  * @returns a function producing numbers in the half-open interval [0, 1).
  */
 export function makeSeededRng(seed: number): () => number {
+  if (!Number.isSafeInteger(seed))
+    throw new RangeError('Seed must be a finite integer')
   let a = seed >>> 0
   return function (): number {
     a |= 0
@@ -66,7 +122,7 @@ export function makeSeededRng(seed: number): () => number {
  * for reproducibility and returns the observed mean diff plus percentile CI
  * bounds.
  *
- * @returns all zeros (`meanDiff`, `lower`, `upper` = 0) when `pairs` is empty.
+ * Rejects fewer than two pairs and invalid/nonfinite evidence or controls.
  */
 export function pairedBootstrapMeanDiffCI(
   pairs: ReadonlyArray<{ before: number; after: number }>,
@@ -76,9 +132,17 @@ export function pairedBootstrapMeanDiffCI(
   const seed = options?.seed ?? 1
   const confidence = options?.confidence ?? 0.95
 
-  if (pairs.length === 0) {
-    return { meanDiff: 0, lower: 0, upper: 0, iterations }
-  }
+  requireFinite(pairs.flatMap((pair) => [pair.before, pair.after]))
+  if (pairs.length < 2)
+    throw new RangeError('Bootstrap requires at least two paired samples')
+  if (
+    !Number.isSafeInteger(iterations) ||
+    iterations < 2 ||
+    iterations > 1_000_000
+  )
+    throw new RangeError('Invalid bootstrap iterations')
+  if (!Number.isFinite(confidence) || confidence <= 0 || confidence >= 1)
+    throw new RangeError('Invalid bootstrap confidence')
 
   const diffs = pairs.map((p) => p.after - p.before)
   const observedMeanDiff = mean(diffs)
@@ -92,7 +156,7 @@ export function pairedBootstrapMeanDiffCI(
       const idx = Math.floor(rng() * n)
       sum += diffs[idx]
     }
-    bootMeans[i] = sum / n
+    bootMeans[i] = finiteResult(sum / n)
   }
 
   bootMeans.sort((a, b) => a - b)
@@ -129,8 +193,7 @@ function erf(x: number): number {
   const t = 1 / (1 + 0.3275911 * ax)
   const y =
     1 -
-    ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t -
-      0.284496736) *
+    ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) *
       t +
       0.254829592) *
       t *
@@ -185,9 +248,14 @@ export interface WilcoxonSignedRankResult {
 export function wilcoxonSignedRankTest(
   pairs: ReadonlyArray<{ before: number; after: number }>,
 ): WilcoxonSignedRankResult {
-  const diffs = pairs
-    .map((p) => p.after - p.before)
-    .filter((d) => d !== 0)
+  requireFinite(
+    pairs.flatMap((pair) => [
+      pair.before,
+      pair.after,
+      pair.after - pair.before,
+    ]),
+  )
+  const diffs = pairs.map((p) => p.after - p.before).filter((d) => d !== 0)
 
   const n = diffs.length
   if (n === 0) {

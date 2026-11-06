@@ -2,13 +2,19 @@ import path from 'path'
 
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
-import type {
-  CommitReceiptV1,
-  FileMutationActionV1,
-  FileMutationResultV1,
-} from '@codebuff/common/tools/results/filesystem'
+import type { FileMutationResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { toWireMutation } from '@codebuff/common/protocol/acp-ext-v1'
-import { getConfirmedAppliedActionsV1, isFileMutationResultV1 } from '@codebuff/common/tools/results/filesystem'
+import {
+  getConfirmedAppliedActionsV1,
+  isFileMutationResultV1,
+} from '@codebuff/common/tools/results/filesystem'
+import { classifyActionOutput } from '@codebuff/common/util/action-outcomes'
+import { runFailureMessage } from '@codebuff/common/types/run-outcome'
+import type {
+  ActionOutcome,
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 
 /**
  * Pure, transport-free ACP event bridge (P1-T2b, NORMATIVE contract §4.2 of
@@ -328,7 +334,8 @@ function anyLocationSensitive(locations: Array<{ path: string }>): boolean {
 type MutationActionSummary = {
   outcome: string
   path: string
-  afterContent: string | undefined
+  destinationPath?: string
+  afterContent?: string
 }
 
 type MutationResultSummary = {
@@ -345,7 +352,8 @@ type MutationResultSummary = {
  * {@link asConfirmedMutation} instead.
  */
 function asMutationResult(value: unknown): MutationResultSummary | undefined {
-  if (!isRecord(value) || value.kind !== 'file_mutation_result') return undefined
+  if (!isRecord(value) || value.kind !== 'file_mutation_result')
+    return undefined
   if (typeof value.outcome !== 'string' || !Array.isArray(value.actions)) {
     return undefined
   }
@@ -361,6 +369,9 @@ function asMutationResult(value: unknown): MutationResultSummary | undefined {
     actions.push({
       outcome: element.outcome,
       path: element.path,
+      ...(typeof element.destinationPath === 'string'
+        ? { destinationPath: element.destinationPath }
+        : {}),
       afterContent:
         typeof element.afterContent === 'string'
           ? element.afterContent
@@ -399,7 +410,10 @@ function sensitiveDiffPlaceholder(path: string): Record<string, unknown> {
 function mutationActionBlock(
   action: MutationActionSummary,
 ): Record<string, unknown> | undefined {
-  if (isSensitivePath(action.path)) {
+  if (
+    isSensitivePath(action.path) ||
+    (action.destinationPath && isSensitivePath(action.destinationPath))
+  ) {
     return sensitiveDiffPlaceholder(action.path)
   }
   if (action.afterContent !== undefined) {
@@ -426,15 +440,6 @@ const MUTATION_RESULT_CONTENT_KEYS = [
  * line stays JSON.parse-able.
  */
 function redactSensitiveMutationValues(values: unknown[]): unknown[] {
-  const sensitivePaths = new Set<string>()
-  for (const value of values) {
-    const parsed = asMutationResult(value)
-    if (parsed === undefined) continue
-    for (const action of parsed.actions) {
-      if (isSensitivePath(action.path)) sensitivePaths.add(action.path)
-    }
-  }
-  if (sensitivePaths.size === 0) return values
   return values.map((value) => {
     if (
       !isRecord(value) ||
@@ -445,19 +450,139 @@ function redactSensitiveMutationValues(values: unknown[]): unknown[] {
     }
     return {
       ...value,
+      freshCapabilities: [],
       actions: value.actions.map((action) => {
-        if (!isRecord(action) || !sensitivePaths.has(String(action.path)))
-          return action
-        const redacted = { ...action }
-        for (const key of MUTATION_RESULT_CONTENT_KEYS) {
-          if (typeof redacted[key] === 'string') {
-            redacted[key] = SENSITIVE_PLACEHOLDER
+        if (!isRecord(action)) return action
+        const { editAnchor: _anchor, ...safeAction } = action
+        const redacted = redactHashAction(safeAction)
+        if (actionTouchesSensitivePath(action)) {
+          for (const key of MUTATION_RESULT_CONTENT_KEYS) {
+            if (typeof redacted[key] === 'string')
+              redacted[key] = SENSITIVE_PLACEHOLDER
           }
         }
         return redacted
       }),
+      ...(isRecord(value.authorityReceipt)
+        ? {
+            authorityReceipt: redactReceiptHashes(value.authorityReceipt),
+          }
+        : {}),
     }
   })
+}
+
+function actionTouchesSensitivePath(action: {
+  path?: unknown
+  destinationPath?: unknown
+}): boolean {
+  return (
+    (typeof action.path === 'string' && isSensitivePath(action.path)) ||
+    (typeof action.destinationPath === 'string' &&
+      isSensitivePath(action.destinationPath))
+  )
+}
+
+function redactPathHashes<T>(hashes: T): T {
+  if (!isRecord(hashes)) return hashes
+  return Object.fromEntries(
+    Object.entries(hashes).map(([file, hash]) => [
+      file,
+      isSensitivePath(file) && hash !== null ? REDACTED_HASH : hash,
+    ]),
+  ) as T
+}
+
+function redactHashAction<
+  T extends {
+    path?: unknown
+    destinationPath?: unknown
+    beforeHash?: unknown
+    afterHash?: unknown
+    forward?: unknown
+  },
+>(action: T): T {
+  const sensitive = actionTouchesSensitivePath(action)
+  return {
+    ...action,
+    ...(sensitive && action.beforeHash !== undefined
+      ? { beforeHash: action.beforeHash === null ? null : REDACTED_HASH }
+      : {}),
+    ...(sensitive && action.afterHash !== undefined
+      ? { afterHash: action.afterHash === null ? null : REDACTED_HASH }
+      : {}),
+    ...(isRecord(action.forward)
+      ? {
+          forward: {
+            ...action.forward,
+            afterHashes: redactPathHashes(action.forward.afterHashes),
+          },
+        }
+      : {}),
+  }
+}
+
+function redactReceiptHashes<
+  T extends { actions?: unknown; finalHashes?: unknown },
+>(receipt: T): T {
+  return {
+    ...receipt,
+    ...(Array.isArray(receipt.actions)
+      ? {
+          actions: receipt.actions.map((action) =>
+            isRecord(action) ? redactHashAction(action) : action,
+          ),
+        }
+      : {}),
+    ...(receipt.finalHashes
+      ? { finalHashes: redactPathHashes(receipt.finalHashes) }
+      : {}),
+  }
+}
+
+function redactActionOutcome(outcome: ActionOutcome): ActionOutcome {
+  const sensitive =
+    outcome.effect.confirmedPaths.some(isSensitivePath) ||
+    outcome.effect.forward?.some((forward) =>
+      Object.keys(forward.afterHashes).some(isSensitivePath),
+    )
+  return {
+    ...outcome,
+    basis: {
+      ...outcome.basis,
+      ...(sensitive ? { inputHash: REDACTED_HASH } : {}),
+    },
+    effect: {
+      ...outcome.effect,
+      ...(outcome.effect.forward
+        ? {
+            forward: outcome.effect.forward.map((forward) => ({
+              ...forward,
+              afterHashes: redactPathHashes(forward.afterHashes),
+            })),
+          }
+        : {}),
+    },
+  }
+}
+
+/** Additive terminal metadata uses the same redaction as streamed action receipts. */
+export function projectOutcomesForWire(result: {
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
+}): {
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
+} {
+  return {
+    ...(result.runOutcome ? { runOutcome: result.runOutcome } : {}),
+    ...(result.taskAcceptance ? { taskAcceptance: result.taskAcceptance } : {}),
+    ...(result.actionOutcomes
+      ? { actionOutcomes: result.actionOutcomes.map(redactActionOutcome) }
+      : {}),
+  }
 }
 
 /**
@@ -473,39 +598,9 @@ function buildReceiptEnvelope(
   ctx: EventBridgeContext,
 ): Record<string, unknown> {
   const wire = toWireMutation(mutation)
-  const sensitivePaths = new Set(
-    mutation.actions
-      .filter((action: FileMutationActionV1) => isSensitivePath(action.path))
-      .map((action: FileMutationActionV1) => action.path),
-  )
-  if (sensitivePaths.size > 0) {
-    for (const action of wire.actions) {
-      if (!sensitivePaths.has(action.path)) continue
-      action.beforeHash = action.beforeHash === null ? null : REDACTED_HASH
-      action.afterHash = action.afterHash === null ? null : REDACTED_HASH
-    }
-    const receipt = wire.authorityReceipt
-    if (receipt !== undefined) {
-      wire.authorityReceipt = {
-        ...receipt,
-        actions: receipt.actions.map((action: CommitReceiptV1['actions'][number]) =>
-          sensitivePaths.has(action.path)
-            ? {
-                ...action,
-                beforeHash: action.beforeHash === null ? null : REDACTED_HASH,
-                afterHash: action.afterHash === null ? null : REDACTED_HASH,
-              }
-            : action,
-        ),
-        finalHashes: Object.fromEntries(
-          Object.entries(receipt.finalHashes).map(([path, hash]) => [
-            path,
-            sensitivePaths.has(path) && hash !== null ? REDACTED_HASH : hash,
-          ]),
-        ),
-      } satisfies CommitReceiptV1
-    }
-  }
+  wire.actions = wire.actions.map(redactHashAction)
+  if (wire.authorityReceipt)
+    wire.authorityReceipt = redactReceiptHashes(wire.authorityReceipt)
   const envelope: Record<string, unknown> = {
     kind: 'openbuff.receipt_envelope',
     version: 1,
@@ -554,9 +649,7 @@ type PlanEntry = {
  * and the FIRST incomplete todo becomes `in_progress`. Returns `undefined`
  * when the output carries no todo list at all.
  */
-function planEntriesFromWriteTodos(
-  values: unknown[],
-): PlanEntry[] | undefined {
+function planEntriesFromWriteTodos(values: unknown[]): PlanEntry[] | undefined {
   for (const value of values) {
     if (!isRecord(value) || !Array.isArray(value.currentTodos)) continue
     const entries: PlanEntry[] = []
@@ -564,15 +657,27 @@ function planEntriesFromWriteTodos(
     for (const todo of value.currentTodos) {
       if (!isRecord(todo) || typeof todo.task !== 'string') continue
       if (todo.completed === true) {
-        entries.push({ content: todo.task, priority: 'medium', status: 'completed' })
+        entries.push({
+          content: todo.task,
+          priority: 'medium',
+          status: 'completed',
+        })
         continue
       }
       if (!markedFirstIncomplete) {
         markedFirstIncomplete = true
-        entries.push({ content: todo.task, priority: 'medium', status: 'in_progress' })
+        entries.push({
+          content: todo.task,
+          priority: 'medium',
+          status: 'in_progress',
+        })
         continue
       }
-      entries.push({ content: todo.task, priority: 'medium', status: 'pending' })
+      entries.push({
+        content: todo.task,
+        priority: 'medium',
+        status: 'pending',
+      })
     }
     return entries
   }
@@ -680,12 +785,12 @@ export function printModeToSessionUpdates(
         return [{ sessionUpdate: 'plan', entries: planEntries }]
       }
 
-      let failed = false
-      let mutation: MutationResultSummary | undefined
-      // The strictly-validated confirmed mutation that earns a §6.2 receipt
-      // envelope (undefined unless a schema-clean mutation has at least one
-      // confirmed applied action).
-      let confirmedMutation: FileMutationResultV1 | undefined
+      const classified =
+        event.actionOutcome ??
+        classifyActionOutput(event.toolName, event.output)
+      let failed = classified.outcome !== 'succeeded'
+      // Keep canonical refused/uncertain receipts as observations too.
+      let canonicalMutation: FileMutationResultV1 | undefined
       for (const value of values) {
         if (!isRecord(value)) continue
         const errorMessage = value.errorMessage
@@ -699,15 +804,9 @@ export function printModeToSessionUpdates(
         if (parsed !== undefined) {
           // §4.2: a mutation outcome outside {applied} fails the tool card.
           if (parsed.outcome !== 'applied') failed = true
-          mutation = parsed
         }
         const confirmed = asConfirmedMutation(value)
-        if (
-          confirmed !== undefined &&
-          getConfirmedAppliedActionsV1(confirmed).length > 0
-        ) {
-          confirmedMutation = confirmed
-        }
+        if (confirmed !== undefined) canonicalMutation = confirmed
       }
 
       const content: Array<unknown> = []
@@ -723,8 +822,8 @@ export function printModeToSessionUpdates(
         TOOL_RESULT_CONTENT_MAX_BYTES,
       )
       if (text.length > 0) content.push({ type: 'text', text })
-      if (mutation !== undefined) {
-        for (const action of mutation.actions) {
+      if (canonicalMutation !== undefined) {
+        for (const action of getConfirmedAppliedActionsV1(canonicalMutation)) {
           // Mutations add `diff` content when after-text is available
           // (`afterContent` present, §4.2). The tool_result variant carries
           // no before-text, so the block omits `oldText` rather than
@@ -746,13 +845,20 @@ export function printModeToSessionUpdates(
       // envelope to `_meta["openbuff.dev"].receipt` (cap.v3 tokens never
       // leave the core — toWireMutation drops afterContent/patch/editAnchor
       // and pins freshCapabilities to []).
-      if (confirmedMutation !== undefined) {
+      if (canonicalMutation !== undefined || event.actionOutcome) {
         payload._meta = {
           'openbuff.dev': {
-            receipt: buildReceiptEnvelope(confirmedMutation, {
-              ...ctx,
-              toolCallId: event.toolCallId,
-            }),
+            ...(canonicalMutation
+              ? {
+                  receipt: buildReceiptEnvelope(canonicalMutation, {
+                    ...ctx,
+                    toolCallId: event.toolCallId,
+                  }),
+                }
+              : {}),
+            ...(event.actionOutcome
+              ? { actionOutcome: redactActionOutcome(event.actionOutcome) }
+              : {}),
           },
         }
       }
@@ -788,13 +894,20 @@ export function printModeToSessionUpdates(
         {
           sessionUpdate: 'tool_call_update',
           toolCallId: event.spawnToolCallId,
-          status: event.error !== undefined ? 'failed' : 'completed',
+          status:
+            event.error !== undefined || runFailureMessage(event)
+              ? 'failed'
+              : 'completed',
           _meta: {
             'openbuff.dev': {
               agent: {
                 agentId: event.agentId,
                 agentType: event.agentType,
                 displayName: event.displayName,
+                ...(event.runOutcome ? { runOutcome: event.runOutcome } : {}),
+                ...(event.taskAcceptance
+                  ? { taskAcceptance: event.taskAcceptance }
+                  : {}),
               },
             },
           },
@@ -818,6 +931,11 @@ export function printModeToSessionUpdates(
         {
           sessionUpdate: 'usage_update',
           cost: { amount: event.totalCost, currency: 'USD' },
+          ...(event.runOutcome || event.taskAcceptance || event.actionOutcomes
+            ? {
+                _meta: { 'openbuff.dev': projectOutcomesForWire(event) },
+              }
+            : {}),
         },
       ]
     }

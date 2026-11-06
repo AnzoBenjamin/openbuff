@@ -114,42 +114,44 @@ export const createReviewer = (
         type: 'string',
         enum: ['covered', 'missing', 'n/a'],
       },
-      // Fix 2: dimension keys are OPTIONAL. The gate already tolerates a
-      // missing dimension entry via `entry.dimensions ?? {}` and only
-      // elevates one whose value starts with block/blocks/blocking/blocker,
-      // so the nested `required` array added rejection surface for no
-      // semantic gain. The five keys stay declared in `properties`.
       dimensions: {
         type: 'object',
         properties: {
-          correctness: { type: 'string' },
-          security: { type: 'string' },
-          tests: { type: 'string' },
-          apiCompatibility: { type: 'string' },
-          performance: { type: 'string' },
+          correctness: { type: 'string', minLength: 1 },
+          security: { type: 'string', minLength: 1 },
+          tests: { type: 'string', minLength: 1 },
+          apiCompatibility: { type: 'string', minLength: 1 },
+          performance: { type: 'string', minLength: 1 },
         },
+        required: [
+          'correctness',
+          'security',
+          'tests',
+          'apiCompatibility',
+          'performance',
+        ],
       },
       requirementCoverage: {
         type: 'array',
+        minItems: 1,
         items: {
           type: 'object',
           properties: {
-            requirement: { type: 'string' },
+            requirement: { type: 'string', minLength: 1 },
             status: {
               type: 'string',
               enum: ['satisfied', 'missing', 'uncertain'],
             },
-            evidence: { type: 'array', items: { type: 'string' } },
+            evidence: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string', minLength: 1 },
+            },
           },
           required: ['requirement', 'status', 'evidence'],
         },
       },
     },
-    // Fix 2: require ONLY the fields the gate actually consumes to make its
-    // decision. `findings` is read as `?? []` and `requirementCoverage` as
-    // `?? []`, so requiring them added rejection surface for zero semantic
-    // gain; `dimensions` stays required because the gate reads it for
-    // `block`-prefixed hard blockers. Their inner item schemas are unchanged.
     required: [
       'schemaVersion',
       'verdict',
@@ -157,6 +159,7 @@ export const createReviewer = (
       'reviewedFiles',
       'coverage',
       'dimensions',
+      'requirementCoverage',
       'family',
     ],
   },
@@ -208,7 +211,7 @@ Call the set_output tool with a NATIVE JSON object (not a string, not markdown, 
   "requirementCoverage": [ { "requirement": "<the user requirement>", "status": "satisfied", "evidence": ["<file:symbol or one-line reason>"] } ]
 }
 
-When something DOES require a change, keep the same shape but set verdict to "BLOCKING" (or "NON_BLOCKING" for non-blocking) and add entries to findings. Required fields are schemaVersion, family, verdict, snapshotFingerprint, reviewedFiles, coverage, and dimensions. findings, requirementCoverage, and advisories are optional; include them when they contain review results. Every value is a native type: schemaVersion is the number 1, reviewedFiles/findings/requirementCoverage are arrays, dimensions is an object. Never wrap this object in quotes and never JSON.stringify it.
+When something DOES require a change, keep the same shape but set verdict to "BLOCKING" (or "NON_BLOCKING" for non-blocking) and add entries to findings. Required fields are schemaVersion, family, verdict, snapshotFingerprint, reviewedFiles, coverage, dimensions, and requirementCoverage. Assess all five dimensions with nonempty values and include at least one requirement with concrete evidence. findings and advisories are optional. Every value is a native type: schemaVersion is the number 1, reviewedFiles/findings/requirementCoverage are arrays, dimensions is an object. Never wrap this object in quotes and never JSON.stringify it.
 
 You must call \`set_output\` with one object that satisfies the declared output schema. Do not finish with prose, a Markdown JSON block, or a textual verdict label: those do not populate structured agent output and the parent will receive \`null\`. Put the verdict in the schema's \`verdict\` field. Missing test coverage for a behavior-changing edit requires \`verdict: "BLOCKING"\` and \`coverage: "missing"\`. For blocking or non-blocking feedback, put the exact next actions in \`findings\`; prefer one comprehensive list over drip-feeding issues across review cycles.
 

@@ -3818,7 +3818,11 @@ ${guideSections}
               const specialistResults = new Map<string, unknown>()
               const specialistSnapshots = new Map<string, string>()
               for (const agentType of spawnableSpecialists) {
-                specialistSnapshots.set(agentType, specialistCreditFingerprint)
+                specialistSnapshots.set(
+                  agentType,
+                  specialistScopedFingerprints.get(agentType) ??
+                    specialistCreditFingerprint,
+                )
               }
               const firstSpecialistBatch = yield {
                 toolName: 'spawn_agents',
@@ -3862,24 +3866,31 @@ ${guideSections}
               }
               const retrySpecialists = spawnableSpecialists.filter(
                 (agentType) => {
-                  const result = specialistResults.get(agentType)
-                  // A fully-attesting review (every pending source file covered
-                  // by a well-formed snapshot fingerprint) is accepted even when
-                  // the exact snapshot id advanced; only genuine file-coverage
-                  // gaps or a missing/non-attestable fingerprint require a
-                  // re-spawn. `isStaleSnapshotReviewerResult` is therefore only
-                  // consulted when attestation issues remain, so transient
-                  // snapshot drift never triggers a pointless refresh+retry.
+                  const expectedSnapshotId = specialistSnapshots.get(agentType)!
+                  const scopedFiles =
+                    specialistScopedFileSets.get(agentType) ?? []
+                  const result = recoverProseVerdictWithAttestation(
+                    recoverStructuredReviewerOutputs(
+                      specialistResults.get(agentType),
+                    ),
+                    expectedSnapshotId,
+                    scopedFiles,
+                  )
+                  if (detectReviewerCrash(result)) return false
+                  // Every protocol failure gets one reviewer-only retry. A
+                  // LOOKS_GOOD label or parent-owned requirement cannot replace
+                  // a current, complete snapshot attestation.
                   const attestationIssues = collectReviewerAttestationIssues(
                     result,
-                    specialistScopedFingerprints.get(agentType) ??
-                      specialistCreditFingerprint,
-                    specialistScopedFileSets.get(agentType) ?? [],
+                    expectedSnapshotId,
+                    scopedFiles,
                     specialistScopedDeletedFiles.get(agentType) ?? [],
                   )
                   return (
-                    attestationIssues.length > 0 &&
-                    isStaleSnapshotReviewerResult(result)
+                    attestationIssues.length > 0 ||
+                    hashGateSnapshotDetails(
+                      buildGateSnapshotDetails(scopedFiles, ''),
+                    ) !== expectedSnapshotId
                   )
                 },
               )
@@ -3895,7 +3906,28 @@ ${guideSections}
                     '',
                   ),
                 )
-                if (!isAttestableSnapshotFingerprint(retryCreditFingerprint)) {
+                const retryScopedFingerprints = new Map<string, string>()
+                for (const agentType of retrySpecialists) {
+                  const details = buildGateSnapshotDetails(
+                    specialistScopedFileSets.get(agentType) ?? [],
+                    '',
+                  )
+                  retryScopedFingerprints.set(
+                    agentType,
+                    hashGateSnapshotDetails(details),
+                  )
+                  specialistScopedDeletedFiles.set(
+                    agentType,
+                    collectDeletedFilesFromSnapshotDetails(details),
+                  )
+                }
+                if (
+                  !isAttestableSnapshotFingerprint(retryCreditFingerprint) ||
+                  [...retryScopedFingerprints.values()].some(
+                    (fingerprint) =>
+                      !isAttestableSnapshotFingerprint(fingerprint),
+                  )
+                ) {
                   activeWorkState.currentPhase = 'blocked'
                   activeWorkState.openReviewerBlockers = [
                     'Specialist review retry cannot attest: recomputed gate snapshot fingerprint is non-attestable.',
@@ -3937,7 +3969,7 @@ ${guideSections}
                           agentType,
                           files: specialistScopedFileSets.get(agentType) ?? [],
                           snapshotFingerprint:
-                            specialistScopedFingerprints.get(agentType) ??
+                            retryScopedFingerprints.get(agentType) ??
                             specialistCreditFingerprint,
                           userPrompt: prompt ?? '',
                           extraLines: [
@@ -3947,7 +3979,7 @@ ${guideSections}
                         params: {
                           files: specialistScopedFileSets.get(agentType) ?? [],
                           snapshot_id:
-                            specialistScopedFingerprints.get(agentType) ??
+                            retryScopedFingerprints.get(agentType) ??
                             specialistCreditFingerprint,
                         },
                       })),
@@ -3957,7 +3989,10 @@ ${guideSections}
                   const retryToolResult =
                     (retryBatch as any)?.toolResult ?? retryBatch
                   for (const agentType of retrySpecialists) {
-                    specialistSnapshots.set(agentType, retryCreditFingerprint)
+                    specialistSnapshots.set(
+                      agentType,
+                      retryScopedFingerprints.get(agentType)!,
+                    )
                     specialistResults.set(
                       agentType,
                       extractSpawnedAgentResult(retryToolResult, agentType),
@@ -3984,31 +4019,47 @@ ${guideSections}
                       expectedSnapshotId,
                       specialistScopedFileSets.get(agentType) ?? [],
                     )
-                  const specialistAttestationIssues =
-                    collectReviewerAttestationIssues(
-                      derivedSpecialistToolResult,
-                      expectedSnapshotId,
-                      specialistScopedFileSets.get(agentType) ?? [],
-                      specialistScopedDeletedFiles.get(agentType) ?? [],
-                    )
-                  // Fingerprint-only drift on a fully-attesting review is NOT a
-                  // terminal protocol failure: only a FILE-COVERAGE gap or a
-                  // non-attestable fingerprint stays blocking after the refresh.
-                  const attestsEverything =
-                    specialistAttestationIssues.length === 0
-                  // A coverage-complete review (zero attestation issues) is a
-                  // PASS and FALLS THROUGH to the normal verdict/credit
-                  // handling below (collectReviewerBlockers /
-                  // getReviewerFinalizationVerdict / specialistReviewGatesDone /
-                  // specialistReviewGateFingerprints). Only a review that does
-                  // NOT fully attest AND smells stale is a terminal protocol
-                  // failure. Do NOT `continue` here for attestsEverything: that
-                  // would skip to the next routed specialist and silently never
-                  // credit this one.
+                  const crash = detectReviewerCrash(derivedSpecialistToolResult)
+                  const specialistAttestationIssues = crash
+                    ? []
+                    : collectReviewerAttestationIssues(
+                        derivedSpecialistToolResult,
+                        expectedSnapshotId,
+                        specialistScopedFileSets.get(agentType) ?? [],
+                        specialistScopedDeletedFiles.get(agentType) ?? [],
+                      )
                   if (
-                    !attestsEverything &&
-                    isStaleSnapshotReviewerResult(derivedSpecialistToolResult)
+                    !crash &&
+                    hashGateSnapshotDetails(
+                      buildGateSnapshotDetails(
+                        specialistScopedFileSets.get(agentType) ?? [],
+                        '',
+                      ),
+                    ) !== expectedSnapshotId
                   ) {
+                    specialistAttestationIssues.push(
+                      'BLOCKING: working tree changed during specialist review',
+                    )
+                  }
+                  if (specialistAttestationIssues.length > 0) {
+                    addOwedReviewer(agentType)
+                    activeWorkState.specialistReviewGatesDone = (
+                      activeWorkState.specialistReviewGatesDone ?? []
+                    ).filter((entry) => entry !== agentType)
+                    delete activeWorkState.specialistReviewGateFingerprints?.[
+                      agentType
+                    ]
+                    delete activeWorkState.specialistReviewFileMarkers?.[
+                      agentType
+                    ]
+                    delete activeWorkState.specialistWaveCreditMarkers?.[
+                      agentType
+                    ]
+                    invalidateWaveCompletionsForSpecialistBlockers(
+                      specialistAttestationIssues,
+                      specialistCreditFingerprint,
+                      specialistScopedFileSets.get(agentType) ?? [],
+                    )
                     activeWorkState.currentPhase = 'blocked'
                     activeWorkState.openReviewerBlockers = [
                       `${agentType} could not attest to a stable snapshot after one automatic refresh.`,
@@ -4018,8 +4069,8 @@ ${guideSections}
                       activeWorkState.openReviewerFindings ?? []
                     ).filter((finding) => finding.reviewer !== agentType)
                     activeWorkState.nextRequiredAction =
-                      'Stop concurrent edits and resume once the working tree is stable; the runtime will obtain a fresh review bundle.'
-                    activeWorkState.latestWorkSummary = `${agentType} stopped after two stale snapshot results.`
+                      'Obtain a fresh matching structured specialist review before finalization can continue.'
+                    activeWorkState.latestWorkSummary = `${agentType} stopped after the bounded snapshot/file attestation retry.`
                     markActiveWorkStateChanged()
                     specialistBlocked = true
                     specialistTerminalFailure = true
@@ -4031,31 +4082,6 @@ ${guideSections}
                     specialistTerminalFailureClass = 'terminal'
                     break
                   }
-                  // Attestation tolerates a coverage-complete specialist review
-                  // whose well-formed v3 fingerprint drifted from the expected
-                  // snapshot; record that drift instead of accepting it
-                  // silently, so a specialist review of possibly-stale file
-                  // content that passed the gate stays auditable (same contract
-                  // as the final code-reviewer gate).
-                  if (attestsEverything) {
-                    const specialistFingerprintDrift =
-                      collectReviewerFingerprintDrift(
-                        derivedSpecialistToolResult,
-                        expectedSnapshotId,
-                      )
-                    if (specialistFingerprintDrift) {
-                      emitGateTelemetry({
-                        currentPhase: activeWorkState.currentPhase,
-                        pendingFileCount: specialistPendingFiles.length,
-                        pendingFiles: specialistPendingFiles,
-                        reviewerStatus: 'attestation-fingerprint-drift',
-                        reviewer: agentType,
-                        reportedFingerprint: specialistFingerprintDrift,
-                        expectedFingerprint: expectedSnapshotId,
-                      })
-                    }
-                  }
-                  const crash = detectReviewerCrash(derivedSpecialistToolResult)
                   const rawBlockers = collectReviewerBlockers(
                     derivedSpecialistToolResult,
                   )
@@ -4246,7 +4272,8 @@ ${guideSections}
                           specialistScopedFileSets.get(reviewer) ?? [],
                           specialistScopedDeletedFiles.get(reviewer) ?? [],
                         ).length > 0
-                      ) continue
+                      )
+                        continue
                       const raw = collectReviewerBlockers(reviewerResult)
                       const parentOwned = collectParentOwnedRequirementBlockers(
                         raw,
@@ -4263,12 +4290,17 @@ ${guideSections}
                         specialistCreditFingerprint,
                         specialistScopedFileSets.get(reviewer) ?? [],
                       )
-                      const records = collectReviewerFindingRecords(reviewerResult)
+                      const records =
+                        collectReviewerFindingRecords(reviewerResult)
                       const findings = otherBlockers.map(
                         (text: string, index: number) => {
-                          const record = correlateReviewerFindingRecord(text, records)
+                          const record = correlateReviewerFindingRecord(
+                            text,
+                            records,
+                          )
                           return {
-                            id: record?.id ?? buildReviewerFindingId(text, index),
+                            id:
+                              record?.id ?? buildReviewerFindingId(text, index),
                             gateId: `${reviewer}:${reviewerSnapshot}`,
                             text,
                             status: 'open' as const,
@@ -4286,10 +4318,14 @@ ${guideSections}
                         activeWorkState.specialistReviewGatesDone ?? []
                       ).filter((entry) => entry !== reviewer)
                       if (activeWorkState.specialistReviewGateFingerprints) {
-                        delete activeWorkState.specialistReviewGateFingerprints[reviewer]
+                        delete activeWorkState.specialistReviewGateFingerprints[
+                          reviewer
+                        ]
                       }
                       if (activeWorkState.specialistReviewFileMarkers) {
-                        delete activeWorkState.specialistReviewFileMarkers[reviewer]
+                        delete activeWorkState.specialistReviewFileMarkers[
+                          reviewer
+                        ]
                       }
                     }
                     const specialistRepairRound: number =
@@ -4336,7 +4372,7 @@ ${guideSections}
                               specialistRepairRound,
                               undefined,
                               undefined,
-                            batchBlockingReviewers,
+                              batchBlockingReviewers,
                             ),
                           ].join('\n'),
                         },
@@ -4397,7 +4433,9 @@ ${guideSections}
                     const specialistOpenFindings = (
                       activeWorkState.openReviewerFindings ?? []
                     ).filter((finding) =>
-                      batchBlockingReviewers.includes(finding.reviewer as string),
+                      batchBlockingReviewers.includes(
+                        finding.reviewer as string,
+                      ),
                     )
                     activeWorkState.repairSessionId =
                       activeWorkState.repairSessionId ??
@@ -4424,7 +4462,8 @@ ${guideSections}
                                 ({ id }) => ({
                                   id: `clear-${id}`,
                                   behavior: `Finding ${id} is addressed in the live workspace.`,
-                                  verification: 'Targeted validation passes and a fresh snapshot-bound review by the originating specialist clears the finding.',
+                                  verification:
+                                    'Targeted validation passes and a fresh snapshot-bound review by the originating specialist clears the finding.',
                                 }),
                               ),
                               context: [],
@@ -4512,8 +4551,9 @@ ${guideSections}
                               'Treat every finding ID as open until its originating specialist clears it.',
                               'Read every target from the live filesystem before editing.',
                               '',
-                              ...specialistOpenFindings.map((finding) =>
-                                `[${finding.reviewer}] ${buildReviewerPromptLine(finding)}`,
+                              ...specialistOpenFindings.map(
+                                (finding) =>
+                                  `[${finding.reviewer}] ${buildReviewerPromptLine(finding)}`,
                               ),
                             ].join('\n'),
                           },
@@ -5005,19 +5045,14 @@ ${guideSections}
               // `plannedReviewWaves` is empty and this block is a no-op, so
               // small changes stay byte-identical. `recordWaveCompletionsForFiles`
               // above has already credited every wave this pass fully covered.
-              // FAIL-CLOSED ON TERMINAL FAILURE: this gate is deliberately NOT
-              // guarded by `!specialistTerminalFailure`. A terminal specialist
-              // failure (crash/rate-limit) must not skip the wave-completeness
-              // requirement: the `specialistBlocked` handler below can credit
-              // the specialist via the bypass flow, which marks gates done and
-              // clears owed entries while `waveCompletions` stays partially
-              // populated. If the wave check were skipped here, the next
-              // iteration — with no planned waves re-checked because the
-              // specialist is now credited — could advance to the code-reviewer
-              // with an incomplete wave ledger. Evaluating it on BOTH terminal
-              // and non-terminal paths keeps every planned wave required before
-              // finalization.
-              if (waveReviewIsActive && plannedReviewWaves.length > 0) {
+              // Terminal failures exit through the bounded failure handler.
+              // Its explicit bypass checks wave completeness before crediting;
+              // continuing here would restart an already exhausted review.
+              if (
+                !specialistTerminalFailure &&
+                waveReviewIsActive &&
+                plannedReviewWaves.length > 0
+              ) {
                 const waveCompletions = activeWorkState.waveCompletions ?? {}
                 const missingWaves = plannedReviewWaves.filter(
                   (_waveFiles, waveIndex) => {
@@ -6336,6 +6371,10 @@ ${guideSections}
                 reviewSnapshotFingerprint,
                 reviewableGateScopeFiles,
                 reviewDeletedFiles,
+                {
+                  requireFullEvidence:
+                    requiredReviewerAgentType === reviewerAgentType,
+                },
               )
           if (
             attestationIssues.length > 0 &&
@@ -6386,6 +6425,10 @@ ${guideSections}
               reviewSnapshotFingerprint,
               reviewableGateScopeFiles,
               reviewDeletedFiles,
+              {
+                requireFullEvidence:
+                  requiredReviewerAgentType === reviewerAgentType,
+              },
             )
           }
           if (attestationIssues.length > 0) {
@@ -6428,10 +6471,7 @@ ${guideSections}
           }
           activeWorkState.reviewerProtocolRetryCount = 0
           activeWorkState.reviewerProtocolAttestationFailed = false
-          // Attestation tolerates a coverage-complete review whose well-formed
-          // v3 fingerprint drifted from the expected snapshot; record that drift
-          // instead of accepting it silently, so a review of possibly-stale file
-          // content that passed the gate stays auditable.
+          // Diagnostic telemetry never substitutes for matching attestation.
           const reviewerFingerprintDrift = collectReviewerFingerprintDrift(
             reviewerToolResult,
             reviewSnapshotFingerprint,
@@ -8534,6 +8574,9 @@ ${guideSections}
           // cast per control-plane member is pure duplication.
           const controlPlane = (params as any)?.orchestrationControlPlane
           const transition = controlPlane?.transitionBase2GateSafe
+          let transitionError:
+            | { error: unknown; from: unknown; event: unknown }
+            | undefined
           if (typeof phase === 'string' && typeof transition === 'function') {
             // Structured never-throw adoption (P2-T6b): transitionBase2GateSafe
             // returns `{ ok: true, state }` | `{ ok: false, error, from,
@@ -8557,11 +8600,13 @@ ${guideSections}
               // authoritative), but publish the structured error alongside it
               // under the same workflow-state key so the sink (and the console
               // channel below) name exactly which from→event edge was illegal.
-              mutableAgentState.workflowStates['base2-gate-v1-last-error'] = {
+              transitionError = {
                 error: outcome.error,
                 from: outcome.from,
                 event: outcome.event,
               }
+              mutableAgentState.workflowStates['base2-gate-v1-last-error'] =
+                transitionError
             }
           }
           // Built BEFORE the console emit on purpose: both channels must share
@@ -8580,6 +8625,8 @@ ${guideSections}
           // The sink's discriminator, owned by this emitter the way
           // gate-telemetry.ts owns its authoritative `recordedAt`.
           safePayload.event = 'base2.gate'
+          if (transitionError)
+            safePayload.workflowTransitionError = transitionError
           // console.info FIRST, then the durable sink: the sink is injected by
           // the runtime (base2's handleSteps is serialized and cannot import
           // it), so it is absent on older runtimes and in tests that pass no
@@ -9409,6 +9456,11 @@ type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | '';
 
 type ReviewerCoverage = 'covered' | 'missing' | 'n/a';
 
+type ReviewerAttestationOptions = {
+    requireFullEvidence?: boolean;
+    lightweight?: boolean;
+};
+
 type StructuredReviewerOutput = {
     verdict: ReviewerStructuredVerdict;
     findings: string[];
@@ -9499,6 +9551,9 @@ type ResolvedReviewerAttestation = {
     schemaVersion?: number;
     snapshotFingerprint?: string;
     reviewedFiles: string[];
+    dimensions?: Record<string, string>;
+    requirementCoverage?: StructuredReviewerOutput['requirementCoverage'];
+    coverage?: ReviewerCoverage;
 };
 
 /**
@@ -9545,6 +9600,9 @@ function resolveReviewerAttestation(structured: StructuredReviewerOutput[], expe
             schemaVersion: last.schemaVersion,
             snapshotFingerprint: last.snapshotFingerprint,
             reviewedFiles: last.reviewedFiles ?? [],
+            dimensions: last.dimensions,
+            requirementCoverage: last.requirementCoverage,
+            coverage: last.coverage,
         };
     }
     let matching: StructuredReviewerOutput | undefined;
@@ -9582,10 +9640,13 @@ function resolveReviewerAttestation(structured: StructuredReviewerOutput[], expe
         schemaVersion: nonConforming?.schemaVersion ?? 1,
         snapshotFingerprint: attesting?.snapshotFingerprint,
         reviewedFiles,
+        dimensions: attesting?.dimensions,
+        requirementCoverage: attesting?.requirementCoverage,
+        coverage: attesting?.coverage,
     };
 }
 
-function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerprint: string, pendingFiles: string[], deletedFiles?: string[]): string[] {
+function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerprint: string, pendingFiles: string[], deletedFiles?: string[], options?: ReviewerAttestationOptions): string[] {
     // The caller passes the reviewable subset; when it is empty there is
     // nothing to attest, so surface no attestation issues.
     if (pendingFiles.length === 0) {
@@ -9651,12 +9712,7 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
         .map((file) => normalizeGateFilePath(file))
         .filter((file) => file.length > 0 && !reviewed.has(file) && !deleted.has(file));
     const issues: string[] = [];
-    // Fingerprint tolerance: a coverage-complete review reporting a well-formed
-    // v3 fingerprint is trusted even when the exact snapshot id advanced between
-    // its spawn and attestation; only a FILE-COVERAGE gap or a missing /
-    // non-attestable fingerprint stays a hard blocker. The tolerance is not
-    // silent — every base2 caller records the drift via
-    // `collectReviewerFingerprintDrift`, whose docblock carries the rationale.
+    // Credit is bound to the exact current basis, including same-path edits.
     const reportedFingerprint = result.snapshotFingerprint;
     const fingerprintIsAttestable = isAttestableV3Fingerprint(reportedFingerprint);
     if (!fingerprintIsAttestable) {
@@ -9665,12 +9721,37 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
         // branches stay fail-closed; only the operator message differs.
         issues.push('BLOCKING: reviewer did not report an attestable snapshot fingerprint');
     }
-    else if (reportedFingerprint !== expectedFingerprint &&
-        missing.length > 0) {
+    else if (reportedFingerprint !== expectedFingerprint) {
         issues.push('BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree');
     }
     if (missing.length > 0) {
         issues.push(`BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`);
+    }
+    if (options?.lightweight) {
+        if (!isLightweightReceiptEligible(pendingFiles))
+            issues.push('BLOCKING: reduced reviewer contract is not eligible for this file scope');
+        if (result.coverage !== 'covered' && result.coverage !== 'n/a')
+            issues.push('BLOCKING: reduced reviewer did not assess coverage');
+        if (structured.some((entry) => entry.verdict !== 'LOOKS_GOOD' || entry.findings.length > 0))
+            issues.push('BLOCKING: substantive reduced review requires the full reviewer contract');
+    }
+    else if (options?.requireFullEvidence) {
+        for (const dimension of [
+            'correctness',
+            'security',
+            'tests',
+            'apiCompatibility',
+            'performance',
+        ]) {
+            if (!result.dimensions?.[dimension]?.trim())
+                issues.push(`BLOCKING: reviewer did not assess ${dimension}`);
+        }
+        const requirements = result.requirementCoverage ?? [];
+        if (requirements.length === 0 ||
+            requirements.some((item) => !item.requirement.trim() ||
+                !['satisfied', 'missing', 'uncertain'].includes(item.status) ||
+                !item.evidence.some((evidence) => evidence.trim().length > 0)))
+            issues.push('BLOCKING: reviewer did not provide nonempty requirement evidence');
     }
     return issues;
 }
@@ -9698,12 +9779,8 @@ function collectReviewerAttestationIssues(toolResult: unknown, expectedFingerpri
  * the resulting record is telemetry-only and credits the review with nothing —
  * the gate still treats it as a crash.
  *
- * `collectReviewerAttestationIssues` deliberately tolerates that drift so an
- * unrelated bundle bump cannot fail the gate; callers use this to RECORD the
- * drift instead of accepting it silently, because a review of stale file
- * content would otherwise pass the gate with no trace. '' means there is
- * nothing to record: an exact match, or a missing/non-attestable fingerprint
- * (both already hard blockers in the attestation issues).
+ * This is diagnostic only. A mismatched fingerprint is blocked by
+ * collectReviewerAttestationIssues and cannot confer review credit.
  */
 function collectReviewerFingerprintDrift(toolResult: unknown, expectedFingerprint: string): string {
     const structured = collectStructuredReviewerOutputs(toolResult);
@@ -10054,8 +10131,7 @@ function findReviewerCrash(value: unknown, depth: number = 0): string | null {
     // `type: 'error'` payload) describes that inner tool call, not a
     // reviewer-agent crash, so the entire envelope subtree is skipped instead
     // of being walked for crash markers.
-    if (typeof record.toolCallId === 'string' ||
-        record.type === 'tool_result') {
+    if (typeof record.toolCallId === 'string' || record.type === 'tool_result') {
         return null;
     }
     if (typeof record.errorMessage === 'string' && record.errorMessage.trim()) {
@@ -10485,7 +10561,8 @@ function recoverStructuredReviewerOutputs(toolResult: unknown): unknown {
     // `every`) matches the recognizer's own "any shaped entry exists" narrowing,
     // so a result the gate already credits is never rewritten.
     const existing = collectStructuredReviewerOutputs(toolResult);
-    if (existing.length > 0 && existing.some((e) => e.schemaVersion !== undefined)) {
+    if (existing.length > 0 &&
+        existing.some((e) => e.schemaVersion !== undefined)) {
         return toolResult;
     }
     // Walk the SAME envelope shapes `visitForStructuredVerdict` walks (depth 8,
@@ -10596,13 +10673,16 @@ function recoverProseVerdictWithAttestation(toolResult: unknown, expectedFingerp
     //    prose from forging a review: a forged line cannot also echo the opaque
     //    runtime fingerprint AND a real reviewed path unless the reviewer
     //    itself supplied them.
-    if (typeof expectedFingerprint !== 'string' || expectedFingerprint.length === 0) {
+    if (typeof expectedFingerprint !== 'string' ||
+        expectedFingerprint.length === 0) {
         return toolResult;
     }
     const hasFingerprint = texts.some((text) => text.includes(expectedFingerprint));
     if (!hasFingerprint)
         return toolResult;
-    const hasReviewedFile = pendingFiles.some((file) => typeof file === 'string' && file.length > 0 && texts.some((text) => text.includes(file)));
+    const hasReviewedFile = pendingFiles.some((file) => typeof file === 'string' &&
+        file.length > 0 &&
+        texts.some((text) => text.includes(file)));
     if (!hasReviewedFile)
         return toolResult;
     // 4. Both signals present: synthesize ONLY the verdict (+ schemaVersion).
@@ -10813,10 +10893,15 @@ function mapCoverageValue(value: string): 'covered' | 'missing' | 'n/a' {
         return 'missing';
     if (value === 'n/a')
         return 'n/a';
-    if (value === 'full' || value === 'complete' || value === 'ok' || value === 'yes') {
+    if (value === 'full' ||
+        value === 'complete' ||
+        value === 'ok' ||
+        value === 'yes') {
         return 'covered';
     }
-    if (value === 'na' || value === 'not-applicable' || value === 'not applicable') {
+    if (value === 'na' ||
+        value === 'not-applicable' ||
+        value === 'not applicable') {
         return 'n/a';
     }
     return 'missing';
@@ -11241,6 +11326,7 @@ function buildLightweightReviewContract(pendingFiles: string[]): {
                 'reviewedFiles',
                 'coverage',
                 'dimensions',
+                'requirementCoverage',
                 'family',
             ],
             instruction: '',

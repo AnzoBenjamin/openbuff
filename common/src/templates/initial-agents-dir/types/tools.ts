@@ -589,6 +589,16 @@ export interface EvaluateAuditCoverageParams {
     snapshot_id: string
     feature: string
     evidence_kind: 'heuristic' | 'verified'
+    maturity?: 'unknown' | 'absent' | 'partial' | 'unwired'
+    status?:
+      | 'complete'
+      | 'partial'
+      | 'implemented_but_unreachable'
+      | 'documented_but_unimplemented'
+      | 'tested_without_runtime_wiring'
+      | 'runtime_wired_without_failure_coverage'
+      | 'unknown'
+    missing?: string[]
     evidence: {
       entrypoints: string[]
       implementation: string[]

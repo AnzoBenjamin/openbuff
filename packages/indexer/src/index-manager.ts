@@ -4,6 +4,7 @@ import {
   isIndexReady,
   isIndexStale,
   getIndexDir,
+  getIndexPublicationToken,
   loadIndex,
   loadSemanticVectors,
   saveIndex,
@@ -598,6 +599,12 @@ export class IndexManager {
     try {
       const existing = await loadIndex(this.projectRoot, cacheDir)
       const expectedBuiltAt = existing?.builtAt ?? null
+      const expectedSnapshotId = existing
+        ? computeIndexSnapshotId(existing)
+        : null
+      const expectedPublicationToken = existing
+        ? getIndexPublicationToken(existing)
+        : null
       let index: MetadataIndex
       stage = 'walk'
       if (existing) {
@@ -629,6 +636,8 @@ export class IndexManager {
       let verifiedWrite = false
       const persisted = await saveIndex(index, this.projectRoot, cacheDir, {
         expectedBuiltAt,
+        expectedSnapshotId,
+        expectedPublicationToken,
         onVerifiedWrite: (verified) => { verifiedWrite = verified },
       })
       if (!persisted) {
@@ -850,7 +859,7 @@ export class IndexManager {
    * instead of silently grafting stale precise edges onto a rebuilt index.
    *
    * Persistence: rides the same async `saveIndex` CAS flow `_build` uses,
-   * keyed on the current snapshot's builtAt so a concurrent writer wins
+   * pinned to the exact persisted bytes so a concurrent writer wins
    * gracefully instead of being clobbered by the merged snapshot. When the
    * save wins, the persisted snapshot is verified fail-closed (mirroring
    * `_build`) and merged precise edges survive across sessions. If the
@@ -878,6 +887,8 @@ export class IndexManager {
       const cacheDir = this.config.cacheDir ?? '.codebuff-index'
       const persisted = await saveIndex(merged, this.projectRoot, cacheDir, {
         expectedBuiltAt: current.builtAt,
+        expectedSnapshotId,
+        expectedPublicationToken: getIndexPublicationToken(current),
       })
       if (persisted) {
         // Fail-closed verification: only trust disk when it still holds the
@@ -913,10 +924,12 @@ export class IndexManager {
         } catch {
           onDisk = null
         }
-        this.index = onDisk ?? merged
+        this.index = onDisk ?? current
         console.debug(
-          '[indexer] merged snapshot adoption lost the saveIndex CAS race; merged precise edges stay in memory only for this session.',
+          '[indexer] merged snapshot adoption refused after losing the publication CAS; serving the winning snapshot.',
         )
+        this.snapshotCache = undefined
+        return false
       }
     } catch (err) {
       // Persistence is an upgrade, not a correctness gate: any error here

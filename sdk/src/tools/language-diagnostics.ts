@@ -113,7 +113,8 @@ function toDiagnostic(
       ? start
       : {
           line: item.endLine,
-          column: item.endColumn && item.endColumn > 0 ? item.endColumn : column,
+          column:
+            item.endColumn && item.endColumn > 0 ? item.endColumn : column,
         }
   return {
     file: normalizeFile(item.file, input.cwd),
@@ -370,9 +371,7 @@ const jvmParser: DiagnosticParser = {
             // (kotlinc's `e:` prefix) and otherwise from the file extension,
             // the only remaining in-line evidence.
             source:
-              /^e:\s/.test(line) || /\.kts?$/i.test(file)
-                ? 'kotlin'
-                : 'java',
+              /^e:\s/.test(line) || /\.kts?$/i.test(file) ? 'kotlin' : 'java',
           },
           input,
         ),
@@ -526,12 +525,18 @@ function recordAt(
   return isRecord(nested) ? nested : undefined
 }
 
-function stringAt(value: Record<string, unknown>, key: string): string | undefined {
+function stringAt(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const item = value[key]
   return typeof item === 'string' ? item : undefined
 }
 
-function numberAt(value: Record<string, unknown>, key: string): number | undefined {
+function numberAt(
+  value: Record<string, unknown>,
+  key: string,
+): number | undefined {
   return asNumber(value[key])
 }
 
@@ -612,8 +617,7 @@ const cargoJsonParser: DiagnosticParser = {
       const primarySpan =
         spans.find((span) => isRecord(span) && span.is_primary === true) ??
         spans.find(
-          (span) =>
-            isRecord(span) && stringAt(span, 'file_name') !== undefined,
+          (span) => isRecord(span) && stringAt(span, 'file_name') !== undefined,
         )
       if (!isRecord(primarySpan)) continue
       const file = stringAt(primarySpan, 'file_name')
@@ -670,7 +674,7 @@ const cargoJsonParser: DiagnosticParser = {
             endLine: numberAt(primarySpan, 'line_end') ?? lineStart,
             endColumn: numberAt(primarySpan, 'column_end') ?? columnStart,
             severity: severity(stringAt(message, 'level') ?? 'error'),
-            code: codeRecord ? stringAt(codeRecord, 'code') ?? null : null,
+            code: codeRecord ? (stringAt(codeRecord, 'code') ?? null) : null,
             message: stringAt(message, 'message') ?? '',
             source: 'cargo',
             fixes: dedupeTextEdits(fixes),
@@ -722,7 +726,8 @@ const ruffJsonParser: DiagnosticParser = {
           range: {
             start: { line: editLine, column: editColumn },
             end: {
-              line: (editEnd ? numberAt(editEnd, 'row') : undefined) ?? editLine,
+              line:
+                (editEnd ? numberAt(editEnd, 'row') : undefined) ?? editLine,
               column:
                 (editEnd ? numberAt(editEnd, 'column') : undefined) ??
                 editColumn,
@@ -765,7 +770,8 @@ const pyrightJsonParser: DiagnosticParser = {
     if (!/\bpyright\b/i.test(input.command)) return []
     const parsed = parseJsonOutput(input)
     if (!isRecord(parsed)) return []
-    const entries = arrayAt(parsed, 'diagnostics')
+    const entries =
+      arrayAt(parsed, 'generalDiagnostics') ?? arrayAt(parsed, 'diagnostics')
     if (!entries) return []
     const diagnostics: LanguageDiagnostic[] = []
     for (const item of entries) {
@@ -790,12 +796,11 @@ const pyrightJsonParser: DiagnosticParser = {
             column: character + 1,
             endLine: ((end ? numberAt(end, 'line') : undefined) ?? line) + 1,
             endColumn:
-              ((end ? numberAt(end, 'character') : undefined) ?? character) +
-              1,
+              ((end ? numberAt(end, 'character') : undefined) ?? character) + 1,
             severity: severity(
               stringAt(item, 'severity') === 'information'
                 ? 'info'
-                : stringAt(item, 'severity') ?? 'error',
+                : (stringAt(item, 'severity') ?? 'error'),
             ),
             code: stringAt(item, 'rule'),
             message,
@@ -870,7 +875,8 @@ const eslintJsonParser: DiagnosticParser = {
               column,
               endLine,
               endColumn,
-              severity: numberAt(message, 'severity') === 2 ? 'error' : 'warning',
+              severity:
+                numberAt(message, 'severity') === 2 ? 'error' : 'warning',
               code: stringAt(message, 'ruleId'),
               message: text,
               source: 'eslint',
@@ -1108,21 +1114,16 @@ const sarifParser: DiagnosticParser = {
               ? sarifResolvedArtifactUri(run, artifactLocation)
               : undefined
             if (!fixUri) continue
-            for (const replacement of arrayAt(
-              artifactChange,
-              'replacements',
-            ) ?? []) {
+            for (const replacement of arrayAt(artifactChange, 'replacements') ??
+              []) {
               if (!isRecord(replacement)) continue
               const deletedRegion = recordAt(replacement, 'deletedRegion')
               if (!deletedRegion) continue
-              const insertedContent = recordAt(
-                replacement,
-                'insertedContent',
-              )
+              const insertedContent = recordAt(replacement, 'insertedContent')
               fixes.push({
                 file: normalizeFile(fixUri, input.cwd),
                 newText: insertedContent
-                  ? stringAt(insertedContent, 'text') ?? ''
+                  ? (stringAt(insertedContent, 'text') ?? '')
                   : '',
                 range: sarifRegionToRange(deletedRegion),
               })
@@ -1153,7 +1154,7 @@ const sarifParser: DiagnosticParser = {
             file: relatedFile,
             range: relatedRange,
             message: relatedMessage
-              ? stringAt(relatedMessage, 'text') ?? ''
+              ? (stringAt(relatedMessage, 'text') ?? '')
               : '',
           })
         }
@@ -1239,10 +1240,10 @@ function interleaveDiagnostics(
   return combined
 }
 
-export function parseLanguageDiagnostics(
+export function parseLanguageDiagnosticsWithCoverage(
   input: DiagnosticParserInput,
   parsers?: readonly DiagnosticParser[],
-): LanguageDiagnostic[] {
+): { diagnostics: LanguageDiagnostic[]; truncated: boolean } {
   let diagnostics: LanguageDiagnostic[]
   if (parsers) {
     // An explicitly supplied parser list is authoritative: run exactly those
@@ -1278,7 +1279,17 @@ export function parseLanguageDiagnostics(
     if (seen.has(key)) continue
     seen.add(key)
     unique.push(diagnostic)
-    if (unique.length >= MAX_DIAGNOSTICS) break
+    if (unique.length > MAX_DIAGNOSTICS) break
   }
-  return unique
+  return {
+    diagnostics: unique.slice(0, MAX_DIAGNOSTICS),
+    truncated: unique.length > MAX_DIAGNOSTICS,
+  }
+}
+
+export function parseLanguageDiagnostics(
+  input: DiagnosticParserInput,
+  parsers?: readonly DiagnosticParser[],
+): LanguageDiagnostic[] {
+  return parseLanguageDiagnosticsWithCoverage(input, parsers).diagnostics
 }

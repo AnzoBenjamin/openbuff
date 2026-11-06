@@ -10,6 +10,7 @@ import type { TaskMemoryV1 } from './task-memory'
 import type { OrchestrationLedgerV1 } from './orchestration-ledger'
 import type { DiscoveryCoverageV1 } from './discovery-coverage'
 import type { AgentReceipt } from './agent-handoff'
+import type { ActionOutcome, RunOutcome, TaskAcceptance } from './run-outcome'
 import type { WorkspaceStateV1 } from './workspace-state'
 import { createInitialWorkspaceState } from './workspace-state'
 import type {
@@ -91,7 +92,11 @@ export const confirmedPostEditAnchorSchema = z
     startLine: z.number().int().min(1),
     endLine: z.number().int().min(1),
     contentHash: z.string().regex(SHA256_CONTENT_HASH_PATTERN),
-    readCapability: z.string().min(1).max(4096).regex(/^cap\.v3\./),
+    readCapability: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^cap\.v3\./),
     projectId: z.string().optional(),
     runId: z.string().optional(),
   })
@@ -382,6 +387,12 @@ export interface MemoryRuntimeStateV2 {
 }
 
 export type AgentState = {
+  /** Runtime terminal reason for this run; never inferred from task output. */
+  runOutcome?: RunOutcome
+  /** A named task oracle may accept a recovered task or reject a completed run. */
+  taskAcceptance?: TaskAcceptance
+  /** Earlier failed/refused attempts survive subsequent recovery. */
+  actionOutcomes?: ActionOutcome[]
   /**
    * @deprecated agentId is replaced by runId
    */

@@ -1,13 +1,106 @@
 import { describe, expect, it } from 'bun:test'
 
 import {
+  isMeasuredScoreEligible,
   makeSeededRng,
   mean,
   pairedBootstrapMeanDiffCI,
   sampleStandardDeviation,
   standardError,
+  sumFiniteCosts,
   wilcoxonSignedRankTest,
 } from '../statistics'
+
+describe('measured score eligibility', () => {
+  it('rejects present error strings, including an empty string', () => {
+    for (const error of ['', 'failed']) {
+      expect(isMeasuredScoreEligible({ error, overallScore: 8 })).toBe(false)
+    }
+  })
+
+  it('preserves healthy absent/null errors and measured zero or low scores', () => {
+    for (const score of [0, 0.5, 8]) {
+      for (const error of [undefined, null]) {
+        expect(isMeasuredScoreEligible({ error, overallScore: score })).toBe(
+          true,
+        )
+      }
+      expect(isMeasuredScoreEligible({ overallScore: score })).toBe(true)
+    }
+  })
+
+  it('keeps execution outcomes and synthetic judging separate', () => {
+    expect(
+      isMeasuredScoreEligible({
+        overallScore: 8,
+        runOutcome: { termination: 'completed' },
+      }),
+    ).toBe(true)
+    for (const termination of ['failed', 'cancelled', 'budget_exhausted']) {
+      expect(
+        isMeasuredScoreEligible({
+          overallScore: 8,
+          runOutcome: { termination },
+        }),
+      ).toBe(false)
+    }
+    expect(
+      isMeasuredScoreEligible({
+        overallScore: 0,
+        scoringStatus: 'all_judges_failed',
+      }),
+    ).toBe(false)
+    expect(
+      isMeasuredScoreEligible({
+        judging: { overallScore: 0, scoringStatus: 'all_judges_failed' },
+      }),
+    ).toBe(false)
+  })
+})
+
+describe('finite monetary aggregation', () => {
+  it('preserves zero, ordinary costs and a finite maximum singleton', () => {
+    expect(sumFiniteCosts([])).toBe(0)
+    expect(sumFiniteCosts([0, 1.25, 2.5])).toBe(3.75)
+    expect(sumFiniteCosts([Number.MAX_VALUE])).toBe(Number.MAX_VALUE)
+  })
+
+  it('rejects nonfinite input and finite-input overflow', () => {
+    expect(() => sumFiniteCosts([Number.MAX_VALUE, Number.MAX_VALUE])).toThrow(
+      /Aggregate monetary cost must be finite/,
+    )
+    for (const cost of [NaN, Infinity, -Infinity]) {
+      expect(() => sumFiniteCosts([cost])).toThrow(
+        /Aggregate monetary cost must be finite/,
+      )
+    }
+  })
+})
+
+describe('invalid evidence rejection', () => {
+  it('rejects nonfinite samples and invalid bootstrap controls', () => {
+    for (const value of [NaN, Infinity, -Infinity]) {
+      expect(() => mean([value])).toThrow()
+      expect(() => standardError([value])).toThrow()
+      expect(() =>
+        wilcoxonSignedRankTest(
+          Array.from({ length: 12 }, () => ({ before: 0, after: value })),
+        ),
+      ).toThrow()
+    }
+    const pairs = [
+      { before: 1, after: 2 },
+      { before: 3, after: 4 },
+    ]
+    for (const iterations of [0, -1, 1.5, Infinity]) {
+      expect(() => pairedBootstrapMeanDiffCI(pairs, { iterations })).toThrow()
+    }
+    for (const confidence of [0, 1, NaN]) {
+      expect(() => pairedBootstrapMeanDiffCI(pairs, { confidence })).toThrow()
+    }
+    expect(() => pairedBootstrapMeanDiffCI([{ before: 1, after: 2 }])).toThrow()
+  })
+})
 
 describe('mean', () => {
   it('returns 0 for empty input', () => {
@@ -79,11 +172,8 @@ describe('makeSeededRng', () => {
 })
 
 describe('pairedBootstrapMeanDiffCI', () => {
-  it('returns all zeros for empty pairs', () => {
-    const result = pairedBootstrapMeanDiffCI([])
-    expect(result.meanDiff).toBe(0)
-    expect(result.lower).toBe(0)
-    expect(result.upper).toBe(0)
+  it('rejects empty paired evidence', () => {
+    expect(() => pairedBootstrapMeanDiffCI([])).toThrow('at least two')
   })
 
   it('computes the observed meanDiff correctly', () => {
@@ -93,7 +183,10 @@ describe('pairedBootstrapMeanDiffCI', () => {
       { before: 3, after: 5 },
     ]
     // diffs are all +2, so meanDiff = 2.
-    const result = pairedBootstrapMeanDiffCI(pairs, { iterations: 500, seed: 7 })
+    const result = pairedBootstrapMeanDiffCI(pairs, {
+      iterations: 500,
+      seed: 7,
+    })
     expect(result.meanDiff).toBe(2)
     // With a constant diff the CI collapses to the point estimate.
     expect(result.lower).toBe(2)

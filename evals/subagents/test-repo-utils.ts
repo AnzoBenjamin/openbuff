@@ -15,15 +15,29 @@ import { getErrorObject } from '@codebuff/common/util/error'
 const execFileAsync = promisify(execFile)
 
 /** Discard setup output as before, and stop the command tree on cancellation. */
-function runInit(command: string, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<void> {
+function runInit(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason ?? new Error('Aborted'))
-    const child = spawn(command, { cwd, env, shell: true, stdio: 'ignore', detached: process.platform !== 'win32' })
+    const child = spawn(command, {
+      cwd,
+      env,
+      shell: true,
+      stdio: 'ignore',
+      detached: process.platform !== 'win32',
+    })
     const abort = () => {
       try {
-        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGTERM')
+        if (process.platform !== 'win32' && child.pid)
+          process.kill(-child.pid, 'SIGTERM')
         else child.kill('SIGTERM')
-      } catch { /* The process may have exited already. */ }
+      } catch {
+        /* The process may have exited already. */
+      }
     }
     signal?.addEventListener('abort', abort, { once: true })
     child.once('error', (error) => {
@@ -40,8 +54,15 @@ function runInit(command: string, cwd: string, env: NodeJS.ProcessEnv, signal?: 
 }
 
 function cloneArgs(repoUrl: string, repoDir: string): string[] {
-  return ['clone', ...(repoUrl.startsWith('file://') ? ['--no-local'] : []),
-    '--depth', '1', '--', repoUrl, repoDir]
+  return [
+    'clone',
+    ...(repoUrl.startsWith('file://') ? ['--no-local'] : []),
+    '--depth',
+    '1',
+    '--',
+    repoUrl,
+    repoDir,
+  ]
 }
 
 /**
@@ -55,25 +76,45 @@ export const withTestRepo = async <T>(
     parentSha: string
     initCommand?: string
     env?: Record<string, string>
+    inheritEnv?: boolean
     signal?: AbortSignal
   },
   fn: (cwd: string) => Promise<T>,
 ): Promise<T> => {
-  const { repoUrl, parentSha, initCommand, env, signal } = repoConfig
+  const {
+    repoUrl,
+    parentSha,
+    initCommand,
+    env,
+    signal,
+    inheritEnv = true,
+  } = repoConfig
+  const executionEnv = inheritEnv ? { ...process.env, ...env } : env
 
   // Create a temporary directory for the test repo
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codebuff-eval-'))
   const repoDir = path.join(tempDir, 'repo')
 
   try {
-    await execFileAsync('git', cloneArgs(repoUrl, repoDir), { signal })
-    await execFileAsync('git', ['fetch', '--depth', '1', 'origin', parentSha], { cwd: repoDir, signal })
-    await execFileAsync('git', ['checkout', parentSha], { cwd: repoDir, signal })
+    await execFileAsync('git', cloneArgs(repoUrl, repoDir), {
+      signal,
+      env: executionEnv,
+    })
+    await execFileAsync('git', ['fetch', '--depth', '1', 'origin', parentSha], {
+      cwd: repoDir,
+      signal,
+      env: executionEnv,
+    })
+    await execFileAsync('git', ['checkout', parentSha], {
+      cwd: repoDir,
+      signal,
+      env: executionEnv,
+    })
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)
       try {
-        await runInit(initCommand, repoDir, { ...process.env, ...env }, signal)
+        await runInit(initCommand, repoDir, executionEnv ?? {}, signal)
       } catch (error) {
         if (signal?.aborted) throw error
         console.error(
@@ -111,17 +152,27 @@ export const withTestRepoAndParent = async <T>(
   try {
     await execFileAsync('git', cloneArgs(repoUrl, repoDir), { signal })
 
-    await execFileAsync('git', ['fetch', '--depth', '2', 'origin', commitSha], { cwd: repoDir, signal })
+    await execFileAsync('git', ['fetch', '--depth', '2', 'origin', commitSha], {
+      cwd: repoDir,
+      signal,
+    })
 
-    await execFileAsync('git', ['checkout', commitSha], { cwd: repoDir, signal })
+    await execFileAsync('git', ['checkout', commitSha], {
+      cwd: repoDir,
+      signal,
+    })
 
     let parentSha: string
     try {
-      const { stdout } = await execFileAsync('git', ['log', '--pretty=%P', '-n', '1', commitSha], {
-        cwd: repoDir,
-        encoding: 'utf-8',
-        signal,
-      })
+      const { stdout } = await execFileAsync(
+        'git',
+        ['log', '--pretty=%P', '-n', '1', commitSha],
+        {
+          cwd: repoDir,
+          encoding: 'utf-8',
+          signal,
+        },
+      )
       const parents = stdout.trim()
 
       if (!parents) {
@@ -146,7 +197,10 @@ export const withTestRepoAndParent = async <T>(
       return null
     }
 
-    await execFileAsync('git', ['checkout', parentSha], { cwd: repoDir, signal })
+    await execFileAsync('git', ['checkout', parentSha], {
+      cwd: repoDir,
+      signal,
+    })
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)

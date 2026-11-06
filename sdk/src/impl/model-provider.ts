@@ -30,6 +30,7 @@ import {
   loadProviderConfigSync,
   resolveConfiguredAgentModelConfig,
   resolveConfiguredProviderModel,
+  resolveConfiguredProviderModelMetadata,
   resolveModelCapabilities,
 } from '../provider-config'
 import type { ModelPricing } from './llm'
@@ -46,6 +47,7 @@ import type {
   LoadedProviderConfig,
   ProviderCompatibility,
   ResolvedProviderModel,
+  ResolvedProviderModelMetadata,
 } from '../provider-config'
 import type { FetchFunction } from '@ai-sdk/provider-utils'
 import type { LanguageModel } from 'ai'
@@ -243,21 +245,61 @@ export async function getModelForRequest(
   let effectiveModel = effectiveAgentModelConfig.model
   let reasoningEffort = effectiveAgentModelConfig.reasoningEffort
 
-  let configuredProviderModel = resolveConfiguredProviderModel({
+  let configuredProviderMetadata = resolveConfiguredProviderModelMetadata({
     model: effectiveModel,
     loadedConfig: loadedProviderConfig,
   })
-  if (params.requiresVision && configuredProviderModel) {
+  const isOAuthRoute =
+    configuredProviderMetadata?.provider.type === 'chatgpt-oauth' ||
+    (!configuredProviderMetadata &&
+      isOpenAIProviderModel(effectiveModel) &&
+      isChatGptOAuthModelAllowed(effectiveModel))
+  if (isOAuthRoute && (skipChatGptOAuth || isChatGptOAuthRateLimited())) {
+    const fallback = loadedProviderConfig.config.failoverModels?.find(
+      (candidate) => {
+        const metadata = resolveConfiguredProviderModelMetadata({
+          model: candidate,
+          loadedConfig: loadedProviderConfig,
+        })
+        return metadata && metadata.provider.type !== 'chatgpt-oauth'
+      },
+    )
+    if (fallback)
+      return getModelForRequest({
+        ...params,
+        model: fallback,
+        skipChatGptOAuth: true,
+        preferModelParam: true,
+      })
+    throw Object.assign(
+      new Error(
+        `Openbuff could not route model '${effectiveModel}': ChatGPT/Codex OAuth is ${skipChatGptOAuth ? 'excluded for this request' : 'rate limited'}. Configure an eligible BYOK failoverModels route or reconnect with /connect:chatgpt.`,
+      ),
+      { name: 'ProviderRoutingError', code: 'provider_route_excluded' },
+    )
+  }
+  if (params.requiresVision && configuredProviderMetadata) {
     const visionRoute = resolveVisionModelIfNeeded({
-      configuredProviderModel,
+      configuredProviderModel: configuredProviderMetadata,
       effectiveModel,
       loadedConfig: loadedProviderConfig,
       reasoningEffort,
+      excludeChatGptOAuth: Boolean(
+        skipChatGptOAuth || isChatGptOAuthRateLimited(),
+      ),
     })
     effectiveModel = visionRoute.effectiveModel
     reasoningEffort = visionRoute.reasoningEffort
-    configuredProviderModel = visionRoute.configuredProviderModel
+    configuredProviderMetadata = visionRoute.configuredProviderModel
   }
+  // Only the final selected route validates its credentials. Metadata scans
+  // above never inspect dormant provider keys.
+  const configuredProviderModel = configuredProviderMetadata
+    ? resolveConfiguredProviderModel({
+        model: effectiveModel,
+        loadedConfig: loadedProviderConfig,
+      })
+    : undefined
   const resolvedCapabilities = configuredProviderModel
     ? resolveModelCapabilities({
         providerId: configuredProviderModel.providerId,
@@ -438,7 +480,7 @@ export function resolveModelContextWindow(params: {
   }).model
   const windows = resolveModelsToTry(effectiveModel, loadedConfig).flatMap(
     (candidateModel) => {
-      const configured = resolveConfiguredProviderModel({
+      const configured = resolveConfiguredProviderModelMetadata({
         model: candidateModel,
         loadedConfig,
       })
@@ -475,7 +517,7 @@ export function resolveModelContextWindows(params: {
   }).model
   const windows = resolveModelsToTry(effectiveModel, loadedConfig).flatMap(
     (candidateModel) => {
-      const configured = resolveConfiguredProviderModel({
+      const configured = resolveConfiguredProviderModelMetadata({
         model: candidateModel,
         loadedConfig,
       })
@@ -510,7 +552,7 @@ function isLikelyNonVisionModelName(modelNames: string): boolean {
 }
 
 function getModelVisionSupport(params: {
-  configuredProviderModel: ResolvedProviderModel
+  configuredProviderModel: ResolvedProviderModelMetadata
   effectiveModel: string
   loadedConfig: LoadedProviderConfig
 }): VisionSupport {
@@ -565,8 +607,9 @@ function getVisionFallbackRank(model: string): number {
 }
 
 function findProviderVisionFallback(params: {
-  configuredProviderModel: ResolvedProviderModel
+  configuredProviderModel: ResolvedProviderModelMetadata
   loadedConfig: LoadedProviderConfig
+  excludeChatGptOAuth?: boolean
 }): string | undefined {
   const { configuredProviderModel, loadedConfig } = params
   // Search the currently-configured provider first (intra-provider fallback)
@@ -584,11 +627,16 @@ function findProviderVisionFallback(params: {
     if (!provider) continue
     const providerModels = getProviderRoutableModels(providerId, provider)
     for (const candidate of providerModels) {
-      const candidateProviderModel = resolveConfiguredProviderModel({
+      const candidateProviderModel = resolveConfiguredProviderModelMetadata({
         model: candidate,
         loadedConfig,
       })
       if (!candidateProviderModel) continue
+      if (
+        params.excludeChatGptOAuth &&
+        candidateProviderModel.provider.type === 'chatgpt-oauth'
+      )
+        continue
       const support = getModelVisionSupport({
         configuredProviderModel: candidateProviderModel,
         effectiveModel: candidate,
@@ -607,12 +655,13 @@ function findProviderVisionFallback(params: {
 }
 
 function resolveVisionModelIfNeeded(params: {
-  configuredProviderModel: ResolvedProviderModel
+  configuredProviderModel: ResolvedProviderModelMetadata
   effectiveModel: string
   loadedConfig: LoadedProviderConfig
   reasoningEffort?: OpenbuffReasoningEffort
+  excludeChatGptOAuth?: boolean
 }): {
-  configuredProviderModel: ResolvedProviderModel
+  configuredProviderModel: ResolvedProviderModelMetadata
   effectiveModel: string
   reasoningEffort?: OpenbuffReasoningEffort
 } {
@@ -631,6 +680,7 @@ function resolveVisionModelIfNeeded(params: {
     findProviderVisionFallback({
       configuredProviderModel,
       loadedConfig,
+      excludeChatGptOAuth: params.excludeChatGptOAuth,
     })
   if (!visionModel) {
     throw new Error(
@@ -642,13 +692,24 @@ function resolveVisionModelIfNeeded(params: {
     )
   }
 
-  const visionProviderModel = resolveConfiguredProviderModel({
+  const visionProviderModel = resolveConfiguredProviderModelMetadata({
     model: visionModel,
     loadedConfig,
   })
   if (!visionProviderModel) {
     throw new Error(
       `Configured visionModel '${visionModel}' could not be routed to a provider. Add it to openbuff.json providers before sending image input.`,
+    )
+  }
+  if (
+    params.excludeChatGptOAuth &&
+    visionProviderModel.provider.type === 'chatgpt-oauth'
+  ) {
+    throw Object.assign(
+      new Error(
+        `Configured visionModel '${visionModel}' uses excluded ChatGPT/Codex OAuth. Configure an eligible BYOK image-capable visionModel.`,
+      ),
+      { name: 'ProviderRoutingError', code: 'provider_route_excluded' },
     )
   }
 

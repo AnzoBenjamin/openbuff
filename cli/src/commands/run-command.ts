@@ -1,4 +1,6 @@
 import { getProjectRoot } from '../project-files'
+import { runFailureMessage } from '@codebuff/common/types/run-outcome'
+import { projectRunOutcomes } from '@openbuff/sdk'
 import { getCodebuffClient } from '../utils/codebuff-client'
 import {
   openRunJournalForRun,
@@ -209,17 +211,42 @@ export async function runHeadlessCommand(
 
   try {
     const client = await getClient()
-    await client.run({
-      agent: args.agentId ?? 'base',
-      prompt: args.prompt,
-      cwd: projectRoot,
-      handleEvent,
-      // P2-T7: the live run journals into the shared run journal. The SAME
-      // object serves writer and reader (one connection, one file).
-      ...(journal ? { journalWriter: journal, journalReader: journal } : {}),
-      ...(runSignal ? { signal: runSignal } : {}),
-    })
+    const result = projectRunOutcomes(
+      await client.run({
+        agent: args.agentId ?? 'base',
+        prompt: args.prompt,
+        cwd: projectRoot,
+        handleEvent,
+        // P2-T7: the live run journals into the shared run journal. The SAME
+        // object serves writer and reader (one connection, one file).
+        ...(journal ? { journalWriter: journal, journalReader: journal } : {}),
+        ...(runSignal ? { signal: runSignal } : {}),
+      }),
+    )
     flushStdout()
+    const message = timedOut
+      ? `timed out after ${timeoutSeconds} seconds (--timeout); the run was aborted`
+      : runFailureMessage(result)
+    if (message) {
+      const runOutcome = timedOut
+        ? {
+            termination: 'deadline_exhausted',
+            cause: { code: 'run_timeout', message },
+          }
+        : result.runOutcome
+      if (args.json) {
+        writeStdout(
+          JSON.stringify({
+            type: 'error',
+            message,
+            runOutcome,
+            taskAcceptance: result.taskAcceptance,
+          }) + '\n',
+        )
+      }
+      writeStderr(`openbuff run: ${message}`)
+      return 1
+    }
     return 0
   } catch (error) {
     // Flush the batched events BEFORE the error line so it lands last.
@@ -231,7 +258,28 @@ export async function runHeadlessCommand(
         : String(error)
     if (args.json) {
       // Keep stdout strictly ndjson: the failure is one machine-readable line.
-      writeStdout(JSON.stringify({ type: 'error', message }) + '\n')
+      writeStdout(
+        JSON.stringify({
+          type: 'error',
+          message,
+          runOutcome: {
+            termination: timedOut
+              ? 'deadline_exhausted'
+              : runSignal?.aborted
+                ? 'cancelled'
+                : 'failed',
+            cause: {
+              code: timedOut
+                ? 'run_timeout'
+                : runSignal?.aborted
+                  ? 'run_cancelled'
+                  : 'run_error',
+              message,
+            },
+          },
+          taskAcceptance: { status: 'unknown' },
+        }) + '\n',
+      )
     }
     writeStderr(`openbuff run: ${message}`)
     return 1

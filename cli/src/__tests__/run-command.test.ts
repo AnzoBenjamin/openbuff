@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { runHeadlessCommand } from '../commands/run-command'
 
 import type { RunCommandArgs, RunHeadlessDeps } from '../commands/run-command'
-import type { OpenbuffClient, PrintModeEvent } from '@openbuff/sdk'
+import type { OpenbuffClient, PrintModeEvent, RunState } from '@openbuff/sdk'
 
 /**
  * Fully hermetic: every dependency of runHeadlessCommand is injected, so no
@@ -16,6 +16,7 @@ function makeHarness(options?: {
   throwMessage?: string
   args?: Partial<RunCommandArgs>
   deps?: Partial<RunHeadlessDeps>
+  result?: RunState
 }) {
   const stdoutChunks: string[] = []
   const stderrLines: string[] = []
@@ -33,7 +34,7 @@ function makeHarness(options?: {
       for (const event of options?.events ?? []) {
         await handleEvent?.(event)
       }
-      return { output: { type: 'message' } }
+      return options?.result ?? { output: { type: 'lastMessage', value: [] } }
     },
   }
 
@@ -55,6 +56,72 @@ function makeHarness(options?: {
 }
 
 describe('runHeadlessCommand', () => {
+  test('resolved failed, exhausted and rejected outcomes fail without an error event', async () => {
+    const results: RunState[] = [
+      {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: {
+          termination: 'failed',
+          cause: { code: 'failed', message: '' },
+        },
+      },
+      { output: { type: 'error', message: '   ' } },
+      {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: { termination: 'budget_exhausted' },
+      },
+      {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: { termination: 'step_exhausted' },
+      },
+      {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: { termination: 'cancelled' },
+      },
+      {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: { termination: 'completed' },
+        taskAcceptance: { status: 'rejected', oracle: 'fixture' },
+      },
+    ]
+    for (const result of results) {
+      const h = makeHarness({
+        result,
+        deps: { openRunJournal: () => undefined },
+      })
+      expect(await runHeadlessCommand(h.args, h.deps)).toBe(1)
+      const error = JSON.parse(h.stdoutChunks.join('').trim())
+      expect(error.type).toBe('error')
+      expect(error.message.trim().length).toBeGreaterThan(0)
+      if (result.taskAcceptance?.status === 'rejected') {
+        expect(error.runOutcome.termination).toBe('completed')
+        expect(error.taskAcceptance.status).toBe('rejected')
+      }
+    }
+  })
+
+  test('an accepted recovery succeeds while its failed action stays recorded', async () => {
+    const result: RunState = {
+      output: { type: 'lastMessage', value: [] },
+      runOutcome: { termination: 'completed' },
+      taskAcceptance: { status: 'accepted', oracle: 'fixture' },
+      actionOutcomes: [
+        {
+          actionId: 'failed-action',
+          attemptId: 'attempt',
+          runId: 'run',
+          toolName: 'custom',
+          basis: { inputHash: 'sha256:fixture' },
+          outcome: 'failed',
+          effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] },
+        },
+      ],
+    }
+    const h = makeHarness({ result, deps: { openRunJournal: () => undefined } })
+    expect(await runHeadlessCommand(h.args, h.deps)).toBe(0)
+    expect(result.actionOutcomes?.[0].outcome).toBe('failed')
+  })
+
   test('short human text flushes before a deferred run completes', async () => {
     let finish!: () => void
     let started!: () => void
@@ -76,6 +143,7 @@ describe('runHeadlessCommand', () => {
               options.handleEvent({ type: 'text', text: 'first text' })
               started()
               await deferred
+              return { output: { type: 'lastMessage', value: [] } }
             },
           }) as unknown as OpenbuffClient,
       },
@@ -156,12 +224,11 @@ describe('runHeadlessCommand', () => {
     const code = await runHeadlessCommand(h.args, h.deps)
 
     expect(code).toBe(1)
-    expect(h.stdoutChunks).toEqual([
-      JSON.stringify({ type: 'error', message: 'boom' }) + '\n',
-    ])
-    expect(JSON.parse(h.stdoutChunks.join('').trim())).toEqual({
+    expect(h.stdoutChunks).toHaveLength(1)
+    expect(JSON.parse(h.stdoutChunks.join('').trim())).toMatchObject({
       type: 'error',
       message: 'boom',
+      runOutcome: { termination: 'failed' },
     })
     expect(h.stderrLines.some((l) => l.includes('boom'))).toBe(true)
   })
@@ -344,9 +411,10 @@ describe('runHeadlessCommand', () => {
       // stdout stays strictly ndjson: exactly one error line.
       const lines = t.stdoutChunks.join('').split('\n').filter(Boolean)
       expect(lines).toHaveLength(1)
-      expect(JSON.parse(lines[0])).toEqual({
+      expect(JSON.parse(lines[0])).toMatchObject({
         type: 'error',
         message: expect.stringContaining('timed out'),
+        runOutcome: { termination: 'deadline_exhausted' },
       })
       expect(t.stderrLines.join('')).toContain('timed out')
     })
@@ -409,9 +477,10 @@ describe('runHeadlessCommand', () => {
 
       expect(code).toBe(1)
       const lines = t.stdoutChunks.join('').split('\n').filter(Boolean)
-      expect(JSON.parse(lines[lines.length - 1])).toEqual({
+      expect(JSON.parse(lines[lines.length - 1])).toMatchObject({
         type: 'error',
         message: 'client hangup',
+        runOutcome: { termination: 'cancelled' },
       })
     })
   })

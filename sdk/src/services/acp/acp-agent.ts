@@ -66,7 +66,10 @@ const MAX_LIVE_SESSIONS = 16
  * state so a cancelled turn (via the abort signal) and a naturally finished
  * turn are both explicit.
  */
-export type AcpPromptTurnResult = { stopReason: 'end_turn' | 'cancelled' }
+export type AcpPromptTurnResult = {
+  stopReason: 'end_turn' | 'cancelled'
+  _meta?: Record<string, unknown>
+}
 
 /**
  * The injectable seam P1-T2 binds to the real core run: the ACP skeleton owns
@@ -170,9 +173,7 @@ export type AcpReverseRequests = {
   ): Promise<RequestPermissionResponse>
   readTextFile(params: ReadTextFileRequest): Promise<ReadTextFileResponse>
   writeTextFile(params: WriteTextFileRequest): Promise<void>
-  createTerminal(
-    params: CreateTerminalRequest,
-  ): Promise<CreateTerminalResponse>
+  createTerminal(params: CreateTerminalRequest): Promise<CreateTerminalResponse>
 }
 
 /**
@@ -216,9 +217,7 @@ export type AcpAgentOptions = {
    * text and drops reasoning/tool raw IO, so no receipts, capabilities, or
    * `cap.v3.` tokens cross the wire on replay (GV-26).
    */
-  historyLoader?: (input: {
-    sessionId: string
-  }) => Promise<AcpReplayMessage[]>
+  historyLoader?: (input: { sessionId: string }) => Promise<AcpReplayMessage[]>
   /**
    * Optional reverse-request seam forwarded into the prompt handler's input;
    * the P1-T2 bridge binds it to AgentSideConnection's requestPermission,
@@ -463,11 +462,7 @@ function expandIpv6Groups(host: string): number[] | null {
         : []
     const fill = 8 - head.length - tail.length
     if (fill < 1) return null
-    parts = [
-      ...head,
-      ...Array<string>(fill).fill('0'),
-      ...tail,
-    ]
+    parts = [...head, ...Array<string>(fill).fill('0'), ...tail]
   } else {
     parts = host.split(':')
     if (parts.length !== 8) return null
@@ -503,7 +498,7 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
     // double and the ranges would never match. Do not drop the unsigned
     // conversion in a refactor.
     return PRIVATE_IPV4_RANGES.some(
-      (range) => ((ipv4 & range.mask) >>> 0) === range.network,
+      (range) => (ipv4 & range.mask) >>> 0 === range.network,
     )
   }
   const groups = expandIpv6Groups(unbracketed)
@@ -896,7 +891,10 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         const history = await options.historyLoader({
           sessionId: params.sessionId,
         })
-        for (const update of replayMessagesToUpdates(params.sessionId, history)) {
+        for (const update of replayMessagesToUpdates(
+          params.sessionId,
+          history,
+        )) {
           await options.connection.sessionUpdate(update)
         }
       }
@@ -926,9 +924,7 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
     // synchronous throw: callers (and the wire layer) await this method and
     // expect the JSON-RPC error to surface through the awaited result. The
     // SDK's Agent interface allows MaybePromise<NewSessionResponse>.
-    async newSession(
-      params: NewSessionRequest,
-    ): Promise<NewSessionResponse> {
+    async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
       // SEC-7 (§12.5): validate cwd containment and the additionalDirectories
       // allowlist BEFORE any session record is created.
       const resolvedCwd = rejectUncontainedCwd(params.cwd)
@@ -980,10 +976,7 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       // reflect the injected store's real posture (a purely in-memory store
       // advertises no resume/replay), and the map is always derived locally.
       const sessionData = options.sessionData
-      if (
-        sessionData &&
-        sessionData.getCapabilities(sessionId) === undefined
-      ) {
+      if (sessionData && sessionData.getCapabilities(sessionId) === undefined) {
         sessionData.setCapabilities(
           sessionId,
           defaultCapabilityMapV1({
@@ -1058,7 +1051,10 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
           },
           signal: abortController.signal,
         })
-        return { stopReason: result.stopReason }
+        return {
+          stopReason: result.stopReason,
+          ...(result._meta ? { _meta: result._meta } : {}),
+        }
       } finally {
         // The turn settled (finished, errored, or was cancelled): release the
         // controller so the session accepts its next prompt. Only this
@@ -1236,11 +1232,9 @@ async function dispatchExtV1Method(
       const receiptId = typeof data.receiptId === 'string' ? data.receiptId : ''
       const envelope = sessionData.getReceipt(sessionId, receiptId)
       if (envelope === undefined) {
-        throw new RequestError(
-          -32002,
-          `Unknown receipt id '${receiptId}'.`,
-          { 'openbuff.dev': { code: 'receipt_not_found', receiptId } },
-        )
+        throw new RequestError(-32002, `Unknown receipt id '${receiptId}'.`, {
+          'openbuff.dev': { code: 'receipt_not_found', receiptId },
+        })
       }
       // GV-07: the redaction-enforcing ext-v1 wire contract is validated on
       // EVERY serve path — including journal-restored sessions — so a tampered
@@ -1253,11 +1247,9 @@ async function dispatchExtV1Method(
       // is unaddressable (receipt_not_found).
       const parsedEnvelope = receiptEnvelopeV1Schema.safeParse(envelope)
       if (!parsedEnvelope.success) {
-        throw new RequestError(
-          -32002,
-          `Unknown receipt id '${receiptId}'.`,
-          { 'openbuff.dev': { code: 'receipt_not_found', receiptId } },
-        )
+        throw new RequestError(-32002, `Unknown receipt id '${receiptId}'.`, {
+          'openbuff.dev': { code: 'receipt_not_found', receiptId },
+        })
       }
       return {
         receipt: parsedEnvelope.data,

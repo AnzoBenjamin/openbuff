@@ -1,5 +1,6 @@
 import { changeFiles } from './change-file'
 import { findFileMutationResult } from './write-audit-findings'
+import { getConfirmedAppliedActionsV1 } from '@codebuff/common/tools/results/filesystem'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { FileMutationResultV1 } from '@codebuff/common/tools/results/filesystem'
@@ -55,7 +56,9 @@ export type SemanticEditApplyDeps = {
 type SemanticEditOutputValue =
   CodebuffToolOutput<'rename_symbol'>[number]['value']
 
-function jsonOutput(value: SemanticEditOutputValue): CodebuffToolOutput<'rename_symbol'> {
+function jsonOutput(
+  value: SemanticEditOutputValue,
+): CodebuffToolOutput<'rename_symbol'> {
   return [{ type: 'json', value }]
 }
 
@@ -70,8 +73,11 @@ function buildApplyOutput(
   mutation: FileMutationResultV1,
   serviceError: string | undefined,
 ): SemanticEditOutputValue {
+  const confirmedActionIds = new Set(
+    getConfirmedAppliedActionsV1(mutation).map((action) => action.actionId),
+  )
   const results = mutation.actions.map((action) => {
-    if (action.outcome === 'applied') {
+    if (confirmedActionIds.has(action.actionId)) {
       return { path: action.path, applied: true }
     }
     return {
@@ -91,7 +97,9 @@ function buildApplyOutput(
     }
   }
   return {
-    applied: mutation.outcome === 'applied',
+    applied:
+      mutation.outcome === 'applied' &&
+      confirmedActionIds.size === mutation.actions.length,
     results,
     ...(errorMessages.size > 0
       ? { errorMessage: [...errorMessages].join('; ') }
@@ -164,7 +172,10 @@ export async function applySemanticEdit(
       }),
     }
   }
-  return { output: jsonOutput(buildApplyOutput(mutation, serviceError)), mutation }
+  return {
+    output: jsonOutput(buildApplyOutput(mutation, serviceError)),
+    mutation,
+  }
 }
 
 /**

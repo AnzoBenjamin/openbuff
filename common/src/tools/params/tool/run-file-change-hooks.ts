@@ -24,7 +24,7 @@ Use cases:
 
 The client will run only the hooks whose filePattern matches the provided files.
 
-When the opt-in OPENBUFF_DIAGNOSTIC_PREFLIGHT diagnostic-delta preflight runs, a diagnostic-delta entry reports diagnostic_delta_passed, or diagnostic_delta_rejected with the new error diagnostics (newDiagnostics) and their suggested fix-its (fixIts).
+When the opt-in OPENBUFF_DIAGNOSTIC_PREFLIGHT diagnostic-delta preflight runs, a diagnostic-delta entry retains command execution and coverage observations. Only a complete before/after check reports diagnostic_delta_passed. New errors report diagnostic_delta_rejected with newDiagnostics and fixIts; failed, cancelled, unavailable, incomplete and unknown observations retain their specific status even when optional validation permits work.
 
 Example:
 ${$getNativeToolCallExampleString({
@@ -56,6 +56,34 @@ const diagnosticSchema = z.object({
   message: z.string(),
   command: z.string(),
   source: z.string(),
+})
+
+const diagnosticCoverageStatusSchema = z.enum(['complete', 'incomplete', 'unavailable', 'unknown'])
+export const diagnosticCaptureSchema = z.object({
+  diagnostics: z.array(diagnosticSchema),
+  commands: z.array(z.object({
+    command: z.string(),
+    status: z.enum(['completed', 'failed', 'timed_out', 'cancelled', 'unavailable', 'unknown']),
+    exitCode: z.number().optional(),
+    errorMessage: z.string().optional(),
+    outputTruncated: z.boolean(),
+    diagnosticCount: z.number().int().nonnegative(),
+    coverageStatus: diagnosticCoverageStatusSchema,
+  })),
+  coverage: z.object({
+    status: diagnosticCoverageStatusSchema,
+    requestedFiles: z.array(z.string()),
+    observedFiles: z.array(z.string()),
+    unobservedFiles: z.array(z.string()),
+    reasons: z.array(z.string()),
+  }),
+})
+
+export const diagnosticObservationsSchema = z.object({
+  basis: z.enum(['before_after', 'current_only', 'unknown']),
+  before: diagnosticCaptureSchema.optional(),
+  after: diagnosticCaptureSchema.optional(),
+  reason: z.string().optional(),
 })
 
 /** Matches LanguageDiagnosticTextEdit from sdk/src/tools/language-diagnostics. */
@@ -112,7 +140,14 @@ export const runFileChangeHooksParams = {
           validationStatus: z.enum([
             'diagnostic_delta_rejected',
             'diagnostic_delta_passed',
+            'diagnostic_delta_failed',
+            'diagnostic_delta_cancelled',
+            'diagnostic_delta_unavailable',
+            'diagnostic_delta_incomplete',
+            'diagnostic_delta_unknown',
           ]),
+          diagnosticStatus: z.enum(['passed', 'new_errors', 'failed', 'cancelled', 'unavailable', 'incomplete', 'unknown']).optional(),
+          observations: diagnosticObservationsSchema.optional(),
           newDiagnostics: z.array(diagnosticSchema).optional(),
           fixIts: z.array(textEditSchema).optional(),
         }),

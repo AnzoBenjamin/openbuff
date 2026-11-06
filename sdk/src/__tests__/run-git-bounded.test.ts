@@ -11,6 +11,7 @@ import {
 } from '@codebuff/common/testing/mock-modules'
 import { createMockChildProcess } from '@codebuff/common/testing/mocks'
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 
 import { runGitBounded } from '../tools/get-change-review-bundle'
 
@@ -53,6 +54,36 @@ describe('runGitBounded', () => {
     expect(result.stdoutTotalBytes).toBe(3 * 1024 * 1024)
     expect(result.stdout).toBe('a'.repeat(4_096))
     expect(result.exitCode).toBe(0)
+    expect(result.stdoutComplete).toBe(true)
+    expect(result.stdoutTruncated).toBe(true)
+    expect(result.stdoutSha256).toBe(
+      createHash('sha256')
+        .update(chunk)
+        .update(chunk)
+        .update(chunk)
+        .digest('hex'),
+    )
+  })
+
+  test('equal-length tails beyond retained stdout change its full digest', async () => {
+    const prefix = Buffer.alloc(4_096, 'a')
+    const run = async (tail: string) => {
+      mockProcess = createMockChildProcess()
+      mockSpawn.mockImplementation(() => mockProcess)
+      const pending = runGitBounded(['diff'], '/repo', undefined, {
+        timeoutMs: 1_000,
+        maxOutputBytes: prefix.length,
+      })
+      mockProcess.stdout.emit('data', prefix)
+      mockProcess.stdout.emit('data', Buffer.from(tail))
+      mockProcess.emit('close', 0)
+      return await pending
+    }
+    const first = await run('tail-one')
+    const second = await run('tail-two')
+    expect(second.stdout).toBe(first.stdout)
+    expect(second.stdoutTotalBytes).toBe(first.stdoutTotalBytes)
+    expect(second.stdoutSha256).not.toBe(first.stdoutSha256)
   })
 
   test('kills a wedged git at the wall-clock deadline and fails closed', async () => {
@@ -66,21 +97,21 @@ describe('runGitBounded', () => {
     )
     expect(result.exitCode).toBe(-1)
     expect(result.stderr).toContain('timed out')
+    expect(result.stdoutComplete).toBe(false)
     expect(mockProcess.kill).toHaveBeenCalledWith('SIGKILL')
   })
 
   test('returns immediately without spawning when the signal is already aborted', async () => {
     const controller = new AbortController()
     controller.abort(new Error('caller cancelled'))
-    const result = await runGitBounded(
-      ['status'],
-      '/repo',
-      controller.signal,
-      { timeoutMs: 1_000, maxOutputBytes: 4_096 },
-    )
+    const result = await runGitBounded(['status'], '/repo', controller.signal, {
+      timeoutMs: 1_000,
+      maxOutputBytes: 4_096,
+    })
     expect(mockSpawn).not.toHaveBeenCalled()
     expect(result.exitCode).toBe(-1)
     expect(result.stderr).toContain('caller cancelled')
     expect(result.stdoutTotalBytes).toBe(0)
+    expect(result.stdoutComplete).toBe(false)
   })
 })

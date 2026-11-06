@@ -69,6 +69,10 @@ import type {
   ChildRunDisposition,
   RunResumeReport,
 } from './run-journal'
+import type {
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 
 /**
  * One item the driver deliberately did NOT act on. `reason` mirrors the
@@ -82,6 +86,8 @@ export type RunReplayDriverSkip =
       kind: 'child'
       childRunId: string
       reason: 'replayed_completed' | 'child_unknown'
+      runOutcome?: RunOutcome
+      taskAcceptance?: TaskAcceptance
     }
   | {
       kind: 'background'
@@ -218,6 +224,10 @@ export async function executeRunResumeReport(params: {
           kind: 'child',
           childRunId: child.childRunId,
           reason: 'replayed_completed',
+          ...(child.runOutcome ? { runOutcome: child.runOutcome } : {}),
+          ...(child.taskAcceptance
+            ? { taskAcceptance: child.taskAcceptance }
+            : {}),
         })
       }
       for (const disposition of report.children.inFlight) {

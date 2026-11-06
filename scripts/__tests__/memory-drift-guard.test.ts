@@ -795,6 +795,63 @@ test('memory-drift guard skips other SKIP_PATH_PREFIXES like evals/test-repos', 
   expect(brokenFindings.some(touched)).toBe(false)
 })
 
+test('memory-drift guard skips the exact raw B30 snapshot while checking active neighboring docs', () => {
+  const archive =
+    'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot'
+  const archivedPath = `${archive}/.agents/sessions/example/PLAN.md`
+  const activePaths = [
+    'docs/session-state.md',
+    'common/knowledge.md',
+    'docs/execution/body-roadmap/evidence/B30/independent-review/README.md',
+    `${archive}-active/PLAN.md`,
+    'docs/execution/body-roadmap/evidence/B31/independent-review/source-snapshot/PLAN.md',
+  ]
+  for (const path of [archivedPath, ...activePaths]) {
+    mkdirSync(join(tmpRoot, path, '..'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      'See `src/missing.ts` and [gone](./gone.md).\nTODO: unresolved\n',
+    )
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  expect(snapshot.files).not.toContain(join(tmpRoot, archivedPath))
+  for (const suppliedSnapshot of [undefined, snapshot]) {
+    for (const checker of [checkPath, checkBrokenLink, checkTodoFixme]) {
+      const findings = checker(tmpRoot, suppliedSnapshot)
+      expect(findings.map((finding) => finding.path).sort()).toEqual(
+        [...activePaths].sort(),
+      )
+    }
+  }
+})
+
+test('broken-link checker resolves positive Markdown source-line citations without hiding missing files', () => {
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'docs', 'guide.md'), '# Guide\n')
+  writeFileSync(join(tmpRoot, 'docs', 'session.mdx'), '# Session\n')
+  writeFileSync(
+    join(tmpRoot, 'docs', 'citations.md'),
+    [
+      '[guide](./guide.md:668)',
+      '[session](./session.mdx:84#state)',
+      '[missing](./missing.md:10)',
+      '[invalid](./guide.md:not-a-line)',
+      '[zero](./guide.md:0)',
+      '[non-markdown](./script.ts:10)',
+    ].join('\n'),
+  )
+  for (const snapshot of [undefined, buildMarkdownSnapshot(tmpRoot)]) {
+    expect(
+      checkBrokenLink(tmpRoot, snapshot).map((finding) => finding.message),
+    ).toEqual([
+      'broken link ./missing.md:10',
+      'broken link ./guide.md:not-a-line',
+      'broken link ./guide.md:0',
+      'broken link ./script.ts:10',
+    ])
+  }
+})
+
 // chmod 0o000 does not block reads for the superuser (or on Windows), so the
 // unreadable-file fixture cannot be reproduced there.
 const canTestUnreadableFile =

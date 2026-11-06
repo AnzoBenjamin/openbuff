@@ -1,5 +1,10 @@
 import z from 'zod/v4'
 import { jsonValueSchema } from './json'
+import {
+  actionOutcomeSchema,
+  runOutcomeSchema,
+  taskAcceptanceSchema,
+} from './run-outcome'
 
 export const agentRoleSchema = z.enum([
   'orchestrator',
@@ -135,6 +140,9 @@ export const agentReceiptSchema = z
     role: agentRoleSchema,
     agentId: z.string().min(1),
     status: z.enum(['completed', 'partial', 'blocked', 'failed', 'cancelled']),
+    runOutcome: runOutcomeSchema.optional(),
+    taskAcceptance: taskAcceptanceSchema.optional(),
+    actionOutcomes: z.array(actionOutcomeSchema).optional(),
     /**
      * D19/PR-T1 typed handoff outcome; additive — legacy receipts without it
      * stay valid.

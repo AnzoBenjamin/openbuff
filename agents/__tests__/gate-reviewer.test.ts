@@ -46,6 +46,7 @@ type GateReviewerHelpers = {
     expectedFingerprint: string,
     pendingFiles: string[],
     deletedFiles?: string[],
+    options?: { requireFullEvidence?: boolean; lightweight?: boolean },
   ) => string[]
   // The gate correlates structured findings with THIS copy, so the
   // first-record-per-id de-dupe needs parity coverage too.
@@ -130,6 +131,7 @@ const INLINE_DEPENDENCY_NAMES = [
   // the shared order-independent resolver; both are generated into base2.
   'normalizeGateFilePath',
   'resolveReviewerAttestation',
+  'isLightweightReceiptEligible',
 ] as const
 
 /**
@@ -1803,8 +1805,10 @@ describe('gate-reviewer helpers', () => {
         expected,
         files,
       ),
-    ).toEqual([])
-    // The tolerated drift is still recorded from the attesting entry.
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
+    // The rejected basis remains visible for diagnostics.
     expect(
       collectReviewerFingerprintDrift(trailingSchemaVersionQuote, expected),
     ).toBe(drifted)
@@ -1896,7 +1900,9 @@ describe('gate-reviewer helpers', () => {
     }
     expect(
       collectReviewerAttestationIssues(trailingQuoteWithFiles, expected, files),
-    ).toEqual([])
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
     expect(
       collectReviewerAttestationIssues(
         trailingQuoteWithFingerprint,
@@ -1984,7 +1990,9 @@ describe('gate-reviewer helpers', () => {
         expected,
         files,
       ),
-    ).toEqual([])
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
     // Drift telemetry reports the REAL receipt's fingerprint rather than '' ...
     expect(
       collectReviewerFingerprintDrift(leadingQuoteWithDriftedReal, expected),
@@ -2354,7 +2362,7 @@ describe('gate-reviewer helpers', () => {
         ['src/a.ts', 'src/b.ts'],
       ),
     ).toEqual([])
-    // Full coverage + different but well-formed v3 fingerprint → no issues.
+    // Full file coverage still requires the exact current content basis.
     expect(
       collectReviewerAttestationIssues(
         {
@@ -2366,7 +2374,9 @@ describe('gate-reviewer helpers', () => {
         'v3:' + 'd'.repeat(64),
         ['src/a.ts', 'src/b.ts'],
       ),
-    ).toEqual([])
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
   })
 
   test('rejects every non-1 attestation schema version', () => {
@@ -2403,12 +2413,7 @@ describe('gate-reviewer helpers', () => {
     ).toEqual([])
   })
 
-  // The gate tolerates a fully-attesting review whose well-formed snapshot
-  // fingerprint drifted from the exact bundle id (e.g. an unrelated plan-session
-  // .jsonl/.md or a git-status bundle bump between spawn and attestation). Only
-  // FILE-COVERAGE gaps, a missing fingerprint, or a non-attestable sentinel stay
-  // hard blockers.
-  test('tolerates a coverage-complete review with a wrong-but-well-formed fingerprint', () => {
+  test('rejects a coverage-complete review with an obsolete same-path fingerprint', () => {
     expect(
       collectReviewerAttestationIssues(
         {
@@ -2420,12 +2425,12 @@ describe('gate-reviewer helpers', () => {
         'v3:' + 'd'.repeat(64),
         ['src/a.ts'],
       ),
-    ).toEqual([])
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
   })
 
-  // The tolerance above is deliberate but must not be silent: the drift is
-  // reported separately so callers can record it (base2 emits gate telemetry).
-  test('collectReviewerFingerprintDrift reports the tolerated non-matching v3 fingerprint', () => {
+  test('collectReviewerFingerprintDrift reports a rejected non-matching basis', () => {
     const drifted = 'v3:' + 'e'.repeat(64)
     const expected = 'v3:' + 'd'.repeat(64)
     const coverageComplete = {
@@ -2434,13 +2439,13 @@ describe('gate-reviewer helpers', () => {
       snapshotFingerprint: drifted,
       reviewedFiles: ['src/a.ts'],
     }
-    // Attestation still tolerates the drift (no blocker) ...
     expect(
       collectReviewerAttestationIssues(coverageComplete, expected, [
         'src/a.ts',
       ]),
-    ).toEqual([])
-    // ... and the drift is surfaced for recording.
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
     expect(collectReviewerFingerprintDrift(coverageComplete, expected)).toBe(
       drifted,
     )
@@ -2511,8 +2516,9 @@ describe('gate-reviewer helpers', () => {
     // invalid-schemaVersion blocker ...
     expect(
       collectReviewerAttestationIssues(toolResult, expected, ['src/a.ts']),
-    ).toEqual([])
-    // ... and the tolerated drift is still recorded from the attesting receipt.
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
     expect(collectReviewerFingerprintDrift(toolResult, expected)).toBe(drifted)
     // Fail-closed fallback: a receipt whose only entry carries no schemaVersion
     // is still rejected.
@@ -2531,7 +2537,9 @@ describe('gate-reviewer helpers', () => {
       inlineHelpers.collectReviewerAttestationIssues(toolResult, expected, [
         'src/a.ts',
       ]),
-    ).toEqual([])
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
     expect(
       inlineHelpers.collectReviewerFingerprintDrift(toolResult, expected),
     ).toBe(drifted)
@@ -2816,7 +2824,9 @@ describe('gate-reviewer helpers', () => {
         ['src/deleted.ts'],
         ['src/deleted.ts'],
       ),
-    ).toEqual([])
+    ).toEqual([
+      'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
+    ])
   })
 
   test('getReviewerFinalizationVerdict blocks finalization when coverage is missing', () => {
@@ -3800,9 +3810,17 @@ describe('collectReviewerHardBlockers', () => {
     ).toEqual([])
     // base2's inline mirrors are the gate's runtime authority.
     const inlineHelpers = loadInlineGateReviewerHelpers()
-    for (const envelope of [siblingEnvelope, nestedEnvelope, quotedInEvidence]) {
+    for (const envelope of [
+      siblingEnvelope,
+      nestedEnvelope,
+      quotedInEvidence,
+    ]) {
       expect(
-        inlineHelpers.collectReviewerAttestationIssues(envelope, expected, files),
+        inlineHelpers.collectReviewerAttestationIssues(
+          envelope,
+          expected,
+          files,
+        ),
       ).toEqual(collectReviewerAttestationIssues(envelope, expected, files))
       expect(inlineHelpers.getReviewerFinalizationVerdict(envelope)).toBe(
         getReviewerFinalizationVerdict(envelope),
@@ -4055,7 +4073,12 @@ describe('gate-reviewer Wave 3 helpers', () => {
   // tool results (null, primitives, inert envelopes) without throwing, and
   // always embed the diagnostic's summary for the reviewer to act on.
   test('the diagnose + retry-notice round trip tolerates non-string tool results', () => {
-    for (const toolResult of [null, undefined, 42, { nested: { deep: true } }]) {
+    for (const toolResult of [
+      null,
+      undefined,
+      42,
+      { nested: { deep: true } },
+    ]) {
       const diag = diagnoseReviewerVerdictRejection(toolResult, 'retry')
       expect(typeof diag.code).toBe('string')
       expect(buildReviewerVerdictRetryNotice(diag, 'code-reviewer')).toContain(
@@ -4155,9 +4178,7 @@ describe('gate-reviewer lightweight tier and prose recovery helpers', () => {
     const proseReply =
       'LOOKS_GOOD: nothing to raise.\nreviewedFiles: ["src/a.ts"]'
     expect(
-      recoverProseVerdictWithAttestation(proseReply, fingerprint, [
-        'src/a.ts',
-      ]),
+      recoverProseVerdictWithAttestation(proseReply, fingerprint, ['src/a.ts']),
     ).toBe(proseReply)
     // An empty expected fingerprint can never be attested either.
     expect(
@@ -4171,9 +4192,7 @@ describe('gate-reviewer lightweight tier and prose recovery helpers', () => {
     const proseReply =
       'LOOKS_GOOD: nothing to raise.\n' + `snapshotFingerprint: ${fingerprint}`
     expect(
-      recoverProseVerdictWithAttestation(proseReply, fingerprint, [
-        'src/a.ts',
-      ]),
+      recoverProseVerdictWithAttestation(proseReply, fingerprint, ['src/a.ts']),
     ).toBe(proseReply)
     // An empty pending set has nothing to cross-check against.
     expect(
@@ -4308,10 +4327,9 @@ describe('gate-reviewer lightweight tier and prose recovery helpers', () => {
       isLightweightReceiptEligible(['src/a.ts', ''], { maxFiles: 5 }),
     ).toBe(false)
     expect(
-      isLightweightReceiptEligible(
-        ['src/a.ts', 42 as unknown as string],
-        { maxFiles: 5 },
-      ),
+      isLightweightReceiptEligible(['src/a.ts', 42 as unknown as string], {
+        maxFiles: 5,
+      }),
     ).toBe(false)
   })
 
@@ -4372,6 +4390,7 @@ describe('gate-reviewer lightweight tier and prose recovery helpers', () => {
       'reviewedFiles',
       'coverage',
       'dimensions',
+      'requirementCoverage',
       'family',
     ])
     expect(full.instruction).toBe('')

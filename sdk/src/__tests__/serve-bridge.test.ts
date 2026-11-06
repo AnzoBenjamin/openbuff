@@ -22,7 +22,7 @@ import type { RunState } from '../run-state'
 import { AcpSessionData } from '../services/acp/session-data'
 
 const DONE_STATE: RunState = {
-  output: { type: 'error', message: 'done' },
+  output: { type: 'lastMessage', value: [] },
 }
 
 /**
@@ -33,6 +33,7 @@ function makeFakeClient(script: {
   events?: PrintModeEvent[]
   mutations?: FilesystemMutationEvent[]
   beforeResolve?: (runOptions: RunOptions & OpenbuffClientOptions) => void
+  result?: RunState
 }): ServeBridgeClient {
   return {
     async run(runOptions) {
@@ -43,7 +44,7 @@ function makeFakeClient(script: {
         await runOptions.onFilesystemMutation?.(mutation)
       }
       script.beforeResolve?.(runOptions)
-      return DONE_STATE
+      return script.result ?? DONE_STATE
     },
   }
 }
@@ -59,6 +60,61 @@ function collectUpdates() {
 }
 
 describe('createServeBridge', () => {
+  test('resolved empty errors and rejected task verdicts remain unsuccessful', async () => {
+    for (const result of [
+      {
+        output: { type: 'error', message: '' },
+        runOutcome: {
+          termination: 'failed',
+          cause: { code: 'fixture', message: '' },
+        },
+      },
+      {
+        output: { type: 'lastMessage', value: [] },
+        runOutcome: { termination: 'completed' },
+        taskAcceptance: { status: 'rejected', oracle: 'fixture' },
+      },
+    ] as RunState[]) {
+      const { promptHandler } = createServeBridge({
+        client: makeFakeClient({ result }),
+        sessionData: new AcpSessionData(),
+      })
+      await expect(
+        promptHandler({
+          sessionId: 's1',
+          promptText: 'fixed control',
+          update: async () => {},
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow()
+    }
+  })
+
+  test('an authoritative accepted recovery retains its verdict after an earlier error event', async () => {
+    const { promptHandler } = createServeBridge({
+      client: makeFakeClient({
+        events: [{ type: 'error', message: 'initial action failed' }],
+        result: {
+          output: { type: 'lastMessage', value: [] },
+          runOutcome: { termination: 'completed' },
+          taskAcceptance: { status: 'accepted', oracle: 'recovery' },
+        },
+      }),
+      sessionData: new AcpSessionData(),
+    })
+    const result = await promptHandler({
+      sessionId: 's1',
+      promptText: 'fixed control',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+    expect(result.stopReason).toBe('end_turn')
+    expect(result._meta?.['openbuff.dev']).toMatchObject({
+      runOutcome: { termination: 'completed' },
+      taskAcceptance: { status: 'accepted' },
+    })
+  })
+
   test('forwards a plain assistant text chunk (sanitized) to update', async () => {
     const sessionData = new AcpSessionData()
     const client = makeFakeClient({
@@ -102,7 +158,12 @@ describe('createServeBridge', () => {
     const sessionData = new AcpSessionData()
     const client = makeFakeClient({
       events: [
-        { type: 'tool_call', toolCallId: 't1', toolName: 'read_files', input: {} },
+        {
+          type: 'tool_call',
+          toolCallId: 't1',
+          toolName: 'read_files',
+          input: {},
+        },
         {
           type: 'tool_result',
           toolCallId: 't1',
@@ -134,7 +195,12 @@ describe('createServeBridge', () => {
       workspaceRevision: 5,
       workspaceSnapshotId: 'snap-1',
       actions: [
-        { action: 'create', path: 'src/a.ts', beforeHash: null, afterHash: 'h1' },
+        {
+          action: 'create',
+          path: 'src/a.ts',
+          beforeHash: null,
+          afterHash: 'h1',
+        },
         {
           action: 'move',
           path: 'src/b.ts',
@@ -597,7 +663,13 @@ describe('createServeBridge', () => {
     const sessionData = new AcpSessionData()
     const received: unknown[] = []
     const client = makeFakeClient({
-      events: [{ type: 'text', text: 'child says cap.v3.1.2.ABCdef here', agentId: 'agent-2' }],
+      events: [
+        {
+          type: 'text',
+          text: 'child says cap.v3.1.2.ABCdef here',
+          agentId: 'agent-2',
+        },
+      ],
     })
     const { promptHandler } = createServeBridge({
       client,
@@ -790,7 +862,10 @@ describe('createServeBridge', () => {
     const controller = new AbortController()
     const client: ServeBridgeClient = {
       async run(runOptions) {
-        await runOptions.handleEvent?.({ type: 'text', text: 'held mid-cancel' })
+        await runOptions.handleEvent?.({
+          type: 'text',
+          text: 'held mid-cancel',
+        })
         controller.abort()
         return DONE_STATE
       },

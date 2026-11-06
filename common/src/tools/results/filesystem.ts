@@ -186,6 +186,22 @@ export const mutationActionOutcomeV1Schema = z.enum([
   'unconfirmed',
 ])
 
+/** Forward adapter evidence, captured before any compensating rollback. */
+export const mutationForwardEvidenceV1Schema = z.object({
+  outcome: z.enum(['applied', 'not_applied', 'unconfirmed']),
+  /**
+   * Applied: exact hashes acknowledged by the forward adapter. Otherwise:
+   * snapshots observed after refusal/throw, which do not establish ownership.
+   * Missing entries mean observation was unavailable, never an absent file.
+   */
+  afterHashes: z
+    .record(z.string().min(1), z.string().min(1).nullable())
+    .refine(
+      (hashes) => Object.keys(hashes).length <= 2,
+      'forward evidence covers at most two paths',
+    ),
+})
+
 export const fileMutationActionV1Schema = z
   .object({
     actionId: z.string().min(1),
@@ -196,6 +212,7 @@ export const fileMutationActionV1Schema = z
     outcome: mutationActionOutcomeV1Schema,
     beforeHash: z.string().min(1).nullable(),
     afterHash: z.string().min(1).nullable(),
+    forward: mutationForwardEvidenceV1Schema.optional(),
     afterContent: boundedMutationContentSchema.optional(),
     editAnchor: readFilesEditAnchorSchema.optional(),
     patch: boundedMutationContentSchema.optional(),
@@ -320,9 +337,14 @@ export const fileMutationResultV1Schema = z
             (outcome) => outcome !== 'rolled_back' && outcome !== 'not_applied',
           ))) ||
       (value.outcome === 'rollback_incomplete' &&
-        applied + rollbackIncomplete === 0) ||
+        applied + rollbackIncomplete === 0 &&
+        !value.actions.some(
+          (action) => action.rollback?.attempted && !action.rollback.succeeded,
+        )) ||
       (value.outcome === 'unconfirmed' &&
-        outcomes.some((outcome) => outcome !== 'unconfirmed'))
+        outcomes.some(
+          (outcome) => outcome !== 'unconfirmed' && outcome !== 'not_applied',
+        ))
     ) {
       ctx.addIssue({
         code: 'custom',
@@ -396,7 +418,16 @@ export const fileMutationResultV1Schema = z
             receiptAction.path !== action.path ||
             receiptAction.destinationPath !== action.destinationPath ||
             receiptAction.beforeHash !== action.beforeHash ||
-            receiptAction.afterHash !== action.afterHash
+            receiptAction.afterHash !== action.afterHash ||
+            !mutationForwardEvidenceMatches(
+              receiptAction.forward,
+              action.forward,
+            ) ||
+            (action.outcome === 'applied' &&
+              !receiptActionHasRetainedForwardEffect(
+                receiptAction,
+                value.authorityReceipt!,
+              ))
           )
         }))
     ) {
@@ -425,6 +456,7 @@ export const commitActionReceiptV1Schema = z
     status: commitActionStatusV1Schema,
     beforeHash: z.string().min(1).nullable(),
     afterHash: z.string().min(1).nullable(),
+    forward: mutationForwardEvidenceV1Schema.optional(),
     error: filesystemErrorSchema.optional(),
   })
   .superRefine((value, ctx) => {
@@ -433,6 +465,27 @@ export const commitActionReceiptV1Schema = z
         code: 'custom',
         message: 'commit receipt move actions require destinationPath',
       })
+    }
+    if (value.forward) {
+      const paths = [
+        value.path,
+        ...(value.destinationPath ? [value.destinationPath] : []),
+      ]
+      if (
+        Object.keys(value.forward.afterHashes).some(
+          (path) => !paths.includes(path),
+        ) ||
+        (value.forward.outcome === 'applied' &&
+          paths.some((path) => !(path in value.forward!.afterHashes))) ||
+        (value.status === 'committed' && value.forward.outcome !== 'applied') ||
+        (value.status === 'not_started' &&
+          value.forward.outcome !== 'not_applied')
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'forward evidence must match the action paths and status',
+        })
+      }
     }
   })
 
@@ -1107,28 +1160,101 @@ export function getConfirmedAppliedActionsV1(
 ): FileMutationActionV1[] {
   if (!result.authorityReceipt) return []
   if (
+    result.authorityReceipt.operationId !== result.operationId ||
+    result.authorityReceipt.receiptId !== result.receiptId ||
+    result.authorityReceipt.authorityTier !== result.authorityTier
+  )
+    return []
+  if (
     result.outcome !== 'applied' &&
     result.outcome !== 'partial' &&
     result.outcome !== 'rollback_incomplete'
   ) {
     return []
   }
-  return result.actions.filter((action) => action.outcome === 'applied')
+  return result.actions.filter((action) => {
+    const receiptAction = result.authorityReceipt!.actions[action.index]
+    return (
+      action.outcome === 'applied' &&
+      receiptAction !== undefined &&
+      receiptAction.index === action.index &&
+      receiptAction.actionId === action.actionId &&
+      receiptAction.path === action.path &&
+      receiptAction.action === action.action &&
+      receiptAction.destinationPath === action.destinationPath &&
+      receiptAction.beforeHash === action.beforeHash &&
+      receiptAction.afterHash === action.afterHash &&
+      mutationForwardEvidenceMatches(receiptAction.forward, action.forward) &&
+      receiptActionHasRetainedForwardEffect(
+        receiptAction,
+        result.authorityReceipt!,
+      )
+    )
+  })
+}
+
+function mutationForwardEvidenceMatches(
+  left: CommitActionReceiptV1['forward'],
+  right: CommitActionReceiptV1['forward'],
+): boolean {
+  if (!left || !right) return left === right
+  return (
+    left.outcome === right.outcome &&
+    Object.keys(left.afterHashes).length ===
+      Object.keys(right.afterHashes).length &&
+    Object.entries(left.afterHashes).every(
+      ([path, hash]) =>
+        path in right.afterHashes && right.afterHashes[path] === hash,
+    )
+  )
+}
+
+function receiptActionHasRetainedForwardEffect(
+  action: CommitActionReceiptV1,
+  receipt: CommitReceiptV1,
+): boolean {
+  if (action.status !== 'committed' && action.status !== 'rollback_failed')
+    return false
+  const hashes =
+    action.forward?.outcome === 'applied'
+      ? action.forward.afterHashes
+      : action.status === 'committed' && !action.forward
+        ? action.action === 'move'
+          ? { [action.path]: null, [action.destinationPath!]: action.afterHash }
+          : { [action.path]: action.afterHash }
+        : undefined
+  if (!hashes) return false
+  const targetPath = action.destinationPath ?? action.path
+  return (
+    hashes[targetPath] === action.afterHash &&
+    (action.action !== 'move' || hashes[action.path] === null) &&
+    Object.entries(hashes).every(
+      ([path, hash]) =>
+        path in receipt.finalHashes && receipt.finalHashes[path] === hash,
+    )
+  )
 }
 
 function mutationActionFromReceipt(
   action: CommitActionReceiptV1,
-  receiptStatus: CommitReceiptV1['status'],
+  receipt: CommitReceiptV1,
   afterContent?: string,
   editAnchor?: z.infer<typeof readFilesEditAnchorSchema>,
 ): FileMutationActionV1 {
   let outcome: FileMutationActionV1['outcome']
+  const receiptStatus = receipt.status
   if (action.status === 'committed') {
     outcome = 'applied'
   } else if (action.status === 'rolled_back') {
     outcome = 'rolled_back'
   } else if (action.status === 'rollback_failed') {
-    outcome = 'applied'
+    outcome = receiptActionHasRetainedForwardEffect(action, receipt)
+      ? 'applied'
+      : action.forward?.outcome === 'not_applied'
+        ? 'not_applied'
+        : 'rollback_incomplete'
+  } else if (action.forward?.outcome === 'not_applied') {
+    outcome = 'not_applied'
   } else if (receiptStatus === 'failed') {
     outcome = 'unconfirmed'
   } else {
@@ -1153,6 +1279,7 @@ function mutationActionFromReceipt(
     outcome,
     beforeHash: action.beforeHash,
     afterHash: action.afterHash,
+    ...(action.forward ? { forward: action.forward } : {}),
     ...(exposeAfterState
       ? { afterContent, ...(editAnchor ? { editAnchor } : {}) }
       : {}),
@@ -1187,7 +1314,7 @@ export function buildFileMutationResultFromReceiptV1(
   const actions = validatedReceipt.actions.map((action) =>
     mutationActionFromReceipt(
       action,
-      validatedReceipt.status,
+      validatedReceipt,
       actionContents?.get(action.index) ?? actionContents?.get(action.actionId),
       actionEditAnchors?.get(action.index) ??
         actionEditAnchors?.get(action.actionId),
@@ -1204,7 +1331,9 @@ export function buildFileMutationResultFromReceiptV1(
             ? 'rollback_incomplete'
             : actions.some((action) => action.outcome === 'applied')
               ? 'partial'
-              : 'unconfirmed'
+              : actions.every((action) => action.outcome === 'not_applied')
+                ? 'not_applied'
+                : 'unconfirmed'
 
   return fileMutationResultV1Schema.parse({
     kind: 'file_mutation_result',

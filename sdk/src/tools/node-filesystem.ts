@@ -4,6 +4,7 @@ import type {
   CodebuffFileContent,
   CodebuffFileSystem,
   CodebuffTextRangeReadResult,
+  CodebuffRangeReadResult,
 } from '@codebuff/common/types/filesystem'
 import type { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
 import type { PathLike } from 'node:fs'
@@ -58,6 +59,7 @@ export function createNodeFileSystem(
         }
       : {}),
     readTextRange: readNodeTextRange,
+    readRange: readNodeRange,
     // Explicit streaming opt-in, deliberately not named `opendir` so adapters
     // inheriting from `fs.promises` are never auto-detected. Node's `Dir`
     // releases its handle from `return()`, satisfying the capability's
@@ -93,6 +95,44 @@ export function createNodeFileSystem(
 // remain deliberately absent. Node's portable fs APIs cannot atomically
 // combine a content-hash comparison with replacement/deletion. Guarded
 // callers fail closed instead of presenting check-then-write as CAS authority.
+
+async function readNodeRange(
+  filePath: PathLike,
+  start: number,
+  endExclusive: number,
+): Promise<CodebuffRangeReadResult> {
+  const length = endExclusive - start
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(endExclusive) ||
+    start < 0 ||
+    length < 0 ||
+    length > 1024 * 1024
+  ) {
+    throw new RangeError('Invalid bounded byte range request (maximum 1 MiB)')
+  }
+  const handle = await nodeFs.open(filePath, 'r')
+  try {
+    const data = Buffer.alloc(length)
+    let bytesRead = 0
+    while (bytesRead < length) {
+      const result = await handle.read(
+        data,
+        bytesRead,
+        length - bytesRead,
+        start + bytesRead,
+      )
+      if (result.bytesRead === 0) break
+      bytesRead += result.bytesRead
+    }
+    return {
+      data: data.subarray(0, bytesRead),
+      endExclusive: start + bytesRead,
+    }
+  } finally {
+    await handle.close()
+  }
+}
 
 async function readNodeTextRange(
   filePath: PathLike,

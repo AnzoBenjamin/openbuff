@@ -578,6 +578,7 @@ describe('inspect3dAsset', () => {
     )
   })
 
+  // Three real Blender launches share the existing integration-test budget.
   test.skipIf(!fs.existsSync('/usr/bin/blender'))(
     'reports commit_outcome_unknown and retains the attempt artifacts when the guarded commit rejects',
     async () => {
@@ -661,6 +662,7 @@ describe('inspect3dAsset', () => {
         `sha256:${sourceHash}`,
       )
     },
+    180_000,
   )
 
   function retainedAttempt(

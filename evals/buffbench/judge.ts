@@ -1,5 +1,5 @@
-import fs from 'fs'
-import path from 'path'
+import { randomUUID } from 'node:crypto'
+import { artifactId, type EvaluationArtifactSink } from './evaluation-artifacts'
 
 import { withTimeout } from '@codebuff/common/util/promise'
 import { z } from 'zod/v4'
@@ -229,6 +229,10 @@ const judgeAgents: Record<string, AgentDefinition> = {
 }
 
 interface JudgeCommitResultInput {
+  env?: Record<string, string>
+  inheritEnv?: boolean
+  artifactSink?: EvaluationArtifactSink
+  attemptId?: string
   client: OpenbuffClient
   commit: EvalCommitV2
   contextFiles: Record<string, string>
@@ -254,8 +258,12 @@ async function runSingleJudge(
   const judgeAgent = judgeAgents[judgeAgentId]
   const agentOutput: string[] = []
   try {
+    const controller = new AbortController()
     const judgeResult = await withTimeout(
       client.run({
+        signal: controller.signal,
+        env: input.env,
+        inheritEnv: input.inheritEnv,
         agent: judgeAgent.id,
         prompt: judgePrompt,
         agentDefinitions: Object.values(judgeAgents),
@@ -271,6 +279,7 @@ async function runSingleJudge(
       }),
       20 * 60 * 1000,
       'Judge agent timed out after 20 minutes',
+      { controller },
     )
 
     if (judgeResult.output.type !== 'structuredOutput') {
@@ -284,24 +293,13 @@ async function runSingleJudge(
         'Judge agent output trace:',
         agentOutput.join(''),
       )
-      if (DEBUG_ERROR) {
-        // Sanitize the eval-data-controlled commit id before it reaches a file
-        // path (same pattern as the run-buffbench.ts trace paths) so an id
-        // like '../../x' cannot escape the evals tree.
-        const safeCommitId = input.commit.id.replace(/[^a-zA-Z0-9-]/g, '_')
-        fs.writeFileSync(
-          path.join(
-            __dirname,
-            '..',
-            `${safeCommitId}-${judgeAgentId}-agent-output-error.json`,
-          ),
-          JSON.stringify(
-            { output: judgeResult.output, trace: agentOutput },
-            null,
-            2,
-          ),
+      if (DEBUG_ERROR && input.artifactSink) {
+        input.artifactSink.writeJson(
+          `${artifactId(input.commit.id)}-${artifactId(judgeAgentId)}-${input.attemptId ?? randomUUID()}-agent-output-error.json`,
+          { output: judgeResult.output, trace: agentOutput },
         )
       }
+
       return null
     }
 

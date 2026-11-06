@@ -95,7 +95,9 @@ describe('turn-snapshots', () => {
   beforeEach(async () => {
     repoRoot = await initTempRepo()
     rootsToClean.push(repoRoot)
-    plainDir = mkdtempSync(path.join(tmpdir(), 'openbuff-turn-snapshots-plain-'))
+    plainDir = mkdtempSync(
+      path.join(tmpdir(), 'openbuff-turn-snapshots-plain-'),
+    )
     rootsToClean.push(plainDir)
   })
 
@@ -136,9 +138,15 @@ describe('turn-snapshots', () => {
     })
 
     test('chains snapshots: parent of snapshot 2 is snapshot 1', async () => {
-      const first = await createTurnSnapshot({ projectRoot: repoRoot, label: 't1' })
+      const first = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 't1',
+      })
       writeFileSync(path.join(repoRoot, 'tracked.txt'), 'v2\n')
-      const second = await createTurnSnapshot({ projectRoot: repoRoot, label: 't2' })
+      const second = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 't2',
+      })
 
       expect(first.status).toBe('created')
       expect(second.status).toBe('created')
@@ -151,16 +159,23 @@ describe('turn-snapshots', () => {
 
     test('is skipped when the tracked tree is unchanged since the last snapshot', async () => {
       expect(
-        (await createTurnSnapshot({ projectRoot: repoRoot, label: 't1' })).status,
+        (await createTurnSnapshot({ projectRoot: repoRoot, label: 't1' }))
+          .status,
       ).toBe('created')
-      const outcome = await createTurnSnapshot({ projectRoot: repoRoot, label: 't2' })
+      const outcome = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 't2',
+      })
       expect(outcome.status).toBe('skipped')
     })
 
     test('never captures untracked files (tracked-tree gate)', async () => {
       writeFileSync(path.join(repoRoot, 'untracked.txt'), 'scratch\n')
 
-      const outcome = await createTurnSnapshot({ projectRoot: repoRoot, label: 't1' })
+      const outcome = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 't1',
+      })
       expect(outcome.status).toBe('created')
 
       const listed = await listTurnSnapshots({ projectRoot: repoRoot })
@@ -221,9 +236,9 @@ describe('turn-snapshots', () => {
 
       // The declined snapshot never touched the private ref: only the three
       // pre-bisect snapshots exist.
-      expect(
-        (await listTurnSnapshots({ projectRoot: repoRoot })).length,
-      ).toBe(3)
+      expect((await listTurnSnapshots({ projectRoot: repoRoot })).length).toBe(
+        3,
+      )
     })
 
     test('accepts a custom label such as shell', async () => {
@@ -305,7 +320,9 @@ describe('turn-snapshots', () => {
       await expect(
         pruneTurnSnapshots({ projectRoot: repoRoot }),
       ).resolves.toBeUndefined()
-      expect((await listTurnSnapshots({ projectRoot: repoRoot })).length).toBe(1)
+      expect((await listTurnSnapshots({ projectRoot: repoRoot })).length).toBe(
+        1,
+      )
 
       // Outside a git repo: total, never throws.
       await expect(
@@ -367,9 +384,9 @@ describe('turn-snapshots', () => {
       expect(existsSync(path.join(repoRoot, 'untracked.txt'))).toBe(true)
 
       // The private ref is kept: newer snapshots are not deleted.
-      expect(
-        (await listTurnSnapshots({ projectRoot: repoRoot })).length,
-      ).toBe(2)
+      expect((await listTurnSnapshots({ projectRoot: repoRoot })).length).toBe(
+        2,
+      )
     })
 
     test('is nothing-to-undo with no snapshots', async () => {
@@ -391,7 +408,10 @@ describe('turn-snapshots', () => {
       ).trim()
 
       writeFileSync(path.join(repoRoot, 'tracked.txt'), 'v2\n')
-      const second = await createTurnSnapshot({ projectRoot: repoRoot, label: 't2' })
+      const second = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 't2',
+      })
       expect(second.status).toBe('created')
 
       const outcome = await restoreToTurn(firstSha, { projectRoot: repoRoot })
@@ -399,9 +419,9 @@ describe('turn-snapshots', () => {
       if (outcome.status !== 'restored') return
       expect(outcome.sha).toBe(firstSha)
 
-      expect(
-        readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-      ).toBe('v1\n')
+      expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+        'v1\n',
+      )
 
       // HEAD and the private ref are untouched by the restore.
       expect((await git(repoRoot, 'rev-parse', TURN_SNAPSHOT_REF)).trim()).toBe(
@@ -492,9 +512,9 @@ describe('turn-snapshots', () => {
         expect(outcome.probesRun).toBeLessThanOrEqual(4)
 
         // The tracked tree is back at the newest (pre-bisect) state.
-        expect(
-          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-        ).toBe('v4\n')
+        expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+          'v4\n',
+        )
       })
 
       test('keepBestState leaves the tracked tree at the last passing snapshot', async () => {
@@ -512,9 +532,9 @@ describe('turn-snapshots', () => {
         )
 
         expect(outcome.status).toBe('found')
-        expect(
-          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-        ).toBe('v2\n')
+        expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+          'v2\n',
+        )
       })
 
       test('is inconclusive when the suite passes at every snapshot', async () => {
@@ -532,9 +552,9 @@ describe('turn-snapshots', () => {
         if (outcome.status !== 'inconclusive') return
         expect(outcome.reason).toBe('no-failure-reproduced')
         // The newest (pre-bisect) state is restored.
-        expect(
-          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-        ).toBe('v4\n')
+        expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+          'v4\n',
+        )
       })
 
       test('needs at least three snapshots to bisect', async () => {
@@ -570,9 +590,9 @@ describe('turn-snapshots', () => {
           },
         )
         expect(outcome.status).toBe('cancelled')
-        expect(
-          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-        ).toBe('v4\n')
+        expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+          'v4\n',
+        )
 
         // The cancel flag resets: a fresh run is not immediately cancelled.
         const rerun = await runTurnBisection(
@@ -619,9 +639,9 @@ describe('turn-snapshots', () => {
 
         // The guard is released when the run ends.
         expect(isTurnBisectionRunning()).toBe(false)
-        expect(
-          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-        ).toBe('v4\n')
+        expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+          'v4\n',
+        )
       })
 
       test('reports a mistyped test command as an error, not a failing baseline', async () => {
@@ -644,9 +664,9 @@ describe('turn-snapshots', () => {
 
         // The newest snapshot's tree is still restored before the error is
         // reported.
-        expect(
-          readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-        ).toBe('v4\n')
+        expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+          'v4\n',
+        )
       })
 
       test('an empty test command is a command-level error', async () => {
@@ -753,7 +773,7 @@ describe('turn-snapshots', () => {
       expect(isTurnBisectionLockHeld(repoRoot)).toBe(false)
     })
 
-    test('a stale lock left by a dead process is stolen instead of wedging the repo', async () => {
+    test('a dead owner is preserved for recovery and cannot be released by a stranger', async () => {
       // A pid that is guaranteed dead: a child process that already exited.
       let deadPid = -1
       await new Promise<void>((resolve) => {
@@ -767,9 +787,267 @@ describe('turn-snapshots', () => {
         recursive: true,
       })
       writeFileSync(turnBisectionLockPath(repoRoot), String(deadPid))
-      // A dead holder is not "held": the lock is stealable.
-      expect(isTurnBisectionLockHeld(repoRoot)).toBe(false)
+      expect(isTurnBisectionLockHeld(repoRoot)).toBe(true)
+      expect(acquireTurnBisectionLock(repoRoot)).toBe(false)
+      releaseTurnBisectionLock(repoRoot)
+      expect(readFileSync(turnBisectionLockPath(repoRoot), 'utf8')).toBe(
+        String(deadPid),
+      )
+      // Fixture cleanup is explicit; production has no stale-owner sweep.
+      rmSync(turnBisectionLockPath(repoRoot))
+    })
+  })
+
+  describe('B04 snapshot ownership and publication', () => {
+    test.each([false, true])(
+      'CAS refuses a competing tip (existing parent: %s)',
+      async (withParent) => {
+        if (withParent)
+          await createTurnSnapshot({ projectRoot: repoRoot, label: 'baseline' })
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), 'candidate\n')
+        let winner = ''
+        let expected = ''
+        const outcome = await createTurnSnapshot(
+          { projectRoot: repoRoot, label: 'candidate' },
+          {
+            runGit: async (args, opts) => {
+              if (args[0] === 'update-ref') {
+                expected = args[3]!
+                const tree = (
+                  await git(repoRoot, 'rev-parse', 'HEAD^{tree}')
+                ).trim()
+                const commit = ['commit-tree', tree, '-m', 'competitor']
+                if (expected) commit.push('-p', expected)
+                winner = (await git(repoRoot, ...commit)).trim()
+                await git(repoRoot, 'update-ref', TURN_SNAPSHOT_REF, winner)
+              }
+              return execFileAsync('git', args, opts)
+            },
+          },
+        )
+        expect(outcome.status).toBe('error')
+        expect(
+          (await git(repoRoot, 'rev-parse', TURN_SNAPSHOT_REF)).trim(),
+        ).toBe(winner)
+        expect(
+          (await listTurnSnapshots({ projectRoot: repoRoot }))[0]?.label,
+        ).toBe('competitor')
+        expect(expected.length).toBe(withParent ? 40 : 0)
+        console.log(
+          JSON.stringify({
+            b04: 'snapshot-cas',
+            withParent,
+            expected,
+            winner,
+            outcome,
+          }),
+        )
+      },
+    )
+
+    test('refuses queued capture and retains correctly attributed trees after retry', async () => {
+      let captured!: () => void
+      let release!: () => void
+      const capturedTree = new Promise<void>((resolve) => {
+        captured = resolve
+      })
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const first = createTurnSnapshot(
+        { projectRoot: repoRoot, label: 'turn-A' },
+        {
+          runGit: async (args, opts) => {
+            const result = await execFileAsync('git', args, opts)
+            if (args[0] === 'write-tree') {
+              captured()
+              await barrier
+            }
+            return result
+          },
+        },
+      )
+      await capturedTree
+      writeFileSync(path.join(repoRoot, 'tracked.txt'), 'turn-B\n')
+      const refused = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 'turn-B',
+      })
+      expect(refused.status).toBe('skipped')
+      if (refused.status === 'skipped')
+        expect(refused.reason).toContain('retry')
+      release()
+      const a = await first
+      const b = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 'turn-B',
+      })
+      expect(a.status).toBe('created')
+      expect(b.status).toBe('created')
+      const chain = await listTurnSnapshots({ projectRoot: repoRoot })
+      expect(chain.map((entry) => entry.label)).toEqual(['turn-B', 'turn-A'])
+      expect(await git(repoRoot, 'show', `${chain[0]!.sha}:tracked.txt`)).toBe(
+        'turn-B\n',
+      )
+      expect(await git(repoRoot, 'show', `${chain[1]!.sha}:tracked.txt`)).toBe(
+        'v1\n',
+      )
+      console.log(
+        JSON.stringify({ b04: 'snapshot-attribution', refused, chain }),
+      )
+    })
+
+    test('a real process holds capture while another refuses and later retries', async () => {
+      const ready = path.join(repoRoot, 'capture-ready')
+      const gate = path.join(repoRoot, 'capture-go')
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          '-e',
+          `
+        import fs from 'node:fs';
+        import {execFile} from 'node:child_process';
+        import {promisify} from 'node:util';
+        import {createTurnSnapshot} from ${JSON.stringify(path.resolve(import.meta.dir, '../turn-snapshots.ts'))};
+        const exec=promisify(execFile);
+        const outcome=await createTurnSnapshot(${JSON.stringify({ projectRoot: repoRoot, label: 'child-turn' })},{runGit:async(args,opts)=>{
+          const result=await exec('git',args,opts);
+          if(args[0]==='write-tree'){
+            fs.writeFileSync(${JSON.stringify(ready)},'ready');
+            while(!fs.existsSync(${JSON.stringify(gate)})) await new Promise(resolve=>setTimeout(resolve,2));
+          }
+          return result;
+        }});
+        console.log(JSON.stringify(outcome));
+      `,
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      )
+      try {
+        const deadline = Date.now() + 5_000
+        while (!existsSync(ready) && Date.now() < deadline)
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        expect(existsSync(ready)).toBe(true)
+        const owner = readFileSync(turnBisectionLockPath(repoRoot), 'utf8')
+        expect(owner.startsWith(`${child.pid}:`)).toBe(true)
+        const refused = await createTurnSnapshot({
+          projectRoot: repoRoot,
+          label: 'parent-turn',
+        })
+        expect(refused.status).toBe('skipped')
+        expect(readFileSync(turnBisectionLockPath(repoRoot), 'utf8')).toBe(
+          owner,
+        )
+        writeFileSync(path.join(repoRoot, 'tracked.txt'), 'parent-turn\n')
+        writeFileSync(gate, 'go')
+        const [exit, stdout] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+        ])
+        expect(exit).toBe(0)
+        expect(JSON.parse(stdout.trim().split('\n').at(-1)!).status).toBe(
+          'created',
+        )
+        expect(
+          (
+            await createTurnSnapshot({
+              projectRoot: repoRoot,
+              label: 'parent-turn',
+            })
+          ).status,
+        ).toBe('created')
+        const chain = await listTurnSnapshots({ projectRoot: repoRoot })
+        expect(chain.map((entry) => entry.label)).toEqual([
+          'parent-turn',
+          'child-turn',
+        ])
+        expect(
+          await git(repoRoot, 'show', `${chain[1]!.sha}:tracked.txt`),
+        ).toBe('v1\n')
+        expect(
+          await git(repoRoot, 'show', `${chain[0]!.sha}:tracked.txt`),
+        ).toBe('parent-turn\n')
+        console.log(
+          JSON.stringify({
+            b04: 'snapshot-real-process',
+            owner,
+            refused,
+            chain,
+          }),
+        )
+      } finally {
+        child.kill()
+        await child.exited
+      }
+    })
+
+    test('linked worktrees and canonical aliases share the repository gate', async () => {
+      const worktree = path.join(plainDir, 'linked')
+      await git(repoRoot, 'worktree', 'add', '--detach', worktree, 'HEAD')
+      expect(turnBisectionLockPath(worktree)).toBe(
+        turnBisectionLockPath(repoRoot),
+      )
+      expect(turnBisectionLockPath(path.join(repoRoot, '.'))).toBe(
+        turnBisectionLockPath(repoRoot),
+      )
       expect(acquireTurnBisectionLock(repoRoot)).toBe(true)
+      expect(
+        (await createTurnSnapshot({ projectRoot: worktree, label: 'linked' }))
+          .status,
+      ).toBe('skipped')
+    })
+
+    test('timed-out capture cannot publish bytes written by the dispatched mutation', async () => {
+      let atAdd!: () => void
+      let resume!: () => void
+      let finished!: () => void
+      const reached = new Promise<void>((resolve) => {
+        atAdd = resolve
+      })
+      const barrier = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      const settled = new Promise<void>((resolve) => {
+        finished = resolve
+      })
+      const pending = capturePreDispatchSnapshot(
+        { projectRoot: repoRoot, label: 'old-turn', timeoutMs: 100 },
+        {
+          runGit: async (args, opts) => {
+            if (args[0] === 'add') {
+              atAdd()
+              await barrier
+            }
+            // Deliberately uncooperative runner ignores AbortSignal. The wrapper
+            // must still block every subsequent publication after it returns.
+            try {
+              return await execFileAsync('git', args, {
+                cwd: opts.cwd,
+                env: opts.env,
+              })
+            } finally {
+              if (args[0] === 'add') finished()
+            }
+          },
+        },
+      )
+      await reached
+      expect((await pending).status).toBe('skipped')
+      writeFileSync(path.join(repoRoot, 'tracked.txt'), 'new-turn\n')
+      resume()
+      await settled
+      // Allow the aborted wrapper's finally to release its gate.
+      for (let i = 0; i < 100 && isTurnBisectionLockHeld(repoRoot); i++)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      expect(await listTurnSnapshots({ projectRoot: repoRoot })).toEqual([])
+      const next = await createTurnSnapshot({
+        projectRoot: repoRoot,
+        label: 'new-turn',
+      })
+      expect(next.status).toBe('created')
+      expect(
+        (await listTurnSnapshots({ projectRoot: repoRoot }))[0]?.label,
+      ).toBe('new-turn')
     })
   })
 
@@ -820,7 +1098,9 @@ describe('turn-snapshots', () => {
     test('an error outcome warns once; the same failure repeats as debug only', () => {
       resetTurnSnapshotWarnLatch()
       const warnSpy = spyOn(logger, 'warn').mockImplementation(() => undefined)
-      const debugSpy = spyOn(logger, 'debug').mockImplementation(() => undefined)
+      const debugSpy = spyOn(logger, 'debug').mockImplementation(
+        () => undefined,
+      )
 
       logTurnSnapshotFailure(
         { status: 'error', message: 'write-tree failed' },
@@ -917,9 +1197,9 @@ describe('turn-snapshots', () => {
       // The real mutating child process, the same shape runBashCommand
       // dispatches through runTerminalCommand.
       await runRealShellCommand(repoRoot, 'echo mutated > tracked.txt')
-      expect(
-        readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8'),
-      ).toBe('mutated\n')
+      expect(readFileSync(path.join(repoRoot, 'tracked.txt'), 'utf8')).toBe(
+        'mutated\n',
+      )
 
       const outcome = await undoLastTurn({ projectRoot: repoRoot })
       expect(outcome.status).toBe('undone')
@@ -934,7 +1214,10 @@ describe('turn-snapshots', () => {
     test('the real mutation path never touches HEAD, the real index, or untracked files', async () => {
       await createTurnSnapshot({ projectRoot: repoRoot, label: 'baseline' })
       await runRealShellCommand(repoRoot, 'echo pre-command > tracked.txt')
-      await capturePreDispatchSnapshot({ projectRoot: repoRoot, label: 'shell' })
+      await capturePreDispatchSnapshot({
+        projectRoot: repoRoot,
+        label: 'shell',
+      })
       await runRealShellCommand(repoRoot, 'echo mutated > tracked.txt')
       writeFileSync(path.join(repoRoot, 'untracked.txt'), 'scratch\n')
       const headBefore = await headSha(repoRoot)

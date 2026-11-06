@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
+import { receiptEnvelopeV1Schema } from '@codebuff/common/protocol/acp-ext-v1'
 
 import {
   printModeErrorToRpcError,
@@ -516,13 +518,9 @@ describe('printModeToSessionUpdates', () => {
   })
 
   test('an applied mutation with afterContent adds diff content blocks', () => {
-    const mutationValue = {
-      kind: 'file_mutation_result',
-      outcome: 'applied',
-      actions: [
-        { outcome: 'applied', path: 'src/a.ts', afterContent: 'new text' },
-      ],
-    }
+    const mutationValue = committedMutationFixture([
+      { path: 'src/a.ts', content: 'new text' },
+    ])
     const updates = printModeToSessionUpdates(
       {
         type: 'tool_result',
@@ -532,17 +530,45 @@ describe('printModeToSessionUpdates', () => {
       },
       makeCtx(),
     )
-    expect(updates).toEqual([
-      {
-        sessionUpdate: 'tool_call_update',
-        toolCallId: 't1',
-        status: 'completed',
-        content: [
-          { type: 'text', text: JSON.stringify(mutationValue) },
-          { type: 'diff', path: 'src/a.ts', newText: 'new text' },
-        ],
-      },
+    expect(updates).toHaveLength(1)
+    const payload = updates[0] as {
+      status: string
+      content: unknown[]
+      _meta: { 'openbuff.dev': { receipt: unknown } }
+    }
+    expect(payload.status).toBe('completed')
+    expect(payload.content).toContainEqual({
+      type: 'diff',
+      path: 'src/a.ts',
+      newText: 'new text',
+    })
+    expect(
+      receiptEnvelopeV1Schema.safeParse(payload._meta['openbuff.dev'].receipt)
+        .success,
+    ).toBe(true)
+    expect(JSON.stringify(updates)).not.toContain('cap.v3.fixture-only')
+  })
+
+  test('a raw applied claim without authority remains failed and emits no applied diff', () => {
+    const backed = committedMutationFixture([
+      { path: 'src/a.ts', content: 'new text' },
     ])
+    const { authorityReceipt: _receipt, ...raw } = backed
+    const [update] = printModeToSessionUpdates(
+      {
+        type: 'tool_result',
+        toolCallId: 't1',
+        toolName: 'write_file',
+        output: [{ type: 'json', value: raw }],
+      },
+      makeCtx(),
+    )
+    expect(update).toMatchObject({ status: 'failed' })
+    expect(
+      (update as { content: Array<{ type: string }> }).content.some(
+        (part) => part.type === 'diff',
+      ),
+    ).toBe(false)
   })
 
   test('oversized tool_result content is capped with a truncation marker', () => {
@@ -551,9 +577,7 @@ describe('printModeToSessionUpdates', () => {
         type: 'tool_result',
         toolCallId: 't1',
         toolName: 'read_files',
-        output: [
-          { type: 'json', value: { blob: 'x'.repeat(80 * 1024) } },
-        ],
+        output: [{ type: 'json', value: { blob: 'x'.repeat(80 * 1024) } }],
       },
       makeCtx(),
     )
@@ -702,10 +726,7 @@ describe('printModeToSessionUpdates', () => {
       ),
     ).toEqual([{ sessionUpdate: 'usage_update', used: 100, size: 200 }])
     expect(
-      printModeToSessionUpdates(
-        { type: 'finish', totalCost: 0.25 },
-        makeCtx(),
-      ),
+      printModeToSessionUpdates({ type: 'finish', totalCost: 0.25 }, makeCtx()),
     ).toEqual([
       {
         sessionUpdate: 'usage_update',
@@ -824,14 +845,14 @@ describe('printModeToSessionUpdates', () => {
   })
 
   test('EV-1: a sensitive-path mutation redacts content fields from the raw-JSON text block', () => {
+    const backed = committedMutationFixture([
+      { path: '.env', content: 'OPENROUTER_API_KEY=sk-live-echo-secret\n' },
+    ])
     const mutationValue = {
-      kind: 'file_mutation_result',
-      outcome: 'applied',
+      ...backed,
       actions: [
         {
-          outcome: 'applied',
-          path: '.env',
-          afterContent: 'OPENROUTER_API_KEY=sk-live-echo-secret\n',
+          ...backed.actions[0]!,
           patch: '--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n',
           content: 'raw post-edit content',
           beforeContent: 'raw pre-edit content',
@@ -870,22 +891,10 @@ describe('printModeToSessionUpdates', () => {
   })
 
   test('EV-1: non-sensitive actions in a mixed mutation keep their afterContent verbatim', () => {
-    const mutationValue = {
-      kind: 'file_mutation_result',
-      outcome: 'applied',
-      actions: [
-        {
-          outcome: 'applied',
-          path: '.env',
-          afterContent: 'SECRET_ENV_CONTENT',
-        },
-        {
-          outcome: 'applied',
-          path: 'src/a.ts',
-          afterContent: 'export const answer = 42',
-        },
-      ],
-    }
+    const mutationValue = committedMutationFixture([
+      { path: '.env', content: 'SECRET_ENV_CONTENT' },
+      { path: 'src/a.ts', content: 'export const answer = 42' },
+    ])
     const updates = printModeToSessionUpdates(
       {
         type: 'tool_result',

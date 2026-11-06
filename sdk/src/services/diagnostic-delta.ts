@@ -7,7 +7,7 @@ import {
 } from '@codebuff/common/util/language-capabilities'
 
 import {
-  parseLanguageDiagnostics,
+  parseLanguageDiagnosticsWithCoverage,
   type LanguageDiagnostic,
   type LanguageDiagnosticTextEdit,
 } from '../tools/language-diagnostics'
@@ -18,8 +18,8 @@ import { getSdkEnv } from '../env'
  * Diagnostic-delta preflight (LI-02 tiers 1–2).
  *
  * The service answers one question: "does this edit introduce NEW
- * compiler/LSP errors?" It captures a language-appropriate baseline, applies
- * an injected edit, captures again, and rejects ONLY when error-severity
+ * compiler/LSP errors, and was that observation complete?" It captures a language-appropriate baseline, applies
+ * an injected edit, captures again, and rejects on observed new error-severity
  * diagnostics appear that were not already present. Tool-suggested fix-its for
  * the new errors are aggregated so the caller can surface or apply them.
  *
@@ -54,14 +54,15 @@ export type DiagnosticRunResult = {
   exitCode?: number
   errorMessage?: string
   timedOut?: boolean
+  cancelled?: boolean
+  outputTruncated?: boolean
+  errorCode?: string
 }
 
 /**
- * Injected runner seam. Implementations MUST honor `timeoutSeconds` (diagnostic
- * commands can be slow) and SHOULD treat a missing tool as a non-fatal
- * `errorMessage`/empty output rather than throwing, so a tool that is absent
- * cannot fabricate a rejection. This module parses whatever stdout/stderr the
- * runner returns; an absent tool therefore yields zero diagnostics.
+ * Injected runner seam. Report exit status, cancellation, timeout and truncated
+ * output explicitly. Missing/failed observations may allow optional work but
+ * never certify a passed diagnostic check. An omitted exit status is unknown.
  */
 export type DiagnosticCommandRunner = (params: {
   command: string
@@ -75,10 +76,10 @@ export type DiagnosticCommandRunner = (params: {
  * How `computeDiagnosticDelta` decides whether a diagnostic in `after` already
  * existed in `before`.
  *
- * - 'tolerant' (default): match on (file, code) with COUNT-AWARE multiset
+ * - 'tolerant' (default): match on (file, code, severity) with COUNT-AWARE multiset
  *   semantics, so a pre-existing diagnostic that moved lines still matches its
  *   baseline and is NOT reported as new, while a genuinely NEW diagnostic
- *   sharing a (file, code) key with pre-existing ones is reported once the
+ *   sharing a (file, code, severity) key with pre-existing ones is reported once the
  *   baseline count for that key is exhausted. Tolerant is the default because
  *   the strict matcher rejected valid edits whose PRE-EXISTING errors merely
  *   shifted lines (the edit did not introduce them); tolerance is the safer
@@ -99,15 +100,63 @@ export type DeltaMatchMode = 'strict' | 'tolerant'
  */
 export const DELTA_MODE_ENV_FLAG = 'OPENBUFF_DIAGNOSTIC_DELTA_MODE'
 
-export type DiagnosticDeltaPreflightResult =
+export type DiagnosticCoverageStatus =
+  | 'complete'
+  | 'incomplete'
+  | 'unavailable'
+  | 'unknown'
+export type DiagnosticCommandObservation = {
+  command: string
+  status:
+    | 'completed'
+    | 'failed'
+    | 'timed_out'
+    | 'cancelled'
+    | 'unavailable'
+    | 'unknown'
+  exitCode?: number
+  errorMessage?: string
+  outputTruncated: boolean
+  diagnosticCount: number
+  coverageStatus: DiagnosticCoverageStatus
+}
+export type DiagnosticCapture = {
+  diagnostics: LanguageDiagnostic[]
+  commands: DiagnosticCommandObservation[]
+  coverage: {
+    status: DiagnosticCoverageStatus
+    requestedFiles: string[]
+    observedFiles: string[]
+    unobservedFiles: string[]
+    reasons: string[]
+  }
+}
+export type DiagnosticStatus =
+  | 'passed'
+  | 'new_errors'
+  | 'failed'
+  | 'cancelled'
+  | 'unavailable'
+  | 'incomplete'
+  | 'unknown'
+export type DiagnosticObservations = {
+  basis: 'before_after' | 'current_only' | 'unknown'
+  before?: DiagnosticCapture
+  after?: DiagnosticCapture
+  reason?: string
+}
+export type DiagnosticDeltaPreflightResult = (
   | { rejected: false }
   | {
       rejected: true
-      /** New error-severity diagnostics introduced by the edit. */
       newDiagnostics: LanguageDiagnostic[]
-      /** Aggregated tool-suggested fix-it edits across `newDiagnostics`. */
       fixIts: LanguageDiagnosticTextEdit[]
     }
+) & {
+  /** Optional only for legacy injected adapters; absence grants no passed evidence. */
+  diagnosticStatus?: DiagnosticStatus
+  observations?: DiagnosticObservations
+}
 
 /** Bounded work: cap files inspected per preflight/capture. */
 const MAX_PREFLIGHT_FILES = 20
@@ -159,14 +208,14 @@ function languageIdForFile(file: string): SupportedLanguageId | undefined {
   return undefined
 }
 
-/** Files that map to a supported language with a diagnostic command. */
+/** Files known to the language registry; capture reports missing command support. */
 export function supportedDiagnosticFiles(files: readonly string[]): string[] {
   return files.filter((file) => languageIdForFile(file) !== undefined)
 }
 
 /**
- * Unique diagnostic commands needed to cover `files`, ordered by first use and
- * capped at MAX_DIAGNOSTIC_COMMANDS. Project/package-wide commands (cargo
+ * All diagnostic commands needed to cover `files`, ordered by first use.
+ * Capture applies the command cap and records every omitted scope. Project/package-wide commands (cargo
  * check, tsc, go vet) run once per capture rather than per file.
  */
 function collectDiagnosticCommands(files: readonly string[]): string[] {
@@ -180,16 +229,10 @@ function collectDiagnosticCommands(files: readonly string[]): string[] {
       if (!commands.includes(command)) commands.push(command)
     }
   }
-  return commands.slice(0, MAX_DIAGNOSTIC_COMMANDS)
+  return commands
 }
 
-/**
- * Run the language-appropriate diagnostic command(s) for `files` through the
- * injected runner and parse the structured/text output into LanguageDiagnostic[]
- * via the existing parsers in tools/language-diagnostics. A command whose tool
- * is unavailable yields no diagnostics (never a fabricated rejection).
- */
-export async function captureDiagnostics(params: {
+type CaptureParams = {
   files: string[]
   cwd: string
   runCommand: DiagnosticCommandRunner
@@ -197,60 +240,332 @@ export async function captureDiagnostics(params: {
   signal?: AbortSignal
   timeoutSeconds?: number
   maxFiles?: number
-}): Promise<LanguageDiagnostic[]> {
-  const { cwd, runCommand, env, signal } = params
-  const timeoutSeconds =
-    params.timeoutSeconds ?? DEFAULT_DIAGNOSTIC_TIMEOUT_SECONDS
-  const maxFiles = Math.max(1, params.maxFiles ?? MAX_PREFLIGHT_FILES)
-  const files = supportedDiagnosticFiles(params.files).slice(0, maxFiles)
-  const commands = collectDiagnosticCommands(files)
+}
 
-  const diagnostics: LanguageDiagnostic[] = []
-  // Bounded parallel fan-out instead of a strictly serial command loop
-  // (perf: diagnostic-preflight-serial-commands-hot-path): each command is a
-  // compile-scale process with the full runner-seam timeout, so serial
-  // execution summed every command's worst-case wall clock on the hot
-  // file-change path. The window is capped at MAX_DIAGNOSTIC_CONCURRENCY and
-  // each command still carries the caller's timeoutSeconds, so total work is
-  // bounded. A failing/absent tool must not abort the preflight or fabricate
-  // a rejection; treat it as producing no diagnostics and move on.
-  const perCommand = await mapWithConcurrency(
-    commands,
-    // Floor of 1: mapWithConcurrency requires a positive integer, and a
-    // capture with no commands must resolve empty exactly as the serial loop
-    // did (an empty worker pool would resolve holes).
-    Math.max(1, Math.min(MAX_DIAGNOSTIC_CONCURRENCY, commands.length)),
-    async (command): Promise<LanguageDiagnostic[]> => {
+/** Compatibility projection. Call captureDiagnosticObservation for validation evidence. */
+export async function captureDiagnostics(
+  params: CaptureParams,
+): Promise<LanguageDiagnostic[]> {
+  return (await captureDiagnosticObservation(params)).diagnostics
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** Recognize only formats from the selected command table, never arbitrary log emptiness. */
+function recognizedOutput(
+  command: string,
+  stdout: string,
+  stderr: string,
+  parsedCount: number,
+): boolean {
+  if (!stdout.trim() && !stderr.trim()) return true
+  if (
+    command.startsWith('ruff ') ||
+    command.startsWith('eslint ') ||
+    command.startsWith('pyright ')
+  ) {
+    if (stderr.trim()) return false
+    try {
+      const value: unknown = JSON.parse(stdout)
+      if (command.startsWith('ruff '))
+        return (
+          Array.isArray(value) &&
+          value.length === parsedCount &&
+          value.every(
+            (entry) =>
+              record(entry) &&
+              typeof entry.filename === 'string' &&
+              typeof entry.message === 'string' &&
+              record(entry.location) &&
+              typeof entry.location.row === 'number',
+          )
+        )
+      if (command.startsWith('eslint '))
+        return (
+          Array.isArray(value) &&
+          value.reduce(
+            (count, entry) =>
+              count +
+              (record(entry) && Array.isArray(entry.messages)
+                ? entry.messages.length
+                : 0),
+            0,
+          ) === parsedCount &&
+          value.every(
+            (entry) =>
+              record(entry) &&
+              typeof entry.filePath === 'string' &&
+              Array.isArray(entry.messages) &&
+              entry.messages.every(
+                (message) =>
+                  record(message) &&
+                  typeof message.message === 'string' &&
+                  typeof message.severity === 'number',
+              ),
+          )
+        )
+      if (!record(value)) return false
+      const entries = value.generalDiagnostics ?? value.diagnostics
+      return (
+        Array.isArray(entries) &&
+        entries.length === parsedCount &&
+        entries.every(
+          (entry) =>
+            record(entry) &&
+            typeof entry.message === 'string' &&
+            typeof entry.file === 'string' &&
+            record(entry.range),
+        )
+      )
+    } catch {
+      return false
+    }
+  }
+  if (command.startsWith('cargo ')) {
+    const lines = stdout.split(/\r?\n/).filter((line) => line.trim())
+    let messages = 0
+    const known = lines.every((line) => {
       try {
-        const result = await runCommand({
-          command,
-          cwd,
-          timeoutSeconds,
-          env,
-          signal,
-        })
-        return parseLanguageDiagnostics({
-          command,
-          cwd,
-          stdout: result.stdout ?? '',
-          stderr: result.stderr ?? '',
-        })
+        const value: unknown = JSON.parse(line)
+        if (record(value) && value.reason === 'compiler-message') messages++
+        return (
+          record(value) &&
+          ((value.reason === 'compiler-message' &&
+            record(value.message) &&
+            typeof value.message.message === 'string' &&
+            Array.isArray(value.message.spans)) ||
+            value.reason === 'compiler-artifact' ||
+            value.reason === 'build-script-executed' ||
+            value.reason === 'build-finished')
+        )
       } catch {
-        return []
+        return false
       }
+    })
+    return (
+      known &&
+      messages === parsedCount &&
+      stderr
+        .split(/\r?\n/)
+        .every(
+          (line) =>
+            !line.trim() ||
+            /^\s*(Checking |Compiling |Finished |warning: .*generated|error: could not compile )/.test(
+              line,
+            ),
+        )
+    )
+  }
+  const lines = `${stdout}\n${stderr}`.split(/\r?\n/)
+  let located = false
+  return lines.every((line) => {
+    if (!line.trim()) return true
+    if (
+      (command.startsWith('tsc ') &&
+        /^.+\(\d+,\d+\): (error|warning) TS\d+:/.test(line)) ||
+      (command.startsWith('go ') && /^.+:\d+(?::\d+)?:/.test(line))
+    ) {
+      located = true
+      return true
+    }
+    return (
+      (located && /^\s+/.test(line)) ||
+      (command.startsWith('go ') && /^# /.test(line))
+    )
+  })
+}
+
+function completedWithDiagnostics(
+  command: string,
+  result: DiagnosticRunResult,
+  count: number,
+): boolean {
+  if (result.exitCode === 0) return true
+  if (count === 0) return false
+  return command.startsWith('cargo ')
+    ? result.exitCode === 101
+    : command.startsWith('tsc ')
+      ? result.exitCode === 1 || result.exitCode === 2
+      : result.exitCode === 1
+}
+
+/** Capture command execution and bounded coverage alongside parsed diagnostics. */
+export async function captureDiagnosticObservation(
+  params: CaptureParams,
+): Promise<DiagnosticCapture> {
+  const { cwd, runCommand, env, signal } = params
+  const maxFiles = Math.max(
+    1,
+    Math.min(MAX_PREFLIGHT_FILES, params.maxFiles ?? MAX_PREFLIGHT_FILES),
+  )
+  const requestedFiles = [...new Set(params.files)]
+  const files = supportedDiagnosticFiles(requestedFiles).slice(0, maxFiles)
+  const planned = collectDiagnosticCommands(files)
+  const commands = planned.slice(0, MAX_DIAGNOSTIC_COMMANDS)
+  const captures = await mapWithConcurrency(
+    commands,
+    Math.max(1, Math.min(MAX_DIAGNOSTIC_CONCURRENCY, commands.length)),
+    async (command) => {
+      let result: DiagnosticRunResult
+      try {
+        result = signal?.aborted
+          ? { cancelled: true }
+          : await runCommand({
+              command,
+              cwd,
+              timeoutSeconds:
+                params.timeoutSeconds ?? DEFAULT_DIAGNOSTIC_TIMEOUT_SECONDS,
+              env,
+              signal,
+            })
+      } catch (error) {
+        result = {
+          errorMessage: error instanceof Error ? error.message : String(error),
+          cancelled:
+            signal?.aborted ||
+            (error instanceof Error && error.name === 'AbortError'),
+        }
+      }
+      const parsed = parseLanguageDiagnosticsWithCoverage({
+        command,
+        cwd,
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
+      })
+      let status: DiagnosticCommandObservation['status']
+      if (result.cancelled || signal?.aborted) status = 'cancelled'
+      else if (result.timedOut) status = 'timed_out'
+      else if (
+        result.exitCode === 127 ||
+        result.errorCode === 'ENOENT' ||
+        result.errorCode === 'EMPTY_COMMAND'
+      )
+        status = 'unavailable'
+      else if (result.errorMessage) status = 'failed'
+      else if (
+        result.exitCode === undefined ||
+        !Number.isInteger(result.exitCode)
+      )
+        status = 'unknown'
+      else
+        status = completedWithDiagnostics(
+          command,
+          result,
+          parsed.diagnostics.length,
+        )
+          ? 'completed'
+          : 'failed'
+      const outputTruncated = Boolean(
+        result.outputTruncated || parsed.truncated,
+      )
+      const coverageStatus: DiagnosticCoverageStatus = outputTruncated
+        ? 'incomplete'
+        : status === 'unavailable'
+          ? 'unavailable'
+          : status !== 'completed'
+            ? 'unknown'
+            : recognizedOutput(
+                  command,
+                  result.stdout ?? '',
+                  result.stderr ?? '',
+                  parsed.diagnostics.length,
+                )
+              ? 'complete'
+              : 'unknown'
+      const observation: DiagnosticCommandObservation = {
+        command,
+        status,
+        exitCode: result.exitCode,
+        errorMessage: result.errorMessage,
+        outputTruncated,
+        diagnosticCount: parsed.diagnostics.length,
+        coverageStatus,
+      }
+      return { diagnostics: parsed.diagnostics, observation }
     },
   )
-  // Keep the serial loop's deterministic join order and total cap: results
-  // are index-aligned with `commands`, so diagnostics accumulate in command
-  // order and stop at MAX_TOTAL_DIAGNOSTICS exactly as before.
-  for (const parsed of perCommand) {
-    for (const diagnostic of parsed) {
-      if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break
-      diagnostics.push(diagnostic)
-    }
-    if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break
+  const observations = captures.map((capture) => capture.observation)
+  const allDiagnostics = captures.flatMap((capture) => capture.diagnostics)
+  const observedFiles = files.filter((file) => {
+    const selected = DIAGNOSTIC_COMMANDS[languageIdForFile(file)!] ?? []
+    return (
+      selected.length > 0 &&
+      selected.every((command) =>
+        observations.some(
+          (observation) =>
+            observation.command === command &&
+            observation.status === 'completed' &&
+            observation.coverageStatus === 'complete',
+        ),
+      )
+    )
+  })
+  const unobservedFiles = requestedFiles.filter(
+    (file) => !observedFiles.includes(file),
+  )
+  const reasons: string[] = []
+  if (
+    requestedFiles.some(
+      (file) =>
+        !languageIdForFile(file) ||
+        !DIAGNOSTIC_COMMANDS[languageIdForFile(file)!]?.length,
+    )
+  )
+    reasons.push('missing_language_command')
+  if (supportedDiagnosticFiles(requestedFiles).length > files.length)
+    reasons.push('file_cap')
+  if (planned.length > commands.length) reasons.push('command_cap')
+  if (
+    allDiagnostics.length > MAX_TOTAL_DIAGNOSTICS ||
+    observations.some((entry) => entry.outputTruncated)
+  )
+    reasons.push('output_cap')
+  if (observations.some((entry) => entry.status !== 'completed'))
+    reasons.push('command_unsuccessful')
+  if (observations.some((entry) => entry.coverageStatus === 'unknown'))
+    reasons.push('unknown_observation')
+  if (commands.length === 0) reasons.push('no_diagnostic_commands')
+  const status: DiagnosticCoverageStatus =
+    commands.length === 0
+      ? 'unavailable'
+      : reasons.length === 0 && unobservedFiles.length === 0
+        ? 'complete'
+        : reasons.includes('output_cap') ||
+            reasons.includes('file_cap') ||
+            reasons.includes('command_cap') ||
+            observedFiles.length > 0
+          ? 'incomplete'
+          : observations.every((entry) => entry.status === 'unavailable')
+            ? 'unavailable'
+            : 'unknown'
+  return {
+    diagnostics: allDiagnostics.slice(0, MAX_TOTAL_DIAGNOSTICS),
+    commands: observations,
+    coverage: {
+      status,
+      requestedFiles,
+      observedFiles,
+      unobservedFiles,
+      reasons,
+    },
   }
-  return diagnostics
+}
+
+function captureStatus(capture: DiagnosticCapture): DiagnosticStatus {
+  if (capture.commands.some((command) => command.status === 'cancelled'))
+    return 'cancelled'
+  if (
+    capture.commands.some(
+      (command) =>
+        command.status === 'failed' || command.status === 'timed_out',
+    )
+  )
+    return 'failed'
+  return capture.coverage.status === 'complete'
+    ? 'passed'
+    : capture.coverage.status
 }
 
 function strictKey(diagnostic: LanguageDiagnostic): string {
@@ -264,13 +579,13 @@ function strictKey(diagnostic: LanguageDiagnostic): string {
 }
 
 function tolerantKey(diagnostic: LanguageDiagnostic): string {
-  return JSON.stringify([diagnostic.file, diagnostic.code])
+  return JSON.stringify([diagnostic.file, diagnostic.code, diagnostic.severity])
 }
 
 /**
  * Pure delta: the diagnostics in `after` that have no matching diagnostic in
  * `before` under the requested match mode. Matching key (strict) is (file,
- * line, column, code/ruleId, severity); tolerant mode matches on (file, code)
+ * line, column, code/ruleId, severity); tolerant mode matches on (file, code, severity)
  * with count-aware multiset semantics to survive line shifts. See
  * {@link DeltaMatchMode}.
  *
@@ -280,7 +595,7 @@ function tolerantKey(diagnostic: LanguageDiagnostic): string {
  * {@link DELTA_MODE_ENV_FLAG} env var.
  *
  * Tolerant matching is count-aware (multiset semantics): the baseline counts
- * per (file, code) key are consumed as `after` diagnostics match against
+ * per (file, code, severity) key are consumed as `after` diagnostics match against
  * them, so a diagnostic counts as NEW once the baseline count for its key is
  * exhausted. A plain per-key Set would mask a genuinely NEW error that merely
  * shares a rule code with a pre-existing one; the multiset keeps N
@@ -299,7 +614,7 @@ export function computeDiagnosticDelta(
   }
   // Count-aware tolerant matching (multiset semantics): consume one baseline
   // occurrence per matched after-diagnostic, so an after diagnostic sharing a
-  // pre-existing (file, code) key is only tolerated while baseline counts
+  // pre-existing (file, code, severity) key is only tolerated while baseline counts
   // remain; once exhausted it is reported as NEW. Pure line shifts stay
   // tolerated because the match key ignores positions.
   const baselineCounts = new Map<string, number>()
@@ -326,9 +641,9 @@ export function computeDiagnosticDelta(
  * matcher and the default is 'tolerant' (fail-open-friendly: a pre-existing
  * diagnostic that merely shifted lines must not fabricate a rejection).
  */
-function resolveDeltaKeyOf(mode?: DeltaMatchMode): (
-  diagnostic: LanguageDiagnostic,
-) => string {
+function resolveDeltaKeyOf(
+  mode?: DeltaMatchMode,
+): (diagnostic: LanguageDiagnostic) => string {
   if (mode) return mode === 'tolerant' ? tolerantKey : strictKey
   // Env access is routed through the SDK env helper (env-architecture gate);
   // DELTA_MODE_ENV_FLAG names the OPENBUFF_DIAGNOSTIC_DELTA_MODE var.
@@ -384,9 +699,10 @@ export async function preflightDiagnosticDelta(params: {
    * already-changed files and passes a no-op applyEdit: a second capture can
    * only re-observe the identical on-disk state, so compile-scale commands
    * (tsc --noEmit, ruff, cargo check) would run twice per hook invocation for
-   * a guaranteed-empty delta. With this flag the after-capture reuses the
-   * baseline capture (delta collapses to empty → accept); the mutation-broker
-   * path, whose applyEdit actually mutates, keeps both captures.
+   * redundant second capture. With this flag one current-state observation
+   * is retained. It can pass only when complete and error-free; existing
+   * errors without a pre-edit basis remain unknown. Mutating callers keep
+   * both captures.
    */
   skipSecondCapture?: boolean
   /**
@@ -396,11 +712,12 @@ export async function preflightDiagnosticDelta(params: {
    * after-capture still runs (the baseline wins over `skipSecondCapture`),
    * making the reject-only-on-new-errors path reachable on the hook seam.
    */
-  baseline?: LanguageDiagnostic[]
+  baseline?: DiagnosticCapture | LanguageDiagnostic[]
 }): Promise<DiagnosticDeltaPreflightResult> {
-  const { files, cwd, runCommand, applyEdit, rollbackEdit, env, signal } = params
+  const { files, cwd, runCommand, applyEdit, rollbackEdit, env, signal } =
+    params
   const capture = () =>
-    captureDiagnostics({
+    captureDiagnosticObservation({
       files,
       cwd,
       runCommand,
@@ -413,7 +730,38 @@ export async function preflightDiagnosticDelta(params: {
   // When a pre-edit baseline is supplied, skip the first capture and use it
   // as `before`. The after-capture below still runs (a baseline wins over
   // skipSecondCapture) so the preflight can compute a real delta.
-  const before = params.baseline ?? (await capture())
+  const before: DiagnosticCapture = Array.isArray(params.baseline)
+    ? {
+        diagnostics: params.baseline,
+        commands: [],
+        coverage: {
+          status: 'unknown',
+          requestedFiles: files,
+          observedFiles: [],
+          unobservedFiles: files,
+          reasons: ['legacy_baseline_has_no_observation'],
+        },
+      }
+    : (params.baseline ?? (await capture()))
+  const observations: DiagnosticObservations = {
+    basis:
+      params.skipSecondCapture && params.baseline === undefined
+        ? 'current_only'
+        : 'before_after',
+    before,
+  }
+  if (
+    signal?.aborted ||
+    before.commands.some((command) => command.status === 'cancelled')
+  ) {
+    return {
+      rejected: true,
+      diagnosticStatus: 'cancelled',
+      observations,
+      newDiagnostics: [],
+      fixIts: [],
+    }
+  }
   // A throwing applyEdit used to leave the edit applied with no rollback and
   // crash the whole preflight. Contain it: roll back best-effort in its own
   // try/catch (a rollback failure is logged, never masked over the original
@@ -434,12 +782,16 @@ export async function preflightDiagnosticDelta(params: {
       } catch (rollbackError) {
         console.error(
           '[diagnostic-delta] rollbackEdit threw while undoing a failed applyEdit; the edit may be left applied',
-          rollbackError instanceof Error ? rollbackError : String(rollbackError),
+          rollbackError instanceof Error
+            ? rollbackError
+            : String(rollbackError),
         )
       }
     }
     return {
       rejected: true,
+      diagnosticStatus: 'failed',
+      observations: { ...observations, reason: 'apply_edit_failed' },
       newDiagnostics: [],
       fixIts: [],
     }
@@ -454,7 +806,46 @@ export async function preflightDiagnosticDelta(params: {
       ? before
       : await capture()
 
-  const delta = computeDiagnosticDelta(before, after, {
+  observations.after = after
+  const beforeStatus = captureStatus(before)
+  const afterStatus = captureStatus(after)
+  if (beforeStatus !== 'passed' || afterStatus !== 'passed') {
+    const priority: DiagnosticStatus[] = [
+      'cancelled',
+      'failed',
+      'unavailable',
+      'incomplete',
+      'unknown',
+    ]
+    const diagnosticStatus =
+      priority.find(
+        (status) => status === beforeStatus || status === afterStatus,
+      ) ?? 'unknown'
+    return { rejected: false, diagnosticStatus, observations }
+  }
+  if (
+    observations.basis === 'current_only' &&
+    after.diagnostics.some((entry) => entry.severity === 'error')
+  ) {
+    return {
+      rejected: false,
+      diagnosticStatus: 'unknown',
+      observations: { ...observations, reason: 'missing_pre_edit_baseline' },
+    }
+  }
+  if (
+    JSON.stringify([...before.coverage.requestedFiles].sort()) !==
+      JSON.stringify([...after.coverage.requestedFiles].sort()) ||
+    JSON.stringify(before.commands.map((entry) => entry.command).sort()) !==
+      JSON.stringify(after.commands.map((entry) => entry.command).sort())
+  ) {
+    return {
+      rejected: false,
+      diagnosticStatus: 'incomplete',
+      observations: { ...observations, reason: 'baseline_scope_mismatch' },
+    }
+  }
+  const delta = computeDiagnosticDelta(before.diagnostics, after.diagnostics, {
     mode: params.deltaMode,
   })
   const newErrors = delta.filter(
@@ -462,7 +853,7 @@ export async function preflightDiagnosticDelta(params: {
   )
   if (newErrors.length === 0) {
     // No new error-severity diagnostics: accept the edit and keep it applied.
-    return { rejected: false }
+    return { rejected: false, diagnosticStatus: 'passed', observations }
   }
 
   // A throwing rollbackEdit used to discard the whole rejection result. Log
@@ -490,5 +881,11 @@ export async function preflightDiagnosticDelta(params: {
       fixIts.push(fix)
     }
   }
-  return { rejected: true, newDiagnostics: newErrors, fixIts }
+  return {
+    rejected: true,
+    diagnosticStatus: 'new_errors',
+    observations,
+    newDiagnostics: newErrors,
+    fixIts,
+  }
 }

@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   closeSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
+  realpathSync,
+  statSync,
   rmSync,
   unlinkSync,
   writeSync,
@@ -40,11 +42,16 @@ export const TURN_SNAPSHOT_REF = 'refs/openbuff/turns'
  */
 export type GitRunner = (
   args: string[],
-  opts: { cwd: string; env: Record<string, string | undefined> },
+  opts: {
+    cwd: string
+    env: Record<string, string | undefined>
+    signal?: AbortSignal
+  },
 ) => Promise<{ stdout: string; stderr: string }>
 
 export type TurnSnapshotDeps = {
   runGit?: GitRunner
+  signal?: AbortSignal
 }
 
 type TurnSnapshotOpts = {
@@ -252,6 +259,7 @@ const defaultRunGit: GitRunner = async (args, opts) => {
     cwd: opts.cwd,
     env: opts.env,
     timeout: GIT_TIMEOUT_MS,
+    signal: opts.signal,
   })
 }
 
@@ -317,7 +325,10 @@ async function runGitCommand(
   env: Record<string, string | undefined>,
 ): Promise<{ stdout: string; stderr: string }> {
   const runGit = deps?.runGit ?? defaultRunGit
-  return await runGit(args, { cwd, env })
+  deps?.signal?.throwIfAborted()
+  const result = await runGit(args, { cwd, env, signal: deps?.signal })
+  deps?.signal?.throwIfAborted()
+  return result
 }
 
 /** Resolve a ref to a sha, or undefined when it does not resolve. */
@@ -429,7 +440,15 @@ export async function createTurnSnapshot(
     return {
       status: 'skipped',
       reason:
-        'a turn bisection is in flight; snapshots are paused until it finishes',
+        'another snapshot or bisection owns the repository gate; retry after it finishes, or resolve the preserved owner record if recovery is needed',
+    }
+  }
+  // Never queue capture: after waiting, the tree could belong to a later turn.
+  if (!acquireTurnBisectionLock(root)) {
+    return {
+      status: 'error',
+      message:
+        'Snapshot capture refused: repository gate is busy or requires recovery; retry once ownership is resolved.',
     }
   }
   const label = opts?.label ?? 'turn'
@@ -485,7 +504,14 @@ export async function createTurnSnapshot(
       commitArgs.push('-p', parent)
     }
     const sha = (await runGitCommand(deps, commitArgs, root, env)).stdout.trim()
-    await runGitCommand(deps, ['update-ref', TURN_SNAPSHOT_REF, sha], root, env)
+    // Empty expected value means the ref must not exist. Git performs the
+    // comparison and publication under its ref lock, including first publish.
+    await runGitCommand(
+      deps,
+      ['update-ref', TURN_SNAPSHOT_REF, sha, parent ?? ''],
+      root,
+      env,
+    )
 
     // SEC retention bound: cap how many uncommitted-tree snapshots stay
     // reachable from the private ref (see the SECURITY WARNING above).
@@ -497,6 +523,7 @@ export async function createTurnSnapshot(
     return { status: 'error', message: toErrorMessage(error) }
   } finally {
     removeTempIndexDir(tempDir)
+    releaseTurnBisectionLock(root)
   }
 }
 
@@ -508,7 +535,7 @@ export async function createTurnSnapshot(
  * post-mutation tree, so /undo-turn would restore the mutated state. Shell
  * commands are long-lived, so awaiting a bounded capture is acceptable
  * latency: this wrapper races createTurnSnapshot against a timeout and, on
- * timeout, proceeds (the snapshot keeps running in the background) after
+ * timeout, cancels capture before dispatch and proceeds after
  * logging the miss once. Implemented here — not at the call site — so the
  * injectable GitRunner seam and the timeout bound stay testable.
  */
@@ -524,9 +551,14 @@ export async function capturePreDispatchSnapshot(
   deps?: TurnSnapshotDeps,
 ): Promise<TurnSnapshotOutcome> {
   const timeoutMs = opts?.timeoutMs ?? PRE_DISPATCH_SNAPSHOT_TIMEOUT_MS
+  const controller = new AbortController()
+  const signal = deps?.signal
+    ? AbortSignal.any([deps.signal, controller.signal])
+    : controller.signal
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
   const timedOut = new Promise<TurnSnapshotOutcome>((resolve) => {
     timeoutHandle = setTimeout(() => {
+      controller.abort(new Error('Pre-dispatch snapshot timed out'))
       warnTurnSnapshotIssue(
         'pre-dispatch shell snapshot',
         `timed out after ${timeoutMs}ms - dispatching the shell command without a pre-command snapshot`,
@@ -538,7 +570,10 @@ export async function capturePreDispatchSnapshot(
     }, timeoutMs)
   })
   try {
-    return await Promise.race([createTurnSnapshot(opts, deps), timedOut])
+    return await Promise.race([
+      createTurnSnapshot(opts, { ...deps, signal }),
+      timedOut,
+    ])
   } finally {
     if (timeoutHandle !== undefined) {
       clearTimeout(timeoutHandle)
@@ -807,105 +842,84 @@ export function cancelTurnBisection(): void {
 }
 
 /**
- * Cross-process bisection guard (finding c, p2-c-turn-snapshots):
- * `bisectRunning` is process-local, so two openbuff CLI instances sharing
- * one repo could each run a bisection and interleave checkoutSnapshotTree
- * rewrites ACROSS processes — exactly the corruption the in-flight guard
- * documents. The guard is an exclusive O_EXCL-created lock file keyed by
- * the resolved repo path under os.tmpdir (per-repo keying keeps the
- * hermetic temp-repo tests isolated; mirrors the transaction-intent-log
- * pid+token lock pattern conceptually, no new dependencies). The file
- * records the holder's pid so a crashed process's stale lock is detected as
- * dead and stolen instead of wedging the repo, and runTurnBisection always
- * releases the lock in its finally.
+ * Cooperative repository gate shared by snapshot capture and bisection.
+ * Exclusive create is the only acquisition primitive. Dead, malformed and
+ * unreadable owners remain held: this TS tier has no automatic crash recovery.
+ * Every process must use this protocol; external removal is not OS-fenced.
  */
-
 const BISECT_LOCK_DIR = path.join(tmpdir(), 'openbuff-turn-bisect')
+const ownedTurnLocks = new Map<string, string>()
 
-/** The bisection lock file path for a repo (exposed for diagnostics/tests). */
+/** Canonical common Git directory also serializes linked worktree publishers. */
 export function turnBisectionLockPath(projectRoot: string): string {
-  const key = createHash('sha1').update(path.resolve(projectRoot)).digest('hex')
+  let repository = path.resolve(projectRoot)
+  try {
+    repository = realpathSync(repository)
+    const dotGit = path.join(repository, '.git')
+    let gitDir = statSync(dotGit).isDirectory()
+      ? dotGit
+      : path.resolve(
+          repository,
+          readFileSync(dotGit, 'utf8')
+            .trim()
+            .replace(/^gitdir: /, ''),
+        )
+    try {
+      gitDir = path.resolve(
+        gitDir,
+        readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim(),
+      )
+    } catch {
+      // Ordinary repositories have no commondir file.
+    }
+    repository = realpathSync(gitDir)
+  } catch {
+    // Non-repositories still get a stable gate; Git reports unavailable later.
+  }
+  const key = createHash('sha1').update(repository).digest('hex')
   return path.join(BISECT_LOCK_DIR, `${key}.lock`)
 }
 
-function readBisectLockPid(projectRoot: string): number | undefined {
+/** Any existing/unknown owner blocks capture, even when its PID is dead. */
+export function isTurnBisectionLockHeld(projectRoot: string): boolean {
   try {
-    const pid = Number.parseInt(
-      readFileSync(turnBisectionLockPath(projectRoot), 'utf8').trim(),
-      10,
-    )
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined
-  } catch {
-    // Missing or unreadable lock file: treat as not held.
-    return undefined
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
+    readFileSync(turnBisectionLockPath(projectRoot), 'utf8')
     return true
   } catch (error) {
-    // EPERM means the process exists but signal delivery is denied.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT'
   }
 }
 
-/** Whether a live holder (this or another process) currently owns the lock. */
-export function isTurnBisectionLockHeld(projectRoot: string): boolean {
-  const pid = readBisectLockPid(projectRoot)
-  if (pid === undefined) {
-    return false
-  }
-  if (pid === process.pid) {
-    return true
-  }
-  return isProcessAlive(pid)
-}
-
-function createBisectLockFile(projectRoot: string): boolean {
+/** Refuse contention immediately, preserving the recovery point's turn basis. */
+export function acquireTurnBisectionLock(projectRoot: string): boolean {
   try {
     mkdirSync(BISECT_LOCK_DIR, { recursive: true })
-    const fd = openSync(turnBisectionLockPath(projectRoot), 'wx')
+    const lockPath = turnBisectionLockPath(projectRoot)
+    const token = `${process.pid}:${randomUUID()}`
+    const fd = openSync(lockPath, 'wx')
     try {
-      writeSync(fd, String(process.pid))
+      writeSync(fd, token)
     } finally {
       closeSync(fd)
     }
+    ownedTurnLocks.set(lockPath, token)
     return true
   } catch {
-    // EEXIST (or an unwritable tmpdir): held by someone else — fail closed.
+    // Failed initialization also leaves inspectable unknown ownership.
     return false
   }
 }
 
-/**
- * Acquire the cross-process bisection lock for `projectRoot`. Returns false
- * when a live holder owns it (fail closed). A lock left behind by a dead
- * process is stolen, so a crash cannot wedge bisections on the repo forever.
- */
-export function acquireTurnBisectionLock(projectRoot: string): boolean {
-  if (createBisectLockFile(projectRoot)) {
-    return true
-  }
-  const pid = readBisectLockPid(projectRoot)
-  if (pid === undefined || pid === process.pid || isProcessAlive(pid)) {
-    return false
-  }
-  try {
-    unlinkSync(turnBisectionLockPath(projectRoot))
-  } catch {
-    return false
-  }
-  return createBisectLockFile(projectRoot)
-}
-
-/** Release the cross-process bisection lock (best-effort, never throws). */
+/** Only our exclusive acquisition can authorize release; never clean strangers. */
 export function releaseTurnBisectionLock(projectRoot: string): void {
+  const lockPath = turnBisectionLockPath(projectRoot)
+  const token = ownedTurnLocks.get(lockPath)
+  if (!token) return
+  ownedTurnLocks.delete(lockPath)
   try {
-    unlinkSync(turnBisectionLockPath(projectRoot))
+    if (readFileSync(lockPath, 'utf8') === token) unlinkSync(lockPath)
   } catch {
-    // Already released or never held: cleanup is best-effort.
+    // Best effort; failed release leaves a recovery-needed gate.
   }
 }
 
@@ -1107,7 +1121,7 @@ export async function runTurnBisection(
     return {
       status: 'error',
       message:
-        'a turn bisection is already running in another openbuff process on this repository - wait for it to finish before starting another.',
+        'another openbuff process owns the snapshot/bisection repository gate, or its preserved owner requires recovery - retry after ownership is resolved.',
     }
   }
   const command = opts?.command ?? 'bun test'

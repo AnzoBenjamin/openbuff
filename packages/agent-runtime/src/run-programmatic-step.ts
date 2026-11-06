@@ -2,11 +2,15 @@ import { HandleStepsYieldValueSchema } from '@codebuff/common/types/agent-templa
 import { selectSpecialistReviewers } from '@codebuff/common/agents/specialist-risk-router'
 import { planDiscoveryBatch } from './orchestration/discovery-coordinator'
 import { createGateTelemetryRecorder } from './orchestration/gate-telemetry-sink'
-import { transitionBase2Gate } from './orchestration/workflow-engine'
-import { getErrorObject } from '@codebuff/common/util/error'
+import {
+  transitionBase2Gate,
+  transitionBase2GateSafe,
+} from './orchestration/workflow-engine'
+import { getErrorObject, isAbortError } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 
-import { executeToolCall } from './tools/tool-executor'
+import { toolNames } from '@codebuff/common/tools/constants'
+import { executeCustomToolCall, executeToolCall } from './tools/tool-executor'
 import { parseTextWithToolCalls } from './util/parse-tool-calls-from-text'
 import {
   MISSING_TOOL_NAME_GUIDANCE,
@@ -79,7 +83,10 @@ class AgentRunContextRegistry {
   // executeSingleToolCall; the value is the number of journaled tool_call
   // matches already consumed for that key, so the same tool called twice with
   // an identical input in one run resolves deterministically in seq order.
-  private readonly runIdToReplayConsumed = new Map<string, Map<string, number>>()
+  private readonly runIdToReplayConsumed = new Map<
+    string,
+    Map<string, number>
+  >()
   // Latch for the "base2 run has no projectRoot" warning (a missing root makes
   // the gate-telemetry sink a silent no-op), keyed by template id so a second,
   // differently-misconfigured base2 variant stays diagnosable. Registry-owned
@@ -271,6 +278,7 @@ export async function runProgrammaticStep(
   endTurn: boolean
   stepNumber: number
   generateN?: number
+  hitStepCap?: boolean
 }> {
   const {
     agentState,
@@ -474,6 +482,7 @@ export async function runProgrammaticStep(
               selectSpecialistReviewers,
               planDiscoveryBatch,
               transitionBase2Gate,
+              transitionBase2GateSafe,
               // Durable JSONL sink for base2's gate telemetry. Injected here
               // because handleSteps is serialized and cannot import it. The
               // key is dropped entirely without a projectRoot — base2
@@ -593,6 +602,7 @@ export async function runProgrammaticStep(
   try {
     // Execute tools synchronously as the generator yields them
     do {
+      params.signal.throwIfAborted()
       if (programmaticIterations++ >= MAX_PROGRAMMATIC_TOOL_CALLS) {
         throw new Error(
           `handleSteps for agent ${template.id} exceeded ${MAX_PROGRAMMATIC_TOOL_CALLS} iterations ` +
@@ -613,10 +623,20 @@ export async function runProgrammaticStep(
         hitStepCap,
         nResponses,
       })
+      // A generator can catch its own cancellation or return naturally after
+      // an awaited tool aborts. Its return is not authority to complete the run.
+      params.signal.throwIfAborted()
 
       if (result.done) {
         endTurn = true
         break
+      }
+
+      // A generator may settle the result of its last permitted STEP, but
+      // newly yielded work cannot bypass an exhausted inference-step limit.
+      // The loop records and streams the single authoritative stop.
+      if (agentState.stepsRemaining === 0) {
+        return { agentState, endTurn: false, stepNumber, hitStepCap: true }
       }
 
       // Validate the yield value from handleSteps
@@ -697,6 +717,7 @@ export async function runProgrammaticStep(
         addProgrammaticToolResultContext,
         onResponseChunk,
       })
+      params.signal.throwIfAborted()
 
       if (agentState.runId) {
         await addAgentStep({
@@ -721,7 +742,11 @@ export async function runProgrammaticStep(
           eventType: 'step_boundary',
           stepNumber,
           correlation: agentStepId,
-          payload: { status: 'completed', childRunIds: newChildRunIds },
+          payload: {
+            status: 'completed',
+            terminal: false,
+            childRunIds: newChildRunIds,
+          },
         })
         for (const childRunId of newChildRunIds) {
           params.journalWriter.append(agentState.runId, {
@@ -752,6 +777,13 @@ export async function runProgrammaticStep(
     const errorMessage = `Error executing handleSteps for agent ${template.id}: ${
       error instanceof Error ? error.message : 'Unknown error'
     }`
+    // A terminal generator failure is not a normal generator return. Keep
+    // any partial output and tool results, but carry the authoritative run
+    // termination to the loop and receipt consumers.
+    agentState.runOutcome = {
+      termination: params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
+      cause: { code: 'programmatic_execution_error', message: errorMessage },
+    }
     logger.error(
       { error: getErrorObject(error), template: template.id },
       errorMessage,
@@ -1051,8 +1083,12 @@ async function executeSingleToolCall(
     })
   }
 
-  // Execute the tool call
-  await executeToolCall({
+  // Programmatic calls share the native/custom authorities used by model
+  // dispatch; a declared custom tool must reach its actual SDK handler.
+  const execute = toolNames.includes(toolCallToExecute.toolName as any)
+    ? executeToolCall
+    : executeCustomToolCall
+  await execute({
     ...params,
     toolName: toolCallToExecute.toolName as any,
     input: toolCallToExecute.input,
@@ -1183,6 +1219,7 @@ async function executeSegmentsArray(
   let toolResults: ToolResultOutput[] = []
 
   for (const segment of segments) {
+    params.signal.throwIfAborted()
     if (segment.type === 'text') {
       // Add text as an assistant message
       agentState.messageHistory = [...agentState.messageHistory]
@@ -1219,6 +1256,7 @@ async function executeSegmentsArray(
     } else {
       // Handle tool call segment
       const toolResult = await executeSingleToolCall(segment, params)
+      params.signal.throwIfAborted()
       if (toolResult) {
         toolResults.push(...toolResult)
       }

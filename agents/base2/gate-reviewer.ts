@@ -25,6 +25,10 @@ type ReviewerStructuredVerdict = 'LOOKS_GOOD' | 'NON_BLOCKING' | 'BLOCKING'
 export type ReviewerFinalizationVerdict = 'LOOKS_GOOD' | ''
 
 type ReviewerCoverage = 'covered' | 'missing' | 'n/a'
+type ReviewerAttestationOptions = {
+  requireFullEvidence?: boolean
+  lightweight?: boolean
+}
 
 type StructuredReviewerOutput = {
   verdict: ReviewerStructuredVerdict
@@ -117,6 +121,9 @@ type ResolvedReviewerAttestation = {
   schemaVersion?: number
   snapshotFingerprint?: string
   reviewedFiles: string[]
+  dimensions?: Record<string, string>
+  requirementCoverage?: StructuredReviewerOutput['requirementCoverage']
+  coverage?: ReviewerCoverage
 }
 
 /**
@@ -166,6 +173,9 @@ function resolveReviewerAttestation(
       schemaVersion: last.schemaVersion,
       snapshotFingerprint: last.snapshotFingerprint,
       reviewedFiles: last.reviewedFiles ?? [],
+      dimensions: last.dimensions,
+      requirementCoverage: last.requirementCoverage,
+      coverage: last.coverage,
     }
   }
   let matching: StructuredReviewerOutput | undefined
@@ -202,6 +212,9 @@ function resolveReviewerAttestation(
     schemaVersion: nonConforming?.schemaVersion ?? 1,
     snapshotFingerprint: attesting?.snapshotFingerprint,
     reviewedFiles,
+    dimensions: attesting?.dimensions,
+    requirementCoverage: attesting?.requirementCoverage,
+    coverage: attesting?.coverage,
   }
 }
 
@@ -210,6 +223,7 @@ export function collectReviewerAttestationIssues(
   expectedFingerprint: string,
   pendingFiles: string[],
   deletedFiles?: string[],
+  options?: ReviewerAttestationOptions,
 ): string[] {
   // The caller passes the reviewable subset; when it is empty there is
   // nothing to attest, so surface no attestation issues.
@@ -289,12 +303,7 @@ export function collectReviewerAttestationIssues(
       (file) => file.length > 0 && !reviewed.has(file) && !deleted.has(file),
     )
   const issues: string[] = []
-  // Fingerprint tolerance: a coverage-complete review reporting a well-formed
-  // v3 fingerprint is trusted even when the exact snapshot id advanced between
-  // its spawn and attestation; only a FILE-COVERAGE gap or a missing /
-  // non-attestable fingerprint stays a hard blocker. The tolerance is not
-  // silent — every base2 caller records the drift via
-  // `collectReviewerFingerprintDrift`, whose docblock carries the rationale.
+  // Credit is bound to the exact current basis, including same-path edits.
   const reportedFingerprint = result.snapshotFingerprint
   const fingerprintIsAttestable = isAttestableV3Fingerprint(reportedFingerprint)
   if (!fingerprintIsAttestable) {
@@ -304,10 +313,7 @@ export function collectReviewerAttestationIssues(
     issues.push(
       'BLOCKING: reviewer did not report an attestable snapshot fingerprint',
     )
-  } else if (
-    reportedFingerprint !== expectedFingerprint &&
-    missing.length > 0
-  ) {
+  } else if (reportedFingerprint !== expectedFingerprint) {
     issues.push(
       'BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree',
     )
@@ -316,6 +322,46 @@ export function collectReviewerAttestationIssues(
     issues.push(
       `BLOCKING: reviewer did not attest to every pending file: ${missing.join(', ')}`,
     )
+  }
+  if (options?.lightweight) {
+    if (!isLightweightReceiptEligible(pendingFiles))
+      issues.push(
+        'BLOCKING: reduced reviewer contract is not eligible for this file scope',
+      )
+    if (result.coverage !== 'covered' && result.coverage !== 'n/a')
+      issues.push('BLOCKING: reduced reviewer did not assess coverage')
+    if (
+      structured.some(
+        (entry) => entry.verdict !== 'LOOKS_GOOD' || entry.findings.length > 0,
+      )
+    )
+      issues.push(
+        'BLOCKING: substantive reduced review requires the full reviewer contract',
+      )
+  } else if (options?.requireFullEvidence) {
+    for (const dimension of [
+      'correctness',
+      'security',
+      'tests',
+      'apiCompatibility',
+      'performance',
+    ]) {
+      if (!result.dimensions?.[dimension]?.trim())
+        issues.push(`BLOCKING: reviewer did not assess ${dimension}`)
+    }
+    const requirements = result.requirementCoverage ?? []
+    if (
+      requirements.length === 0 ||
+      requirements.some(
+        (item) =>
+          !item.requirement.trim() ||
+          !['satisfied', 'missing', 'uncertain'].includes(item.status) ||
+          !item.evidence.some((evidence) => evidence.trim().length > 0),
+      )
+    )
+      issues.push(
+        'BLOCKING: reviewer did not provide nonempty requirement evidence',
+      )
   }
   return issues
 }
@@ -343,12 +389,8 @@ export function collectReviewerAttestationIssues(
  * the resulting record is telemetry-only and credits the review with nothing —
  * the gate still treats it as a crash.
  *
- * `collectReviewerAttestationIssues` deliberately tolerates that drift so an
- * unrelated bundle bump cannot fail the gate; callers use this to RECORD the
- * drift instead of accepting it silently, because a review of stale file
- * content would otherwise pass the gate with no trace. '' means there is
- * nothing to record: an exact match, or a missing/non-attestable fingerprint
- * (both already hard blockers in the attestation issues).
+ * This is diagnostic only. A mismatched fingerprint is blocked by
+ * collectReviewerAttestationIssues and cannot confer review credit.
  */
 export function collectReviewerFingerprintDrift(
   toolResult: unknown,
@@ -749,10 +791,7 @@ function findReviewerCrash(value: unknown, depth: number = 0): string | null {
   // `type: 'error'` payload) describes that inner tool call, not a
   // reviewer-agent crash, so the entire envelope subtree is skipped instead
   // of being walked for crash markers.
-  if (
-    typeof record.toolCallId === 'string' ||
-    record.type === 'tool_result'
-  ) {
+  if (typeof record.toolCallId === 'string' || record.type === 'tool_result') {
     return null
   }
   if (typeof record.errorMessage === 'string' && record.errorMessage.trim()) {
@@ -981,7 +1020,12 @@ function visitForStructuredVerdict(
     (record.type === 'json' || record.type === 'structuredOutput') &&
     'value' in record
   ) {
-    visitForStructuredVerdict(record.value, out, depth + 1, inheritedSchemaVersion)
+    visitForStructuredVerdict(
+      record.value,
+      out,
+      depth + 1,
+      inheritedSchemaVersion,
+    )
     // spawn_agent_inline can surface the agent receipt as a SIBLING of
     // `value` on the json record; the receipt carries the compact review
     // when the bulky payload was truncated in transit. Visit it too —
@@ -1229,7 +1273,10 @@ export function recoverStructuredReviewerOutputs(toolResult: unknown): unknown {
   // `every`) matches the recognizer's own "any shaped entry exists" narrowing,
   // so a result the gate already credits is never rewritten.
   const existing = collectStructuredReviewerOutputs(toolResult)
-  if (existing.length > 0 && existing.some((e) => e.schemaVersion !== undefined)) {
+  if (
+    existing.length > 0 &&
+    existing.some((e) => e.schemaVersion !== undefined)
+  ) {
     return toolResult
   }
   // Walk the SAME envelope shapes `visitForStructuredVerdict` walks (depth 8,
@@ -1328,8 +1375,7 @@ export function recoverProseVerdictWithAttestation(
     for (const rawLine of cleaned.split(/\r?\n/)) {
       const line = rawLine.trim()
       const match = /^(LOOKS_GOOD|NON_BLOCKING|BLOCKING)\b/i.exec(line)
-      if (match)
-        lastProseVerdict = match[1].trim().toUpperCase()
+      if (match) lastProseVerdict = match[1].trim().toUpperCase()
     }
   }
   if (!lastProseVerdict) return toolResult
@@ -1339,13 +1385,21 @@ export function recoverProseVerdictWithAttestation(
   //    prose from forging a review: a forged line cannot also echo the opaque
   //    runtime fingerprint AND a real reviewed path unless the reviewer
   //    itself supplied them.
-  if (typeof expectedFingerprint !== 'string' || expectedFingerprint.length === 0) {
+  if (
+    typeof expectedFingerprint !== 'string' ||
+    expectedFingerprint.length === 0
+  ) {
     return toolResult
   }
-  const hasFingerprint = texts.some((text) => text.includes(expectedFingerprint))
+  const hasFingerprint = texts.some((text) =>
+    text.includes(expectedFingerprint),
+  )
   if (!hasFingerprint) return toolResult
   const hasReviewedFile = pendingFiles.some(
-    (file) => typeof file === 'string' && file.length > 0 && texts.some((text) => text.includes(file)),
+    (file) =>
+      typeof file === 'string' &&
+      file.length > 0 &&
+      texts.some((text) => text.includes(file)),
   )
   if (!hasReviewedFile) return toolResult
   // 4. Both signals present: synthesize ONLY the verdict (+ schemaVersion).
@@ -1391,7 +1445,9 @@ export function recoverProseVerdictWithAttestation(
  * Hoisted top-level `function`; every regex is inlined (no module-scope const)
  * so the spliced copy is self-contained.
  */
-function extractVerdictObjectFromText(text: string): Record<string, unknown> | null {
+function extractVerdictObjectFromText(
+  text: string,
+): Record<string, unknown> | null {
   if (typeof text !== 'string') return null
   const cleaned = stripReviewerPreamble(text)
   if (!cleaned) return null
@@ -1537,7 +1593,8 @@ function normalizeVerdictKeyAndCoverage(
   // R4 (fail-closed, total): map a coverage value to one of the three literals.
   // Only full/complete/ok/yes may become `covered`; n/a aliases become `n/a`;
   // EVERYTHING else (including absent) is `missing`.
-  const rawCoverage = typeof obj.coverage === 'string' ? obj.coverage.trim().toLowerCase() : ''
+  const rawCoverage =
+    typeof obj.coverage === 'string' ? obj.coverage.trim().toLowerCase() : ''
   out.coverage = mapCoverageValue(rawCoverage)
   // Recovery's own marker so the recognizer shapes the entry. Deliberately the
   // ONLY added key: no findings/advisories/fingerprint/reviewedFiles (INV-A.2).
@@ -1556,10 +1613,19 @@ function mapCoverageValue(value: string): 'covered' | 'missing' | 'n/a' {
   if (value === 'covered') return 'covered'
   if (value === 'missing') return 'missing'
   if (value === 'n/a') return 'n/a'
-  if (value === 'full' || value === 'complete' || value === 'ok' || value === 'yes') {
+  if (
+    value === 'full' ||
+    value === 'complete' ||
+    value === 'ok' ||
+    value === 'yes'
+  ) {
     return 'covered'
   }
-  if (value === 'na' || value === 'not-applicable' || value === 'not applicable') {
+  if (
+    value === 'na' ||
+    value === 'not-applicable' ||
+    value === 'not applicable'
+  ) {
     return 'n/a'
   }
   return 'missing'
@@ -1766,9 +1832,7 @@ export function diagnoseReviewerVerdictRejection(
       expected: acceptedVerdicts,
     }
   }
-  const coverageInvalid = shaped.find(
-    (entry) => entry.coverage === undefined,
-  )
+  const coverageInvalid = shaped.find((entry) => entry.coverage === undefined)
   if (coverageInvalid) {
     return {
       ...base,
@@ -1786,7 +1850,9 @@ export function diagnoseReviewerVerdictRejection(
     code: 'recovered',
     summary:
       'Reviewer structured output was recovered into a creditable verdict by the recovery pre-pass.',
-    observed: truncateObserved(shaped.map((entry) => entry.verdict).filter(Boolean)),
+    observed: truncateObserved(
+      shaped.map((entry) => entry.verdict).filter(Boolean),
+    ),
     expected: acceptedVerdicts,
   }
 }
@@ -2006,6 +2072,7 @@ export function buildLightweightReviewContract(pendingFiles: string[]): {
         'reviewedFiles',
         'coverage',
         'dimensions',
+        'requirementCoverage',
         'family',
       ],
       instruction: '',

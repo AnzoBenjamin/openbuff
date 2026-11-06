@@ -1,4 +1,13 @@
 import { match } from 'ts-pattern'
+import {
+  runFailureMessage,
+  runOutcomeSchema,
+  taskAcceptanceSchema,
+} from '@codebuff/common/types/run-outcome'
+import type {
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 
 import {
   appendTextToAgentBlock,
@@ -13,6 +22,7 @@ import {
   getCanonicalMutationResult,
   hasMultipartError,
   isTerminalToolBlock,
+  getMutationOutcome,
 } from './tool-result-normalizer'
 import { shouldHideAgent } from './constants'
 import {
@@ -400,11 +410,25 @@ const handleSubagentFinish = (
 
   const unresolvedToolIds = new Set<string>()
   state.message.updater.updateAiMessageBlocks((blocks) => {
-    if (event.error) {
+    const failure = runFailureMessage(event) ?? event.error
+    const cancelled = event.runOutcome?.termination === 'cancelled'
+    let updated: ContentBlock[]
+    if (failure) {
       collectUnresolvedToolIdsForAgent(blocks, event.agentId, unresolvedToolIds)
-      return markAgentFailed(blocks, event.agentId, event.error)
+      updated = markAgentFailed(blocks, event.agentId, failure)
+    } else {
+      updated = markAgentComplete(blocks, event.agentId)
     }
-    return markAgentComplete(blocks, event.agentId)
+    return updateBlocksRecursively(updated, event.agentId, (block) =>
+      block.type === 'agent'
+        ? {
+            ...block,
+            ...(cancelled ? { status: 'cancelled' as const } : {}),
+            runOutcome: event.runOutcome,
+            taskAcceptance: event.taskAcceptance,
+          }
+        : block,
+    )
   })
 
   updateStreamingAgents(state, { remove: event.agentId })
@@ -692,10 +716,7 @@ const handleToolStart = (
   state: EventHandlerState,
   event: PrintModeToolStart,
 ) => {
-  const flipQueued = (
-    blocks: ContentBlock[],
-    depth = 0,
-  ): ContentBlock[] =>
+  const flipQueued = (blocks: ContentBlock[], depth = 0): ContentBlock[] =>
     blocks.map((block) => {
       if (block.type === 'tool' && block.toolCallId === event.toolCallId) {
         if (isTerminalToolBlock(block)) return block
@@ -752,7 +773,12 @@ const getSpawnResultForBlock = (
 /** Narrow spawn_agents result.agentReceipt without using any. */
 const readSpawnAgentReceipt = (
   result: unknown,
-): { status?: string; errorMessage?: string } => {
+): {
+  status?: string
+  errorMessage?: string
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+} => {
   if (!result || typeof result !== 'object') return {}
   const receipt = (result as { agentReceipt?: unknown }).agentReceipt
   if (!receipt || typeof receipt !== 'object') return {}
@@ -772,7 +798,18 @@ const readSpawnAgentReceipt = (
       errorMessage = (first as { message: string }).message
     }
   }
-  return { status, errorMessage }
+  const outcome = runOutcomeSchema.safeParse(
+    (receipt as { runOutcome?: unknown }).runOutcome,
+  )
+  const acceptance = taskAcceptanceSchema.safeParse(
+    (receipt as { taskAcceptance?: unknown }).taskAcceptance,
+  )
+  return {
+    status,
+    errorMessage,
+    ...(outcome.success ? { runOutcome: outcome.data } : {}),
+    ...(acceptance.success ? { taskAcceptance: acceptance.data } : {}),
+  }
 }
 
 const mapReceiptStatusToAgentStatus = (
@@ -839,11 +876,16 @@ const applySpawnAgentResultToBlock = (
       ? [...existingBlocks, { type: 'text', content } as ContentBlock]
       : existingBlocks
 
-  const nextStatus = mapReceiptStatusToAgentStatus(
-    receipt.status,
-    hasError,
-    backgroundJobId,
-  )
+  const nextStatus =
+    receipt.runOutcome?.termination === 'cancelled'
+      ? 'cancelled'
+      : runFailureMessage(receipt)
+        ? 'failed'
+        : mapReceiptStatusToAgentStatus(
+            receipt.status,
+            hasError,
+            backgroundJobId,
+          )
 
   // Append a brief receipt error when partial if that message is not already present.
   if (nextStatus === 'partial' && receipt.errorMessage) {
@@ -876,6 +918,10 @@ const applySpawnAgentResultToBlock = (
       blocks: finalBlocks,
       ...(backgroundJobId ? { backgroundJobId } : {}),
       status: nextStatus,
+      ...(receipt.runOutcome ? { runOutcome: receipt.runOutcome } : {}),
+      ...(receipt.taskAcceptance
+        ? { taskAcceptance: receipt.taskAcceptance }
+        : {}),
     }
   }
 
@@ -970,32 +1016,27 @@ const updateBackgroundAgentCard = (
         .filter(Boolean)
         .join('\n')
       const existingBlocks = block.blocks ?? []
-      const resultReceipt =
-        value.result &&
-        typeof value.result === 'object' &&
-        (value.result as { agentReceipt?: unknown }).agentReceipt &&
-        typeof (value.result as { agentReceipt?: unknown }).agentReceipt ===
-          'object'
-          ? (value.result as { agentReceipt: { status?: unknown } })
-              .agentReceipt
-          : undefined
-      const receiptStatus =
-        resultReceipt && typeof resultReceipt.status === 'string'
-          ? resultReceipt.status
-          : undefined
+      const resultReceipt = readSpawnAgentReceipt(value.result)
+      const receiptStatus = resultReceipt.status
       // Defensive: value.status or nested agentReceipt can surface partial.
       const mappedStatus: AgentContentBlock['status'] =
-        status === 'partial' ||
-        receiptStatus === 'partial' ||
-        receiptStatus === 'blocked'
-          ? 'partial'
-          : status === 'completed'
-            ? 'complete'
-            : status === 'error'
-              ? 'failed'
-              : status === 'cancelled'
-                ? 'cancelled'
-                : 'running'
+        resultReceipt.runOutcome?.termination === 'cancelled'
+          ? 'cancelled'
+          : runFailureMessage(resultReceipt) ||
+              receiptStatus === 'failed' ||
+              status === 'failed'
+            ? 'failed'
+            : status === 'partial' ||
+                receiptStatus === 'partial' ||
+                receiptStatus === 'blocked'
+              ? 'partial'
+              : status === 'completed'
+                ? 'complete'
+                : status === 'error'
+                  ? 'failed'
+                  : status === 'cancelled'
+                    ? 'cancelled'
+                    : 'running'
       return {
         ...block,
         blocks: appended
@@ -1005,6 +1046,12 @@ const updateBackgroundAgentCard = (
             ]
           : existingBlocks,
         status: mappedStatus,
+        ...(resultReceipt.runOutcome
+          ? { runOutcome: resultReceipt.runOutcome }
+          : {}),
+        ...(resultReceipt.taskAcceptance
+          ? { taskAcceptance: resultReceipt.taskAcceptance }
+          : {}),
       }
     }
     return block.blocks
@@ -1031,18 +1078,23 @@ const appendResultOnlyToolBlockToAgent = (
       return block
     }
 
-    const hasError = hasMultipartError(event.output)
+    const hasError = event.actionOutcome
+      ? event.actionOutcome.outcome !== 'succeeded'
+      : hasMultipartError(event.output)
     const backgroundJobId =
       !hasError && event.toolName === 'run_terminal_command'
         ? getBackgroundShellJobIdFromToolOutput(event.output)
         : undefined
     // BACKGROUND shell start is fire-and-forget: keep the card running until
     // live job_update settles it. A successful BACKGROUND start is not terminal.
-    const lifecycle: ToolContentBlock['lifecycle'] = hasError
-      ? 'failed'
-      : backgroundJobId
-        ? 'running'
-        : 'succeeded'
+    const lifecycle: ToolContentBlock['lifecycle'] =
+      event.actionOutcome?.outcome === 'cancelled'
+        ? 'cancelled'
+        : hasError
+          ? 'failed'
+          : backgroundJobId
+            ? 'running'
+            : 'succeeded'
 
     const resultOnlyToolBlock: ToolContentBlock = {
       type: 'tool',
@@ -1051,6 +1103,7 @@ const appendResultOnlyToolBlockToAgent = (
       input: {},
       agentId: event.agentId,
       lifecycle,
+      ...(event.actionOutcome ? { actionOutcome: event.actionOutcome } : {}),
       ...(backgroundJobId !== undefined ? { backgroundJobId } : {}),
     }
 
@@ -1071,6 +1124,17 @@ const handleToolResult = (
   state: EventHandlerState,
   event: PrintModeToolResult,
 ) => {
+  if (event.actionOutcome) {
+    state.message.updater.updateAiMessage((message) => ({
+      ...message,
+      actionOutcomes: [
+        ...(message.actionOutcomes ?? []).filter(
+          (action) => action.attemptId !== event.actionOutcome!.attemptId,
+        ),
+        event.actionOutcome!,
+      ],
+    }))
+  }
   const askUserResult =
     event.output?.[0]?.type === 'json'
       ? (event.output[0] as { type: 'json'; value: unknown }).value
@@ -1124,6 +1188,24 @@ const handleToolResult = (
     const withLifecycle = updatedBlocks.map(
       function markResult(block): ContentBlock {
         if (block.type === 'tool' && block.toolCallId === event.toolCallId) {
+          if (event.actionOutcome) {
+            const outcome = event.actionOutcome.outcome
+            const jobId = block.backgroundJobId ?? backgroundShellJobId
+            return {
+              ...block,
+              actionOutcome: event.actionOutcome,
+              ...(block.lifecycle === 'cancelled' ? { interrupted: true } : {}),
+              ...(jobId ? { backgroundJobId: jobId } : {}),
+              lifecycle:
+                outcome === 'cancelled'
+                  ? 'cancelled'
+                  : outcome !== 'succeeded'
+                    ? 'failed'
+                    : jobId
+                      ? 'running'
+                      : 'succeeded',
+            }
+          }
           if (block.lifecycle === 'cancelled') {
             const mutation = getCanonicalMutationResult(event.output)
             if (!mutation) return block
@@ -1131,8 +1213,7 @@ const handleToolResult = (
               ...block,
               interrupted: true,
               lifecycle:
-                mutation.outcome === 'applied' ||
-                mutation.outcome === 'rolled_back'
+                getMutationOutcome(event.output) === 'applied'
                   ? 'succeeded'
                   : 'failed',
             }
@@ -2110,6 +2191,12 @@ const handleFinish = (state: EventHandlerState, event: PrintModeFinish) => {
   if (typeof event.totalCost === 'number' && state.onTotalCost) {
     state.onTotalCost(event.totalCost)
   }
+  state.message.updater.updateAiMessage((message) => ({
+    ...message,
+    ...(event.runOutcome ? { runOutcome: event.runOutcome } : {}),
+    ...(event.taskAcceptance ? { taskAcceptance: event.taskAcceptance } : {}),
+    ...(event.actionOutcomes ? { actionOutcomes: event.actionOutcomes } : {}),
+  }))
 
   const settledIds = new Set<string>()
   state.message.updater.updateAiMessageBlocks((blocks) => {

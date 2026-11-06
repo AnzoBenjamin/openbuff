@@ -18,7 +18,6 @@ import {
   generateObject,
   NoSuchToolError,
   APICallError,
-  NoOutputGeneratedError,
   ToolCallRepairError,
   InvalidToolInputError,
   TypeValidationError,
@@ -41,16 +40,24 @@ import { refreshChatGptOAuthToken } from '../credentials'
 import {
   getProviderContentPolicyFinishError,
   getErrorStatusCode,
-  isRetryableStatusCode,
+  isProviderAbortError,
   normalizeProviderContentPolicyError,
 } from '../error-utils'
 import {
-  MAX_RETRIES_PER_MESSAGE,
-  RETRY_BACKOFF_BASE_DELAY_MS,
-  computeBackoffDelayMs,
-  isTransientNetworkError,
+  RETRY_POLICY,
+  classifyRetryableError,
+  createRequestRetryBudget,
+  admitRequestAttempt,
+  canAdmitRequestAttempt,
+  getRouteAttemptLimit,
+  getRetryDelayMs,
   runWithRetryPolicy,
   waitForBackoffDelay,
+} from '../retry-config'
+import type {
+  RetryExecutionOptions,
+  RequestRetryBudget,
+  RetryPolicy,
 } from '../retry-config'
 
 import type { ModelRequestParams } from './model-provider'
@@ -623,20 +630,37 @@ function getPlainToolInputSchema(inputSchema: unknown): unknown {
 
 /** Render the actual active tool surface for providers without native tools. */
 export function buildTextToolInstructions(tools: unknown): string {
-  if (!tools || typeof tools !== 'object' || Object.keys(tools).length === 0) return ''
-  const entries = Object.entries(tools as Record<string, unknown>).map(([name, value]) => {
-    const definition = value as { description?: string; inputSchema?: unknown }
-    let schema = getPlainToolInputSchema(definition.inputSchema)
-    if (schema === undefined) {
-      try {
-        schema = asSchema(definition.inputSchema as Parameters<typeof asSchema>[0]).jsonSchema
-      } catch {
-        throw new Error(`Cannot render input schema for tool ${name} on a provider without native tools`)
+  if (!tools || typeof tools !== 'object' || Object.keys(tools).length === 0)
+    return ''
+  const entries = Object.entries(tools as Record<string, unknown>).map(
+    ([name, value]) => {
+      const definition = value as {
+        description?: string
+        inputSchema?: unknown
       }
-    }
-    if (schema === undefined) throw new Error(`Missing input schema for tool ${name} on a provider without native tools`)
-    return JSON.stringify({ name, description: definition.description, inputSchema: schema })
-  })
+      let schema = getPlainToolInputSchema(definition.inputSchema)
+      if (schema === undefined) {
+        try {
+          schema = asSchema(
+            definition.inputSchema as Parameters<typeof asSchema>[0],
+          ).jsonSchema
+        } catch {
+          throw new Error(
+            `Cannot render input schema for tool ${name} on a provider without native tools`,
+          )
+        }
+      }
+      if (schema === undefined)
+        throw new Error(
+          `Missing input schema for tool ${name} on a provider without native tools`,
+        )
+      return JSON.stringify({
+        name,
+        description: definition.description,
+        inputSchema: schema,
+      })
+    },
+  )
   return [
     'You can call only the tools listed below. Each inputSchema describes the JSON object parameters for that tool.',
     'To call a tool, output <codebuff_tool_call> followed by one JSON object with "cb_tool_name" set to the tool name and the tool parameters as other fields, followed by </codebuff_tool_call>. Use JSON arrays and objects, not strings containing JSON.',
@@ -656,14 +680,15 @@ export function textOnlyToolHistory(messages: ModelMessage[]): ModelMessage[] {
         })),
       }
     }
-    if (message.role !== 'assistant' || typeof message.content === 'string') return message
+    if (message.role !== 'assistant' || typeof message.content === 'string')
+      return message
     return {
       ...message,
       content: message.content.map((part) =>
         part.type === 'tool-call'
           ? {
               type: 'text' as const,
-              text: `<codebuff_tool_call>\n${JSON.stringify({ cb_tool_name: part.toolName, ...part.input as object })}\n</codebuff_tool_call>`,
+              text: `<codebuff_tool_call>\n${JSON.stringify({ cb_tool_name: part.toolName, ...(part.input as object) })}\n</codebuff_tool_call>`,
             }
           : part,
       ),
@@ -1034,8 +1059,9 @@ function withConfiguredReasoningEffort(
 
   return {
     ...(providerOptions ?? {}),
-    openaiCompatible: {
-      ...((providerOptions?.openaiCompatible as JSONObject | undefined) ?? {}),
+    'openai-compatible': {
+      ...((providerOptions?.['openai-compatible'] as JSONObject | undefined) ??
+        {}),
       reasoningEffort,
     },
     openai: {
@@ -1089,6 +1115,8 @@ export function classifyChatGptOAuthStreamError(params: {
   if (!isChatGptOAuth || skipChatGptOAuth || hasYieldedContent) {
     return 'ignore'
   }
+  if (isProviderAbortError(error) || normalizeProviderContentPolicyError(error))
+    return 'fail-fast'
 
   if (isOAuthRateLimitError(error)) {
     return 'fallback-rate-limit'
@@ -1102,10 +1130,12 @@ export function classifyChatGptOAuthStreamError(params: {
 }
 
 export async function* promptAiSdkStream(
-  params: ParamsOf<PromptAiSdkStreamFn> & {
-    skipChatGptOAuth?: boolean
-    chatGptOAuthRetried?: boolean
-  },
+  params: ParamsOf<PromptAiSdkStreamFn> &
+    RetryExecutionOptions & {
+      skipChatGptOAuth?: boolean
+      chatGptOAuthRetried?: boolean
+      retryBudget?: RequestRetryBudget
+    },
 ): ReturnType<PromptAiSdkStreamFn> {
   const { providerOptions: originalProviderOptions, ...streamParams } = params
 
@@ -1185,15 +1215,20 @@ export async function* promptAiSdkStream(
   // surfacing as "Agent run error: undefined" at the post-loop `throw lastError`.
   // getModelForRequest performs the same resolution inside the loop, but only
   // after resolveModelsToTry gates entry — so we must resolve up front.
-  const effectiveRequestedModel =
-    params.model ||
-    (params.agentId
-      ? resolveConfiguredAgentModelConfig({
-          agentId: params.agentId,
-          loadedConfig,
-        }).model
-      : undefined)
+  const effectiveRequestedModel = resolveConfiguredAgentModelConfig({
+    agentId: params.agentId,
+    model: params.model,
+    loadedConfig,
+  }).model
   const modelsToTry = resolveModelsToTry(effectiveRequestedModel, loadedConfig)
+  const policy: RetryPolicy = params.retryPolicy ?? RETRY_POLICY
+  const retryBudget =
+    params.retryBudget ??
+    createRequestRetryBudget(
+      policy,
+      effectiveRequestedModel,
+      modelsToTry.length,
+    )
   const routeContextWindowTokens = resolveModelContextWindow({
     agentId: params.agentId,
     model: effectiveRequestedModel,
@@ -1206,12 +1241,20 @@ export async function* promptAiSdkStream(
     failoverIndex++
   ) {
     const failoverModel = modelsToTry[failoverIndex]
+    // Image routing may select a different model. Keep the resolved route
+    // available when this retry loop exits into the failover handler.
+    let attemptModel = failoverModel
     let promptTooLongRetried = false
     let providerMessageLimitOverride: number | undefined
     try {
-      for (let attempt = 0; attempt <= MAX_RETRIES_PER_MESSAGE; attempt++) {
-        // Track if we've yielded content in THIS attempt (for ChatGPT OAuth fallback)
-        let hasYieldedContent = false
+      for (
+        let attempt = 0;
+        attempt <=
+        (failoverIndex === 0
+          ? policy.maxRetries
+          : (policy.backupMaxRetries ?? policy.maxRetries));
+        attempt++
+      ) {
         // Tool-call chunks are buffered until THIS attempt's finishReason
         // resolves, so every attempt must start with an empty buffer. Without
         // this reset a stream that fails after buffering leaves its payloads
@@ -1230,6 +1273,9 @@ export async function* promptAiSdkStream(
         }
 
         try {
+          if (params.signal.aborted) throw params.signal.reason
+          if (retryBudget.attempts >= retryBudget.maxAttempts)
+            throw retryBudget.lastError
           const modelParams: ModelRequestParams = {
             apiKey: params.apiKey,
             model: failoverModel,
@@ -1244,7 +1290,31 @@ export async function* promptAiSdkStream(
             // primary and failover would be a no-op (M8.1).
             preferModelParam: failoverIndex > 0,
           }
-          const modelResult = await getModelForRequest(modelParams)
+          const modelResult = await getModelForRequest(modelParams).catch(
+            (error) => {
+              if (retryBudget.lastError === undefined) throw error
+              throw Object.assign(
+                new Error(
+                  error instanceof Error ? error.message : String(error),
+                  { cause: retryBudget.lastError },
+                ),
+                {
+                  name: 'ProviderConfigurationError',
+                  code: 'provider_configuration',
+                  routeError: error,
+                },
+              )
+            },
+          )
+          attemptModel = modelResult.effectiveModel
+          if (
+            retryBudget.attempts === 0 &&
+            !loadedConfig.config.failoverModels?.includes(attemptModel)
+          ) {
+            retryBudget.primaryModel = attemptModel
+          }
+          if (params.signal.aborted) throw params.signal.reason
+          admitRequestAttempt(policy, retryBudget, attemptModel)
           aiSDKModel = modelResult.model
           isChatGptOAuth = modelResult.isChatGptOAuth
           compatibility = modelResult.compatibility
@@ -1355,10 +1425,11 @@ export async function* promptAiSdkStream(
               : {}),
             prompt: undefined,
             model: aiSDKModel,
-            messages: compatibility.supportsTools === false
-              ? textOnlyToolHistory(requestMessages)
-              : requestMessages,
-            ...(isChatGptOAuth && { maxRetries: 0 }),
+            messages:
+              compatibility.supportsTools === false
+                ? textOnlyToolHistory(requestMessages)
+                : requestMessages,
+            maxRetries: 0,
             ...(hasProviderOptions(requestProviderOptions)
               ? { providerOptions: requestProviderOptions }
               : {}),
@@ -1487,13 +1558,15 @@ export async function* promptAiSdkStream(
           // The provider's AUTHORITATIVE finish reason, preferring the in-stream
           // `finish` chunk (captured in the loop below) over the late-resolved
           // `response.finishReason` promise.
-          let streamFinishReason: Awaited<typeof response.finishReason> | undefined
+          let streamFinishReason:
+            | Awaited<typeof response.finishReason>
+            | undefined
 
           for await (const chunkValue of response.fullStream) {
+            if (params.signal.aborted) throw params.signal.reason
             if (chunkValue.type !== 'text-delta') {
               const flushed = stopSequenceHandler.flush()
               if (flushed) {
-                hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'text',
@@ -1503,11 +1576,6 @@ export async function* promptAiSdkStream(
               }
             }
             if (chunkValue.type === 'error') {
-              // Publish already-received tool calls before handling the error so
-              // an error chunk can never silently swallow a tool call the model
-              // already emitted (pre-buffering behavior relied on the tool-call
-              // chunks having been yielded before the error).
-              yield* flushPendingToolCallChunks(false)
               // Error chunks from fullStream are non-network errors (tool failures, model issues, rate limits, etc.)
               // Network errors which cannot be recovered from are thrown, not yielded as chunks.
 
@@ -1533,6 +1601,7 @@ export async function* promptAiSdkStream(
                 ToolCallRepairError.isInstance(chunkValue.error) ||
                 TypeValidationError.isInstance(chunkValue.error)
               ) {
+                yield* flushPendingToolCallChunks(false)
                 logger.warn(
                   {
                     chunk: { ...chunkValue, error: undefined },
@@ -1541,7 +1610,6 @@ export async function* promptAiSdkStream(
                   },
                   'Tool call error in AI SDK stream - passing through to agent to retry',
                 )
-                hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'error',
@@ -1553,7 +1621,7 @@ export async function* promptAiSdkStream(
               const chatGptErrorPolicy = classifyChatGptOAuthStreamError({
                 isChatGptOAuth,
                 skipChatGptOAuth: params.skipChatGptOAuth,
-                hasYieldedContent,
+                hasYieldedContent: anyContentYielded,
                 error: chunkValue.error,
               })
 
@@ -1581,6 +1649,7 @@ export async function* promptAiSdkStream(
                 anyContentYielded = true
                 const fallbackResult = yield* promptAiSdkStream({
                   ...params,
+                  retryBudget,
                   skipChatGptOAuth: true,
                 })
                 return fallbackResult
@@ -1603,7 +1672,11 @@ export async function* promptAiSdkStream(
                 })
 
                 // Try refreshing the token and retrying once before failing/falling back
-                if (!params.chatGptOAuthRetried) {
+                retryBudget.lastError = chunkValue.error
+                if (
+                  !params.chatGptOAuthRetried &&
+                  canAdmitRequestAttempt(policy, retryBudget, attemptModel)
+                ) {
                   const refreshed = await refreshChatGptOAuthToken()
                   if (refreshed) {
                     logger.info(
@@ -1614,6 +1687,7 @@ export async function* promptAiSdkStream(
                     anyContentYielded = true
                     const retryResult = yield* promptAiSdkStream({
                       ...params,
+                      retryBudget,
                       chatGptOAuthRetried: true,
                     })
                     return retryResult
@@ -1630,6 +1704,7 @@ export async function* promptAiSdkStream(
                 anyContentYielded = true
                 const fallbackResult = yield* promptAiSdkStream({
                   ...params,
+                  retryBudget,
                   skipChatGptOAuth: true,
                 })
                 return fallbackResult
@@ -1662,7 +1737,6 @@ export async function* promptAiSdkStream(
                 !reasoningExcluded ||
                 compatibility.reasoningReplay === 'required'
               ) {
-                hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'reasoning',
@@ -1677,7 +1751,6 @@ export async function* promptAiSdkStream(
             if (chunkValue.type === 'text-delta') {
               if (!params.stopSequences) {
                 if (chunkValue.text) {
-                  hasYieldedContent = true
                   anyContentYielded = true
                   yield {
                     type: 'text',
@@ -1692,7 +1765,6 @@ export async function* promptAiSdkStream(
                 chunkValue.text,
               )
               if (stopSequenceResult.text) {
-                hasYieldedContent = true
                 anyContentYielded = true
                 yield {
                   type: 'text',
@@ -1711,7 +1783,6 @@ export async function* promptAiSdkStream(
               // flushPendingToolCallChunks, at the actual yield — otherwise a
               // stream that emits only tool calls and then throws could never
               // be retried or failed over.
-              hasYieldedContent = true
               const { providerMetadata, ...toolCall } = chunkValue
               pendingToolCallChunks.push({
                 ...toolCall,
@@ -1730,6 +1801,7 @@ export async function* promptAiSdkStream(
               streamFinishReason = chunkValue.finishReason
             }
           }
+          if (params.signal.aborted) throw params.signal.reason
           const flushed = stopSequenceHandler.flush()
           if (flushed) {
             anyContentYielded = true
@@ -1751,7 +1823,7 @@ export async function* promptAiSdkStream(
           // check must precede the flush, which drains the pending buffer.
           if (finishReason !== 'length' && pendingToolCallChunks.length > 0) {
             const configured = resolveConfiguredProviderModel({
-              model: failoverModel,
+              model: attemptModel,
               loadedConfig,
             })
             if (configured) {
@@ -1760,7 +1832,7 @@ export async function* promptAiSdkStream(
               // capability-key candidates resolveModelCapabilities uses.
               const band = getMaxOutputBytesForModel(
                 configured.provider,
-                failoverModel,
+                attemptModel,
                 configured.providerId,
               )
               // Serialized UTF-8 byte count, matching the byte-band semantics
@@ -1781,7 +1853,7 @@ export async function* promptAiSdkStream(
               )
               if (serializedBytes > band) {
                 logger.warn(
-                  { model: failoverModel, band, serializedBytes },
+                  { model: attemptModel, band, serializedBytes },
                   'Tool-call payloads exceeded the configured maxOutputBytes transport band without a provider length report; the configured band for this model looks stale.',
                 )
               }
@@ -1795,7 +1867,7 @@ export async function* promptAiSdkStream(
           yield* flushPendingToolCallChunks(finishReason === 'length')
           const contentPolicyError = getProviderContentPolicyFinishError({
             finishReason,
-            model: failoverModel,
+            model: attemptModel,
           })
           if (contentPolicyError) throw contentPolicyError
 
@@ -1914,11 +1986,17 @@ export async function* promptAiSdkStream(
           const error =
             normalizeProviderContentPolicyError(caughtError) ?? caughtError
           lastError = error
+          retryBudget.lastError = error
 
           // Don't retry user-cancelled requests
           if (params.signal.aborted) {
-            throw error
+            throw params.signal.reason
           }
+          if (
+            isProviderAbortError(error) ||
+            normalizeProviderContentPolicyError(error)
+          )
+            throw error
 
           if (anyContentYielded) {
             // Content was already yielded to the caller — cannot safely retry
@@ -1933,7 +2011,7 @@ export async function* promptAiSdkStream(
           if (
             providerContextLimit !== undefined &&
             !promptTooLongRetried &&
-            attempt < MAX_RETRIES_PER_MESSAGE
+            canAdmitRequestAttempt(policy, retryBudget, attemptModel)
           ) {
             promptTooLongRetried = true
             // Leave room for system/tool overhead and provider-side tokenization
@@ -1943,7 +2021,7 @@ export async function* promptAiSdkStream(
               getModelContextMessageLimit(providerContextLimit)
             logger.warn(
               {
-                model: failoverModel,
+                model: attemptModel,
                 providerContextLimit,
                 messageLimit: providerMessageLimitOverride,
               },
@@ -1951,81 +2029,72 @@ export async function* promptAiSdkStream(
             )
             emitProviderStatus({
               status: 'retrying',
-              model: failoverModel,
+              model: attemptModel,
               attempt: attempt + 2,
-              maxAttempts: MAX_RETRIES_PER_MESSAGE + 1,
+              maxAttempts: getRouteAttemptLimit(
+                policy,
+                retryBudget,
+                attemptModel,
+              ),
             })
             continue
           }
 
-          // Retry on transient network errors OR retryable HTTP status codes
-          // (408/429/500/502/503/504). The AI SDK surfaces provider 5xx responses
-          // as APICallError with a `statusCode`/`status` property; without this
-          // check, a provider 500 would be thrown immediately rather than retried.
           const statusCode = getErrorStatusCode(error)
-          const isRetryableStatus = isRetryableStatusCode(statusCode)
-          // The AI SDK rejects `response.finishReason` with NoOutputGeneratedError
-          // ("No output generated. Check the stream for errors.") when the provider
-          // opened a stream, sent zero chunks (no text, no tool call, no error
-          // chunk), and closed cleanly. That error carries no HTTP status and is
-          // not a network error, so without this case it would be thrown
-          // immediately. Treat it as retryable — the `anyContentYielded` check
-          // above already throws once output was streamed, so a retry here can
-          // never duplicate content.
-          const isEmptyStreamNoOutput =
-            NoOutputGeneratedError.isInstance(error) && !anyContentYielded
+          const decision = classifyRetryableError(error, policy)
           if (
-            !isTransientNetworkError(error) &&
-            !isRetryableStatus &&
-            !isEmptyStreamNoOutput
-          ) {
+            !decision.retryable ||
+            !canAdmitRequestAttempt(policy, retryBudget, attemptModel)
+          )
+            throw error
+          const delayMs = getRetryDelayMs(
+            error,
+            (retryBudget.routeAttempts.get(attemptModel) ?? 1) - 1,
+            policy,
+          )
+          if (retryBudget.waitMs + delayMs > retryBudget.maxWaitMs) {
+            retryBudget.exhausted = true
             throw error
           }
-
-          if (attempt >= MAX_RETRIES_PER_MESSAGE) {
-            logger.error(
-              {
-                error: getErrorObject(error),
-                attempts: attempt + 1,
-                statusCode,
-              },
-              'Stream failed after all retry attempts',
-            )
-            throw error
-          }
-
-          const delayMs = computeBackoffDelayMs({
-            attempt,
-            baseDelayMs: RETRY_BACKOFF_BASE_DELAY_MS,
-          })
+          retryBudget.waitMs += delayMs
           logger.warn(
             {
               error: getErrorObject(error),
               attempt: attempt + 1,
-              maxRetries: MAX_RETRIES_PER_MESSAGE,
+              maxRetries:
+                getRouteAttemptLimit(policy, retryBudget, attemptModel) - 1,
               delayMs,
               statusCode,
             },
-            isRetryableStatus
+            statusCode !== undefined
               ? `Retryable HTTP ${statusCode} during stream, retrying with delay`
               : 'Transient network error during stream, retrying with delay',
           )
           emitProviderStatus({
             status: 'retrying',
-            model: failoverModel,
+            model: attemptModel,
             attempt: attempt + 2,
-            maxAttempts: MAX_RETRIES_PER_MESSAGE + 1,
+            maxAttempts: getRouteAttemptLimit(
+              policy,
+              retryBudget,
+              attemptModel,
+            ),
             delayMs,
             ...(statusCode !== undefined ? { statusCode } : {}),
           })
-          await waitForBackoffDelay({ delayMs, signal: params.signal })
+          await (params.retrySleep?.(delayMs, params.signal) ??
+            waitForBackoffDelay({ delayMs, signal: params.signal }))
+          if (params.signal.aborted) throw params.signal.reason
         }
       }
     } catch (error) {
       lastError = error
 
       const canFailover =
+        !params.signal.aborted &&
         !anyContentYielded &&
+        !retryBudget.exhausted &&
+        retryBudget.attempts < retryBudget.maxAttempts &&
         failoverIndex < modelsToTry.length - 1 &&
         isFailoverEligibleError(error)
 
@@ -2038,7 +2107,7 @@ export async function* promptAiSdkStream(
         event: AnalyticsEvent.PROVIDER_FAILOVER,
         userId: userId ?? '',
         properties: {
-          fromModel: failoverModel,
+          fromModel: attemptModel,
           toModel: modelsToTry[failoverIndex + 1],
           statusCode,
           userInputId,
@@ -2047,7 +2116,7 @@ export async function* promptAiSdkStream(
       })
       logger.warn(
         {
-          fromModel: failoverModel,
+          fromModel: attemptModel,
           toModel: modelsToTry[failoverIndex + 1],
           statusCode,
           failoverIndex,
@@ -2056,7 +2125,7 @@ export async function* promptAiSdkStream(
       )
       emitProviderStatus({
         status: 'failover',
-        model: failoverModel,
+        model: attemptModel,
         nextModel: modelsToTry[failoverIndex + 1],
         ...(statusCode !== undefined ? { statusCode } : {}),
       })
@@ -2069,7 +2138,7 @@ export async function* promptAiSdkStream(
 }
 
 export async function promptAiSdk(
-  params: ParamsOf<PromptAiSdkFn>,
+  params: ParamsOf<PromptAiSdkFn> & RetryExecutionOptions,
 ): ReturnType<PromptAiSdkFn> {
   const { logger } = params
 
@@ -2150,10 +2219,13 @@ export async function promptAiSdk(
     // streaming path — same shared policy object, same backoff helpers.
     response = await runWithRetryPolicy({
       signal: params.signal,
+      policy: params.retryPolicy,
+      sleep: params.retrySleep,
       operation: async () => {
         try {
           return await generateText({
             ...params,
+            maxRetries: 0,
             // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
             // the caller's params.signal is merged and keeps precedence.
             abortSignal: withDefaultRequestTimeout(params.signal),
@@ -2236,7 +2308,7 @@ export async function promptAiSdk(
 }
 
 export async function promptAiSdkStructured<T>(
-  params: PromptAiSdkStructuredInput<T>,
+  params: PromptAiSdkStructuredInput<T> & RetryExecutionOptions,
 ): PromptAiSdkStructuredOutput<T> {
   const { logger } = params
 
@@ -2310,10 +2382,13 @@ export async function promptAiSdkStructured<T>(
     // streaming path — same shared policy object, same backoff helpers.
     response = await runWithRetryPolicy({
       signal: params.signal,
+      policy: params.retryPolicy,
+      sleep: params.retrySleep,
       operation: async () => {
         try {
           return await generateObject<z.ZodType<T>, 'object'>({
             ...params,
+            maxRetries: 0,
             // M3-T1: finite default request timeout (see DEFAULT_LLM_REQUEST_TIMEOUT_MS);
             // the caller's params.signal is merged and keeps precedence.
             abortSignal: withDefaultRequestTimeout(params.signal),

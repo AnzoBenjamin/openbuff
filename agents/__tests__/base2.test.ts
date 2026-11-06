@@ -54,6 +54,16 @@ function finishStepWithToolResult(value: unknown) {
   } as any
 }
 
+function fullReviewerDimensions() {
+  return {
+    correctness: 'pass: requested behavior is assessed',
+    security: 'pass: changed paths introduce no security regression',
+    tests: 'pass: behavior has test evidence',
+    apiCompatibility: 'pass: the public contract is preserved',
+    performance: 'pass: the change stays within its execution bounds',
+  }
+}
+
 /**
  * LOOKS_GOOD specialist receipt whose only requirementCoverage gaps are
  * parent-owned process duties. Includes rows parent-owned only via evidence
@@ -280,7 +290,16 @@ function attestedReviewerResult(
               apiCompatibility: 'pass',
               performance: 'pass',
             },
-            requirementCoverage: [],
+            requirementCoverage: [
+              {
+                requirement:
+                  'The pending changes satisfy the requested behavior',
+                status: 'satisfied',
+                evidence: files.map(
+                  (file: string) => `${file}: reviewed current source`,
+                ),
+              },
+            ],
           },
         ],
       },
@@ -942,9 +961,7 @@ describe('base2 validation/reviewer coordination prompts', () => {
     const planBase2 = createBase2('default', { planOnly: true })
 
     expect(planBase2.systemPrompt).toContain('at most **12** agents')
-    expect(planBase2.systemPrompt).toContain(
-      'split into bounded waves',
-    )
+    expect(planBase2.systemPrompt).toContain('split into bounded waves')
     expect(planBase2.instructionsPrompt).toContain(
       'as many analysis subagents as the work requires',
     )
@@ -6424,8 +6441,14 @@ describe('base2 verification and reviewer gates', () => {
               reviewedFiles: ['./src/a.ts'],
               findings: [],
               coverage: 'covered',
-              dimensions: {},
-              requirementCoverage: [],
+              dimensions: fullReviewerDimensions(),
+              requirementCoverage: [
+                {
+                  requirement: 'Requested behavior',
+                  status: 'satisfied',
+                  evidence: ['src/a.ts'],
+                },
+              ],
             },
           ],
         },
@@ -6551,19 +6574,31 @@ describe('base2 verification and reviewer gates', () => {
     let reviewerSpawned = false
     for (let i = 0; i < 30 && !next.done; i++) {
       const call = next.value as any
-      if (call?.toolName === 'spawn_agents' &&
-          call.input.agents.some((agent: any) => agent.agent_type === 'code-reviewer')) {
+      if (
+        call?.toolName === 'spawn_agents' &&
+        call.input.agents.some(
+          (agent: any) => agent.agent_type === 'code-reviewer',
+        )
+      ) {
         reviewerSpawned = true
         break
       }
-      const value = call?.toolName === 'git_status' ? { status: ' M src/a.ts' }
-        : call?.toolName === 'run_file_change_hooks' ? [] : {}
-      next = resumed.next(call === 'STEP'
-        ? finishStepWithToolResult({})
-        : { toolResult: [{ type: 'json', value }] } as any)
+      const value =
+        call?.toolName === 'git_status'
+          ? { status: ' M src/a.ts' }
+          : call?.toolName === 'run_file_change_hooks'
+            ? []
+            : {}
+      next = resumed.next(
+        call === 'STEP'
+          ? finishStepWithToolResult({})
+          : ({ toolResult: [{ type: 'json', value }] } as any),
+      )
     }
     expect(reviewerSpawned).toBe(true)
-    expect((agentState as any).base2ActiveWork.reviewerProtocolRetryCount).toBe(0)
+    expect((agentState as any).base2ActiveWork.reviewerProtocolRetryCount).toBe(
+      0,
+    )
   })
 
   test('reviewer prompt maps gate test coverage to the changed test file in the same snapshot', () => {
@@ -6771,7 +6806,7 @@ describe('base2 verification and reviewer gates', () => {
               ],
               findings: [],
               coverage: 'covered',
-              dimensions: { correctness: 'pass', tests: 'pass' },
+              dimensions: fullReviewerDimensions(),
               requirementCoverage: [
                 {
                   requirement:
@@ -6861,7 +6896,7 @@ describe('base2 verification and reviewer gates', () => {
               snapshotFingerprint,
               reviewedFiles: ['src/a.ts'],
               coverage: 'covered',
-              dimensions: { correctness: 'pass' },
+              dimensions: fullReviewerDimensions(),
               findings: [
                 {
                   id: 'code-reviewer:correctness:minor-style',
@@ -7823,12 +7858,12 @@ describe('base2 verification and reviewer gates', () => {
                 reviewedFiles: [gateFile],
                 findings: [],
                 coverage: 'covered',
-                dimensions: { correctness: 'pass' },
+                dimensions: fullReviewerDimensions(),
                 requirementCoverage: [
                   {
                     requirement: 'commit and push',
                     status: 'missing',
-                    evidence: [],
+                    evidence: ['The parent owns the commit and push workflow.'],
                   },
                 ],
               },
@@ -8087,7 +8122,7 @@ describe('base2 verification and reviewer gates', () => {
               snapshotFingerprint,
               reviewedFiles: ['src/a.ts'],
               coverage: 'covered',
-              dimensions: { correctness: 'pass' },
+              dimensions: fullReviewerDimensions(),
               findings: Array.from({ length: 20 }, (_, index) => ({
                 id: `code-reviewer:correctness:finding-${index}`,
                 summary: longText,
@@ -9929,7 +9964,13 @@ describe('base2 content-based reviewer finding correlation', () => {
                 apiCompatibility: 'pass',
                 performance: 'pass',
               },
-              requirementCoverage: [],
+              requirementCoverage: [
+                {
+                  requirement: 'Requested behavior',
+                  status: 'satisfied',
+                  evidence: ['src/a.ts'],
+                },
+              ],
             },
           ],
         },
@@ -10121,7 +10162,7 @@ describe('base2 specialist parent-owned LOOKS_GOOD credit', () => {
   })
 })
 
-describe('base2 specialist attestation tolerance', () => {
+describe('base2 specialist snapshot attestation', () => {
   // RF-1: a pending path that is DELETED on disk carries a `missing` content
   // marker and cannot be read by the specialist, so it must be
   // attested-by-absence exactly like the final code-reviewer path. Without the
@@ -10261,11 +10302,15 @@ describe('base2 specialist attestation tolerance', () => {
     }
   })
 
-  // RF-2: the specialist path tolerates a coverage-complete review whose
-  // well-formed v3 fingerprint does not match the expected snapshot; that
-  // tolerated drift must be RECORDED (gate telemetry with dedicated
-  // reported/expected keys) rather than accepted silently.
-  test('records fingerprint drift for a coverage-complete routed specialist review', () => {
+  test.each([
+    'foreign-clean',
+    'foreign-parent-owned',
+    'wide-foreign',
+    'missing-file',
+    'invalid-schema',
+    'no-verdict',
+    'byte-drift',
+  ])('blocks %s specialist evidence after one reviewer-only retry', (kind) => {
     const tmpDir = makeProjectTempDir('base2-specialist-drift-')
     const telemetry: Array<Record<string, unknown>> = []
     const originalInfo = console.info
@@ -10282,13 +10327,22 @@ describe('base2 specialist attestation tolerance', () => {
       writeFileSync(absoluteFile, 'export const session = "v1"\n')
       const gateFile = normalizeGateFilePath(absoluteFile)
       const driftFingerprint = `v3:${'e'.repeat(64)}`
+      const pendingFiles = [gateFile]
+      if (kind === 'wide-foreign') {
+        for (let index = 0; index < 40; index++) {
+          const file = join(stateDir, `session-${index}.ts`)
+          writeFileSync(file, `export const session${index} = "v1"\n`)
+          pendingFiles.push(normalizeGateFilePath(file))
+        }
+      }
+      const status = pendingFiles.map((file) => ` M ${file}`).join('\n')
       const base2 = createBase2('default')
       const agentState = {
         agentId: 'base2-custom',
         base2ActiveWork: {
-          changedFiles: [gateFile],
-          touchedFiles: [gateFile],
-          pendingGateFiles: [gateFile],
+          changedFiles: pendingFiles,
+          touchedFiles: pendingFiles,
+          pendingGateFiles: pendingFiles,
           currentPhase: 'awaiting_validation',
           openReviewerBlockers: [],
           openReviewerFindings: [],
@@ -10307,7 +10361,7 @@ describe('base2 specialist attestation tolerance', () => {
           securityReviewGateDone: true,
           preEditSecurityReviewDone: true,
           specialistReviewGatesDone: [],
-          auxGatesLastPendingFiles: [gateFile],
+          auxGatesLastPendingFiles: pendingFiles,
         },
       }
       const gen = base2.handleSteps!({
@@ -10320,9 +10374,7 @@ describe('base2 specialist attestation tolerance', () => {
         toolName: 'git_status',
         input: {},
       })
-      expect(
-        gen.next(feedJson({ status: ` M ${gateFile}` })).value,
-      ).toMatchObject({
+      expect(gen.next(feedJson({ status })).value).toMatchObject({
         toolName: 'spawn_agent_inline',
         input: { agent_type: 'context-pruner' },
       })
@@ -10332,13 +10384,13 @@ describe('base2 specialist attestation tolerance', () => {
         toolName: 'git_status',
         input: {},
       })
-      const bundle = gen.next(feedJson({ status: ` M ${gateFile}` }))
+      const bundle = gen.next(feedJson({ status }))
       expect(bundle.value).toMatchObject({
         toolName: 'get_change_review_bundle',
         input: {},
       })
       const spawn = gen.next(
-        feedJson({ snapshotId: 'unit-spec-snap-drift', files: [gateFile] }),
+        feedJson({ snapshotId: 'unit-spec-snap-drift', files: pendingFiles }),
       )
       expect(spawn.value).toMatchObject({
         toolName: 'spawn_agents',
@@ -10350,43 +10402,91 @@ describe('base2 specialist attestation tolerance', () => {
       expect(expectedFingerprint).toMatch(/^v3:[a-f0-9]{64}$/)
       expect(expectedFingerprint).not.toBe(driftFingerprint)
 
-      const afterSpecialist = gen.next(
+      const invalidResult = (fingerprint: string) =>
         feedJson({
           agentType: 'reliability-reviewer',
-          value: {
-            schemaVersion: 1,
-            family: 'reviewer',
-            verdict: 'LOOKS_GOOD',
-            snapshotFingerprint: driftFingerprint,
-            reviewedFiles: [gateFile],
-            findings: [],
-            coverage: 'covered',
-            dimensions: {},
-            requirementCoverage: [],
-          },
-        }),
-      )
-      // Drift is tolerated: the specialist is credited and the loop re-enters.
-      expect(afterSpecialist.value).toMatchObject({
-        toolName: 'spawn_agent_inline',
-        input: { agent_type: 'context-pruner' },
+          value:
+            kind === 'no-verdict'
+              ? 'The session retry path looks acceptable to me.'
+              : {
+                  schemaVersion: kind === 'invalid-schema' ? 2 : 1,
+                  family: 'reviewer',
+                  verdict: 'LOOKS_GOOD',
+                  snapshotFingerprint: kind.includes('foreign')
+                    ? driftFingerprint
+                    : fingerprint,
+                  reviewedFiles: kind === 'missing-file' ? [] : pendingFiles,
+                  findings: [],
+                  coverage: 'covered',
+                  dimensions: fullReviewerDimensions(),
+                  requirementCoverage: [
+                    {
+                      requirement:
+                        kind === 'foreign-parent-owned'
+                          ? 'Commit and push'
+                          : 'Requested behavior',
+                      status:
+                        kind === 'foreign-parent-owned'
+                          ? 'missing'
+                          : 'satisfied',
+                      evidence: ['Parent owns the commit and push workflow.'],
+                    },
+                  ],
+                },
+        })
+      if (kind === 'byte-drift') {
+        writeFileSync(absoluteFile, 'export const session = "v2"\n')
+      }
+      const refresh = gen.next(invalidResult(expectedFingerprint))
+      expect(refresh.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+        input: {},
       })
       expect(
         (agentState as any).base2ActiveWork.specialistReviewGatesDone,
-      ).toContain('reliability-reviewer')
-
-      const driftEvents = telemetry.filter(
-        (event) => event.reviewerStatus === 'attestation-fingerprint-drift',
+      ).not.toContain('reliability-reviewer')
+      const retrySpawn = gen.next(
+        feedJson({ snapshotId: 'unit-spec-snap-retry', files: pendingFiles }),
       )
-      expect(driftEvents).toHaveLength(1)
-      expect(driftEvents[0]).toMatchObject({
-        event: 'base2.gate',
-        reviewer: 'reliability-reviewer',
-        reportedFingerprint: driftFingerprint,
-        expectedFingerprint,
-        pendingFiles: [gateFile],
+      expect(retrySpawn.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
       })
-      expect(driftEvents[0]!.reuseReason).toBeUndefined()
+      const retryFingerprint = String(
+        (retrySpawn.value as any).input.agents[0].params.snapshot_id,
+      )
+      if (kind === 'byte-drift') {
+        expect(retryFingerprint).not.toBe(expectedFingerprint)
+        writeFileSync(absoluteFile, 'export const session = "v3"\n')
+      }
+      const blockedMessage = gen.next(invalidResult(retryFingerprint))
+      expect(blockedMessage.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
+      })
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.currentPhase).toBe('blocked')
+      expect(activeWork.specialistReviewGatesDone).not.toContain(
+        'reliability-reviewer',
+      )
+      expect(
+        activeWork.specialistReviewGateFingerprints?.['reliability-reviewer'],
+      ).toBeUndefined()
+      expect(
+        activeWork.specialistReviewFileMarkers?.['reliability-reviewer'],
+      ).toBeUndefined()
+      expect(
+        activeWork.specialistWaveCreditMarkers?.['reliability-reviewer'],
+      ).toBeUndefined()
+      expect(activeWork.waveCompletions ?? {}).toEqual({})
+      expect(activeWork.reviewReceipts).toEqual([])
+      expect(activeWork.openReviewerBlockers.length).toBeGreaterThan(0)
+      expect(
+        telemetry.some(
+          (event) => event.reviewerStatus === 'attestation-fingerprint-drift',
+        ),
+      ).toBe(false)
+      expect(gen.next().done).toBe(true)
     } finally {
       console.info = originalInfo
       rmSync(tmpDir, { recursive: true, force: true })
@@ -11826,25 +11926,12 @@ describe('base2 gate-state reviewer-family and skip-reason fields', () => {
     }
   })
 
-  test('a stale skip token is overwritten on the specialist no-verdict budget-exhaustion path', () => {
-    // Regression (stale-skip-reason-token): the no-verdict
-    // budget-exhaustion branch used to backfill lastReviewerGateSkipReason
-    // only when it was EMPTY, so a stale token from an earlier unrelated
-    // failure survived the reduced-assurance CREDIT and shadowed the
-    // accurate 'specialist-no-verdict-budget-exhausted' marker on the
-    // durable state. Unlike the terminal-failure and repair-exit
-    // siblings, this path CONTINUES the loop, so the stale token would
-    // ride the pinned state the loop re-emits for the credited snapshot.
-    // The token must be assigned unconditionally so it always matches the
-    // credit that produced it, exactly like the three sites above.
+  test('a spent no-verdict budget cannot credit an unattested specialist result', () => {
     const { tmpDir, gateFile } = seedReliabilityFixture(
       'base2-specialist-stale-token-no-verdict-',
     )
     try {
-      // Finite retry budget with the per-specialist count already spent by
-      // a prior pass on this snapshot: the FIRST no-verdict rejection of
-      // this pass exhausts the budget, so the reduced-assurance credit
-      // path runs without a second specialist spawn.
+      // Exhausting an advisory retry budget does not establish attestation.
       const base2 = createBase2('default', { maxSpecialistNoVerdictRetries: 1 })
       const agentState = {
         agentId: 'base2-custom',
@@ -11892,47 +11979,42 @@ describe('base2 gate-state reviewer-family and skip-reason fields', () => {
         input: { agents: [{ agent_type: 'reliability-reviewer' }] },
       })
 
-      // The specialist ran but returned only prose: no structured verdict,
-      // no crash, no blockers. The spent budget routes the gate straight
-      // to the reduced-assurance credit instead of a re-spawn.
-      const afterNoVerdict = gen.next(
-        feedJson({
-          agentType: 'reliability-reviewer',
-          value: 'The session retry path looks acceptable to me.',
-        }),
-      )
-      // The credit path CONTINUES the loop: the specialist is credited
-      // with reduced assurance and the loop re-enters at the pruner.
-      expect(afterNoVerdict.value).toMatchObject({
-        toolName: 'spawn_agent_inline',
-        input: { agent_type: 'context-pruner' },
+      const proseOnly = feedJson({
+        agentType: 'reliability-reviewer',
+        value: 'The session retry path looks acceptable to me.',
       })
-      const activeWork = (agentState as any).base2ActiveWork
-      expect(activeWork.specialistReviewGatesDone).toContain(
-        'reliability-reviewer',
-      )
-      expect(activeWork.validationAssurance).toBe('reduced')
-      expect(activeWork.latestWorkSummary).toContain('never returned a verdict')
-      // The stale token is OVERWRITTEN: the durable marker names the
-      // reduced-assurance credit that produced it instead of leaking the
-      // unrelated earlier failure's token.
-      expect(activeWork.lastReviewerGateSkipReason).toBe(
-        'specialist-no-verdict-budget-exhausted',
-      )
-
-      // Loop re-entry republishes the durable state: the pinned block the
-      // next surface reads carries the accurate marker, not the stale one.
-      const pinned = gen.next()
-      expect(pinned.value).toMatchObject({
+      const afterNoVerdict = gen.next(proseOnly)
+      expect(afterNoVerdict.value).toMatchObject({
+        toolName: 'get_change_review_bundle',
+      })
+      expect(gen.next(feedJson({ files: [gateFile] })).value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const blocked = gen.next(proseOnly)
+      expect(blocked.value).toMatchObject({
         toolName: 'add_message',
         input: { role: 'user' },
       })
-      const pinnedText = (pinned.value as any).input.content as string
-      expect(pinnedText).toContain(
-        'Last reviewer gate skip/error reason: specialist-no-verdict-budget-exhausted',
+      const activeWork = (agentState as any).base2ActiveWork
+      expect(activeWork.currentPhase).toBe('blocked')
+      expect(activeWork.specialistReviewGatesDone).not.toContain(
+        'reliability-reviewer',
       )
-      expect(pinnedText).not.toContain('validation-hook-failures')
-      expect(gen.next().value).toBe('STEP')
+      expect(activeWork.reviewReceipts).toEqual([])
+      expect(activeWork.validationAssurance).not.toBe('reduced')
+      expect(activeWork.latestWorkSummary).toContain(
+        'after one automatic refresh',
+      )
+      expect(activeWork.lastReviewerGateSkipReason).toBe(
+        'specialist-terminal-failure',
+      )
+      const blockText = (blocked.value as any).input.content as string
+      expect(parseGateStateBlock(blockText)?.skipReason).toBe(
+        'specialist-terminal-failure',
+      )
+      expect(blockText).not.toContain('validation-hook-failures')
+      expect(gen.next().done).toBe(true)
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -11944,7 +12026,7 @@ describe('base2 gate-state reviewer-family and skip-reason fields', () => {
     // assign it unconditionally — but the reviewer-protocol retry guards used
     // to read that same token as policy state. A turn that ended blocked on
     // reviewer-protocol attestation failure enters this pass with the token
-    // armed; the specialist no-verdict budget-exhaustion credit then
+    // armed; a specialist protocol failure then
     // overwrites the token (correct for the published block) and must NOT
     // disarm the protocol policy: the guards read the dedicated
     // reviewerProtocolAttestationFailed latch, which survives the exit, so
@@ -12011,39 +12093,42 @@ describe('base2 gate-state reviewer-family and skip-reason fields', () => {
         (agentState as any).base2ActiveWork.reviewerProtocolAttestationFailed,
       ).toBe(true)
 
-      // Prose-only specialist response with the budget spent: the
-      // reduced-assurance credit path overwrites the published token…
-      const afterNoVerdict = gen.next(
-        feedJson({
-          agentType: 'reliability-reviewer',
-          value: 'The session retry path looks acceptable to me.',
-        }),
-      )
+      const proseOnly = feedJson({
+        agentType: 'reliability-reviewer',
+        value: 'The session retry path looks acceptable to me.',
+      })
+      const afterNoVerdict = gen.next(proseOnly)
       expect(afterNoVerdict.value).toMatchObject({
-        toolName: 'spawn_agent_inline',
-        input: { agent_type: 'context-pruner' },
+        toolName: 'get_change_review_bundle',
+      })
+      expect(gen.next(feedJson({ files: [gateFile] })).value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'reliability-reviewer' }] },
+      })
+      const blocked = gen.next(proseOnly)
+      expect(blocked.value).toMatchObject({
+        toolName: 'add_message',
+        input: { role: 'user' },
       })
       const activeWork = (agentState as any).base2ActiveWork
       expect(activeWork.lastReviewerGateSkipReason).toBe(
-        'specialist-no-verdict-budget-exhausted',
+        'specialist-terminal-failure',
       )
-      // …while the protocol-policy latch SURVIVES the exit with its retry
+      expect(activeWork.currentPhase).toBe('blocked')
+      expect(activeWork.specialistReviewGatesDone).not.toContain(
+        'reliability-reviewer',
+      )
+      expect(activeWork.reviewReceipts).toEqual([])
+      // The protocol-policy latch survives the exit with its retry
       // budget intact: the next pass's guards still see the
       // protocol-blocked state instead of silently disarming.
       expect(activeWork.reviewerProtocolAttestationFailed).toBe(true)
       expect(activeWork.reviewerProtocolRetryCount).toBe(1)
-      // Loop re-entry republishes the accurate (overwritten) token while the
-      // latch stays armed: published telemetry and policy state have split.
-      const pinned = gen.next()
-      expect(pinned.value).toMatchObject({
-        toolName: 'add_message',
-        input: { role: 'user' },
-      })
-      const pinnedText = (pinned.value as any).input.content as string
-      expect(pinnedText).toContain(
-        'Last reviewer gate skip/error reason: specialist-no-verdict-budget-exhausted',
+      const blockText = (blocked.value as any).input.content as string
+      expect(parseGateStateBlock(blockText)?.skipReason).toBe(
+        'specialist-terminal-failure',
       )
-      expect(gen.next().value).toBe('STEP')
+      expect(gen.next().done).toBe(true)
     } finally {
       rmSync(tmpDir, { recursive: true, force: true })
     }
@@ -14708,8 +14793,14 @@ describe('base2 deleted-before-first-snapshot gate files', () => {
                   reviewedFiles: [],
                   findings: [],
                   coverage: 'covered',
-                  dimensions: {},
-                  requirementCoverage: [],
+                  dimensions: fullReviewerDimensions(),
+                  requirementCoverage: [
+                    {
+                      requirement: 'Remove the obsolete file',
+                      status: 'satisfied',
+                      evidence: [`${deletedFile} is absent in this snapshot.`],
+                    },
+                  ],
                 },
               ],
             },

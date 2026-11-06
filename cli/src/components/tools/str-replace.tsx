@@ -13,6 +13,7 @@ import {
 } from '../../utils/implementor-helpers'
 import {
   getCanonicalMutationResult,
+  getMutationOutcome,
   getStructuredErrorMessages,
 } from '../../utils/tool-result-normalizer'
 
@@ -195,7 +196,8 @@ function getEditStatus(toolBlock: Parameters<typeof extractDiff>[0]): {
 } {
   const mutation = getCanonicalMutationResult(toolBlock.outputRaw)
   if (mutation) {
-    if (mutation.outcome === 'applied') {
+    const outcome = getMutationOutcome(toolBlock.outputRaw)
+    if (outcome === 'applied') {
       return {
         status: 'applied',
         message: toolBlock.interrupted
@@ -203,7 +205,7 @@ function getEditStatus(toolBlock: Parameters<typeof extractDiff>[0]): {
           : null,
       }
     }
-    if (mutation.outcome === 'unconfirmed') {
+    if (outcome === 'unconfirmed') {
       return {
         status: 'unconfirmed',
         message: 'Disk mutation could not be confirmed.',
@@ -215,8 +217,8 @@ function getEditStatus(toolBlock: Parameters<typeof extractDiff>[0]): {
         'rolled_back',
         'rollback_incomplete',
         'not_applied',
-      ].includes(String(mutation.outcome))
-        ? (mutation.outcome as EditStatus)
+      ].includes(String(outcome))
+        ? (outcome as EditStatus)
         : 'failed',
       message: [
         `Mutation ${String(mutation.outcome)}.`,

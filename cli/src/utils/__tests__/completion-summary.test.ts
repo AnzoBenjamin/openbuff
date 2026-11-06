@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { buildFileMutationResultFromReceiptV1 } from '@codebuff/common/tools/results/filesystem'
 
 import {
   computeCompletionSummary,
@@ -390,14 +391,53 @@ describe('review outcome authority and capture freshness', () => {
     outputRaw: [
       {
         type: 'json',
-        value: {
-          kind: 'file_mutation_result',
-          outcome: 'applied',
-          actions: [{ path: 'a.ts', outcome: 'applied' }],
-        },
+        value: buildFileMutationResultFromReceiptV1({
+          kind: 'commit_receipt',
+          version: 1,
+          receiptId: 'receipt-edit',
+          operationId: 'operation-edit',
+          callId: 'edit',
+          authorityTier: 'conditional_commit',
+          status: 'committed',
+          actions: [
+            {
+              actionId: 'action-edit',
+              index: 0,
+              action: 'update',
+              path: 'a.ts',
+              status: 'committed',
+              beforeHash: 'before',
+              afterHash: 'after',
+            },
+          ],
+          finalHashes: { 'a.ts': 'after' },
+        }),
       },
     ],
   }
+
+  test('[B03] a raw applied claim without authority does not advance review generation', () => {
+    const rawEdit: ToolContentBlock = {
+      ...edit,
+      outputRaw: [
+        {
+          type: 'json',
+          value: {
+            kind: 'file_mutation_result',
+            outcome: 'applied',
+            actions: [{ path: 'a.ts', outcome: 'applied' }],
+          },
+        },
+      ],
+    }
+    const summary = computeCompletionSummary([
+      review('review-1', 'LOOKS_GOOD'),
+      rawEdit,
+    ])
+    expect(summary?.filesEdited).toBe(0)
+    expect(summary?.reviewVerdict).toBe('LOOKS_GOOD')
+    expect(summary?.reviewHistory?.[0]?.stale).toBe(false)
+  })
   test('NON_BLOCKING is never a substring BLOCKING and unrelated quoted prose sets no verdict', () => {
     expect(
       computeCompletionSummary([review('r', 'NON_BLOCKING')])?.reviewVerdict,

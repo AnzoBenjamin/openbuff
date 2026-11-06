@@ -19,6 +19,18 @@ import type {
 import type { ClientBackend } from './backend'
 import type { OpenbuffClientOptions, RunOptions } from '../run'
 import type { RunState } from '../run-state'
+import { projectRunOutcomes } from '../run-state'
+import {
+  actionOutcomeSchema,
+  runOutcomeSchema,
+  taskAcceptanceSchema,
+} from '@codebuff/common/types/run-outcome'
+import type {
+  ActionOutcome,
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
+import { receiptEnvelopeV1Schema } from '@codebuff/common/protocol/acp-ext-v1'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { JSONValue } from '@codebuff/common/types/json'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
@@ -34,6 +46,39 @@ export type ActiveRun = {
   toolNames: Map<string, string>
   /** toolCallId → last observed status, so a pending card becomes tool_start first. */
   statuses: Map<string, string>
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
+}
+
+function outcomeFields(
+  value: unknown,
+): Pick<RunState, 'runOutcome' | 'taskAcceptance' | 'actionOutcomes'> {
+  if (!isRecord(value)) return {}
+  const outcome = runOutcomeSchema.safeParse(value.runOutcome)
+  const acceptance = taskAcceptanceSchema.safeParse(value.taskAcceptance)
+  const actions = actionOutcomeSchema.array().safeParse(value.actionOutcomes)
+  return {
+    ...(outcome.success ? { runOutcome: outcome.data } : {}),
+    ...(acceptance.success ? { taskAcceptance: acceptance.data } : {}),
+    ...(actions.success ? { actionOutcomes: actions.data } : {}),
+  }
+}
+
+function scopedMetadata(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) && isRecord(value['openbuff.dev'])
+    ? value['openbuff.dev']
+    : undefined
+}
+
+function mergeActions(
+  left: ActionOutcome[] = [],
+  right: ActionOutcome[] = [],
+): ActionOutcome[] {
+  const retained = new Map(left.map((action) => [action.attemptId, action]))
+  for (const action of right)
+    if (!retained.has(action.attemptId)) retained.set(action.attemptId, action)
+  return [...retained.values()]
 }
 
 /** JSON-RPC error surface we read the `openbuff.dev` message out of. */
@@ -84,8 +129,8 @@ function toolCallUpdateContentText(update: Record<string, unknown>): string {
     // `{ type: 'content', content: <ContentBlock> }` — the ContentBlock
     // carries the actual `{ type: 'text', text }`. (The unwrapped
     // `{ type: 'text' }` form is not a valid tool_call_update item.)
-    if (isRecord(part) && part.type === 'content') {
-      const inner = part.content
+    if (isRecord(part)) {
+      const inner = part.type === 'content' ? part.content : part
       if (
         isRecord(inner) &&
         inner.type === 'text' &&
@@ -181,16 +226,79 @@ export function acpSessionUpdateToPrintModeEvents(
         const text = toolCallUpdateContentText(
           update as Record<string, unknown>,
         )
-        const value =
-          status === 'failed' ? { errorMessage: text } : { message: text }
-        const output: ToolResultOutput[] = [
-          { type: 'json', value: value as unknown as JSONValue },
-        ]
+        const meta = scopedMetadata((update as Record<string, unknown>)._meta)
+        const action = actionOutcomeSchema.safeParse(meta?.actionOutcome)
+        const receipt = receiptEnvelopeV1Schema.safeParse(meta?.receipt)
+        let output: ToolResultOutput[]
+        if (receipt.success) {
+          output = [{ type: 'json', value: receipt.data.mutation }]
+        } else {
+          try {
+            const values = text
+              .split('\n')
+              .filter((line) => line.trim())
+              .map((line) => JSON.parse(line) as JSONValue)
+            output = values.length
+              ? values.map((value) => ({ type: 'json' as const, value }))
+              : [
+                  {
+                    type: 'json',
+                    value:
+                      status === 'failed'
+                        ? { errorMessage: text || 'Remote tool failed.' }
+                        : { message: text },
+                  },
+                ]
+          } catch {
+            output = [
+              {
+                type: 'json',
+                value:
+                  status === 'failed'
+                    ? { errorMessage: text || 'Remote tool failed.' }
+                    : { message: text },
+              },
+            ]
+          }
+        }
+        const transportedAction = action.success
+          ? status === 'failed' && action.data.outcome === 'succeeded'
+            ? {
+                ...action.data,
+                outcome: 'failed' as const,
+                cause: {
+                  code: 'remote_tool_failed',
+                  message: text || 'Remote tool failed.',
+                },
+              }
+            : action.data
+          : undefined
+        if (transportedAction)
+          run.actionOutcomes = mergeActions(run.actionOutcomes, [
+            transportedAction,
+          ])
+        // A failed transport status survives even when its text is valid JSON.
+        if (
+          status === 'failed' &&
+          (!action.success || action.data.outcome === 'succeeded') &&
+          !output.some(
+            (part) =>
+              part.type === 'json' &&
+              isRecord(part.value) &&
+              typeof part.value.errorMessage === 'string',
+          )
+        ) {
+          output.push({
+            type: 'json',
+            value: { errorMessage: text || 'Remote tool failed.' },
+          })
+        }
         events.push({
           type: 'tool_result',
           toolCallId,
           toolName,
           output,
+          ...(transportedAction ? { actionOutcome: transportedAction } : {}),
         })
       }
       break
@@ -200,6 +308,16 @@ export function acpSessionUpdateToPrintModeEvents(
       if (isRecord(cost) && typeof cost.amount === 'number') {
         run.totalCost += cost.amount
       }
+      const outcomes = outcomeFields(
+        scopedMetadata((update as Record<string, unknown>)._meta),
+      )
+      if (outcomes.runOutcome) run.runOutcome = outcomes.runOutcome
+      if (outcomes.taskAcceptance) run.taskAcceptance = outcomes.taskAcceptance
+      if (outcomes.actionOutcomes)
+        run.actionOutcomes = mergeActions(
+          run.actionOutcomes,
+          outcomes.actionOutcomes,
+        )
       break
     }
     default:
@@ -287,7 +405,12 @@ export class AcpRemoteBackend implements ClientBackend {
 
   constructor(
     private readonly transport:
-      | { kind: 'socket'; socketPath: string; token: string; timeoutMs?: number }
+      | {
+          kind: 'socket'
+          socketPath: string
+          token: string
+          timeoutMs?: number
+        }
       | { kind: 'stdio'; command: string; args?: string[] }
       | { kind: 'stream'; stream: import('@agentclientprotocol/sdk').Stream },
   ) {}
@@ -359,11 +482,18 @@ export class AcpRemoteBackend implements ClientBackend {
     }
   }
 
-  private buildErrorRunState(message: string): RunState {
-    return {
+  private buildErrorRunState(
+    message: string,
+    outcomes?: Pick<
+      RunState,
+      'runOutcome' | 'taskAcceptance' | 'actionOutcomes'
+    >,
+  ): RunState {
+    return projectRunOutcomes({
       sessionState: undefined,
       output: { type: 'error', message },
-    }
+      ...outcomes,
+    })
   }
 
   /**
@@ -372,13 +502,19 @@ export class AcpRemoteBackend implements ClientBackend {
    * the streamed session/update notifications onto the host's handleEvent.
    */
   async run(options: RunOptions & OpenbuffClientOptions): Promise<RunState> {
+    if (options.signal?.aborted) {
+      return this.buildErrorRunState('Run cancelled by user.', {
+        runOutcome: { termination: 'cancelled' },
+      })
+    }
     if (this.closed) {
       return this.buildErrorRunState('The ACP-remote backend is closed.')
     }
     const cwd = options.cwd ?? this.cwd ?? process.cwd()
     this.cwd = cwd
-    const connection = await this.ensureConnection()
+    let runState: ActiveRun | undefined
     try {
+      const connection = await this.ensureConnection()
       if (!this.initialized) {
         await connection.initialize({ protocolVersion: PROTOCOL_VERSION })
         this.initialized = true
@@ -401,12 +537,13 @@ export class AcpRemoteBackend implements ClientBackend {
       // Captured as a narrowed const so the prompt/cancel calls below are
       // bound to THIS turn's session regardless of any concurrent detach().
       const sessionId = this.sessionId
-      const runState: ActiveRun = {
+      runState = {
         options,
         text: '',
         totalCost: 0,
         toolNames: new Map(),
         statuses: new Map(),
+        actionOutcomes: [],
       }
       this.activeRun = runState
       // Map the host's AbortSignal onto ACP `session/cancel` so a cancelled
@@ -427,30 +564,98 @@ export class AcpRemoteBackend implements ClientBackend {
           prompt: [{ type: 'text', text: options.prompt }],
         })
         const stopReason: StopReason = response.stopReason
-        if (stopReason === 'cancelled') {
-          return this.buildErrorRunState('Run cancelled by user.')
-        }
-        await options.handleEvent?.({
-          type: 'finish',
-          totalCost: runState.totalCost,
-        })
-        return {
+        const outcomes = outcomeFields(scopedMetadata(response._meta))
+        const fallbackOutcome: RunOutcome =
+          stopReason === 'cancelled'
+            ? { termination: 'cancelled' }
+            : stopReason === 'max_tokens'
+              ? {
+                  termination: 'budget_exhausted',
+                  cause: {
+                    code: 'remote_token_limit',
+                    message: 'The remote run exhausted its token budget.',
+                  },
+                }
+              : stopReason === 'max_turn_requests'
+                ? {
+                    termination: 'step_exhausted',
+                    cause: {
+                      code: 'remote_step_limit',
+                      message: 'The remote run exhausted its turn limit.',
+                    },
+                  }
+                : stopReason === 'end_turn'
+                  ? { termination: 'completed' }
+                  : {
+                      termination: 'failed',
+                      cause: {
+                        code: 'remote_stop',
+                        message: `The remote run stopped: ${stopReason}.`,
+                      },
+                    }
+        const result = projectRunOutcomes({
           sessionState: undefined,
-          // `lastMessage.value` is an array of assistant/tool messages (AgentOutput).
-          // The accumulated assistant text is delivered as a single text part.
           output: {
             type: 'lastMessage',
             value: runState.text ? [{ type: 'text', text: runState.text }] : [],
           },
-        }
+          runOutcome:
+            stopReason !== 'end_turn'
+              ? fallbackOutcome
+              : (outcomes.runOutcome ?? runState.runOutcome ?? fallbackOutcome),
+          taskAcceptance: outcomes.taskAcceptance ?? runState.taskAcceptance,
+          actionOutcomes: mergeActions(
+            runState.actionOutcomes,
+            outcomes.actionOutcomes,
+          ),
+        })
+        await options.handleEvent?.({
+          type: 'finish',
+          totalCost: runState.totalCost,
+          runOutcome: result.runOutcome,
+          taskAcceptance: result.taskAcceptance,
+          actionOutcomes: result.actionOutcomes,
+        })
+        return result
       } finally {
         signal?.removeEventListener('abort', onAbort)
         this.activeRun = undefined
       }
     } catch (error) {
       const message = rpcErrorMessage(error)
-      await options.handleEvent?.({ type: 'error', message })
-      return this.buildErrorRunState(message)
+      const remote = outcomeFields(
+        scopedMetadata(isRpcErrorLike(error) ? error.data : undefined),
+      )
+      const outcomes = {
+        runOutcome:
+          remote.runOutcome ??
+          (options.signal?.aborted
+            ? { termination: 'cancelled' as const }
+            : runState?.runOutcome),
+        taskAcceptance: remote.taskAcceptance ?? runState?.taskAcceptance,
+        actionOutcomes: mergeActions(
+          runState?.actionOutcomes,
+          remote.actionOutcomes,
+        ),
+      }
+      const result =
+        remote.runOutcome?.termination === 'completed' &&
+        remote.taskAcceptance?.status === 'rejected'
+          ? projectRunOutcomes({
+              output: {
+                type: 'lastMessage',
+                value: [{ type: 'text', text: message }],
+              },
+              ...outcomes,
+            })
+          : this.buildErrorRunState(message, outcomes)
+      await options.handleEvent?.({
+        type: 'error',
+        message,
+        runOutcome: result.runOutcome,
+        taskAcceptance: result.taskAcceptance,
+      })
+      return result
     }
   }
 

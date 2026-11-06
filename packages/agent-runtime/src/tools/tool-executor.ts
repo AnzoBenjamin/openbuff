@@ -30,6 +30,11 @@ import {
 import { isAbortError } from '@codebuff/common/util/error'
 import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import {
+  classifyActionOutput,
+  hashActionInput,
+} from '@codebuff/common/util/action-outcomes'
+import type { ActionOutcome } from '@codebuff/common/types/run-outcome'
 import type { JSONObject } from '@codebuff/common/types/json'
 import {
   isExternalReadPath,
@@ -2685,6 +2690,126 @@ export type ExecuteToolCallParams<T extends string = ToolName> = {
 export async function executeToolCall<T extends ToolName>(
   params: ExecuteToolCallParams<T>,
 ): Promise<void> {
+  return trackToolAttempt(params, (tracked) => executeNativeToolCall(tracked))
+}
+
+type ToolAttemptParams = {
+  toolName: string
+  input: unknown
+  toolCallId?: string
+  agentState: AgentState
+  runId: string
+  signal: AbortSignal
+  onResponseChunk: (chunk: string | PrintModeEvent) => void
+}
+
+/** Keep failed attempts after recovery, including refusals before dispatch. */
+async function trackToolAttempt<P extends ToolAttemptParams>(
+  params: P,
+  execute: (tracked: P) => Promise<void>,
+): Promise<void> {
+  const toolCallId = params.toolCallId ?? generateCompactId()
+  const attemptId = generateCompactId()
+  let basis: ActionOutcome['basis'] = {
+    inputHash: hashActionInput(params.toolName, params.input),
+    ...(params.agentState.workspaceState
+      ? { workspaceRevision: params.agentState.workspaceState.revision }
+      : {}),
+  }
+  let dispatched = false
+  let refusal: string | undefined
+  let retained: ActionOutcome | undefined
+  const retain = (
+    result: Pick<ActionOutcome, 'outcome' | 'effect' | 'cause'>,
+  ): ActionOutcome => {
+    if (retained) return retained
+    retained = {
+      actionId: toolCallId,
+      attemptId,
+      runId: params.runId,
+      toolName: params.toolName,
+      basis,
+      ...result,
+    }
+    params.agentState.actionOutcomes = [
+      ...(params.agentState.actionOutcomes ?? []),
+      retained,
+    ]
+    return retained
+  }
+  const unavailable = (
+    outcome: ActionOutcome['outcome'],
+    code: string,
+    message: string,
+  ) =>
+    retain({
+      outcome,
+      cause: { code, message: message.slice(0, 4_000) },
+      effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] },
+    })
+  const tracked = {
+    ...params,
+    toolCallId,
+    onResponseChunk: (chunk: string | PrintModeEvent) => {
+      if (typeof chunk !== 'string') {
+        if (chunk.type === 'tool_call' && chunk.toolCallId === toolCallId) {
+          dispatched = true
+          basis = {
+            inputHash: hashActionInput(params.toolName, chunk.input),
+            ...(params.agentState.workspaceState
+              ? { workspaceRevision: params.agentState.workspaceState.revision }
+              : {}),
+          }
+        }
+        if (chunk.type === 'error' && !dispatched)
+          refusal ??= chunk.userMessage ?? chunk.message
+        if (chunk.type === 'tool_result' && chunk.toolCallId === toolCallId) {
+          const actionOutcome = retain(
+            classifyActionOutput(params.toolName, chunk.output),
+          )
+          params.onResponseChunk({ ...chunk, actionOutcome })
+          return
+        }
+      }
+      params.onResponseChunk(chunk)
+    },
+  } as P
+  try {
+    params.signal.throwIfAborted()
+    await execute(tracked)
+    params.signal.throwIfAborted()
+  } catch (error) {
+    unavailable(
+      params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
+      params.signal.aborted || isAbortError(error)
+        ? 'action_cancelled'
+        : 'action_execution_error',
+      error instanceof Error ? error.message : String(error),
+    )
+    throw error
+  }
+  if (!retained) {
+    if (params.signal.aborted)
+      unavailable(
+        'cancelled',
+        'action_cancelled',
+        'Action cancelled before a result was confirmed.',
+      )
+    else if (refusal) unavailable('refused', 'action_refused', refusal)
+    else
+      unavailable(
+        'uncertain',
+        'action_result_unavailable',
+        dispatched
+          ? 'Action dispatched without a confirmed result.'
+          : 'Action produced no dispatch or result evidence.',
+      )
+  }
+}
+
+async function executeNativeToolCall<T extends ToolName>(
+  params: ExecuteToolCallParams<T>,
+): Promise<void> {
   const {
     toolName,
     input,
@@ -3800,6 +3925,7 @@ export async function executeToolCall<T extends ToolName>(
   // `logger.warn({ error, toolName, toolCallId }, ...)` contract or the error
   // becomes silently lost for spawned agents.
   const recoverableToolResultPromise = toolResultPromise.catch((error) => {
+    params.signal.throwIfAborted()
     if (isAbortError(error)) throw error
     logger.warn(
       { error, toolName, toolCallId: toolCall.toolCallId },
@@ -3819,6 +3945,7 @@ export async function executeToolCall<T extends ToolName>(
   })
 
   return recoverableToolResultPromise.then(async ({ output, creditsUsed }) => {
+    params.signal.throwIfAborted()
     let validatedOutput = output
     if (toolName === 'read_files') {
       const parsed = toolParams.read_files.outputSchema.safeParse(output)
@@ -4089,6 +4216,12 @@ export function parseRawCustomToolCall(params: {
 export async function executeCustomToolCall(
   params: ExecuteToolCallParams<string>,
 ): Promise<void> {
+  return trackToolAttempt(params, (tracked) => executeExternalToolCall(tracked))
+}
+
+async function executeExternalToolCall(
+  params: ExecuteToolCallParams<string>,
+): Promise<void> {
   const {
     toolName,
     input,
@@ -4281,9 +4414,7 @@ export async function executeCustomToolCall(
 
   return abortablePreviousToolCallFinished
     .then(async () => {
-      if (params.signal.aborted) {
-        return null
-      }
+      params.signal.throwIfAborted()
 
       const toolName = toolCall.toolName.includes(MCP_TOOL_SEPARATOR)
         ? toolCall.toolName
@@ -4305,7 +4436,8 @@ export async function executeCustomToolCall(
       return clientToolResult.output satisfies ToolResultOutput[]
     })
     .catch((error) => {
-      if (isAbortError(error)) throw error
+      params.signal.throwIfAborted()
+      if (isAbortError(error) || fromHandleSteps) throw error
       logger.warn(
         { error, toolName, toolCallId: toolCall.toolCallId },
         'Custom tool handler failed after tool-call publication; returning a terminal failure result',
@@ -4318,6 +4450,7 @@ export async function executeCustomToolCall(
       })
     })
     .then((result) => {
+      params.signal.throwIfAborted()
       if (!result) {
         return
       }

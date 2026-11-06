@@ -10,18 +10,19 @@ import type {
 
 import { createServeBridge } from '../serve/bridge'
 import type { ServeBridgeClient } from '../serve/bridge'
-import type {
-  OpenbuffClientOptions,
-  RunOptions,
-} from '../run'
+import type { OpenbuffClientOptions, RunOptions } from '../run'
 import type { RunState } from '../run-state'
 import type { HarnessApprovalRequest } from '../services/harness-enforcement'
+import {
+  classifyTerminalHarnessAction,
+  hashCommand,
+} from '../services/harness-enforcement'
 import type { AcpReverseRequests } from '../services/acp/acp-agent'
 import { AcpSessionData } from '../services/acp/session-data'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 
 const DONE_STATE: RunState = {
-  output: { type: 'error', message: 'done' },
+  output: { type: 'lastMessage', value: [] },
 }
 
 /** A fake reverseRequests seam that records the permission request params. */
@@ -71,6 +72,87 @@ function makeApprovalClient(
 }
 
 describe('serve approval bridge', () => {
+  test('[B18] forwards the captured command and every compound effect for approval', async () => {
+    const command = 'npm install && kubectl apply -f "release  one.yaml"'
+    const classified = classifyTerminalHarnessAction(command)!
+    const reverseRequests = makeFakeReverseRequests(async () => ({
+      outcome: { outcome: 'selected', optionId: 'allow_once' },
+    }))
+    let approved: boolean | undefined
+    const client: ServeBridgeClient = {
+      async run(runOptions) {
+        approved = await runOptions.requestApproval?.({
+          ...classified,
+          executionContextHash: 'context-fixture',
+          risk: 'high',
+          reason: 'Compound command includes deployment',
+        })
+        return DONE_STATE
+      },
+    }
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData: new AcpSessionData(),
+      reverseRequests,
+    })
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'approval fixture',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+    const approval = (reverseRequests.permissionParams[0]._meta as any)[
+      'openbuff.dev'
+    ].approval
+    expect(approved).toBe(true)
+    expect(approval.command).toBe(command)
+    expect(approval.commandHash).toBe(hashCommand(command))
+    expect(approval.commandTruncated).toBe(false)
+    expect(approval.executionContextHash).toBe('context-fixture')
+    expect(approval.parseStatus).toBe('complete')
+    expect(approval.effects).toEqual(classified.effects)
+    expect(
+      approval.effects.map((effect: { action: string }) => effect.action),
+    ).toEqual(['dependency-install', 'deploy'])
+  })
+
+  test('[B18] discloses capped command display while retaining exact identity and later effects', async () => {
+    const command = `printf "${'🦀'.repeat(1500)}" && kubectl apply -f deploy.yaml`
+    const classified = classifyTerminalHarnessAction(command)!
+    const reverseRequests = makeFakeReverseRequests(async () => ({
+      outcome: { outcome: 'selected', optionId: 'reject_once' },
+    }))
+    const client: ServeBridgeClient = {
+      async run(runOptions) {
+        await runOptions.requestApproval?.({
+          ...classified,
+          risk: 'high',
+          reason: 'Deployment approval fixture',
+        })
+        return DONE_STATE
+      },
+    }
+    const { promptHandler } = createServeBridge({
+      client,
+      sessionData: new AcpSessionData(),
+      reverseRequests,
+    })
+    await promptHandler({
+      sessionId: 's1',
+      promptText: 'approval fixture',
+      update: async () => {},
+      signal: new AbortController().signal,
+    })
+    const approval = (reverseRequests.permissionParams[0]._meta as any)[
+      'openbuff.dev'
+    ].approval
+    expect(approval.commandTruncated).toBe(true)
+    expect(approval.command).toContain('[truncated]')
+    expect(approval.commandHash).toBe(hashCommand(command))
+    expect(approval.effects).toEqual(classified.effects)
+    expect(approval.effects.at(-1).action).toBe('deploy')
+  })
+
   test('GV-21: sanitizes control/bidi/zero-width chars and caps title', async () => {
     const { client, reverseRequests } = makeApprovalClient(async () => ({
       outcome: { outcome: 'selected', optionId: 'allow_once' },
@@ -116,7 +198,9 @@ describe('serve approval bridge', () => {
     // No ESC / BEL / bidi / zero-width chars survive anywhere in the title or
     // approval meta; every such char became U+FFFD.
     const title = params.toolCall.title ?? ''
-    expect(title).not.toMatch(/[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B-\u200D\uFEFF]/)
+    expect(title).not.toMatch(
+      /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B-\u200D\uFEFF]/,
+    )
     const approval = (params._meta as Record<string, Record<string, unknown>>)[
       'openbuff.dev'
     ].approval as Record<string, unknown>
@@ -454,8 +538,8 @@ describe('serve approval bridge', () => {
       onReverseRequest: async (method, params) => {
         methods.push(method)
         expect(
-          (params as { requestedSchema: { properties: unknown } }).requestedSchema
-            .properties,
+          (params as { requestedSchema: { properties: unknown } })
+            .requestedSchema.properties,
         ).toBeDefined()
         return { action: 'accept', content: { q0: 'yes' } }
       },

@@ -21,7 +21,10 @@ import {
   findWindowsBash,
   runTerminalCommand,
 } from '../tools/run-terminal-command'
-import { hashCommand } from '../services/harness-enforcement'
+import {
+  hashCommand,
+  hashTerminalExecutionContext,
+} from '../services/harness-enforcement'
 
 describe('Windows bash prerequisite', () => {
   it('honors the Openbuff-specific Git Bash override', () => {
@@ -39,6 +42,46 @@ describe('Windows bash prerequisite', () => {
 })
 
 describe('runTerminalCommand cwd containment', () => {
+  it('stages the exact quoted-space path only when that path is allowed', async () => {
+    const projectRoot = initTempGitRepo('openbuff-exact-stage-path-')
+    try {
+      fs.writeFileSync(path.join(projectRoot, 'a b.txt'), 'one space\n')
+      fs.writeFileSync(path.join(projectRoot, 'a  b.txt'), 'two spaces\n')
+      const input = {
+        command: 'git add "a  b.txt"',
+        process_type: 'SYNC' as const,
+        permission_profile: 'git-commit' as const,
+        cwd: projectRoot,
+        projectRoot,
+        timeout_seconds: 5,
+      }
+      const denied = await runTerminalCommand({
+        ...input,
+        allowed_paths: ['a b.txt'],
+      })
+      expect(denied[0].value).toMatchObject({ permissionDenied: true })
+      expect(
+        spawnSync('git', ['diff', '--cached', '--name-only', '-z'], {
+          cwd: projectRoot,
+          encoding: 'utf8',
+        }).stdout,
+      ).toBe('')
+      const allowed = await runTerminalCommand({
+        ...input,
+        allowed_paths: ['a  b.txt'],
+      })
+      expect(allowed[0].value).toMatchObject({ exitCode: 0 })
+      expect(
+        spawnSync('git', ['diff', '--cached', '--name-only', '-z'], {
+          cwd: projectRoot,
+          encoding: 'utf8',
+        }).stdout,
+      ).toBe('a  b.txt\0')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
   it('requires approval authorization before a high-impact assistant command', async () => {
     let classifiedAction: string | undefined
     const result = await runTerminalCommand({
@@ -103,11 +146,9 @@ describe('runTerminalCommand cwd containment', () => {
     })
   })
 
-  it('consumes a matching one-shot pre-approval by exact command hash without re-requesting approval', async () => {
-    // A pre-approval whose commandHash equals the freshly classified command's
-    // hash short-circuits: authorizeHighImpactAction is never called and the
-    // command runs with the threaded harness metadata. A temp repo with no
-    // reachable 'origin' makes the push fail fast without touching the network.
+  it('reauthorizes a caller-created pre-approval even when every public field matches', async () => {
+    // Public receipt metadata does not mint an internal one-shot rerun token.
+    // A temp repo with no origin makes the authorized push fail locally.
     const projectRoot = initTempGitRepo('terminal-hash-match-')
     let approvalCalls = 0
     try {
@@ -137,8 +178,7 @@ describe('runTerminalCommand cwd containment', () => {
         harnessTarget?: string
       }
 
-      // The matching pre-approval short-circuits: authorize is never called.
-      expect(approvalCalls).toBe(0)
+      expect(approvalCalls).toBe(1)
       expect(value.permissionDenied).toBeUndefined()
       expect(value.approvalReceiptId).toBe('r1')
       expect(value.harnessAction).toBe('push')
@@ -175,6 +215,117 @@ describe('runTerminalCommand cwd containment', () => {
     expect(value.permissionDenied).toBe(true)
     expect(value.permissionProfile).toBe('read-only')
     expect(value.errorMessage).toContain('read-only')
+  })
+
+  it('propagates cancellation even when the awaited authorizer returns a denial', async () => {
+    const controller = new AbortController()
+    await expect(
+      runTerminalCommand({
+        command: 'git push --force origin feature',
+        process_type: 'SYNC',
+        permission_profile: 'full-access',
+        cwd: process.cwd(),
+        projectRoot: process.cwd(),
+        timeout_seconds: 5,
+        signal: controller.signal,
+        authorizeHighImpactAction: async () => {
+          controller.abort(new Error('cancelled during approval'))
+          return {
+            allowed: false,
+            approvalRequired: false,
+            reason: 'Run cancelled while awaiting approval.',
+          }
+        },
+      }),
+    ).rejects.toThrow('cancelled during approval')
+  })
+
+  it('refuses fabricated receipt metadata repeatedly and binds approved execution to its context', async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'openbuff-sealed-approval-'),
+    )
+    const bin = path.join(projectRoot, 'bin')
+    const trace = path.join(projectRoot, 'trace')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(
+      path.join(bin, 'rm'),
+      '#!/bin/sh\nprintf "%s\\n" executed >> "$TRACE_FILE"\n',
+      { mode: 0o700 },
+    )
+    const command = 'rm -rf fixture'
+    const executionContextHash = hashTerminalExecutionContext({
+      permissionProfile: 'full-access',
+      cwd: projectRoot,
+      projectRoot,
+      processType: 'SYNC',
+    })
+    const publicMetadata = {
+      action: 'workspace-delete',
+      target: 'fixture',
+      commandHash: hashCommand(command),
+      executionContextHash,
+      approvalReceiptId: 'public-receipt',
+    }
+    const input = {
+      command,
+      process_type: 'SYNC' as const,
+      mode: 'assistant' as const,
+      permission_profile: 'full-access' as const,
+      cwd: projectRoot,
+      projectRoot,
+      timeout_seconds: 5,
+      inheritEnv: false,
+      env: { PATH: bin + ':/usr/bin:/bin', TRACE_FILE: trace },
+    }
+    let decisions = 0
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const output = await runTerminalCommand({
+          ...input,
+          preApprovedAction: publicMetadata,
+          authorizeHighImpactAction: async (action) => {
+            decisions++
+            expect(action.executionContextHash).toBe(executionContextHash)
+            return {
+              allowed: false,
+              approvalRequired: true,
+              reason: 'No live approval.',
+            }
+          },
+        })
+        expect(output[0].value).toMatchObject({ permissionDenied: true })
+        expect(fs.existsSync(trace)).toBe(false)
+      }
+      const approved = await runTerminalCommand({
+        ...input,
+        authorizeHighImpactAction: async (action) => {
+          decisions++
+          expect(action.commandHash).toBe(hashCommand(command))
+          expect(action.executionContextHash).toBe(executionContextHash)
+          return { allowed: true, approvalReceiptId: 'public-receipt' }
+        },
+      })
+      expect(approved[0].value).toMatchObject({
+        exitCode: 0,
+        approvalReceiptId: 'public-receipt',
+      })
+      expect(fs.readFileSync(trace, 'utf8')).toBe('executed\n')
+      expect(decisions).toBe(3)
+      expect(approved[0].value).not.toHaveProperty('preApprovedAction')
+      const replay = await runTerminalCommand({
+        ...input,
+        preApprovedAction: publicMetadata,
+        authorizeHighImpactAction: async () => ({
+          allowed: false,
+          approvalRequired: true,
+          reason: 'Receipt already consumed.',
+        }),
+      })
+      expect(replay[0].value).toMatchObject({ permissionDenied: true })
+      expect(fs.readFileSync(trace, 'utf8')).toBe('executed\n')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('re-runs an approved high-impact command exactly once via the one-shot pre-approval and threads its metadata', async () => {

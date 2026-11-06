@@ -2,6 +2,7 @@ export type * from '@codebuff/common/types/json'
 export type * from '@codebuff/common/types/messages/codebuff-message'
 export type * from '@codebuff/common/types/messages/data-content'
 export type * from '@codebuff/common/types/print-mode'
+export type * from '@codebuff/common/types/run-outcome'
 export type {
   TextPart,
   ImagePart,

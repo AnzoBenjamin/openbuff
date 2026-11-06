@@ -690,7 +690,15 @@ describe('editor / repair-editor / test-writer cohesion', () => {
                 apiCompatibility: 'pass',
                 performance: 'pass',
               },
-              requirementCoverage: [],
+              requirementCoverage: [
+                {
+                  requirement: 'The requested behavior has been reviewed',
+                  status: 'satisfied',
+                  evidence: [
+                    'src/a.ts: inspected current changes; coverage remains missing',
+                  ],
+                },
+              ],
             },
           ],
         },
@@ -754,7 +762,15 @@ describe('editor / repair-editor / test-writer cohesion', () => {
                 apiCompatibility: 'pass',
                 performance: 'pass',
               },
-              requirementCoverage: [],
+              requirementCoverage: [
+                {
+                  requirement: 'The requested behavior has been reviewed',
+                  status: 'satisfied',
+                  evidence: [
+                    'src/a.ts: inspected current changes; code and coverage findings retained',
+                  ],
+                },
+              ],
             },
           ],
         },

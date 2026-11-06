@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test } from 'bun:test'
 
 import { getToolMetadata } from '@codebuff/common/tools/metadata'
+import { buildFileMutationResultFromReceiptV1 } from '@codebuff/common/tools/results/filesystem'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
 
 import { initializeThemeStore } from '../../../hooks/use-theme'
 import { chatThemes } from '../../../utils/theme-system'
@@ -162,6 +164,42 @@ describe('restored blocks with removed tool names', () => {
   test.each(['rolled_back', 'rollback_incomplete', 'not_applied'] as const)(
     'a canonical %s result retains its explicit outcome',
     (outcome) => {
+      const afterHash = outcome === 'rollback_incomplete' ? 'partial' : 'before'
+      const mutation = buildFileMutationResultFromReceiptV1({
+        kind: 'commit_receipt',
+        version: 1,
+        receiptId: `receipt-${outcome}`,
+        operationId: `op-${outcome}`,
+        callId: `${outcome}-apply-patch`,
+        authorityTier: 'conditional_commit',
+        status: outcome === 'not_applied' ? 'not_started' : outcome,
+        actions: [
+          {
+            actionId: 'action',
+            index: 0,
+            action: 'update',
+            path: 'src/r.ts',
+            status:
+              outcome === 'rollback_incomplete'
+                ? 'rollback_failed'
+                : outcome === 'not_applied'
+                  ? 'not_started'
+                  : 'rolled_back',
+            beforeHash: 'before',
+            afterHash,
+            ...(outcome === 'rollback_incomplete'
+              ? {
+                  forward: {
+                    outcome: 'unconfirmed' as const,
+                    afterHashes: { 'src/r.ts': afterHash },
+                  },
+                }
+              : {}),
+          },
+        ],
+        finalHashes: { 'src/r.ts': afterHash },
+      })
+      mutation.actions[0]!.patch = '@@ -1 +1 @@\n-a\n+b'
       const config = renderToolComponent(
         {
           type: 'tool',
@@ -171,19 +209,7 @@ describe('restored blocks with removed tool names', () => {
           outputRaw: [
             {
               type: 'json',
-              value: {
-                kind: 'file_mutation_result',
-                version: 1,
-                outcome,
-                actions: [
-                  {
-                    action: 'update',
-                    path: 'src/r.ts',
-                    outcome,
-                    diff: '@@ -1 +1 @@\n-a\n+b',
-                  },
-                ],
-              },
+              value: mutation,
             },
           ],
         } as PersistedToolBlock,
@@ -197,6 +223,10 @@ describe('restored blocks with removed tool names', () => {
   )
 
   test('a canonical applied result is labeled applied', () => {
+    const mutation = committedMutationFixture([
+      { path: 'src/a.ts', content: 'b\n' },
+    ])
+    mutation.actions[0]!.patch = '@@ -1 +1 @@\n-a\n+b'
     const config = renderToolComponent(
       {
         type: 'tool',
@@ -206,19 +236,7 @@ describe('restored blocks with removed tool names', () => {
         outputRaw: [
           {
             type: 'json',
-            value: {
-              kind: 'file_mutation_result',
-              version: 1,
-              outcome: 'applied',
-              actions: [
-                {
-                  action: 'update',
-                  path: 'src/a.ts',
-                  outcome: 'applied',
-                  diff: '@@ -1 +1 @@\n-a\n+b',
-                },
-              ],
-            },
+            value: mutation,
           },
         ],
       } as PersistedToolBlock,
@@ -309,6 +327,40 @@ describe('restored blocks with removed tool names', () => {
 })
 
 test('a partial legacy canonical result names each retained action outcome', () => {
+  const mutation = buildFileMutationResultFromReceiptV1({
+    kind: 'commit_receipt',
+    version: 1,
+    receiptId: 'receipt-partial',
+    operationId: 'op-partial',
+    callId: 'partial-legacy',
+    authorityTier: 'conditional_commit',
+    status: 'failed',
+    actions: [
+      {
+        actionId: 'applied',
+        index: 0,
+        action: 'update',
+        path: 'a.ts',
+        status: 'committed',
+        beforeHash: 'a',
+        afterHash: 'b',
+        forward: { outcome: 'applied', afterHashes: { 'a.ts': 'b' } },
+      },
+      {
+        actionId: 'refused',
+        index: 1,
+        action: 'update',
+        path: 'b.ts',
+        status: 'failed',
+        beforeHash: 'c',
+        afterHash: 'c',
+        forward: { outcome: 'not_applied', afterHashes: { 'b.ts': 'c' } },
+      },
+    ],
+    finalHashes: { 'a.ts': 'b', 'b.ts': 'c' },
+  })
+  mutation.actions[0]!.patch = '@@ -1 +1 @@\n-a\n+b'
+  mutation.actions[1]!.patch = '@@ -1 +1 @@\n-c\n+d'
   const result = renderToolComponent(
     {
       type: 'tool',
@@ -318,22 +370,7 @@ test('a partial legacy canonical result names each retained action outcome', () 
       outputRaw: [
         {
           type: 'json',
-          value: {
-            kind: 'file_mutation_result',
-            outcome: 'partial',
-            actions: [
-              {
-                path: 'a.ts',
-                outcome: 'applied',
-                patch: '@@ -1 +1 @@\n-a\n+b',
-              },
-              {
-                path: 'b.ts',
-                outcome: 'not_applied',
-                patch: '@@ -1 +1 @@\n-c\n+d',
-              },
-            ],
-          },
+          value: mutation,
         },
       ],
     } as PersistedToolBlock,

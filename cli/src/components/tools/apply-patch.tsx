@@ -6,6 +6,8 @@ import { extractValueForKey } from '../../utils/implementor-helpers'
 import {
   getCanonicalMutationActions,
   getCanonicalMutationResult,
+  getMutationOutcome,
+  getConfirmedMutationActionsFromOutput,
   getStructuredErrorMessages,
   getToolOutputRecords,
 } from '../../utils/tool-result-normalizer'
@@ -87,7 +89,7 @@ function getLegacyPatchStatus(
 ): LegacyPatchStatus {
   const mutation = getCanonicalMutationResult(toolBlock.outputRaw)
   if (mutation) {
-    const outcome = mutation.outcome
+    const outcome = getMutationOutcome(toolBlock.outputRaw)
     if (
       outcome === 'applied' ||
       outcome === 'partial' ||
@@ -209,8 +211,17 @@ export function getLegacyPatchOperations(
   }
 
   // Blocks recorded after the canonical mutation contract landed.
+  const confirmed = new Set(
+    getConfirmedMutationActionsFromOutput(toolBlock.outputRaw).map(
+      (action) => action.actionId,
+    ),
+  )
   for (const action of getCanonicalMutationActions(toolBlock.outputRaw)) {
-    push(action)
+    push(
+      action.outcome === 'applied' && !confirmed.has(action.actionId)
+        ? { ...action, outcome: 'unconfirmed' }
+        : action,
+    )
   }
 
   if (operations.length === 0) {

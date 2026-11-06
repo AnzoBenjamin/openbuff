@@ -21,6 +21,8 @@ import type {
   RunOptions,
 } from '../run'
 import type { RunState } from '../run-state'
+import { projectRunOutcomes } from '../run-state'
+import { runFailureMessage } from '@codebuff/common/types/run-outcome'
 import type {
   CreateElicitationRequest,
   ElicitationPropertySchema,
@@ -34,6 +36,7 @@ import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import {
   printModeErrorToRpcError,
   printModeToSessionUpdates,
+  projectOutcomesForWire,
 } from './event-bridge'
 import type { PrintModeRpcError } from './event-bridge'
 
@@ -750,23 +753,26 @@ export function createServeBridge(options: ServeBridgeOptions): {
     }
     await maybeNotifyCapabilitiesChanged(input.sessionId)
 
+    let result: RunState
     try {
-      await client.run({
-        agent: agentId,
-        prompt: input.promptText,
-        handleEvent,
-        onFilesystemMutation: (event: FilesystemMutationEvent) =>
-          sessionData.recordReceiptFromMutationEvent(input.sessionId, event),
-        signal: input.signal,
-        // §5: bridge the core approval callback to session/request_permission.
-        // Without a reverseRequests seam the callback resolves `false`, so a
-        // high-impact action is denied rather than silently approved.
-        requestApproval,
-        // §4.2: bridge the ask_user tool onto elicitation / the events ext /
-        // a skipped result, honoring cancel.
-        overrideTools: { ask_user: handleAskUser },
-        ...(clientMcpServers ? { mcpServers: clientMcpServers } : {}),
-      })
+      result = projectRunOutcomes(
+        await client.run({
+          agent: agentId,
+          prompt: input.promptText,
+          handleEvent,
+          onFilesystemMutation: (event: FilesystemMutationEvent) =>
+            sessionData.recordReceiptFromMutationEvent(input.sessionId, event),
+          signal: input.signal,
+          // §5: bridge the core approval callback to session/request_permission.
+          // Without a reverseRequests seam the callback resolves `false`, so a
+          // high-impact action is denied rather than silently approved.
+          requestApproval,
+          // §4.2: bridge the ask_user tool onto elicitation / the events ext /
+          // a skipped result, honoring cancel.
+          overrideTools: { ask_user: handleAskUser },
+          ...(clientMcpServers ? { mcpServers: clientMcpServers } : {}),
+        }),
+      )
     } finally {
       // §12.8 NEW-3 flush contract: turn end AND cancel release everything
       // held; the idle timer is stopped so no per-turn timer outlives the turn.
@@ -802,17 +808,26 @@ export function createServeBridge(options: ServeBridgeOptions): {
     // response directly, while many JSON-RPC implementations wrap or discard
     // plain-object (non-Error) throws, which would silently turn the
     // terminal error into a generic failure without the openbuff.dev data.
-    if (terminalError !== undefined) {
-      throw new RequestError(
-        terminalError.code,
-        terminalError.data['openbuff.dev'].message,
-        terminalError.data,
-      )
+    const terminalMetadata = projectOutcomesForWire(result)
+    const cancelled =
+      input.signal.aborted || result.runOutcome?.termination === 'cancelled'
+    const failure = runFailureMessage(result)
+    // The final authoritative outcome also permits a recovered task to succeed.
+    const failureMessage = result.runOutcome
+      ? failure
+      : (terminalError?.data['openbuff.dev'].message ?? failure)
+    if (failureMessage && !cancelled) {
+      throw new RequestError(terminalError?.code ?? -32603, failureMessage, {
+        'openbuff.dev': { ...terminalMetadata, message: failureMessage },
+      })
     }
 
     // A run that ended via the abort signal maps to 'cancelled'; a naturally
     // settled run is 'end_turn'.
-    return { stopReason: input.signal.aborted ? 'cancelled' : 'end_turn' }
+    return {
+      stopReason: cancelled ? 'cancelled' : 'end_turn',
+      _meta: { 'openbuff.dev': terminalMetadata },
+    }
   }
 
   return { promptHandler, sessionData }
@@ -955,7 +970,7 @@ function capChars(value: string, maxChars: number): string {
 
 /**
  * §12.4 command binding: truncates `command` at 4 KiB UTF-8, appending a
- * truncation marker, so the approval `_meta` carries the normalized command
+ * truncation marker, so the approval `_meta` carries a bounded command display
  * without unbounded growth.
  */
 function capCommandForApproval(command: string): string {
@@ -988,13 +1003,23 @@ function buildApprovalPermissionRequest(
 ): RequestPermissionRequest {
   const action = sanitizeDisplayText(String(request.action))
   const target = sanitizeDisplayText(String(request.target))
-  const title = capChars(`Approve ${action}: ${target}`, APPROVAL_TITLE_MAX_CHARS)
-  // The core HarnessApprovalRequest binds the command via commandHash (the
-  // raw command is not carried across the contract); the human-readable
-  // display derives from the classified target.
-  const command = sanitizeDisplayText(
-    capCommandForApproval(String(request.target)),
+  const effectActions = request.effects?.length
+    ? [
+        ...new Set(
+          request.effects.map((effect) =>
+            sanitizeDisplayText(String(effect.action)),
+          ),
+        ),
+      ].join(', ')
+    : action
+  const title = capChars(
+    `Approve ${effectActions}: ${target}`,
+    APPROVAL_TITLE_MAX_CHARS,
   )
+  // Terminal requests carry the captured command. Other/legacy adapters use
+  // their target display. Sanitization and capping never change the binding.
+  const rawCommand = request.rawCommand ?? String(request.target)
+  const command = sanitizeDisplayText(capCommandForApproval(rawCommand))
   const approval: Record<string, unknown> = {
     action,
     target,
@@ -1002,7 +1027,33 @@ function buildApprovalPermissionRequest(
     reason: sanitizeDisplayText(String(request.reason)),
     command,
     commandHash: request.commandHash,
+    commandTruncated:
+      new TextEncoder().encode(rawCommand).byteLength >
+      APPROVAL_COMMAND_MAX_BYTES,
   }
+  if (request.executionContextHash !== undefined)
+    approval.executionContextHash = request.executionContextHash
+  if (request.parseStatus !== undefined)
+    approval.parseStatus = request.parseStatus
+  if (request.parseReason !== undefined)
+    approval.parseReason = sanitizeDisplayText(
+      capCommandForApproval(request.parseReason),
+    )
+  if (request.effects !== undefined)
+    approval.effects = request.effects.map((effect) => ({
+      action: sanitizeDisplayText(String(effect.action)),
+      target: sanitizeDisplayText(capCommandForApproval(effect.target)),
+      ...(effect.branch !== undefined
+        ? { branch: sanitizeDisplayText(String(effect.branch)) }
+        : {}),
+      ...(effect.pushRisks !== undefined
+        ? {
+            pushRisks: effect.pushRisks.map((risk) =>
+              sanitizeDisplayText(String(risk)),
+            ),
+          }
+        : {}),
+    }))
   if (request.branch !== undefined) {
     approval.branch = sanitizeDisplayText(String(request.branch))
   }

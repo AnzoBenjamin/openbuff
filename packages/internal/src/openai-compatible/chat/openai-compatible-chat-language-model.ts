@@ -107,7 +107,7 @@ type OpenAICompatibleStreamErrorData = {
   type?: string | null
   param?: unknown
   code?: string | number | null
-  status?: string | null
+  status?: string | number | null
   details?: unknown[] | null
 }
 
@@ -121,6 +121,7 @@ function stringifyErrorMetadata(metadata: Record<string, unknown>): string {
 
 function createOpenAICompatibleStreamError(
   error: OpenAICompatibleStreamErrorData,
+  responseHeaders: Record<string, string> = {},
 ): Error {
   const metadata = Object.fromEntries(
     Object.entries({
@@ -141,9 +142,20 @@ function createOpenAICompatibleStreamError(
     trimmedMetadataText
       ? `${error.message} ${trimmedMetadataText}`
       : error.message,
+    { cause: error },
   )
   streamError.name = 'OpenAICompatibleStreamError'
-  return streamError
+  const status = Number(error.status)
+  return Object.assign(streamError, metadata, {
+    ...(error.status != null &&
+    (typeof error.status === 'number' || /^[1-5]\d{2}$/.test(error.status)) &&
+    Number.isInteger(status) &&
+    status >= 100 &&
+    status <= 599
+      ? { statusCode: status }
+      : {}),
+    responseHeaders,
+  })
 }
 
 export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
@@ -671,7 +683,10 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
               finishReason = 'error'
               controller.enqueue({
                 type: 'error',
-                error: createOpenAICompatibleStreamError(value.error),
+                error: createOpenAICompatibleStreamError(
+                  value.error,
+                  responseHeaders,
+                ),
               })
               return
             }

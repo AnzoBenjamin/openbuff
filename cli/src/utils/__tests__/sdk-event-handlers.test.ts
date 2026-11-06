@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
 
 import {
   createBatchedMessageUpdater,
@@ -194,7 +195,8 @@ describe('sdk-event-handlers', () => {
     const blocks = getMessages()[0].blocks ?? []
     const statusBlocks = blocks.filter(
       (block) =>
-        'content' in block && (block as { textType?: string }).textType === 'status',
+        'content' in block &&
+        (block as { textType?: string }).textType === 'status',
     )
     expect(statusBlocks).toHaveLength(1)
     expect(statusBlocks[0]).toMatchObject({
@@ -503,31 +505,42 @@ describe('sdk-event-handlers', () => {
       output: [
         {
           type: 'json',
-          value: {
-            kind: 'file_mutation_result',
-            version: 1,
-            operationId: 'op',
-            outcome: 'applied',
-            authorityTier: 'portable_path',
-            actions: [
-              {
-                actionId: 'a',
-                index: 0,
-                action: 'create',
-                path: 'a.ts',
-                outcome: 'applied',
-                beforeHash: null,
-                afterHash: 'sha256:x',
-              },
-            ],
-            errors: [],
-            freshCapabilities: [],
-          },
+          value: committedMutationFixture([{ path: 'a.ts', content: 'after' }]),
         },
       ],
     })
     expect(getMessages()[0].blocks?.[0]).toMatchObject({
       lifecycle: 'succeeded',
+      interrupted: true,
+    })
+  })
+
+  test('an unbacked applied claim after cancellation cannot confirm success', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_call',
+      toolCallId: 'tool-unbacked',
+      toolName: 'write_file',
+      input: { path: 'a.ts' },
+    })
+    ctx.message.updater.updateAiMessageBlocks((blocks) =>
+      blocks.map((block) =>
+        block.type === 'tool'
+          ? { ...block, lifecycle: 'cancelled' as const }
+          : block,
+      ),
+    )
+    const { authorityReceipt: _receipt, ...unbacked } =
+      committedMutationFixture([{ path: 'a.ts', content: 'after' }])
+    dispatchValidEvent(handleEvent, {
+      type: 'tool_result',
+      toolCallId: 'tool-unbacked',
+      toolName: 'write_file',
+      output: [{ type: 'json', value: unbacked }],
+    })
+    expect(getMessages()[0].blocks?.[0]).toMatchObject({
+      lifecycle: 'failed',
       interrupted: true,
     })
   })
@@ -1116,8 +1129,18 @@ describe('sdk-event-handlers', () => {
     const handleEvent = createEventHandler(ctx)
 
     // Two eviction iterations in one turn; no pass has run yet.
-    handleEvent({ type: 'context_window', used: 60_000, max: 200_000, evictedTokens: 8_000 })
-    handleEvent({ type: 'context_window', used: 55_000, max: 200_000, evictedTokens: 4_000 })
+    handleEvent({
+      type: 'context_window',
+      used: 60_000,
+      max: 200_000,
+      evictedTokens: 8_000,
+    })
+    handleEvent({
+      type: 'context_window',
+      used: 55_000,
+      max: 200_000,
+      evictedTokens: 4_000,
+    })
     // An iteration where the evictor was a no-op adds nothing — and writes
     // nothing: the handler early-returns without invoking the setter.
     handleEvent({ type: 'context_window', used: 55_000, max: 200_000 })

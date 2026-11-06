@@ -3,13 +3,14 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test, spyOn } from 'bun:test'
 
 import {
   buildChunkSidecarDocument,
   CHUNK_SIDECAR_VERSION,
   computeIndexSnapshotId,
   getIndexDir,
+  getIndexPublicationToken,
   loadChunkSidecar,
   loadIndex,
   loadSemanticVectors,
@@ -149,6 +150,166 @@ describe('index cache ownership', () => {
     expect((await loadIndex(root))?.builtAt).toBe(200)
   })
 
+  test.each([false, true])(
+    'full-document CAS admits one real process for same-time same-source graph changes (initial: %s)',
+    async (initial) => {
+      const root = await fs.promises.mkdtemp(
+        path.join(os.tmpdir(), 'openbuff-index-process-cas-'),
+      )
+      const base: MetadataIndex = {
+        version: '2',
+        builtAt: 100,
+        projectRoot: root,
+        workspaceRevision: 'base',
+        fileCount: 0,
+        files: {},
+        graph: { nodes: {}, edges: [] },
+      }
+      if (!initial) await saveIndex(base, root)
+      const gate = path.join(root, 'go')
+      const active = path.join(root, 'active')
+      const events = path.join(root, 'events.jsonl')
+      const service = path.join(import.meta.dir, 'index-store.ts')
+      const children = ['a', 'b'].map((name) => {
+        const code = `
+        import fs from 'node:fs';
+        import {saveIndex} from ${JSON.stringify(service)};
+        const originalOpen=fs.promises.open;
+        fs.promises.open=async(...args)=>{
+          const handle=await originalOpen(...args);
+          if(String(args[0]).endsWith('.openbuff-index.lock')){
+            fs.writeFileSync(${JSON.stringify(active)},String(process.pid),{flag:'wx'});
+            fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({event:'enter',pid:process.pid})+'\\n');
+            const close=handle.close.bind(handle);
+            handle.close=async()=>{
+              const owner=fs.readFileSync(args[0],'utf8').split('\\n')[0];
+              fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({event:'exit',pid:process.pid,owner})+'\\n');
+              fs.unlinkSync(${JSON.stringify(active)});
+              return close();
+            };
+            await new Promise(resolve=>setTimeout(resolve,25));
+          }
+          return handle;
+        };
+        fs.writeFileSync(${JSON.stringify(path.join(root, `ready-${name}`))},'ready');
+        while(!fs.existsSync(${JSON.stringify(gate)})) await new Promise(resolve=>setTimeout(resolve,2));
+        const result=await saveIndex(${JSON.stringify({ ...base, graph: { nodes: { [name]: { id: name, kind: 'file', name, filePath: name } }, edges: [] } })},${JSON.stringify(root)},'.codebuff-index',${JSON.stringify({ expectedBuiltAt: initial ? null : 100, expectedSnapshotId: initial ? null : computeIndexSnapshotId(base), expectedPublicationToken: initial ? null : getIndexPublicationToken(base) })});
+        console.log(JSON.stringify({pid:process.pid,result}));
+      `
+        return Bun.spawn([process.execPath, '-e', code], {
+          stdout: 'pipe',
+          stderr: 'pipe',
+        })
+      })
+      try {
+        const deadline = Date.now() + 5_000
+        while (
+          (!fs.existsSync(path.join(root, 'ready-a')) ||
+            !fs.existsSync(path.join(root, 'ready-b'))) &&
+          Date.now() < deadline
+        )
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        expect(fs.existsSync(path.join(root, 'ready-a'))).toBe(true)
+        expect(fs.existsSync(path.join(root, 'ready-b'))).toBe(true)
+        await fs.promises.writeFile(gate, 'go')
+        const outputs = await Promise.all(
+          children.map(async (child) => {
+            const [exit, stdout, stderr] = await Promise.all([
+              child.exited,
+              new Response(child.stdout).text(),
+              new Response(child.stderr).text(),
+            ])
+            expect(stderr).toBe('')
+            expect(exit).toBe(0)
+            return JSON.parse(stdout)
+          }),
+        )
+        expect(outputs.filter((output) => output.result)).toHaveLength(1)
+        const observations = (await fs.promises.readFile(events, 'utf8'))
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line))
+        expect(observations.map((event) => event.event)).toEqual([
+          'enter',
+          'exit',
+          'enter',
+          'exit',
+        ])
+        expect(
+          new Set(
+            observations
+              .filter((event) => event.owner)
+              .map((event) => event.owner),
+          ).size,
+        ).toBe(2)
+        const persisted = (await loadIndex(root))!
+        expect(persisted.builtAt).toBe(base.builtAt)
+        expect(computeIndexSnapshotId(persisted)).toBe(
+          computeIndexSnapshotId(base),
+        )
+        console.log(
+          JSON.stringify({
+            b04: 'index-real-process',
+            expectedPublicationToken: initial
+              ? null
+              : getIndexPublicationToken(base),
+            actualPublicationToken: getIndexPublicationToken(persisted),
+            sourceSnapshotId: computeIndexSnapshotId(base),
+            initial,
+            outputs,
+            observations,
+            after: await fs.promises.readFile(
+              path.join(getIndexDir(root), 'metadata.json'),
+              'utf8',
+            ),
+          }),
+        )
+      } finally {
+        for (const child of children) child.kill()
+        await Promise.all(children.map((child) => child.exited))
+        await fs.promises.rm(root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test('publication tokens bind disk bytes even when load rebuilds query data', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-publication-token-'),
+    )
+    const base: MetadataIndex = {
+      version: '2',
+      builtAt: 100,
+      projectRoot: root,
+      fileCount: 0,
+      files: {},
+      graph: { nodes: {}, edges: [] },
+    }
+    try {
+      await saveIndex(base, root)
+      const loaded = (await loadIndex(root))!
+      expect(loaded.queryData).toBeDefined()
+      expect(base.queryData).toBeUndefined()
+      expect(getIndexPublicationToken(loaded)).toBe(
+        getIndexPublicationToken(base),
+      )
+      const expectedPublicationToken = getIndexPublicationToken(loaded)
+      const changed = { ...base, parserDegraded: true }
+      expect(
+        await saveIndex(changed, root, '.codebuff-index', {
+          expectedPublicationToken,
+        }),
+      ).toBe(true)
+      expect(
+        await saveIndex(base, root, '.codebuff-index', {
+          expectedPublicationToken,
+        }),
+      ).toBe(false)
+      expect((await loadIndex(root))?.parserDegraded).toBe(true)
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true })
+    }
+  })
+
   test('supports compare-and-swap metadata persistence', async () => {
     const root = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), 'openbuff-index-explicit-cas-'),
@@ -243,7 +404,7 @@ describe('index cache ownership', () => {
     expect(loaded?.queryData?.postings.alpha).toEqual(['src/a.ts'])
   })
 
-  test('reclaims a lock held by a dead process without waiting out the stale window', async () => {
+  test('preserves a dead owner and explicitly requires recovery without writes', async () => {
     const root = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), 'openbuff-lock-dead-owner-'),
     )
@@ -286,11 +447,15 @@ describe('index cache ownership', () => {
       graph: { nodes: {}, edges: [] },
     }
     const started = Date.now()
-    expect(await saveIndex({ ...base, builtAt: 300 }, root)).toBe(true)
-    // The reclaim must happen well inside the 10s lock-acquire timeout; a dead
-    // owner should be detected immediately rather than after STALE_LOCK_MS.
+    const ownerBefore = await fs.promises.readFile(lockPath, 'utf8')
+    const namesBefore = await fs.promises.readdir(dir)
+    await expect(saveIndex({ ...base, builtAt: 300 }, root)).rejects.toThrow(
+      'requires recovery',
+    )
     expect(Date.now() - started).toBeLessThan(5_000)
-    expect((await loadIndex(root))?.builtAt).toBe(300)
+    expect(await loadIndex(root)).toBeNull()
+    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(ownerBefore)
+    expect(await fs.promises.readdir(dir)).toEqual(namesBefore)
   })
 
   test('does not reclaim a lock owned by the current live process', async () => {
@@ -315,6 +480,9 @@ describe('index cache ownership', () => {
       `${process.pid}:00000000-0000-0000-0000-000000000000\n${Date.now()}\n`,
       'utf8',
     )
+    // An old mtime must not grant takeover of a slow but live owner.
+    await fs.promises.utimes(lockPath, new Date(0), new Date(0))
+    const ownerBefore = await fs.promises.readFile(lockPath, 'utf8')
     const base = {
       version: '2' as const,
       projectRoot: root,
@@ -325,6 +493,44 @@ describe('index cache ownership', () => {
     await expect(saveIndex({ ...base, builtAt: 400 }, root)).rejects.toThrow(
       'Timed out waiting for index cache lock',
     )
+    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(ownerBefore)
+    expect(await loadIndex(root)).toBeNull()
+  }, 15_000)
+
+  test('unknown ownership and old recovery artifacts remain intact on refusal', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-unknown-'),
+    )
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir)
+    const lockPath = path.join(dir, '.openbuff-index.lock')
+    const scratch = path.join(dir, '.reclaim.unknown-owner')
+    await fs.promises.writeFile(lockPath, '{malformed owner')
+    await fs.promises.writeFile(scratch, 'preserved ownership evidence')
+    await fs.promises.utimes(scratch, new Date(0), new Date(0))
+    const base: MetadataIndex = {
+      version: '2',
+      builtAt: 100,
+      projectRoot: root,
+      fileCount: 0,
+      files: {},
+      graph: { nodes: {}, edges: [] },
+    }
+    try {
+      await expect(saveIndex(base, root)).rejects.toThrow('requires recovery')
+      expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(
+        '{malformed owner',
+      )
+      expect(await fs.promises.readFile(scratch, 'utf8')).toBe(
+        'preserved ownership evidence',
+      )
+      expect((await fs.promises.readdir(dir)).sort()).toEqual([
+        '.openbuff-index.lock',
+        '.reclaim.unknown-owner',
+      ])
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true })
+    }
   }, 15_000)
 
   test('merges concurrent semantic fingerprint writes under the cache lock', async () => {
@@ -1112,104 +1318,102 @@ describe('reclaimStaleLock', () => {
       '.openbuff-index.lock',
     )
 
-  test('deletes a lock whose content still matches the stale snapshot', async () => {
-    const lockPath = await makeLockPath('openbuff-reclaim-match-')
-    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
-    await fs.promises.writeFile(lockPath, staleContent, 'utf8')
-    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(true)
-    await expect(fs.promises.readFile(lockPath, 'utf8')).rejects.toThrow(
-      'ENOENT',
-    )
-  })
-
-  test('leaves a re-acquired lock intact when its content no longer matches', async () => {
-    const lockPath = await makeLockPath('openbuff-reclaim-fresh-')
-    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
-    // A competing waiter reclaimed the stale lock and re-acquired it with a
-    // fresh owner token before this waiter's reclaim ran.
-    const freshContent = `${process.pid}:11111111-1111-1111-1111-111111111111\n${Date.now()}\n`
-    await fs.promises.writeFile(lockPath, staleContent, 'utf8')
-    await fs.promises.writeFile(lockPath, freshContent, 'utf8')
-
-    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(false)
-    // The fresh holder's lock file must survive the losing waiter's reclaim.
-    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(freshContent)
-  })
-
-  test('reports success for an already-reclaimed (missing) lock', async () => {
-    const lockPath = await makeLockPath('openbuff-reclaim-gone-')
-    expect(await reclaimStaleLock(lockPath, 'gone\n')).toBe(true)
-  })
-
-  test('leaves no reclaim scratch files behind after a matched reclaim', async () => {
-    const lockPath = await makeLockPath('openbuff-reclaim-clean-')
-    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
-    await fs.promises.writeFile(lockPath, staleContent, 'utf8')
-    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(true)
-    expect(
-      fs
-        .readdirSync(path.dirname(lockPath))
-        .filter((name) => name.includes('.reclaim.')),
-    ).toEqual([])
-  })
-
-  test('restores a displaced fresh lock byte-for-byte when the namespace frees up', async () => {
-    const lockPath = await makeLockPath('openbuff-reclaim-restore-')
-    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
-    const freshContent = `${process.pid}:22222222-2222-2222-2222-222222222222\n${Date.now()}\n`
-    await fs.promises.writeFile(lockPath, freshContent, 'utf8')
-
-    expect(await reclaimStaleLock(lockPath, staleContent)).toBe(false)
-    // The displaced live lock was moved back atomically: no scratch copies of
-    // a live holder's lock remain in the directory.
-    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(freshContent)
-    expect(
-      fs
-        .readdirSync(path.dirname(lockPath))
-        .filter((name) => name.includes('.reclaim.')),
-    ).toEqual([])
-  })
-
-  test('removes the displaced scratch lock when the restore races a newer waiter', async () => {
-    const lockPath = await makeLockPath('openbuff-reclaim-leak-')
-    const staleContent = '424242:00000000-0000-0000-0000-000000000000\n1\n'
-    const freshContent = `${process.pid}:33333333-3333-3333-3333-333333333333\n${Date.now()}\n`
-    // The competing waiter re-acquired with a fresh owner token before this
-    // waiter's reclaim ran, so the displaced copy can never match.
-    await fs.promises.writeFile(lockPath, freshContent, 'utf8')
-
-    // Simulate the newer waiter still holding the lock path at restore time:
-    // link fails atomically with EEXIST, so the displaced copy cannot go back
-    // and the losing waiter must clean up its own scratch.
-    const originalLink = fs.promises.link
-    fs.promises.link = (async (
-      existingPath: string,
-      newPath: string,
-    ): Promise<void> => {
-      if (newPath === lockPath) {
-        await fs.promises.writeFile(lockPath, freshContent, 'utf8')
-        const error = new Error(
-          'EEXIST: simulated newer waiter holds the lock path',
-        ) as NodeJS.ErrnoException
-        error.code = 'EEXIST'
-        throw error
+  test.each(['stale', 'replacement', 'malformed', 'missing'])(
+    'refuses automatic reclaim for %s ownership with zero mutation syscalls',
+    async (kind) => {
+      const lockPath = await makeLockPath('openbuff-reclaim-refusal-')
+      const stale = '2147483647:stale-generation\n1\n'
+      const bytes =
+        kind === 'stale'
+          ? stale
+          : kind === 'replacement'
+            ? `${process.pid}:replacement-generation\n1\n`
+            : '{unknown'
+      if (kind !== 'missing') await fs.promises.writeFile(lockPath, bytes)
+      const mutations = (
+        ['rename', 'unlink', 'rm', 'link', 'writeFile'] as const
+      ).map((method) => spyOn(fs.promises, method))
+      try {
+        const results = await Promise.all([
+          reclaimStaleLock(lockPath, stale),
+          reclaimStaleLock(lockPath, stale),
+        ])
+        expect(results).toEqual([false, false])
+        for (const mutation of mutations)
+          expect(mutation).not.toHaveBeenCalled()
+      } finally {
+        for (const mutation of mutations) mutation.mockRestore()
       }
-      return originalLink(existingPath, newPath)
-    }) as typeof fs.promises.link
-    try {
-      expect(await reclaimStaleLock(lockPath, staleContent)).toBe(false)
-    } finally {
-      fs.promises.link = originalLink
-    }
+      if (kind !== 'missing')
+        expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(bytes)
+      expect(
+        (await fs.promises.readdir(path.dirname(lockPath))).filter((name) =>
+          name.includes('.reclaim.'),
+        ),
+      ).toEqual([])
+    },
+  )
 
-    // The newer waiter's lock survived...
-    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(freshContent)
-    // ...and the losing waiter left no `.reclaim.*` scratch behind.
-    expect(
-      fs
-        .readdirSync(path.dirname(lockPath))
-        .filter((name) => name.includes('.reclaim.')),
-    ).toEqual([])
+  test('stale acquisition observations cannot displace replacement generation', async () => {
+    const root = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-index-barrier-'),
+    )
+    const dir = getIndexDir(root)
+    await fs.promises.mkdir(dir)
+    const lockPath = path.join(dir, '.openbuff-index.lock')
+    const stale = '2147483647:stale-generation\n1\n'
+    const replacement = `${process.pid}:replacement-generation\n1\n`
+    await fs.promises.writeFile(lockPath, stale)
+    const originalRead = fs.promises.readFile
+    let observed = 0
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    fs.promises.readFile = (async (
+      ...args: Parameters<typeof originalRead>
+    ) => {
+      const bytes = await originalRead(...args)
+      if (String(args[0]) === lockPath && observed < 2) {
+        observed++
+        if (observed === 2) {
+          await fs.promises.writeFile(lockPath, replacement)
+          release()
+        }
+        await barrier
+      }
+      return bytes
+    }) as typeof originalRead
+    const rename = spyOn(fs.promises, 'rename')
+    const index: MetadataIndex = {
+      version: '2',
+      builtAt: 1,
+      projectRoot: root,
+      fileCount: 0,
+      files: {},
+      graph: { nodes: {}, edges: [] },
+    }
+    try {
+      const outcomes = await Promise.allSettled([
+        saveIndex(index, root),
+        saveIndex(index, root),
+      ])
+      expect(observed).toBe(2)
+      expect(
+        outcomes.every(
+          (outcome) =>
+            outcome.status === 'rejected' &&
+            String(outcome.reason).includes('requires recovery'),
+        ),
+      ).toBe(true)
+      expect(rename).not.toHaveBeenCalled()
+    } finally {
+      fs.promises.readFile = originalRead
+      rename.mockRestore()
+    }
+    expect(await fs.promises.readFile(lockPath, 'utf8')).toBe(replacement)
+    // No metadata, sidecar, owner marker or reclaim scratch was created.
+    expect(await fs.promises.readdir(dir)).toEqual(['.openbuff-index.lock'])
   })
 })
 
@@ -1220,7 +1424,7 @@ describe('releaseOwnedLock', () => {
       '.openbuff-index.lock',
     )
 
-  test('deletes the lock when the displaced bytes still hold our token', async () => {
+  test('releases a lock with our token under the no-takeover protocol', async () => {
     const lockPath = await makeLockPath('openbuff-release-match-')
     const ownerToken = '424242:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
     await fs.promises.writeFile(lockPath, `${ownerToken}\n1\n`, 'utf8')
@@ -1237,7 +1441,7 @@ describe('releaseOwnedLock', () => {
     ).toEqual([])
   })
 
-  test("restores a competing waiter's re-acquired lock instead of deleting it", async () => {
+  test('preserves another owner when a caller presents a foreign token', async () => {
     // The finding's race: our mtime aged out (silent heartbeat utimes
     // failure), a waiter reclaimed the lock and re-acquired it with a fresh
     // token, and only then did our release run. The release must not delete

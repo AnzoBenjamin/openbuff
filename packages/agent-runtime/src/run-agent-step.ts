@@ -3,6 +3,7 @@ import { supportsCacheControl } from '@codebuff/common/old-constants'
 import { TOOLS_WHICH_WONT_FORCE_NEXT_STEP } from '@codebuff/common/tools/constants'
 import { buildArray } from '@codebuff/common/util/array'
 import { MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
+import { runStatusFromOutcome } from '@codebuff/common/types/run-outcome'
 import {
   AbortError,
   extractApiErrorDetails,
@@ -602,6 +603,10 @@ export const runAgentStep = async (
     // which was later misreported as "No response from agent".
     agentState = {
       ...agentState,
+      runOutcome: {
+        termination: 'step_exhausted',
+        cause: { code: 'step_limit', message: STEP_CAP_REACHED_MESSAGE },
+      },
       messageHistory: [
         ...expireMessages(agentState.messageHistory, 'userPrompt'),
         assistantMessage({
@@ -672,6 +677,13 @@ export const runAgentStep = async (
     )
     agentState = {
       ...agentState,
+      runOutcome: {
+        termination: 'budget_exhausted',
+        cause: {
+          code: `${preStepBudgetCheck.reason}_budget`,
+          message: preStepBudgetCheck.message,
+        },
+      },
       messageHistory: [
         ...agentState.messageHistory,
         userMessage(withSystemTags(preStepBudgetCheck.message)),
@@ -924,6 +936,17 @@ export const runAgentStep = async (
       return {
         agentState: {
           ...agentState,
+          runOutcome: {
+            termination: 'cancelled',
+            cause: {
+              code: 'provider_request_aborted',
+              message: 'Provider request was aborted',
+            },
+          },
+          stepsRemaining:
+            agentState.stepsRemaining > 0
+              ? agentState.stepsRemaining - 1
+              : agentState.stepsRemaining,
           // Apply any cost accrued before the abort (C2.3: avoid stale-closure
           // mutation; apply on the returned post-spread object).
           creditsUsed: agentState.creditsUsed + stepCreditsUsed,
@@ -967,19 +990,44 @@ export const runAgentStep = async (
       nResponses = [responsesString]
     }
 
+    const candidateAgentState: AgentState = {
+      ...agentState,
+      stepsRemaining:
+        agentState.stepsRemaining > 0
+          ? agentState.stepsRemaining - 1
+          : agentState.stepsRemaining,
+      // Apply the step's accumulated cost on the returned post-spread
+      // object, not via in-place closure mutation (C2.3).
+      creditsUsed: agentState.creditsUsed + stepCreditsUsed,
+      directCreditsUsed: agentState.directCreditsUsed + stepCreditsUsed,
+      cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
+      cacheTotalInputTokens:
+        agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
+    }
+    const candidateBudget = checkBudgetExceeded(
+      candidateAgentState,
+      stepCacheTotalInputTokens,
+    )
+    if (candidateBudget.exceeded) {
+      candidateAgentState.runOutcome = {
+        termination: 'budget_exhausted',
+        cause: {
+          code: `${candidateBudget.reason}_budget`,
+          message: candidateBudget.message,
+        },
+      }
+      candidateAgentState.messageHistory = [
+        ...candidateAgentState.messageHistory,
+        userMessage(withSystemTags(candidateBudget.message)),
+      ]
+      onResponseChunk(`${candidateBudget.message}\n\n`)
+    }
     return {
-      agentState: {
-        ...agentState,
-        // Apply the step's accumulated cost on the returned post-spread
-        // object, not via in-place closure mutation (C2.3).
-        creditsUsed: agentState.creditsUsed + stepCreditsUsed,
-        directCreditsUsed: agentState.directCreditsUsed + stepCreditsUsed,
-        cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
-        cacheTotalInputTokens:
-          agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
-      },
-      fullResponse: responsesString,
-      shouldEndTurn: false,
+      agentState: candidateAgentState,
+      fullResponse: candidateBudget.exceeded
+        ? candidateBudget.message
+        : responsesString,
+      shouldEndTurn: candidateBudget.exceeded,
       messageId: null,
       nResponses,
     }
@@ -1330,6 +1378,13 @@ export const runAgentStep = async (
     )
     agentState = {
       ...agentState,
+      runOutcome: {
+        termination: 'budget_exhausted',
+        cause: {
+          code: `${budgetCheck.reason}_budget`,
+          message: budgetCheck.message,
+        },
+      },
       messageHistory: [
         ...agentState.messageHistory,
         userMessage(withSystemTags(budgetCheck.message)),
@@ -1783,12 +1838,13 @@ export async function loopAgentSteps(
                               reconcileAgentReceiptIntoParent,
                             } =
                               await import('./tools/handlers/tool/spawn-agent-utils')
-                            const receipt = await buildRuntimeAgentReceiptWithArtifacts({
-                              agentType,
-                              agentId: childState.agentId,
-                              output: result.output,
-                              agentState: result.agentState,
-                            })
+                            const receipt =
+                              await buildRuntimeAgentReceiptWithArtifacts({
+                                agentType,
+                                agentId: childState.agentId,
+                                output: result.output,
+                                agentState: result.agentState,
+                              })
                             mergeChildEvidenceIntoParent({
                               parentAgentState: initialAgentState,
                               childAgentState: result.agentState,
@@ -1824,7 +1880,21 @@ export async function loopAgentSteps(
                                 (entry) => entry.jobId === jobId,
                               )
                             if (intent) {
-                              intent.status = 'completed'
+                              intent.status = (
+                                receipt.runOutcome
+                                  ? receipt.runOutcome.termination ===
+                                    'cancelled'
+                                  : receipt.status === 'cancelled'
+                              )
+                                ? 'cancelled'
+                                : (
+                                      receipt.runOutcome
+                                        ? receipt.runOutcome.termination !==
+                                          'completed'
+                                        : receipt.status === 'failed'
+                                    )
+                                  ? 'error'
+                                  : 'completed'
                               intent.completedAt = clock.now()
                               intent.childRunId = childState.runId
                               intent.receipt = receipt
@@ -1947,16 +2017,10 @@ export async function loopAgentSteps(
     }
   }
 
-  if (signal.aborted) {
-    return {
-      agentState: initialAgentState,
-      output: {
-        type: 'error',
-        message: 'Run cancelled by user',
-      },
-    }
-  }
-
+  // These outcomes belong to this run. Action history remains available after
+  // recovery; a previous turn's terminal reason or oracle cannot settle it.
+  initialAgentState.runOutcome = undefined
+  initialAgentState.taskAcceptance = { status: 'unknown' }
   // P2-T2b: a resume-pinned relaunch (see pinnedRunId on the params type)
   // skips startAgentRun entirely — reusing the ORIGINAL child runId — while
   // every other caller keeps the byte-identical mint path.
@@ -2497,12 +2561,109 @@ export async function loopAgentSteps(
       incrementalTokenCounter.reset()
     }
 
+    // Limit admission before a generator can dispatch tools or a compactor
+    // can spawn an inference request. A hard stop is terminal even if required
+    // output is missing or the generator would otherwise yield another STEP.
+    const stopForSelectedLimit = (checkSteps = true): boolean => {
+      if (currentAgentState.runOutcome) return true
+      Object.assign(
+        currentAgentState,
+        initBudgetFromTemplate(currentAgentState, agentTemplate),
+      )
+      const budget = checkBudgetExceeded(currentAgentState, 0)
+      const stepExhausted = checkSteps && currentAgentState.stepsRemaining === 0
+      if (!stepExhausted && !budget.exceeded) return false
+      const message = stepExhausted
+        ? STEP_CAP_REACHED_MESSAGE
+        : budget.exceeded
+          ? budget.message
+          : ''
+      currentAgentState.runOutcome = {
+        termination: stepExhausted ? 'step_exhausted' : 'budget_exhausted',
+        cause: {
+          code: stepExhausted
+            ? 'step_limit'
+            : budget.exceeded
+              ? `${budget.reason}_budget`
+              : 'budget_limit',
+          message,
+        },
+      }
+      currentAgentState.messageHistory = [
+        ...currentAgentState.messageHistory,
+        stepExhausted
+          ? assistantMessage({
+              content: message,
+              tags: ['STEP_CAP_REACHED'],
+              keepDuringTruncation: true,
+            })
+          : userMessage(withSystemTags(message)),
+      ]
+      onResponseChunk(`${message}\n\n`)
+      maybeCheckpoint(currentAgentState, true)
+      return true
+    }
+
+    const finalizeRun = async () => {
+      currentAgentState.runOutcome ??= { termination: 'completed' }
+      currentAgentState.taskAcceptance ??= { status: 'unknown' }
+      const { termination, cause } = currentAgentState.runOutcome
+      const status = runStatusFromOutcome(currentAgentState.runOutcome)
+      if (currentAgentState.runId && params.journalWriter) {
+        try {
+          params.journalWriter.append(currentAgentState.runId, {
+            eventType: 'step_boundary',
+            stepNumber: totalSteps,
+            correlation: runId,
+            payload: {
+              status: termination,
+              terminal: true,
+              runOutcome: currentAgentState.runOutcome,
+              taskAcceptance: currentAgentState.taskAcceptance,
+              actionOutcomes: currentAgentState.actionOutcomes ?? [],
+            },
+          })
+        } catch (journalError) {
+          logger.debug(
+            { error: journalError, runId },
+            'Failed to append terminal step_boundary to run journal (non-fatal)',
+          )
+        }
+      }
+      try {
+        await finishAgentRun({
+          ...params,
+          runId,
+          status,
+          runOutcome: currentAgentState.runOutcome,
+          taskAcceptance: currentAgentState.taskAcceptance,
+          totalSteps,
+          directCredits: currentAgentState.directCreditsUsed,
+          totalCredits: currentAgentState.creditsUsed,
+          ...(cause ? { errorMessage: cause.message } : {}),
+        })
+      } catch (finishError) {
+        logger.warn(
+          { error: finishError, runId, status },
+          'Failed to finalize agent run (non-fatal)',
+        )
+      }
+    }
+
     try {
       while (true) {
-        totalSteps++
         if (signal.aborted) {
           throw new AbortError()
         }
+        const canSettlePriorWork =
+          (totalSteps > 0 && agentTemplate.handleSteps !== undefined) ||
+          (shouldEndTurn &&
+            (!agentTemplate.outputSchema ||
+              (currentAgentState.output !== undefined &&
+                agentTemplate.outputSchema.safeParse(currentAgentState.output)
+                  .success)))
+        if (stopForSelectedLimit(!canSettlePriorWork)) break
+        totalSteps++
 
         const startTime = new Date()
 
@@ -2853,6 +3014,11 @@ export async function loopAgentSteps(
           totalSteps = stepNumber
 
           shouldEndTurn = endTurn
+          if (programmaticResult.hitStepCap) {
+            stopForSelectedLimit()
+            break
+          }
+          if (stopForSelectedLimit(!endTurn)) break
 
           // nResponses (from a prior GENERATE_N) is consumed by the generator on
           // this step. Clear it so a later programmatic step can't read the same
@@ -3242,12 +3408,15 @@ export async function loopAgentSteps(
         // invalid output (for example from a degraded or stale handler schema)
         // while the reviewer still has its reads and findings in context.
         const outputRecord =
-          currentAgentState.output && typeof currentAgentState.output === 'object'
+          currentAgentState.output &&
+          typeof currentAgentState.output === 'object'
             ? (currentAgentState.output as Record<string, unknown>)
             : undefined
-        const outputSchemaShape = (agentTemplate.outputSchema as
-          | { shape?: Record<string, unknown> }
-          | undefined)?.shape
+        const outputSchemaShape = (
+          agentTemplate.outputSchema as
+            | { shape?: Record<string, unknown> }
+            | undefined
+        )?.shape
         const isReviewer =
           agentType.toLowerCase().includes('reviewer') ||
           outputRecord?.family === 'reviewer' ||
@@ -3269,7 +3438,10 @@ export async function loopAgentSteps(
             if (!validation.success) {
               const issues = validation.error.issues
                 .slice(0, 8)
-                .map((issue) => `${issue.path.join('.') || 'output'}: ${issue.message}`)
+                .map(
+                  (issue) =>
+                    `${issue.path.join('.') || 'output'}: ${issue.message}`,
+                )
                 .join('; ')
               reviewerOutputIssue = `The reviewer receipt failed its output schema: ${issues}`
             }
@@ -3645,52 +3817,20 @@ export async function loopAgentSteps(
         )
       }
 
-      // P2-T2-DESIGN §4d: journal ONE terminal step_boundary on NORMAL exit
-      // so the tail of a completed run proves completion. Without it the tail
-      // is the final step's llm_response and classifyChildRun reports
-      // child_incomplete_tail for a child that actually finished. Error/abort
-      // exits return through the catch blocks below and deliberately do NOT
-      // append this marker: a non-terminal tail is what keeps an interrupted
-      // run classifying as resumable/incomplete rather than falsely complete.
-      // Fail-open like every other write point: a journal append failure must
-      // never fail the completed run (and run-journal.test.ts proves a
-      // step_boundary tail classifies as clean/child_completed).
-      if (currentAgentState.runId && params.journalWriter) {
-        try {
-          params.journalWriter.append(currentAgentState.runId, {
-            eventType: 'step_boundary',
-            stepNumber: totalSteps,
-            correlation: runId,
-            payload: { status: 'completed', terminal: true },
-          })
-        } catch (journalError) {
-          logger.debug(
-            { error: journalError, runId },
-            'Failed to append terminal step_boundary to run journal (non-fatal)',
-          )
-        }
-      }
-
-      try {
-        await finishAgentRun({
-          ...params,
-          runId,
-          status: 'completed',
-          totalSteps,
-          directCredits: currentAgentState.directCreditsUsed,
-          totalCredits: currentAgentState.creditsUsed,
-        })
-      } catch (finishError) {
-        // Finalization must not replace the successful run result.
-        logger.warn(
-          { error: finishError, runId },
-          'Failed to finalize agent run after completion (non-fatal)',
-        )
-      }
+      await finalizeRun()
 
       return {
         agentState: currentAgentState,
-        output: getAgentOutput(currentAgentState, agentTemplate),
+        output:
+          currentAgentState.runOutcome?.termination === 'failed' ||
+          currentAgentState.runOutcome?.termination === 'cancelled'
+            ? {
+                type: 'error',
+                message:
+                  currentAgentState.runOutcome.cause?.message ??
+                  `Agent run ${currentAgentState.runOutcome.termination}`,
+              }
+            : getAgentOutput(currentAgentState, agentTemplate),
       }
     } catch (error) {
       // Handle user-initiated aborts separately - don't log as errors
@@ -3725,23 +3865,11 @@ export async function loopAgentSteps(
           'Agent run cancelled by user (abort error)',
         )
 
-        try {
-          await finishAgentRun({
-            ...params,
-            runId,
-            status: 'cancelled',
-            totalSteps,
-            directCredits: currentAgentState.directCreditsUsed,
-            totalCredits: currentAgentState.creditsUsed,
-          })
-        } catch (finishError) {
-          // Preserve the abort flow; a finalization failure at this point must
-          // not replace the original cancellation with a different error.
-          logger.warn(
-            { error: finishError, runId },
-            'Failed to finalize agent run after cancellation (non-fatal)',
-          )
+        currentAgentState.runOutcome = {
+          termination: 'cancelled',
+          cause: { code: 'user_cancelled', message: 'Run cancelled by user' },
         }
+        await finalizeRun()
 
         return {
           agentState: currentAgentState,
@@ -3777,25 +3905,14 @@ export async function loopAgentSteps(
       const errorMessage = apiErrorDetails.message ?? fallbackMessage
       const statusCode = apiErrorDetails.statusCode
 
-      const status = signal.aborted ? 'cancelled' : 'failed'
-      try {
-        await finishAgentRun({
-          ...params,
-          runId,
-          status,
-          totalSteps,
-          directCredits: currentAgentState.directCreditsUsed,
-          totalCredits: currentAgentState.creditsUsed,
-          errorMessage,
-        })
-      } catch (finishError) {
-        // Propagate the ORIGINAL error, not a finalization failure that would
-        // mask it.
-        logger.warn(
-          { error: finishError, runId, status },
-          'Failed to finalize agent run after error (non-fatal)',
-        )
+      currentAgentState.runOutcome = {
+        termination: signal.aborted ? 'cancelled' : 'failed',
+        cause: {
+          code: signal.aborted ? 'user_cancelled' : 'agent_execution_error',
+          message: errorMessage,
+        },
       }
+      await finalizeRun()
 
       // Payment required errors (402) should propagate
       if (statusCode === 402) {

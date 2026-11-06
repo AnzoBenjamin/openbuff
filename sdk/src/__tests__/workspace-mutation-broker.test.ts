@@ -129,6 +129,8 @@ describe('WorkspaceMutationBroker', () => {
     const before = Buffer.from('before\n')
     await writeFile(file, before)
     const gate = path.join(path.dirname(workspace), 'gate')
+    const activePath = path.join(path.dirname(workspace), 'active')
+    const eventsPath = path.join(path.dirname(workspace), 'events.jsonl')
     const servicePath = path.resolve(
       import.meta.dir,
       '..',
@@ -144,6 +146,17 @@ describe('WorkspaceMutationBroker', () => {
         const broker = await WorkspaceMutationBroker.create({
           cwd: ${JSON.stringify(workspace)},
           stateDir: ${JSON.stringify(stateDir)},
+        });
+        const originalLock = broker.withWorkspaceLock.bind(broker);
+        broker.withWorkspaceLock = (operation) => originalLock(async () => {
+          fs.writeFileSync(${JSON.stringify(activePath)}, String(process.pid), {flag:'wx'});
+          const owner = JSON.parse(fs.readFileSync(broker.brokerDir+'.lock/owner.json','utf8'));
+          fs.appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({event:'enter', pid:process.pid, token:owner.token})+'\\n');
+          try { await new Promise(resolve=>setTimeout(resolve,25)); return await operation(); }
+          finally {
+            fs.appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({event:'exit',pid:process.pid,token:owner.token})+'\\n');
+            fs.unlinkSync(${JSON.stringify(activePath)});
+          }
         });
         fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
         const wait = new Int32Array(new SharedArrayBuffer(4));
@@ -188,6 +201,18 @@ describe('WorkspaceMutationBroker', () => {
 
     const results = await Promise.all([first.completed, second.completed])
     expect(results.filter((result) => result.applied)).toHaveLength(1)
+    const events = (await readFile(eventsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(events.map((event) => event.event)).toEqual([
+      'enter',
+      'exit',
+      'enter',
+      'exit',
+    ])
+    expect(new Set(events.map((event) => event.token)).size).toBe(2)
+    console.log(JSON.stringify({ b04: 'broker-real-process', events, results }))
     expect(['first\n', 'second\n']).toContain(await readFile(file, 'utf8'))
     const broker = await WorkspaceMutationBroker.create({
       cwd: workspace,
@@ -196,6 +221,52 @@ describe('WorkspaceMutationBroker', () => {
     expect(
       (await broker.listReceipts()).map((receipt) => receipt.state).sort(),
     ).toEqual(['committed', 'rejected'])
+  })
+
+  test('an actual exited holder leaves inspectable recovery-required ownership', async () => {
+    const { workspace, stateDir } = await makeWorkspace(
+      'broker-crashed-process',
+    )
+    const target = path.join(workspace, 'file.txt')
+    await writeFile(target, 'before')
+    const broker = await WorkspaceMutationBroker.create({
+      cwd: workspace,
+      stateDir,
+    })
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `
+      import { WorkspaceMutationBroker } from ${JSON.stringify(path.resolve(import.meta.dir, '../services/workspace-mutation-broker.ts'))};
+      const broker=await WorkspaceMutationBroker.create(${JSON.stringify({ cwd: workspace, stateDir })});
+      await broker.withWorkspaceLock(async()=>{process.exit(0)});
+    `,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    expect(await child.exited).toBe(0)
+    const ownerPath = `${broker.brokerDir}.lock/owner.json`
+    const owner = await readFile(ownerPath, 'utf8')
+    expect(JSON.parse(owner).pid).toBe(child.pid)
+    const state = await readFile(path.join(broker.brokerDir, 'state.json'))
+    await expect(
+      broker.conditionalCommit(target, 'after', hashFileContent('before')),
+    ).rejects.toBeInstanceOf(WorkspaceMutationBrokerRecoveryError)
+    expect(await readFile(ownerPath, 'utf8')).toBe(owner)
+    expect(await readFile(path.join(broker.brokerDir, 'state.json'))).toEqual(
+      state,
+    )
+    expect(await readFile(target, 'utf8')).toBe('before')
+    expect(await broker.listReceipts()).toEqual([])
+    console.log(
+      JSON.stringify({
+        b04: 'broker-crash-refusal',
+        owner: JSON.parse(owner),
+        beforeHash: hashFileContent('before'),
+        afterHash: hashFileContent(await readFile(target)),
+      }),
+    )
   })
 
   test('supports exclusive create, conditional delete, and no-clobber move', async () => {
@@ -281,57 +352,134 @@ describe('WorkspaceMutationBroker', () => {
     expect(await readFile(second, 'utf8')).toBe('second before\r\n')
   })
 
-  test('recovers stale locks only when the recorded process is gone', async () => {
+  test.each([
+    ['dead', 2_147_483_647],
+    ['live', process.pid],
+    ['unknown', -1],
+  ])('preserves stale %s ownership and refuses writes', async (kind, pid) => {
     const { workspace, stateDir } = await makeWorkspace('broker-stale-lock')
     const broker = await WorkspaceMutationBroker.create({
       cwd: workspace,
       stateDir,
+      lockTimeoutMs: 30,
+      lockPollMs: 2,
     })
+    const target = path.join(workspace, 'file.txt')
+    await writeFile(target, 'before')
+    const stateBefore = await readFile(
+      path.join(broker.brokerDir, 'state.json'),
+    )
     const lockPath = `${broker.brokerDir}.lock`
-    await mkdir(lockPath, { recursive: true })
-    await writeFile(
-      path.join(lockPath, 'owner.json'),
-      JSON.stringify({
-        schemaVersion: 1,
-        token: 'dead-owner',
-        pid: 999_999_999,
-        acquiredAt: new Date(0).toISOString(),
-      }),
-    )
-    const old = new Date(Date.now() - 60_000)
-    await fs.promises.utimes(lockPath, old, old)
-
-    const recovered = await WorkspaceMutationBroker.create({
-      cwd: workspace,
-      stateDir,
-      staleLockMs: 1,
-      lockTimeoutMs: 1_000,
+    await mkdir(lockPath)
+    const owner = JSON.stringify({
+      schemaVersion: 1,
+      token: `${kind}-generation`,
+      pid,
+      acquiredAt: new Date(0).toISOString(),
     })
-    expect(recovered.workspaceId).toBe(broker.workspaceId)
-    expect(fs.existsSync(lockPath)).toBe(false)
-
-    await mkdir(lockPath, { recursive: true })
-    await writeFile(
-      path.join(lockPath, 'owner.json'),
-      JSON.stringify({
-        schemaVersion: 1,
-        token: 'live-owner',
-        pid: process.pid,
-        acquiredAt: new Date(0).toISOString(),
-      }),
-    )
-    await fs.promises.utimes(lockPath, old, old)
+    await writeFile(path.join(lockPath, 'owner.json'), owner)
+    await fs.promises.utimes(lockPath, new Date(0), new Date(0))
     await expect(
-      WorkspaceMutationBroker.create({
-        cwd: workspace,
-        stateDir,
-        staleLockMs: 1,
-        lockTimeoutMs: 40,
-        lockPollMs: 5,
-      }),
-    ).rejects.toThrow('Timed out acquiring workspace mutation lock')
-    expect(fs.existsSync(lockPath)).toBe(true)
-    await rm(lockPath, { recursive: true, force: true })
+      broker.conditionalCommit(target, 'after', hashFileContent('before')),
+    ).rejects.toThrow(
+      kind === 'live' ? 'Timed out acquiring' : 'requires recovery',
+    )
+    expect(await readFile(target, 'utf8')).toBe('before')
+    expect(await readFile(path.join(lockPath, 'owner.json'), 'utf8')).toBe(
+      owner,
+    )
+    expect(await readFile(path.join(broker.brokerDir, 'state.json'))).toEqual(
+      stateBefore,
+    )
+    expect(await broker.listReceipts()).toEqual([])
+  })
+
+  test('competing stale observations cannot remove replacement ownership', async () => {
+    const { workspace, stateDir } = await makeWorkspace(
+      'broker-reclaim-barrier',
+    )
+    const brokers = await Promise.all(
+      [0, 1].map(() =>
+        WorkspaceMutationBroker.create({
+          cwd: workspace,
+          stateDir,
+          lockTimeoutMs: 30,
+          lockPollMs: 2,
+        }),
+      ),
+    )
+    const target = path.join(workspace, 'file.txt')
+    await writeFile(target, 'before')
+    const lockPath = `${brokers[0]!.brokerDir}.lock`
+    const ownerPath = path.join(lockPath, 'owner.json')
+    await mkdir(lockPath)
+    const dead = JSON.stringify({
+      schemaVersion: 1,
+      token: 'dead-generation',
+      pid: 2_147_483_647,
+      acquiredAt: new Date(0).toISOString(),
+    })
+    const replacement = JSON.stringify({
+      schemaVersion: 1,
+      token: 'replacement-generation',
+      pid: process.pid,
+      acquiredAt: new Date().toISOString(),
+    })
+    await writeFile(ownerPath, dead)
+    await fs.promises.utimes(lockPath, new Date(0), new Date(0))
+    const originalRead = fs.promises.readFile
+    const originalRm = fs.promises.rm
+    let observed = 0
+    let removals = 0
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    fs.promises.readFile = (async (
+      ...args: Parameters<typeof originalRead>
+    ) => {
+      const result = await originalRead(...args)
+      if (String(args[0]) === ownerPath && observed < 2) {
+        observed++
+        if (observed === 2) {
+          await writeFile(ownerPath, replacement)
+          release()
+        }
+        await barrier
+      }
+      return result
+    }) as typeof originalRead
+    fs.promises.rm = (async (...args: Parameters<typeof originalRm>) => {
+      if (String(args[0]) === lockPath) removals++
+      return originalRm(...args)
+    }) as typeof originalRm
+    let outcomes: PromiseSettledResult<unknown>[]
+    try {
+      outcomes = await Promise.allSettled(
+        brokers.map((broker, i) =>
+          broker.conditionalCommit(
+            target,
+            `after-${i}`,
+            hashFileContent('before'),
+          ),
+        ),
+      )
+    } finally {
+      fs.promises.readFile = originalRead
+      fs.promises.rm = originalRm
+    }
+    expect(observed).toBe(2)
+    expect(removals).toBe(0)
+    expect(
+      outcomes!.every(
+        (outcome) =>
+          outcome.status === 'rejected' &&
+          outcome.reason instanceof WorkspaceMutationBrokerRecoveryError,
+      ),
+    ).toBe(true)
+    expect(await readFile(ownerPath, 'utf8')).toBe(replacement)
+    expect(await readFile(target, 'utf8')).toBe('before')
+    expect(await brokers[0]!.listReceipts()).toEqual([])
   })
 
   test('reconciles a committed workspace state from an incomplete receipt', async () => {

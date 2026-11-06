@@ -1,9 +1,6 @@
 import { z } from 'zod/v4'
 
-import {
-  pairedBootstrapMeanDiffCI,
-  wilcoxonSignedRankTest,
-} from './statistics'
+import { pairedBootstrapMeanDiffCI, wilcoxonSignedRankTest } from './statistics'
 
 import type { ComparisonResult } from './compare-runs'
 import type { AgentDefinition } from '@openbuff/sdk'
@@ -394,6 +391,11 @@ export function decideProposalPromotion(params: {
 }): ProposalPromotionDecision {
   const policy = { ...defaultPromotionPolicy, ...params.policy }
   const reasons: string[] = []
+  if (
+    !Number.isFinite(params.comparison.overall.totalScoreDelta) ||
+    !Number.isFinite(policy.minTotalScoreDelta)
+  )
+    reasons.push('nonfinite promotion score evidence or threshold')
 
   if (policy.requireAppliedProposals && params.dryRun.appliedCount === 0) {
     reasons.push('no proposals applied in dry run')
@@ -417,26 +419,45 @@ export function decideProposalPromotion(params: {
     const maxPValue = policy.maxPValue ?? 0.05
     if (!params.pairedScores || params.pairedScores.length === 0) {
       // Fail closed: significance was demanded but the evidence is missing.
-      reasons.push('significance required but no paired per-task scores provided')
+      reasons.push(
+        'significance required but no paired per-task scores provided',
+      )
     } else {
-      const wilcoxon = wilcoxonSignedRankTest(params.pairedScores)
-      const ci = pairedBootstrapMeanDiffCI(params.pairedScores, {
-        iterations: policy.bootstrapIterations,
-        seed: policy.bootstrapSeed,
-      })
-      // P8-T4a: a not-applicable Wilcoxon verdict (underpowered comparison,
-      // n < 10) must BLOCK promotion. The promotion gate rejects
-      // underpowered comparisons instead of trusting a neutral p-value.
-      significanceSummary = wilcoxon.applicable
-        ? `, wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)}, bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
-        : `, wilcoxon not applicable (${wilcoxon.reason}), bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
-      if (!wilcoxon.applicable) {
-        reasons.push(
-          `improvement not statistically significant (wilcoxon not applicable: ${wilcoxon.reason}; bootstrap meanDiff=${ci.meanDiff.toFixed(2)}, CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}])`,
+      try {
+        if (!Number.isFinite(maxPValue) || maxPValue <= 0 || maxPValue > 1)
+          throw new RangeError('Invalid significance threshold')
+        if (
+          params.pairedScores.some(
+            (pair) =>
+              ![pair.before, pair.after].every(
+                (score) => Number.isFinite(score) && score >= 0 && score <= 10,
+              ),
+          )
         )
-      } else if (wilcoxon.pValueTwoSided > maxPValue || ci.lower <= 0) {
+          throw new RangeError('Invalid paired score evidence')
+        const wilcoxon = wilcoxonSignedRankTest(params.pairedScores)
+        const ci = pairedBootstrapMeanDiffCI(params.pairedScores, {
+          iterations: policy.bootstrapIterations,
+          seed: policy.bootstrapSeed,
+        })
+        // P8-T4a: a not-applicable Wilcoxon verdict (underpowered comparison,
+        // n < 10) must BLOCK promotion. The promotion gate rejects
+        // underpowered comparisons instead of trusting a neutral p-value.
+        significanceSummary = wilcoxon.applicable
+          ? `, wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)}, bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
+          : `, wilcoxon not applicable (${wilcoxon.reason}), bootstrap meanDiff=${ci.meanDiff.toFixed(2)} CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}]`
+        if (!wilcoxon.applicable) {
+          reasons.push(
+            `improvement not statistically significant (wilcoxon not applicable: ${wilcoxon.reason}; bootstrap meanDiff=${ci.meanDiff.toFixed(2)}, CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}])`,
+          )
+        } else if (wilcoxon.pValueTwoSided > maxPValue || ci.lower <= 0) {
+          reasons.push(
+            `improvement not statistically significant (wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)} > ${maxPValue.toFixed(4)} or bootstrap CI lower ${ci.lower.toFixed(2)} <= 0; meanDiff=${ci.meanDiff.toFixed(2)}, CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}])`,
+          )
+        }
+      } catch (error) {
         reasons.push(
-          `improvement not statistically significant (wilcoxon p=${wilcoxon.pValueTwoSided.toFixed(4)} > ${maxPValue.toFixed(4)} or bootstrap CI lower ${ci.lower.toFixed(2)} <= 0; meanDiff=${ci.meanDiff.toFixed(2)}, CI=[${ci.lower.toFixed(2)}, ${ci.upper.toFixed(2)}])`,
+          `invalid significance evidence: ${error instanceof Error ? error.message : String(error)}`,
         )
       }
     }

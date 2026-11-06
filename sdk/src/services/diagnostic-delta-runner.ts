@@ -1,12 +1,10 @@
-import {
-  captureDiagnostics,
-  preflightDiagnosticDelta,
-} from './diagnostic-delta'
+import { preflightDiagnosticDelta } from './diagnostic-delta'
 import { getSystemProcessEnv } from '../env'
 
 import type { ChildProcess } from 'node:child_process'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import type {
+  DiagnosticCapture,
   DiagnosticCommandRunner,
   DiagnosticRunResult,
 } from './diagnostic-delta'
@@ -52,15 +50,15 @@ export const DIAGNOSTIC_SIGTERM_GRACE_MS = 5_000
 export class BoundedStreamCapture {
   private chunks: Buffer[] = []
   private retained = 0
+  truncated = false
 
   push(chunk: Buffer | string): void {
-    if (this.retained >= MAX_CAPTURED_STREAM_BYTES) return
-    const bytes =
-      typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk
     const take = Math.min(
       MAX_CAPTURED_STREAM_BYTES - this.retained,
       bytes.length,
     )
+    if (take < bytes.length) this.truncated = true
     if (take <= 0) return
     this.chunks.push(bytes.subarray(0, take))
     this.retained += take
@@ -98,24 +96,43 @@ export function createDiagnosticCommandRunner(params: {
       const argv = command.split(/\s+/).filter(Boolean)
       const file = argv.shift()
       if (!file) {
-        resolve({ errorMessage: 'empty diagnostic command' })
+        resolve({
+          errorMessage: 'empty diagnostic command',
+          errorCode: 'EMPTY_COMMAND',
+        })
         return
       }
       const stdoutCapture = new BoundedStreamCapture()
       const stderrCapture = new BoundedStreamCapture()
       let settled = false
+      let deadlineExpired = false
       let timer: ReturnType<typeof setTimeout> | undefined
       // Tracked in the outer scope so finish() can cancel it (P3 audit): a
       // child that exits before the SIGTERM→SIGKILL grace elapses must not
       // leave a dangling escalation timer — the same settle() shape the
       // sibling semgrep runner (makeSpawnRunner) enforces.
       let escalate: ReturnType<typeof setTimeout> | undefined
+      let onAbort: (() => void) | undefined
       const finish = (result: DiagnosticRunResult) => {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
         if (escalate) clearTimeout(escalate)
-        resolve(result)
+        if (onAbort) signal?.removeEventListener('abort', onAbort)
+        resolve({
+          ...result,
+          ...(deadlineExpired ? { timedOut: true } : {}),
+          stdout: result.stdout ?? stdoutCapture.text(),
+          stderr: result.stderr ?? stderrCapture.text(),
+          outputTruncated: stdoutCapture.truncated || stderrCapture.truncated,
+        })
+      }
+      if (signal?.aborted) {
+        finish({
+          cancelled: true,
+          errorMessage: 'diagnostic command cancelled before spawn',
+        })
+        return
       }
       let child: ChildProcess
       try {
@@ -128,10 +145,22 @@ export function createDiagnosticCommandRunner(params: {
       } catch (error) {
         finish({
           errorMessage: error instanceof Error ? error.message : String(error),
+          errorCode: (error as NodeJS.ErrnoException)?.code,
+          cancelled:
+            signal?.aborted ||
+            (error instanceof Error && error.name === 'AbortError'),
         })
         return
       }
+      onAbort = () =>
+        finish({
+          cancelled: true,
+          errorMessage: 'diagnostic command cancelled',
+        })
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) onAbort()
       timer = setTimeout(() => {
+        deadlineExpired = true
         try {
           child.kill('SIGTERM')
         } catch {
@@ -171,11 +200,21 @@ export function createDiagnosticCommandRunner(params: {
       child.on('error', (error: Error) => {
         // Missing tool (ENOENT) and similar spawn failures: no diagnostics,
         // never a fabricated rejection.
-        finish({ errorMessage: error.message })
-      })
-      child.on('close', (code: number | null) => {
         finish({
-          exitCode: code ?? 1,
+          errorMessage: error.message,
+          errorCode: (error as NodeJS.ErrnoException).code,
+          cancelled: signal?.aborted || error.name === 'AbortError',
+        })
+      })
+      child.on('close', (code: number | null, terminationSignal?: string) => {
+        finish({
+          exitCode: code ?? undefined,
+          cancelled: signal?.aborted,
+          ...(terminationSignal
+            ? {
+                errorMessage: `diagnostic command terminated by ${terminationSignal}`,
+              }
+            : {}),
           stdout: stdoutCapture.text(),
           stderr: stderrCapture.text(),
         })
@@ -184,11 +223,10 @@ export function createDiagnosticCommandRunner(params: {
 }
 
 /**
- * The `diagnosticDelta` injector runFileChangeHooks consumes. Fail-open: any
- * error inside the preflight resolves to `undefined`, which the hook executor
- * treats as "no preflight result", so a broken preflight never breaks hooks.
- * The flag check lives inside runFileChangeHooks, so this injector can be
- * passed unconditionally and flag-off behavior stays byte-identical.
+ * Optional validation injector. Work may continue after an observer failure,
+ * while its unknown/unsuccessful evidence stays visible to hooks and clients.
+ * No-baseline captures can certify an empty current check; observed errors
+ * without a pre-edit basis cannot be declared pre-existing.
  */
 export function createDiagnosticDeltaHook(params: {
   spawn: CodebuffSpawn
@@ -200,33 +238,39 @@ export function createDiagnosticDeltaHook(params: {
    * that snapshot and the hook uses it as the preflight `baseline` — the
    * after-capture then runs for real, so a NEW error in the after-state can
    * actually produce a rejection. When the provider yields no baseline
-   * (capture failed / not supplied), today's no-op applyEdit +
-   * skipSecondCapture behavior is kept byte-identical.
+   * (not supplied), capture the current state once. A failed baseline
+   * provider is retained as unknown evidence, never replaced with success.
    */
   getBaseline?: (ctx: {
     files: string[]
     cwd: string
     env?: Record<string, string | undefined>
     signal?: AbortSignal
-  }) => Promise<LanguageDiagnostic[] | undefined> | LanguageDiagnostic[] | undefined
+  }) =>
+    | Promise<DiagnosticCapture | LanguageDiagnostic[] | undefined>
+    | DiagnosticCapture
+    | LanguageDiagnostic[]
+    | undefined
 }): DiagnosticDeltaHook {
   const runCommand = createDiagnosticCommandRunner(params)
   const preflight = params.preflight ?? preflightDiagnosticDelta
   return async ({ files, cwd, env, signal }) => {
     try {
-      let baseline: LanguageDiagnostic[] | undefined
+      let baseline: DiagnosticCapture | LanguageDiagnostic[] | undefined
       try {
         baseline = await params.getBaseline?.({ files, cwd, env, signal })
       } catch {
-        // Fail-open: a broken baseline provider must degrade to today's
-        // no-baseline behavior, never break the hook.
-        baseline = undefined
+        return {
+          rejected: false,
+          diagnosticStatus: signal?.aborted ? 'cancelled' : 'unknown',
+          observations: { basis: 'unknown', reason: 'baseline_capture_failed' },
+        }
       }
       // File-change hooks observe already-changed files. Without a pre-edit
       // baseline the preflight captures the current state as its own baseline
-      // with a no-op applyEdit: it reports acceptance unless its capture
-      // machinery itself breaks (fail-open below) and never fabricates a
-      // rejection; a true before/after delta needs a captured baseline.
+      // with a no-op applyEdit. A complete error-free current observation can
+      // pass; observed errors without a pre-edit basis remain unknown. A true
+      // before/after delta needs the caller's captured baseline.
       // WITH a baseline (P3 audit fix D), skipSecondCapture must NOT be
       // passed — the after-capture runs for real so a genuine delta against
       // the pre-edit snapshot can produce a rejection.
@@ -249,8 +293,12 @@ export function createDiagnosticDeltaHook(params: {
         signal,
       })
     } catch {
-      // Fail-open: a broken preflight must never break the hooks.
-      return undefined
+      // Work may continue, but missing observation never becomes passed evidence.
+      return {
+        rejected: false,
+        diagnosticStatus: signal?.aborted ? 'cancelled' : 'unknown',
+        observations: { basis: 'unknown', reason: 'preflight_failed' },
+      }
     }
   }
 }

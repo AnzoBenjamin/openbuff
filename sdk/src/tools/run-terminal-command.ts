@@ -25,12 +25,21 @@ import {
 } from './terminal-command-policy'
 import {
   classifyTerminalHarnessAction,
+  hashTerminalExecutionContext,
   type ClassifiedHarnessAction,
 } from '../services/harness-enforcement'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 const COMMAND_OUTPUT_LIMIT = 50_000
+type TerminalApprovalToken = {
+  action: string
+  target: string
+  commandHash: string
+  executionContextHash: string
+  approvalReceiptId?: string
+}
+const terminalApprovalTokens = new WeakMap<object, TerminalApprovalToken>()
 /**
  * Byte budget for one safety spawn's TOTAL output. It bounds how much of a diff
  * the preflight is willing to inspect at all — an over-budget stream fails the
@@ -748,7 +757,11 @@ function runGitForSafety(
   args: string[],
   cwd: string,
   observeStdout?: (chunk: Buffer) => void,
-  options?: { signal?: AbortSignal; timeoutMs?: number },
+  options?: {
+    signal?: AbortSignal
+    timeoutMs?: number
+    env?: NodeJS.ProcessEnv
+  },
 ): Promise<GitSafetyResult> {
   return new Promise((resolve) => {
     let stdout = ''
@@ -770,7 +783,7 @@ function runGitForSafety(
       // Route the preflight git spawn through the credential scrub so the
       // safety check never runs with the agent process's provider secrets.
       env: {
-        ...getChildProcessEnv(),
+        ...(options?.env ?? getChildProcessEnv()),
         // These are READ-ONLY inspections, and the two remaining preflight
         // diffs run concurrently against the same index. git refreshes the
         // index opportunistically and may take index.lock to do it; two
@@ -901,6 +914,7 @@ type StagedCommitSafetyResult =
 async function validateStagedCommit(
   cwd: string,
   signal?: AbortSignal,
+  env?: NodeJS.ProcessEnv,
 ): Promise<StagedCommitSafetyResult> {
   // Two independent reads of the same index: the whitespace check and ONE -U0
   // diff that supplies both the staged names (from its `diff --git` headers)
@@ -914,13 +928,14 @@ async function validateStagedCommit(
   const [whitespace, diff] = await Promise.all([
     runGitForSafety(['diff', '--cached', '--check'], cwd, undefined, {
       signal,
+      env,
     }),
     scanWhilePending(
       runGitForSafety(
         ['diff', '--cached', '-U0'],
         cwd,
         (chunk) => scanner.enqueue(chunk),
-        { signal },
+        { signal, env },
       ),
       scanner,
     ),
@@ -1109,13 +1124,13 @@ To fix this, you have several options:
 export async function listDirtyPaths(
   projectRoot: string,
   signal?: AbortSignal,
+  env?: NodeJS.ProcessEnv,
 ): Promise<Set<string> | null> {
   try {
-    const result = await runGit(
-      ['status', '--porcelain', '-uall'],
-      projectRoot,
-      signal,
-    )
+    const args = ['status', '--porcelain', '-uall']
+    const result = env
+      ? await runGitForSafety(args, projectRoot, undefined, { signal, env })
+      : await runGit(args, projectRoot, signal)
     if (result.exitCode !== 0) return null
     const paths = new Set<string>()
     for (const line of result.stdout.split('\n')) {
@@ -1152,13 +1167,14 @@ export async function runTerminalCommand({
   detach = false,
   mode = 'assistant',
   permission_profile = 'workspace-write',
-  allowed_paths,
+  allowed_paths: requestedAllowedPaths,
   cwd,
   projectRoot,
   timeout_seconds,
-  env,
+  env: requestedEnv,
+  inheritEnv = true,
   signal,
-  owner,
+  owner: requestedOwner,
   authorizeHighImpactAction,
   preApprovedAction,
 }: {
@@ -1172,6 +1188,8 @@ export async function runTerminalCommand({
   projectRoot?: string
   timeout_seconds: number
   env?: Record<string, string | undefined>
+  /** Trusted host option, never taken from model tool input. */
+  inheritEnv?: boolean
   /** Optional abort signal. Owned background jobs are cancelled unless
    * `detach` was explicitly requested. */
   signal?: AbortSignal
@@ -1189,21 +1207,20 @@ export async function runTerminalCommand({
         approvalRequired: boolean
       }
   >
-  /**
-   * One-shot pre-approved harness action carried on the internal
-   * post-approval rerun. When the freshly classified high-impact action
-   * matches it (same action+target), the rerun consumes it instead of
-   * requesting approval again, so the terminal permission profile is still
-   * enforced (unlike the old mode:'user' rerun which bypassed the whole
-   * policy).
-   */
+  /** Internal rerun handle. Caller-created objects carry no approval authority. */
   preApprovedAction?: {
     action: string
     target: string
     commandHash: string
+    executionContextHash?: string
     approvalReceiptId?: string
   }
 }): Promise<CodebuffToolOutput<'run_terminal_command'>> {
+  const allowed_paths = requestedAllowedPaths
+    ? [...requestedAllowedPaths]
+    : undefined
+  const env = requestedEnv ? { ...requestedEnv } : undefined
+  const owner = requestedOwner ? { ...requestedOwner } : undefined
   // The contract for `cwd` is "project root or a subdirectory of it". A
   // caller-supplied absolute path like `/etc` or a traversal like
   // `../../outside` must be rejected before we spawn a child process so the
@@ -1234,6 +1251,10 @@ export async function runTerminalCommand({
     ])
   }
   const containedCwd = resolvedCwd.operationPath
+  const processEnv = scrubChildProcessEnv({
+    ...(inheritEnv ? getChildProcessEnv() : {}),
+    ...(env ?? {}),
+  })
 
   const policy = evaluateTerminalCommandPolicy({
     command,
@@ -1257,19 +1278,35 @@ export async function runTerminalCommand({
     ])
   }
 
-  const highImpactAction =
+  const classifiedAction =
     mode === 'assistant' ? classifyTerminalHarnessAction(command) : undefined
-  // A matched one-shot pre-approval means this call is the post-approval
-  // rerun for the same action+target: the profile policy already ran above,
-  // so consume the pre-approval and fall through to execution instead of
-  // asking for approval again (which would loop approve->rerun->approve).
+  const highImpactAction = classifiedAction
+    ? Object.freeze({
+        ...classifiedAction,
+        executionContextHash: hashTerminalExecutionContext({
+          permissionProfile: permission_profile,
+          cwd: containedCwd,
+          projectRoot: projectRoot ?? process.cwd(),
+          allowedPaths: allowed_paths,
+          processType: process_type,
+          detach,
+          mode,
+        }),
+      })
+    : undefined
+  const registeredPreApproval = preApprovedAction
+    ? terminalApprovalTokens.get(preApprovedAction)
+    : undefined
+  if (preApprovedAction) terminalApprovalTokens.delete(preApprovedAction)
   const matchedPreApproval =
     highImpactAction &&
-    preApprovedAction &&
-    preApprovedAction.action === highImpactAction.action &&
-    preApprovedAction.target === highImpactAction.target &&
-    preApprovedAction.commandHash === highImpactAction.commandHash
-      ? preApprovedAction
+    registeredPreApproval &&
+    registeredPreApproval.action === highImpactAction.action &&
+    registeredPreApproval.target === highImpactAction.target &&
+    registeredPreApproval.commandHash === highImpactAction.commandHash &&
+    registeredPreApproval.executionContextHash ===
+      highImpactAction.executionContextHash
+      ? registeredPreApproval
       : undefined
   // Harness metadata threaded onto the eventual output on the matched
   // pre-approval path so callers see identical metadata whether the command
@@ -1282,6 +1319,9 @@ export async function runTerminalCommand({
             : {}),
           harnessAction: highImpactAction.action,
           harnessTarget: highImpactAction.target,
+          harnessEffects: highImpactAction.effects,
+          harnessParseStatus: highImpactAction.parseStatus,
+          executionContextHash: highImpactAction.executionContextHash,
         }
       : undefined
   const finalizeHarnessMetadata = (
@@ -1310,12 +1350,16 @@ export async function runTerminalCommand({
             approvalRequired: true,
             harnessAction: highImpactAction.action,
             harnessTarget: highImpactAction.target,
+            harnessEffects: highImpactAction.effects,
+            harnessParseStatus: highImpactAction.parseStatus,
+            executionContextHash: highImpactAction.executionContextHash,
             permissionProfile: permission_profile,
           },
         },
       ])
     }
     return authorizeHighImpactAction(highImpactAction).then((decision) => {
+      throwIfAborted(signal)
       if (!decision.allowed) {
         return [
           {
@@ -1327,11 +1371,24 @@ export async function runTerminalCommand({
               approvalRequired: decision.approvalRequired,
               harnessAction: highImpactAction.action,
               harnessTarget: highImpactAction.target,
+              harnessEffects: highImpactAction.effects,
+              harnessParseStatus: highImpactAction.parseStatus,
+              executionContextHash: highImpactAction.executionContextHash,
               permissionProfile: permission_profile,
             },
           },
         ]
       }
+      const token: TerminalApprovalToken = Object.freeze({
+        action: highImpactAction.action,
+        target: highImpactAction.target,
+        commandHash: highImpactAction.commandHash,
+        executionContextHash: highImpactAction.executionContextHash,
+        ...(decision.approvalReceiptId
+          ? { approvalReceiptId: decision.approvalReceiptId }
+          : {}),
+      })
+      terminalApprovalTokens.set(token, token)
       // Approved: re-run with mode unchanged (still 'assistant') and the
       // permission profile unchanged so the profile policy is STILL enforced
       // on the rerun. A one-shot preApprovedAction lets that rerun skip only
@@ -1348,17 +1405,11 @@ export async function runTerminalCommand({
         projectRoot,
         timeout_seconds,
         env,
+        inheritEnv,
         signal,
         owner,
         authorizeHighImpactAction,
-        preApprovedAction: {
-          action: highImpactAction.action,
-          target: highImpactAction.target,
-          commandHash: highImpactAction.commandHash,
-          ...(decision.approvalReceiptId
-            ? { approvalReceiptId: decision.approvalReceiptId }
-            : {}),
-        },
+        preApprovedAction: token,
       }).then((output) => {
         const part = output[0]
         return [
@@ -1371,6 +1422,9 @@ export async function runTerminalCommand({
                 : {}),
               harnessAction: highImpactAction.action,
               harnessTarget: highImpactAction.target,
+              harnessEffects: highImpactAction.effects,
+              harnessParseStatus: highImpactAction.parseStatus,
+              executionContextHash: highImpactAction.executionContextHash,
             },
           },
         ]
@@ -1381,9 +1435,10 @@ export async function runTerminalCommand({
   if (
     mode === 'assistant' &&
     permission_profile === 'git-commit' &&
-    /^\s*git\s+commit\b/i.test(command)
+    (highImpactAction?.effects?.some((effect) => effect.action === 'commit') ||
+      /^\s*git\s+commit\b/i.test(command))
   ) {
-    const safety = await validateStagedCommit(containedCwd, signal)
+    const safety = await validateStagedCommit(containedCwd, signal, processEnv)
     if (safety?.kind === 'blocked') {
       return finalizeHarnessMetadata(
         Promise.resolve([
@@ -1433,13 +1488,6 @@ export async function runTerminalCommand({
             : Object.assign(new Error('Aborted'), { name: 'AbortError' })
         }
         const isWindows = os.platform() === 'win32'
-        // Merge caller overrides FIRST, then scrub the merged object so a
-        // caller-supplied env cannot re-inject credential-named keys.
-        const processEnv = scrubChildProcessEnv({
-          ...getChildProcessEnv(),
-          ...(env ?? {}),
-        })
-
         let shell: string
         let shellArgs: string[]
         if (isWindows) {
@@ -1455,7 +1503,7 @@ export async function runTerminalCommand({
         }
 
         const gitRoot = projectRoot ?? containedCwd
-        const dirtyBefore = await listDirtyPaths(gitRoot, signal)
+        const dirtyBefore = await listDirtyPaths(gitRoot, signal, processEnv)
         // The await above swallows aborts: listDirtyPaths resolves null on any
         // rejection, including this signal's own abort reason. Re-check so an
         // aborted run never spawns the job it would no longer own.
@@ -1514,19 +1562,12 @@ export async function runTerminalCommand({
   return finalizeHarnessMetadata(
     (async () => {
       const gitRoot = projectRoot ?? containedCwd
-      const dirtyBefore = await listDirtyPaths(gitRoot, signal)
+      const dirtyBefore = await listDirtyPaths(gitRoot, signal, processEnv)
 
       const commandResult = await new Promise<
         CodebuffToolOutput<'run_terminal_command'>
       >((resolve, reject) => {
         const isWindows = os.platform() === 'win32'
-        // Merge caller overrides FIRST, then scrub the merged object so a
-        // caller-supplied env cannot re-inject credential-named keys.
-        const processEnv = scrubChildProcessEnv({
-          ...getChildProcessEnv(),
-          ...(env ?? {}),
-        })
-
         let shell: string
         let shellArgs: string[]
 
@@ -1799,7 +1840,7 @@ export async function runTerminalCommand({
       ) {
         return commandResult
       }
-      const dirtyAfter = await listDirtyPaths(gitRoot, signal)
+      const dirtyAfter = await listDirtyPaths(gitRoot, signal, processEnv)
       const touched =
         dirtyBefore && dirtyAfter ? dirtyDelta(dirtyBefore, dirtyAfter) : []
       return [

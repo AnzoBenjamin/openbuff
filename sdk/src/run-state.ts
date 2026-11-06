@@ -40,6 +40,11 @@ import type { CustomToolDefinition } from './custom-tool'
 import type { WorkspaceMoveRecord } from './services/task-memory-store'
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type {
+  ActionOutcome,
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 import type {
@@ -74,6 +79,72 @@ export function selectHighestPriorityKnowledgeFile(
 export type RunState = {
   sessionState?: SessionState
   output: AgentOutput
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
+}
+
+/** Project the runtime's three outcome levels onto the public SDK result. */
+export function projectRunOutcomes(
+  state: RunState,
+  overrides?: { runOutcome?: RunOutcome; taskAcceptance?: TaskAcceptance },
+): RunState {
+  const agentState = state.sessionState?.mainAgentState
+  let runOutcome =
+    overrides?.runOutcome ??
+    state.runOutcome ??
+    agentState?.runOutcome ??
+    (state.output.type === 'error'
+      ? {
+          termination: 'failed' as const,
+          cause: { code: 'run_error', message: state.output.message },
+        }
+      : undefined)
+  if (
+    state.output.type === 'error' &&
+    runOutcome?.termination === 'completed'
+  ) {
+    runOutcome = {
+      termination: 'failed',
+      cause: { code: 'run_error', message: state.output.message },
+    }
+  }
+  const taskAcceptance = overrides?.taskAcceptance ??
+    state.taskAcceptance ??
+    agentState?.taskAcceptance ?? { status: 'unknown' as const }
+  const actionOutcomes =
+    state.actionOutcomes ?? agentState?.actionOutcomes ?? []
+  const output =
+    runOutcome &&
+    runOutcome.termination !== 'completed' &&
+    state.output.type !== 'error'
+      ? {
+          type: 'error' as const,
+          message:
+            runOutcome.cause?.message ??
+            `Run ${runOutcome.termination.replaceAll('_', ' ')}.`,
+        }
+      : state.output
+  return {
+    ...state,
+    output,
+    ...(runOutcome ? { runOutcome } : {}),
+    taskAcceptance,
+    actionOutcomes,
+    ...(state.sessionState && agentState
+      ? {
+          sessionState: {
+            ...state.sessionState,
+            mainAgentState: {
+              ...agentState,
+              ...(runOutcome ? { runOutcome } : {}),
+              taskAcceptance,
+              actionOutcomes,
+            },
+          },
+        }
+      : {}),
+  }
 }
 
 /**
@@ -848,7 +919,7 @@ export async function initialSessionState(
     }
   }
 
-  if (maxAgentSteps) {
+  if (maxAgentSteps !== undefined) {
     initialState.mainAgentState.stepsRemaining = maxAgentSteps
   }
 

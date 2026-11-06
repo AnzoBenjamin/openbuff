@@ -178,7 +178,23 @@ export interface ProposalDryRunReport {
   promotionDecision?: ProposalPromotionDecision
 }
 
-export interface EvalRun {
+export interface EvalAttemptEvidence {
+  runId?: string
+  experimentId?: string
+  attemptId?: string
+  taskId?: string
+  repeat?: number
+  languages?: string[]
+  providerRoute?: string
+  executionScope?: 'trusted_task' | 'key_free_environment'
+  workloadHash?: string
+  measurementConfigHash?: string
+  evaluatorVersion?: string
+  runOutcome?: import('@codebuff/common/types/run-outcome').RunOutcome
+  costEvidence?: { status: 'reported' | 'unknown'; source?: string }
+}
+
+export interface EvalRun extends EvalAttemptEvidence {
   commitSha: string
   prompt: string
   diff: string
@@ -208,6 +224,9 @@ export interface AgentEvalResults {
   averageScoreExcludingFailures: number
   averageIdiomScore?: number
   averageCost: number
+  totalCost?: number
+  costComplete?: boolean
+  attemptCount?: number
   averageDuration: number
   /** Standard error of the measured-run overall scores. Optional for back-compat. */
   scoreStandardError?: number

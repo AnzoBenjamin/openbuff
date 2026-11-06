@@ -212,13 +212,11 @@ export function missingChildCallbackDeps(
   request: SupervisedSpawnRequest,
 ): string[] {
   const bridged =
-    typeof request.rpcSocketPath === 'string' && request.rpcSocketPath.length > 0
+    typeof request.rpcSocketPath === 'string' &&
+    request.rpcSocketPath.length > 0
       ? new Set<string>(BRIDGED_CHILD_DEP_NAMES)
       : new Set<string>()
-  const supplied = new Set<string>([
-    ...bridged,
-    ...LOCALLY_SUPPLIED_DEP_NAMES,
-  ])
+  const supplied = new Set<string>([...bridged, ...LOCALLY_SUPPLIED_DEP_NAMES])
   return CHILD_CALLBACK_DEPS.filter((dep) => !supplied.has(dep))
 }
 
@@ -240,6 +238,15 @@ export function buildUnsupportedDepsReceipt(params: {
     agentId: params.agentId,
     status: 'failed',
     outcome: 'crashed',
+    runOutcome: {
+      termination: 'failed',
+      cause: {
+        code: 'unsupported-deps',
+        message: `Required callbacks are unavailable: ${params.missing.join(', ')}`,
+      },
+    },
+    taskAcceptance: { status: 'unknown' },
+    actionOutcomes: [],
     changedFiles: [],
     requirementsAddressed: [],
     acceptanceCriteriaAddressed: [],
@@ -295,9 +302,11 @@ function isRehydratableMessageHistory(value: unknown): boolean {
   if (!Array.isArray(value)) return false
   return value.every((entry) => {
     if (!isPlainObject(entry)) return false
-    if (!(MESSAGE_ROLES as readonly unknown[]).includes(entry.role)) return false
+    if (!(MESSAGE_ROLES as readonly unknown[]).includes(entry.role))
+      return false
     if (!Array.isArray(entry.content)) return false
-    if (entry.sentAt !== undefined && typeof entry.sentAt !== 'number') return false
+    if (entry.sentAt !== undefined && typeof entry.sentAt !== 'number')
+      return false
     return true
   })
 }
@@ -310,15 +319,25 @@ function isRehydratableMessageHistory(value: unknown): boolean {
 function isRehydratableWorkspaceState(value: unknown): boolean {
   if (!isPlainObject(value)) return false
   if (value.schemaVersion !== 1) return false
-  if (typeof value.revision !== 'number' || !Number.isFinite(value.revision)) return false
+  if (typeof value.revision !== 'number' || !Number.isFinite(value.revision))
+    return false
   if (typeof value.snapshotId !== 'string') return false
-  if (typeof value.updatedAt !== 'number' || !Number.isFinite(value.updatedAt)) return false
+  if (typeof value.updatedAt !== 'number' || !Number.isFinite(value.updatedAt))
+    return false
   if (!Array.isArray(value.changes)) return false
   return value.changes.every((change) => {
     if (!isPlainObject(change)) return false
-    if (typeof change.revision !== 'number' || !Number.isFinite(change.revision)) return false
+    if (
+      typeof change.revision !== 'number' ||
+      !Number.isFinite(change.revision)
+    )
+      return false
     if (typeof change.source !== 'string') return false
-    if (typeof change.occurredAt !== 'number' || !Number.isFinite(change.occurredAt)) return false
+    if (
+      typeof change.occurredAt !== 'number' ||
+      !Number.isFinite(change.occurredAt)
+    )
+      return false
     return Array.isArray(change.actions)
   })
 }
@@ -370,7 +389,10 @@ export function buildChildAgentState(request: SupervisedSpawnRequest) {
     if (parsed.success) {
       state.taskMemory = parsed.data
     } else {
-      logStateFieldDropped('taskMemory', `failed schema validation: ${parsed.error.message}`)
+      logStateFieldDropped(
+        'taskMemory',
+        `failed schema validation: ${parsed.error.message}`,
+      )
     }
   }
   if (child.playbookContext !== undefined) {
@@ -387,10 +409,16 @@ export function buildChildAgentState(request: SupervisedSpawnRequest) {
       if (validPlaybooks.length > 0) {
         state.playbookContext = validPlaybooks
       } else {
-        logStateFieldDropped('playbookContext', 'no entry passed MemoryPlaybookSchema validation')
+        logStateFieldDropped(
+          'playbookContext',
+          'no entry passed MemoryPlaybookSchema validation',
+        )
       }
     } else {
-      logStateFieldDropped('playbookContext', 'not an array of memory playbooks')
+      logStateFieldDropped(
+        'playbookContext',
+        'not an array of memory playbooks',
+      )
     }
   }
   if (child.workspaceState !== undefined) {
@@ -499,6 +527,12 @@ function buildFailedChildReceipt(params: {
     agentId: params.agentId,
     status: 'failed',
     outcome: 'crashed',
+    runOutcome: {
+      termination: 'failed',
+      cause: { code: 'supervised_child_failed', message: params.message },
+    },
+    taskAcceptance: { status: 'unknown' },
+    actionOutcomes: [],
     changedFiles: [],
     requirementsAddressed: [],
     acceptanceCriteriaAddressed: [],
@@ -553,11 +587,7 @@ export function serializeSessionEvidenceForReceipt(
     const log = (
       agentState as AgentState & { sessionEvidenceLog?: SessionEvidenceLog }
     ).sessionEvidenceLog
-    if (
-      !log ||
-      !Array.isArray(log.entries) ||
-      log.entries.length === 0
-    ) {
+    if (!log || !Array.isArray(log.entries) || log.entries.length === 0) {
       return undefined
     }
     return log.entries
@@ -595,9 +625,7 @@ export function buildSupervisedSuccessReceipt(params: {
     output: params.output,
     agentState: params.agentState,
   })
-  const sessionEvidence = serializeSessionEvidenceForReceipt(
-    params.agentState,
-  )
+  const sessionEvidence = serializeSessionEvidenceForReceipt(params.agentState)
   return sessionEvidence === undefined
     ? receipt
     : { ...receipt, sessionEvidence }
@@ -816,7 +844,10 @@ export async function runSupervisedChildEntry(
     error?: unknown
   }) => AgentReceipt
   try {
-    const [{ loopAgentSteps }, { buildRuntimeAgentReceipt, flushOversizeArtifactWrites }] = await Promise.all([
+    const [
+      { loopAgentSteps },
+      { buildRuntimeAgentReceipt, flushOversizeArtifactWrites },
+    ] = await Promise.all([
       import('../run-agent-step'),
       import('../tools/handlers/tool/spawn-agent-utils'),
     ])
@@ -832,9 +863,8 @@ export async function runSupervisedChildEntry(
     })
   }
 
-  const { connectChildBridge, buildBridgedChildDeps } = await import(
-    './child-bridge-client'
-  )
+  const { connectChildBridge, buildBridgedChildDeps } =
+    await import('./child-bridge-client')
   let client: ChildBridgeClient
   try {
     client = await connectChildBridge(request.rpcSocketPath as string)
@@ -951,9 +981,9 @@ export async function runSupervisedChildEntry(
     // loop must enter the structured failed-receipt path, never look like a
     // fulfilled result eligible for normal runtime receipt derivation. The
     // cleanup helper separately observes either settlement outcome after abort.
-    const loopPromise = Promise.resolve(
-      loopAgentStepsFn(loopParams),
-    ).then((value) => value as { agentState: unknown; output: unknown })
+    const loopPromise = Promise.resolve(loopAgentStepsFn(loopParams)).then(
+      (value) => value as { agentState: unknown; output: unknown },
+    )
     // A loop rejection propagates out of the race into the outer catch below
     // (structured failed-child receipt); the finally still aborts first.
     try {
