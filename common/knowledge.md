@@ -1,5 +1,13 @@
 # Common Package Knowledge
 
+## UI-facing state and question contracts
+
+- `common/src/types/session-state.ts` adds optional `AgentState.contextArchiveHydration: 'project' | 'in-memory-only'`. Edited conversation branches can disable later project-wide transcript hydration while preserving the chosen runtime continuation. Missing fields retain the legacy project-hydration policy.
+- `common/src/utils/ask-user-bridge.ts` gives each request a distinct `requestId`, queues concurrent requests FIFO, and accepts an optional abort signal. Identity-bound callers pass that ID to `submit`; stale IDs cannot complete a newer request. Cancelling a waiting request leaves the active request intact, and `cancelAll` resolves retained requests as skipped.
+- `InspectableAskUserQuestion.inspectionText` retains full local inspection text separately from bounded question labels. Optional `AskUserApproval` carries action, target, reason and routine/high risk metadata for decision views; it does not replace the tool's execution authorization policy.
+- `common/src/tools/params/tool/set-output.ts` adds optional salvage-acknowledgment provenance: `artifactPersisted`, `artifactPath`, `artifactCreatedAt`, `artifactWrittenByThisCall`, `artifactBytes` and SHA-256. Older acknowledgments still validate. Consumers use explicit metadata for recovery and must not infer artifact paths or complete output retention from acknowledgment prose.
+- Public schema changes still use the canonical tool-definition generator and committed mirrors. [Acceptance scope](../docs/design/cli-overhaul/README.md) distinguishes retained-source inspection, authoritative runtime restoration and unverified human accessibility.
+
 - Output budgets: `common/src/tools/results/filesystem.ts` allows 10 MiB per read block; job output retention defaults to 1 MiB. `list_directory` exposes paginated `offset`/`limit` input and `truncated`/`nextOffset` output. Terminal results can report unavailable full logs explicitly. Complete large `set_output` objects remain eligible for schema validation; undecodable large strings use artifact recovery.
 
 This package contains code shared across the Openbuff monorepo, especially the local/BYOK `cli`, `sdk`, agents, and runtime packages.

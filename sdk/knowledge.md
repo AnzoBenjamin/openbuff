@@ -1,5 +1,13 @@
 # SDK Package Knowledge
 
+## Dashboard capture and request ownership
+
+- `sdk/src/dash/server.ts` binds timeline requests to the selected-run generation and receipt/gate requests to their panel generations. Late responses and errors cannot overwrite newer selections. Refresh retains captured data while exposing loading/error feedback; local Find and expandable event/field details inspect that retained snapshot.
+- `sdk/src/dash/provider.ts` returns the latest bounded event window using `DASH_MAX_EVENTS`, currently 2000. Event rows retain `payloadSummary`, bounded `payloadDetail`, `payloadTruncated` and source time when available. Payload projection limits nodes/depth/characters and avoids invoking object accessors; bounded detail is not a complete journal payload guarantee.
+- Providers can report source availability through optional `getSourceStatus`. `sdk/src/dash/export.ts` stores source status and `capturedAt` in static snapshots. Offline exports identify capture time and disable live refresh controls; timeline labels distinguish the captured window from older source events.
+- `sdk/scripts/build.ts` can reuse a grammar from an earlier local CLI build only after the shared resolver verifies the immutable SHA-256 pin. The build retains Node ESM/CJS required-export checks; artifact reuse does not relax integrity or consumer-export validation.
+- [CLI overhaul acceptance](../docs/design/cli-overhaul/README.md) retains the dashboard and supporting UI validation scope. Automated keyboard/geometry checks do not establish screen-reader or human usability acceptance.
+
 - CI regression coverage: the failed-cleanup test in `sdk/src/__tests__/3d-assets.test.ts` cancels after writing attempt metadata, before launching Blender, and verifies no guarded commit occurred. It exercises retained artifacts without requiring Blender on CI runners. Symbol batch tests in `packages/agent-runtime/src/__tests__/read-files-edit-state.test.ts` cover both complete reads within the current budget and omitted symbols above it.
 
 - Output recovery: SYNC terminal overflow is streamed to a full JSON artifact through `sdk/src/tools/terminal-output-spool.ts`; failures return `logPersisted: false` without a path. Directory listings accept `offset` and `limit`, return `nextOffset` when more visible entries remain, and apply read policy before pagination. Background output reads now allow 1,000,000 bytes. Blender operations use an attempt-owned JSON file; `sdk/src/tools/3d-artifact-retention.ts` retains recent receipts across calls with per-project adapter state, a rotating bounded stat window, and scans across operation directories.

@@ -1,5 +1,16 @@
 # CLI Package Knowledge
 
+## Retained-output readers and recovery
+
+- The CLI overhaul uses summary → bounded preview → focused reader. `cli/src/utils/output-document.ts` owns retained document identity/revision, availability, provenance, coverage, logical locations and lazy row details. `cli/src/utils/output-catalog.ts` adapts captured tool/agent results; rendering does not fetch replacement historical content or call a provider to summarize it.
+- `cli/src/components/output-reader-screen.tsx` provides local Find, source-aware Go to line, outlines, horizontal/wrapped reading and Back. `cli/src/state/output-reader-store.ts` keeps reading state separate from persisted conversation data. ANSI/CRLF search uses visible offsets while exact copy retains captured bytes; linear export strips terminal controls through `cli/src/utils/output-export.ts`.
+- Composer revisions and request ownership protect unsent text, attachments and edit/fork state during asynchronous actions. Queue items retain their enqueue-time mode and attachments; edit, reorder, removal/Undo and failed-send recovery use stable item identities.
+- Question answers preserve selected options and custom text separately. Regex validation runs in an OS child process with timeout/cancellation, waits for child exit before settling, and retains the current answer/request submission owner. `cli/src/binary-entry.ts` handles validation children before SDK/OpenTUI initialization; normal commands keep the existing main/pre-init path.
+- Ctrl+O in saved history opens bounded inspection-only recovery through `cli/src/utils/saved-transcript-inspection.ts`. It retains malformed source and healthy neighboring rows without writing recovered rows into SDK history or weakening authoritative resume validation.
+- Folded tool/agent rows preserve failure, partial, unknown, launch/job identity and capture-limit information. Root/nested block handling shares retained inspection; failed agent views keep siblings readable and offer Retry. Status notices retain one row with Stop/timing, and paging advances at least one row in a one-row viewport.
+- Use Bun 1.3.5 for validation. `bun run --cwd cli test` follows CI discovery; `bun run --cwd cli test:native-ui` runs production-skipped native suites in isolated development runtimes and writes logs to an owned temporary directory. `cli/scripts/ui-study.tsx` supplies fixed reader fixtures and linear export for the pending human study. Full and native counts overlap.
+- [Design and acceptance status](../docs/design/cli-overhaul/README.md) distinguishes executed acceptance from source support. Exact scenarios, automatic resumable per-row saved-history recovery, final independent review, emulator checks and human/screen-reader acceptance remain open.
+
 - Generated tool types now include `list_directory` pagination (`offset`, `limit`, and continuation via `nextOffset`). The starter-type mirror in `cli/src/data/initial-agent-type-sources.generated.ts` is regenerated from the canonical schemas so newly initialized agent directories receive the same contract.
 
 ## Conversation rendering and restore
