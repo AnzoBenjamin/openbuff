@@ -825,6 +825,48 @@ test('memory-drift guard skips the exact raw B30 snapshot while checking active 
   }
 })
 
+test('memory-drift guard skips exact RWEB snapshots while checking active neighboring docs', () => {
+  const archivedPaths = [
+    'docs/execution/body-roadmap/evidence/RWEB/planning-review/initial-addendum.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/commands-reference.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/session-management-reference.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/trust-boundaries-reference.md',
+  ]
+  const activePaths = [
+    'docs/execution/body-roadmap/researcher-web-agent-browser.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/FEASIBILITY.md',
+    'docs/execution/body-roadmap/evidence/RWEB/planning-review/initial-addendum-active.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/commands-reference-active.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility-independent-review/REVIEW.md',
+    'common/knowledge.md',
+  ]
+  for (const path of [...archivedPaths, ...activePaths]) {
+    mkdirSync(join(tmpRoot, path, '..'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      'See `src/missing.ts` and [gone](./gone.md).\nTODO: unresolved\n',
+    )
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  for (const path of archivedPaths) {
+    expect(snapshot.files).not.toContain(join(tmpRoot, path))
+  }
+  for (const suppliedSnapshot of [undefined, snapshot]) {
+    for (const checker of [
+      checkPath,
+      checkCrossFile,
+      checkBrokenLink,
+      checkTodoFixme,
+    ]) {
+      expect(
+        checker(tmpRoot, suppliedSnapshot)
+          .map((finding) => finding.path)
+          .sort(),
+      ).toEqual([...activePaths].sort())
+    }
+  }
+})
+
 test('broken-link checker resolves positive Markdown source-line citations without hiding missing files', () => {
   mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
   writeFileSync(join(tmpRoot, 'docs', 'guide.md'), '# Guide\n')
@@ -874,12 +916,8 @@ test.skipIf(!canTestUnreadableFile)(
     expect(() => runMemoryDriftGuard(tmpRoot)).not.toThrow()
 
     const snapshot = buildMarkdownSnapshot(tmpRoot)
-    expect(
-      snapshot.files.some((p) => p.includes('docs/secret.md')),
-    ).toBe(false)
-    expect(
-      snapshot.linesByFile.has(unreadable),
-    ).toBe(false)
+    expect(snapshot.files.some((p) => p.includes('docs/secret.md'))).toBe(false)
+    expect(snapshot.linesByFile.has(unreadable)).toBe(false)
     // No checker emits findings for the unreadable file.
     expect(
       checkPath(tmpRoot, snapshot).some((f) =>
@@ -1382,9 +1420,9 @@ describe('review receipt strict validation (forgery resistance)', () => {
       recordedAt: '2025-01-01T00:00:00.000Z',
     })
     expect(loadReviewReceipt(tmpRoot)).toBeNull()
-    expect(
-      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
-    ).toBe(true)
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
   })
 
   test('an unknown verdict string is treated as ABSENT', () => {
@@ -1398,9 +1436,9 @@ describe('review receipt strict validation (forgery resistance)', () => {
       recordedAt: '2025-01-01T00:00:00.000Z',
     })
     expect(loadReviewReceipt(tmpRoot)).toBeNull()
-    expect(
-      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
-    ).toBe(true)
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
   })
 
   test('a fileHashes value that is not 64-hex sha256 is treated as ABSENT', () => {
@@ -1422,9 +1460,9 @@ describe('review receipt strict validation (forgery resistance)', () => {
       })
       expect(loadReviewReceipt(tmpRoot)).toBeNull()
     }
-    expect(
-      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
-    ).toBe(true)
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
   })
 
   test('an empty reviewer name is treated as ABSENT', () => {
@@ -1462,9 +1500,9 @@ describe('review receipt strict validation (forgery resistance)', () => {
       recordedAt: '2025-01-01T00:00:00.000Z',
     })
     expect(loadReviewReceipt(tmpRoot)).toBeNull()
-    expect(
-      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
-    ).toBe(true)
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
   })
 
   test('a valid receipt carries receiptId/agentId and still suppresses', () => {
@@ -1482,9 +1520,9 @@ describe('review receipt strict validation (forgery resistance)', () => {
     const receipt = loadReviewReceipt(tmpRoot)
     expect(receipt?.receiptId).toBe('review-run-1234')
     expect(receipt?.agentId).toBe('agent-code-reviewer-9')
-    expect(
-      checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel),
-    ).toBe(false)
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      false,
+    )
   })
 
   test('checkStaleness degrades visibly when git fails during the per-pair work', () => {

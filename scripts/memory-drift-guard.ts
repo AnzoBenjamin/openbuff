@@ -43,6 +43,15 @@ const SKIP_PATH_PREFIXES = [
   'evals/test-repos/',
 ]
 
+// Frozen draft/upstream snapshots retain their original relative links.
+// Keep neighboring reports and the active researcher roadmap in the scan.
+const SKIP_MARKDOWN_FILES = new Set([
+  'docs/execution/body-roadmap/evidence/RWEB/planning-review/initial-addendum.md',
+  'docs/execution/body-roadmap/evidence/RWEB/feasibility/commands-reference.md',
+  'docs/execution/body-roadmap/evidence/RWEB/feasibility/session-management-reference.md',
+  'docs/execution/body-roadmap/evidence/RWEB/feasibility/trust-boundaries-reference.md',
+])
+
 const PATH_QUOTED_REGEX =
   /`((?:src|packages|cli|common|sdk|agents|scripts|docs)\/[A-Za-z0-9._\/-]+\.[A-Za-z]+)`/g
 
@@ -71,7 +80,10 @@ function toProjectPath(root: string, path: string): string {
 }
 
 function shouldSkipPath(projectPath: string): boolean {
-  return SKIP_PATH_PREFIXES.some((prefix) => projectPath.startsWith(prefix))
+  return (
+    SKIP_MARKDOWN_FILES.has(projectPath) ||
+    SKIP_PATH_PREFIXES.some((prefix) => projectPath.startsWith(prefix))
+  )
 }
 
 function* markdownFiles(root: string, directory = root): Generator<string> {
@@ -1237,9 +1249,7 @@ export function checkScriptCoverage(
   const allMdContent: string[] = []
   for (const filePath of snapshotFiles(snapshot, root)) {
     try {
-      allMdContent.push(
-        snapshotFileLines(snapshot, filePath).join('\n'),
-      )
+      allMdContent.push(snapshotFileLines(snapshot, filePath).join('\n'))
     } catch (err) {
       console.debug(
         `[memory-drift-guard] checkScriptCoverage read failed for ${filePath}: ${

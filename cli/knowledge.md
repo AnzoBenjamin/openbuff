@@ -1,5 +1,11 @@
 # CLI Package Knowledge
 
+## Polyglot first-wave outcomes and mutation evidence
+
+- `cli/src/utils/output-outcome.ts` projects typed run and task outcomes into completion summaries. Headless runs return failure/cancellation consistently with SDK and journal results; verified recovery can complete a task while preserving earlier failed actions.
+- Tool normalization and edit rendering keep attempted, partial, uncertain and confirmed forward effects distinct. A rollback failure alone does not make an edit applied. `cli/src/utils/turn-snapshots.ts` serializes capture per repository and binds recovery points to the actual producer turn.
+- The [body execution checkpoint](../docs/execution/body-roadmap/STATE.md) records the accepted milestones, rebuilt CLI and pending researcher/browser implementation.
+
 ## Retained-output readers and recovery
 
 - The CLI overhaul uses summary → bounded preview → focused reader. `cli/src/utils/output-document.ts` owns retained document identity/revision, availability, provenance, coverage, logical locations and lazy row details. `cli/src/utils/output-catalog.ts` adapts captured tool/agent results; rendering does not fetch replacement historical content or call a provider to summarize it.

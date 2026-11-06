@@ -389,7 +389,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Source TypeScript/Bun coverage, maturity, source identity, reviewer gating and persistent evidence diagnostics",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B01/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B01/accepted/20261106T232934662561Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -400,8 +400,8 @@
             "scope": "Independent approval of the 11 leader-owned B01 coverage/maturity/source-inventory and ordinary/specialist reviewer-gating source files only. The 37 declared dependencies are integrity inputs, not separately approved implementation.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B01/workspace-typecheck-refresh-20261107/review.json",
-              "sha256": "3ac61eba60c9330c4876974df8e5f18161fe38fe5380cf815810f9b1b164ca71"
+              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B01/review.json",
+              "sha256": "e104687798891af8c0c0b819828bc69b7c7a91ac7b0e79dab77a2a53e5cceaf1"
             }
           },
           {
@@ -424,10 +424,10 @@
         "Inspection completeness remains separate from capability readiness.",
         "Source observation is not an atomic OS snapshot; no native or installed-platform assurance is claimed."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.370451+00:00",
+      "acceptedAt": "2026-11-06T23:29:34.718720+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B01/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "a8d9c389e75778edf918a04f22547a2da678f0598a987d521583ffc4871f513e"
+        "path": "docs/execution/body-roadmap/evidence/B01/accepted/20261106T232934662561Z-acceptance.json",
+        "sha256": "e39c90a34e4dfaa2dc2d48f303580c5552a4de1f3194ad6122465e1dd0c0ddb9"
       }
     },
     {
@@ -1557,7 +1557,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Real diagnostic child outcomes through delta/hooks, source SDK dispatch, retained baselines and CLI classification",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B36/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B36/accepted/20261106T232934662561Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1569,8 +1569,8 @@
             "scope": "Real fixed diagnostic children \u2192 delta/hooks \u2192 source SDK dispatch/JSON \u2192 CLI classifier, retained source-SDK client baselines and actual Node bounded reads.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B36/workspace-typecheck-refresh-20261107/review.json",
-              "sha256": "55ec7711acbfde8522cc889f62071df8cd4fc04b2c1f6f51431a2ae32cb750f8"
+              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/review.json",
+              "sha256": "5be413776644461f9fc56522e1cd56aabafe77a6ab2d4113598e5929a2495c2a"
             }
           }
         ],
@@ -1580,10 +1580,10 @@
         "No native validator, installed ecosystem toolchain or OS/descendant termination graduation.",
         "Original independent diagnostic evidence remains distinct from fresh integration checks."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.852514+00:00",
+      "acceptedAt": "2026-11-06T23:29:34.769968+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B36/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "5a1b824f31e3117d3d1a10902fd1151d26279269b5f440b1498250244bcc554b"
+        "path": "docs/execution/body-roadmap/evidence/B36/accepted/20261106T232934662561Z-acceptance.json",
+        "sha256": "f1bf08a98b546f3c3eeec5c50bb14df8ddc323ce8893aa2e1813adadfc6099dd"
       }
     },
     {
@@ -1644,5 +1644,5 @@
       "risks": []
     }
   ],
-  "updatedAt": "2026-11-06T21:50:30.853171+00:00"
+  "updatedAt": "2026-11-06T23:29:34.772101+00:00"
 }

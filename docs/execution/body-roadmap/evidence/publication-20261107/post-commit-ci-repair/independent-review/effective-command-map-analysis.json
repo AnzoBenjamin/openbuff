@@ -1,0 +1,551 @@
+{
+  "scope": "Read-only interpretation of frozen command_provenance input-map selection",
+  "commands": [
+    {
+      "card": "B01",
+      "name": "tests",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-tests.json",
+      "originalInputCounts": {
+        "before": 61,
+        "after": 61
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "probe",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-probe.json",
+      "originalInputCounts": {
+        "before": 61,
+        "after": 61
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "ordinary-consumer",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-ordinary-consumer.json",
+      "originalInputCounts": {
+        "before": 61,
+        "after": 61
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "specialist-consumer",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-specialist-consumer.json",
+      "originalInputCounts": {
+        "before": 61,
+        "after": 61
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "generated-gate-parity",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-generated-gate-parity.json",
+      "originalInputCounts": {
+        "before": 61,
+        "after": 61
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "whitespace",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-whitespace.json",
+      "originalInputCounts": {
+        "before": 61,
+        "after": 61
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "final root all-workspaces typecheck after generated CLI build (shared actual invocation)",
+      "path": "docs/execution/body-roadmap/evidence/B01/workspace-typecheck-refresh-20261107/command-workspace-typecheck.json",
+      "originalInputCounts": {
+        "before": 182,
+        "after": 182
+      },
+      "originalGuardBindings": {
+        "scripts/memory-drift-guard.ts": "d21dacd87f74b1d7df1a003d9a101884a2ef821763a14d25185d8e7d531d823c",
+        "scripts/__tests__/memory-drift-guard.test.ts": "f0530b608a3e80936b75722f89034df4420712c811760c1f47cd1df2e0d21551"
+      }
+    },
+    {
+      "card": "B01",
+      "name": "tail/store tests",
+      "path": "docs/execution/body-roadmap/evidence/B01/tail-store/independent-approval/commands/tests.json",
+      "originalInputCounts": {
+        "before": 19,
+        "after": 19
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "tail/store fixture",
+      "path": "docs/execution/body-roadmap/evidence/B01/tail-store/independent-approval/commands/fixture.json",
+      "originalInputCounts": {
+        "before": 19,
+        "after": 19
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "tail/store counterexamples",
+      "path": "docs/execution/body-roadmap/evidence/B01/tail-store/independent-approval/commands/counterexamples.json",
+      "originalInputCounts": {
+        "before": 19,
+        "after": 19
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B01",
+      "name": "tail/store sdk-typecheck",
+      "path": "docs/execution/body-roadmap/evidence/B01/tail-store/independent-approval/commands/sdk-typecheck.json",
+      "originalInputCounts": {
+        "before": 32,
+        "after": 32
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "multifile-producer-tests",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/multifile-producer-tests.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "ci-sorted-producer-tests",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/ci-sorted-producer-tests.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "actual-consumers",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/actual-consumers.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "approval-cancellation",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/approval-cancellation.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "counterexamples",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/counterexamples.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "sdk-typecheck",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/sdk-typecheck.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "runtime-typecheck",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/runtime-typecheck.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "cli-typecheck",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/cli-typecheck.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "consumer-tests",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/consumer-tests.json",
+      "originalInputCounts": {
+        "before": 137,
+        "after": 137
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B02",
+      "name": "oracle-verification",
+      "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/commands/oracle-verification.json",
+      "originalInputCounts": {
+        "before": 138,
+        "after": 138
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B03",
+      "name": "affected-runtime-acp-tests",
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/commands/affected-runtime-acp-tests.json",
+      "originalInputCounts": {
+        "before": 624,
+        "after": 624
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B03",
+      "name": "leader-vision-route-regression",
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/commands/leader-vision-route-regression.json",
+      "originalInputCounts": {
+        "before": 624,
+        "after": 624
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B03",
+      "name": "actual-sdk-fixture",
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/commands/actual-sdk-fixture.json",
+      "originalInputCounts": {
+        "before": 624,
+        "after": 624
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B03",
+      "name": "consumer-probe",
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/commands/consumer-probe.json",
+      "originalInputCounts": {
+        "before": 624,
+        "after": 624
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B03",
+      "name": "node-broker-probe",
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/commands/node-broker-probe.json",
+      "originalInputCounts": {
+        "before": 624,
+        "after": 624
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B03",
+      "name": "byte-observer-replay",
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/commands/byte-observer-replay.json",
+      "originalInputCounts": {
+        "before": 624,
+        "after": 624
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B04",
+      "name": "cooperative-cas-tests",
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/commands/cooperative-cas-tests.json",
+      "originalInputCounts": {
+        "before": 24,
+        "after": 24
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B04",
+      "name": "cooperative-cas-replay",
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/commands/cooperative-cas-replay.json",
+      "originalInputCounts": {
+        "before": 24,
+        "after": 24
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B08",
+      "name": "actual-vision-failover",
+      "path": "docs/execution/body-roadmap/evidence/B08/typed-independent-review/command-actual-vision-failover.json",
+      "originalInputCounts": {
+        "before": 66,
+        "after": 66
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B08",
+      "name": "provider-tests",
+      "path": "docs/execution/body-roadmap/evidence/B08/typed-independent-review/command-provider-tests.json",
+      "originalInputCounts": {
+        "before": 66,
+        "after": 66
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B08",
+      "name": "provider-retry-fixture",
+      "path": "docs/execution/body-roadmap/evidence/B08/typed-independent-review/command-provider-retry-fixture.json",
+      "originalInputCounts": {
+        "before": 66,
+        "after": 66
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B08",
+      "name": "typecheck-sdk",
+      "path": "docs/execution/body-roadmap/evidence/B08/typed-independent-review/command-typecheck-sdk.json",
+      "originalInputCounts": {
+        "before": 66,
+        "after": 66
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B08",
+      "name": "typecheck-internal",
+      "path": "docs/execution/body-roadmap/evidence/B08/typed-independent-review/command-typecheck-internal.json",
+      "originalInputCounts": {
+        "before": 66,
+        "after": 66
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B08",
+      "name": "typecheck-common",
+      "path": "docs/execution/body-roadmap/evidence/B08/typed-independent-review/command-typecheck-common.json",
+      "originalInputCounts": {
+        "before": 66,
+        "after": 66
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "leader-vision-route-regression",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/leader-vision-route-regression.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "affected-identity-approval-terminal-store-tests",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/affected-identity-approval-terminal-store-tests.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "actual-launcher-parser-consumers",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/actual-launcher-parser-consumers.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "actual-sdk-approval-cancellation-consumers",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/actual-sdk-approval-cancellation-consumers.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "independent-corrupt-approval-consumer",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/independent-corrupt-approval-consumer.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "independent-observation-replay",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/independent-observation-replay.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "sdk-typecheck",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/sdk-typecheck.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B18",
+      "name": "source-diff-check",
+      "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/commands/source-diff-check.json",
+      "originalInputCounts": {
+        "before": 52,
+        "after": 52
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "affected-evaluator-consumers",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/affected-evaluator-consumers.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "comparison-consumer-regressions",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/comparison-consumer-regressions.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "full-evals-ci",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/full-evals-ci.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "leader-vision-route-regression",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/leader-vision-route-regression.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "actual-isolated-sdk",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/actual-isolated-sdk.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "actual-evaluation-artifacts",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/actual-evaluation-artifacts.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "comparison-boundary-probe",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/comparison-boundary-probe.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B30",
+      "name": "artifact-isolation-replay",
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/commands-final/artifact-isolation-replay.json",
+      "originalInputCounts": {
+        "before": 651,
+        "after": 651
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B36",
+      "name": "integration-tests",
+      "path": "docs/execution/body-roadmap/evidence/B36/typed-independent-review/command-integration-tests.json",
+      "originalInputCounts": {
+        "before": 15,
+        "after": 15
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B36",
+      "name": "fixture",
+      "path": "docs/execution/body-roadmap/evidence/B36/typed-independent-review/command-fixture.json",
+      "originalInputCounts": {
+        "before": 15,
+        "after": 15
+      },
+      "originalGuardBindings": {}
+    },
+    {
+      "card": "B36",
+      "name": "final root all-workspaces typecheck after generated CLI build (shared actual invocation)",
+      "path": "docs/execution/body-roadmap/evidence/B36/workspace-typecheck-refresh-20261107/command-workspace-typecheck.json",
+      "originalInputCounts": {
+        "before": 182,
+        "after": 182
+      },
+      "originalGuardBindings": {
+        "scripts/memory-drift-guard.ts": "d21dacd87f74b1d7df1a003d9a101884a2ef821763a14d25185d8e7d531d823c",
+        "scripts/__tests__/memory-drift-guard.test.ts": "f0530b608a3e80936b75722f89034df4420712c811760c1f47cd1df2e0d21551"
+      }
+    }
+  ]
+}

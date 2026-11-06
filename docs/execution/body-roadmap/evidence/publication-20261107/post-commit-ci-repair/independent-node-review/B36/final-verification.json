@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "B36",
+  "checkedAt": "2026-11-06T23:28:42.781150+00:00",
+  "approval": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/approval.json",
+    "sha256": "c965379ac0908029ae8ddcfec6398f97c30289675858f0e910cb81501b0d4cae"
+  },
+  "review": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/review.json",
+    "sha256": "5be413776644461f9fc56522e1cd56aabafe77a6ab2d4113598e5929a2495c2a"
+  },
+  "formatValidation": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/format-validation.json",
+    "sha256": "7851acff144af0d619642bbf7811a6817bc76d268432e9488f66a3b44d910811"
+  },
+  "sourceContracts": 15,
+  "requiredCommands": 3,
+  "reusedScopedCommands": 2,
+  "replacementRaw": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+    "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+  },
+  "rawInputs": 187,
+  "exactMapsStableAndCurrent": true,
+  "canonicalReviewFieldsMatchOriginalApproval": true,
+  "originalScopeOwnersOraclesContractsPreserved": true,
+  "priorScopedCommandRefsPreservedExactly": true,
+  "sourceDependencyConfigArtifactOracleAndLogHashesCurrent": true,
+  "strictValidatorFrozen": true,
+  "formatOnlyNoRoadmapAcceptance": true,
+  "productCommandsRerun": []
+}

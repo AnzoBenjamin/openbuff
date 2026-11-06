@@ -1,0 +1,290 @@
+{
+  "recordedAt": "2026-11-06T23:18:17.328566+00:00",
+  "scope": "Read-only pre-renewal impact observation, not acceptance.",
+  "argv": [
+    "python3",
+    "-B",
+    "docs/execution/body-roadmap/validate-ledger.py"
+  ],
+  "exitCode": 1,
+  "sourceBefore": {
+    "scripts/memory-drift-guard.ts": "d21dacd87f74b1d7df1a003d9a101884a2ef821763a14d25185d8e7d531d823c",
+    "scripts/__tests__/memory-drift-guard.test.ts": "f0530b608a3e80936b75722f89034df4420712c811760c1f47cd1df2e0d21551",
+    ".agents/types/tools.ts": "e4b2fa47548bc622df03c8bc2cc18fa358f33270b3470cd7e0553c3b84d29132"
+  },
+  "sourceAfter": {
+    "scripts/memory-drift-guard.ts": "d21dacd87f74b1d7df1a003d9a101884a2ef821763a14d25185d8e7d531d823c",
+    "scripts/__tests__/memory-drift-guard.test.ts": "f0530b608a3e80936b75722f89034df4420712c811760c1f47cd1df2e0d21551",
+    ".agents/types/tools.ts": "e4b2fa47548bc622df03c8bc2cc18fa358f33270b3470cd7e0553c3b84d29132"
+  },
+  "sourceStable": true,
+  "affectedCommands": [
+    {
+      "card": "B01",
+      "name": "tests",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-tests.json",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "test",
+        "--isolate",
+        "sdk/src/__tests__/audit-intelligence.test.ts",
+        "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+        "sdk/src/__tests__/write-audit-findings.test.ts",
+        "common/src/util/__tests__/audit-receipt.test.ts",
+        "agents/__tests__/gate-reviewer.test.ts",
+        "agents/__tests__/code-reviewer.test.ts",
+        "agents/__tests__/gate-reviewer-parity.test.ts",
+        "agents/__tests__/audit-contracts.test.ts",
+        "agents/__tests__/base2.test.ts",
+        "agents/__tests__/base2-writer-spawn-rules.test.ts",
+        "agents/__tests__/review-rubric-parity.test.ts",
+        "agents/e2e/reviewer-spawn-conditions.e2e.test.ts"
+      ],
+      "affectedNormalizedInputs": {
+        ".agents/types/tools.ts": "c4121c5fd085f6bf68aa312658a73e3d2d9d4009859ea72e0af73be447e7c53f"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/manifest.json",
+        "sha256": "e2f7e325c8a46dab943223ca044048077efef8f7409b960ad1c7639a436587b5",
+        "jsonPointer": "/commands/0"
+      }
+    },
+    {
+      "card": "B01",
+      "name": "probe",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-probe.json",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B01/independent-main-review/probe.ts"
+      ],
+      "affectedNormalizedInputs": {
+        ".agents/types/tools.ts": "c4121c5fd085f6bf68aa312658a73e3d2d9d4009859ea72e0af73be447e7c53f"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/manifest.json",
+        "sha256": "e2f7e325c8a46dab943223ca044048077efef8f7409b960ad1c7639a436587b5",
+        "jsonPointer": "/commands/1"
+      }
+    },
+    {
+      "card": "B01",
+      "name": "ordinary-consumer",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-ordinary-consumer.json",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer.ts"
+      ],
+      "affectedNormalizedInputs": {
+        ".agents/types/tools.ts": "c4121c5fd085f6bf68aa312658a73e3d2d9d4009859ea72e0af73be447e7c53f"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/manifest.json",
+        "sha256": "e2f7e325c8a46dab943223ca044048077efef8f7409b960ad1c7639a436587b5",
+        "jsonPointer": "/commands/2"
+      }
+    },
+    {
+      "card": "B01",
+      "name": "specialist-consumer",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-specialist-consumer.json",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer.ts"
+      ],
+      "affectedNormalizedInputs": {
+        ".agents/types/tools.ts": "c4121c5fd085f6bf68aa312658a73e3d2d9d4009859ea72e0af73be447e7c53f"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/manifest.json",
+        "sha256": "e2f7e325c8a46dab943223ca044048077efef8f7409b960ad1c7639a436587b5",
+        "jsonPointer": "/commands/3"
+      }
+    },
+    {
+      "card": "B01",
+      "name": "generated-gate-parity",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-generated-gate-parity.json",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "scripts/generate-gate-helpers.ts",
+        "--check",
+        "agents/base2/base2.ts"
+      ],
+      "affectedNormalizedInputs": {
+        ".agents/types/tools.ts": "c4121c5fd085f6bf68aa312658a73e3d2d9d4009859ea72e0af73be447e7c53f"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/manifest.json",
+        "sha256": "e2f7e325c8a46dab943223ca044048077efef8f7409b960ad1c7639a436587b5",
+        "jsonPointer": "/commands/6"
+      }
+    },
+    {
+      "card": "B01",
+      "name": "whitespace",
+      "path": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-whitespace.json",
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "--",
+        "sdk/src/services/audit-intelligence.ts",
+        "sdk/src/tools/audit-intelligence.ts",
+        "common/src/tools/params/tool/audit-intelligence.ts",
+        "agents/base2/gate-reviewer.ts",
+        "agents/base2/base2.ts",
+        "agents/reviewer/code-reviewer.ts",
+        "sdk/src/__tests__/audit-intelligence.test.ts",
+        "agents/__tests__/gate-reviewer.test.ts",
+        "agents/__tests__/code-reviewer.test.ts",
+        "agents/__tests__/base2.test.ts",
+        "agents/__tests__/base2-writer-spawn-rules.test.ts"
+      ],
+      "affectedNormalizedInputs": {
+        ".agents/types/tools.ts": "c4121c5fd085f6bf68aa312658a73e3d2d9d4009859ea72e0af73be447e7c53f"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/manifest.json",
+        "sha256": "e2f7e325c8a46dab943223ca044048077efef8f7409b960ad1c7639a436587b5",
+        "jsonPointer": "/commands/7"
+      }
+    },
+    {
+      "card": "B01",
+      "name": "final root all-workspaces typecheck after generated CLI build (shared actual invocation)",
+      "path": "docs/execution/body-roadmap/evidence/B01/workspace-typecheck-refresh-20261107/command-workspace-typecheck.json",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "affectedNormalizedInputs": {
+        "scripts/memory-drift-guard.ts": "d21dacd87f74b1d7df1a003d9a101884a2ef821763a14d25185d8e7d531d823c",
+        "scripts/__tests__/memory-drift-guard.test.ts": "f0530b608a3e80936b75722f89034df4420712c811760c1f47cd1df2e0d21551"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/typecheck.json",
+        "sha256": "82194ab38a33acc54b73264b6497da20a7666f6580bc4adc97524042c76a4711"
+      }
+    },
+    {
+      "card": "B36",
+      "name": "final root all-workspaces typecheck after generated CLI build (shared actual invocation)",
+      "path": "docs/execution/body-roadmap/evidence/B36/workspace-typecheck-refresh-20261107/command-workspace-typecheck.json",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "affectedNormalizedInputs": {
+        "scripts/memory-drift-guard.ts": "d21dacd87f74b1d7df1a003d9a101884a2ef821763a14d25185d8e7d531d823c",
+        "scripts/__tests__/memory-drift-guard.test.ts": "f0530b608a3e80936b75722f89034df4420712c811760c1f47cd1df2e0d21551"
+      },
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/typecheck.json",
+        "sha256": "82194ab38a33acc54b73264b6497da20a7666f6580bc4adc97524042c76a4711"
+      }
+    }
+  ],
+  "ledgerSha256": "108ed649f9f89f7a767651382f8966d5fdd2a16b50d4d1f43551e7548a833758",
+  "validatorSha256": "6aa69375eeeae93f4850a6a068e1c17d39ba08b7a7b4d14c8ebe10e552d36c4c",
+  "result": {
+    "schemaVersion": 1,
+    "valid": false,
+    "scope": "plan/ledger/evidence consistency; no product or unavailable-platform assurance is inferred",
+    "cardCount": 36,
+    "nodeCount": 39,
+    "accepted": [
+      "B01",
+      "B02",
+      "B03",
+      "B04",
+      "B08",
+      "B18",
+      "B30",
+      "B36"
+    ],
+    "remaining": [
+      "B05",
+      "B06",
+      "B07",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B13",
+      "B14",
+      "B15",
+      "B16",
+      "B17",
+      "B19",
+      "B20",
+      "B21",
+      "B22",
+      "B23",
+      "B24",
+      "B25",
+      "B26",
+      "B27",
+      "B28",
+      "B29",
+      "B31",
+      "B32",
+      "B33",
+      "B34",
+      "B35",
+      "M22-CORE",
+      "M22-TXN",
+      "M22-CHILD"
+    ],
+    "ready": [
+      "B05",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B15",
+      "B19",
+      "B23",
+      "B28",
+      "B32"
+    ],
+    "errors": [
+      "B01 command original before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized before input: hash mismatch for .agents/types/tools.ts",
+      "B01 command original after input: hash mismatch for .agents/types/tools.ts",
+      "B01 command normalized after input: hash mismatch for .agents/types/tools.ts"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-two-node-ci-context-transition-seal",
+  "createdAt": "2026-11-06T23:33:57.646854+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "decision": "approve-exact-candidate-for-byte-preserving-promotion",
+  "candidateSha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b",
+  "previousLiveSha256": "108ed649f9f89f7a767651382f8966d5fdd2a16b50d4d1f43551e7548a833758",
+  "scope": "Evidence transition and binding consistency only; no implementation self-approval, added product credit or new card acceptance.",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance-independent-review/REVIEW.md",
+      "sha256": "e02c46b128ced09f8c5e6ca1e15e16454d23907f4d92a724113c2af72ca4d5d7",
+      "bytes": 2991
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance-independent-review/candidate-validation.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance-independent-review/candidate-validation.stdout.log",
+      "sha256": "6978ab14d7f8ed9196a74c0105e60c769a27cdf00f1db077e24a9b5b46aaecaa",
+      "bytes": 813
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance-independent-review/review.json",
+      "sha256": "9768f0726c1c5f36f922b337d7d08beb12970d95cc04b0c0f45b06e42b733649",
+      "bytes": 80752
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance-independent-review/verify-candidate.py",
+      "sha256": "5664dc1e32beee9af3aba0f90cf9997739713ab338b091d9a1c9f7b04215dcba",
+      "bytes": 12651
+    }
+  ]
+}

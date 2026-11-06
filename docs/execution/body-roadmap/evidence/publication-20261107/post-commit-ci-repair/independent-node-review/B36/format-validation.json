@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "B36",
+  "purpose": "Exact authority/command/oracle formats only; synthetic graph grants no real prerequisite or roadmap acceptance.",
+  "validator": {
+    "path": "docs/execution/body-roadmap/validate-ledger.py",
+    "sha256": "6aa69375eeeae93f4850a6a068e1c17d39ba08b7a7b4d14c8ebe10e552d36c4c"
+  },
+  "helper": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B01/validate-formats.py",
+    "sha256": "23ef591fe0738f4fba3e3acf667423dea1fc22e96f469c3f89a417b557aa5665"
+  },
+  "approval": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/approval.json",
+    "sha256": "c965379ac0908029ae8ddcfec6398f97c30289675858f0e910cb81501b0d4cae"
+  },
+  "review": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/review.json",
+    "sha256": "5be413776644461f9fc56522e1cd56aabafe77a6ab2d4113598e5929a2495c2a"
+  },
+  "formatHarness": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/format-harness/ledger.json",
+    "sha256": "3bd5d18470bf547541c09a210ecff37ca3e981dc3671c0f8f1f0224165afd6c9"
+  },
+  "result": {
+    "schemaVersion": 1,
+    "valid": true,
+    "scope": "plan/ledger/evidence consistency; no product or unavailable-platform assurance is inferred",
+    "cardCount": 1,
+    "nodeCount": 1,
+    "accepted": [
+      "B36"
+    ],
+    "remaining": [],
+    "ready": [],
+    "errors": []
+  }
+}

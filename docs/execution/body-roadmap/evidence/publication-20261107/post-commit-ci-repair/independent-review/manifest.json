@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-publication-memory-guard-review-seal",
+  "createdAt": "2026-11-06T23:25:24.245947+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "implementationOwners": [
+    "/root"
+  ],
+  "decision": "approve",
+  "scope": "Exact four-file RWEB snapshot exclusion and guard regression only. Separate B01/B36 command and acceptance renewal is not granted.",
+  "sourceBindings": [
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "sha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "bytes": 51622
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "sha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "bytes": 55454
+    }
+  ],
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/RENEWAL-SCOPE.md",
+      "sha256": "c503898ed42b3995a4069f3a9a477a4deba60fde97fb6442a955217bd4192162",
+      "bytes": 3390
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/REVIEW.md",
+      "sha256": "32923083c7e21b2217c30ee15142885f4e1e82488b08ea4deb0fd4113df45a55",
+      "bytes": 2997
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/committed-negative-control.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/committed-negative-control.stdout.log",
+      "sha256": "ef5c4173a941a5ca0ab7a5a0ea5bd90eea3e2f075b9ae58ee4fafcbcd561e6b0",
+      "bytes": 8490
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/effective-command-map-analysis.json",
+      "sha256": "317fd44001d15819db40c2fc4f5ce146fc89afb8b1f976dbb28ee75eb3afa0f9",
+      "bytes": 17651
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/guard-fix-controls.json",
+      "sha256": "b0e137d999ed78706f87a08839b07234c1868d88cda8b13baafc176d0c00dae0",
+      "bytes": 22093
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/initial-live-impact.json",
+      "sha256": "004da2f2da909ff97517e2f32141d51ebfceacb7e3952ac2001d65b1c7bef22b",
+      "bytes": 11975
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/initial-live-validation.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/initial-live-validation.stdout.log",
+      "sha256": "911cf017dbf2f4480b1706dfbe50c53dd2091eb56ed94036a029cde7656a467b",
+      "bytes": 2820
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/probe-exact-exclusions.ts",
+      "sha256": "cf5fe0502f4ab672bd1fdcdf3037bcac2b0dbcb76d0d8ab9a105f383122309ae",
+      "bytes": 2286
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/repaired-positive-control.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/repaired-positive-control.stdout.log",
+      "sha256": "db10e6bab87e930d05902a0f5ba8ef18673f4650365ce236d752df9eb70c8307",
+      "bytes": 5816
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/reviewed-guard.diff",
+      "sha256": "c19dabeb4d48273a2f8135d2ad739cc5bbf81360efa3762c54ba522269bf7b94",
+      "bytes": 7216
+    }
+  ]
+}

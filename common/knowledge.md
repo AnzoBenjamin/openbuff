@@ -1,5 +1,11 @@
 # Common Package Knowledge
 
+## Polyglot outcome and mutation contracts
+
+- `common/src/types/run-outcome.ts` distinguishes run settlement, task acceptance and action outcome. Consumers retain failed actions after successful recovery and never infer task acceptance from run completion alone.
+- `common/src/tools/results/filesystem.ts` selects confirmed mutations from observed forward effects. Attempted, partial and uncertain receipts remain visible; rollback failure alone grants no applied authority. SDK, runtime and CLI projections consume the same selection.
+- Shared tool types include audit maturity/status fields and hook configuration. The [body checkpoint](../docs/execution/body-roadmap/STATE.md) records their accepted source scope and remaining byte/read and execution-context work.
+
 ## UI-facing state and question contracts
 
 - `common/src/types/session-state.ts` adds optional `AgentState.contextArchiveHydration: 'project' | 'in-memory-only'`. Edited conversation branches can disable later project-wide transcript hydration while preserving the chosen runtime continuation. Missing fields retain the legacy project-hydration policy.
